@@ -1,0 +1,25 @@
+name: Backend
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen mypy src/senior_control
+      - run: uv run --frozen pytest tests/unit tests/integration
+      - run: uv build
+      - run: |
+          python -m venv /tmp/wheel-test
+          /tmp/wheel-test/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config'
