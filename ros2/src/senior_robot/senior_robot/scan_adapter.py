@@ -46,9 +46,9 @@ class ScanAdapter(Node):
         self.status = self.create_publisher(DiagnosticArray, "/perception/scan_status", 10)
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
 
-    def report(self, message, usable):
+    def report(self, message, usable, stamp):
         array = DiagnosticArray()
-        array.header.stamp = self.get_clock().now().to_msg()
+        array.header.stamp = stamp
         status = DiagnosticStatus()
         status.name = "scan_adapter"
         status.hardware_id = "laser"
@@ -97,10 +97,10 @@ class ScanAdapter(Node):
             for ray in filtered.rays:
                 if ray.kind in ("self", "invalid"):
                     result.ranges[ray.index] = float("nan")
-            self.report("usable", True)
+            self.report("usable", True, msg.header.stamp)
         except (ValueError, TransformException) as exc:
             result.ranges = [float("nan")] * len(msg.ranges)
-            self.report(str(exc), False)
+            self.report(str(exc), False, msg.header.stamp)
         self.publisher.publish(result)
 
 

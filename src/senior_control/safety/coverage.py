@@ -1,9 +1,10 @@
 """Conservative whole-area observation coverage, never a motion authorization."""
 
 from dataclasses import dataclass
-from math import isfinite
+from math import cos, isfinite, pi
 
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from senior_control.safety.self_filter import FilteredObservation, Point2D
@@ -42,7 +43,7 @@ def supports(
 ) -> CoverageResult:
     if not isfinite(now) or not isfinite(max_age) or max_age < 0 or not clock_domain:
         raise ValueError("invalid time or clock domain")
-    polygons: dict[float, list[Polygon]] = {}
+    polygons: dict[float, list[BaseGeometry]] = {}
     for observation in observations:
         scan = observation.scan
         if (
@@ -65,7 +66,15 @@ def supports(
                 and triangle.area > 0
                 and not any(triangle.intersects(Polygon(mask)) for mask in observation.self_masks)
             ):
-                polygons.setdefault(scan.stamp, []).append(triangle)
+                # A circumscribed polygon removes the entire blind disk, including
+                # between polygon vertices; an inscribed buffer would leave slivers.
+                if scan.range_min > 0:
+                    blind = Point(a.origin).buffer(scan.range_min / cos(pi / 64), quad_segs=16)
+                    area: BaseGeometry = triangle.difference(blind)
+                else:
+                    area = triangle
+                if not area.is_empty:
+                    polygons.setdefault(scan.stamp, []).append(area)
     if not polygons:
         return CoverageResult(False, "no usable observation area")
     if any(unary_union(group).covers(Polygon(sweep.vertices)) for group in polygons.values()):

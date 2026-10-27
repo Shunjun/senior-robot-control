@@ -1,3 +1,5 @@
+import pytest
+
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
 from senior_control.safety.coverage import SweptRegion, supports
@@ -124,3 +126,30 @@ def test_reference_epoch_mismatch_is_unusable():
     obs = observation([3.0] * 5)
     sweep = SweptRegion(((0.5, -0.1), (1.0, -0.1), (1.0, 0.1), (0.5, 0.1)), "base_link", 10.1)
     assert not supports(sweep, [obs], 10.1, "ros", 0.5).supported
+
+
+@pytest.mark.parametrize(
+    "vertices",
+    [
+        ((0.2, -0.05), (0.3, -0.05), (0.3, 0.05), (0.2, 0.05)),
+        ((0.9, -0.05), (1.2, -0.05), (1.2, 0.05), (0.9, 0.05)),
+    ],
+)
+def test_minimum_range_blind_disk_is_not_covered(vertices):
+    scan = ScanObservation(
+        (3.0, 3.0, 3.0),
+        -0.5,
+        0.5,
+        1.0,
+        5.0,
+        10.0,
+        "ros",
+        Pose2D(0, 0, 0),
+        10.0,
+        "base_link",
+        10.0,
+        True,
+        0.51,
+    )
+    obs = filter_self(scan, DeviceProfile(self_mask_calibrated=True))
+    assert not supports(sweep_region(vertices), [obs], 10.1, "ros", 0.5).supported
