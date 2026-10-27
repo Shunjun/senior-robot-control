@@ -33,7 +33,7 @@
 
 ## 文件与模块边界
 
-所有下列路径相对项目根目录。Python统一包src/senior_control，按功能拆模块；ROS包装位于ros2/src/senior_robot，仿真位于ros2/src/senior_sim；网页位于web。tests/unit测试纯业务，tests/integration测试本进程ASGI/数据库与适配器，tests/ros测试Linux ROS，tests/e2e测试真实运行的仿真闭环。
+所有下列路径相对项目根目录。Python采用src/senior_control布局，按领域拆模块；共享模型不依赖ROS、HTTP或数据库，依赖方向为入口/适配器→应用服务→领域核心，存储实现满足窄Protocol接口；ROS包装位于ros2/src/senior_robot，仿真位于ros2/src/senior_sim；网页位于web。tests/unit测试纯业务，tests/integration测试本进程ASGI/数据库与适配器，tests/ros测试Linux ROS，tests/e2e测试真实运行的仿真闭环。
 
 - src/senior_control/{protocol,config,clock}.py：消息、设备配置与时钟。
 - src/senior_control/safety/：几何、覆盖、自车过滤、仲裁、保护与脱困。
@@ -49,7 +49,7 @@
 
 ## 共享契约与规划决定
 
-任务1在protocol.py中集中定义以下模型，后续任务只扩展其所属内部实现：Velocity(vx,wz)、MapGoal(pose,map_ref)、QualifiedFix(latitude,longitude,altitude,covariance,stamp,fix_type)、Waypoint(id,kind,pose,map_ref,anchor_id,source_robot_id,status)、RobotSnapshot(robot_id,connection,localization,map_ref,home,tasks_revision,captured_at)。二维底盘禁止非零横向速度。
+任务1在models.py定义共享值类型Velocity(vx,wz)、Pose2D和MapRef；protocol.py只定义版本化Envelope、按type判别的请求/响应DTO和序列化边界。MapGoal、QualifiedFix、Waypoint、RobotSnapshot分别由navigation、localization、waypoints和agent领域拥有，不把所有模型堆进protocol.py；协议DTO引用共享值类型或显式映射领域数据，不泄露ROS消息或SQLite Row。二维底盘禁止非零横向速度。
 
 扫描与地图证据类型定义在safety/self_filter.py与mapping/evidence.py：ScanObservation包含量程、角度、时间、frame和外参；FilteredObservation显式区分命中、真实自由射线、遮挡和无效区域；MappingObservation包含关联关键帧与动态掩码。Localization、Navigation、Mapping、Task适配接口使用可注入时钟和可替换ROS客户端，测试不能依赖真实网络或真实sleep。
 
@@ -61,15 +61,67 @@
 
 首次目标平台为Humble/Fortress；其他已有仿真只通过显式适配接入，不预先承诺Classic或其他ROS版本完全兼容。新增根目录config/simulation.yaml、config/hardware.example.yaml保存车端/测试配置，任务2创建并由任务20文档引用。
 
+## Python后端工程基线（Python Development插件审查后修订）
+
+### 运行环境、依赖与质量门槛
+
+- 最低Python 3.10，对齐Humble目标环境；禁止未经适配直接使用3.11+专有语法/API。本地可使用已安装3.12做非ROS测试，CI必须分别验证3.10与3.12。ROS进程必须使用与系统rclpy二进制一致的解释器，默认/usr/bin/python3.10；不能以uv管理的不同Python替换它。
+- 使用pyproject.toml的PEP 621元数据与src布局，uv.lock锁定Python依赖；apt/ROS依赖通过rosdep和实际包版本清单记录，不将rclpy作为普通PyPI依赖安装。ROS环境使用对应系统解释器创建带--system-site-packages的独立venv；colcon构建、运行与wheel安装使用一致解释器并检测ABI。
+- 最小核心依赖为Pydantic v2、pydantic-settings、PyYAML、aiosqlite；cloud、agent、vision拆optional extras，dev使用dependency-group。云端不安装YOLO、Torch或ROS，纯业务导入不得加载重型可选依赖。环境锁验证各目标extra，不能仅在macOS解析成功就声称Linux可部署。
+- Ruff格式/静态规则及mypy strict随任务1建立，目标语法py310；禁止全局ignore_errors、无类型dict贯穿业务和模块导入时联网/建库/读密钥/创建任务。入口负责load_settings与资源创建。常规CI命令为uv sync --frozen --group dev、uv run --frozen ruff check .、uv run --frozen ruff format --check .、uv run --frozen mypy src/senior_control、uv run --frozen pytest tests/unit tests/integration。另做uv build和干净环境wheel导入测试。
+
+### 同步核心、异步I/O与ROS边界
+
+- safety几何、地图证据计算、调度决策和航向数学保持同步纯函数；网络、数据库和应用编排使用async。不能仅给阻塞函数加async前缀，也不能在运行中的事件循环内调用asyncio.run。
+- rclpy executor及安全门在独立ROS进程运行，网络代理不在ROS回调内阻塞等待。代理和ROS适配器通过本机Unix domain socket进行版本化、有长度限制、权限仅限本机服务用户的IPC；事件分发到rclpy执行上下文，ROS Future回调转换为带超时的响应。禁止在网络事件循环里spin、spin_until_future_complete或阻塞Future.result，也不直接await假定兼容的rclpy Future。
+- 安全输出进程独立检查从代理收到的心跳/运动资格的本地单调到期时间；代理卡顿或退出不能靠继续更新旧心跳保持运动。大地图重建、压缩和纯Python CPU重任务不与心跳/安全循环共线程运行；使用有界独立进程，推理/编码依赖也隔离。to_thread仅用于可界定的阻塞I/O，不承诺取消协程即可停止底层线程。
+- 持久化与审计时间使用UTC aware datetime，地图/传感器时刻保留clock-domain，不将ROS仿真时钟混作UTC；时长和deadline用单调时钟。所有读/写/连接/握手/ROS调用有deadline。有界队列分别处理命令、状态和文件，速度采用最新值槽位且不重试；急停及资格撤销优先。慢消费者不得无限占用内存。重连退避加抖动，重试仅放在连接层；撤销凭据、协议不兼容不无限重试。
+
+### SQLite、操作日志与恢复
+
+- 每车单个agent实例拥有该车数据库，云端使用独立数据库保存管理员会话、设备凭据摘要、配对码和只读状态缓存。服务器不直接打开车端数据库。
+- aiosqlite连接在拥有它的事件循环中创建/关闭，以单写入锁序列化事务；启用foreign_keys、WAL、本地磁盘synchronous=FULL与有界busy_timeout。WAL不等于多写者无冲突。事务短小，禁止在持有写事务时等待ROS、网络、文件压缩或用户操作；SQLite连接不跨任意线程/进程复用。
+- schema版本与有序迁移脚本纳入仓库；迁移前备份，通过SQLite backup API取得一致副本，不复制运行中的单个db文件遗漏WAL。未知更高schema版本拒绝启动，迁移失败回滚并保持运动禁用。测试用真实临时文件，覆盖锁冲突、磁盘满、旧版本升级和结果未知。
+- 长操作先提交operation_id、目标设备、请求内容hash、状态，再由车端受监督worker执行，不能依赖FastAPI BackgroundTasks或无引用create_task保证持久性。同一operation_id不同内容返回冲突；数据库唯一键防止两个消费者同时claim。首版无须Celery/Redis，使用车端持久化日志和单worker即可。
+- 数据库提交与ROS/文件副作用不是一个原子事务：状态记录accepted→dispatching→running→终态；超时、崩溃或取消只表示结果可能未知。导航重启先按execution_id对账，无法确认时needs_review并禁止重发。地图切换使用持久化阶段日志、同文件系统rename和必要fsync，失败的ROS/文件动作不能假装靠SQL rollback撤销。
+
+### 生命周期、错误与观测
+
+- FastAPI使用lifespan/asynccontextmanager与AsyncExitStack持有数据库、共享HTTP客户端和后台任务监督器；create_app不在导入时运行资源。agent入口同样由顶层生命周期统一关闭。任务需要保留引用、读取异常、取消并await；CancelledError清理后继续传播。Python3.10通过明确的任务集合与gather清理，不直接依赖TaskGroup。
+- 关停顺序为先撤销运动资格，再禁止新操作，取消/核查导航与长操作，关闭视频PeerConnection/编码器、WS/HTTP连接、IPC与数据库；整体关停有deadline，底盘watchdog仍独立兜底。进程异常和SIGTERM均测试此路径，不能仅测试正常退出。取消清理放在finally中，必要的落盘使用有界保护并记录结果，取消等待不代表数据库工作线程或ROS目标已停止。
+- 领域错误包含Validation、Conflict、Offline、LocalizationUnavailable、SafetyRejected、Timeout与OperationUnknown；HTTP/WS入口统一映射错误码，保留内部异常链但不泄露堆栈/密钥。纯函数抛具体异常，边界转换为响应DTO，不用None同时表达空结果、离线和失败。
+- 使用结构化JSON日志及robot_id/request_id/operation_id/execution_id关联；跨IPC和线程显式传递关联信息。日志默认脱敏密码、配对码、token、Cookie和敏感定位载荷；Pydantic错误输出也不得包含原始秘密输入，不只依赖SecretStr的repr。指标覆盖事件循环延迟、保护周期、队列深度、DB等待、重连、任务跳过、受阻与打滑；request_id等不作指标标签。不为首版引入完整遥测平台，提供可采集输出。
+- 云端首版只允许一个ASGI worker/服务实例持有在线连接和租约，并由部署配置与启动检查约束；单worker仍可连接多台车；服务入口拒绝workers!=1，同一持久化目录增加进程锁，重复实例启动失败。禁止直接以--workers 2扩容产生互不认识的注册表；多实例需另行设计外部协调，不是本期功能。
+
+### 任务接口归属与补充验证
+
+- 任务1增加models.py、errors.py、storage/{database,migrations}.py、observability.py、py.typed，以及tests/unit/test_settings.py和tests/integration/test_storage.py。load_settings(source: SettingsSource) -> AppSettings显式调用并注入；环境变量SENIOR_前缀，优先级CLI覆盖→环境/挂载密钥→显式YAML→非敏感默认值，不自动读取cwd的.env。Web/ROS/设备配置分别校验，仿真与实车profile不混用，密钥无默认值。
+- 任务1建立单机存储连接/迁移基类和测试schema，后续任务9/10/12/13各自添加领域迁移，不为尚无消费者的数据表预建通用框架。值类型/dataclass用于领域，Pydantic用于配置和协议边界；Envelope.payload采用按type判别的联合模型，出入口禁止NaN/Inf、额外字段与无限嵌套大包。
+- 任务6/8/9/10/11/12中的外部副作用接口均为async def；TaskRunner.tick保持同步纯决策，返回TaskIntent列表，Agent中的async TaskExecutor.persist_and_dispatch(intent: TaskIntent) -> OperationResult（实现位于tasks/executor.py）负责claim、写入和发ROS，不在纯tick里操作数据库或导航。调度器和网络服务不能各启一个独立runner重复执行。
+- 任务13的create_app(settings: CloudSettings)保持同步工厂但无启动副作用，lifespan统一运行资源；任务14的async Agent.run、async dispatch、async publish_snapshot使用async存储Protocol。任务15的project_depth/数学保持同步，CPU部分在独立worker；任务16的async VideoSession.offer及async close管理媒体资源，TURN凭据计算本身保持纯函数。
+- 新增src/senior_control/runtime/{supervisor,ipc}.py、tests/integration/test_runtime.py，分别由任务13与14按需实现监督器/IPC；tests/integration/test_shutdown.py和test_backend_observability.py在任务14加入，部署单worker约束在任务20测试。以下补充测试必须纳入对应任务验证命令与全量suite：
+
+| 所属任务 | 具名验证与必要断言 |
+| --- | --- |
+| 1 | test_import_has_no_side_effects：无配置可导入核心，不建库/联网；test_settings_precedence_and_redaction：配置覆盖正确，错误输出无密钥；test_schema_migration_rollback：失败后旧schema完整且不可获得运动资格 |
+| 1/12 | test_sqlite_busy_is_bounded：并发写冲突有界失败；test_transaction_does_not_await_robot：等待ROS时另一个DB操作仍可完成；test_disk_full_has_no_success_ack |
+| 9/12/14 | test_same_operation_different_payload_conflicts；test_cancelled_io_outcome_unknown：取消等待不能提前报告副作用已回滚；test_crash_between_commit_and_dispatch_needs_review |
+| 13/14 | test_slow_ros_does_not_block_heartbeat；test_backpressure_bounds_memory；test_auth_failure_does_not_retry_forever；test_background_failure_revokes_motion |
+| 14/16 | test_sigterm_revokes_motion_before_cleanup；test_cancel_propagates_and_releases_resources：无遗留任务/连接；test_slow_encoder_does_not_delay_stop |
+| 14/20 | test_logs_redact_secrets_and_keep_operation_ids；test_metrics_labels_are_bounded；test_multiworker_start_rejected |
+| 20/21 | test_wheel_import_in_clean_py310；test_ros_interpreter_abi_detected；test_core_import_without_cloud_vision_extras；Linux3.10与macOS3.12分别记录结果 |
+
+以下任务文本与本基线不一致时，采用本节的异步和职责划分，并在实施ledger记录具体改动。纯核心不统一“异步化”，避免为签名一致而引入无意义协程。
+
 ## 执行与验证约定
 
-每个任务按“失败测试→确认失败原因→最小实现→验证→提交”执行；不得用无关依赖错误代替预期行为失败。测试示例中的类型和夹具由该任务创建，并在测试文件中定义，不要求预先存在。API返回模型与错误码在任务1集中定义，后续不得自行改名。
+每个任务按“失败测试→确认失败原因→最小实现→验证→提交”执行；不得用无关依赖错误代替预期行为失败。测试示例中的类型和夹具由该任务创建，并在测试文件中定义，不要求预先存在。API错误码与Envelope规范在任务1定义，领域DTO由所属任务定义并同步协议schema；后续不得自行改名。
 
 Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安装开发依赖。ROS测试在Linux执行，先source ROS与colcon工作空间；缺少Linux环境时记录未执行，不将静态检查替代运行验证。网页单元/构建不启动服务；需要浏览器或仿真进程的调试测试遵守禁止擅自启动开发服务的要求，实际启动前确认已具备相应执行授权。
 
-项目目前不是Git仓库。实施开始先读取using-git-worktrees，确认新目录独立后初始化本地Git并提交已确认设计与计划，不创建远程、不推送。各任务提交仅包含明确列出的相关文件，失败不得提交为完成。
+已在用户指定的新目录初始化独立Git仓库，当前分支feat/control-foundation，初始提交仅含设计与计划；不创建远程、不推送。各任务提交仅包含明确列出的相关文件，失败不得提交为完成。
 
-以下签名是接口契约；数据模型字段详见任务1。外部服务操作均异步且有超时、operation_id和结果状态。实现不得把NotImplemented、假数据或永远成功的适配器当成交付。
+以下签名是接口契约；仅纯计算、领域状态转换和时钟为同步。凡涉及ROS、网络、持久化或进程操作的签名均以async def和明确超时实现；具体约束见后端工程基线。长操作返回operation_id和结果状态。实现不得把NotImplemented、假数据或永远成功的适配器当成交付。
 
 ---
 ## 阶段一：仿真与安全基础
@@ -78,17 +130,22 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 
 **Files:**
 - Create: `pyproject.toml`
-- Create: `src/senior_control/{__init__,protocol,config,clock}.py`
+- Create: `src/senior_control/{__init__,models,protocol,config,clock,errors,observability}.py`
+- Create: `src/senior_control/py.typed`
+- Create: `src/senior_control/storage/{__init__,database,migrations}.py`
+- Create: `tests/unit/test_settings.py`
+- Create: `tests/integration/test_storage.py`
+- Create: `.github/workflows/backend.yml`
 - Create: `tests/unit/test_protocol.py`
 - Create: `docs/protocol/v1.md`
 - Create: `.gitignore`
 
-**Interfaces:** 定义Envelope(v,robot_id,session_id,connection_epoch,request_id,seq,expires_at,payload)、Pose2D(x,y,yaw)、MapRef(map_id,reference_revision)、SensorHealth、OperationResult；配置统一使用米/弧度/秒。validate_envelope(raw: dict) -> Envelope；Clock.monotonic() -> float；DeviceProfile包含footprint、话题、TF与传感器覆盖配置。
+**Interfaces:** 定义Envelope(v,type,robot_id,session_id,connection_epoch,request_id,seq,expires_at,payload)、Pose2D(x,y,yaw)、MapRef(map_id,reference_revision)、SensorHealth、OperationResult；配置统一使用米/弧度/秒。validate_envelope(raw: bytes, expected_robot_id: str) -> Envelope；Clock.monotonic() -> float；DeviceProfile包含footprint、话题、TF与传感器覆盖配置。
 
 - [ ] **Step 1 — 写失败测试：** test_reject_nonfinite_and_wrong_robot：NaN/Inf、非法枚举、未知协议版本、错误robot_id和超大消息被拒绝；test_clock_is_injected：使用假单调时钟无真实sleep。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
 - [ ] **Step 3 — 实现：** 建立可编辑安装与dev依赖锁；写严格输入模型和配置加载。将心跳周期、失联阈值、命令TTL、感知过期阈值集中配置并验证约束，先作为仿真参数，不能标称实车制动保证。
-- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/unit/test_protocol.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
+- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_settings.py tests/integration/test_storage.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
 - [ ] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: define robot protocol and typed configuration"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
 
 ### Task 2: Linux仿真底盘与驱动适配
@@ -170,7 +227,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `tests/unit/test_recovery.py`
 - Create: `tests/ros/test_navigation.py`
 
-**Interfaces:** RecoveryController.step(context: RecoveryContext, now: float) -> RecoveryDecision；NavigationAdapter.navigate(goal: MapGoal) -> execution_id；cancel(execution_id) -> OperationResult。RecoveryContext含候选扫掠评估、进展与覆盖。
+**Interfaces:** RecoveryController.step(context: RecoveryContext, now: float) -> RecoveryDecision；async NavigationAdapter.navigate(goal: MapGoal) -> execution_id；async cancel(execution_id) -> OperationResult。RecoveryContext含候选扫掠评估、进展与覆盖。
 
 - [ ] **Step 1 — 写失败测试：** test_front_blocked_selects_safe_reverse；test_occluded_rear_uses_bounded_map_assisted_reverse_when_eligible；test_all_blocked_finishes_bounded；test_cancel_rejected_does_not_start_new_goal；test_expired_tf_blocks_recovery。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -201,7 +258,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `tests/ros/test_mapping.py`
 - Create: `docs/operations/slam-backend.md`
 
-**Interfaces:** SlamAdapter.serialize(destination: Path) -> SlamSnapshot；load(snapshot: SlamSnapshot, initial_pose: Pose2D | None) -> OperationResult；anchors() -> AnchorSnapshot；MapReferenceStore.apply_anchor_update(update: AnchorSnapshot) -> ReferenceChange。
+**Interfaces:** async SlamAdapter.serialize(destination: Path) -> SlamSnapshot；async load(snapshot: SlamSnapshot, initial_pose: Pose2D | None) -> OperationResult；async anchors() -> AnchorSnapshot；MapReferenceStore.apply_anchor_update(update: AnchorSnapshot) -> ReferenceChange。
 
 - [ ] **Step 1 — 写失败测试：** test_grid_growth_keeps_reference；test_loop_reprojects_box_and_waypoint；test_unavailable_anchor_marks_review_required；test_reload_preserves_removed_box；test_single_map_odom_owner。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -217,7 +274,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `tests/integration/test_map_operations.py`
 - Create: `docs/protocol/map-bundle.md`
 
-**Interfaces:** export_bundle(map_ref: MapRef, destination: Path) -> BundleManifest；import_bundle(path: Path, robot_id: str) -> OperationResult；clear_map(expected: MapRef) -> OperationResult。manifest明确format_version、文件hash、后端版本、地图参考、稳定层、anchors、georeference和waypoints。
+**Interfaces:** async export_bundle(map_ref: MapRef, destination: Path) -> BundleManifest；async import_bundle(path: Path, robot_id: str) -> OperationResult；async clear_map(expected: MapRef) -> OperationResult。manifest明确format_version、文件hash、后端版本、地图参考、稳定层、anchors、georeference和waypoints。
 
 - [ ] **Step 1 — 写失败测试：** test_path_traversal_and_symlink_rejected；test_corrupt_bundle_preserves_active_map；test_mixed_revision_export_rejected；test_clear_invalidates_bound_tasks；test_cross_robot_home_requires_confirmation；test_unknown_operation_after_disconnect_queryable。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -232,7 +289,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `tests/unit/test_home.py`
 - Create: `tests/integration/test_waypoint_store.py`
 
-**Interfaces:** HomeService.initialize(start: StartupReference, localized: LocalizedPose) -> HomeResult；set_current(pose: LocalizedPose) -> Waypoint；return_home(expected: MapRef) -> execution_id。Waypoint含id、kind、pose、map_ref、anchor_id、source_robot_id和status。
+**Interfaces:** async HomeService.initialize(start: StartupReference, localized: LocalizedPose) -> HomeResult；async set_current(pose: LocalizedPose) -> Waypoint；async return_home(expected: MapRef) -> execution_id。Waypoint含id、kind、pose、map_ref、anchor_id、source_robot_id和status。
 
 - [ ] **Step 1 — 写失败测试：** test_home_persists_restart；test_moved_before_localization_not_silently_home；test_trusted_start_transform_recovers_start；test_obstacle_does_not_move_home；test_reference_mismatch_rejected。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -248,7 +305,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `tests/unit/test_localization.py`
 - Create: `tests/ros/test_relocalization.py`
 
-**Interfaces:** GeoAlignment.to_map(fix: QualifiedFix) -> PositionEstimate；Relocalizer.begin(map_ref: MapRef, hint: PoseHint | None) -> OperationResult；HeadingObserver.observe(sample: MotionSample) -> HeadingObservation | None。HeadingObserver不接收速度发布器，观测由融合估计器校验后使用。
+**Interfaces:** GeoAlignment.to_map(fix: QualifiedFix) -> PositionEstimate；async Relocalizer.begin(map_ref: MapRef, hint: PoseHint | None) -> OperationResult；HeadingObserver.observe(sample: MotionSample) -> HeadingObservation | None。HeadingObserver不接收速度发布器，观测由融合估计器校验后使用。
 
 - [ ] **Step 1 — 写失败测试：** test_unreferenced_map_rejects_geo_conversion；test_single_fix_no_heading；test_forward_baseline_corrects_wrapped_angle；test_reverse_curve_slip_jump_rejected；test_heading_observer_never_commands_motion；test_no_gps_manual_hint_scan_match；test_bad_gps_does_not_kill_healthy_local_navigation。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -259,12 +316,12 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 ### Task 12: 本地任务数据库与调度
 
 **Files:**
-- Create: `src/senior_control/tasks/{__init__,models,store,schedule,runner}.py`
+- Create: `src/senior_control/tasks/{__init__,models,store,schedule,runner,executor}.py`
 - Create: `tests/unit/test_schedule.py`
 - Create: `tests/integration/test_task_runner.py`
 - Create: `docs/protocol/scheduling.md`
 
-**Interfaces:** Schedule.next_after(utc: datetime) -> datetime；TaskStore.update(task: TaskDefinition, expected_revision: int) -> TaskDefinition；TaskRunner.tick(now_utc: datetime, now_mono: float, context: ExecutionContext) -> list[TaskEvent]。TaskDefinition含robot_id、map_ref、waypoint_ids、schedule、timezone、enabled和revision。
+**Interfaces:** Schedule.next_after(utc: datetime) -> datetime；async TaskStore.update(task: TaskDefinition, expected_revision: int) -> TaskDefinition；TaskRunner.tick(now_utc: datetime, now_mono: float, context: ExecutionContext) -> list[TaskIntent]。TaskDefinition含robot_id、map_ref、waypoint_ids、schedule、timezone、enabled和revision。
 
 - [ ] **Step 1 — 写失败测试：** test_interval_anchored_to_created_at；test_cron_dom_dow_or；test_dst_gap_skips_and_fold_runs_once；test_offline_skips_no_catchup；test_crash_after_dispatch_never_redispatches_unknown；test_manual_takeover_requires_resume；test_device_reboot_preserves_tasks；test_next_scheduled_occurrence_runs_but_interrupted_instance_does_not_resume。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -279,6 +336,8 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 **Files:**
 - Create: `src/senior_control/cloud/{__init__,app,auth,pairing,registry,relay}.py`
 - Create: `tests/integration/test_cloud.py`
+- Create: `src/senior_control/runtime/{__init__,supervisor}.py`
+- Create: `tests/integration/test_runtime.py`
 - Create: `docs/protocol/http-ws.md`
 
 **Interfaces:** create_app(settings: CloudSettings) -> FastAPI；POST /api/session、DELETE /api/session；POST /api/pairing-codes、POST /api/devices/pair、GET /api/robots、DELETE /api/robots/{id}；/ws/agent与/ws/control使用版本化Envelope。
@@ -286,7 +345,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - [ ] **Step 1 — 写失败测试：** test_pair_code_atomic_single_use；test_rate_limit_invalid_login；test_revoked_device_cannot_reconnect；test_browser_cannot_impersonate_agent；test_two_sockets_old_epoch_dropped；test_wrong_robot_command_rejected。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
 - [ ] **Step 3 — 实现：** 配置管理员密码hash，不引入注册；浏览器用Secure/HttpOnly/SameSite会话Cookie与写操作CSRF校验，WS校验Origin。设备使用单独凭据并哈希存储；心跳与控制转发有界队列，速度不积压，状态快照可合并。消息大小、鉴权与上传限额显式配置。
-- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/integration/test_cloud.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
+- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/integration/test_cloud.py tests/integration/test_runtime.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
 - [ ] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: add single admin pairing and authenticated robot relay"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
 
 ### Task 14: 车端代理与任务地图同步
@@ -294,14 +353,17 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 **Files:**
 - Create: `src/senior_control/agent/{__init__,connection,dispatcher,snapshots,main}.py`
 - Create: `tests/integration/test_agent.py`
+- Create: `src/senior_control/runtime/ipc.py`
+- Create: `tests/integration/test_shutdown.py`
+- Create: `tests/integration/test_backend_observability.py`
 - Create: `ros2/src/senior_robot/senior_robot/agent_adapter.py`
 
-**Interfaces:** Agent.run() -> None；dispatch(envelope: Envelope) -> OperationResult；publish_snapshot(robot_id: str) -> RobotSnapshot。RobotSnapshot包含连接、定位、map_ref、home、任务revision、执行状态与采集时间；云端缓存加last_synced_at/stale。
+**Interfaces:** async Agent.run() -> None；async dispatch(envelope: Envelope) -> OperationResult；async publish_snapshot(robot_id: str) -> RobotSnapshot。RobotSnapshot包含连接、定位、map_ref、home、任务revision、执行状态与采集时间；云端缓存加last_synced_at/stale。
 
 - [ ] **Step 1 — 写失败测试：** test_reconnect_fetches_full_snapshot；test_edit_ack_only_after_device_commit；test_offline_edit_fails_not_queued；test_other_robot_heartbeat_not_eligible；test_shutdown_disables_motion_before_ros_exit。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
 - [ ] **Step 3 — 实现：** 任务/Home/地图操作在车端执行，以operation_id去重和expected_revision防覆盖；重连拒绝旧命令但允许查询已提交操作结果。长时间地图导出不阻塞心跳与停车，工作队列分离并有超时。
-- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/integration/test_agent.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
+- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/integration/test_agent.py tests/integration/test_shutdown.py tests/integration/test_backend_observability.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
 - [ ] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: connect robot agent and synchronize device owned data"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
 
 ## 阶段四：视觉与网页
@@ -330,7 +392,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 - Create: `deploy/coturn/turnserver.conf.template`
 - Create: `docs/operations/video.md`
 
-**Interfaces:** VideoSession.offer(robot_id: str, offer: SessionDescription) -> SessionDescription；issue_turn_credentials(session_id: str, now: int) -> IceCredentials；信令复用已认证设备/控制连接，不混入速度队列。
+**Interfaces:** async VideoSession.offer(robot_id: str, offer: SessionDescription) -> SessionDescription；issue_turn_credentials(session_id: str, now: int) -> IceCredentials；信令复用已认证设备/控制连接，不混入速度队列。
 
 - [ ] **Step 1 — 写失败测试：** test_unselected_robot_stream_denied；test_turn_credentials_expire；test_congested_video_keeps_heartbeat_and_stop；test_no_camera_returns_unavailable；test_session_close_releases_encoder。
 - [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
@@ -440,7 +502,7 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 | 四 | 桌面与移动横屏控制、视频与YOLO、任务和地图管理完整可用 | 15—19 |
 | 五 | 自托管部署可复现，Linux全链路仿真有证据，实车未验证项明确 | 20—21 |
 
-本计划尚未运行任何产品测试。完成标记只在步骤真实执行后填写。实施中每次更改协议或上游签名须同步其所有消费者及协议文档，禁止以接口兼容名义保留无注释的分支。
+后端规划已按Python Development插件完成一次静态审查并合并修订，见docs/reviews/2026-10-27-python-backend-plan-review.md。本计划尚未运行任何产品测试。完成标记只在步骤真实执行后填写。实施中每次更改协议或上游签名须同步其所有消费者及协议文档，禁止以接口兼容名义保留无注释的分支。
 
 ## 自查记录
 
