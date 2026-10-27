@@ -62,3 +62,62 @@ async def test_disk_full_has_no_success_ack(tmp_path):
         await db.connection.rollback()
         cursor = await db.connection.execute("SELECT count(*) FROM item")
         assert (await cursor.fetchone())[0] == 0
+
+
+@pytest.mark.parametrize("timeout", [-1, 0, 60001])
+def test_busy_timeout_must_be_bounded(tmp_path, timeout):
+    with pytest.raises(ValueError):
+        Database(tmp_path / "x.db", busy_timeout_ms=timeout)
+
+
+@pytest.mark.asyncio
+async def test_database_pragmas_and_backup_snapshot(tmp_path):
+    path = tmp_path / "snapshot.db"
+    async with Database(path) as db:
+        for name, expected in (("foreign_keys", 1), ("synchronous", 2), ("journal_mode", "wal")):
+            async with db.connection.execute(f"PRAGMA {name}") as cursor:
+                assert (await cursor.fetchone())[0] == expected
+        await migrate(
+            db,
+            [
+                Migration(
+                    1, ("CREATE TABLE item (value TEXT)", "INSERT INTO item VALUES ('before')")
+                )
+            ],
+        )
+        await migrate(db, [Migration(1, ()), Migration(2, ("INSERT INTO item VALUES ('after')",))])
+    with sqlite3.connect(str(path) + ".backup") as snapshot:
+        assert snapshot.execute("SELECT value FROM item").fetchall() == [("before",)]
+        assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_locked_wal_initialization_uses_requested_busy_timeout(tmp_path):
+    import asyncio
+
+    path = tmp_path / "locked.db"
+    with sqlite3.connect(path) as blocker:
+        blocker.execute("CREATE TABLE x (v INTEGER)")
+        blocker.execute("BEGIN EXCLUSIVE")
+        with pytest.raises(sqlite3.OperationalError):
+            await asyncio.wait_for(Database(path, busy_timeout_ms=50).__aenter__(), 1)
+        blocker.rollback()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_initialization_releases_connection(tmp_path):
+    import asyncio
+
+    path = tmp_path / "cancel.db"
+    with sqlite3.connect(path) as blocker:
+        blocker.execute("CREATE TABLE x (v INTEGER)")
+        blocker.execute("BEGIN EXCLUSIVE")
+        task = asyncio.create_task(Database(path, busy_timeout_ms=100).__aenter__())
+        await asyncio.sleep(0.02)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        blocker.rollback()
+    async with Database(path, busy_timeout_ms=100) as db:
+        async with db.connection.execute("SELECT count(*) FROM x") as cursor:
+            assert (await cursor.fetchone())[0] == 0
