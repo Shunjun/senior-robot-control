@@ -26,11 +26,11 @@ def node():
     rclpy.shutdown()
 
 
-def wait_for(node, condition, seconds=30):
+def wait_for(node, condition, seconds=30, failure="timed out waiting for ROS data"):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline and not condition():
         rclpy.spin_once(node, timeout_sec=0.1)
-    assert condition(), "timed out waiting for ROS data"
+    assert condition(), failure
 
 
 def test_sim_sensor_contract(node):
@@ -133,7 +133,13 @@ def test_truth_independent_and_tf_stream(node):
         node.create_subscription(LaserScan, "/scan", scans.append, qos_profile_sensor_data),
     ]
     wait_for(node, lambda: bool(truth) and bool(wheel) and bool(scans))
-    assert any(p.node_name == "drive" for p in node.get_publishers_info_by_topic("/wheel/odom"))
+    wait_for(
+        node,
+        lambda: any(
+            p.node_name == "drive" for p in node.get_publishers_info_by_topic("/wheel/odom")
+        ),
+        failure="drive publisher for /wheel/odom not discovered",
+    )
     spin_for(node, 2.0)
     before_scan_count = len(scans)
     before_tf_count = len(transforms)
@@ -179,7 +185,13 @@ def test_watchdog_stops(node):
             and publisher.get_subscription_count() > 0
         ),
     )
-    assert any(s.node_name == "drive" for s in node.get_subscriptions_info_by_topic("/cmd_vel"))
+    wait_for(
+        node,
+        lambda: any(
+            s.node_name == "drive" for s in node.get_subscriptions_info_by_topic("/cmd_vel")
+        ),
+        failure="drive subscriber for /cmd_vel not discovered",
+    )
     original = copy.deepcopy(observations[-1].pose.pose)
     clear_pose = copy.deepcopy(original)
     clear_pose.position.x = -3.0

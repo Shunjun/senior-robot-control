@@ -77,3 +77,14 @@ trap - EXIT
 ```
 
 Run the identical pytest command in the second terminal. It must **fail specifically on the assertion with `watchdog failed to sustain low velocity after timeout`**, after movement and clearance checks pass; an import, launch, service, timing or clearance failure is inconclusive. Stop the negative-control launch, which removes its temporary file. This deliberately failing run proves the stop assertion detects the long timeout only when observed on the actual Linux simulator; it does not test pause/resume safety.
+
+### Linux VM rendering
+
+On the tested Ubuntu 22.04 aarch64 Parallels VM, a displayless server-only launch aborted during Ogre2/EGL texture initialization. With `xvfb`, `xauth`, and `mesa-utils` installed, `glxinfo` under Xvfb reported Mesa llvmpipe / OpenGL 4.5; the following launch ran the RGB-D, scan, IMU and odometry sensor contract successfully on that VM:
+
+```sh
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x720x24' \
+  ros2 launch senior_sim simulation.launch.py headless:=true
+```
+
+Keep the same sourced ROS environments and isolated domain described above in both terminals. This establishes the sensor test only; the complete ROS suite and watchdog negative control remain separate gates. Fortress also offers `--headless-rendering` for EGL with OGRE2, but that option has not been tested in this VM. `-s` alone means server-only and does not request that option. See the [Fortress headless rendering documentation](https://gazebosim.org/api/gazebo/6/headless_rendering.html).
