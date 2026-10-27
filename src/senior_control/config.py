@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from math import pi
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,7 +24,13 @@ class DeviceProfile(ConfigModel):
 
     @model_validator(mode="after")
     def hardware_requirements(self) -> "DeviceProfile":
+        if any(not 0 < span <= 2 * pi for span in self.sensor_coverage.values()):
+            raise ValueError("sensor coverage spans must be in (0, 2π]")
+        if not self.sensor_coverage.keys() <= self.topics.keys():
+            raise ValueError("sensor coverage must reference configured topics")
         if self.mode == "hardware":
+            if "scan" not in self.sensor_coverage:
+                raise ValueError("hardware requires scan coverage")
             points = self.footprint
             area = (
                 abs(
@@ -99,8 +106,11 @@ def load_settings(source: SettingsSource) -> AppSettings:
     """Load YAML, mounted secrets, environment, then CLI; never load cwd .env."""
     values: dict[str, Any] = {}
     if source.yaml_path is not None:
-        with source.yaml_path.open(encoding="utf-8") as stream:
-            loaded = yaml.safe_load(stream)
+        try:
+            with source.yaml_path.open(encoding="utf-8") as stream:
+                loaded = yaml.safe_load(stream)
+        except yaml.YAMLError:
+            raise ValueError("invalid YAML configuration") from None
         if not isinstance(loaded, dict):
             raise ValueError("configuration must be a mapping")
         values.update(loaded)

@@ -121,7 +121,8 @@ def test_hardware_profile_requires_geometry_and_ros_mapping():
                     "mode": "hardware",
                     "footprint": [[0, 0], [1, 0], [0, 1]],
                     "frames": {"base": "base_link"},
-                    "topics": {"cmd": "/cmd_vel"},
+                    "topics": {"cmd": "/cmd_vel", "scan": "/scan"},
+                    "sensor_coverage": {"scan": 6.0},
                 },
             },
             environment={},
@@ -186,3 +187,55 @@ def test_clock_is_injected_without_sleep():
     assert not expired(clock, 11.0)
     clock.now = 11.0
     assert expired(clock, 11.0)
+
+
+def test_malformed_yaml_traceback_does_not_expose_secret(tmp_path, monkeypatch):
+    import traceback
+
+    import yaml
+
+    parse = yaml.safe_load
+    monkeypatch.setattr(yaml, "safe_load", lambda stream: parse(stream.read()))
+
+    path = tmp_path / "invalid.yaml"
+    path.write_text("secret: private-yaml-token: invalid\n", encoding="utf-8")
+    with pytest.raises(Exception) as exc:
+        load_settings(SettingsSource(yaml_path=path, environment={}))
+    assert "private-yaml-token" not in "".join(traceback.format_exception(exc.value))
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    [
+        {},
+        {"scan": -0.1},
+        {"scan": 0},
+        {"scan": 6.3},
+        {"other": 1.0},
+        {"scan": 1.0, "other": 1.0},
+        {"scan": float("inf")},
+    ],
+)
+def test_hardware_rejects_missing_or_invalid_coverage(coverage):
+    from senior_control.config import DeviceProfile
+
+    with pytest.raises(ValueError):
+        DeviceProfile(
+            mode="hardware",
+            footprint=[(0, 0), (1, 0), (0, 1)],
+            frames={"base": "base"},
+            topics={"scan": "/scan"},
+            sensor_coverage=coverage,
+        )
+
+
+def test_simulation_coverage_optional_and_full_circle_valid():
+    from math import pi
+
+    from senior_control.config import DeviceProfile
+
+    assert DeviceProfile().sensor_coverage == {}
+    profile = DeviceProfile(topics={"scan": "/scan"}, sensor_coverage={"scan": 2 * pi})
+    assert profile.sensor_coverage["scan"] == 2 * pi
+    with pytest.raises(ValueError):
+        DeviceProfile(sensor_coverage={"scan": 1.0})
