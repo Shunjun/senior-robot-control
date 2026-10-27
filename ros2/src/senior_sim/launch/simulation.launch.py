@@ -6,6 +6,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -13,7 +14,7 @@ def generate_launch_description():
     share = FindPackageShare("senior_sim")
     world = LaunchConfiguration("world")
     headless = LaunchConfiguration("headless")
-    sim_time = LaunchConfiguration("use_sim_time")
+    sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     description = Command(
         [
             "xacro ",
@@ -47,7 +48,12 @@ def generate_launch_description():
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
-                parameters=[{"robot_description": description, "use_sim_time": sim_time}],
+                parameters=[
+                    {
+                        "robot_description": ParameterValue(description, value_type=str),
+                        "use_sim_time": sim_time,
+                    }
+                ],
             ),
             Node(
                 package="ros_gz_sim",
