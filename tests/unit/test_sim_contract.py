@@ -104,3 +104,36 @@ def test_baseline_has_visible_obstacle() -> None:
     obstacle = world.find("./world/model[@name='test_obstacle']")
     assert obstacle is not None
     assert obstacle.find("./link/visual/geometry/box/size") is not None
+
+
+def test_drive_remapping_uses_humble_plugin_configuration() -> None:
+    import xml.etree.ElementTree as ET
+
+    model = ET.parse(ROOT / "ros2/src/senior_sim/urdf/senior.urdf.xacro").getroot()
+    plugin = model.find("./gazebo/plugin[@name='gz_ros2_control::GazeboSimROS2ControlPlugin']")
+    assert plugin is not None
+    remaps = {item.text for item in plugin.findall("./ros/remapping")}
+    assert {"/drive/cmd_vel_unstamped:=/cmd_vel", "/drive/odom:=/wheel/odom"} <= remaps
+    launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
+    assert "--controller-ros-args" not in launch
+
+
+def test_environment_package_versions_from_ament_prefix(tmp_path, monkeypatch) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "detect_environment", ROOT / "tools/detect_environment.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    package = tmp_path / "share" / "controller_manager"
+    package.mkdir(parents=True)
+    (package / "package.xml").write_text(
+        "<package><name>controller_manager</name><version>2.1.0</version></package>",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AMENT_PREFIX_PATH", str(tmp_path))
+    monkeypatch.setattr(module.shutil, "which", lambda _: None)
+    result = module.detect_environment()
+    assert result["packages"]["controller_manager"]["version"] == "2.1.0"
+    assert result["packages"]["gz_ros2_control"]["available"] is False
+    assert result["matrix"]["runtime_ready"] is False

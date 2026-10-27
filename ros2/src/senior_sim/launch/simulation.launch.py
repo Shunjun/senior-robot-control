@@ -76,8 +76,6 @@ def generate_launch_description():
                     "drive",
                     "--controller-manager",
                     "/controller_manager",
-                    "--controller-ros-args",
-                    "--remap ~/odom:=/wheel/odom --remap ~/cmd_vel_unstamped:=/cmd_vel",
                 ],
             ),
         ]
