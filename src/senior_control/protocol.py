@@ -8,7 +8,13 @@ from senior_control.errors import ErrorCode
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+        revalidate_instances="always",
+        hide_input_in_errors=True,
+    )
 
 
 class EmptyPayload(StrictModel):
@@ -89,7 +95,11 @@ def validate_envelope(raw: bytes, expected_robot_id: str) -> Envelope:
 
 def serialize_envelope(envelope: Envelope) -> bytes:
     """Serialize a validated envelope with the same size bound as input."""
-    raw = _adapter.dump_json(envelope)
+    try:
+        validated = _adapter.validate_python(envelope)
+    except ValidationError as exc:
+        raise ValueError("invalid envelope") from exc
+    raw = _adapter.dump_json(validated)
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("message too large")
     return raw

@@ -715,7 +715,6 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]
-provides-extras = ["cloud", "agent", "vision"]
 
 [package.metadata.requires-dev]
 dev = [

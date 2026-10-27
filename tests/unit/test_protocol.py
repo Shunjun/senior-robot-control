@@ -81,3 +81,16 @@ def test_shared_values_reject_invalid_values():
     ):
         with pytest.raises(ValueError):
             factory()
+
+
+def test_serialization_rejects_mutated_and_constructed_nonfinite_payloads():
+    from senior_control.protocol import VelocityPayload, serialize_envelope
+
+    envelope = validate_envelope(message(), "r1")
+    assert envelope.type == "drive.velocity"
+    envelope.payload.vx = float("nan")
+    with pytest.raises(ValueError):
+        serialize_envelope(envelope)
+    envelope.payload = VelocityPayload.model_construct(vx=float("inf"), wz=0.0)
+    with pytest.raises(ValueError):
+        serialize_envelope(envelope)
