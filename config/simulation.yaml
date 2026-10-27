@@ -1,0 +1,5 @@
+mode: simulation
+footprint: [[-0.337, -0.27], [0.337, -0.27], [0.337, 0.27], [-0.337, 0.27]]
+topics: {scan: /scan, imu: /imu/data, wheel_odom: /wheel/odom, color: /camera/color/image_raw, depth: /camera/depth/image_raw}
+frames: {base: base_link, scan: laser_link, imu: imu_link, camera: camera_link}
+sensor_coverage: {scan: 6.283185307179586}

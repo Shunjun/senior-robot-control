@@ -1,0 +1,19 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    joint_state_broadcaster: {type: joint_state_broadcaster/JointStateBroadcaster}
+    drive: {type: diff_drive_controller/DiffDriveController}
+drive:
+  ros__parameters:
+    left_wheel_names: [left_front_joint, left_back_joint]
+    right_wheel_names: [right_front_joint, right_back_joint]
+    wheel_separation: 0.481154
+    wheel_radius: 0.076
+    cmd_vel_timeout: 0.3
+    use_stamped_vel: false
+    open_loop: false
+    position_feedback: true
+    enable_odom_tf: true
+    odom_frame_id: odom
+    base_frame_id: base_link
+    publish_rate: 30.0

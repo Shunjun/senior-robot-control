@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="senior">
+  <xacro:arg name="controllers_file" default=""/>
+  <link name="base_link">
+    <inertial><mass value="30"/><origin xyz="0 0 0.0593"/><inertia ixx="0.8" iyy="1.2" izz="1.7" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 0.0593"/><geometry><box size="0.674 0.54 0.15425"/></geometry></visual>
+    <collision><origin xyz="0 0 0.0593"/><geometry><box size="0.674 0.54 0.15425"/></geometry></collision>
+    <!-- Conservative rear attachment represents actual occlusion, not masked scan values. -->
+    <visual><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></visual>
+    <collision><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></collision>
+  </link>
+  <xacro:macro name="wheel" params="name x y">
+    <link name="${name}_wheel"><inertial><mass value="1"/><inertia ixx="0.002" iyy="0.003" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial><visual><origin rpy="1.57079632679 0 0"/><geometry><cylinder radius="0.076" length="0.06615"/></geometry></visual><collision><origin rpy="1.57079632679 0 0"/><geometry><cylinder radius="0.076" length="0.06615"/></geometry></collision></link>
+    <joint name="${name}_joint" type="continuous"><parent link="base_link"/><child link="${name}_wheel"/><origin xyz="${x} ${y} 0.016471"/><axis xyz="0 1 0"/><limit effort="100" velocity="20"/></joint>
+  </xacro:macro>
+  <xacro:wheel name="left_front" x="0.21399916" y="0.24259043"/>
+  <xacro:wheel name="left_back" x="-0.21400084" y="0.24259043"/>
+  <xacro:wheel name="right_front" x="0.21398716" y="-0.23856357"/>
+  <xacro:wheel name="right_back" x="-0.21401284" y="-0.23856357"/>
+  <link name="laser_link"/><joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser_link"/><origin xyz="0.15699 0.00201 0.14652"/></joint>
+  <link name="camera_link"/><joint name="camera_joint" type="fixed"><parent link="base_link"/><child link="camera_link"/><origin xyz="0.2316 0.00224 0.1282"/></joint>
+  <link name="camera_optical_frame"/><joint name="camera_optical_joint" type="fixed"><parent link="camera_link"/><child link="camera_optical_frame"/><origin rpy="-1.57079632679 0 -1.57079632679"/></joint>
+  <link name="imu_link"/><joint name="imu_joint" type="fixed"><parent link="base_link"/><child link="imu_link"/></joint>
+  <gazebo reference="laser_link"><sensor name="laser" type="gpu_lidar"><topic>/scan</topic><update_rate>10</update_rate><ignition_frame_id>laser_link</ignition_frame_id><lidar><scan><horizontal><samples>720</samples><min_angle>-3.14159265</min_angle><max_angle>3.14159265</max_angle></horizontal></scan><range><min>0.08</min><max>20</max><resolution>0.01</resolution></range></lidar></sensor></gazebo>
+  <gazebo reference="camera_link"><sensor name="rgbd" type="rgbd_camera"><topic>/camera</topic><update_rate>10</update_rate><ignition_frame_id>camera_optical_frame</ignition_frame_id><camera><horizontal_fov>1.047</horizontal_fov><image><width>640</width><height>480</height><format>R8G8B8</format></image><clip><near>0.1</near><far>10</far></clip></camera></sensor></gazebo>
+  <gazebo reference="imu_link"><sensor name="imu" type="imu"><topic>/imu/data</topic><update_rate>50</update_rate><ignition_frame_id>imu_link</ignition_frame_id><always_on>true</always_on></sensor></gazebo>
+  <ros2_control name="GazeboSimSystem" type="system"><hardware><plugin>gz_ros2_control/GazeboSimSystem</plugin></hardware>
+    <xacro:macro name="control_joint" params="name"><joint name="${name}_joint"><command_interface name="velocity"/><state_interface name="position"/><state_interface name="velocity"/></joint></xacro:macro>
+    <xacro:control_joint name="left_front"/><xacro:control_joint name="left_back"/><xacro:control_joint name="right_front"/><xacro:control_joint name="right_back"/>
+  </ros2_control>
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin"><parameters>$(arg controllers_file)</parameters></plugin>
+    <plugin filename="ignition-gazebo-odometry-publisher-system" name="ignition::gazebo::systems::OdometryPublisher"><odom_frame>world</odom_frame><robot_base_frame>base_link</robot_base_frame><odom_topic>/ground_truth/odom</odom_topic><tf_topic>/ground_truth/pose_unbridged</tf_topic><dimensions>3</dimensions></plugin>
+  </gazebo>
+</robot>

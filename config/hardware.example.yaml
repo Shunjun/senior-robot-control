@@ -1,0 +1,6 @@
+# Example only: verify topics, frames, coverage and geometry against the actual robot.
+mode: hardware
+footprint: [[-0.337, -0.27], [0.337, -0.27], [0.337, 0.27], [-0.337, 0.27]]
+topics: {scan: /hardware/scan}
+frames: {base: base_link, scan: laser_link}
+sensor_coverage: {scan: 6.283185307179586}
