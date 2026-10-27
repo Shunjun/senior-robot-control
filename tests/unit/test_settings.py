@@ -135,3 +135,54 @@ def test_nested_wrong_type_rejected():
         load_settings(
             SettingsSource(environment={"SENIOR_SECRET": "x", "SENIOR_DEVICE__TOPICS": "not-a-map"})
         )
+
+
+def test_unstructured_and_exception_logs_never_emit_input():
+    import json
+    import logging
+
+    from senior_control.observability import JsonFormatter
+
+    record = logging.LogRecord(
+        "test", logging.ERROR, "", 0, 'authorization: Bearer "super secret" position=1,2', (), None
+    )
+    record.event = "not-an-approved-event"
+    record.operation_id = "op-23"
+    formatted = json.loads(JsonFormatter().format(record))
+    assert formatted["event"] == "unstructured_log"
+    assert formatted["operation_id"] == "op-23"
+    assert "super secret" not in str(formatted)
+    assert "position" not in str(formatted)
+
+
+def test_approved_event_keeps_identifiers():
+    import json
+    import logging
+
+    from senior_control.observability import JsonFormatter
+
+    record = logging.LogRecord("test", logging.INFO, "", 0, "token: secret", (), None)
+    record.event = "operation_failed"
+    record.operation_id = "op-23"
+    result = json.loads(JsonFormatter().format(record))
+    assert result["event"] == "operation_failed"
+    assert result["operation_id"] == "op-23"
+    assert "secret" not in str(result)
+
+
+def test_clock_is_injected_without_sleep():
+    from senior_control.clock import Clock
+
+    class FakeClock:
+        now = 10.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    def expired(clock: Clock, deadline: float) -> bool:
+        return clock.monotonic() >= deadline
+
+    clock = FakeClock()
+    assert not expired(clock, 11.0)
+    clock.now = 11.0
+    assert expired(clock, 11.0)
