@@ -44,3 +44,40 @@ def test_reject_invalid_envelope(changes):
 def test_reject_oversized_message():
     with pytest.raises(ValueError):
         validate_envelope(message(session_id="x" * 100_000), "r1")
+
+
+def test_response_round_trip_and_typed_payload():
+    from senior_control.protocol import ResponseEnvelope, serialize_envelope
+
+    raw = message(
+        type="response",
+        payload={"request_type": "drive.velocity", "ok": False, "error": "safety_rejected"},
+    )
+    result = validate_envelope(raw, "r1")
+    assert isinstance(result, ResponseEnvelope)
+    assert result.payload.error == "safety_rejected"
+    assert validate_envelope(serialize_envelope(result), "r1") == result
+
+
+def test_response_cannot_have_success_and_error():
+    with pytest.raises(ValueError):
+        validate_envelope(
+            message(
+                type="response",
+                payload={"request_type": "drive.stop", "ok": True, "error": "timeout"},
+            ),
+            "r1",
+        )
+
+
+def test_shared_values_reject_invalid_values():
+    from senior_control.models import MapRef, OperationResult, Pose2D, Velocity
+
+    for factory in (
+        lambda: Velocity(float("nan"), 0),
+        lambda: Pose2D(0, float("inf"), 0),
+        lambda: MapRef("", -1),
+        lambda: OperationResult("id", "invented"),
+    ):
+        with pytest.raises(ValueError):
+            factory()

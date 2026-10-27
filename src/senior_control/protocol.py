@@ -2,7 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+
+from senior_control.errors import ErrorCode
 
 
 class StrictModel(BaseModel):
@@ -40,12 +42,39 @@ class SimpleEnvelope(EnvelopeBase):
     payload: EmptyPayload
 
 
-Envelope = Annotated[VelocityEnvelope | SimpleEnvelope, Field(discriminator="type")]
+class ResponsePayload(StrictModel):
+    request_type: Literal[
+        "control.acquire",
+        "control.release",
+        "drive.velocity",
+        "drive.stop",
+        "safety.estop",
+        "safety.reset",
+    ]
+    ok: bool
+    error: ErrorCode | None = None
+    operation_id: str | None = None
+
+    @model_validator(mode="after")
+    def consistent_result(self) -> "ResponsePayload":
+        if self.ok == (self.error is not None):
+            raise ValueError("response success and error conflict")
+        return self
+
+
+class ResponseEnvelope(EnvelopeBase):
+    type: Literal["response"]
+    payload: ResponsePayload
+
+
+Envelope = Annotated[
+    VelocityEnvelope | SimpleEnvelope | ResponseEnvelope, Field(discriminator="type")
+]
 _adapter = TypeAdapter(Envelope)
 MAX_MESSAGE_BYTES = 65536
 
 
-def validate_envelope(raw: bytes, expected_robot_id: str) -> EnvelopeBase:
+def validate_envelope(raw: bytes, expected_robot_id: str) -> Envelope:
     """Validate a bounded message for the authenticated robot."""
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("message too large")
@@ -56,3 +85,11 @@ def validate_envelope(raw: bytes, expected_robot_id: str) -> EnvelopeBase:
     if envelope.robot_id != expected_robot_id:
         raise ValueError("wrong robot")
     return envelope
+
+
+def serialize_envelope(envelope: Envelope) -> bytes:
+    """Serialize a validated envelope with the same size bound as input."""
+    raw = _adapter.dump_json(envelope)
+    if len(raw) > MAX_MESSAGE_BYTES:
+        raise ValueError("message too large")
+    return raw

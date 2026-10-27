@@ -75,3 +75,63 @@ def test_configuration_traceback_does_not_expose_input():
             )
         )
     assert "trace-secret" not in "".join(traceback.format_exception(exc.value))
+
+
+def test_mounted_secrets_and_nested_env_precedence(tmp_path):
+    from senior_control.config import AgentSettings
+
+    config = tmp_path / "config.yaml"
+    config.write_text("secret: yaml\ndevice:\n  mode: simulation\n  topics:\n    cmd: /yaml\n")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "SENIOR_SECRET").write_text("mounted")
+    result = load_settings(
+        SettingsSource(
+            yaml_path=config,
+            secrets_dir=secrets,
+            environment={"SENIOR_DEVICE__TOPICS__CMD": "/env"},
+            cli={"device": {"topics": {"scan": "/cli"}}},
+        )
+    )
+    assert isinstance(result, AgentSettings)
+    assert result.secret.get_secret_value() == "mounted"
+    assert result.device.topics == {"cmd": "/env", "scan": "/cli"}
+
+
+def test_cloud_settings_rejects_device_and_empty_secret():
+    from senior_control.config import CloudSettings
+
+    result = load_settings(SettingsSource(cli={"role": "cloud", "secret": "abc"}, environment={}))
+    assert isinstance(result, CloudSettings)
+    for values in ({"role": "cloud", "secret": "abc", "device": {}}, {"secret": ""}):
+        with pytest.raises(ValueError):
+            load_settings(SettingsSource(cli=values, environment={}))
+
+
+def test_hardware_profile_requires_geometry_and_ros_mapping():
+    with pytest.raises(ValueError):
+        load_settings(
+            SettingsSource(cli={"secret": "x", "device": {"mode": "hardware"}}, environment={})
+        )
+    settings = load_settings(
+        SettingsSource(
+            cli={
+                "secret": "x",
+                "device": {
+                    "mode": "hardware",
+                    "footprint": [[0, 0], [1, 0], [0, 1]],
+                    "frames": {"base": "base_link"},
+                    "topics": {"cmd": "/cmd_vel"},
+                },
+            },
+            environment={},
+        )
+    )
+    assert settings.device.mode == "hardware"
+
+
+def test_nested_wrong_type_rejected():
+    with pytest.raises(ValueError):
+        load_settings(
+            SettingsSource(environment={"SENIOR_SECRET": "x", "SENIOR_DEVICE__TOPICS": "not-a-map"})
+        )
