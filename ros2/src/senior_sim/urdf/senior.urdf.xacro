@@ -3,7 +3,11 @@
   <xacro:arg name="controllers_file" default=""/>
   <link name="base_link">
     <inertial><mass value="30"/><origin xyz="0 0 0.0593"/><inertia ixx="0.8" iyy="1.2" izz="1.7" ixy="0" ixz="0" iyz="0"/></inertial>
-    <visual><origin xyz="0 0 0.0593"/><geometry><box size="0.674 0.54 0.15425"/></geometry></visual>
+    <!-- Camera aperture is visual only; conservative collision envelope remains intact. -->
+    <visual><origin xyz="0 0 0.0460875"/><geometry><box size="0.674 0.54 0.127825"/></geometry></visual>
+    <visual><origin xyz="-0.0685 0 0.1232125"/><geometry><box size="0.537 0.54 0.026425"/></geometry></visual>
+    <visual><origin xyz="0.2685 0.155 0.1232125"/><geometry><box size="0.137 0.23 0.026425"/></geometry></visual>
+    <visual><origin xyz="0.2685 -0.155 0.1232125"/><geometry><box size="0.137 0.23 0.026425"/></geometry></visual>
     <collision><origin xyz="0 0 0.0593"/><geometry><box size="0.674 0.54 0.15425"/></geometry></collision>
     <!-- Conservative rear attachment represents actual occlusion, not masked scan values. -->
     <visual><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></visual>

@@ -1,5 +1,7 @@
 """Linux integration: launch simulator separately before running this file."""
 
+import math
+import struct
 import time
 
 import pytest
@@ -70,6 +72,14 @@ def test_sim_sensor_contract(node):
         msg = received[topic]
         assert msg.header.frame_id == frame
         assert msg.header.stamp.sec or msg.header.stamp.nanosec
+    scan = received["/scan"]
+    assert any(math.isfinite(r) and 0.1 < r < 4.0 for r in scan.ranges)
+    depth = received["/camera/depth/image_raw"]
+    assert depth.encoding == "32FC1" and depth.width and depth.height
+    endian = ">" if depth.is_bigendian else "<"
+    center_offset = (depth.height // 2) * depth.step + (depth.width // 2) * 4
+    center_depth = struct.unpack_from(endian + "f", depth.data, center_offset)[0]
+    assert math.isfinite(center_depth) and 0.1 < center_depth < 4.0
     assert received["/ground_truth/odom"].child_frame_id == "base_link"
     assert not any(
         t.header.frame_id == "world" and t.child_frame_id == "base_link" for t in transforms

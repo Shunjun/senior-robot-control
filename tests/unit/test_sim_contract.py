@@ -74,3 +74,33 @@ def test_environment_reports_passive_topic_discovery(monkeypatch) -> None:
         module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="/scan\n/clock\n")
     )
     assert module.detect_environment()["topics"] == ["/clock", "/scan"]
+
+
+def test_camera_forward_ray_is_clear_of_chassis_visuals() -> None:
+    import xml.etree.ElementTree as ET
+
+    model = ET.parse(ROOT / "ros2/src/senior_sim/urdf/senior.urdf.xacro").getroot()
+    camera_joint = model.find("./joint[@name='camera_joint']/origin")
+    assert camera_joint is not None
+    x, y, z = map(float, camera_joint.attrib["xyz"].split())
+    for visual in model.findall("./link[@name='base_link']/visual"):
+        origin = visual.find("origin")
+        size = visual.find("geometry/box")
+        assert origin is not None and size is not None
+        center = tuple(map(float, origin.attrib["xyz"].split()))
+        dimensions = tuple(map(float, size.attrib["size"].split()))
+        intersects = (
+            abs(y - center[1]) <= dimensions[1] / 2
+            and abs(z - center[2]) <= dimensions[2] / 2
+            and x <= center[0] + dimensions[0] / 2
+        )
+        assert not intersects, "forward camera ray intersects chassis visual"
+
+
+def test_baseline_has_visible_obstacle() -> None:
+    import xml.etree.ElementTree as ET
+
+    world = ET.parse(ROOT / "ros2/src/senior_sim/worlds/baseline.sdf").getroot()
+    obstacle = world.find("./world/model[@name='test_obstacle']")
+    assert obstacle is not None
+    assert obstacle.find("./link/visual/geometry/box/size") is not None
