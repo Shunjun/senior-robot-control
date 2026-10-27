@@ -26,6 +26,8 @@ class ConfigModel(BaseModel):
 class DeviceProfile(ConfigModel):
     mode: Literal["simulation", "hardware"] = "simulation"
     footprint: list[tuple[float, float]] = Field(default_factory=list)
+    self_mask: list[list[tuple[float, float]]] = Field(default_factory=list)
+    self_mask_calibrated: bool = False
     topics: dict[str, str] = Field(default_factory=dict)
     frames: dict[str, str] = Field(default_factory=dict)
     sensor_coverage: dict[str, float] = Field(default_factory=dict)

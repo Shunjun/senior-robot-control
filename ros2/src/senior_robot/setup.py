@@ -7,8 +7,9 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/senior_robot"]),
         ("share/senior_robot", ["package.xml"]),
-        ("share/senior_robot/config", ["config/hardware.yaml"]),
+        ("share/senior_robot/config", ["config/hardware.yaml", "config/self_filter.yaml"]),
     ],
+    entry_points={"console_scripts": ["scan_adapter = senior_robot.scan_adapter:main"]},
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Senior Robot",

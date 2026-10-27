@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --frozen --group dev
+      - run: uv sync --frozen --group dev --extra safety
       - run: uv run --frozen ruff check .
       - run: uv run --frozen ruff format --check .
       - run: uv run --frozen mypy src/senior_control
@@ -22,4 +22,4 @@ jobs:
           python -m venv /tmp/wheel-test
           /tmp/wheel-test/bin/pip install dist/*.whl
           cd /tmp
-          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config'
+          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config; import importlib.util; assert importlib.util.find_spec("shapely") is None'
