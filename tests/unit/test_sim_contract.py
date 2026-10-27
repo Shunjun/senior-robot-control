@@ -137,3 +137,9 @@ def test_environment_package_versions_from_ament_prefix(tmp_path, monkeypatch) -
     assert result["packages"]["controller_manager"]["version"] == "2.1.0"
     assert result["packages"]["gz_ros2_control"]["available"] is False
     assert result["matrix"]["runtime_ready"] is False
+
+
+def test_launch_supports_isolated_controller_configuration() -> None:
+    launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
+    assert '"controllers_file",' in launch
+    assert 'LaunchConfiguration("controllers_file")' in launch

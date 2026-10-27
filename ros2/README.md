@@ -35,3 +35,45 @@ The official `diff_drive_controller` uses feedback (`open_loop: false`) and `cmd
 Sources: [Humble/Fortress control compatibility](https://github.com/ros-controls/gz_ros2_control/tree/humble), [controller timeout and feedback](https://control.ros.org/humble/doc/ros2_controllers/diff_drive_controller/doc/userdoc.html), [Fortress ROS bridge](https://gazebosim.org/docs/fortress/ros2_integration/), [simulator odometry publisher](https://gazebosim.org/api/gazebo/6/classignition_1_1gazebo_1_1systems_1_1OdometryPublisher.html).
 
 `python3 tools/detect_environment.py` reports sourced ament package manifests and versions, missing prerequisites, and passive topic discovery. Its matrix does not certify runtime readiness or the Fortress version; check the installed `ignition-gazebo6` packages on the Linux host. The Humble plugin `<ros><remapping>` forwards controller topic remaps as documented in [the Humble integration documentation](https://github.com/ros-controls/gz_ros2_control/blob/humble/doc/index.rst). Runtime tests must confirm the actual `/drive` publisher and subscriber mappings.
+
+### Watchdog negative control
+
+Use the baseline world in an isolated ROS domain. Run the normal launch and test first, then stop that entire launch before the negative control. The test moves the model to x=-3 m with a clear forward corridor, checks its world position and forward lidar during the 2 s post-command window, and restores the model pose in `finally`. Both runs require working `/world/baseline/set_pose` and a running clock; a setup failure is not a successful negative control.
+
+Normal launch, from the repository root in the first terminal:
+
+```sh
+source /opt/ros/humble/setup.bash
+source ros2/install/setup.bash
+export ROS_DOMAIN_ID=71
+ros2 launch senior_sim simulation.launch.py headless:=true
+```
+
+In a second terminal from the repository root, with the same sourced environments and domain:
+
+```sh
+export ROS_DOMAIN_ID=71
+/usr/bin/python3.10 -m pytest tests/ros/test_sim_topics.py::test_watchdog_stops -q
+```
+
+It must pass. Stop the launch, then start a fresh simulation with a **temporary 10-second timeout** in the first terminal. The cleanup after the launch and the exit trap remove the temporary configuration; the installed and source controller YAML are never edited.
+
+```sh
+export ROS_DOMAIN_ID=71
+watchdog_dir=$(mktemp -d)
+trap 'rm -rf "$watchdog_dir"' EXIT
+/usr/bin/python3.10 - "$watchdog_dir/controllers.yaml" <<'PY'
+import sys
+import yaml
+from pathlib import Path
+source = Path('ros2/src/senior_sim/config/controllers.yaml')
+config = yaml.safe_load(source.read_text())
+config['drive']['ros__parameters']['cmd_vel_timeout'] = 10.0
+Path(sys.argv[1]).write_text(yaml.safe_dump(config))
+PY
+ros2 launch senior_sim simulation.launch.py headless:=true controllers_file:="$watchdog_dir/controllers.yaml"
+rm -rf "$watchdog_dir"
+trap - EXIT
+```
+
+Run the identical pytest command in the second terminal. It must **fail specifically on the assertion with `watchdog failed to sustain low velocity after timeout`**, after movement and clearance checks pass; an import, launch, service, timing or clearance failure is inconclusive. Stop the negative-control launch, which removes its temporary file. This deliberately failing run proves the stop assertion detects the long timeout only when observed on the actual Linux simulator; it does not test pause/resume safety.

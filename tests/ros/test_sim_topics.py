@@ -163,48 +163,101 @@ def test_truth_independent_and_tf_stream(node):
 
 
 def test_watchdog_stops(node):
-    observations, clocks = [], []
+    observations, clocks, scans = [], [], []
     subscriptions = [
         node.create_subscription(Odometry, "/ground_truth/odom", observations.append, 10),
         node.create_subscription(Clock, "/clock", clocks.append, qos_profile_sensor_data),
+        node.create_subscription(LaserScan, "/scan", scans.append, qos_profile_sensor_data),
     ]
     publisher = node.create_publisher(Twist, "/cmd_vel", 10)
-    wait_for(node, lambda: bool(clocks) and publisher.get_subscription_count() > 0)
+    wait_for(
+        node,
+        lambda: (
+            bool(clocks)
+            and bool(observations)
+            and bool(scans)
+            and publisher.get_subscription_count() > 0
+        ),
+    )
     assert any(s.node_name == "drive" for s in node.get_subscriptions_info_by_topic("/cmd_vel"))
-    command = Twist()
-    command.linear.x = 0.2
-    deadline = time.monotonic() + 15
-    moving = False
-    while time.monotonic() < deadline:
-        publisher.publish(command)
-        rclpy.spin_once(node, timeout_sec=0.05)
-        if observations and clocks:
+    original = copy.deepcopy(observations[-1].pose.pose)
+    clear_pose = copy.deepcopy(original)
+    clear_pose.position.x = -3.0
+    clear_pose.position.y = 0.0
+    clear_pose.position.z = 0.06
+    clear_pose.orientation.x = clear_pose.orientation.y = clear_pose.orientation.z = 0.0
+    clear_pose.orientation.w = 1.0
+    try:
+        set_sim_pose(clear_pose)
+        wait_for(node, lambda: abs(observations[-1].pose.pose.position.x + 3.0) < 0.1)
+        # Let the sensor and physics settle before commands; old samples are timestamp-filtered.
+        spin_for(node, 1.0)
+        command = Twist()
+        command.linear.x = 0.2
+        deadline = time.monotonic() + 15
+        moving = False
+        while time.monotonic() < deadline:
+            publisher.publish(command)
+            rclpy.spin_once(node, timeout_sec=0.05)
             recent = stamp_seconds(clocks[-1].clock) - stamp_seconds(observations[-1].header.stamp)
             if 0 <= recent < 0.2 and observations[-1].twist.twist.linear.x > 0.05:
                 moving = True
                 break
-    assert moving, "no recent measured movement while commands were published"
-    # Final command and latest clock establish a lower bound for post-command samples.
-    publisher.publish(command)
-    last_command_time = stamp_seconds(clocks[-1].clock)
-    wait_for(
-        node,
-        lambda: (
-            observations and stamp_seconds(observations[-1].header.stamp) >= last_command_time + 2.0
-        ),
-        seconds=30,
-    )
-    samples = [
-        m
-        for m in observations
-        if last_command_time + 1.2 <= stamp_seconds(m.header.stamp) <= last_command_time + 2.0
-    ]
-    assert len(samples) >= 5
-    assert stamp_seconds(samples[-1].header.stamp) - stamp_seconds(samples[0].header.stamp) >= 0.5
-    assert all(
-        abs(m.twist.twist.linear.x) < 0.02
-        and abs(m.twist.twist.linear.y) < 0.02
-        and abs(m.twist.twist.angular.z) < 0.05
-        for m in samples
-    )
+        assert moving, "no recent measured movement while commands were published"
+        publisher.publish(command)
+        last_command_time = stamp_seconds(clocks[-1].clock)
+        wait_for(
+            node,
+            lambda: stamp_seconds(observations[-1].header.stamp) >= last_command_time + 2.0,
+            seconds=30,
+        )
+        post = [
+            m
+            for m in observations
+            if last_command_time <= stamp_seconds(m.header.stamp) <= last_command_time + 2.0
+        ]
+        samples = [m for m in post if stamp_seconds(m.header.stamp) >= last_command_time + 1.2]
+        assert len(samples) >= 5
+        assert (
+            stamp_seconds(samples[-1].header.stamp) - stamp_seconds(samples[0].header.stamp) >= 0.5
+        )
+        # Baseline wall begins at x=1.9; this monitored corridor is over 3m away.
+        assert all(
+            -3.2 < m.pose.pose.position.x < -1.5 and abs(m.pose.pose.position.y) < 0.5 for m in post
+        )
+        window_scans = [
+            m
+            for m in scans
+            if last_command_time <= stamp_seconds(m.header.stamp) <= last_command_time + 2.0
+        ]
+        assert len(window_scans) >= 5
+        assert (
+            stamp_seconds(window_scans[-1].header.stamp)
+            - stamp_seconds(window_scans[0].header.stamp)
+            >= 1.0
+        )
+        for scan in window_scans:
+            front = [
+                distance
+                for i, distance in enumerate(scan.ranges)
+                if abs(scan.angle_min + i * scan.angle_increment) <= 0.25
+            ]
+            assert len(front) >= 5
+            assert all(not math.isnan(distance) and distance > 2.0 for distance in front), (
+                "forward path obstructed"
+            )
+        assert all(
+            abs(m.twist.twist.linear.x) < 0.02
+            and abs(m.twist.twist.linear.y) < 0.02
+            and abs(m.twist.twist.angular.z) < 0.05
+            for m in samples
+        ), "watchdog failed to sustain low velocity after timeout"
+    finally:
+        # Explicit stop also handles the long-timeout negative control before pose restoration.
+        stop = Twist()
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            publisher.publish(stop)
+            rclpy.spin_once(node, timeout_sec=0.05)
+        set_sim_pose(original)
     assert subscriptions

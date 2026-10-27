@@ -19,7 +19,7 @@ def generate_launch_description():
             "xacro ",
             PathJoinSubstitution([share, "urdf", "senior.urdf.xacro"]),
             " controllers_file:=",
-            PathJoinSubstitution([share, "config", "controllers.yaml"]),
+            LaunchConfiguration("controllers_file"),
         ]
     )
     gz_launch = PathJoinSubstitution([FindPackageShare("ros_gz_sim"), "launch", "gz_sim.launch.py"])
@@ -27,6 +27,10 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "world", default_value=PathJoinSubstitution([share, "worlds", "baseline.sdf"])
+            ),
+            DeclareLaunchArgument(
+                "controllers_file",
+                default_value=PathJoinSubstitution([share, "config", "controllers.yaml"]),
             ),
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
