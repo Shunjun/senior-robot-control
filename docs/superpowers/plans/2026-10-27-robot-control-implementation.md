@@ -142,11 +142,11 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 
 **Interfaces:** 定义Envelope(v,type,robot_id,session_id,connection_epoch,request_id,seq,expires_at,payload)、Pose2D(x,y,yaw)、MapRef(map_id,reference_revision)、SensorHealth、OperationResult；配置统一使用米/弧度/秒。validate_envelope(raw: bytes, expected_robot_id: str) -> Envelope；Clock.monotonic() -> float；DeviceProfile包含footprint、话题、TF与传感器覆盖配置。
 
-- [ ] **Step 1 — 写失败测试：** test_reject_nonfinite_and_wrong_robot：NaN/Inf、非法枚举、未知协议版本、错误robot_id和超大消息被拒绝；test_clock_is_injected：使用假单调时钟无真实sleep。
-- [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
-- [ ] **Step 3 — 实现：** 建立可编辑安装与dev依赖锁；写严格输入模型和配置加载。将心跳周期、失联阈值、命令TTL、感知过期阈值集中配置并验证约束，先作为仿真参数，不能标称实车制动保证。
-- [ ] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_settings.py tests/integration/test_storage.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
-- [ ] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: define robot protocol and typed configuration"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
+- [x] **Step 1 — 写失败测试：** test_reject_nonfinite_and_wrong_robot：NaN/Inf、非法枚举、未知协议版本、错误robot_id和超大消息被拒绝；test_clock_is_injected：使用假单调时钟无真实sleep。
+- [x] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
+- [x] **Step 3 — 实现：** 建立可编辑安装与dev依赖锁；写严格输入模型和配置加载。将心跳周期、失联阈值、命令TTL、感知过期阈值集中配置并验证约束，先作为仿真参数，不能标称实车制动保证。
+- [x] **Step 4 — 验证：** `.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_settings.py tests/integration/test_storage.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
+- [x] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: define robot protocol and typed configuration"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
 
 ### Task 2: Linux仿真底盘与驱动适配
 
