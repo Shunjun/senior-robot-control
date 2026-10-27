@@ -239,3 +239,26 @@ def test_simulation_coverage_optional_and_full_circle_valid():
     assert profile.sensor_coverage["scan"] == 2 * pi
     with pytest.raises(ValueError):
         DeviceProfile(sensor_coverage={"scan": 1.0})
+
+
+def test_hardware_coverage_rejects_boolean_before_numeric_coercion():
+    from senior_control.config import DeviceProfile
+
+    with pytest.raises(ValueError):
+        DeviceProfile(
+            mode="hardware",
+            footprint=[(0, 0), (1, 0), (0, 1)],
+            frames={"base": "base"},
+            topics={"scan": "/scan"},
+            sensor_coverage={"scan": True},
+        )
+
+
+def test_numeric_coverage_from_environment_remains_supported():
+    settings = load_settings(
+        SettingsSource(
+            environment={"SENIOR_SECRET": "x", "SENIOR_DEVICE__SENSOR_COVERAGE__SCAN": "1.5"},
+            cli={"device": {"topics": {"scan": "/scan"}}},
+        )
+    )
+    assert settings.device.sensor_coverage["scan"] == 1.5

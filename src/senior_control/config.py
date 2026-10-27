@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class ConfigModel(BaseModel):
@@ -21,6 +29,13 @@ class DeviceProfile(ConfigModel):
     topics: dict[str, str] = Field(default_factory=dict)
     frames: dict[str, str] = Field(default_factory=dict)
     sensor_coverage: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("sensor_coverage", mode="before")
+    @classmethod
+    def reject_boolean_coverage(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and any(isinstance(span, bool) for span in value.values()):
+            raise ValueError("sensor coverage must be numeric, not boolean")
+        return value
 
     @model_validator(mode="after")
     def hardware_requirements(self) -> "DeviceProfile":
