@@ -160,11 +160,11 @@ Python测试命令统一`.venv/bin/python -m pytest`；任务1创建环境并安
 
 **Interfaces:** simulation.launch.py(use_sim_time=true, world, headless)启动差速模型、雷达、RGB-D、IMU、轮里程计与独立world truth；detect_environment() -> dict报告ROS/Gazebo/设备/话题，不启动硬件。输出/scan、/camera/color/image_raw、/camera/depth/image_raw、/camera/*/camera_info、/wheel/odom、/imu/data、/ground_truth/odom、/clock。
 
-- [ ] **Step 1 — 写失败测试：** test_sim_sensor_contract：时间戳、frame与消息类型正确，/ground_truth/odom独立于轮里程计且不发布truth TF；test_watchdog_stops：命令停发后仿真底盘速度归零。
-- [ ] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
-- [ ] **Step 3 — 实现：** 检测Humble/Fortress包可用性并固定桥消息映射，保留既有仿真接入launch参数。模型采用厂商轮位与外形，碰撞几何可简化但不得小于已确认车体。底盘看门狗与车端安全门独立。输出版本矩阵。
-- [ ] **Step 4 — 验证：** `colcon build --packages-select senior_sim senior_robot && python3 -m pytest tests/ros/test_sim_topics.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
-- [ ] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: add Linux senior robot simulation and sensor contracts"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
+- [x] **Step 1 — 写失败测试：** test_sim_sensor_contract：时间戳、frame与消息类型正确，/ground_truth/odom独立于轮里程计且不发布truth TF；test_watchdog_stops：命令停发后仿真底盘速度归零。
+- [x] **Step 2 — 确认失败：** 运行下列验证命令中本任务测试；应因尚未实现的指定行为失败，记录失败断言。
+- [x] **Step 3 — 实现：** 检测Humble/Fortress包可用性并固定桥消息映射，保留既有仿真接入launch参数。模型采用厂商轮位与外形，碰撞几何可简化但不得小于已确认车体。底盘看门狗与车端安全门独立。输出版本矩阵。
+- [x] **Step 4 — 验证：** `colcon build --packages-select senior_sim senior_robot && python3 -m pytest tests/ros/test_sim_topics.py -q`。预期本任务测试全部PASS；包含构建时须退出码0。需要Linux而未运行的检查保留未完成状态。
+- [x] **Step 5 — 提交：** 显式暂存本任务Files中的实际文件，执行 `git commit -m "feat: add Linux senior robot simulation and sensor contracts"`，记录验证证据；不要使用全目录暂存夹带凭据或生成数据。
 
 ### Task 3: 自车过滤与可观测覆盖
 
