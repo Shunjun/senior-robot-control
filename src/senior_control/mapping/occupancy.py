@@ -1,7 +1,7 @@
 """Confirm and clear a long-term occupancy layer from repeated observations."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from senior_control.mapping.evidence import (
     CellEvidence,
@@ -367,7 +367,6 @@ class OccupancyMaintainer:
         track.free_count += 1
         track.belief = self._clamp(track.belief - limits.free_weight)
         track.last_valid_time = observation.stamp
-        track.anchor_id = observation.anchor_id
         started = track.first_free_time
         ready = (
             track.occupied
@@ -379,7 +378,7 @@ class OccupancyMaintainer:
         if not ready:
             return
         track.source = "observed_free_space"
-        removed.append(self._record(track))
+        removed.append(replace(self._record(track), anchor_id=observation.anchor_id))
         del self._cells[key]
 
     def _clamp(self, belief: float) -> float:

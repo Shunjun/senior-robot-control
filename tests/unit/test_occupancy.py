@@ -342,7 +342,7 @@ def test_single_miss_preserves_wall() -> None:
     assert_delta_idle(miss)
     after_miss = only_cell(maintainer.snapshot())
     assert after_miss.cell == confirmed.cell
-    assert after_miss.anchor_id == "miss"
+    assert after_miss.anchor_id == "wall-2"
     assert after_miss.hit_count == confirmed.hit_count
     assert after_miss.free_count == 1
     assert after_miss.last_valid_time == 2.0
