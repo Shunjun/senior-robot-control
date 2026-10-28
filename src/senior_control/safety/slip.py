@@ -1,8 +1,10 @@
 """Compare commanded motion, wheel spin, and accepted body motion.
 
-Longitudinal lag inside the configured startup or braking window is not slip.
-Lateral motion and unexpected yaw stop immediately. An anomaly stops and does
-not request more torque.
+Longitudinal lag, and yaw that is merely behind a turn command, are not slip
+inside the configured startup or braking window. Opposite direction, too little
+body travel after that window, lateral motion, yaw against the command, and
+body motion while the command is zero all stop. An anomaly latches until the
+command returns to zero or ``reset`` is called, and it never requests more torque.
 """
 
 import math
@@ -42,6 +44,13 @@ class SlipMonitor:
         self.yaw_limit = yaw_limit
         self._elapsed = 0.0
         self._driving: bool | None = None
+        self._latched = False
+
+    def reset(self) -> None:
+        """Clear the latched anomaly and the startup window."""
+        self._elapsed = 0.0
+        self._driving = None
+        self._latched = False
 
     def update(
         self, command: Velocity, wheel_odom: WheelOdom, actual: MotionEstimate
@@ -50,19 +59,49 @@ class SlipMonitor:
             return _stop("invalid_wheel_interval")
         if actual.quality <= 0.0:
             return _stop("body_motion_unusable")
+        if actual.dt <= 0.0 or not math.isfinite(actual.dt):
+            return _stop("interval_mismatch")
+        scale = wheel_odom.dt / actual.dt
+        body_x = actual.pose_delta.x * scale
+        body_y = actual.pose_delta.y * scale
+        body_yaw = actual.pose_delta.yaw * scale
+        if not all(math.isfinite(value) for value in (scale, body_x, body_y, body_yaw)):
+            return _stop("interval_mismatch")
         driving = command.vx != 0.0 or command.wz != 0.0
         if self._driving is None or driving != self._driving:
             self._elapsed = 0.0
             self._driving = driving
         self._elapsed += wheel_odom.dt
         in_window = self._elapsed <= self.startup_window
-        lateral = abs(actual.pose_delta.y) > self.lateral_limit
+        wheel_x = wheel_odom.pose_delta.x
         expected_yaw = command.wz * wheel_odom.dt
-        unexpected_yaw = abs(actual.pose_delta.yaw - expected_yaw) > self.yaw_limit
-        wheels_without_body = (
-            abs(wheel_odom.pose_delta.x) > self.wheel_motion_limit
-            and abs(actual.pose_delta.x) <= self.wheel_motion_limit * 0.5
+        lagging_turn = (
+            command.wz != 0.0
+            and body_yaw * command.wz >= 0.0
+            and abs(body_yaw) <= abs(expected_yaw)
         )
-        if lateral or unexpected_yaw or (wheels_without_body and not in_window):
+        unexpected_yaw = abs(body_yaw - expected_yaw) > self.yaw_limit and not (
+            in_window and lagging_turn
+        )
+        opposite = (
+            wheel_x * body_x < 0.0
+            and abs(wheel_x) > self.wheel_motion_limit
+            and abs(body_x) > self.wheel_motion_limit * 0.5
+        )
+        # Body travel under half the wheel travel is the trip threshold. The
+        # latch is the hysteresis: one quiet frame does not restore the command.
+        short = abs(wheel_x) > self.wheel_motion_limit and abs(body_x) < abs(wheel_x) * 0.5
+        uncommanded = (not driving) and (
+            abs(body_x) > self.wheel_motion_limit
+            or abs(body_y) > self.lateral_limit
+            or abs(body_yaw) > self.yaw_limit
+        )
+        lateral = abs(body_y) > self.lateral_limit
+        if lateral or unexpected_yaw or opposite or uncommanded or (short and not in_window):
+            self._latched = True
+            return _stop("motion_anomaly")
+        if not driving:
+            self._latched = False
+        if self._latched:
             return _stop("motion_anomaly")
         return MotionAnomaly(False, command, False, "within_tolerance")

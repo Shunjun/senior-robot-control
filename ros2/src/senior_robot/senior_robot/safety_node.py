@@ -3,12 +3,15 @@
 The default 20 Hz timer is simulation configuration, not a physical braking or
 timing guarantee. Braking, reaction, hard margin, and staleness stay unset
 until parameters provide them, and an unset limit publishes zero velocity.
+An unset or expired command TTL also publishes zero. The age is measured with
+a monotonic clock and does not wait for a stop message.
 This process does not arbitrate control, publish heartbeats, or remap Nav2.
 It does not read wheel odometry or /ground_truth/odom, and it does not use a
 wheel transform to relabel a scan into the body frame.
 """
 
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -19,7 +22,7 @@ from sensor_msgs.msg import LaserScan
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
-from senior_control.safety.guard import evaluate_motion
+from senior_control.safety.guard import command_expired, evaluate_motion
 from senior_control.safety.self_filter import FilteredObservation, ScanObservation, filter_self
 
 
@@ -56,11 +59,13 @@ class SafetyGate(Node):
         self.declare_parameter("measured_topic", "")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("output_topic", "/cmd_vel")
+        self.declare_parameter("command_ttl_seconds", -1.0)
         self._body = str(self.get_parameter("body_frame").value)
         rate = float(self.get_parameter("simulation_rate_hz").value)
         if not self._body or not math.isfinite(rate) or rate <= 0.0:
             raise ValueError("simulation_rate_hz must be positive and body_frame nonempty")
         self._command = Velocity(0.0, 0.0)
+        self._command_monotonic: float | None = None
         self._measured = Velocity(0.0, 0.0)
         self._filtered: FilteredObservation | None = None
         output = str(self.get_parameter("output_topic").value)
@@ -113,6 +118,7 @@ class SafetyGate(Node):
         velocity = self._velocity(msg)
         if velocity is not None:
             self._command = velocity
+            self._command_monotonic = time.monotonic()
 
     def _on_measured(self, msg: Twist) -> None:
         # Caller must supply independent body velocity. This node never subscribes
@@ -157,6 +163,10 @@ class SafetyGate(Node):
         self._publisher.publish(twist)
 
     def _on_timer(self) -> None:
+        ttl = _positive(float(self.get_parameter("command_ttl_seconds").value))
+        if command_expired(self._command_monotonic, time.monotonic(), ttl):
+            self._publish(Velocity(0.0, 0.0))
+            return
         now = self.get_clock().now().nanoseconds / 1e9
         observations = [] if self._filtered is None else [self._filtered]
         try:

@@ -81,18 +81,56 @@ def scan_pair(**kwargs: object):
     return [observation(-math.pi / 2, **kwargs), observation(math.pi / 2, **kwargs)]  # type: ignore[arg-type]
 
 
+def point_hit(x: float, y: float):
+    angle = math.atan2(y, x)
+    scan = ScanObservation(
+        (math.hypot(x, y), 5.0),
+        angle,
+        0.01,
+        0.05,
+        8.0,
+        10.0,
+        "sim",
+        Pose2D(0.0, 0.0, 0.0),
+        10.0,
+        "base_link",
+        10.0,
+        True,
+        0.01,
+        False,
+        False,
+    )
+    return filter_self(scan, DeviceProfile(self_mask_calibrated=True))
+
+
 def test_warning_overlap_allows_safe_reverse():
-    # Front face x=0.337. At 0.8 m/s with reaction 0.2 s and braking 1 m/s^2,
-    # stopping distance is 0.48 m. Forward hard reach 0.837 m contains the
-    # 0.60 m hit. Reverse hard reach stays at x=0.357 and does not.
+    # Speed 0.8 m/s stops in 0.48 m. The forward warning reaches x=0.837 and
+    # contains the 0.60 m hit. The reverse hard sweep stays at x=0.357.
     observations = scan_pair()
     profile = limits()
     reverse = evaluate_motion(Velocity(-0.8, 0.0), Velocity(0.0, 0.0), observations, profile, 10.2)
     forward = evaluate_motion(Velocity(0.8, 0.0), Velocity(0.0, 0.0), observations, profile, 10.2)
+    clear = evaluate_motion(
+        Velocity(-0.8, 0.0), Velocity(0.0, 0.0), scan_pair(hit=5.0), profile, 10.2
+    )
     assert reverse.allowed
     assert reverse.velocity == Velocity(-0.8, 0.0)
+    assert reverse.reason == "warning_overlap"
     assert not forward.allowed
     assert forward.velocity == Velocity(0.0, 0.0)
+    assert forward.reason == "hard_sweep_collision"
+    assert clear.allowed
+    assert clear.reason == "hard_sweep_clear"
+
+
+def test_forward_measured_warning_overlap_allows_reverse():
+    # Measured 0.3 m/s still coasts forward 0.105 m, so the hard front is
+    # 0.462 m. Commanded 0.8 m/s puts the forward warning out to 0.837 m,
+    # which contains the 0.60 m hit without putting it in the hard sweep.
+    decision = evaluate_motion(Velocity(-0.8, 0.0), Velocity(0.3, 0.0), scan_pair(), limits(), 10.2)
+    assert decision.allowed
+    assert decision.velocity == Velocity(-0.8, 0.0)
+    assert decision.reason == "warning_overlap"
 
 
 def test_invalid_depth_is_unknown():
@@ -187,6 +225,45 @@ def test_reference_mismatch_rejected():
     assert accepted.velocity == command
     assert not rejected.allowed
     assert rejected.velocity == Velocity(0.0, 0.0)
+
+
+def test_mid_arc_corner_hit_blocks_rotation():
+    # 0.8 rad/s stops in 0.48 rad. The hit is the reviewer's mid-arc sample.
+    radius = math.hypot(0.337, 0.27)
+    distance = 0.995 * radius
+    angle = 0.908
+    observations = scan_pair(hit=5.0) + [
+        point_hit(distance * math.cos(angle), distance * math.sin(angle))
+    ]
+    decision = evaluate_motion(
+        Velocity(0.0, 0.8),
+        Velocity(0.0, 0.0),
+        observations,
+        limits(hard_margin=0.0),
+        10.2,
+    )
+    assert not decision.allowed
+    assert decision.velocity == Velocity(0.0, 0.0)
+    assert decision.reason == "hard_sweep_collision"
+
+
+def test_combined_arc_carries_body_into_obstacle():
+    # v=0.8 and w=0.8 stop after 0.48 m and 0.48 rad. Body point (0.325, 0.259)
+    # is inside the footprint at that arc pose and outside the straight box.
+    yaw = 0.48
+    travel_x = math.sin(yaw)
+    travel_y = 1.0 - math.cos(yaw)
+    cosine = math.cos(yaw)
+    sine = math.sin(yaw)
+    body_x = 0.325
+    body_y = 0.259
+    world_x = travel_x + cosine * body_x - sine * body_y
+    world_y = travel_y + sine * body_x + cosine * body_y
+    observations = scan_pair(hit=5.0) + [point_hit(world_x, world_y)]
+    decision = evaluate_motion(Velocity(0.8, 0.8), Velocity(0.0, 0.0), observations, limits(), 10.2)
+    assert not decision.allowed
+    assert decision.velocity == Velocity(0.0, 0.0)
+    assert decision.reason == "hard_sweep_collision"
 
 
 def test_unobserved_rotation_stops():

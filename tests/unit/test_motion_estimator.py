@@ -11,7 +11,7 @@ from senior_control.safety.motion_estimator import (
 
 
 def estimator() -> MotionEstimator:
-    return MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05)
+    return MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05, max_covariance=1.0)
 
 
 def sample(
@@ -22,10 +22,12 @@ def sample(
     dx: float = 0.25,
     wheel_dx: float = 1.0,
     now: float = 10.0,
+    covariance: tuple[float, float, float] = (0.25, 0.25, 0.25),
+    yaw: float = 0.0,
 ):
     scan = RelativeMotion(
-        Pose2D(dx, 0.0, 0.0),
-        (0.25, 0.25, 0.25),
+        Pose2D(dx, 0.0, yaw),
+        covariance,
         1.0,
         degenerate,
         now,
@@ -58,6 +60,29 @@ def test_scan_degeneracy_disables_degraded_reverse():
     assert qualified.velocity == Velocity(0.5, 0.0)
     assert body_displacement(qualified) == 0.25
     assert qualified.covariance == (0.25, 0.25, 0.25)
+
+
+def test_nan_imu_yaw_is_not_independent():
+    wheel, scan, _imu, visual, now = sample(yaw=0.3)
+    estimate = estimator().update(wheel, scan, ImuYaw(float("nan"), now, 0.5), visual, now)
+    assert estimate.quality == 0.0
+    assert not supports_degraded_reverse(estimate)
+
+
+def test_source_must_be_scan_match_and_covariance_within_cap():
+    gate = MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05, max_covariance=1.0)
+    for source in ("wheel_odom", "odom", "ekf"):
+        disguised = gate.update(*sample(source=source))
+        assert not supports_degraded_reverse(disguised)
+    loose = gate.update(*sample(covariance=(1.0e6, 1.0e6, 1.0e6)))
+    assert not supports_degraded_reverse(loose)
+
+
+def test_unset_covariance_cap_fails_closed():
+    gate = MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05)
+    estimate = gate.update(*sample())
+    assert estimate.quality == 0.0
+    assert not supports_degraded_reverse(estimate)
 
 
 def test_loop_jump_not_motion():

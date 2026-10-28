@@ -2,8 +2,12 @@
 
 Stopping distances come only from explicit profile fields. Unset braking,
 reaction, hard margin, or staleness is not a vehicle guarantee and stops motion.
+The hard sweep is the body travel during that stop. The warning zone extends
+the same stopping distance in both longitudinal directions and does not veto a
+hard-clear command.
 """
 
+import math
 from dataclasses import dataclass
 
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
@@ -13,7 +17,7 @@ from shapely.ops import split
 from senior_control.config import DeviceProfile
 from senior_control.models import Velocity
 from senior_control.safety.coverage import SweptRegion, supports
-from senior_control.safety.geometry import swept_footprint
+from senior_control.safety.geometry import swept_footprint, swept_trajectory
 from senior_control.safety.self_filter import FilteredObservation
 
 Point2D = tuple[float, float]
@@ -28,6 +32,35 @@ class SafetyDecision:
 
 def _stop(reason: str) -> SafetyDecision:
     return SafetyDecision(False, Velocity(0.0, 0.0), reason)
+
+
+def command_expired(command_stamp: float | None, now: float, ttl: float | None) -> bool:
+    """True when the last accepted command is older than an explicit TTL.
+
+    A missing stamp, a missing TTL, or a non-positive TTL fails closed. The
+    caller measures ``command_stamp`` and ``now`` on one monotonic clock.
+    """
+    if (
+        command_stamp is None
+        or ttl is None
+        or not math.isfinite(command_stamp)
+        or not math.isfinite(now)
+        or not math.isfinite(ttl)
+        or ttl <= 0.0
+        or now < command_stamp
+    ):
+        return True
+    return now - command_stamp > ttl
+
+
+def _rotation_step(footprint: list[tuple[float, float]], margin: float) -> float:
+    """Step whose corner gap stays within the hard margin, or 5 mm in simulation."""
+    radius = max(math.hypot(point[0], point[1]) for point in footprint)
+    allowance = margin if margin > 0.0 else 0.005
+    if radius <= 1e-9:
+        return math.pi / 16.0
+    ratio = min(1.0, allowance / (2.0 * radius))
+    return 4.0 * math.asin(ratio)
 
 
 def stopping_distance(speed: float, reaction_time: float, braking_deceleration: float) -> float:
@@ -66,6 +99,14 @@ def _directional_distances(
     if command > 0.0 or (command == 0.0 and measured > 0.0):
         return distance, 0.0
     return 0.0, distance
+
+
+def _warning_reach(command: float, measured: float, reaction_time: float, braking: float) -> float:
+    """Stopping distance of the faster speed, used on both sides of the body."""
+    speed = max(abs(command), abs(measured))
+    if speed == 0.0:
+        return 0.0
+    return stopping_distance(speed, reaction_time, braking)
 
 
 def _rectangles(
@@ -202,6 +243,7 @@ def evaluate_motion(
         return _stop("hard_contact")
 
     forward, backward = _directional_distances(command.vx, measured.vx, reaction, braking)
+    warning_reach = _warning_reach(command.vx, measured.vx, reaction, braking)
     hard = Polygon(
         (
             (xmin - backward - margin, ymin - margin),
@@ -210,38 +252,107 @@ def evaluate_motion(
             (xmin - backward - margin, ymax + margin),
         )
     )
-    if any(hard.intersects(hit) for hit in hits):
-        return _stop("hard_sweep_collision")
-
+    warning = Polygon(
+        (
+            (xmin - warning_reach - margin, ymin - margin),
+            (xmax + warning_reach + margin, ymin - margin),
+            (xmax + warning_reach + margin, ymax + margin),
+            (xmin - warning_reach - margin, ymax + margin),
+        )
+    )
+    positive_yaw = 0.0
+    negative_yaw = 0.0
     if yaw_braking is not None and (command.wz != 0.0 or measured.wz != 0.0):
         positive_yaw, negative_yaw = _directional_distances(
             command.wz, measured.wz, reaction, yaw_braking
         )
-        for yaw in (positive_yaw, -negative_yaw):
-            if yaw == 0.0:
-                continue
-            spun = swept_footprint(profile.footprint, yaw=yaw, yaw_step=abs(yaw), margin=margin)
-            if any(spun.intersects(hit) for hit in hits):
-                return _stop("hard_sweep_collision")
-            pieces = _simple_pieces(spun.difference(body))
-            if pieces is None:
-                return _stop("coverage_rejected")
-            for piece in pieces:
-                coords = tuple(
-                    (float(point[0]), float(point[1])) for point in piece.exterior.coords
-                )
-                if len(coords) > 1 and coords[0] == coords[-1]:
-                    coords = coords[:-1]
-                decision = _require(coords, frame, stamp, observations, now, clock, max_age)
-                if decision is not None:
-                    return decision
+    step = _rotation_step(profile.footprint, margin)
+    spins: list[BaseGeometry] = []
+    for yaw in (positive_yaw, -negative_yaw):
+        if yaw == 0.0:
+            continue
+        spins.append(
+            swept_footprint(
+                profile.footprint,
+                yaw=yaw,
+                yaw_step=min(step, abs(yaw)),
+                margin=margin,
+            )
+        )
+    arcs: list[BaseGeometry] = []
+    for distance, yaw in _coupled_arcs(
+        command, measured, forward, backward, positive_yaw, negative_yaw
+    ):
+        arcs.append(
+            swept_trajectory(
+                profile.footprint,
+                distance=distance,
+                yaw=yaw,
+                step=min(step, abs(yaw)),
+                margin=margin,
+            )
+        )
+    hard_geoms: list[BaseGeometry] = [hard, *spins, *arcs]
+    if any(geom.intersects(hit) for geom in hard_geoms for hit in hits):
+        return _stop("hard_sweep_collision")
+    warning_overlap = any(warning.intersects(hit) for hit in hits)
 
+    for spun in spins:
+        decision = _cover_difference(spun, body, frame, stamp, observations, now, clock, max_age)
+        if decision is not None:
+            return decision
+    for arc in arcs:
+        decision = _cover_difference(arc, body, frame, stamp, observations, now, clock, max_age)
+        if decision is not None:
+            return decision
     for vertices in _rectangles(xmin, ymin, xmax, ymax, forward, backward, margin):
-        try:
-            region = SweptRegion(vertices, frame, stamp)
-            result = supports(region, observations, now, clock, max_age)
-        except ValueError:
-            return _stop("coverage_rejected")
-        if not result.supported:
-            return _stop(result.reason)
+        decision = _require(vertices, frame, stamp, observations, now, clock, max_age)
+        if decision is not None:
+            return decision
+    if warning_overlap:
+        return SafetyDecision(True, command, "warning_overlap")
     return SafetyDecision(True, command, "hard_sweep_clear")
+
+
+def _coupled_arcs(
+    command: Velocity,
+    measured: Velocity,
+    forward: float,
+    backward: float,
+    positive_yaw: float,
+    negative_yaw: float,
+) -> list[tuple[float, float]]:
+    """Pair each signed stop that has both translation and yaw. Pure axes stay separate."""
+    arcs: list[tuple[float, float]] = []
+    for linear, angular in ((command.vx, command.wz), (measured.vx, measured.wz)):
+        if linear == 0.0 or angular == 0.0:
+            continue
+        distance = forward if linear > 0.0 else -backward
+        yaw = positive_yaw if angular > 0.0 else -negative_yaw
+        pair = (distance, yaw)
+        if distance != 0.0 and yaw != 0.0 and pair not in arcs:
+            arcs.append(pair)
+    return arcs
+
+
+def _cover_difference(
+    swept: BaseGeometry,
+    body: Polygon,
+    frame: str,
+    stamp: float,
+    observations: list[FilteredObservation],
+    now: float,
+    clock: str,
+    max_age: float,
+) -> SafetyDecision | None:
+    pieces = _simple_pieces(swept.difference(body))
+    if pieces is None:
+        return _stop("coverage_rejected")
+    for piece in pieces:
+        coords = tuple((float(point[0]), float(point[1])) for point in piece.exterior.coords)
+        if len(coords) > 1 and coords[0] == coords[-1]:
+            coords = coords[:-1]
+        decision = _require(coords, frame, stamp, observations, now, clock, max_age)
+        if decision is not None:
+            return decision
+    return None
