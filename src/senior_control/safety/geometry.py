@@ -16,6 +16,19 @@ def _valid_body(footprint: Sequence[tuple[float, float]]) -> Polygon:
     return body
 
 
+def inflation_step(radius: float, margin: float) -> float:
+    """Largest yaw step whose ``2 r sin(step / 4)`` gap stays within the hard margin.
+
+    ``radius`` is the distance from the sample point to the rotation center.
+    A zero margin uses a 5 mm simulation allowance, not a vehicle guarantee.
+    """
+    allowance = margin if margin > 0.0 else 0.005
+    if radius <= 1e-9:
+        return math.pi / 16.0
+    ratio = min(1.0, allowance / (2.0 * radius))
+    return 4.0 * math.asin(ratio)
+
+
 def _inflate(union: BaseGeometry, gap: float, margin: float) -> BaseGeometry:
     inflate = gap + margin
     if inflate > 0.0:
@@ -84,6 +97,10 @@ def swept_trajectory(
         raise ValueError("invalid trajectory sweep")
     body = _valid_body(footprint)
     path_radius = distance / yaw
+    reach = max(math.hypot(point[0], point[1] - path_radius) for point in body.exterior.coords)
+    # A step chosen from the body radius is far too coarse when the turning
+    # center is distant. Cap it so the gap stays within the hard margin.
+    step = min(step, inflation_step(reach, margin))
     steps = max(1, math.ceil(abs(yaw) / step - 1e-12))
     actual_step = yaw / steps
     samples: list[BaseGeometry] = []
@@ -96,6 +113,5 @@ def swept_trajectory(
                 yoff=path_radius * (1.0 - math.cos(psi)),
             )
         )
-    reach = max(math.hypot(point[0], point[1] - path_radius) for point in body.exterior.coords)
     gap = 2.0 * reach * math.sin(abs(actual_step) / 4.0)
     return _inflate(unary_union(samples), gap, margin)

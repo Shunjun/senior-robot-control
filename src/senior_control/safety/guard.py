@@ -17,7 +17,7 @@ from shapely.ops import split
 from senior_control.config import DeviceProfile
 from senior_control.models import Velocity
 from senior_control.safety.coverage import SweptRegion, supports
-from senior_control.safety.geometry import swept_footprint, swept_trajectory
+from senior_control.safety.geometry import inflation_step, swept_footprint, swept_trajectory
 from senior_control.safety.self_filter import FilteredObservation
 
 Point2D = tuple[float, float]
@@ -54,13 +54,18 @@ def command_expired(command_stamp: float | None, now: float, ttl: float | None) 
 
 
 def _rotation_step(footprint: list[tuple[float, float]], margin: float) -> float:
-    """Step whose corner gap stays within the hard margin, or 5 mm in simulation."""
+    """In-place step. The rotation center is the origin, so the radius is the body."""
     radius = max(math.hypot(point[0], point[1]) for point in footprint)
-    allowance = margin if margin > 0.0 else 0.005
-    if radius <= 1e-9:
-        return math.pi / 16.0
-    ratio = min(1.0, allowance / (2.0 * radius))
-    return 4.0 * math.asin(ratio)
+    return inflation_step(radius, margin)
+
+
+def _arc_step(
+    footprint: list[tuple[float, float]], distance: float, yaw: float, margin: float
+) -> float:
+    """Step from the distance to the turning center, not from the body radius alone."""
+    center = distance / yaw
+    radius = max(math.hypot(point[0], point[1] - center) for point in footprint)
+    return min(abs(yaw), inflation_step(radius, margin))
 
 
 def stopping_distance(speed: float, reaction_time: float, braking_deceleration: float) -> float:
@@ -288,7 +293,7 @@ def evaluate_motion(
                 profile.footprint,
                 distance=distance,
                 yaw=yaw,
-                step=min(step, abs(yaw)),
+                step=_arc_step(profile.footprint, distance, yaw, margin),
                 margin=margin,
             )
         )

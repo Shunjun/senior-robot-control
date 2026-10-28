@@ -266,6 +266,19 @@ def test_combined_arc_carries_body_into_obstacle():
     assert decision.reason == "hard_sweep_collision"
 
 
+def test_tiny_yaw_does_not_block_beside_the_body():
+    # 0.15 m outside the side face. Straight 0.8 m/s leaves it clear.
+    # 0.01 rad/s must not inflate the hard sweep out to that point.
+    observations = scan_pair(hit=5.0) + [point_hit(0.0, 0.27 + 0.15)]
+    straight = evaluate_motion(Velocity(0.8, 0.0), Velocity(0.0, 0.0), observations, limits(), 10.2)
+    turning = evaluate_motion(Velocity(0.8, 0.01), Velocity(0.0, 0.0), observations, limits(), 10.2)
+    assert straight.allowed
+    assert straight.reason == "hard_sweep_clear"
+    assert turning.allowed
+    assert turning.velocity == Velocity(0.8, 0.01)
+    assert turning.reason == "hard_sweep_clear"
+
+
 def test_unobserved_rotation_stops():
     # Zero hard margin leaves no translation sliver, so only the corner arc is new.
     # 0.8 rad/s, reaction 0.2 s, yaw braking 1 rad/s^2 stops in 0.48 rad.

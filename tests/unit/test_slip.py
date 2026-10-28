@@ -49,6 +49,21 @@ def test_wheels_spin_without_body_motion_stops():
     assert abs(late.velocity.wz) <= abs(command.wz)
 
 
+def test_braking_coast_inside_window_is_not_slip():
+    # 0.8 m/s for one frame, then the command drops to zero and the body
+    # coasts 0.17 m in 0.25 s. That coast is inside the braking window.
+    checker = monitor()
+    driving = checker.update(Velocity(0.8, 0.0), wheel(0.2), body(0.2, vx=0.8))
+    coast = checker.update(Velocity(0.0, 0.0), wheel(0.0), body(0.17, vx=0.68))
+    resumed = checker.update(Velocity(0.8, 0.0), wheel(0.2), body(0.2, vx=0.8))
+    assert driving.anomalous is False
+    assert coast.anomalous is False
+    assert coast.velocity == Velocity(0.0, 0.0)
+    assert coast.increase_torque is False
+    assert resumed.anomalous is False
+    assert resumed.velocity == Velocity(0.8, 0.0)
+
+
 def test_startup_latency_not_slip():
     checker = monitor()
     driving = checker.update(Velocity(0.2, 0.0), wheel(0.0625), still_body())

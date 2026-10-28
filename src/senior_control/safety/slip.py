@@ -1,10 +1,11 @@
 """Compare commanded motion, wheel spin, and accepted body motion.
 
-Longitudinal lag, and yaw that is merely behind a turn command, are not slip
-inside the configured startup or braking window. Opposite direction, too little
-body travel after that window, lateral motion, yaw against the command, and
-body motion while the command is zero all stop. An anomaly latches until the
-command returns to zero or ``reset`` is called, and it never requests more torque.
+Longitudinal lag, yaw that is merely behind a turn command, and longitudinal
+coast after a driving command are not slip inside the configured startup or
+braking window. Opposite direction, too little body travel after that window,
+lateral motion, and yaw against the command all stop. Body motion while the
+command was already zero also stops. An anomaly latches until the command
+returns to zero or ``reset`` is called, and it never requests more torque.
 """
 
 import math
@@ -45,12 +46,14 @@ class SlipMonitor:
         self._elapsed = 0.0
         self._driving: bool | None = None
         self._latched = False
+        self._braked_from_motion = False
 
     def reset(self) -> None:
         """Clear the latched anomaly and the startup window."""
         self._elapsed = 0.0
         self._driving = None
         self._latched = False
+        self._braked_from_motion = False
 
     def update(
         self, command: Velocity, wheel_odom: WheelOdom, actual: MotionEstimate
@@ -68,6 +71,10 @@ class SlipMonitor:
         if not all(math.isfinite(value) for value in (scale, body_x, body_y, body_yaw)):
             return _stop("interval_mismatch")
         driving = command.vx != 0.0 or command.wz != 0.0
+        if driving:
+            self._braked_from_motion = False
+        elif self._driving is True:
+            self._braked_from_motion = True
         if self._driving is None or driving != self._driving:
             self._elapsed = 0.0
             self._driving = driving
@@ -91,10 +98,15 @@ class SlipMonitor:
         # Body travel under half the wheel travel is the trip threshold. The
         # latch is the hysteresis: one quiet frame does not restore the command.
         short = abs(wheel_x) > self.wheel_motion_limit and abs(body_x) < abs(wheel_x) * 0.5
+        # Longitudinal coast is braking lag only after a real drive. A body that
+        # moves while the command was already zero is still uncommanded.
         uncommanded = (not driving) and (
-            abs(body_x) > self.wheel_motion_limit
-            or abs(body_y) > self.lateral_limit
+            abs(body_y) > self.lateral_limit
             or abs(body_yaw) > self.yaw_limit
+            or (
+                abs(body_x) > self.wheel_motion_limit
+                and not (in_window and self._braked_from_motion)
+            )
         )
         lateral = abs(body_y) > self.lateral_limit
         if lateral or unexpected_yaw or opposite or uncommanded or (short and not in_window):
