@@ -49,7 +49,7 @@ def wall_evidence(raw, filtered, origin, laser_yaw, pose):
 
 def test_simulated_self_and_wall_evidence():
     rclpy = pytest.importorskip("rclpy")
-    from diagnostic_msgs.msg import DiagnosticArray
+    from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
     from nav_msgs.msg import Odometry
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
@@ -94,7 +94,9 @@ def test_simulated_self_and_wall_evidence():
                 if (
                     not status.status
                     or not any(
-                        s.name == "scan_adapter" and s.level == 0 and s.message == "usable"
+                        s.name == "scan_adapter"
+                        and s.level == DiagnosticStatus.OK
+                        and s.message == "usable"
                         for s in status.status
                     )
                     or not poses
