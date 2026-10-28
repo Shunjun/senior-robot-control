@@ -333,6 +333,38 @@ def test_live_obstacle_vetoes_historical_free_space():
     assert decision.reason != "map_assisted_reverse"
 
 
+def test_empty_observations_do_not_map_reverse():
+    maps = FixtureMap(corridor())
+    machine = controller(maps, speed=0.08, single_distance=0.3)
+    decision = machine.step(
+        context(candidates=(Velocity(0.8, 0.0),), observations=()),
+        NOW,
+    )
+    assert decision.reason == "protection_refused"
+    assert decision.velocity == Velocity(0.0, 0.0)
+    assert decision.finished
+
+
+def test_unset_hard_margin_does_not_map_reverse_over_live_hit():
+    maps = FixtureMap(corridor())
+    machine = RecoveryController(
+        limits(hard_margin=None),
+        bounds(speed=0.08, single_distance=0.3),
+        maps,
+        clock_domain="sim",
+    )
+    decision = machine.step(
+        context(
+            candidates=(Velocity(0.8, 0.0),),
+            observations=scan_pair(nan_rear=True) + (point_hit(-0.36, 0.0),),
+        ),
+        NOW,
+    )
+    assert decision.reason == "protection_refused"
+    assert decision.velocity == Velocity(0.0, 0.0)
+    assert decision.finished
+
+
 def test_no_return_ray_is_not_free_space():
     maps = FixtureMap(corridor(no_return=True))
     machine = controller(maps, speed=0.15, single_distance=0.3)

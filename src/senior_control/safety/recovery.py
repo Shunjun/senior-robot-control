@@ -29,6 +29,23 @@ from senior_control.safety.motion_estimator import (
 from senior_control.safety.self_filter import FilteredObservation, RayEvidence
 
 _COLLISION = frozenset({"hard_contact", "hard_sweep_collision"})
+_PROTECTION = frozenset(
+    {
+        "safety_limits_unset",
+        "observation_missing",
+        "reference_mismatch",
+        "yaw_braking_unset",
+        "footprint_missing",
+        "footprint_invalid",
+        "coverage_rejected",
+    }
+)
+_UNOBSERVED = frozenset(
+    {
+        "required area contains unknown space",
+        "no usable observation area",
+    }
+)
 Point2D = tuple[float, float]
 
 
@@ -367,27 +384,29 @@ class RecoveryController:
             )
             if not stripped.allowed:
                 return stripped.reason
-        if not self._covered(command, context, now, max_age):
-            return "required area contains unknown space"
-        return ""
+        return self._covered(command, context, now, max_age)
 
     def _covered(
         self, command: Velocity, context: RecoveryContext, now: float, max_age: float
-    ) -> bool:
+    ) -> str:
+        """Empty string means the sweep was checked and observed.
+
+        A clock mismatch, a missing sweep, and a real coverage miss stay distinct.
+        """
         observations = list(context.observations)
         if not observations:
-            return False
+            return "observation_missing"
         frames = {item.scan.reference_frame for item in observations}
         stamps = {item.scan.reference_stamp for item in observations}
         clocks = {item.scan.clock_domain for item in observations}
         if len(frames) != 1 or len(stamps) != 1 or len(clocks) != 1:
-            return False
+            return "reference_mismatch"
         clock = next(iter(clocks))
         if clock != self._clock_domain:
-            return False
+            return "reference_mismatch"
         pieces = self._sweep_pieces(command.vx, context.measured.vx)
         if not pieces:
-            return False
+            return "coverage_rejected"
         frame = next(iter(frames))
         stamp = next(iter(stamps))
         for vertices in pieces:
@@ -396,10 +415,24 @@ class RecoveryController:
                     SweptRegion(vertices, frame, stamp), observations, now, clock, max_age
                 )
             except ValueError:
-                return False
+                return "coverage_rejected"
             if not result.supported:
-                return False
-        return True
+                return result.reason
+        return ""
+
+    def _protection_configured(self) -> bool:
+        profile = self._profile
+        margin = profile.hard_margin
+        braking = profile.braking_deceleration
+        reaction = profile.reaction_time
+        return (
+            margin is not None
+            and braking is not None
+            and braking > 0.0
+            and reaction is not None
+            and reaction >= 0.0
+            and len(profile.footprint) >= 3
+        )
 
     def _sweep_pieces(self, command: float, measured: float) -> list[tuple[Point2D, ...]]:
         braking = self._profile.braking_deceleration
@@ -476,20 +509,13 @@ class RecoveryController:
             return self._finish("distance_exceeded", cancelled=False)
         reverse = Velocity(-limits.speed, 0.0)
         reason = self._sensor(reverse, context, now, limits.observation_max_age)
-        if reason in _COLLISION:
+        if reason in _COLLISION or reason in _PROTECTION:
             return self._finish("protection_refused", cancelled=False)
         if reason == "":
             return self._command(reverse, "safe_reverse", now)
-        if self._map_reverse(context, now, limits, travel):
+        checked = bool(context.observations) and self._protection_configured()
+        if reason in _UNOBSERVED and checked and self._map_reverse(context, now, limits, travel):
             return self._command(reverse, "map_assisted_reverse", now)
-        if context.planning_failed and reason not in _COLLISION:
-            # Planning failure stays distinct when the sweep was not vetoed by a hit
-            # and the rear is not the occluded case handled above.
-            if reason not in {
-                "required area contains unknown space",
-                "no usable observation area",
-                "coverage_rejected",
-                "observation_missing",
-            }:
-                return self._finish("planning_failure", cancelled=False)
-        return self._finish("blind_zone_blocked", cancelled=False)
+        if reason in _UNOBSERVED and checked:
+            return self._finish("blind_zone_blocked", cancelled=False)
+        return self._finish("protection_refused", cancelled=False)
