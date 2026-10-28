@@ -24,6 +24,13 @@ class ConfigModel(BaseModel):
 
 
 class DeviceProfile(ConfigModel):
+    """Geometry, topics, and optional motion-limit inputs.
+
+    Braking, reaction, hard margin, and observation age default to unset.
+    An unset value is not a vehicle braking guarantee. Callers that use these
+    numbers for a simulator must treat them as simulation configuration.
+    """
+
     mode: Literal["simulation", "hardware"] = "simulation"
     footprint: list[tuple[float, float]] = Field(default_factory=list)
     self_mask: list[list[tuple[float, float]]] = Field(default_factory=list)
@@ -31,6 +38,11 @@ class DeviceProfile(ConfigModel):
     topics: dict[str, str] = Field(default_factory=dict)
     frames: dict[str, str] = Field(default_factory=dict)
     sensor_coverage: dict[str, float] = Field(default_factory=dict)
+    braking_deceleration: float | None = None
+    yaw_braking_deceleration: float | None = None
+    reaction_time: float | None = None
+    hard_margin: float | None = None
+    observation_max_age: float | None = None
 
     @field_validator("sensor_coverage", mode="before")
     @classmethod
@@ -68,6 +80,21 @@ class DeviceProfile(ConfigModel):
                 for k, v in mapping.items()
             ):
                 raise ValueError("hardware frame and topic names must be nonempty")
+        positive = {
+            "braking deceleration": self.braking_deceleration,
+            "yaw braking deceleration": self.yaw_braking_deceleration,
+        }
+        nonnegative = {
+            "reaction time": self.reaction_time,
+            "hard margin": self.hard_margin,
+            "observation max age": self.observation_max_age,
+        }
+        for name, value in positive.items():
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
+        for name, value in nonnegative.items():
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be non-negative")
         return self
 
 

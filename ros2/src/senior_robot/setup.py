@@ -9,7 +9,12 @@ setup(
         ("share/senior_robot", ["package.xml"]),
         ("share/senior_robot/config", ["config/hardware.yaml", "config/self_filter.yaml"]),
     ],
-    entry_points={"console_scripts": ["scan_adapter = senior_robot.scan_adapter:main"]},
+    entry_points={
+        "console_scripts": [
+            "scan_adapter = senior_robot.scan_adapter:main",
+            "safety_node = senior_robot.safety_node:main",
+        ]
+    },
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Senior Robot",
