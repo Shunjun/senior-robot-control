@@ -14,9 +14,13 @@ setup(
                 "config/self_filter.yaml",
                 "config/nav2.yaml",
                 "config/lattice_diff.json",
+                "config/slam.yaml",
             ],
         ),
-        ("share/senior_robot/launch", ["launch/navigation.launch.py"]),
+        (
+            "share/senior_robot/launch",
+            ["launch/navigation.launch.py", "launch/mapping.launch.py"],
+        ),
         ("share/senior_robot/behavior_trees", ["behavior_trees/navigate.xml"]),
     ],
     entry_points={
@@ -25,6 +29,7 @@ setup(
             "safety_node = senior_robot.safety_node:main",
             "command_node = senior_robot.command_node:main",
             "navigation_adapter = senior_robot.navigation_adapter:main",
+            "slam_adapter = senior_robot.slam_adapter:main",
         ]
     },
     install_requires=["setuptools"],
