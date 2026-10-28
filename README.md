@@ -1,0 +1,183 @@
+# Senior 小车远程控制
+
+面向 WHEELTEC senior_4wd_dl 的车端 ROS 2 程序、自托管云端和中文网页控制台。当前仓库完成阶段一：协议与配置、Linux 仿真底盘、自车过滤、独立安全门、控制租约与断线停车。导航、建图、云端、网页和实车部署还没有代码。
+
+速度只走一条链：导航、遥控或脱困进入控制仲裁，再进入独立安全门，最后由安全门发布 `/cmd_vel`。仿真底盘把 `/cmd_vel` 接到差速控制器，控制器自己还有 0.3 秒命令超时。现在没有导航和脱困进程；`command_node` 也还没有网络入口，单独启动时只会向安全门发零速度。
+
+## 已完成的功能
+
+- 版本化命令信封。校验车辆、会话、连接代次、序号和数值；拒绝 NaN、错误车辆和超大消息。心跳、失联和速度有效期集中配置，单位是米、弧度、秒。
+- Ubuntu 22.04 上的 Humble / Gazebo Fortress 仿真。输出雷达、RGB-D、IMU、轮里程计和独立真实位姿。命令停发后底盘看门狗把速度归零。这项已在虚拟机上跑通，记录见 `docs/testing/2026-10-27-linux-simulation.md`。
+- 自车过滤。车体后方附件回波被去掉，且不会变成后方空闲；附件外的近墙仍保留。仿真世界是 `rear_occlusion.sdf`。历史地图辅助倒车留到阶段二。
+- 独立安全门 `safety_node`。按车体矩形预测扫掠，硬边界拦截，预警区允许已观测空闲方向的倒车。传感器过期、扫描运动来源不对或打滑时停车。速度命令按车端单调时钟超时后发零。逻辑有单元测试；这个节点还没有在 Linux 上作为进程跑过。
+- 控制仲裁 `command_node`。每台车一份租约。优先级是锁定急停、手动、脱困、导航。手动接管停掉导航，松开后不自动续跑。旧连接和旧序号不能把过期速度重新激活。它只发布 `/safety/command_in`。仲裁器单元测试已通过；整条 ROS 速度链还没有在 Linux 上跑过。
+
+## 仓库布局
+
+| 路径 | 内容 |
+| --- | --- |
+| `src/senior_control` | 协议、配置、存储骨架和安全逻辑 |
+| `ros2/src/senior_sim` | 仿真模型、世界和 `simulation.launch.py` |
+| `ros2/src/senior_robot` | `scan_adapter`、`safety_node`、`command_node` |
+| `config/simulation.yaml` | 仿真外形与话题，供 Python 配置读取 |
+| `config/hardware.example.yaml` | 实车配置示例，不能当作已核对的实车参数 |
+| `docs/protocol/v1.md` | 当前命令类型 |
+| `docs/superpowers/plans/2026-10-27-robot-control-implementation.md` | 实施计划 |
+
+## 各端部署与启动
+
+有两个互不替代的 Python 环境。开发机上的 `.venv` 跑单元测试和类型检查，不包含 ROS。Ubuntu 上的 `.ros-venv` 继承系统里的 `rclpy`，再安装本仓库，供 `colcon` 生成的节点入口使用。用系统自带的 `colcon` 构建时，生成脚本的解释器找不到 `senior_control`。
+
+### 开发机：控制库
+
+需要 Python 3.10 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。macOS 只做这项，不启动仿真。
+
+```sh
+uv sync --frozen --group dev --extra safety
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/senior_control
+uv run pytest tests/unit tests/integration -q
+```
+
+`safety` 额外依赖提供 Shapely，自车过滤和扫掠会用到它。这条命令不启动 ROS，也不连接小车。
+
+环境只读检查不启动仿真、硬件或 ROS 守护进程：
+
+```sh
+python3 tools/detect_environment.py
+```
+
+在已 source ROS 的 Ubuntu 上，它报告已安装的 ament 包和被动可见的话题。未 source 时只报告缺失项。
+
+### 仿真端：Ubuntu 22.04
+
+安装 ROS 2 Humble 和 Gazebo Fortress 的官方二进制，包含 `ros_gz_sim`、`ros_gz_bridge`、`gz_ros2_control`、`controller_manager`、`diff_drive_controller`、`joint_state_broadcaster`、`robot_state_publisher`、`xacro`。无桌面的机器还需要 `xvfb`、`xauth`、`mesa-utils`。已测试环境是 Ubuntu 22.04.5 aarch64、Humble、Fortress 6.18.0。
+
+在仓库根目录：
+
+```sh
+source /opt/ros/humble/setup.bash
+python3.10 -m venv --system-site-packages .ros-venv
+.ros-venv/bin/pip install -e ".[safety]"
+rosdep update --rosdistro humble
+rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
+cd ros2
+../.ros-venv/bin/python -m colcon build --packages-select senior_sim senior_robot
+source install/setup.bash
+```
+
+每次开终端都要重新 source Humble 和 `ros2/install/setup.bash`。仿真和测试使用同一个未占用的域，避免接到别的 ROS 图：
+
+```sh
+export ROS_DOMAIN_ID=73
+export IGN_PARTITION=senior_sim
+```
+
+带图形界面的主机：
+
+```sh
+ros2 launch senior_sim simulation.launch.py headless:=false use_sim_time:=true
+```
+
+`headless:=true` 是默认值，Gazebo 以 `-r -s` 运行。在已测试的 Parallels 虚拟机上，没有显示服务器时 Ogre2/EGL 会在初始化时中止。该虚拟机用下面这条命令跑通了传感器契约：
+
+```sh
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x720x24' \
+  ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true
+```
+
+默认世界是安装后的 `baseline.sdf`。后部遮挡世界：
+
+```sh
+ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true \
+  world:="$(ros2 pkg prefix senior_sim)/share/senior_sim/worlds/rear_occlusion.sdf"
+```
+
+仿真起来后，传感器话题包括 `/scan`、`/camera/color/image_raw`、`/camera/depth/image_raw`、`/imu/data`、`/wheel/odom`、`/ground_truth/odom`、`/clock`。真实位姿的 TF 不接入定位。看门狗负对照和传感器契约的完整步骤在 `ros2/README.md`。
+
+### 车端 ROS 进程
+
+三个进程都在仿真或以后的实车 ROS 图里运行，并且使用上面的 `.ros-venv` 构建结果。先启动仿真或实车驱动，再按下面的顺序启动。它们没有合成一个 launch 文件。
+
+雷达过滤读取安装后的仿真参数。这份参数打开了 `use_sim_time`，只用于仿真；实车要另写参数文件。
+
+```sh
+ros2 run senior_robot scan_adapter --ros-args \
+  --params-file "$(ros2 pkg prefix senior_robot)/share/senior_robot/config/self_filter.yaml"
+```
+
+它订阅 `/scan`，发布 `/perception/scan_filtered` 和 `/perception/scan_status`。外参或时间戳无效时，过滤结果为 NaN，状态为不可用。
+
+安全门默认把制动、反应时间、硬边界和命令有效期留空，空值时只发布零速度。下面的制动、反应时间和硬边界取自 `tests/unit/test_guard.py` 的测试夹具，外形取自 `config/simulation.yaml`，遮挡多边形取自 `self_filter.yaml`。这组数只用于让仿真节点离开“未配置即停车”；实车制动距离需要单独标定：
+
+```sh
+ros2 run senior_robot safety_node --ros-args \
+  -p use_sim_time:=true \
+  -p footprint_xy:="[-0.337,-0.27,0.337,-0.27,0.337,0.27,-0.337,0.27]" \
+  -p self_mask_xy:="[-0.33,-0.24,-0.23,-0.24,-0.23,0.24,-0.33,0.24]" \
+  -p self_mask_calibrated:=true \
+  -p transform_static:=true \
+  -p braking_deceleration:=1.0 \
+  -p yaw_braking_deceleration:=1.0 \
+  -p reaction_time:=0.2 \
+  -p hard_margin:=0.02 \
+  -p observation_max_age:=0.5 \
+  -p command_ttl_seconds:=0.3
+```
+
+`safety_node` 订阅 `/safety/command_in` 和 `/scan`，发布 `/cmd_vel`。它是唯一允许发布 `/cmd_vel` 的节点。
+
+```sh
+ros2 run senior_robot command_node --ros-args \
+  -p use_sim_time:=true \
+  -p robot_id:=robot \
+  -p heartbeat_seconds:=0.2 \
+  -p disconnect_seconds:=1.0 \
+  -p command_ttl_seconds:=0.3 \
+  -p command_topic:=/safety/command_in
+```
+
+`command_topic` 不能是 `/cmd_vel`，节点会拒绝这个配置。心跳 0.2 秒、失联 1.0 秒、速度有效期 0.3 秒与 `AgentSettings` 的仿真默认值一致，不代表实车制动距离。当前没有传输线程调用 `submit`，所以这个进程持续发布零速度。
+
+### 实车
+
+没有实车 launch，也没有 systemd 服务。`config/hardware.example.yaml` 和 `ros2/src/senior_robot/config/hardware.yaml` 只是待核对的话题与外形示例。`tools/detect_environment.py` 只读，不启动驱动。仿真参数、仿真遮挡多边形和上面的制动示例都不能用来驱动真实底盘。厂商底盘、雷达和相机驱动保留，本仓库不替换它们。
+
+### 云端
+
+云端进程、配对、认证和 Docker Compose 属于任务 13、14、20，目录里还没有这些文件。现在不能部署云端服务。
+
+### 网页
+
+网页工程属于任务 17–19，仓库里没有 `web/`。现在不能启动控制台。
+
+## 任务路线图
+
+状态按代码和复审记录。Linux 运行栏只把已经在 Ubuntu 上执行并通过的检查标成已验证。
+
+| 任务 | 功能 | 代码 | Linux 运行 |
+| --- | --- | --- | --- |
+| 1 | 协议、配置、时钟、SQLite 骨架 | 已完成 | 不依赖 ROS |
+| 2 | 仿真底盘、传感器契约、底盘看门狗 | 已完成 | 已验证 |
+| 3 | 自车过滤与覆盖判断 | 已完成 | 后部遮挡仿真已跑通 |
+| 4 | 矩形扫掠、打滑检测、独立安全门 | 已完成 | 节点未跑 |
+| 5 | 控制租约、急停锁定、断线停车 | 已完成 | 速度链未跑 |
+| 6 | Nav2 导航与有界脱困 | 未开始 | — |
+| 7 | 稳定障碍与自由空间清除 | 未开始 | — |
+| 8 | SLAM、回环与持续建图 | 未开始 | — |
+| 9 | 地图包导入、导出与清除 | 未开始 | — |
+| 10 | 导航点与 Home | 未开始 | — |
+| 11 | GPS 配准、重定位与被动航向 | 未开始 | — |
+| 12 | 本地任务与调度 | 未开始 | — |
+| 13 | 单管理员认证、配对与多车中转 | 未开始 | — |
+| 14 | 车端代理、任务与地图同步 | 未开始 | — |
+| 15 | RGB-D 几何与可选 YOLO | 未开始 | — |
+| 16 | WebRTC 视频与 TURN | 未开始 | — |
+| 17 | 网页骨架、登录与选车 | 未开始 | — |
+| 18 | 地图、驾驶与重定位界面 | 未开始 | — |
+| 19 | 任务、地图管理与视频界面 | 未开始 | — |
+| 20 | 自托管部署与硬件检查 | 未开始 | — |
+| 21 | Linux 全链路仿真验收 | 未开始 | — |
+
+阶段二到阶段五的交付标准写在实施计划的「阶段退出条件」一节。任务 5 的 ROS 测试在第一次上 Linux 前，还要先补上订阅发现完成后再发命令的等待；当前测试可能在发现完成前丢消息。

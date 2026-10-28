@@ -1,8 +1,10 @@
-# Humble / Fortress simulation (runtime validation pending)
+# Humble / Fortress simulation
+
+Current startup and the task roadmap are in the repository root `README.md`. The sensor contract and the watchdog negative control passed on Ubuntu 22.04 aarch64; evidence is `docs/testing/2026-10-27-linux-simulation.md`. That record does not cover the safety gate or the command chain.
 
 | OS | ROS | Gazebo | integration |
 | --- | --- | --- | --- |
-| Ubuntu 22.04 | Humble | Fortress | `ros_gz_sim`, `ros_gz_bridge`, `gz_ros2_control` Humble binaries; not yet tested here |
+| Ubuntu 22.04 | Humble | Fortress | `ros_gz_sim`, `ros_gz_bridge`, `gz_ros2_control` Humble binaries; sensor contract verified on the aarch64 VM |
 | macOS | none | none | portable tests only; not a simulation validation |
 
 After installing ROS Humble and Fortress from their official repositories on Ubuntu 22.04, start in the repository root:
