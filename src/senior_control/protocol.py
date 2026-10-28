@@ -43,7 +43,14 @@ class VelocityEnvelope(EnvelopeBase):
 
 class SimpleEnvelope(EnvelopeBase):
     type: Literal[
-        "control.acquire", "control.release", "drive.stop", "safety.estop", "safety.reset"
+        "control.acquire",
+        "control.release",
+        "drive.stop",
+        "safety.estop",
+        "safety.reset",
+        "navigation.start",
+        "navigation.cancel",
+        "navigation.resume",
     ]
     payload: EmptyPayload
 
@@ -56,6 +63,9 @@ class ResponsePayload(StrictModel):
         "drive.stop",
         "safety.estop",
         "safety.reset",
+        "navigation.start",
+        "navigation.cancel",
+        "navigation.resume",
     ]
     ok: bool
     error: ErrorCode | None = None

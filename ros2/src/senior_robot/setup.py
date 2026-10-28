@@ -13,6 +13,7 @@ setup(
         "console_scripts": [
             "scan_adapter = senior_robot.scan_adapter:main",
             "safety_node = senior_robot.safety_node:main",
+            "command_node = senior_robot.command_node:main",
         ]
     },
     install_requires=["setuptools"],
