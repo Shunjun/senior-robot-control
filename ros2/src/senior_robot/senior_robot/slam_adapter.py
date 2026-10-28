@@ -32,6 +32,37 @@ MATCH_START_AT_GIVEN_POSE = 2
 MATCH_LOCALIZE_AT_POSE = 3
 
 
+def finished_deserialize_response(future: object) -> object:
+    """Accept a finished call only when it produced a response object.
+
+    Humble 2.6.10 DeserializePoseGraph has an empty response message. That
+    object is still success. A null result or a set exception is not.
+    """
+
+    done = getattr(future, "done", None)
+    if not callable(done) or not done():
+        raise DomainError(ErrorCode.TIMEOUT, "deserialize did not finish")
+    read_exception = getattr(future, "exception", None)
+    if callable(read_exception):
+        error = read_exception()
+        if error is not None:
+            if isinstance(error, BaseException):
+                raise DomainError(
+                    ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize failed"
+                ) from error
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize failed")
+    read_result = getattr(future, "result", None)
+    if not callable(read_result):
+        raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize returned nothing")
+    try:
+        response = read_result()
+    except Exception as exc:
+        raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize failed") from exc
+    if response is None:
+        raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize returned nothing")
+    return response
+
+
 class PoseGraphBackend(Protocol):
     """Narrow stand-in for the Humble pose-graph services and node poses."""
 
@@ -52,8 +83,8 @@ class PoseGraphBackend(Protocol):
 
     async def deserialize_pose_graph(
         self, prefix: str, match_type: int, initial_pose: Pose2D | None
-    ) -> None:
-        """Load that pose graph. Humble 2.6.10 returns an empty response."""
+    ) -> object | None:
+        """Load that pose graph. None means the call produced no response."""
 
 
 class SlamAdapter:
@@ -85,9 +116,14 @@ class SlamAdapter:
             if initial_pose is not None
             else self.MATCH_START_AT_FIRST_NODE
         )
-        await self._backend.deserialize_pose_graph(
-            str(snapshot.pose_graph_prefix), match_type, initial_pose
-        )
+        try:
+            response = await self._backend.deserialize_pose_graph(
+                str(snapshot.pose_graph_prefix), match_type, initial_pose
+            )
+        except DomainError:
+            return operation
+        if response is None:
+            return operation
         self._store.restore(snapshot)
         return OperationResult("slam-load", OperationStatus.SUCCEEDED)
 
@@ -175,7 +211,7 @@ def main() -> None:
 
         async def deserialize_pose_graph(
             self, prefix: str, match_type: int, initial_pose: Pose2D | None
-        ) -> None:
+        ) -> object:
             if not self._deserialize.wait_for_service(timeout_sec=1.0):
                 raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "deserialize service missing")
             request = DeserializePoseGraph.Request()
@@ -188,8 +224,7 @@ def main() -> None:
                 request.initial_pose.theta = initial_pose.yaw
             future = self._deserialize.call_async(request)
             rclpy.spin_until_future_complete(self._node, future, timeout_sec=5.0)
-            if not future.done():
-                raise DomainError(ErrorCode.TIMEOUT, "deserialize did not finish")
+            return finished_deserialize_response(future)
 
         def _remember_graph(self, message: MarkerArray) -> None:
             markers: list[GraphNodeMarker] = []

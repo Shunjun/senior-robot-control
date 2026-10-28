@@ -87,8 +87,9 @@ class MemoryPoseGraph:
 
     async def deserialize_pose_graph(
         self, prefix: str, match_type: int, initial_pose: Pose2D | None
-    ) -> None:
+    ) -> object:
         self.deserialized.append((prefix, match_type, initial_pose))
+        return object()
 
 
 def test_grid_growth_keeps_reference() -> None:
@@ -312,6 +313,62 @@ async def test_reload_preserves_removed_box(tmp_path: Path) -> None:
     assert {item.cell for item in fresh.occupancy().cells} == {(4, 2)}
     assert fresh.removals()[0].cell == (2, 2)
     assert fresh.removals()[0].anchor_id == "kf-box"
+
+
+async def test_null_deserialize_does_not_restore_occupancy(tmp_path: Path) -> None:
+    module = slam_adapter_module()
+    source = MapReferenceStore(MAP, "wheel_odom", CELL)
+    wall = evidence(WALL, "kf-wall", hits=5, belief=4.0)
+    source.place(wall, world=WALL, anchor_pose=Pose2D(0.0, 0.0, 0.0))
+    snapshot = await module.SlamAdapter(MemoryPoseGraph(()), source).serialize(tmp_path / "layer")
+
+    class FinishedFuture:
+        def __init__(self, response: object, error: BaseException | None = None) -> None:
+            self._response = response
+            self._error = error
+
+        def done(self) -> bool:
+            return True
+
+        def exception(self) -> BaseException | None:
+            return self._error
+
+        def result(self) -> object:
+            if self._error is not None:
+                raise self._error
+            return self._response
+
+    class FutureBackend(MemoryPoseGraph):
+        def __init__(self, future: FinishedFuture) -> None:
+            super().__init__(())
+            self._future = future
+
+        async def deserialize_pose_graph(
+            self, prefix: str, match_type: int, initial_pose: Pose2D | None
+        ) -> object | None:
+            self.deserialized.append((prefix, match_type, initial_pose))
+            return module.finished_deserialize_response(self._future)
+
+    async def load_with(future: FinishedFuture) -> tuple[object, MapReferenceStore]:
+        store = MapReferenceStore(MAP, "wheel_odom", CELL)
+        result = await module.SlamAdapter(FutureBackend(future), store).load(snapshot, None)
+        return result, store
+
+    null_result, null_store = await load_with(FinishedFuture(None))
+    assert null_result.status == OperationStatus.FAILED
+    assert null_store.occupancy().cells == ()
+    assert null_store.removals() == ()
+
+    broken_result, broken_store = await load_with(
+        FinishedFuture(None, RuntimeError("deserialize failed"))
+    )
+    assert broken_result.status == OperationStatus.FAILED
+    assert broken_store.occupancy().cells == ()
+    assert broken_store.removals() == ()
+
+    restored_result, restored_store = await load_with(FinishedFuture(object()))
+    assert restored_result.status == OperationStatus.SUCCEEDED
+    assert {item.cell for item in restored_store.occupancy().cells} == {wall.cell}
 
 
 async def test_single_map_odom_owner() -> None:
