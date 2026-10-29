@@ -396,3 +396,75 @@ def test_busy_navigation_skips_other_task() -> None:
     )
 
     assert intents == [TaskIntent(second.task_id, IntentAction.SKIP, "busy", occurrence_utc=due)]
+
+
+def test_one_tick_dispatches_only_the_latest_occurrence() -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    task = interval_task(created, every_seconds=600)
+    end = created + timedelta(minutes=30)
+
+    intents = TaskRunner([task]).tick(
+        end,
+        1800.0,
+        context(active_map=task.map_ref, last_tick_utc=created, last_tick_mono=0.0),
+    )
+
+    assert intents == [
+        TaskIntent(
+            task.task_id,
+            IntentAction.SKIP,
+            "busy",
+            occurrence_utc=created + timedelta(minutes=10),
+        ),
+        TaskIntent(
+            task.task_id,
+            IntentAction.SKIP,
+            "busy",
+            occurrence_utc=created + timedelta(minutes=20),
+        ),
+        TaskIntent(task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=end),
+    ]
+
+
+def test_one_tick_dispatches_at_most_one_navigation() -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    alpha = interval_task(created, task_id="alpha")
+    beta = interval_task(created, task_id="beta")
+    due = created + timedelta(minutes=30)
+
+    intents = TaskRunner([beta, alpha]).tick(
+        due,
+        1800.0,
+        context(active_map=alpha.map_ref, last_tick_utc=created, last_tick_mono=0.0),
+    )
+
+    assert [item for item in intents if item.action is IntentAction.DISPATCH] == [
+        TaskIntent("alpha", IntentAction.DISPATCH, "due", occurrence_utc=due)
+    ]
+    assert any(
+        item.task_id == "beta" and item.action is IntentAction.SKIP and item.occurrence_utc == due
+        for item in intents
+    )
+
+
+def test_monotonic_lead_does_not_reopen_scanned_time() -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    task = interval_task(created, every_seconds=10)
+    last = created + timedelta(seconds=40)
+    now = last + timedelta(seconds=10)
+
+    intents = TaskRunner([task]).tick(
+        now,
+        130.0,
+        context(active_map=task.map_ref, last_tick_utc=last, last_tick_mono=100.0),
+    )
+
+    assert all(
+        item.skip_from <= item.skip_until
+        for item in intents
+        if item.skip_from is not None and item.skip_until is not None
+    )
+    assert all(item.occurrence_utc is None or item.occurrence_utc > last for item in intents)
+    assert [item for item in intents if item.action is IntentAction.DISPATCH] == [
+        TaskIntent(task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=now)
+    ]

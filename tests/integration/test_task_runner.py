@@ -172,6 +172,62 @@ async def test_crash_after_dispatch_never_redispatches_unknown(tmp_path: Path) -
     assert intents == []
 
 
+async def test_claim_conflicts_while_another_execution_is_in_flight(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    later = due + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        other = await store.create(interval_task(created, task_id="other"))
+        navigation = HoldNavigation(store)
+        executor = TaskExecutor(database, store, navigation)
+        dispatch = asyncio.create_task(executor.persist_and_dispatch(due_intent(saved, due), saved))
+        await asyncio.wait_for(navigation.started.wait(), timeout=1)
+        with pytest.raises(DomainError) as caught:
+            await store.claim(other, due)
+        assert caught.value.code is ErrorCode.CONFLICT
+        assert await store.execution_for(other.task_id, due) is None
+        navigation.release.set()
+        running = await asyncio.wait_for(dispatch, timeout=1)
+        with pytest.raises(DomainError) as again:
+            await store.claim(saved, later)
+        assert again.value.code is ErrorCode.CONFLICT
+        assert await store.execution_for(saved.task_id, later) is None
+
+    assert running.status is ExecutionStatus.RUNNING
+
+
+async def test_cancel_writes_needs_review_on_a_different_task(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        navigation = HoldNavigation(store)
+        executor = TaskExecutor(database, store, navigation)
+        writers: list[asyncio.Task[object]] = []
+        original = store.mark_needs_review
+
+        async def watching(execution_id: str):
+            current = asyncio.current_task()
+            assert current is not None
+            writers.append(current)
+            return await original(execution_id)
+
+        store.mark_needs_review = watching  # type: ignore[method-assign]
+        dispatch = asyncio.create_task(executor.persist_and_dispatch(due_intent(saved, due), saved))
+        await asyncio.wait_for(navigation.started.wait(), timeout=1)
+        dispatch.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await dispatch
+        record = await store.execution_for(saved.task_id, due)
+
+    assert writers
+    assert writers[0] is not dispatch
+    assert record is not None
+    assert record.status is ExecutionStatus.NEEDS_REVIEW
+    assert record.rollback_confirmed is False
+
+
 async def test_duplicate_claim_conflicts(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
     due = created + timedelta(minutes=30)
@@ -341,6 +397,82 @@ async def test_disk_full_has_no_success_ack(tmp_path: Path) -> None:
         with pytest.raises(sqlite3.OperationalError, match="full"):
             await store.create(oversized)
         assert await store.get("patrol") is None
+
+
+async def test_pause_persists_and_lets_the_next_occurrence_claim(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    following = due + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        executor = TaskExecutor(database, store, RecordingNavigation())
+        running = await executor.persist_and_dispatch(due_intent(saved, due), saved)
+        await executor.apply(
+            TaskIntent(
+                saved.task_id,
+                IntentAction.PAUSE,
+                "manual",
+                occurrence_utc=due,
+                execution_id=running.execution_id,
+            ),
+            saved,
+        )
+        paused = await store.execution_by_id(running.execution_id)
+        claimed = await store.claim(saved, following)
+        still_paused = await store.execution_by_id(running.execution_id)
+
+    assert paused is not None
+    assert paused.status is ExecutionStatus.PAUSED
+    assert claimed.status is ExecutionStatus.DISPATCHING
+    assert still_paused is not None
+    assert still_paused.status is ExecutionStatus.PAUSED
+
+
+async def test_skipped_occurrence_occupies_the_claim_key(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    following = due + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        executor = TaskExecutor(database, store, RecordingNavigation())
+        await executor.apply(
+            TaskIntent(saved.task_id, IntentAction.SKIP, "busy", occurrence_utc=due),
+            saved,
+        )
+        skipped = await store.execution_for(saved.task_id, due)
+        with pytest.raises(DomainError) as caught:
+            await store.claim(saved, due)
+        claimed = await store.claim(saved, following)
+
+    assert skipped is not None
+    assert skipped.status is ExecutionStatus.SKIPPED
+    assert caught.value.code is ErrorCode.CONFLICT
+    assert claimed.status is ExecutionStatus.DISPATCHING
+
+
+async def test_executor_records_clock_jump_interval(tmp_path: Path) -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    skip_from = created + timedelta(minutes=10)
+    skip_until = skip_from + timedelta(hours=2)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        executor = TaskExecutor(database, store, None)
+        await executor.apply(
+            TaskIntent(
+                saved.task_id,
+                IntentAction.SKIP,
+                "clock_jump",
+                skip_from=skip_from,
+                skip_until=skip_until,
+            ),
+            saved,
+        )
+        loaded = await store.skips()
+
+    assert len(loaded) == 1
+    assert loaded[0].reason == "clock_jump"
+    assert loaded[0].skip_from == skip_from
+    assert loaded[0].skip_until == skip_until
 
 
 async def test_skip_interval_survives_restart(tmp_path: Path) -> None:

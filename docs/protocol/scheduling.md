@@ -24,10 +24,14 @@ Daily and weekly schedules use the task timezone. The default timezone is
 A wall-clock time that falls in a daylight-saving gap is skipped. A repeated
 wall-clock time runs once, at the earlier UTC offset.
 
-A trigger is eligible only inside the current scan window, `(last_tick, now]`.
-The first scan has no previous tick and does not catch up. If wall time and
-monotonic time disagree by more than two seconds, the discontinuous interval is
-recorded as a skip and only the monotonic tail of the scan can start work.
+A trigger is eligible only inside the current scan window. The first scan has
+no previous tick and does not catch up. One tick dispatches at most the latest
+due occurrence in that window. Every earlier due occurrence in the same window
+is skipped. When the wall clock jumps ahead of monotonic time by more than two
+seconds, the eligible start is `max(last_tick, now - monotonic_delta)` and is
+never earlier than `last_tick`. The skipped interval is only the part of
+`(last_tick, now]` outside that window. When the monotonic clock is ahead, the
+eligible window stays `(last_tick, now]` and no skip interval is recorded.
 Triggers missed while offline, busy, or outside the current window are skipped
 and are not replayed. The next occurrence can start a new instance.
 
@@ -39,10 +43,16 @@ running instance. Releasing manual control or reconnecting does not resume it.
 An invalidated `map_task_link` blocks that task on the old map and leaves the
 task definition in place. The link does not store a copy of the schedule.
 
-The claim is one SQLite transaction. The same task and occurrence cannot be
-claimed twice; the second claim conflicts. If the process dies after the claim
-commits and before navigation is sent, the next process start marks that
-instance `needs_review` and does not send it. Cancelling while navigation is in
-progress also ends in `needs_review` with rollback unconfirmed. A missing
-navigation port does not connect to Nav2 and does not report success. A full
-disk does not confirm the write.
+The claim is one SQLite transaction. Before inserting, it conflicts when this
+robot already has a dispatching or running row. The same task and occurrence
+cannot be claimed twice. The executor persists a pause by moving that row out
+of dispatching and running, and persists a per-occurrence skip on the same
+unique key. A clock-jump intent records its interval through `record_skip`.
+`tick` does not write either of those. A paused instance is not resumed. If
+the process dies after the claim commits and before navigation is sent, the
+next process start marks that instance `needs_review` and does not send it.
+Cancelling while navigation is in progress writes `needs_review` with rollback
+unconfirmed on a task that cancellation does not affect, waits until that
+commit finishes, and then re-raises. A missing navigation port does not
+connect to Nav2 and does not report success. A full disk does not confirm the
+write.

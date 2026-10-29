@@ -200,6 +200,8 @@ class TaskStore:
                         raise DomainError(ErrorCode.CONFLICT, "task does not exist")
                     if await self._invalidated(connection, task.task_id):
                         raise DomainError(ErrorCode.CONFLICT, "map link invalidated")
+                    if await self._in_flight(connection):
+                        raise DomainError(ErrorCode.CONFLICT, "execution already in flight")
                     await connection.execute(
                         """
                         INSERT INTO task_execution (
@@ -229,6 +231,69 @@ class TaskStore:
             navigation_sent=True,
             rollback_confirmed=False,
         )
+
+    async def pause(self, execution_id: str) -> ExecutionRecord:
+        if not execution_id.strip():
+            raise DomainError(ErrorCode.VALIDATION, "execution id is required")
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                current = await self._execution_in(connection, execution_id)
+                if current is None:
+                    raise DomainError(ErrorCode.CONFLICT, "execution does not exist")
+                if current.status is not ExecutionStatus.PAUSED:
+                    if current.status not in {ExecutionStatus.DISPATCHING, ExecutionStatus.RUNNING}:
+                        raise DomainError(ErrorCode.CONFLICT, "execution is not in flight")
+                    await connection.execute(
+                        """
+                        UPDATE task_execution
+                        SET status = ?
+                        WHERE execution_id = ? AND status IN (?, ?)
+                        """,
+                        (
+                            ExecutionStatus.PAUSED.value,
+                            execution_id,
+                            ExecutionStatus.DISPATCHING.value,
+                            ExecutionStatus.RUNNING.value,
+                        ),
+                    )
+                stored = await self._execution_in(connection, execution_id)
+        if stored is None or stored.status is not ExecutionStatus.PAUSED:
+            raise DomainError(ErrorCode.CONFLICT, "execution was not paused")
+        return stored
+
+    async def skip_occurrence(
+        self, task: TaskDefinition, occurrence_utc: datetime
+    ) -> ExecutionRecord:
+        self._require_robot(task)
+        occurrence = _utc(occurrence_utc)
+        execution_id = uuid.uuid4().hex
+        try:
+            async with self._database.write_lock:
+                async with self._transaction() as connection:
+                    current = await self._task_in(connection, task.task_id)
+                    if current is None:
+                        raise DomainError(ErrorCode.CONFLICT, "task does not exist")
+                    await connection.execute(
+                        """
+                        INSERT INTO task_execution (
+                            execution_id, task_id, occurrence_utc, status,
+                            navigation_sent, rollback_confirmed
+                        )
+                        VALUES (?, ?, ?, ?, 0, 0)
+                        """,
+                        (
+                            execution_id,
+                            task.task_id,
+                            _stamp(occurrence),
+                            ExecutionStatus.SKIPPED.value,
+                        ),
+                    )
+                    stored = await self._execution_in(connection, execution_id)
+        except sqlite3.IntegrityError as exc:
+            raise DomainError(ErrorCode.CONFLICT, "duplicate execution") from exc
+        if stored is None:
+            raise DomainError(ErrorCode.CONFLICT, "skip was not stored")
+        return stored
 
     async def mark_needs_review(self, execution_id: str) -> ExecutionRecord:
         return await self._mark(
@@ -393,6 +458,24 @@ class TaskStore:
             """,
             (task.task_id, task.map_ref.map_id, task.map_ref.reference_revision),
         )
+
+    async def _in_flight(self, connection: aiosqlite.Connection) -> bool:
+        async with connection.execute(
+            """
+            SELECT 1
+            FROM task_execution AS e
+            JOIN task_definition AS t ON t.task_id = e.task_id
+            WHERE t.robot_id = ? AND e.status IN (?, ?)
+            LIMIT 1
+            """,
+            (
+                self._robot_id,
+                ExecutionStatus.DISPATCHING.value,
+                ExecutionStatus.RUNNING.value,
+            ),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row is not None
 
     async def _invalidated(self, connection: aiosqlite.Connection, task_id: str) -> bool:
         async with connection.execute(

@@ -10,7 +10,13 @@ import asyncio
 from typing import Protocol
 
 from senior_control.storage.database import Database
-from senior_control.tasks.models import ExecutionRecord, IntentAction, TaskDefinition, TaskIntent
+from senior_control.tasks.models import (
+    ExecutionRecord,
+    IntentAction,
+    SkipRecord,
+    TaskDefinition,
+    TaskIntent,
+)
 from senior_control.tasks.store import TaskStore
 
 
@@ -52,32 +58,35 @@ class TaskExecutor:
         try:
             await self._navigation.start(record.execution_id, task)
         except asyncio.CancelledError:
-            _clear_cancellation()
-            await self._store.mark_needs_review(record.execution_id)
+            review = asyncio.create_task(self._store.mark_needs_review(record.execution_id))
+            await asyncio.shield(review)
             raise
         except Exception:
             await self._store.mark_needs_review(record.execution_id)
             raise
         return await self._store.mark_running(record.execution_id)
 
+    async def apply(self, intent: TaskIntent, task: TaskDefinition) -> ExecutionRecord | SkipRecord:
+        if intent.task_id != task.task_id:
+            raise ValueError("intent task does not match")
+        if intent.action is IntentAction.DISPATCH:
+            return await self.persist_and_dispatch(intent, task)
+        if intent.action is IntentAction.PAUSE:
+            if intent.execution_id is None:
+                raise ValueError("pause requires an execution id")
+            return await self._store.pause(intent.execution_id)
+        if intent.action is IntentAction.SKIP and intent.reason == "clock_jump":
+            if intent.skip_from is None or intent.skip_until is None:
+                raise ValueError("clock jump requires an interval")
+            if intent.skip_from > intent.skip_until:
+                raise ValueError("skip interval is inverted")
+            return await self._store.record_skip(
+                task.task_id, intent.skip_from, intent.skip_until, intent.reason
+            )
+        if intent.action is IntentAction.SKIP and intent.occurrence_utc is not None:
+            return await self._store.skip_occurrence(task, intent.occurrence_utc)
+        raise ValueError("unsupported intent")
+
     def _crash_if(self, phase: str) -> None:
         if self._fault_after == phase:
             raise ProcessCrash(phase)
-
-
-def _clear_cancellation() -> None:
-    current = asyncio.current_task()
-    if current is None:
-        return
-    uncancel = getattr(current, "uncancel", None)
-    if not callable(uncancel):
-        return
-    cancelling = getattr(current, "cancelling", None)
-    if not callable(cancelling):
-        uncancel()
-        return
-    while True:
-        pending = cancelling()
-        if not isinstance(pending, int) or pending <= 0:
-            return
-        uncancel()

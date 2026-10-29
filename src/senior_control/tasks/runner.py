@@ -75,6 +75,7 @@ class TaskRunner:
         }
         if start is None:
             return intents
+        due: list[tuple[datetime, TaskDefinition, str | None]] = []
         for task in self._tasks:
             if not task.enabled:
                 continue
@@ -86,16 +87,34 @@ class TaskRunner:
                 cursor = occurrence
                 if (task.task_id, occurrence) in claimed:
                     continue
-                reason = _block_reason(task, context, busy)
-                action = IntentAction.SKIP if reason is not None else IntentAction.DISPATCH
+                due.append((occurrence, task, _block_reason(task, context, busy)))
+        if not due:
+            return intents
+        latest = max(item[0] for item in due)
+        chosen = min(
+            (item for item in due if item[0] == latest),
+            key=lambda item: item[1].task_id,
+        )
+        chosen_blocked = chosen[2] is not None
+        for occurrence, task, reason in sorted(due, key=lambda item: (item[0], item[1].task_id)):
+            selected = (
+                not chosen_blocked and task.task_id == chosen[1].task_id and occurrence == chosen[0]
+            )
+            if selected:
                 intents.append(
                     TaskIntent(
-                        task.task_id,
-                        action,
-                        reason if reason is not None else "due",
-                        occurrence_utc=occurrence,
+                        task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=occurrence
                     )
                 )
+                continue
+            intents.append(
+                TaskIntent(
+                    task.task_id,
+                    IntentAction.SKIP,
+                    reason if reason is not None else "busy",
+                    occurrence_utc=occurrence,
+                )
+            )
         return intents
 
 
@@ -113,8 +132,12 @@ def _scan(
     if not jumped:
         return last, now_utc, None
     if now_utc >= last and mono >= 0:
-        skip_until = now_utc - timedelta(seconds=mono)
-        return skip_until, now_utc, (last, skip_until)
+        eligible_start = now_utc - timedelta(seconds=mono)
+        if eligible_start < last:
+            eligible_start = last
+        if eligible_start > last:
+            return eligible_start, now_utc, (last, eligible_start)
+        return last, now_utc, None
     if now_utc < last:
         return now_utc, now_utc, (now_utc, last)
     return now_utc, now_utc, (last, now_utc)
