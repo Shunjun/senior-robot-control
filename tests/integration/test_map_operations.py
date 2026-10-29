@@ -715,3 +715,271 @@ async def test_map_lock_blocks_clear_until_export_fsync(tmp_path: Path) -> None:
         await clear_task
 
     assert gate.calls == ["stop_and_block_navigation"]
+
+
+class BrokenPublish(MapOperations):
+    async def _publish_active(self, snapshot: SlamSnapshot, pose_graph: Path | None) -> None:
+        del snapshot, pose_graph
+        raise RuntimeError("active publish failed")
+
+
+def _operations(
+    kind: type[MapOperations],
+    database: Database,
+    store: MapReferenceStore,
+    root: Path,
+    *,
+    robot_id: str,
+    loader: Loader | None = None,
+    session: Graph | None = None,
+) -> MapOperations:
+    graph = session or Graph(store.map_ref)
+    return kind(
+        database,
+        store,
+        MapArchive(
+            graph,
+            source_robot_id=robot_id,
+            home_waypoint_id="home",
+            sensor_summary=(("lidar", "source-description-only"),),
+        ),
+        Gate(),
+        robot_id=robot_id,
+        map_root=root / "maps",
+        config_dir=root / "config",
+        loader=loader,
+    )
+
+
+@pytest.mark.asyncio
+async def test_export_conflict_after_running_is_failed(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    destination = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, store, tmp_path, robot_id="robot-a")
+        await ops.prepare()
+        await ops.export_bundle(store.map_ref, destination, operation_id="export-ok")
+        with pytest.raises(DomainError) as caught:
+            await ops.export_bundle(store.map_ref, destination, operation_id="export-dup")
+        replay = await ops.export_bundle(store.map_ref, destination, operation_id="export-dup")
+        record = await ops.operation_record("export-dup")
+        queried = await ops.query("export-dup")
+
+    assert caught.value.code is ErrorCode.CONFLICT
+    assert isinstance(replay, BundleManifest)
+    assert record.result.status is OperationStatus.FAILED
+    assert queried.status is OperationStatus.FAILED
+    assert record.result.status is not OperationStatus.NEEDS_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_export_cancel_after_running_needs_review(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    graph = HoldingGraph(store.map_ref)
+    destination = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="robot-a")
+        await ops.prepare()
+        task = asyncio.create_task(
+            ops.export_bundle(store.map_ref, destination, operation_id="export-cancel")
+        )
+        await asyncio.wait_for(graph.started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        record = await ops.operation_record("export-cancel")
+        queried = await ops.query("export-cancel")
+
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert record.rollback_confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_import_replace_after_identity_change_needs_review(tmp_path: Path) -> None:
+    store = filled_store("local", 1, (2.25, 0.25))
+    source = filled_store("yard", 3, (1.25, 0.25))
+    bundle = tmp_path / "yard.zip"
+
+    def replace_then_fail(snapshot: SlamSnapshot) -> None:
+        MapReferenceStore.replace(store, snapshot)
+        raise RuntimeError("replace failed after identity")
+
+    store.replace = replace_then_fail  # type: ignore[method-assign]
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(
+            database, store, tmp_path, Session(store.map_ref), robot_id="robot-a", loader=Loader()
+        )
+        await ops.prepare()
+        async with Database(tmp_path / "source.db") as source_db:
+            origin = operations_for(source_db, source, tmp_path / "source", robot_id="robot-a")
+            await origin.prepare()
+            await origin.export_bundle(source.map_ref, bundle, operation_id="export-replace")
+        with pytest.raises(RuntimeError, match="replace failed after identity"):
+            await ops.import_bundle(bundle, "robot-a", operation_id="import-replace")
+        record = await ops.operation_record("import-replace")
+        queried = await ops.query("import-replace")
+
+    assert store.map_ref == source.map_ref
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert record.result.status is not OperationStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_import_publish_failure_after_running_needs_review(tmp_path: Path) -> None:
+    store = filled_store("local", 1, (2.25, 0.25))
+    source = filled_store("yard", 3, (1.25, 0.25))
+    bundle = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = _operations(
+            BrokenPublish,
+            database,
+            store,
+            tmp_path,
+            robot_id="robot-a",
+            loader=Loader(),
+            session=Session(store.map_ref),
+        )
+        await ops.prepare()
+        async with Database(tmp_path / "source.db") as source_db:
+            origin = operations_for(source_db, source, tmp_path / "source", robot_id="robot-a")
+            await origin.prepare()
+            await origin.export_bundle(source.map_ref, bundle, operation_id="export-publish")
+        with pytest.raises(RuntimeError, match="active publish failed"):
+            await ops.import_bundle(bundle, "robot-a", operation_id="import-publish")
+        record = await ops.operation_record("import-publish")
+        queried = await ops.query("import-publish")
+
+    assert store.map_ref == source.map_ref
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_import_cancel_during_load_needs_review(tmp_path: Path) -> None:
+    store = filled_store("local", 1, (2.25, 0.25))
+    source = filled_store("yard", 3, (1.25, 0.25))
+    bundle = tmp_path / "yard.zip"
+
+    class HoldLoader(Loader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def load(self, directory: Path, hint: Pose2D | None) -> None:
+            del directory, hint
+            self.started.set()
+            await self.release.wait()
+
+    loader = HoldLoader()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(
+            database,
+            store,
+            tmp_path,
+            Session(store.map_ref),
+            robot_id="robot-a",
+            loader=loader,
+        )
+        await ops.prepare()
+        async with Database(tmp_path / "source.db") as source_db:
+            origin = operations_for(source_db, source, tmp_path / "source", robot_id="robot-a")
+            await origin.prepare()
+            await origin.export_bundle(source.map_ref, bundle, operation_id="export-load-cancel")
+        task = asyncio.create_task(
+            ops.import_bundle(bundle, "robot-a", operation_id="import-load-cancel")
+        )
+        await asyncio.wait_for(loader.started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        record = await ops.operation_record("import-load-cancel")
+        queried = await ops.query("import-load-cancel")
+
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert record.rollback_confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_clear_reset_failure_is_failed(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    original = store.map_ref
+
+    class BoomReset(Session):
+        async def reset(self) -> None:
+            raise RuntimeError("reset failed")
+
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(
+            database, store, tmp_path, BoomReset(store.map_ref), robot_id="robot-a"
+        )
+        await ops.prepare()
+        with pytest.raises(RuntimeError, match="reset failed"):
+            await ops.clear_map(original, operation_id="clear-reset")
+        record = await ops.operation_record("clear-reset")
+        queried = await ops.query("clear-reset")
+
+    assert store.map_ref == original
+    assert record.result.status is OperationStatus.FAILED
+    assert queried.status is OperationStatus.FAILED
+    assert record.result.status is not OperationStatus.NEEDS_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_clear_publish_failure_after_identity_change_needs_review(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    original = store.map_ref
+    async with Database(tmp_path / "robot.db") as database:
+        ops = _operations(
+            BrokenPublish,
+            database,
+            store,
+            tmp_path,
+            robot_id="robot-a",
+            session=Session(store.map_ref),
+        )
+        await ops.prepare()
+        with pytest.raises(RuntimeError, match="active publish failed"):
+            await ops.clear_map(original, operation_id="clear-publish")
+        record = await ops.operation_record("clear-publish")
+        queried = await ops.query("clear-publish")
+
+    assert store.map_ref != original
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert record.result.status is not OperationStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_clear_cancel_after_running_needs_review(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+
+    class HoldReset(Session):
+        def __init__(self, map_ref: MapRef) -> None:
+            super().__init__(map_ref)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def reset(self) -> None:
+            self.started.set()
+            await self.release.wait()
+            await super().reset()
+
+    session = HoldReset(store.map_ref)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, session, robot_id="robot-a")
+        await ops.prepare()
+        task = asyncio.create_task(ops.clear_map(store.map_ref, operation_id="clear-cancel"))
+        await asyncio.wait_for(session.started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        record = await ops.operation_record("clear-cancel")
+        queried = await ops.query("clear-cancel")
+
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert record.rollback_confirmed is False
