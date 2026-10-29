@@ -191,6 +191,38 @@ class MapReferenceStore:
             raise DomainError(ErrorCode.CONFLICT, "cell size does not match the store")
         self.grid = snapshot.grid
         self.review_required = snapshot.review_required
+        self._install(snapshot)
+
+    def replace(self, snapshot: SlamSnapshot) -> None:
+        """Switch identity, resolution, odometry owner, and sequence together."""
+
+        self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
+        self.grid = snapshot.grid
+        self.review_required = snapshot.review_required
+        self._install(snapshot)
+
+    def clear(self, map_ref: MapRef, *, odom_owner: str, cell_size_m: float) -> None:
+        """Empty the layer and publish a new identity in the same update."""
+
+        self._reset_identity(map_ref, odom_owner, cell_size_m)
+        self.grid = GridExtent(0, 0, 0.0, 0.0)
+        self.review_required = False
+
+    def _reset_identity(self, map_ref: MapRef, odom_owner: str, cell_size_m: float) -> None:
+        owner = odom_owner.strip()
+        if not owner:
+            raise ValueError("odometry owner is required")
+        if not math.isfinite(cell_size_m) or cell_size_m <= 0.0:
+            raise ValueError("cell size must be positive")
+        self.map_ref = map_ref
+        self.odom_owner = owner
+        self.cell_size_m = float(cell_size_m)
+        self._seq = 0
+        self._live.clear()
+        self._removed.clear()
+        self._waypoints.clear()
+
+    def _install(self, snapshot: SlamSnapshot) -> None:
         for binding in snapshot.bindings:
             self._seq += 1
             record = _Record(

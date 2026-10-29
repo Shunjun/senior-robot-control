@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -124,7 +126,7 @@ class SlamSnapshot:
         target = destination / "occupancy.json"
         temporary = destination / "occupancy.json.tmp"
         temporary.write_text(json.dumps(payload), encoding="utf-8")
-        os.replace(temporary, target)
+        durable_replace(temporary, target)
 
     @classmethod
     def read(cls, destination: Path) -> "SlamSnapshot":
@@ -150,6 +152,45 @@ class SlamSnapshot:
             tuple(_waypoint(item) for item in _sequence(body.get("waypoint_bindings"))),
             _flag(body.get("review_required")),
         )
+
+
+def durable_replace(temporary: Path, destination: Path) -> None:
+    """Replace a file, then fsync the file and its parent directory."""
+
+    _fsync_path(temporary)
+    os.replace(temporary, destination)
+    _fsync_path(destination)
+    _fsync_path(destination.parent)
+
+
+def durable_move_tree(temporary: Path, destination: Path) -> None:
+    """Move a directory on the same filesystem, then fsync its files and parent."""
+
+    for path in sorted(temporary.rglob("*")):
+        if path.is_file() or path.is_dir():
+            _fsync_path(path)
+    _fsync_path(temporary)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        displaced = destination.with_name(f".{destination.name}-{uuid.uuid4().hex}")
+        os.replace(destination, displaced)
+        os.replace(temporary, destination)
+        shutil.rmtree(displaced)
+    else:
+        os.replace(temporary, destination)
+    for path in sorted(destination.rglob("*")):
+        if path.is_file() or path.is_dir():
+            _fsync_path(path)
+    _fsync_path(destination)
+    _fsync_path(destination.parent)
+
+
+def _fsync_path(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def anchor_from_graph_marker(marker: GraphNodeMarker) -> AnchorPose | None:

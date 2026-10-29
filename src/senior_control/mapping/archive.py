@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 import stat
 import tempfile
 import zipfile
@@ -11,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.references import AnchorPose
+from senior_control.mapping.references import AnchorPose, SlamSnapshot, durable_replace
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, Pose2D
 
@@ -74,6 +73,10 @@ class PoseGraphSource(Protocol):
 
     async def write(self, directory: Path) -> tuple[str, ...]: ...
 
+    async def read(self, directory: Path) -> None: ...
+
+    async def reset(self) -> None: ...
+
 
 class MapArchive:
     def __init__(
@@ -121,6 +124,7 @@ class MapArchive:
             snapshot.write(staging / "occupancy")
             waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
             (staging / "waypoints.json").write_bytes(waypoint_bytes)
+            _write_grid(snapshot, staging / "grid")
             payloads = _file_bytes(staging)
             digests = {
                 name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
@@ -148,6 +152,15 @@ class MapArchive:
         _write_zip(destination, files)
         return manifest
 
+    async def write_pose_graph(self, directory: Path) -> tuple[str, ...]:
+        return await self._pose_graph.write(directory)
+
+    async def read_pose_graph(self, directory: Path) -> None:
+        await self._pose_graph.read(directory)
+
+    async def reset_pose_graph(self) -> None:
+        await self._pose_graph.reset()
+
     async def validate_and_extract(self, path: Path, directory: Path) -> BundleManifest:
         try:
             archive = zipfile.ZipFile(path)
@@ -170,8 +183,13 @@ class MapArchive:
         }
         if declared != actual:
             raise DomainError(ErrorCode.VALIDATION, "bundle file hash mismatch")
+        _check_content_hash(manifest_body)
         if files.get(STABLE_LAYER) is None:
             raise DomainError(ErrorCode.VALIDATION, "stable occupancy layer is missing")
+        if not any(name.startswith("pose_graph/") and not name.endswith("/") for name in files):
+            raise DomainError(ErrorCode.VALIDATION, "pose graph is missing")
+        if "grid/map.yaml" not in files or "grid/map.pgm" not in files:
+            raise DomainError(ErrorCode.VALIDATION, "grid map is missing")
         waypoint_bytes = files.get("waypoints.json")
         if waypoint_bytes is None:
             raise DomainError(ErrorCode.VALIDATION, "waypoints are missing")
@@ -186,6 +204,10 @@ class MapArchive:
             if waypoint.map_ref != manifest.map_ref:
                 raise DomainError(
                     ErrorCode.VALIDATION, "waypoint map does not match the bundle map"
+                )
+            if waypoint.source_robot_id != manifest.source_robot_id:
+                raise DomainError(
+                    ErrorCode.VALIDATION, "waypoint source does not match the bundle source"
                 )
         _materialize(directory, files)
         return manifest
@@ -235,7 +257,7 @@ def _write_zip(destination: Path, files: dict[str, bytes]) -> None:
         with zipfile.ZipFile(partial, "w") as bundle:
             for name in sorted(files):
                 bundle.writestr(name, files[name])
-        os.replace(partial, destination)
+        durable_replace(partial, destination)
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
@@ -309,9 +331,8 @@ def _pose_json(pose: Pose2D | None) -> dict[str, float] | None:
 
 
 def _manifest_json(manifest: BundleManifest) -> dict[str, object]:
-    return {
+    body: dict[str, object] = {
         "format_version": manifest.format_version,
-        "file_hashes": dict(manifest.file_hashes),
         "backend_version": manifest.backend_version,
         "map_ref": {
             "map_id": manifest.map_ref.map_id,
@@ -330,6 +351,47 @@ def _manifest_json(manifest: BundleManifest) -> dict[str, object]:
         "tasks_included": manifest.tasks_included,
         "sensor_summary": [list(item) for item in manifest.sensor_summary],
     }
+    body["content_hash"] = hashlib.sha256(_canonical(body)).hexdigest()
+    body["file_hashes"] = dict(manifest.file_hashes)
+    return body
+
+
+def _check_content_hash(body: dict[str, object]) -> None:
+    declared = body.get("content_hash")
+    if not isinstance(declared, str) or not declared:
+        raise DomainError(ErrorCode.VALIDATION, "manifest behavior checksum is missing")
+    covered = {
+        key: value for key, value in body.items() if key not in {"content_hash", "file_hashes"}
+    }
+    actual = hashlib.sha256(_canonical(covered)).hexdigest()
+    if actual != declared:
+        raise DomainError(ErrorCode.VALIDATION, "manifest behavior checksum mismatch")
+
+
+def _canonical(body: dict[str, object]) -> bytes:
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
+    width = snapshot.grid.width if snapshot.grid.width > 0 else 1
+    height = snapshot.grid.height if snapshot.grid.height > 0 else 1
+    occupied = {evidence.cell for evidence in snapshot.occupancy.cells}
+    pixels = bytearray()
+    for y in range(height):
+        for x in range(width):
+            pixels.append(0 if (x, y) in occupied else 205)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "map.pgm").write_bytes(f"P5\n{width} {height}\n255\n".encode() + bytes(pixels))
+    origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"
+    yaml_text = (
+        "image: map.pgm\n"
+        f"resolution: {snapshot.cell_size_m}\n"
+        f"origin: {origin}\n"
+        "negate: 0\n"
+        "occupied_thresh: 0.65\n"
+        "free_thresh: 0.196\n"
+    )
+    (directory / "map.yaml").write_text(yaml_text, encoding="utf-8")
 
 
 def _manifest_from_json(

@@ -1,6 +1,8 @@
 """Transactional map import, export, and clear."""
 
+import asyncio
 import json
+import shutil
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
@@ -13,7 +15,7 @@ import aiosqlite
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.archive import BundleManifest, MapArchive
-from senior_control.mapping.references import GridExtent, SlamSnapshot
+from senior_control.mapping.references import SlamSnapshot, durable_move_tree
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, OperationResult, OperationStatus
 from senior_control.storage.database import Database
@@ -58,14 +60,6 @@ OPERATION_JOURNAL_STATEMENTS: tuple[str, ...] = (
         adopted INTEGER NOT NULL
     )
     """,
-)
-
-_UNRESOLVED = frozenset(
-    {
-        OperationStatus.ACCEPTED,
-        OperationStatus.DISPATCHING,
-        OperationStatus.RUNNING,
-    }
 )
 
 
@@ -143,6 +137,7 @@ class MapOperations:
         self._loader = loader
         self._checkpoint = checkpoint
         self._fault_after = fault_after
+        self._map_lock = asyncio.Lock()
 
     async def prepare(self) -> None:
         from senior_control.storage.migrations import migrate
@@ -168,8 +163,36 @@ class MapOperations:
     async def export_bundle(
         self, map_ref: MapRef, destination: Path, *, operation_id: str | None = None
     ) -> BundleManifest:
-        del operation_id
-        return await self._archive.export_bundle(self.store, map_ref, destination)
+        operation_id = _operation_id(operation_id)
+        payload = _payload(
+            "export",
+            {
+                "map_id": map_ref.map_id,
+                "reference_revision": map_ref.reference_revision,
+                "destination": str(destination),
+            },
+        )
+        if not await self._accept(operation_id, "export", payload):
+            return await self._archived_manifest(destination)
+        await self._phase(operation_id, "dispatching", OperationStatus.DISPATCHING)
+        async with self._map_lock:
+            if self.store.map_ref != map_ref:
+                await self._finish(
+                    operation_id,
+                    OperationStatus.FAILED,
+                    rollback_confirmed=False,
+                    relocalized=False,
+                )
+                raise DomainError(ErrorCode.CONFLICT, "active map reference does not match")
+            await self._phase(operation_id, "running", OperationStatus.RUNNING)
+            manifest = await self._archive.export_bundle(self.store, map_ref, destination)
+        await self._finish(
+            operation_id,
+            OperationStatus.SUCCEEDED,
+            rollback_confirmed=False,
+            relocalized=False,
+        )
+        return manifest
 
     async def import_bundle(
         self, path: Path, robot_id: str, *, operation_id: str | None = None
@@ -197,33 +220,33 @@ class MapOperations:
             if not await self._accept(operation_id, "import", payload):
                 return await self.query(operation_id)
             self._crash_if("accepted")
-            await self._advance(operation_id, "dispatching", OperationStatus.DISPATCHING, 2)
-            self._crash_if("dispatching")
-            await self._motion.stop_and_block_navigation()
-            await self._pause()
-            previous = self.store.snapshot(Path("pose_graph"), ())
-            try:
-                if self._loader is not None:
-                    await self._loader.load(staging / "pose_graph", manifest.last_pose_hint)
-            except Exception:
-                previous.write(self.map_root / "active")
-                await self._finish(
-                    operation_id,
-                    OperationStatus.FAILED,
-                    rollback_confirmed=True,
-                    relocalized=False,
-                )
-                raise
-            history = (
-                self.map_root
-                / "history"
-                / previous.map_ref.map_id
-                / str(previous.map_ref.reference_revision)
-            )
-            previous.write(history)
-            self._adopt(snapshot)
-            snapshot.write(self.map_root / "active")
-            await self._finish_import(operation_id, robot_id, manifest)
+            async with self._map_lock:
+                await self._phase(operation_id, "dispatching", OperationStatus.DISPATCHING)
+                self._crash_if("dispatching")
+                await self._motion.stop_and_block_navigation()
+                await self._pause_or_review(operation_id)
+                previous = self.store.snapshot(Path("pose_graph"), ())
+                history = _history_dir(self.map_root, previous.map_ref)
+                await self._backup(previous, history)
+                await self._phase(operation_id, "history_durable", None)
+                await self._phase(operation_id, "running", OperationStatus.RUNNING)
+                try:
+                    await self._archive.read_pose_graph(staging / "pose_graph")
+                    if self._loader is not None:
+                        await self._loader.load(staging / "pose_graph", manifest.last_pose_hint)
+                except Exception:
+                    await self._restore_saved(previous, history)
+                    await self._finish(
+                        operation_id,
+                        OperationStatus.FAILED,
+                        rollback_confirmed=True,
+                        relocalized=False,
+                    )
+                    raise
+                self.store.replace(snapshot)
+                await self._publish_active(snapshot, staging / "pose_graph")
+                await self._phase(operation_id, "active_durable", None)
+                await self._finish_import(operation_id, robot_id, manifest)
         return OperationResult(operation_id, OperationStatus.SUCCEEDED)
 
     async def clear_map(
@@ -237,44 +260,53 @@ class MapOperations:
         if not await self._accept(operation_id, "clear", payload):
             return await self.query(operation_id)
         self._crash_if("accepted")
-        await self._advance(operation_id, "dispatching", OperationStatus.DISPATCHING, 2)
-        self._crash_if("dispatching")
-        await self._motion.stop_and_block_navigation()
-        await self._pause()
-        previous = self.store.snapshot(Path("pose_graph"), ())
-        if previous.map_ref != expected:
-            raise DomainError(ErrorCode.CONFLICT, "active map reference does not match")
-        history = (
-            self.map_root
-            / "history"
-            / previous.map_ref.map_id
-            / str(previous.map_ref.reference_revision)
-        )
-        previous.write(history)
-        cleared = MapRef(f"unmapped-{uuid.uuid4().hex}", 0)
-        self._install_empty(cleared)
-        self.store.snapshot(Path("pose_graph"), ()).write(self.map_root / "active")
-        await self._invalidate(expected)
-        await self._finish(
-            operation_id,
-            OperationStatus.SUCCEEDED,
-            rollback_confirmed=False,
-            relocalized=False,
-        )
+        async with self._map_lock:
+            if self.store.map_ref != expected:
+                await self._finish(
+                    operation_id,
+                    OperationStatus.FAILED,
+                    rollback_confirmed=False,
+                    relocalized=False,
+                )
+                raise DomainError(ErrorCode.CONFLICT, "active map reference does not match")
+            await self._phase(operation_id, "dispatching", OperationStatus.DISPATCHING)
+            self._crash_if("dispatching")
+            await self._motion.stop_and_block_navigation()
+            await self._pause_or_review(operation_id)
+            previous = self.store.snapshot(Path("pose_graph"), ())
+            history = _history_dir(self.map_root, previous.map_ref)
+            await self._backup(previous, history)
+            await self._phase(operation_id, "history_durable", None)
+            await self._phase(operation_id, "running", OperationStatus.RUNNING)
+            await self._archive.reset_pose_graph()
+            owner = previous.odom_owner
+            cell_size = previous.cell_size_m
+            cleared = MapRef(f"unmapped-{uuid.uuid4().hex}", 0)
+            self.store.clear(cleared, odom_owner=owner, cell_size_m=cell_size)
+            await self._publish_active(self.store.snapshot(Path("pose_graph"), ()), None)
+            await self._phase(operation_id, "active_durable", None)
+            await self._invalidate(expected)
+            await self._unadopt_home(expected)
+            await self._finish(
+                operation_id,
+                OperationStatus.SUCCEEDED,
+                rollback_confirmed=False,
+                relocalized=False,
+            )
         return OperationResult(operation_id, OperationStatus.SUCCEEDED)
 
     async def query(self, operation_id: str) -> OperationResult:
         stored = await self._stored(operation_id)
         if stored is None:
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "operation was never issued")
-        return OperationResult(operation_id, _published(stored.status))
+        return OperationResult(operation_id, stored.status)
 
     async def operation_record(self, operation_id: str) -> OperationRecord:
         stored = await self._stored(operation_id)
         if stored is None:
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "operation was never issued")
         return OperationRecord(
-            OperationResult(operation_id, _published(stored.status)),
+            OperationResult(operation_id, stored.status),
             stored.rollback_confirmed,
             stored.relocalized,
         )
@@ -389,16 +421,27 @@ class MapOperations:
                 )
         return True
 
-    async def _advance(
-        self, operation_id: str, phase: str, status: OperationStatus, seq: int
-    ) -> None:
+    async def _phase(self, operation_id: str, phase: str, status: OperationStatus | None) -> None:
         async with self._database.write_lock:
-            async with self._transaction() as connection:
-                await connection.execute(
-                    "UPDATE map_operation SET status = ? WHERE operation_id = ?",
-                    (status.value, operation_id),
-                )
-                await connection.execute(
+            connection = self._database.connection
+            async with connection.execute(
+                """
+                SELECT COALESCE(MAX(seq), 0)
+                FROM map_operation_phase
+                WHERE operation_id = ?
+                """,
+                (operation_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            await connection.rollback()
+            seq = 1 if row is None else _whole(row[0]) + 1
+            async with self._transaction() as writing:
+                if status is not None:
+                    await writing.execute(
+                        "UPDATE map_operation SET status = ? WHERE operation_id = ?",
+                        (status.value, operation_id),
+                    )
+                await writing.execute(
                     """
                     INSERT INTO map_operation_phase (operation_id, seq, phase)
                     VALUES (?, ?, ?)
@@ -485,6 +528,18 @@ class MapOperations:
                     (map_ref.map_id, map_ref.reference_revision),
                 )
 
+    async def _unadopt_home(self, map_ref: MapRef) -> None:
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                await connection.execute(
+                    """
+                    UPDATE map_home_link
+                    SET adopted = 0, status = 'unadopted'
+                    WHERE map_id = ? AND reference_revision = ?
+                    """,
+                    (map_ref.map_id, map_ref.reference_revision),
+                )
+
     async def _stored(self, operation_id: str) -> _StoredOperation | None:
         async with self._database.write_lock:
             return await self._locked_stored(operation_id)
@@ -524,38 +579,70 @@ class MapOperations:
         else:
             await connection.commit()
 
-    async def _pause(self) -> None:
-        if self._checkpoint is not None:
-            await self._checkpoint.checkpoint()
+    async def _pause_or_review(self, operation_id: str) -> None:
+        try:
+            if self._checkpoint is not None:
+                await self._checkpoint.checkpoint()
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None:
+                uncancel = getattr(task, "uncancel", None)
+                if callable(uncancel):
+                    uncancel()
+            await self._phase(operation_id, "needs_review", OperationStatus.NEEDS_REVIEW)
+            await self._finish(
+                operation_id,
+                OperationStatus.NEEDS_REVIEW,
+                rollback_confirmed=False,
+                relocalized=False,
+            )
+            raise
+
+    async def _backup(self, snapshot: SlamSnapshot, destination: Path) -> None:
+        stage = self._stage_dir()
+        await self._archive.write_pose_graph(stage / "pose_graph")
+        snapshot.write(stage)
+        durable_move_tree(stage, destination)
+
+    async def _publish_active(self, snapshot: SlamSnapshot, pose_graph: Path | None) -> None:
+        stage = self._stage_dir()
+        if pose_graph is None:
+            await self._archive.write_pose_graph(stage / "pose_graph")
+        else:
+            _copy_tree(pose_graph, stage / "pose_graph")
+        snapshot.write(stage)
+        durable_move_tree(stage, self.map_root / "active")
+
+    async def _restore_saved(self, snapshot: SlamSnapshot, history: Path) -> None:
+        await self._archive.read_pose_graph(history / "pose_graph")
+        stage = self._stage_dir()
+        _copy_tree(history / "pose_graph", stage / "pose_graph")
+        snapshot.write(stage)
+        durable_move_tree(stage, self.map_root / "active")
+
+    def _stage_dir(self) -> Path:
+        stage = self.map_root / ".staging" / uuid.uuid4().hex
+        stage.mkdir(parents=True, exist_ok=True)
+        return stage
+
+    async def _archived_manifest(self, destination: Path) -> BundleManifest:
+        with tempfile.TemporaryDirectory() as raw:
+            return await self._archive.validate_and_extract(destination, Path(raw))
 
     def _crash_if(self, phase: str) -> None:
         if self._fault_after == phase:
             raise ProcessCrash(phase)
 
-    def _adopt(self, snapshot: SlamSnapshot) -> None:
-        store = self.store
-        store._live.clear()
-        store._removed.clear()
-        store._waypoints.clear()
-        store.map_ref = snapshot.map_ref
-        store.odom_owner = snapshot.odom_owner
-        store.cell_size_m = snapshot.cell_size_m
-        store.restore(snapshot)
 
-    def _install_empty(self, map_ref: MapRef) -> None:
-        store = self.store
-        store._live.clear()
-        store._removed.clear()
-        store._waypoints.clear()
-        store.map_ref = map_ref
-        store.grid = GridExtent(0, 0, 0.0, 0.0)
-        store.review_required = False
+def _history_dir(root: Path, map_ref: MapRef) -> Path:
+    return root / "history" / map_ref.map_id / str(map_ref.reference_revision)
 
 
-def _published(status: OperationStatus) -> OperationStatus:
-    if status in _UNRESOLVED:
-        return OperationStatus.NEEDS_REVIEW
-    return status
+def _copy_tree(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        if path.is_file():
+            shutil.copyfile(path, destination / path.name)
 
 
 def _operation_id(operation_id: str | None) -> str:

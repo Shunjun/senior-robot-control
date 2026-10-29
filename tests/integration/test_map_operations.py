@@ -13,9 +13,9 @@ from senior_control.mapping.archive import BundleManifest, MapArchive
 from senior_control.mapping.evidence import CellEvidence
 from senior_control.mapping.operations import MapOperations, ProcessCrash
 from senior_control.mapping.references import (
+    AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
-    AnchoredWaypoint,
     GridExtent,
     SlamSnapshot,
 )
@@ -24,6 +24,7 @@ from senior_control.models import MapRef, OperationStatus, Pose2D
 from senior_control.storage.database import Database
 
 CELL = 0.5
+_HINT = Pose2D(1.0, 2.0, 0.25)
 
 
 def cell_of(x: float, y: float) -> tuple[int, int]:
@@ -31,7 +32,7 @@ def cell_of(x: float, y: float) -> tuple[int, int]:
 
 
 class Graph:
-    def __init__(self, map_ref: MapRef, hint: Pose2D | None = Pose2D(1.0, 2.0, 0.25)) -> None:
+    def __init__(self, map_ref: MapRef, hint: Pose2D | None = _HINT) -> None:
         self._map_ref = map_ref
         self._hint = hint
 
@@ -49,6 +50,12 @@ class Graph:
         (directory / "graph.posegraph").write_text(self._map_ref.map_id, encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
+
+    async def read(self, directory: Path) -> None:
+        del directory
+
+    async def reset(self) -> None:
+        return None
 
 
 class Gate:
@@ -402,7 +409,14 @@ async def test_cancelled_io_outcome_unknown(tmp_path: Path) -> None:
             await task
         record = await ops.operation_record("cancel-1")
         links = await ops.task_links()
+        async with database.connection.execute(
+            "SELECT status FROM map_operation WHERE operation_id = ?",
+            ("cancel-1",),
+        ) as cursor:
+            stored = await cursor.fetchone()
 
+    assert stored is not None
+    assert stored[0] == "needs_review"
     assert record.result.status is OperationStatus.NEEDS_REVIEW
     assert record.rollback_confirmed is False
     assert record.relocalized is False
@@ -446,3 +460,258 @@ async def test_crash_between_commit_and_dispatch_needs_review(tmp_path: Path) ->
     assert links[0].invalidated is False
     assert links[0].definition == "keep"
     assert gate.calls == []
+
+
+class Session(Graph):
+    def __init__(self, map_ref: MapRef) -> None:
+        super().__init__(map_ref)
+        self.token = "live"
+        self.resets = 0
+        self.reads: list[Path] = []
+        self.rollback_during_restore: bool | None = None
+
+    async def write(self, directory: Path) -> tuple[str, ...]:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "graph.posegraph").write_text(self.token, encoding="utf-8")
+        (directory / "graph.data").write_text("scans", encoding="utf-8")
+        return ("graph.posegraph", "graph.data")
+
+    async def read(self, directory: Path) -> None:
+        self.reads.append(directory)
+        pose = directory / "graph.posegraph"
+        if pose.is_file():
+            self.token = pose.read_text(encoding="utf-8")
+
+    async def reset(self) -> None:
+        self.resets += 1
+        self.token = "reset"
+
+
+class HoldingGraph(Graph):
+    def __init__(self, map_ref: MapRef) -> None:
+        super().__init__(map_ref)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def write(self, directory: Path) -> tuple[str, ...]:
+        self.started.set()
+        await self.release.wait()
+        return await super().write(directory)
+
+
+def session_operations(
+    database: Database,
+    store: MapReferenceStore,
+    root: Path,
+    session: Graph,
+    *,
+    robot_id: str,
+    loader: Loader | None = None,
+    gate: Gate | None = None,
+) -> MapOperations:
+    return MapOperations(
+        database,
+        store,
+        MapArchive(
+            session,
+            source_robot_id=robot_id,
+            home_waypoint_id="home",
+            sensor_summary=(("lidar", "source-description-only"),),
+        ),
+        gate or Gate(),
+        robot_id=robot_id,
+        map_root=root / "maps",
+        config_dir=root / "config",
+        loader=loader,
+        checkpoint=None,
+        fault_after=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_keeps_pose_graph_and_stage_log(tmp_path: Path) -> None:
+    source = filled_store("yard", 3, (1.25, 0.25))
+    local = filled_store("local", 1, (2.25, 0.25))
+    session = Session(source.map_ref)
+    bundle = tmp_path / "yard.zip"
+    async with (
+        Database(tmp_path / "a.db") as database_a,
+        Database(tmp_path / "b.db") as database_b,
+    ):
+        origin = session_operations(database_a, source, tmp_path / "a", session, robot_id="robot-a")
+        target_session = Session(local.map_ref)
+        target = session_operations(
+            database_b,
+            local,
+            tmp_path / "b",
+            target_session,
+            robot_id="robot-b",
+            loader=Loader(),
+        )
+        await origin.prepare()
+        await target.prepare()
+        await origin.export_bundle(source.map_ref, bundle, operation_id="export-graph")
+        await target.import_bundle(bundle, "robot-b", operation_id="import-graph")
+        phases = await target.phases("import-graph")
+
+    history = tmp_path / "b" / "maps" / "history" / "local" / "1" / "pose_graph" / "graph.posegraph"
+    active = tmp_path / "b" / "maps" / "active" / "pose_graph" / "graph.posegraph"
+    assert history.is_file()
+    assert history.read_text(encoding="utf-8") == "live"
+    assert active.is_file()
+    assert "history_durable" in phases
+    assert "running" in phases
+    assert "active_durable" in phases
+    assert phases.index("history_durable") < phases.index("running")
+    assert phases.index("running") < phases.index("active_durable")
+
+
+@pytest.mark.asyncio
+async def test_failed_load_restores_session_before_rollback_flag(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    session = Session(store.map_ref)
+    gate = Gate()
+
+    class DirtyLoader(Loader):
+        async def load(self, directory: Path, hint: Pose2D | None) -> None:
+            del directory, hint
+            session.token = "dirty"
+            raise RuntimeError("slam rejected the graph")
+
+    bundle = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(
+            database, store, tmp_path, session, robot_id="robot-a", loader=DirtyLoader(), gate=gate
+        )
+        await ops.prepare()
+        await ops.export_bundle(store.map_ref, bundle, operation_id="export-fail")
+
+        async def watch_restore(directory: Path) -> None:
+            del directory
+            current = await ops.operation_record("import-fail")
+            session.rollback_during_restore = current.rollback_confirmed
+
+        session.read = watch_restore  # type: ignore[method-assign]
+        original_read = Session.read
+
+        async def reading(directory: Path) -> None:
+            await watch_restore(directory)
+            await original_read(session, directory)
+
+        session.read = reading  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="slam rejected"):
+            await ops.import_bundle(bundle, "robot-a", operation_id="import-fail")
+        record = await ops.operation_record("import-fail")
+
+    assert session.reads
+    assert session.token == "live"
+    assert session.rollback_during_restore is False
+    assert record.rollback_confirmed is True
+    assert record.result.status is OperationStatus.FAILED
+    assert gate.driving is False
+    assert gate.blocked is True
+    assert ops.store.map_ref.map_id == "yard"
+
+
+@pytest.mark.asyncio
+async def test_clear_resets_session_and_unadopts_home(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    session = Session(store.map_ref)
+    bundle = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(
+            database, store, tmp_path, session, robot_id="robot-a", loader=Loader()
+        )
+        await ops.prepare()
+        await ops.export_bundle(store.map_ref, bundle, operation_id="export-home")
+        await ops.import_bundle(bundle, "robot-a", operation_id="import-home")
+        adopted = await ops.home_for("robot-a")
+        assert adopted is not None and adopted.adopted is True
+        await ops.clear_map(store.map_ref, operation_id="clear-home")
+        home = await ops.home_for("robot-a")
+        phases = await ops.phases("clear-home")
+
+    assert session.resets == 1
+    history = tmp_path / "maps" / "history" / "yard" / "3" / "pose_graph" / "graph.posegraph"
+    active = tmp_path / "maps" / "active" / "pose_graph" / "graph.posegraph"
+    assert history.is_file()
+    assert active.is_file()
+    assert active.read_text(encoding="utf-8") == "reset"
+    assert home is not None
+    assert home.adopted is False
+    assert home.waypoint_id == "home"
+    assert home.map_ref == MapRef("yard", 3)
+    assert home.source_robot_id == "robot-a"
+    assert "running" in phases
+
+
+@pytest.mark.asyncio
+async def test_export_is_queryable_while_running(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    graph = HoldingGraph(store.map_ref)
+    destination = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="robot-a")
+        await ops.prepare()
+        task = asyncio.create_task(
+            ops.export_bundle(store.map_ref, destination, operation_id="export-live")
+        )
+        await asyncio.wait_for(graph.started.wait(), timeout=1)
+        found = await asyncio.wait_for(ops.query("export-live"), timeout=1)
+        assert found.status is not OperationStatus.NEEDS_REVIEW
+        assert found.status in {
+            OperationStatus.ACCEPTED,
+            OperationStatus.DISPATCHING,
+            OperationStatus.RUNNING,
+        }
+        graph.release.set()
+        manifest = await task
+        done = await ops.query("export-live")
+
+    assert isinstance(manifest, BundleManifest)
+    assert done.status is OperationStatus.SUCCEEDED
+    assert done.operation_id == "export-live"
+
+
+@pytest.mark.asyncio
+async def test_clear_mismatch_fails_before_stop(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, store, tmp_path, robot_id="robot-a", gate=gate)
+        await ops.prepare()
+        with pytest.raises(DomainError) as caught:
+            await ops.clear_map(MapRef("yard", 9), operation_id="bad-clear")
+        record = await ops.operation_record("bad-clear")
+        phases = await ops.phases("bad-clear")
+
+    assert caught.value.code is ErrorCode.CONFLICT
+    assert gate.calls == []
+    assert gate.driving is True
+    assert record.result.status is OperationStatus.FAILED
+    assert "dispatching" not in phases
+    assert ops.store.map_ref == MapRef("yard", 3)
+
+
+@pytest.mark.asyncio
+async def test_map_lock_blocks_clear_until_export_fsync(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.25, 0.25))
+    graph = HoldingGraph(store.map_ref)
+    gate = Gate()
+    destination = tmp_path / "yard.zip"
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="robot-a", gate=gate)
+        await ops.prepare()
+        export_task = asyncio.create_task(
+            ops.export_bundle(store.map_ref, destination, operation_id="export-lock")
+        )
+        await asyncio.wait_for(graph.started.wait(), timeout=1)
+        clear_task = asyncio.create_task(ops.clear_map(store.map_ref, operation_id="clear-lock"))
+        await asyncio.sleep(0.05)
+        assert gate.calls == []
+        assert clear_task.done() is False
+        graph.release.set()
+        await export_task
+        await clear_task
+
+    assert gate.calls == ["stop_and_block_navigation"]
