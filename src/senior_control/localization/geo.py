@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.archive import Georeference
-from senior_control.models import Pose2D
 
 _WGS84_A = 6_378_137.0
 _WGS84_F = 1.0 / 298.257223563
@@ -36,10 +35,19 @@ class QualifiedFix:
 
 
 @dataclass(frozen=True)
+class AlignedPose:
+    """Map position. ``yaw`` stays empty until an absolute heading or a scan provides one."""
+
+    x: float
+    y: float
+    yaw: float | None
+
+
+@dataclass(frozen=True)
 class PositionEstimate:
     """Map position from one alignment. ``uncertainty`` is easting, northing, yaw."""
 
-    pose: Pose2D | None
+    pose: AlignedPose | None
     uncertainty: tuple[float, float, float]
     heading_rad: float | None
     full_transform: bool
@@ -85,6 +93,10 @@ class GeoAlignment:
         self._clock = clock
         self._max_age_s = max_age_s
         self._max_horizontal_std_m = max_horizontal_std_m
+        self._unverified_heading = False
+
+    def note_heading(self, *, source: str, ready: bool) -> None:
+        self._unverified_heading = source == "unknown" and not ready
 
     def to_map(self, fix: QualifiedFix) -> PositionEstimate:
         if self.georeference.status == "unreferenced":
@@ -122,11 +134,10 @@ class GeoAlignment:
         assert rotation is not None and translation is not None
         rotated = _rotate(rotation, (east, north, _up))
         heading = _map_heading(fix.absolute_heading_rad, rotation)
-        yaw = 0.0 if heading is None else heading
         sigma_yaw = math.inf if heading is None else self._uncertainty_m[2]
         return self._estimate(
             fix,
-            pose=Pose2D(rotated[0] + translation[0], rotated[1] + translation[1], yaw),
+            pose=AlignedPose(rotated[0] + translation[0], rotated[1] + translation[1], heading),
             uncertainty=(
                 math.hypot(self._uncertainty_m[0], fix.horizontal_std_m),
                 math.hypot(self._uncertainty_m[1], fix.horizontal_std_m),
@@ -145,12 +156,12 @@ class GeoAlignment:
         local_healthy: bool,
         server_connected: bool,
     ) -> NavigationPosture:
-        # A server drop is not a stop for localization. GPS loss only pauses
-        # geodetic targets and alignment updates.
+        # A server drop is not a stop. An unverified heading bias pauses map
+        # navigation without stopping. GPS loss only pauses geodetic updates.
         del server_connected
         trusted = fix is not None and self._usable(fix) and self._complete()
         return NavigationPosture(
-            map_navigation=local_healthy,
+            map_navigation=local_healthy and not self._unverified_heading,
             geodetic_targets_paused=not trusted,
             alignment_updates_paused=not trusted,
             stop=False,
@@ -160,7 +171,7 @@ class GeoAlignment:
         self,
         fix: QualifiedFix,
         *,
-        pose: Pose2D | None,
+        pose: AlignedPose | None,
         uncertainty: tuple[float, float, float],
         heading_rad: float | None,
         full_transform: bool,
@@ -208,6 +219,8 @@ class GeoAlignment:
         )
 
     def _usable(self, fix: QualifiedFix) -> bool:
+        if fix.navsat_status < 0:
+            return False
         if not fix.fresh or not math.isfinite(fix.stamp):
             return False
         if abs(self._clock.monotonic() - fix.stamp) > self._max_age_s:
@@ -257,10 +270,10 @@ def _map_heading(
 ) -> float | None:
     if absolute_heading_rad is None or not math.isfinite(absolute_heading_rad):
         return None
-    return _wrap(absolute_heading_rad + _yaw(rotation))
+    return _wrap(absolute_heading_rad + quaternion_yaw(rotation))
 
 
-def _yaw(rotation: tuple[float, float, float, float]) -> float:
+def quaternion_yaw(rotation: tuple[float, float, float, float]) -> float:
     x, y, z, w = rotation
     sin_yaw = 2.0 * (w * z + x * y)
     cos_yaw = 1.0 - 2.0 * (y * y + z * z)

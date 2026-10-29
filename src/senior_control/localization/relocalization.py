@@ -4,11 +4,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from senior_control.errors import DomainError
-from senior_control.localization.geo import GeoAlignment, QualifiedFix
+from senior_control.localization.geo import AlignedPose, GeoAlignment, QualifiedFix
 from senior_control.mapping.archive import Georeference
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 
-ScanMatch = Callable[[Pose2D | None], tuple[Pose2D, bool] | None]
+ScanMatch = Callable[[Pose2D | AlignedPose | None], tuple[Pose2D, bool] | None]
 
 
 @dataclass(frozen=True)
@@ -51,14 +51,14 @@ class Relocalizer:
         self.reason = "scan_match" if hint is None else hint.source
         return OperationResult("relocalize", OperationStatus.SUCCEEDED)
 
-    def _seed(self, hint: PoseHint | None) -> Pose2D | None:
+    def _seed(self, hint: PoseHint | None) -> Pose2D | AlignedPose | None:
         if hint is None:
             return None
         if hint.source == "gps":
             return self._gps_seed(hint)
         return hint.pose
 
-    def _gps_seed(self, hint: PoseHint) -> Pose2D | None:
+    def _gps_seed(self, hint: PoseHint) -> AlignedPose | None:
         unreferenced = self._georeference.status == "unreferenced"
         if self._alignment is None or hint.fix is None or unreferenced:
             return None
@@ -66,9 +66,10 @@ class Relocalizer:
             estimate = self._alignment.to_map(hint.fix)
         except DomainError:
             return None
-        if not estimate.accepted or estimate.pose is None or not estimate.full_transform:
+        pose = estimate.pose
+        if not estimate.accepted or pose is None or not estimate.full_transform:
             return None
-        return estimate.pose
+        return AlignedPose(pose.x, pose.y, estimate.heading_rad)
 
     def _fail(self, reason: str) -> OperationResult:
         self.ready = False

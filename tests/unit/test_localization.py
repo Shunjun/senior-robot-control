@@ -173,6 +173,7 @@ def test_referenced_alignment_converts_enu_and_records_uncertainty() -> None:
     assert estimate.pose.x == pytest.approx(MAP_X, abs=1e-3)
     assert estimate.pose.y == pytest.approx(MAP_Y, abs=1e-3)
     assert estimate.heading_rad is None
+    assert estimate.pose.yaw is None
     assert math.isinf(estimate.uncertainty[2])
     assert estimate.uncertainty[0] == pytest.approx(math.hypot(0.4, 0.3))
     assert estimate.uncertainty[1] == pytest.approx(math.hypot(0.5, 0.3))
@@ -185,6 +186,72 @@ def test_referenced_alignment_converts_enu_and_records_uncertainty() -> None:
     assert headed.pose is not None
     assert headed.pose.yaw == pytest.approx(headed.heading_rad)
     assert headed.uncertainty[2] == pytest.approx(0.05)
+
+
+def test_no_fix_status_is_rejected_and_ordinary_status_is_not_rtk() -> None:
+    geo = alignment(referenced())
+    no_fix = geo.to_map(satellite(navsat_status=-1, rtk="fixed", fresh=True, horizontal_std_m=0.2))
+    assert no_fix.accepted is False
+    assert no_fix.pose is None
+    for status in (0, 1, 2):
+        ordinary = geo.to_map(satellite(navsat_status=status, rtk=None))
+        assert ordinary.accepted is True
+        assert ordinary.rtk is None
+        assert ordinary.pose is not None
+        assert ordinary.pose.yaw is None
+
+
+def test_rotated_map_compares_heading_in_one_frame() -> None:
+    observer = HeadingObserver(min_baseline_m=5.0, max_correction_rad=0.35)
+    psi = math.pi / 2
+    map_dx = math.cos(psi) * 8.0
+    map_dy = math.sin(psi) * 8.0
+    consistent = straight(
+        map_yaw=psi,
+        map_dx=map_dx,
+        map_dy=map_dy,
+        enu_east_m=8.0,
+        enu_north_m=0.0,
+        alignment_rotation=YAW_90,
+    )
+    assert observer.observe(consistent) is None
+    biased = replace(consistent, map_yaw=psi - 0.2)
+    correction = observer.observe(biased)
+    assert correction is not None
+    assert correction.source == "heading"
+    assert correction.ready is True
+    assert correction.correction_rad == pytest.approx(0.2, abs=1e-9)
+
+
+def test_unknown_bias_pauses_map_navigation_without_stopping() -> None:
+    observer = HeadingObserver(min_baseline_m=5.0, max_correction_rad=0.35)
+    observation = observer.observe(
+        straight(
+            map_yaw=0.0,
+            map_dx=8.0 * math.cos(0.35),
+            map_dy=8.0 * math.sin(0.35),
+            enu_east_m=8.0 * math.cos(-0.35),
+            enu_north_m=8.0 * math.sin(-0.35),
+        )
+    )
+    assert observation is not None
+    assert observation.source == "unknown"
+    assert observation.ready is False
+    assert observation.correction_rad == pytest.approx(-0.7, abs=1e-9)
+    geo = alignment(referenced())
+    geo.note_heading(source=observation.source, ready=observation.ready)
+    paused = geo.posture(fix=satellite(), local_healthy=True, server_connected=False)
+    assert paused.map_navigation is False
+    assert paused.stop is False
+    assert paused.geodetic_targets_paused is False
+    assert paused.alignment_updates_paused is False
+    geo.note_heading(source="heading", ready=True)
+    resumed = geo.posture(fix=satellite(), local_healthy=True, server_connected=False)
+    assert resumed.map_navigation is True
+    assert resumed.stop is False
+    lost = geo.posture(fix=None, local_healthy=True, server_connected=False)
+    assert lost.map_navigation is True
+    assert lost.stop is False
 
 
 def test_forward_baseline_corrects_wrapped_angle() -> None:
@@ -223,6 +290,7 @@ def test_forward_baseline_corrects_wrapped_angle() -> None:
     assert ambiguous is not None
     assert ambiguous.source == "unknown"
     assert ambiguous.ready is False
+    assert ambiguous.correction_rad == pytest.approx(-0.7, abs=1e-9)
 
 
 def test_reverse_curve_slip_jump_rejected() -> None:
@@ -233,7 +301,6 @@ def test_reverse_curve_slip_jump_rejected() -> None:
         "curve": straight(imu_yaw_delta_rad=0.8),
         "slip": straight(slip=True),
         "jump": straight(jump=True),
-        "gnss": straight(gnss_trusted=False),
         "stationary": straight(
             map_dx=0.0,
             map_dy=0.0,
@@ -260,6 +327,11 @@ def test_reverse_curve_slip_jump_rejected() -> None:
     }
     for name, sample in rejected.items():
         assert observer.observe(sample) is None, name
+    gnss = observer.observe(straight(gnss_trusted=False))
+    assert gnss is not None
+    assert gnss.source == "gnss"
+    assert gnss.ready is False
+    assert gnss.correction_rad == 0.0
 
 
 def test_heading_observer_never_commands_motion() -> None:
@@ -355,6 +427,22 @@ async def test_gps_seed_needs_reliable_match() -> None:
     assert seen[0] is not None
     assert seen[0].x == pytest.approx(MAP_X, abs=1e-2)
     assert seen[0].y == pytest.approx(MAP_Y, abs=1e-2)
+    assert seen[0].yaw is None
+
+    expected_yaw = math.atan2(math.sin(0.5 + math.pi / 2), math.cos(0.5 + math.pi / 2))
+    headed_yaw: list[float | None] = []
+
+    def headed(seed: Pose2D | None) -> tuple[Pose2D, bool] | None:
+        headed_yaw.append(None if seed is None else seed.yaw)
+        if seed is None or seed.yaw is None:
+            return None
+        return Pose2D(seed.x, seed.y, seed.yaw), True
+
+    with_heading = relocator(referenced(), headed, aligned=geo)
+    headed_fix = satellite(rtk=None, navsat_status=0, absolute_heading_rad=0.5)
+    headed_result = await with_heading.begin(MAP, PoseHint(None, "gps", headed_fix))
+    assert headed_result.status == OperationStatus.SUCCEEDED
+    assert headed_yaw[0] == pytest.approx(expected_yaw)
 
     def confirm(seed: Pose2D | None) -> tuple[Pose2D, bool] | None:
         if seed is None:

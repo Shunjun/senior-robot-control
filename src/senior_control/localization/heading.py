@@ -10,6 +10,8 @@ Home stay untouched.
 import math
 from dataclasses import dataclass
 
+from senior_control.localization.geo import quaternion_yaw
+
 _MAX_TURN_RAD = 0.2
 _AGREE_RAD = 0.12
 _TRACK_RATIO = 0.35
@@ -32,6 +34,7 @@ class MotionSample:
     commanded_forward: bool
     slip: bool
     jump: bool
+    alignment_rotation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -51,21 +54,23 @@ class HeadingObserver:
         self._max_correction_rad = max_correction_rad
 
     def observe(self, sample: MotionSample) -> HeadingObservation | None:
-        if not _measurable(sample, self._min_baseline_m):
+        if not _motion_window(sample, self._min_baseline_m):
             return None
+        if not sample.gnss_trusted:
+            return HeadingObservation(0.0, "gnss", False)
+        psi = quaternion_yaw(sample.alignment_rotation)
         enu_course = math.atan2(sample.enu_north_m, sample.enu_east_m)
         map_course = math.atan2(sample.map_dy, sample.map_dx)
-        yaw_error = _wrap(enu_course - sample.map_yaw)
-        frame_error = _wrap(enu_course - map_course)
-        travel_matches_enu = abs(_wrap(map_course - enu_course)) <= _AGREE_RAD
-        travel_matches_yaw = abs(_wrap(map_course - sample.map_yaw)) <= _AGREE_RAD
-        if travel_matches_enu and abs(yaw_error) > _AGREE_RAD:
+        enu_in_map = _wrap(enu_course + psi)
+        yaw_error = _wrap(enu_in_map - sample.map_yaw)
+        frame_error = _wrap(enu_in_map - map_course)
+        if abs(frame_error) <= _AGREE_RAD and abs(yaw_error) > _AGREE_RAD:
             return HeadingObservation(
                 _bound(yaw_error, self._max_correction_rad),
                 "heading",
                 True,
             )
-        if travel_matches_yaw and abs(frame_error) > _AGREE_RAD:
+        if abs(_wrap(map_course - sample.map_yaw)) <= _AGREE_RAD and abs(frame_error) > _AGREE_RAD:
             return HeadingObservation(
                 _bound(frame_error, self._max_correction_rad),
                 "georeference",
@@ -73,11 +78,12 @@ class HeadingObserver:
             )
         if abs(yaw_error) <= _AGREE_RAD and abs(frame_error) <= _AGREE_RAD:
             return None
-        return HeadingObservation(0.0, "unknown", False)
+        residual = yaw_error if abs(yaw_error) >= abs(frame_error) else frame_error
+        return HeadingObservation(residual, "unknown", False)
 
 
-def _measurable(sample: MotionSample, min_baseline_m: float) -> bool:
-    if sample.slip or sample.jump or not sample.gnss_trusted or not sample.georeferenced:
+def _motion_window(sample: MotionSample, min_baseline_m: float) -> bool:
+    if sample.slip or sample.jump or not sample.georeferenced:
         return False
     if sample.odom_forward_m <= 0.0 or abs(sample.imu_yaw_delta_rad) > _MAX_TURN_RAD:
         return False
