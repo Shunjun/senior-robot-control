@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import threading
 
 _EVENTS = frozenset(
     {
@@ -34,3 +35,66 @@ class JsonFormatter(logging.Formatter):
             if isinstance(value, str) and _IDENTIFIER.fullmatch(value):
                 data[key] = value
         return json.dumps(data, ensure_ascii=False)
+
+
+_METRIC_NAMES = frozenset({"agent_operations_total", "agent_reconnects_total"})
+_OPERATION_LABELS = frozenset(
+    {
+        "task.create",
+        "task.update",
+        "task.delete",
+        "task.enable",
+        "home.set",
+        "map.export",
+        "map.import",
+        "map.clear",
+        "operation.query",
+        "drive.velocity",
+        "drive.stop",
+        "safety.estop",
+        "control",
+        "none",
+    }
+)
+_RESULT_LABELS = frozenset(
+    {
+        "accepted",
+        "dispatching",
+        "running",
+        "succeeded",
+        "failed",
+        "needs_review",
+        "validation",
+        "conflict",
+        "offline",
+        "localization_unavailable",
+        "safety_rejected",
+        "timeout",
+        "operation_unknown",
+        "none",
+    }
+)
+OTHER = "other"
+
+
+class Metrics:
+    """Counters whose labels come from closed sets: a caller cannot grow the series count."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._series: dict[tuple[str, str, str], int] = {}
+
+    def inc(self, name: str, *, operation: str = "none", result: str = "none") -> None:
+        if name not in _METRIC_NAMES:
+            raise ValueError("unknown metric")
+        key = (
+            name,
+            operation if operation in _OPERATION_LABELS else OTHER,
+            result if result in _RESULT_LABELS else OTHER,
+        )
+        with self._lock:
+            self._series[key] = self._series.get(key, 0) + 1
+
+    def series(self) -> dict[tuple[str, str, str], int]:
+        with self._lock:
+            return dict(self._series)

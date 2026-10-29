@@ -1,6 +1,6 @@
 """Versioned, bounded remote control wire format."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
@@ -55,8 +55,53 @@ class SimpleEnvelope(EnvelopeBase):
     payload: EmptyPayload
 
 
+OPERATION_TYPES = (
+    "task.create",
+    "task.update",
+    "task.delete",
+    "task.enable",
+    "home.set",
+    "map.export",
+    "map.import",
+    "map.clear",
+    "operation.query",
+)
+
+
+class OperationPayload(StrictModel):
+    """Device-owned edit. The robot dedupes by ``operation_id`` and guards by revision."""
+
+    operation_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=0)
+    body: dict[str, Any] = Field(default_factory=dict)
+
+
+class OperationEnvelope(EnvelopeBase):
+    type: Literal[
+        "task.create",
+        "task.update",
+        "task.delete",
+        "task.enable",
+        "home.set",
+        "map.export",
+        "map.import",
+        "map.clear",
+        "operation.query",
+    ]
+    payload: OperationPayload
+
+
 class ResponsePayload(StrictModel):
     request_type: Literal[
+        "task.create",
+        "task.update",
+        "task.delete",
+        "task.enable",
+        "home.set",
+        "map.export",
+        "map.import",
+        "map.clear",
+        "operation.query",
         "control.acquire",
         "control.release",
         "drive.velocity",
@@ -70,6 +115,9 @@ class ResponsePayload(StrictModel):
     ok: bool
     error: ErrorCode | None = None
     operation_id: str | None = None
+    status: Literal[
+        "accepted", "dispatching", "running", "succeeded", "failed", "needs_review"
+    ] | None = None
 
     @model_validator(mode="after")
     def consistent_result(self) -> "ResponsePayload":
@@ -84,7 +132,8 @@ class ResponseEnvelope(EnvelopeBase):
 
 
 Envelope = Annotated[
-    VelocityEnvelope | SimpleEnvelope | ResponseEnvelope, Field(discriminator="type")
+    VelocityEnvelope | SimpleEnvelope | OperationEnvelope | ResponseEnvelope,
+    Field(discriminator="type"),
 ]
 _adapter = TypeAdapter(Envelope)
 MAX_MESSAGE_BYTES = 65536

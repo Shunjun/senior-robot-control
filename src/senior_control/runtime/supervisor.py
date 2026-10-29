@@ -104,6 +104,10 @@ class Supervisor:
         self._wake.set()
         return True
 
+    def revoke(self, reason: str) -> None:
+        """Stop accepting and draining motion now. Safe to call from a signal handler."""
+        self._revoke(reason)
+
     def _revoke(self, reason: str) -> None:
         if self.revoked_reason is None:
             self.revoked_reason = reason
