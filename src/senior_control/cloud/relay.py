@@ -9,12 +9,14 @@ from typing import Any, Literal, cast
 
 from fastapi import WebSocket
 
+from senior_control.agent.snapshots import SnapshotCache, snapshot_from_envelope
 from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
     Envelope,
     ResponseEnvelope,
     ResponsePayload,
+    SnapshotEnvelope,
     serialize_envelope,
     validate_envelope,
 )
@@ -105,8 +107,9 @@ class _Link:
 
 
 class Hub:
-    def __init__(self, limits: CloudLimits) -> None:
+    def __init__(self, limits: CloudLimits, snapshots: SnapshotCache | None = None) -> None:
         self._limits = limits
+        self.snapshots = snapshots if snapshots is not None else SnapshotCache()
         self._links: dict[str, _Link] = {}
 
     def _link(self, robot_id: str) -> _Link:
@@ -144,6 +147,7 @@ class Hub:
         if link is not None:
             if link.agent is connection:
                 link.agent = None
+                self.snapshots.mark_offline(connection.robot_id)
             link.controllers.discard(connection)
         connection.outbox.close(CLOSE_NORMAL)
 
@@ -181,10 +185,15 @@ class Hub:
         except ValueError:
             connection.outbox.close(CLOSE_BAD_FRAME)
             return
+        if envelope.connection_epoch != connection.epoch and isinstance(
+            envelope, (SnapshotEnvelope, ResponseEnvelope)
+        ):
+            return
+        if isinstance(envelope, SnapshotEnvelope):
+            self.snapshots.store(snapshot_from_envelope(envelope))
+            return
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
-            return
-        if envelope.connection_epoch != connection.epoch:
             return
         for controller in list(link.controllers):
             if not controller.outbox.put(raw, "response"):
@@ -201,6 +210,9 @@ class Hub:
             envelope = validate_envelope(raw, claimed)
         except (ValueError, KeyError, TypeError):
             connection.outbox.close(CLOSE_BAD_FRAME)
+            return
+        if isinstance(envelope, SnapshotEnvelope):
+            connection.outbox.close(CLOSE_POLICY)
             return
         if envelope.robot_id != connection.robot_id or isinstance(envelope, ResponseEnvelope):
             self._reject(connection, envelope, ErrorCode.VALIDATION)

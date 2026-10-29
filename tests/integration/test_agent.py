@@ -284,7 +284,7 @@ async def test_long_map_export_does_not_block_heartbeat_or_stop(rig: Rig) -> Non
     result = await rig.agent.dispatch(stop())
     assert time.monotonic() - started < 0.1
     assert result.status is OperationStatus.SUCCEEDED
-    assert rig.motion.events.count("stop") == 1
+    assert rig.motion.events.count("stop:req-stop") == 1
     await asyncio.sleep(0.1)
     assert link.heartbeats >= beats + 3
     assert not export.done()
@@ -312,6 +312,7 @@ async def test_other_robot_heartbeat_not_eligible(rig: Rig) -> None:
     assert rig.agent.eligible_for_motion is True
     await rig.agent.dispatch(velocity())
     await until(lambda: any(event.startswith("drive") for event in rig.motion.events))
+    assert "drive:3:0.2:0.0" in rig.motion.events
     await finish(task, rig)
 
 
@@ -387,7 +388,7 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
             ROBOT,
             connector=connector,
             journal=journal,
-            tasks=StoreTaskPort(store, robot_id=ROBOT),
+            tasks=StoreTaskPort(store, robot_id=ROBOT, journal=journal),
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
@@ -439,3 +440,131 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         assert isinstance(stored, TaskDefinition) and isinstance(stored.schedule, Schedule)
         agent.request_shutdown()
         await asyncio.wait_for(runner, timeout=2)
+
+
+async def test_shutdown_disables_motion_with_the_link_epoch(rig: Rig) -> None:
+    task = await start(rig, FakeLink(epoch=7))
+    await finish(task, rig)
+    assert rig.motion.events[-3:] == ["disable:7", "exit", "close"]
+
+
+def task_body(task_id: str = "patrol") -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "map_id": MAP.map_id,
+        "reference_revision": MAP.reference_revision,
+        "waypoint_ids": ["wp-1"],
+        "schedule": {"kind": "cron", "expression": "0 8 * * *", "timezone": "Asia/Shanghai"},
+        "timezone": "Asia/Shanghai",
+        "enabled": True,
+        "created_at": datetime(2026, 10, 27, tzinfo=timezone.utc).isoformat(),
+    }
+
+
+@dataclass
+class StoreRig:
+    agent: Agent
+    store: TaskStore
+    journal: AgentJournal
+    state: FakeState
+    runner: asyncio.Task[None]
+
+
+@pytest.fixture
+async def store_rig(tmp_path: Path) -> AsyncIterator[StoreRig]:
+    async with Database(tmp_path / "robot.db") as database:
+        store = TaskStore(database, robot_id=ROBOT)
+        await store.prepare()
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        connector = FakeConnector(FakeLink(epoch=1))
+        state = FakeState(runnable_task_ids=("patrol", "other"))
+        agent = Agent(
+            ROBOT,
+            connector=connector,
+            journal=journal,
+            tasks=StoreTaskPort(store, robot_id=ROBOT, journal=journal),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=state,
+            motion=FakeMotion(),
+            heartbeat_seconds=0.02,
+            retry_delay=0.01,
+        )
+        runner = asyncio.ensure_future(agent.run())
+        await until(lambda: agent.connected)
+        yield StoreRig(agent, store, journal, state, runner)
+        agent.request_shutdown()
+        await asyncio.wait_for(runner, timeout=2)
+
+
+async def test_task_delete_disables_keeps_the_row_and_hides_it(store_rig: StoreRig) -> None:
+    agent, store, journal = store_rig.agent, store_rig.store, store_rig.journal
+    await agent.dispatch(operation("task.create", "op-create", task_body()))
+    result = await agent.dispatch(
+        operation("task.delete", "op-del", {"task_id": "patrol"}, expected_revision=1)
+    )
+    assert result.status is OperationStatus.SUCCEEDED
+    kept = await store.get("patrol")
+    assert kept is not None and kept.enabled is False and kept.revision == 2
+    assert await journal.deleted_task_ids() == frozenset({"patrol"})
+    snapshot = await agent.publish_snapshot(ROBOT)
+    assert snapshot.runnable_task_ids == ("other",)
+
+    with pytest.raises(DomainError) as caught:
+        await agent.dispatch(
+            operation(
+                "task.enable",
+                "op-back",
+                {"task_id": "patrol", "enabled": True},
+                expected_revision=2,
+            )
+        )
+    assert caught.value.code is ErrorCode.CONFLICT
+    stored = await store.get("patrol")
+    assert stored is not None and stored.enabled is False
+
+
+async def test_task_delete_wrong_revision_or_missing_task_is_a_conflict(
+    store_rig: StoreRig,
+) -> None:
+    agent, store, journal = store_rig.agent, store_rig.store, store_rig.journal
+    await agent.dispatch(operation("task.create", "op-create", task_body()))
+    with pytest.raises(DomainError) as stale:
+        await agent.dispatch(
+            operation("task.delete", "op-stale", {"task_id": "patrol"}, expected_revision=5)
+        )
+    assert stale.value.code is ErrorCode.CONFLICT
+    with pytest.raises(DomainError) as missing:
+        await agent.dispatch(
+            operation("task.delete", "op-none", {"task_id": "ghost"}, expected_revision=1)
+        )
+    assert missing.value.code is ErrorCode.CONFLICT
+    kept = await store.get("patrol")
+    assert kept is not None and kept.enabled is True and kept.revision == 1
+    assert await journal.deleted_task_ids() == frozenset()
+
+
+async def test_task_delete_succeeds_only_after_both_commits(
+    store_rig: StoreRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent, store, journal = store_rig.agent, store_rig.store, store_rig.journal
+    await agent.dispatch(operation("task.create", "op-create", task_body()))
+    seen: list[bool] = []
+    real = journal.mark_deleted
+
+    async def failing(task_id: str, operation_id: str, revision: int) -> None:
+        stored = await store.get(task_id)
+        seen.append(stored is not None and stored.enabled is False)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(journal, "mark_deleted", failing)
+    with pytest.raises(DomainError) as caught:
+        await agent.dispatch(
+            operation("task.delete", "op-del", {"task_id": "patrol"}, expected_revision=1)
+        )
+    assert caught.value.code is ErrorCode.OPERATION_UNKNOWN
+    assert seen == [True]
+    entry = await journal.get("op-del")
+    assert entry is not None and entry.status is OperationStatus.NEEDS_REVIEW
+    monkeypatch.setattr(journal, "mark_deleted", real)

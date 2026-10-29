@@ -3,9 +3,15 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from typing import Protocol
 
 from senior_control.models import MapRef
+from senior_control.protocol import (
+    HomePayload,
+    MapRefPayload,
+    SnapshotEnvelope,
+    SnapshotPayload,
+)
 from senior_control.waypoints import Waypoint
 
 
@@ -18,10 +24,18 @@ class LiveState:
     home: Waypoint | None
     task_revision: int
     execution_status: str
+    runnable_task_ids: tuple[str, ...] = ()
 
 
 class StatePort(Protocol):
     async def collect(self) -> LiveState: ...
+
+
+@dataclass(frozen=True)
+class HomeSummary:
+    waypoint_id: str
+    map_ref: MapRef
+    status: str
 
 
 @dataclass(frozen=True)
@@ -30,33 +44,84 @@ class RobotSnapshot:
     connected: bool
     localized: bool
     map_ref: MapRef | None
-    home: Waypoint | None
+    home: HomeSummary | None
     task_revision: int
     execution_status: str
     collected_at: float
+    runnable_task_ids: tuple[str, ...] = ()
 
-    def to_wire(self) -> dict[str, Any]:
-        return {
-            "robot_id": self.robot_id,
-            "connected": self.connected,
-            "localized": self.localized,
-            "map_ref": None
-            if self.map_ref is None
-            else {
-                "map_id": self.map_ref.map_id,
-                "reference_revision": self.map_ref.reference_revision,
-            },
-            "home": None
-            if self.home is None
-            else {
-                "id": self.home.id,
-                "map_id": self.home.map_ref.map_id,
-                "status": self.home.status,
-            },
-            "task_revision": self.task_revision,
-            "execution_status": self.execution_status,
-            "collected_at": self.collected_at,
-        }
+
+def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
+    if map_ref is None:
+        return None
+    return MapRefPayload(map_id=map_ref.map_id, reference_revision=map_ref.reference_revision)
+
+
+def snapshot_envelope(
+    snapshot: RobotSnapshot,
+    *,
+    robot_id: str,
+    session_id: str,
+    connection_epoch: int,
+    request_id: str,
+    seq: int,
+    expires_at: float,
+) -> SnapshotEnvelope:
+    """The uplink frame a ``Link`` sends for a snapshot."""
+    home = snapshot.home
+    return SnapshotEnvelope(
+        v=1,
+        robot_id=robot_id,
+        session_id=session_id,
+        connection_epoch=connection_epoch,
+        request_id=request_id,
+        seq=seq,
+        expires_at=expires_at,
+        type="snapshot",
+        payload=SnapshotPayload(
+            connected=snapshot.connected,
+            localized=snapshot.localized,
+            map_ref=_map_payload(snapshot.map_ref),
+            home=None
+            if home is None
+            else HomePayload(
+                waypoint_id=home.waypoint_id,
+                map_ref=MapRefPayload(
+                    map_id=home.map_ref.map_id,
+                    reference_revision=home.map_ref.reference_revision,
+                ),
+                status=home.status,
+            ),
+            task_revision=snapshot.task_revision,
+            runnable_task_ids=list(snapshot.runnable_task_ids),
+            execution_status=snapshot.execution_status,
+            collected_at=snapshot.collected_at,
+        ),
+    )
+
+
+def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
+    payload = envelope.payload
+    home = payload.home
+    return RobotSnapshot(
+        robot_id=envelope.robot_id,
+        connected=payload.connected,
+        localized=payload.localized,
+        map_ref=None
+        if payload.map_ref is None
+        else MapRef(payload.map_ref.map_id, payload.map_ref.reference_revision),
+        home=None
+        if home is None
+        else HomeSummary(
+            home.waypoint_id,
+            MapRef(home.map_ref.map_id, home.map_ref.reference_revision),
+            home.status,
+        ),
+        task_revision=payload.task_revision,
+        execution_status=payload.execution_status,
+        collected_at=payload.collected_at,
+        runnable_task_ids=tuple(payload.runnable_task_ids),
+    )
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,13 @@ from typing import Any, Protocol
 
 from senior_control.agent.snapshots import RobotSnapshot
 from senior_control.clock import Clock
-from senior_control.protocol import Envelope, ResponseEnvelope, serialize_envelope
+from senior_control.protocol import (
+    Envelope,
+    ResponseEnvelope,
+    SimpleEnvelope,
+    VelocityEnvelope,
+    serialize_envelope,
+)
 from senior_control.runtime.ipc import IpcClient, IpcError
 
 
@@ -55,15 +61,15 @@ class HeartbeatLedger:
 class MotionPort(Protocol):
     """The only way the agent reaches motion: through the ROS-side adapter."""
 
-    async def drive(self, vx: float, wz: float) -> None: ...
+    async def drive(self, envelope: VelocityEnvelope) -> None: ...
 
-    async def stop(self) -> None: ...
+    async def stop(self, envelope: SimpleEnvelope) -> None: ...
 
-    async def estop(self) -> None: ...
+    async def estop(self, envelope: SimpleEnvelope) -> None: ...
 
     async def forward(self, envelope: Envelope) -> None: ...
 
-    async def disable(self) -> None: ...
+    async def disable(self, connection_epoch: int) -> None: ...
 
     async def exit(self) -> None: ...
 
@@ -84,20 +90,20 @@ class IpcMotion:
             raise IpcError(f"ros side refused {kind}")
         return reply
 
-    async def drive(self, vx: float, wz: float) -> None:
-        await self._ok("drive", vx=vx, wz=wz)
+    async def drive(self, envelope: VelocityEnvelope) -> None:
+        await self._ok("drive", envelope=serialize_envelope(envelope).decode())
 
-    async def stop(self) -> None:
-        await self._ok("stop")
+    async def stop(self, envelope: SimpleEnvelope) -> None:
+        await self._ok("stop", envelope=serialize_envelope(envelope).decode())
 
-    async def estop(self) -> None:
-        await self._ok("estop")
+    async def estop(self, envelope: SimpleEnvelope) -> None:
+        await self._ok("estop", envelope=serialize_envelope(envelope).decode())
 
     async def forward(self, envelope: Envelope) -> None:
         await self._ok("command", envelope=serialize_envelope(envelope).decode())
 
-    async def disable(self) -> None:
-        await self._ok("disable_motion")
+    async def disable(self, connection_epoch: int) -> None:
+        await self._ok("disable_motion", connection_epoch=connection_epoch)
 
     async def exit(self) -> None:
         await self._ok("exit")

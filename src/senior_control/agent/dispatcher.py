@@ -43,7 +43,7 @@ class TaskPort(Protocol):
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int: ...
 
-    async def delete(self, task_id: str, expected_revision: int) -> int: ...
+    async def delete(self, task_id: str, expected_revision: int, *, operation_id: str) -> int: ...
 
     async def set_enabled(self, task_id: str, enabled: bool, expected_revision: int) -> int: ...
 
@@ -194,7 +194,9 @@ class Dispatcher:
             if kind == "task.delete":
                 revision = _required(expected)
                 task_id = _text(body, "task_id")
-                return "edit", lambda: self._tasks.delete(task_id, revision)
+                return "edit", lambda: self._tasks.delete(
+                    task_id, revision, operation_id=operation_id
+                )
             if kind == "task.enable":
                 revision = _required(expected)
                 enabled = body.get("enabled")
@@ -274,27 +276,41 @@ def _map_ref(body: Mapping[str, Any]) -> MapRef:
 class StoreTaskPort:
     """Task edits through ``TaskStore``; the store keeps its own SQL and revision check."""
 
-    def __init__(self, store: TaskStore, *, robot_id: str) -> None:
+    def __init__(self, store: TaskStore, *, robot_id: str, journal: AgentJournal) -> None:
         self._store = store
         self._robot_id = robot_id
+        self._journal = journal
 
     async def create(self, body: Mapping[str, Any]) -> int:
         stored = await self._store.create(self._definition(body))
         return stored.revision
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
-        stored = await self._store.update(self._definition(body), expected_revision)
+        definition = self._definition(body)
+        await self._require_live(definition.task_id)
+        stored = await self._store.update(definition, expected_revision)
         return stored.revision
 
-    async def delete(self, task_id: str, expected_revision: int) -> int:
-        raise DomainError(ErrorCode.VALIDATION, "task store keeps history and cannot delete")
+    async def delete(self, task_id: str, expected_revision: int, *, operation_id: str) -> int:
+        """Disable through the store, then record the delete. Row and history are kept."""
+        current = await self._store.get(task_id)
+        if current is None:
+            raise DomainError(ErrorCode.CONFLICT, "task does not exist")
+        stored = await self._store.update(replace(current, enabled=False), expected_revision)
+        await self._journal.mark_deleted(task_id, operation_id, stored.revision)
+        return stored.revision
 
     async def set_enabled(self, task_id: str, enabled: bool, expected_revision: int) -> int:
+        await self._require_live(task_id)
         current = await self._store.get(task_id)
         if current is None:
             raise DomainError(ErrorCode.CONFLICT, "task does not exist")
         stored = await self._store.update(replace(current, enabled=enabled), expected_revision)
         return stored.revision
+
+    async def _require_live(self, task_id: str) -> None:
+        if task_id in await self._journal.deleted_task_ids():
+            raise DomainError(ErrorCode.CONFLICT, "task was deleted")
 
     def _definition(self, body: Mapping[str, Any]) -> TaskDefinition:
         try:

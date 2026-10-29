@@ -11,7 +11,7 @@ from typing import Any
 from senior_control.agent.connection import HeartbeatFrame, HeartbeatLedger, Link, MotionPort
 from senior_control.agent.dispatcher import Deadlines, Dispatcher, HomePort, MapPort, TaskPort
 from senior_control.agent.journal import AgentJournal
-from senior_control.agent.snapshots import RobotSnapshot, StatePort
+from senior_control.agent.snapshots import HomeSummary, RobotSnapshot, StatePort
 from senior_control.clock import Clock, SystemClock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
@@ -22,6 +22,7 @@ from senior_control.protocol import (
     ResponseEnvelope,
     ResponsePayload,
     SimpleEnvelope,
+    SnapshotEnvelope,
     VelocityEnvelope,
 )
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
@@ -64,6 +65,7 @@ class Agent:
         self.robot_id = robot_id
         self.metrics = metrics if metrics is not None else Metrics()
         self._connector = connector
+        self._journal = journal
         self._state = state
         self._motion = motion
         self._deadlines = deadlines if deadlines is not None else Deadlines()
@@ -88,6 +90,8 @@ class Agent:
         )
         self._link: Link | None = None
         self._epoch = 0
+        self._last_epoch = 0
+        self._latest_velocity: VelocityEnvelope | None = None
         self._supervisor: Supervisor | None = None
         self._stopping = False
         self._stop = asyncio.Event()
@@ -119,7 +123,7 @@ class Agent:
         supervisor = Supervisor(
             send_heartbeat=self._beat,
             call_ros=self._motion.call,
-            drive_sink=self._motion.drive,
+            drive_sink=self._drive,
             publish_cmd_vel=_never_publish,
             connect=self._session,
             background=self._background,
@@ -154,7 +158,9 @@ class Agent:
         self._stopping = True
         supervisor.revoke("shutting down")
         try:
-            await asyncio.wait_for(self._motion.disable(), timeout=self._deadlines.safety)
+            await asyncio.wait_for(
+                self._motion.disable(self._last_epoch), timeout=self._deadlines.safety
+            )
         except Exception:
             logger.exception("ros side did not acknowledge disabling motion")
 
@@ -195,7 +201,7 @@ class Agent:
         except AuthRejected:
             self.request_shutdown()
             raise
-        self._link, self._epoch = link, link.epoch
+        self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
         try:
@@ -283,7 +289,9 @@ class Agent:
     # ------------------------------------------------------------------ commands
 
     async def dispatch(self, envelope: Envelope) -> OperationResult:
-        if isinstance(envelope, ResponseEnvelope) or envelope.robot_id != self.robot_id:
+        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope)):
+            raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
+        if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if isinstance(envelope, OperationEnvelope):
             return await self._dispatcher.run(envelope)
@@ -301,16 +309,17 @@ class Agent:
 
     async def _control(self, envelope: VelocityEnvelope | SimpleEnvelope) -> OperationResult:
         request_id = envelope.request_id
-        if envelope.type in HALT_TYPES:
+        if isinstance(envelope, SimpleEnvelope) and envelope.type in HALT_TYPES:
             # A stop is honored whatever the epoch, expiry, or link state: it only removes motion.
             supervisor = self._supervisor
+            self._latest_velocity = None
             if supervisor is not None:
                 supervisor.submit_drive(0.0, 0.0)
             try:
                 if envelope.type == "safety.estop":
-                    await asyncio.wait_for(self._motion.estop(), self._deadlines.safety)
+                    await asyncio.wait_for(self._motion.estop(envelope), self._deadlines.safety)
                 else:
-                    await asyncio.wait_for(self._motion.stop(), self._deadlines.safety)
+                    await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
             except Exception as exc:
                 if supervisor is not None:
                     supervisor.revoke("stop was not acknowledged")
@@ -319,11 +328,11 @@ class Agent:
         self._admit(envelope)
         if isinstance(envelope, VelocityEnvelope):
             supervisor = self._supervisor
-            if (
-                supervisor is None
-                or not self.eligible_for_motion
-                or not supervisor.submit_drive(envelope.payload.vx, envelope.payload.wz)
-            ):
+            if supervisor is None or not self.eligible_for_motion:
+                raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
+            self._latest_velocity = envelope
+            if not supervisor.submit_drive(envelope.payload.vx, envelope.payload.wz):
+                self._latest_velocity = None
                 raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         try:
@@ -331,6 +340,13 @@ class Agent:
         except Exception as exc:
             raise DomainError(ErrorCode.TIMEOUT, "ros side did not accept the command") from exc
         return OperationResult(request_id, OperationStatus.SUCCEEDED)
+
+    async def _drive(self, vx: float, wz: float) -> None:
+        """Supervisor sink. The arbiter gets the controller's own validated envelope."""
+        latest = self._latest_velocity
+        if latest is None or (latest.payload.vx, latest.payload.wz) != (vx, wz):
+            return
+        await self._motion.drive(latest)
 
     def _admit(self, envelope: Envelope) -> None:
         """A first-time command needs a live link, the current epoch, and an unexpired deadline."""
@@ -347,13 +363,16 @@ class Agent:
         if robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "snapshot is for another robot")
         live = await asyncio.wait_for(self._state.collect(), timeout=self._deadlines.edit)
+        deleted = await self._journal.deleted_task_ids()
+        home = live.home
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
             connected=self.connected,
             localized=live.localized,
             map_ref=live.map_ref,
-            home=live.home,
+            home=None if home is None else HomeSummary(home.id, home.map_ref, home.status),
             task_revision=live.task_revision,
+            runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
         )

@@ -53,31 +53,39 @@ def operation(
     )
 
 
-def stop(epoch: int = 1, robot_id: str = ROBOT) -> SimpleEnvelope:
+def simple(
+    kind: str, *, seq: int, epoch: int = 1, robot_id: str = ROBOT, request_id: str | None = None
+) -> SimpleEnvelope:
     return SimpleEnvelope(
         v=1,
         robot_id=robot_id,
         session_id="session-1",
         connection_epoch=epoch,
-        request_id="req-stop",
-        seq=2,
+        request_id=request_id or f"req-{kind}-{seq}",
+        seq=seq,
         expires_at=time.time() + 30,
-        type="drive.stop",
+        type=kind,  # type: ignore[arg-type]
         payload=EmptyPayload(),
     )
 
 
-def velocity(epoch: int = 1, robot_id: str = ROBOT) -> VelocityEnvelope:
+def stop(epoch: int = 1, robot_id: str = ROBOT, seq: int = 2) -> SimpleEnvelope:
+    return simple("drive.stop", seq=seq, epoch=epoch, robot_id=robot_id, request_id="req-stop")
+
+
+def velocity(
+    epoch: int = 1, robot_id: str = ROBOT, seq: int = 3, vx: float = 0.2
+) -> VelocityEnvelope:
     return VelocityEnvelope(
         v=1,
         robot_id=robot_id,
         session_id="session-1",
         connection_epoch=epoch,
         request_id="req-velocity",
-        seq=3,
+        seq=seq,
         expires_at=time.time() + 30,
         type="drive.velocity",
-        payload=VelocityPayload(vx=0.2, wz=0.0),
+        payload=VelocityPayload(vx=vx, wz=0.0),
     )
 
 
@@ -139,20 +147,20 @@ class FakeMotion:
     def __init__(self, events: list[str] | None = None) -> None:
         self.events: list[str] = events if events is not None else []
 
-    async def drive(self, vx: float, wz: float) -> None:
-        self.events.append(f"drive:{vx}:{wz}")
+    async def drive(self, envelope: VelocityEnvelope) -> None:
+        self.events.append(f"drive:{envelope.seq}:{envelope.payload.vx}:{envelope.payload.wz}")
 
-    async def stop(self) -> None:
-        self.events.append("stop")
+    async def stop(self, envelope: SimpleEnvelope) -> None:
+        self.events.append(f"stop:{envelope.request_id}")
 
-    async def estop(self) -> None:
-        self.events.append("estop")
+    async def estop(self, envelope: SimpleEnvelope) -> None:
+        self.events.append(f"estop:{envelope.request_id}")
 
     async def forward(self, envelope: Envelope) -> None:
         self.events.append(f"forward:{envelope.type}")
 
-    async def disable(self) -> None:
-        self.events.append("disable")
+    async def disable(self, connection_epoch: int) -> None:
+        self.events.append(f"disable:{connection_epoch}")
 
     async def exit(self) -> None:
         self.events.append("exit")
@@ -190,7 +198,7 @@ class FakeTasks:
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
         return await self._commit("update", body, expected_revision)
 
-    async def delete(self, task_id: str, expected_revision: int) -> int:
+    async def delete(self, task_id: str, expected_revision: int, *, operation_id: str) -> int:
         return await self._commit("delete", {"task_id": task_id}, expected_revision)
 
     async def set_enabled(self, task_id: str, enabled: bool, expected_revision: int) -> int:
@@ -230,6 +238,7 @@ class FakeMaps:
 @dataclass
 class FakeState:
     task_revision: int = 4
+    runnable_task_ids: tuple[str, ...] = ()
     localized: bool = True
     execution_status: str = "idle"
     calls: int = field(default=0)
@@ -250,6 +259,7 @@ class FakeState:
             map_ref=MAP,
             home=home,
             task_revision=self.task_revision,
+            runnable_task_ids=self.runnable_task_ids,
             execution_status=self.execution_status,
         )
 

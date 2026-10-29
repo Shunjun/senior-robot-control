@@ -91,6 +91,38 @@ class OperationEnvelope(EnvelopeBase):
     payload: OperationPayload
 
 
+ShortText = Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class MapRefPayload(StrictModel):
+    map_id: ShortText
+    reference_revision: int = Field(ge=0)
+
+
+class HomePayload(StrictModel):
+    waypoint_id: ShortText
+    map_ref: MapRefPayload
+    status: ShortText
+
+
+class SnapshotPayload(StrictModel):
+    """The robot's own view of itself, pushed on connect and after each change."""
+
+    connected: bool
+    localized: bool
+    map_ref: MapRefPayload | None
+    home: HomePayload | None
+    task_revision: int = Field(ge=0)
+    runnable_task_ids: list[ShortText] = Field(max_length=200)
+    execution_status: str = Field(min_length=1, max_length=64)
+    collected_at: float
+
+
+class SnapshotEnvelope(EnvelopeBase):
+    type: Literal["snapshot"]
+    payload: SnapshotPayload
+
+
 class ResponsePayload(StrictModel):
     request_type: Literal[
         "task.create",
@@ -132,7 +164,7 @@ class ResponseEnvelope(EnvelopeBase):
 
 
 Envelope = Annotated[
-    VelocityEnvelope | SimpleEnvelope | OperationEnvelope | ResponseEnvelope,
+    VelocityEnvelope | SimpleEnvelope | OperationEnvelope | SnapshotEnvelope | ResponseEnvelope,
     Field(discriminator="type"),
 ]
 _adapter = TypeAdapter(Envelope)

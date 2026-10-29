@@ -68,10 +68,6 @@ class CommandNode(Node):
     def publish_command(self) -> None:
         self._publish(self._arbiter.tick(self._clock.monotonic()))
 
-    def publish_velocity(self, velocity: Velocity) -> None:
-        """Write to the safety input only. Used by the agent adapter to hold or zero motion."""
-        self._publish(velocity)
-
     def _publish(self, velocity: Velocity) -> None:
         message = Twist()
         message.linear.x = velocity.vx

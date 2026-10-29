@@ -229,18 +229,21 @@ async def test_slow_encoder_does_not_delay_stop(tmp_path: Path) -> None:
         began = time.monotonic()
         await agent.dispatch(stop())
         assert time.monotonic() - began < 0.1
-        assert "stop" in motion.events
+        assert "stop:req-stop" in motion.events
         release.set()
         agent.request_shutdown()
         await asyncio.wait_for(runner, timeout=2)
+
+
+ADAPTER = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/agent_adapter.py"
+COMMAND_NODE = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/command_node.py"
 
 
 def _load_adapter() -> Any:
     import importlib.util
     import sys
 
-    path = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/agent_adapter.py"
-    spec = importlib.util.spec_from_file_location("agent_adapter_under_test", path)
+    spec = importlib.util.spec_from_file_location("agent_adapter_under_test", ADAPTER)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -248,21 +251,153 @@ def _load_adapter() -> Any:
     return module
 
 
-async def test_adapter_refuses_motion_after_disable_and_never_imports_rclpy_at_load() -> None:
-    from senior_control.models import Velocity
+class ArbiterRig:
+    """AdapterCore on the real arbiter, wired as CommandNode wires it: submit and disconnect."""
 
-    published: list[Velocity] = []
-    exits: list[bool] = []
-    core = _load_adapter().AdapterCore(
-        robot_id=ROBOT,
-        publish=published.append,
-        submit=lambda envelope: None,
-        request_exit=lambda: exits.append(True),
-    )
-    assert (await core.handle({"type": "drive", "vx": 0.2, "wz": 0.0}))["ok"] is True
-    assert (await core.handle({"type": "disable_motion"}))["ok"] is True
-    refused = await core.handle({"type": "drive", "vx": 0.2, "wz": 0.0})
-    assert refused == {"ok": False, "error": "motion_disabled"}
-    assert published[-1] == Velocity(0.0, 0.0) and Velocity(0.2, 0.0) not in published[2:]
-    await core.handle({"type": "exit"})
-    assert exits == [True]
+    def __init__(self) -> None:
+        from senior_control.safety.arbiter import Arbiter
+
+        self.now = 100.0
+        self.arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3)
+        self.exits: list[bool] = []
+        self.core = _load_adapter().AdapterCore(
+            robot_id=ROBOT,
+            submit=lambda envelope: self.arbiter.accept(envelope, self.now).accepted,
+            disconnect=self.arbiter.disconnect,
+            request_exit=lambda: self.exits.append(True),
+        )
+
+    def tick(self, advance: float = 0.0) -> tuple[float, float]:
+        self.now += advance
+        velocity_ = self.arbiter.tick(self.now)
+        return (velocity_.vx, velocity_.wz)
+
+    async def send(self, kind: str, envelope: Any = None, **fields: Any) -> dict[str, Any]:
+        from senior_control.protocol import serialize_envelope
+
+        message: dict[str, Any] = {"v": 1, "type": kind, **fields}
+        if envelope is not None:
+            message["envelope"] = serialize_envelope(envelope).decode()
+        reply: dict[str, Any] = await self.core.handle(message)
+        return reply
+
+
+async def test_adapter_drive_goes_through_the_arbiter_lease() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1)))["ok"] is True
+    assert (await rig.send("drive", velocity(seq=2)))["ok"] is True
+    assert rig.tick() == (0.2, 0.0)
+    # The arbiter's TTL still applies: a raw topic write would have outlived it.
+    assert rig.tick(advance=0.5) == (0.0, 0.0)
+
+
+async def test_adapter_rejects_drive_that_is_not_a_valid_velocity_envelope() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1))
+    assert (await rig.send("drive", velocity(seq=2, robot_id="robot-2")))["ok"] is False
+    assert (await rig.send("drive", simple("drive.stop", seq=2)))["ok"] is False
+    assert (await rig.core.handle({"v": 1, "type": "drive", "envelope": "{not json"}))[
+        "ok"
+    ] is False
+    assert (await rig.core.handle({"v": 1, "type": "drive", "vx": 0.2, "wz": 0.0}))["ok"] is False
+    assert rig.tick() == (0.0, 0.0)
+
+
+async def test_adapter_stop_and_estop_hold_zero_through_the_arbiter() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1))
+    await rig.send("drive", velocity(seq=2))
+    assert (await rig.send("stop", simple("drive.stop", seq=3)))["ok"] is True
+    assert rig.tick() == (0.0, 0.0) and rig.tick(advance=0.1) == (0.0, 0.0)
+    await rig.send("drive", velocity(seq=4))
+    assert (await rig.send("estop", simple("safety.estop", seq=5)))["ok"] is True
+    assert rig.arbiter.mode(rig.now) == "estop"
+    assert rig.tick() == (0.0, 0.0)
+    refused = await rig.send("drive", velocity(seq=6))
+    assert refused == {"ok": True, "accepted": False}
+    assert rig.tick() == (0.0, 0.0)
+
+
+async def test_adapter_stop_the_arbiter_refuses_still_ends_motion() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=5))
+    await rig.send("drive", velocity(seq=6))
+    assert rig.tick() == (0.2, 0.0)
+    # Stale seq: the arbiter refuses it, so the adapter must still bring motion to zero.
+    reply = await rig.send("stop", simple("drive.stop", seq=1))
+    assert reply["ok"] is True and reply["accepted"] is False
+    assert rig.tick() == (0.0, 0.0)
+    assert rig.arbiter.mode(rig.now) == "idle"
+
+
+async def test_adapter_disable_motion_zeroes_through_the_arbiter_and_refuses_drive() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1))
+    await rig.send("drive", velocity(seq=2))
+    assert (await rig.send("disable_motion", connection_epoch=1))["ok"] is True
+    assert rig.tick() == (0.0, 0.0)
+    assert rig.arbiter.mode(rig.now) == "idle"
+    assert await rig.send("drive", velocity(seq=3)) == {"ok": False, "error": "motion_disabled"}
+    assert rig.tick() == (0.0, 0.0)
+
+
+async def test_adapter_exit_and_release_zero_through_the_arbiter() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1, epoch=4))
+    await rig.send("drive", velocity(seq=2, epoch=4))
+    assert rig.tick() == (0.2, 0.0)
+    # disable_motion named another epoch; the adapter still zeroes the epoch it has seen.
+    await rig.send("disable_motion", connection_epoch=0)
+    assert rig.tick() == (0.0, 0.0)
+
+    other = ArbiterRig()
+    await other.send("command", simple("control.acquire", seq=1))
+    await other.send("drive", velocity(seq=2))
+    assert (await other.send("exit"))["ok"] is True and other.exits == [True]
+    assert other.tick() == (0.0, 0.0)
+
+    last = ArbiterRig()
+    await last.send("command", simple("control.acquire", seq=1))
+    await last.send("drive", velocity(seq=2))
+    last.core.release()
+    assert last.tick() == (0.0, 0.0)
+
+
+def test_adapter_has_no_raw_velocity_write() -> None:
+    adapter = ADAPTER.read_text()
+    assert "publish_velocity" not in adapter and "Twist" not in adapter
+    assert "publish_velocity" not in COMMAND_NODE.read_text()
+
+
+async def test_ipc_motion_sends_validated_envelopes_and_the_epoch(
+    socket_path: Path, ros: tuple[RosSide, list[str]]
+) -> None:
+    from agent_fakes import simple, velocity
+
+    from senior_control.protocol import validate_envelope
+
+    side, _ = ros
+    motion = IpcMotion(IpcClient(socket_path))
+    await motion.drive(velocity(seq=4))
+    await motion.stop(simple("drive.stop", seq=5))
+    await motion.estop(simple("safety.estop", seq=6))
+    await motion.disable(9)
+    await motion.close()
+    kinds = [message["type"] for message in side.messages]
+    assert kinds == ["drive", "stop", "estop", "disable_motion"]
+    drive = validate_envelope(side.messages[0]["envelope"].encode(), ROBOT)
+    assert drive.type == "drive.velocity" and drive.seq == 4
+    assert validate_envelope(side.messages[1]["envelope"].encode(), ROBOT).type == "drive.stop"
+    assert side.messages[3]["connection_epoch"] == 9
