@@ -42,7 +42,7 @@ def localized(
 
 async def test_schema_version_two_adds_waypoint_table(tmp_path: Path) -> None:
     async with Database(tmp_path / "schema.db") as database:
-        await migrate(database, list(DOMAIN_MIGRATIONS))
+        await migrate(database, list(DOMAIN_MIGRATIONS[:2]))
         async with database.connection.execute("PRAGMA user_version") as cursor:
             row = await cursor.fetchone()
         assert row is not None
