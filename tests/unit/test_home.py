@@ -1,5 +1,6 @@
 """Home stays at the recoverable power-on pose and rejects a bad return."""
 
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -103,7 +104,7 @@ async def test_trusted_start_transform_recovers_start(tmp_path: Path) -> None:
         current = Pose2D(5.0, 5.0, 1.5707963267948966)
         result = await service.initialize(
             StartupReference(True, True, True, Pose2D(2.0, 0.0, 1.5707963267948966)),
-            localized(current),
+            localized(current, latitude=31.2, longitude=121.4),
         )
         assert result.initialized
         assert result.reason == ""
@@ -117,6 +118,8 @@ async def test_trusted_start_transform_recovers_start(tmp_path: Path) -> None:
         assert result.waypoint.pose.y == pytest.approx(5.0)
         assert result.waypoint.pose.yaw == pytest.approx(0.0)
         assert result.waypoint.pose != current
+        assert result.waypoint.latitude is None
+        assert result.waypoint.longitude is None
 
 
 async def test_obstacle_does_not_move_home(tmp_path: Path) -> None:
@@ -242,3 +245,163 @@ async def test_missing_port_rejects_without_navigation(tmp_path: Path) -> None:
             await service.return_home(MAP)
         assert caught.value.code == ErrorCode.OFFLINE
         assert str(caught.value) == "navigation port is unavailable"
+
+
+def test_cancel_status_waits_for_a_terminal_goal() -> None:
+    module = navigation_module()
+    assert module.cancel_status(0, False) is OperationStatus.FAILED
+    assert module.cancel_status(0, True) is OperationStatus.SUCCEEDED
+    assert module.cancel_status(3, False) is OperationStatus.SUCCEEDED
+    assert module.cancel_status(1, True) is OperationStatus.FAILED
+
+
+class TerminalCodeExecutor:
+    def __init__(self, module: object) -> None:
+        self._module = module
+        self.started: list[object] = []
+
+    async def start(self, goal: object) -> str:
+        self.started.append(goal)
+        return f"nav-{len(self.started)}"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        status = self._module.cancel_status(3, False)
+        return OperationResult(execution_id, status)
+
+
+async def test_finished_goal_does_not_block_the_next_return(tmp_path: Path) -> None:
+    module = navigation_module()
+    executor = TerminalCodeExecutor(module)
+    async with Database(tmp_path / "finished.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=AdapterPort(executor),
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        first = await service.return_home(MAP)
+        assert first == "nav-1"
+        started = False
+        try:
+            started = await service.return_home(MAP) == "nav-2"
+        except DomainError:
+            started = False
+        assert started
+        assert len(executor.started) == 2
+
+
+class SlowNavigation:
+    def __init__(self) -> None:
+        self.started = 0
+        self.release = asyncio.Event()
+
+    async def navigate(self, goal: object) -> str:
+        del goal
+        self.started += 1
+        entered = self.started
+        await self.release.wait()
+        return f"exec-{entered}"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_overlapping_returns_do_not_both_navigate(tmp_path: Path) -> None:
+    navigation = SlowNavigation()
+    async with Database(tmp_path / "overlap.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        first = asyncio.create_task(service.return_home(MAP))
+        second = asyncio.create_task(service.return_home(MAP))
+        try:
+            for _ in range(50):
+                if navigation.started:
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.05)
+            assert navigation.started == 1
+        finally:
+            navigation.release.set()
+        assert await first == "exec-1"
+        assert await second == "exec-2"
+
+
+class FailingSecondNavigation:
+    def __init__(self) -> None:
+        self.starts = 0
+        self.cancelled: list[str] = []
+
+    async def navigate(self, goal: object) -> str:
+        del goal
+        self.starts += 1
+        if self.starts == 2:
+            raise RuntimeError("send failed")
+        return f"exec-{self.starts}"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.cancelled.append(execution_id)
+        return OperationResult(execution_id, OperationStatus.FAILED)
+
+
+async def test_failed_send_clears_a_finished_execution(tmp_path: Path) -> None:
+    navigation = FailingSecondNavigation()
+    async with Database(tmp_path / "send-fail.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        assert await service.return_home(MAP) == "exec-1"
+        await service.note_terminal("exec-1")
+        sent = False
+        try:
+            await service.return_home(MAP)
+        except RuntimeError as exc:
+            sent = str(exc) == "send failed"
+        assert sent
+        again = False
+        try:
+            again = await service.return_home(MAP) == "exec-3"
+        except DomainError:
+            again = False
+        assert again
+        assert navigation.starts == 3
+        assert navigation.cancelled == []
+
+
+async def test_recovered_start_keeps_its_own_fix(tmp_path: Path) -> None:
+    async with Database(tmp_path / "fix.db") as database:
+        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        await service.prepare()
+        result = await service.initialize(
+            StartupReference(
+                True,
+                True,
+                True,
+                Pose2D(2.0, 0.0, 1.5707963267948966),
+                30.0,
+                120.0,
+            ),
+            localized(
+                Pose2D(5.0, 5.0, 1.5707963267948966),
+                latitude=31.2,
+                longitude=121.4,
+            ),
+        )
+        assert result.waypoint is not None
+        assert result.waypoint.latitude == pytest.approx(30.0)
+        assert result.waypoint.longitude == pytest.approx(120.0)

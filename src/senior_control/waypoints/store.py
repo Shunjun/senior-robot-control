@@ -337,6 +337,21 @@ class WaypointStore:
             await connection.commit()
 
 
+async def adopted_home_blocks_foreign(connection: aiosqlite.Connection, robot_id: str) -> bool:
+    async with connection.execute(
+        """
+        SELECT status, adopted
+        FROM map_home_link
+        WHERE robot_id = ?
+        """,
+        (robot_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if row is None:
+        return False
+    return _text(row[0]) == "confirmed" and _flag(row[1])
+
+
 async def replace_imported_home(
     connection: aiosqlite.Connection,
     *,

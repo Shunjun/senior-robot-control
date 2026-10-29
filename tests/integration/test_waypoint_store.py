@@ -192,12 +192,13 @@ async def test_reference_change_moves_home_and_survives_restart(tmp_path: Path) 
 class BlockingNavigation:
     def __init__(self) -> None:
         self.events: list[str] = []
+        self.goals: list[object] = []
         self.release = asyncio.Event()
 
     async def navigate(self, goal: object) -> str:
-        del goal
+        self.goals.append(goal)
         self.events.append("navigate")
-        return f"exec-{self.events.count('navigate')}"
+        return f"exec-{len(self.goals)}"
 
     async def cancel(self, execution_id: str) -> OperationResult:
         self.events.append("cancel")
@@ -241,6 +242,7 @@ async def test_cancel_waits_outside_write_transaction(tmp_path: Path) -> None:
             await replacement
         assert completed
         assert navigation.events == ["navigate", "cancel", "terminated", "navigate"]
+        assert navigation.goals[1].pose == Pose2D(2.0, 2.0, 0.4)
 
 
 async def test_unadopted_home_is_rejected(tmp_path: Path) -> None:
@@ -286,13 +288,11 @@ async def test_disconnect_does_not_resume_navigation(tmp_path: Path) -> None:
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
         first = await service.return_home(MAP)
         assert first == "exec-1"
+        navigation.release.set()
         await service.note_connection(False)
-        with pytest.raises(DomainError) as caught:
-            await service.return_home(MAP)
-        assert caught.value.code == ErrorCode.OFFLINE
-        assert str(caught.value) == "connection is offline"
+        assert navigation.events == ["navigate", "cancel", "terminated"]
         await service.note_connection(True)
-        assert navigation.events == ["navigate"]
+        assert navigation.events == ["navigate", "cancel", "terminated"]
 
 
 async def test_review_required_reference_rejects_return(tmp_path: Path) -> None:
@@ -417,3 +417,71 @@ async def test_recoverable_initialize_keeps_pending_home(tmp_path: Path) -> None
         assert again.waypoint is not None
         assert again.waypoint.pose == adopted.pose
         assert again.waypoint.id == adopted.id
+
+
+async def test_cancel_then_unhealthy_does_not_send_replacement(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "recheck.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        assert await service.return_home(MAP) == "exec-1"
+        navigation.release.clear()
+        replacement = asyncio.create_task(service.return_home(MAP))
+        for _ in range(50):
+            if "cancel" in navigation.events:
+                break
+            await asyncio.sleep(0.01)
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4), healthy=False))
+        navigation.release.set()
+        with pytest.raises(DomainError) as caught:
+            await replacement
+        assert caught.value.code == ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert navigation.events == ["navigate", "cancel", "terminated"]
+
+
+async def test_foreign_bundle_keeps_adopted_home(tmp_path: Path) -> None:
+    helpers = _operation_helpers()
+    source = helpers.filled_store("yard", 3, (1.25, 0.25))
+    local = helpers.filled_store("local", 1, (2.25, 0.25))
+    bundle = tmp_path / "from-a.zip"
+    kept = Pose2D(8.0, 8.0, 0.2)
+    async with (
+        Database(tmp_path / "a.db") as database_a,
+        Database(tmp_path / "b.db") as database_b,
+    ):
+        origin = helpers.operations_for(database_a, source, tmp_path / "a", robot_id="robot-a")
+        target = helpers.operations_for(database_b, local, tmp_path / "b", robot_id="robot-b")
+        await origin.prepare()
+        await target.prepare()
+        service = HomeService(database_b, local, robot_id="robot-b")
+        await service.prepare()
+        adopted = await service.set_current(
+            LocalizedPose(kept, local.map_ref, "kf-1", Pose2D(0.0, 0.0, 0.0), True)
+        )
+        await origin.export_bundle(source.map_ref, bundle, operation_id="export-a")
+        await target.import_bundle(bundle, "robot-b", operation_id="import-b")
+        home = await service.home()
+        link = await service.home_link()
+        async with database_b.connection.execute(
+            "SELECT COUNT(*) FROM waypoint WHERE robot_id = ? AND kind = 'home'",
+            ("robot-b",),
+        ) as cursor:
+            count = await cursor.fetchone()
+    assert home is not None
+    assert home.id == adopted.id
+    assert home.pose == kept
+    assert home.status == "confirmed"
+    assert home.source_robot_id == "robot-b"
+    assert link is not None
+    assert link.adopted is True
+    assert link.status == "confirmed"
+    assert link.waypoint_id == adopted.id
+    assert count is not None
+    assert count[0] == 1

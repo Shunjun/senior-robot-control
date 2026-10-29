@@ -11,6 +11,22 @@ from typing import Protocol
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 
 SAFETY_COMMAND_TOPIC = "/safety/command_in"
+ERROR_NONE = 0
+ERROR_GOAL_TERMINATED = 3
+
+
+def cancel_status(return_code: int | None, result_arrived: bool) -> OperationStatus:
+    """Success means the goal is terminal. An accepted cancel is not enough.
+
+    ``ERROR_GOAL_TERMINATED`` means the goal had already finished. That is not
+    a rejected cancel.
+    """
+
+    if return_code == ERROR_GOAL_TERMINATED:
+        return OperationStatus.SUCCEEDED
+    if return_code != ERROR_NONE or not result_arrived:
+        return OperationStatus.FAILED
+    return OperationStatus.SUCCEEDED
 
 
 @dataclass(frozen=True)
@@ -47,14 +63,19 @@ class NavigationAdapter:
         return execution_id
 
     async def cancel(self, execution_id: str) -> OperationResult:
-        if not execution_id.strip() or self._active != execution_id:
-            return OperationResult(execution_id or "unknown", OperationStatus.FAILED)
+        if not execution_id.strip():
+            return OperationResult("unknown", OperationStatus.FAILED)
+        if self._active is None and not self._cancel_rejected:
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+        if self._active != execution_id:
+            return OperationResult(execution_id, OperationStatus.FAILED)
         result = await self._executor.cancel(execution_id)
-        if result.status != OperationStatus.SUCCEEDED:
-            self._cancel_rejected = True
+        if result.status == OperationStatus.SUCCEEDED:
+            self._active = None
+            self._cancel_rejected = False
             return result
-        self._active = None
-        self._cancel_rejected = False
+        if result.status == OperationStatus.FAILED:
+            self._cancel_rejected = True
         return result
 
 
@@ -133,9 +154,20 @@ def main() -> None:
             if not cancel_future.done():
                 return OperationResult(execution_id, OperationStatus.FAILED)
             response = cancel_future.result()
-            if response is None or int(response.return_code) != 0:
-                return OperationResult(execution_id, OperationStatus.FAILED)
-            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+            return_code = None if response is None else int(response.return_code)
+            result_arrived = return_code == ERROR_GOAL_TERMINATED
+            if return_code == ERROR_NONE:
+                get_result = getattr(handle, "get_result_async", None)
+                if get_result is None:
+                    result_arrived = False
+                else:
+                    result_future = get_result()
+                    rclpy.spin_until_future_complete(self._node, result_future, timeout_sec=2.0)
+                    result_arrived = bool(result_future.done())
+            status = cancel_status(return_code, result_arrived)
+            if status == OperationStatus.SUCCEEDED:
+                self._handles.pop(execution_id, None)
+            return OperationResult(execution_id, status)
 
     rclpy.init()
     node_type = create_navigation_node()

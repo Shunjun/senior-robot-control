@@ -1,5 +1,6 @@
 """Home decisions. This module does not open a Nav2 client."""
 
+import asyncio
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,8 @@ class StartupReference:
     continuous: bool
     trusted: bool
     relative_pose: Pose2D | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,7 @@ class HomeService:
         self._localized: LocalizedPose | None = None
         self._connected = True
         self._execution_id: str | None = None
+        self._return_lock = asyncio.Lock()
 
     async def prepare(self) -> None:
         await self._store.prepare()
@@ -107,9 +111,12 @@ class HomeService:
         if not _recoverable(start):
             return HomeResult(False, None, "home is uninitialized")
         pose = localized.pose
+        latitude = localized.latitude
+        longitude = localized.longitude
         if start.moved:
             assert start.relative_pose is not None
             pose = _recover_start(localized.pose, start.relative_pose)
+            latitude, longitude = _pair(start.latitude, start.longitude)
         waypoint = await self._store.save_home(
             waypoint_id=None,
             pose=pose,
@@ -119,8 +126,8 @@ class HomeService:
             source_robot_id=self._robot_id,
             status="confirmed",
             adopted=True,
-            latitude=localized.latitude,
-            longitude=localized.longitude,
+            latitude=latitude,
+            longitude=longitude,
         )
         self._remember(localized)
         self._bind(waypoint, localized.anchor_pose)
@@ -146,16 +153,22 @@ class HomeService:
         return waypoint
 
     async def return_home(self, expected: MapRef) -> str:
-        waypoint = await self._ready(expected)
-        navigation = self._navigation
-        assert navigation is not None
-        if self._execution_id is not None:
-            result = await navigation.cancel(self._execution_id)
-            if result.status != OperationStatus.SUCCEEDED:
-                raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
-        execution_id = await navigation.navigate(HomeGoal(expected, waypoint.pose))
-        self._execution_id = execution_id
-        return execution_id
+        async with self._return_lock:
+            if self._execution_id is not None:
+                result = await self._finish_execution(self._execution_id)
+                if result.status != OperationStatus.SUCCEEDED:
+                    raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
+                self._execution_id = None
+            waypoint = await self._ready(expected)
+            navigation = self._navigation
+            assert navigation is not None
+            try:
+                execution_id = await navigation.navigate(HomeGoal(expected, waypoint.pose))
+            except Exception:
+                self._execution_id = None
+                raise
+            self._execution_id = execution_id
+            return execution_id
 
     async def home(self) -> Waypoint | None:
         stored = await self._store.home()
@@ -245,6 +258,26 @@ class HomeService:
 
     async def note_connection(self, connected: bool) -> None:
         self._connected = connected
+        if connected or self._navigation is None or self._execution_id is None:
+            return
+        if self._return_lock.locked():
+            return
+        async with self._return_lock:
+            if self._execution_id is None or self._navigation is None:
+                return
+            result = await self._finish_execution(self._execution_id)
+            if result.status == OperationStatus.SUCCEEDED:
+                self._execution_id = None
+
+    async def note_terminal(self, execution_id: str) -> None:
+        async with self._return_lock:
+            if self._execution_id == execution_id:
+                self._execution_id = None
+
+    async def _finish_execution(self, execution_id: str) -> OperationResult:
+        navigation = self._navigation
+        assert navigation is not None
+        return await navigation.cancel(execution_id)
 
     async def _ready(self, expected: MapRef) -> Waypoint:
         stored = await self._store.home()
@@ -293,6 +326,12 @@ def _recoverable(start: StartupReference) -> bool:
     if not start.moved:
         return True
     return start.continuous and start.trusted and start.relative_pose is not None
+
+
+def _pair(latitude: float | None, longitude: float | None) -> tuple[float | None, float | None]:
+    if latitude is None or longitude is None:
+        return None, None
+    return latitude, longitude
 
 
 def _recover_start(localized: Pose2D, relative: Pose2D) -> Pose2D:

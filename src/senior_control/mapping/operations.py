@@ -503,7 +503,10 @@ class MapOperations:
     async def _finish_import(
         self, operation_id: str, robot_id: str, manifest: BundleManifest
     ) -> None:
-        from senior_control.waypoints.store import replace_imported_home
+        from senior_control.waypoints.store import (
+            adopted_home_blocks_foreign,
+            replace_imported_home,
+        )
 
         home = next((item for item in manifest.waypoints if item.kind == "home"), None)
         # Another robot's home stays unconfirmed. The last pose is only a load hint.
@@ -516,7 +519,9 @@ class MapOperations:
                     break
         async with self._database.write_lock:
             async with self._transaction() as connection:
-                if home is not None:
+                if home is not None and not (
+                    pending and await adopted_home_blocks_foreign(connection, robot_id)
+                ):
                     assert anchor_pose is not None
                     await replace_imported_home(
                         connection,
