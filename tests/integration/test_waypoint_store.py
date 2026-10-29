@@ -1,6 +1,7 @@
 """Waypoint rows survive restart. Home stays one per robot."""
 
 import asyncio
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -319,3 +320,100 @@ async def test_review_required_reference_rejects_return(tmp_path: Path) -> None:
         assert caught.value.code == ErrorCode.CONFLICT
         assert str(caught.value) == "coordinate reference needs review"
         assert navigation.events == []
+
+
+def _operation_helpers() -> object:
+    path = Path(__file__).resolve().parent / "test_map_operations.py"
+    spec = importlib.util.spec_from_file_location("map_operation_fixtures", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_bundle_import_home_pose_is_visible(tmp_path: Path) -> None:
+    helpers = _operation_helpers()
+    pose = Pose2D(1.25, 0.25, 0.1)
+    source = helpers.filled_store("yard", 3, (1.25, 0.25))
+    local = helpers.filled_store("local", 1, (2.25, 0.25))
+    bundle = tmp_path / "from-a.zip"
+    async with (
+        Database(tmp_path / "a.db") as database_a,
+        Database(tmp_path / "b.db") as database_b,
+    ):
+        origin = helpers.operations_for(database_a, source, tmp_path / "a", robot_id="robot-a")
+        target = helpers.operations_for(database_b, local, tmp_path / "b", robot_id="robot-b")
+        await origin.prepare()
+        await target.prepare()
+        await origin.export_bundle(source.map_ref, bundle, operation_id="export-a")
+        await target.import_bundle(bundle, "robot-b", operation_id="import-b")
+        service = HomeService(database_b, target.store, robot_id="robot-b")
+        await service.prepare()
+        home = await service.home()
+        link = await service.home_link()
+    assert home is not None
+    assert home.pose.x == pytest.approx(pose.x)
+    assert home.pose.y == pytest.approx(pose.y)
+    assert home.pose.yaw == pytest.approx(pose.yaw)
+    assert home.kind == "home"
+    assert home.id == "home"
+    assert home.source_robot_id == "robot-a"
+    assert home.status == "pending_confirmation"
+    assert home.map_ref == source.map_ref
+    assert link is not None
+    assert link.adopted is False
+    assert link.status == "pending_confirmation"
+    assert link.waypoint_id == home.id
+
+    own = helpers.filled_store("yard", 3, (1.25, 0.25))
+    own_bundle = tmp_path / "own.zip"
+    async with Database(tmp_path / "own.db") as database:
+        ops = helpers.operations_for(database, own, tmp_path / "own", robot_id="robot-a")
+        await ops.prepare()
+        await ops.export_bundle(own.map_ref, own_bundle, operation_id="export-own")
+        await ops.import_bundle(own_bundle, "robot-a", operation_id="import-own")
+        service = HomeService(database, ops.store, robot_id="robot-a")
+        await service.prepare()
+        home = await service.home()
+        link = await service.home_link()
+    assert home is not None
+    assert home.pose.x == pytest.approx(pose.x)
+    assert home.pose.y == pytest.approx(pose.y)
+    assert home.pose.yaw == pytest.approx(pose.yaw)
+    assert home.status == "confirmed"
+    assert home.source_robot_id == "robot-a"
+    assert link is not None
+    assert link.adopted is True
+    assert link.status == "confirmed"
+
+
+async def test_recoverable_initialize_keeps_pending_home(tmp_path: Path) -> None:
+    async with Database(tmp_path / "pending.db") as database:
+        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        await service.prepare()
+        imported = await service.import_home(
+            BundleWaypoint("home-b", "home", Pose2D(1.0, 1.0, 0.25), MAP, "node-1", "robot-b"),
+            anchor_pose=Pose2D(0.0, 0.0, 0.0),
+        )
+        result = await service.initialize(STILL, localized(Pose2D(9.0, 9.0, 0.4)))
+        kept = await service.home()
+        link = await service.home_link()
+        assert kept is not None
+        assert kept.pose == imported.pose
+        assert kept.status == "pending_confirmation"
+        assert kept.source_robot_id == "robot-b"
+        assert result.initialized is False
+        assert link is not None
+        assert link.adopted is False
+        assert link.status == "pending_confirmation"
+        adopted = await service.set_current(localized(Pose2D(3.0, 4.0, 0.2)))
+        assert adopted.pose == Pose2D(3.0, 4.0, 0.2)
+        assert adopted.status == "confirmed"
+        confirmed = await service.home_link()
+        assert confirmed is not None
+        assert confirmed.adopted is True
+        again = await service.initialize(STILL, localized(Pose2D(8.0, 8.0, 0.1)))
+        assert again.initialized is True
+        assert again.waypoint is not None
+        assert again.waypoint.pose == adopted.pose
+        assert again.waypoint.id == adopted.id

@@ -246,51 +246,19 @@ class WaypointStore:
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 target = await self._target_id(connection, kind, waypoint_id)
-                await connection.execute(
-                    """
-                    INSERT INTO waypoint (
-                        waypoint_id, robot_id, kind, x, y, yaw, map_id, reference_revision,
-                        anchor_id, source_robot_id, status, latitude, longitude,
-                        anchor_x, anchor_y, anchor_yaw, recorded_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(waypoint_id) DO UPDATE SET
-                        robot_id = excluded.robot_id,
-                        kind = excluded.kind,
-                        x = excluded.x,
-                        y = excluded.y,
-                        yaw = excluded.yaw,
-                        map_id = excluded.map_id,
-                        reference_revision = excluded.reference_revision,
-                        anchor_id = excluded.anchor_id,
-                        source_robot_id = excluded.source_robot_id,
-                        status = excluded.status,
-                        latitude = excluded.latitude,
-                        longitude = excluded.longitude,
-                        anchor_x = excluded.anchor_x,
-                        anchor_y = excluded.anchor_y,
-                        anchor_yaw = excluded.anchor_yaw,
-                        recorded_at = excluded.recorded_at
-                    """,
-                    (
-                        target,
-                        self._robot_id,
-                        kind,
-                        pose.x,
-                        pose.y,
-                        pose.yaw,
-                        map_ref.map_id,
-                        map_ref.reference_revision,
-                        anchor_id,
-                        source_robot_id,
-                        status,
-                        latitude,
-                        longitude,
-                        anchor_pose.x,
-                        anchor_pose.y,
-                        anchor_pose.yaw,
-                        _timestamp(),
-                    ),
+                await _write_waypoint(
+                    connection,
+                    waypoint_id=target,
+                    robot_id=self._robot_id,
+                    kind=kind,
+                    pose=pose,
+                    map_ref=map_ref,
+                    anchor_id=anchor_id,
+                    anchor_pose=anchor_pose,
+                    source_robot_id=source_robot_id,
+                    status=status,
+                    latitude=latitude,
+                    longitude=longitude,
                 )
                 if kind == "home":
                     if adopted is None:
@@ -367,6 +335,106 @@ class WaypointStore:
             raise
         else:
             await connection.commit()
+
+
+async def replace_imported_home(
+    connection: aiosqlite.Connection,
+    *,
+    robot_id: str,
+    waypoint_id: str,
+    pose: Pose2D,
+    map_ref: MapRef,
+    anchor_id: str,
+    anchor_pose: Pose2D,
+    source_robot_id: str,
+    status: str,
+) -> None:
+    """Write the imported home pose on a connection that already holds the write transaction."""
+
+    await connection.execute(
+        """
+        DELETE FROM waypoint
+        WHERE robot_id = ? AND kind = 'home' AND waypoint_id != ?
+        """,
+        (robot_id, waypoint_id),
+    )
+    await _write_waypoint(
+        connection,
+        waypoint_id=waypoint_id,
+        robot_id=robot_id,
+        kind="home",
+        pose=pose,
+        map_ref=map_ref,
+        anchor_id=anchor_id,
+        anchor_pose=anchor_pose,
+        source_robot_id=source_robot_id,
+        status=status,
+        latitude=None,
+        longitude=None,
+    )
+
+
+async def _write_waypoint(
+    connection: aiosqlite.Connection,
+    *,
+    waypoint_id: str,
+    robot_id: str,
+    kind: str,
+    pose: Pose2D,
+    map_ref: MapRef,
+    anchor_id: str,
+    anchor_pose: Pose2D,
+    source_robot_id: str,
+    status: str,
+    latitude: float | None,
+    longitude: float | None,
+) -> None:
+    await connection.execute(
+        """
+        INSERT INTO waypoint (
+            waypoint_id, robot_id, kind, x, y, yaw, map_id, reference_revision,
+            anchor_id, source_robot_id, status, latitude, longitude,
+            anchor_x, anchor_y, anchor_yaw, recorded_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(waypoint_id) DO UPDATE SET
+            robot_id = excluded.robot_id,
+            kind = excluded.kind,
+            x = excluded.x,
+            y = excluded.y,
+            yaw = excluded.yaw,
+            map_id = excluded.map_id,
+            reference_revision = excluded.reference_revision,
+            anchor_id = excluded.anchor_id,
+            source_robot_id = excluded.source_robot_id,
+            status = excluded.status,
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            anchor_x = excluded.anchor_x,
+            anchor_y = excluded.anchor_y,
+            anchor_yaw = excluded.anchor_yaw,
+            recorded_at = excluded.recorded_at
+        """,
+        (
+            waypoint_id,
+            robot_id,
+            kind,
+            pose.x,
+            pose.y,
+            pose.yaw,
+            map_ref.map_id,
+            map_ref.reference_revision,
+            anchor_id,
+            source_robot_id,
+            status,
+            latitude,
+            longitude,
+            anchor_pose.x,
+            anchor_pose.y,
+            anchor_pose.yaw,
+            _timestamp(),
+        ),
+    )
 
 
 def _stored(row: aiosqlite.Row, *, adopted: bool | None, link_status: str | None) -> StoredWaypoint:

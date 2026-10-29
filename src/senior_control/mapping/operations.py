@@ -503,12 +503,32 @@ class MapOperations:
     async def _finish_import(
         self, operation_id: str, robot_id: str, manifest: BundleManifest
     ) -> None:
+        from senior_control.waypoints.store import replace_imported_home
+
         home = next((item for item in manifest.waypoints if item.kind == "home"), None)
         # Another robot's home stays unconfirmed. The last pose is only a load hint.
         pending = manifest.source_robot_id != robot_id
+        anchor_pose = home.pose if home is not None else None
+        if home is not None:
+            for binding in self.store.snapshot(Path("pose_graph"), ()).waypoint_bindings:
+                if binding.waypoint.waypoint_id == home.waypoint_id:
+                    anchor_pose = binding.anchor_pose
+                    break
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 if home is not None:
+                    assert anchor_pose is not None
+                    await replace_imported_home(
+                        connection,
+                        robot_id=robot_id,
+                        waypoint_id=home.waypoint_id,
+                        pose=home.pose,
+                        map_ref=home.map_ref,
+                        anchor_id=home.anchor_id,
+                        anchor_pose=anchor_pose,
+                        source_robot_id=manifest.source_robot_id,
+                        status="pending_confirmation" if pending else "confirmed",
+                    )
                     await connection.execute(
                         """
                         INSERT INTO map_home_link (

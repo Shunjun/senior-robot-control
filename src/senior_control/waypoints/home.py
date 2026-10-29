@@ -96,11 +96,12 @@ class HomeService:
 
     async def initialize(self, start: StartupReference, localized: LocalizedPose) -> HomeResult:
         existing = await self._store.home()
-        if _kept(existing):
-            assert existing is not None
-            self._remember(localized)
+        if existing is not None:
             self._bind(existing.waypoint, existing.anchor_pose)
-            return HomeResult(True, existing.waypoint, "")
+            if _kept(existing):
+                self._remember(localized)
+                return HomeResult(True, existing.waypoint, "")
+            return HomeResult(False, None, "home is not adopted")
         if not localized.healthy:
             return HomeResult(False, None, "localization is unhealthy")
         if not _recoverable(start):
