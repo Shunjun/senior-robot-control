@@ -12,6 +12,10 @@ dependencies = ["pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7",
 safety = [
     "shapely>=2,<3",
 ]
+cloud = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+]
 
 [dependency-groups]
 dev = [
