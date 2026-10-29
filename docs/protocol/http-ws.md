@@ -78,6 +78,6 @@
 `Supervisor` 是异步上下文管理器，构造时不启动任何东西。它拥有心跳任务、后台任务和上行重连循环，不导入 ROS，也从不调用 `publish_cmd_vel`。
 
 - `request_ros(name)` 调用注入的 `call_ros`，心跳在独立任务中运行，不被慢调用阻塞。
-- `submit_drive(vx, wz)` 同步、有界（`queue_limit`），队列满时丢最旧的值，保留最新值；运动被撤销后返回 `False`。
+- `submit_drive(vx, wz)` 同步，只有一个待发送槽：新的提交（包括 `(0, 0)` 停车）直接替换槽里尚未发出的值，不排队。已经进入 `drive_sink` 的那一次调用可以完成，被替换的旧值不会再发出。运动被撤销后返回 `False`。
 - 任一后台任务抛错或提前结束，运动被撤销并清空队列。`drive_sink` 抛错同样撤销。
 - `connect` 抛 `AuthRejected` 时状态变为 `auth_failed`，撤销运动，不再重试。其他异常以指数退避重试（`retry_delay` 起，上限 `max_retry_delay`）。

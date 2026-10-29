@@ -1,4 +1,4 @@
-"""Agent supervisor: heartbeat, bounded drive forwarding, background watch, uplink retry.
+"""Agent supervisor: heartbeat, latest-only drive forwarding, background watch, uplink retry.
 
 Nothing here imports ROS. Every ROS-facing call is injected. The supervisor never
 publishes `/cmd_vel`; drive values leave only through `drive_sink`, and the safety chain
@@ -7,7 +7,6 @@ behind that sink owns the topic.
 
 import asyncio
 import logging
-from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Any
@@ -30,12 +29,11 @@ class Supervisor:
         connect: Callable[[], Awaitable[None]] | None = None,
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         heartbeat_seconds: float = 0.2,
-        queue_limit: int = 8,
         retry_delay: float = 1.0,
         max_retry_delay: float | None = None,
     ) -> None:
-        if heartbeat_seconds <= 0 or retry_delay < 0 or queue_limit < 1:
-            raise ValueError("heartbeat, retry delay and queue limit must be positive")
+        if heartbeat_seconds <= 0 or retry_delay < 0:
+            raise ValueError("heartbeat and retry delay must be positive")
         self._send_heartbeat = send_heartbeat
         self._call_ros = call_ros
         self._drive_sink = drive_sink
@@ -48,7 +46,7 @@ class Supervisor:
         self._max_retry_delay = (
             max_retry_delay if max_retry_delay is not None else max(retry_delay * 30, retry_delay)
         )
-        self._drive: deque[tuple[float, float]] = deque(maxlen=queue_limit)
+        self._pending: tuple[float, float] | None = None
         self._wake = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
@@ -57,7 +55,7 @@ class Supervisor:
 
     @property
     def pending(self) -> int:
-        return len(self._drive)
+        return 0 if self._pending is None else 1
 
     @property
     def motion_allowed(self) -> bool:
@@ -83,7 +81,7 @@ class Supervisor:
         tb: TracebackType | None,
     ) -> None:
         self._running = False
-        self._drive.clear()
+        self._pending = None
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -99,10 +97,10 @@ class Supervisor:
         return await self._call_ros(name)
 
     def submit_drive(self, vx: float, wz: float) -> bool:
-        """Queue one velocity. The queue is bounded and the oldest value is dropped first."""
+        """Keep one pending velocity. A newer value, a stop included, replaces it."""
         if not self._running or self.revoked_reason is not None:
             return False
-        self._drive.append((vx, wz))
+        self._pending = (vx, wz)
         self._wake.set()
         return True
 
@@ -110,7 +108,7 @@ class Supervisor:
         if self.revoked_reason is None:
             self.revoked_reason = reason
             logger.error("motion revoked: %s", reason)
-        self._drive.clear()
+        self._pending = None
 
     async def _heartbeat_loop(self) -> None:
         loop = asyncio.get_running_loop()
@@ -130,8 +128,9 @@ class Supervisor:
     async def _drain_loop(self) -> None:
         while True:
             await self._wake.wait()
-            while self._drive and self.revoked_reason is None:
-                vx, wz = self._drive.popleft()
+            while self._pending is not None and self.revoked_reason is None:
+                vx, wz = self._pending
+                self._pending = None
                 try:
                     await self._drive_sink(vx, wz)
                 except Exception:
