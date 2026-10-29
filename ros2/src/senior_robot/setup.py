@@ -30,6 +30,7 @@ setup(
             "command_node = senior_robot.command_node:main",
             "navigation_adapter = senior_robot.navigation_adapter:main",
             "slam_adapter = senior_robot.slam_adapter:main",
+            "localization_node = senior_robot.localization_node:main",
         ]
     },
     install_requires=["setuptools"],
