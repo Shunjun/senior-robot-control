@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -54,6 +55,7 @@ class LocalizedPose:
 class HomeGoal:
     map_ref: MapRef
     pose: Pose2D
+    on_accepted: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,9 @@ class HomeService:
         self._localized: LocalizedPose | None = None
         self._connected = True
         self._execution_id: str | None = None
-        self._cancel_owed = False
+        self._accepted_id: str | None = None
+        self._cancel_id: str | None = None
+        self._in_send = False
         self._return_lock = asyncio.Lock()
 
     async def prepare(self) -> None:
@@ -160,13 +164,25 @@ class HomeService:
             waypoint = await self._ready(expected)
             navigation = self._navigation
             assert navigation is not None
+            self._accepted_id = None
+            self._in_send = True
+            cancel_this = False
             try:
-                execution_id = await navigation.navigate(HomeGoal(expected, waypoint.pose))
-            except Exception:
-                self._execution_id = None
-                raise
-            self._execution_id = execution_id
-            if self._cancel_owed:
+                try:
+                    execution_id = await navigation.navigate(
+                        HomeGoal(expected, waypoint.pose, self._note_accepted)
+                    )
+                except Exception:
+                    self._cancel_id = None
+                    self._execution_id = None
+                    raise
+                else:
+                    self._execution_id = execution_id
+                    cancel_this = self._cancel_id == execution_id
+            finally:
+                self._in_send = False
+                self._accepted_id = None
+            if cancel_this:
                 await self._cancel_owed_goal()
             return execution_id
 
@@ -258,17 +274,22 @@ class HomeService:
 
     async def note_connection(self, connected: bool) -> None:
         self._connected = connected
-        if not connected and (self._execution_id is not None or self._return_lock.locked()):
-            self._cancel_owed = True
+        if not connected:
+            accepted = self._accepted_id if self._in_send else self._execution_id
+            if accepted is not None:
+                self._cancel_id = accepted
         if self._navigation is None or self._return_lock.locked():
             return
         async with self._return_lock:
-            if not self._cancel_owed:
-                return
-            if self._execution_id is None:
-                self._cancel_owed = False
+            if self._cancel_id is None or self._execution_id != self._cancel_id:
+                if not self._in_send:
+                    self._cancel_id = None
                 return
             await self._cancel_owed_goal()
+
+    def _note_accepted(self, execution_id: str) -> None:
+        if execution_id.strip():
+            self._accepted_id = execution_id
 
     async def note_terminal(self, execution_id: str) -> None:
         async with self._return_lock:
@@ -280,7 +301,8 @@ class HomeService:
                 if result.status != OperationStatus.SUCCEEDED:
                     raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
             self._execution_id = None
-            self._cancel_owed = False
+            if self._cancel_id == execution_id:
+                self._cancel_id = None
 
     async def _cancel_owed_goal(self) -> None:
         execution_id = self._execution_id
@@ -289,7 +311,8 @@ class HomeService:
         if result.status != OperationStatus.SUCCEEDED:
             raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
         self._execution_id = None
-        self._cancel_owed = False
+        if self._cancel_id == execution_id:
+            self._cancel_id = None
 
     async def _finish_execution(self, execution_id: str) -> OperationResult:
         navigation = self._navigation

@@ -417,9 +417,11 @@ class AcceptThenWait:
         self.active: str | None = None
 
     async def navigate(self, goal: object) -> str:
-        del goal
         self.active = "nav-1"
         self.events.append("navigate")
+        notify = getattr(goal, "on_accepted", None)
+        if notify is not None:
+            notify(self.active)
         self.accepted.set()
         await self.release.wait()
         return "nav-1"
@@ -492,3 +494,103 @@ async def test_terminal_note_releases_the_adapter_goal(tmp_path: Path) -> None:
         assert caught is None
         assert second == "nav-2"
         assert len(executor.started) == 2
+
+
+class KeepingNavigation:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.active: str | None = None
+
+    async def navigate(self, goal: object) -> str:
+        del goal
+        self.active = "nav-1"
+        self.events.append("navigate")
+        return "nav-1"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.events.append("cancel")
+        self.active = None
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_disconnect_before_the_goal_is_accepted_keeps_the_later_goal(
+    tmp_path: Path,
+) -> None:
+    navigation = KeepingNavigation()
+    async with Database(tmp_path / "before-accept.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        await database.write_lock.acquire()
+        task = asyncio.create_task(service.return_home(MAP))
+        try:
+            entered = False
+            for _ in range(50):
+                waiters = getattr(database.write_lock, "_waiters", None)
+                if waiters:
+                    entered = True
+                    break
+                await asyncio.sleep(0)
+            assert entered
+            await service.note_connection(False)
+            await service.note_connection(True)
+            assert navigation.events == []
+        finally:
+            database.write_lock.release()
+        assert await task == "nav-1"
+        assert navigation.events == ["navigate"]
+        assert navigation.active == "nav-1"
+
+
+class FailThenAccept:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active: str | None = None
+
+    async def navigate(self, goal: object) -> str:
+        del goal
+        self.events.append("navigate")
+        if self.events.count("navigate") == 1:
+            self.started.set()
+            await self.release.wait()
+            raise RuntimeError("send failed")
+        self.active = "nav-2"
+        return "nav-2"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.events.append("cancel")
+        self.active = None
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_failed_send_does_not_cancel_the_next_connected_return(tmp_path: Path) -> None:
+    navigation = FailThenAccept()
+    async with Database(tmp_path / "stale-debt.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        task = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.started.wait(), timeout=1)
+        await service.note_connection(False)
+        await service.note_connection(True)
+        navigation.release.set()
+        with pytest.raises(RuntimeError, match="send failed"):
+            await task
+        assert navigation.events == ["navigate"]
+        assert await service.return_home(MAP) == "nav-2"
+        assert navigation.events == ["navigate", "navigate"]
+        assert navigation.active == "nav-2"
