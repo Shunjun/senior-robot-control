@@ -350,7 +350,7 @@ class FailingSecondNavigation:
 
     async def cancel(self, execution_id: str) -> OperationResult:
         self.cancelled.append(execution_id)
-        return OperationResult(execution_id, OperationStatus.FAILED)
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
 
 async def test_failed_send_clears_a_finished_execution(tmp_path: Path) -> None:
@@ -380,7 +380,7 @@ async def test_failed_send_clears_a_finished_execution(tmp_path: Path) -> None:
             again = False
         assert again
         assert navigation.starts == 3
-        assert navigation.cancelled == []
+        assert navigation.cancelled == ["exec-1"]
 
 
 async def test_recovered_start_keeps_its_own_fix(tmp_path: Path) -> None:
@@ -405,3 +405,90 @@ async def test_recovered_start_keeps_its_own_fix(tmp_path: Path) -> None:
         assert result.waypoint is not None
         assert result.waypoint.latitude == pytest.approx(30.0)
         assert result.waypoint.longitude == pytest.approx(120.0)
+
+
+class AcceptThenWait:
+    """Goal is accepted before navigate returns, so disconnect can land in that window."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.accepted = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active: str | None = None
+
+    async def navigate(self, goal: object) -> str:
+        del goal
+        self.active = "nav-1"
+        self.events.append("navigate")
+        self.accepted.set()
+        await self.release.wait()
+        return "nav-1"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.events.append("cancel")
+        self.active = None
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_disconnect_during_navigate_cancels_the_accepted_goal(tmp_path: Path) -> None:
+    navigation = AcceptThenWait()
+    async with Database(tmp_path / "inflight.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        task = asyncio.create_task(service.return_home(MAP))
+        try:
+            await asyncio.wait_for(navigation.accepted.wait(), timeout=1)
+            await service.note_connection(False)
+            assert navigation.events == ["navigate"]
+            await service.note_connection(True)
+            assert navigation.events == ["navigate"]
+        finally:
+            navigation.release.set()
+        await task
+        assert navigation.events == ["navigate", "cancel"]
+        assert navigation.active is None
+
+
+class ReleasingExecutor:
+    def __init__(self) -> None:
+        self.started: list[object] = []
+
+    async def start(self, goal: object) -> str:
+        self.started.append(goal)
+        return f"nav-{len(self.started)}"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_terminal_note_releases_the_adapter_goal(tmp_path: Path) -> None:
+    executor = ReleasingExecutor()
+    async with Database(tmp_path / "terminal.db") as database:
+        service = HomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=AdapterPort(executor),
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        first = await service.return_home(MAP)
+        assert first == "nav-1"
+        await service.note_terminal(first)
+        second: str | None = None
+        caught: Exception | None = None
+        try:
+            second = await service.return_home(MAP)
+        except Exception as exc:
+            caught = exc
+        assert caught is None
+        assert second == "nav-2"
+        assert len(executor.started) == 2

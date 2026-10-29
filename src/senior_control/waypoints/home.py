@@ -91,6 +91,7 @@ class HomeService:
         self._localized: LocalizedPose | None = None
         self._connected = True
         self._execution_id: str | None = None
+        self._cancel_owed = False
         self._return_lock = asyncio.Lock()
 
     async def prepare(self) -> None:
@@ -155,10 +156,7 @@ class HomeService:
     async def return_home(self, expected: MapRef) -> str:
         async with self._return_lock:
             if self._execution_id is not None:
-                result = await self._finish_execution(self._execution_id)
-                if result.status != OperationStatus.SUCCEEDED:
-                    raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
-                self._execution_id = None
+                await self._cancel_owed_goal()
             waypoint = await self._ready(expected)
             navigation = self._navigation
             assert navigation is not None
@@ -168,6 +166,8 @@ class HomeService:
                 self._execution_id = None
                 raise
             self._execution_id = execution_id
+            if self._cancel_owed:
+                await self._cancel_owed_goal()
             return execution_id
 
     async def home(self) -> Waypoint | None:
@@ -258,21 +258,38 @@ class HomeService:
 
     async def note_connection(self, connected: bool) -> None:
         self._connected = connected
-        if connected or self._navigation is None or self._execution_id is None:
-            return
-        if self._return_lock.locked():
+        if not connected and (self._execution_id is not None or self._return_lock.locked()):
+            self._cancel_owed = True
+        if self._navigation is None or self._return_lock.locked():
             return
         async with self._return_lock:
-            if self._execution_id is None or self._navigation is None:
+            if not self._cancel_owed:
                 return
-            result = await self._finish_execution(self._execution_id)
-            if result.status == OperationStatus.SUCCEEDED:
-                self._execution_id = None
+            if self._execution_id is None:
+                self._cancel_owed = False
+                return
+            await self._cancel_owed_goal()
 
     async def note_terminal(self, execution_id: str) -> None:
         async with self._return_lock:
-            if self._execution_id == execution_id:
-                self._execution_id = None
+            if self._execution_id != execution_id:
+                return
+            navigation = self._navigation
+            if navigation is not None:
+                result = await navigation.cancel(execution_id)
+                if result.status != OperationStatus.SUCCEEDED:
+                    raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
+            self._execution_id = None
+            self._cancel_owed = False
+
+    async def _cancel_owed_goal(self) -> None:
+        execution_id = self._execution_id
+        assert execution_id is not None
+        result = await self._finish_execution(execution_id)
+        if result.status != OperationStatus.SUCCEEDED:
+            raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
+        self._execution_id = None
+        self._cancel_owed = False
 
     async def _finish_execution(self, execution_id: str) -> OperationResult:
         navigation = self._navigation
