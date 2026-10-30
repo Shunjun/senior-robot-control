@@ -801,36 +801,114 @@ async def test_video_frames_never_reach_the_supervisor_drive_slot() -> None:
     assert submitted[:1] == [(0.3, 0.0)]
 
 
-@pytest.mark.parametrize("how", ["close_session", "revoke_robot", "detach"])
-async def test_closing_the_connection_releases_the_encoder(how: str) -> None:
-    pytest.importorskip("fastapi")
-    rig = WireRig()
-    budget = ViewerBudget(1)
-    session, factory, _, _ = make_session(viewer=rig.controller, budget=budget)  # type: ignore[arg-type]
-    await session.offer("robot-a", video_offer("VP8"))
-    rig.controller.video = session  # type: ignore[attr-defined]
-    assert factory.encoders == 1
+def close_frames(connection: object) -> list[dict[str, object]]:
+    import json
 
+    frames = [json.loads(item) for item in drain_outbox(connection)]
+    return [frame for frame in frames if frame["type"] == "video.close"]
+
+
+def end_viewer(rig: WireRig, how: str) -> None:
     if how == "close_session":
         rig.hub.close_session("session-hash")
     elif how == "revoke_robot":
         rig.hub.revoke_robot("robot-a")
     else:
         rig.hub.detach(rig.controller)
-    await settle(lambda: factory.encoders == 0)
-
-    assert factory.encoders == 0
-    assert budget.active == 0
-    assert (await session.status()).state == "closed"
 
 
-async def test_closing_an_unrelated_session_keeps_the_encoder() -> None:
+@pytest.mark.parametrize("how", ["close_session", "revoke_robot", "detach"])
+async def test_ending_the_viewer_tells_the_agent_to_stop_its_video(how: str) -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig(outbox_frames=3)
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    rig.hub.handle_control_frame(rig.controller, candidate_frame())
+    rig.hub.handle_control_frame(rig.controller, candidate_frame(request_id="c2"))
+    assert rig.agent.outbox.pending == 3  # the video queue is full
+
+    end_viewer(rig, how)
+
+    closes = close_frames(rig.agent)
+    assert len(closes) == 1  # a full video queue does not evict the close
+    assert closes[0]["session_id"] == "viewer-1"
+    assert closes[0]["robot_id"] == "robot-a"
+    assert closes[0]["connection_epoch"] == rig.agent.epoch
+    first = await rig.agent.outbox.get()
+    assert isinstance(first, bytes)  # delivered even when the agent socket is being revoked
+
+    end_viewer(rig, "detach")  # a second ending does not repeat the close
+    assert len(close_frames(rig.agent)) <= 1
+
+
+async def test_the_close_frame_survives_a_stop_and_a_video_flood() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig(outbox_frames=3)
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    rig.hub.close_session("session-hash")
+    rig.hub.handle_control_frame(
+        rig.hub.attach_controller("robot-a", "other-hash"),  # type: ignore[arg-type]
+        stop_frame(),
+    )
+    assert len(close_frames(rig.agent)) == 1
+    assert stop_frame() in drain_outbox(rig.agent)
+
+
+async def test_close_is_only_sent_for_the_viewer_that_ended() -> None:
     pytest.importorskip("fastapi")
     rig = WireRig()
-    session, factory, _, _ = make_session(viewer=rig.controller)  # type: ignore[arg-type]
-    await session.offer("robot-a", video_offer("VP8"))
-    rig.controller.video = session  # type: ignore[attr-defined]
+    bystander = rig.hub.attach_controller("robot-a", "other-hash")
+    assert bystander is not None
+    rig.hub.close_session("other-hash")  # never offered, so nothing to stop
+    assert close_frames(rig.agent) == []
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
     rig.hub.close_session("someone-else")
-    await asyncio.sleep(0.05)
-    assert factory.encoders == 1
-    await session.close()
+    assert close_frames(rig.agent) == []
+    rig.hub.close_session("session-hash")
+    assert [frame["session_id"] for frame in close_frames(rig.agent)] == ["viewer-1"]
+
+
+async def test_viewer_can_close_its_own_video_over_the_control_socket() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    closing = wire_frame("video.close", {})
+    rig.hub.handle_control_frame(rig.controller, closing)
+    assert not rig.controller.outbox.closed
+    assert close_frames(rig.agent)[0]["session_id"] == "viewer-1"
+    rig.hub.handle_control_frame(rig.controller, wire_frame("video.close", {}, session_id="x"))
+    assert len(drain_outbox(rig.controller)) == 1  # a close for an id it never offered is refused
+    rig.hub.detach(rig.controller)
+    assert len(close_frames(rig.agent)) == 1
+
+
+async def test_an_agent_close_for_an_unknown_viewer_is_ignored() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    rig.hub.handle_agent_frame(rig.agent, wire_frame("video.close", {}, connection_epoch=1))
+    assert not rig.agent.outbox.closed
+    assert drain_outbox(rig.controller) == []
+
+
+async def test_a_full_controller_queue_drops_video_and_keeps_the_socket() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig(outbox_frames=2)
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    answer = wire_frame("video.answer", {"sdp": "a"}, connection_epoch=1)
+    rig.hub.handle_agent_frame(rig.agent, answer)
+    rig.hub.handle_agent_frame(rig.agent, candidate_frame(connection_epoch=1))
+    assert rig.controller.outbox.pending == 2  # the controller's queue is full of video
+
+    late = candidate_frame(connection_epoch=1, request_id="late")
+    rig.hub.handle_agent_frame(rig.agent, late)
+    assert not rig.controller.outbox.closed  # a lost candidate must not drop the control socket
+    assert not rig.agent.outbox.closed
+    assert late not in drain_outbox(rig.controller)
+    assert drain_outbox(rig.controller)[0] == answer
+
+    # Stop keeps reaching the agent, and the agent's reply still reaches the controller.
+    rig.hub.handle_control_frame(rig.controller, stop_frame())
+    assert stop_frame() in drain_outbox(rig.agent)
+    reply = wire_frame("response", {"request_type": "drive.stop", "ok": True}, connection_epoch=1)
+    rig.hub.handle_agent_frame(rig.agent, reply)
+    assert reply in drain_outbox(rig.controller)
+    assert not rig.controller.outbox.closed

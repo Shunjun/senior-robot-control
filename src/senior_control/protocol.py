@@ -146,6 +146,7 @@ class ResponsePayload(StrictModel):
         "video.offer",
         "video.answer",
         "video.candidate",
+        "video.close",
     ]
     ok: bool
     error: ErrorCode | None = None
@@ -192,7 +193,14 @@ class VideoCandidateEnvelope(EnvelopeBase):
     payload: CandidatePayload
 
 
-VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope
+class VideoCloseEnvelope(EnvelopeBase):
+    """Ends the video of one signaling id. The relay sends it when the viewer goes away."""
+
+    type: Literal["video.close"]
+    payload: EmptyPayload
+
+
+VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope
 
 Envelope = Annotated[
     VelocityEnvelope | SimpleEnvelope | OperationEnvelope | SnapshotEnvelope | ResponseEnvelope,
@@ -205,7 +213,8 @@ Frame = Annotated[
     | SnapshotEnvelope
     | ResponseEnvelope
     | VideoSdpEnvelope
-    | VideoCandidateEnvelope,
+    | VideoCandidateEnvelope
+    | VideoCloseEnvelope,
     Field(discriminator="type"),
 ]
 _adapter = TypeAdapter(Envelope)

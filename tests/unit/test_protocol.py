@@ -139,3 +139,15 @@ def test_reject_invalid_video_frames(raw):
 def test_commands_do_not_accept_video_types():
     with pytest.raises(ValueError):
         validate_envelope(video_message(), "r1")
+
+
+def test_video_close_has_no_payload_and_round_trips():
+    from senior_control.protocol import serialize_envelope, validate_frame
+
+    closing = validate_frame(video_message("video.close", {}), "r1")
+    assert closing.type == "video.close"
+    assert validate_frame(serialize_envelope(closing), "r1") == closing
+    with pytest.raises(ValueError):
+        validate_frame(video_message("video.close", {"sdp": "v=0"}), "r1")
+    with pytest.raises(ValueError):
+        validate_envelope(video_message("video.close", {}), "r1")

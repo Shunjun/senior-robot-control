@@ -6,7 +6,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, cast
 
 from fastapi import WebSocket
 
@@ -14,11 +14,13 @@ from senior_control.agent.snapshots import SnapshotCache, snapshot_from_envelope
 from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
+    EmptyPayload,
     Envelope,
     ResponseEnvelope,
     ResponsePayload,
     SnapshotEnvelope,
     VideoCandidateEnvelope,
+    VideoCloseEnvelope,
     VideoEnvelope,
     VideoSdpEnvelope,
     serialize_envelope,
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 SAFETY_TYPES = frozenset({"drive.stop", "safety.estop"})
 VELOCITY = "drive.velocity"
 VIDEO = "video"
+VIDEO_CLOSE = "video.close"
+VIDEO_CLOSE_TTL_SECONDS = 300.0
+PROTECTED_TYPES = SAFETY_TYPES | {VIDEO_CLOSE}
 
 CLOSE_NORMAL = 1000
 CLOSE_POLICY = 1008
@@ -44,6 +49,8 @@ class Outbox:
 
     Video signaling has its own kind. It never replaces a velocity sample, it is the first thing
     a full queue gives up for any other frame, and it is refused rather than evicting one.
+    A video close is the exception: it evicts video and survives both a stop and a socket close,
+    because it is what makes the vehicle stop sending pictures.
     """
 
     def __init__(self, limit: int) -> None:
@@ -83,9 +90,9 @@ class Outbox:
             if kind == VELOCITY:
                 del self._items[index]
                 return True
-        if incoming in SAFETY_TYPES:
+        if incoming in PROTECTED_TYPES:
             for index, (kind, _) in enumerate(self._items):
-                if kind not in SAFETY_TYPES:
+                if kind not in PROTECTED_TYPES:
                     del self._items[index]
                     return True
         return False
@@ -93,24 +100,18 @@ class Outbox:
     def close(self, code: int) -> None:
         if self._close_code is None:
             self._close_code = code
-            self._items.clear()
+            self._items = deque(item for item in self._items if item[0] == VIDEO_CLOSE)
             self._event.set()
 
     async def get(self) -> bytes | int:
-        """Next frame, or the close code once the outbox is closed."""
+        """Next frame, or the close code once the outbox is closed and drained."""
         while True:
-            if self._close_code is not None:
-                return self._close_code
             if self._items:
                 return self._items.popleft()[1]
+            if self._close_code is not None:
+                return self._close_code
             self._event.clear()
             await self._event.wait()
-
-
-class VideoHandle(Protocol):
-    """What the hub needs of a video session: a way to release its peer and encoder."""
-
-    async def close(self) -> None: ...
 
 
 @dataclass(eq=False)
@@ -120,8 +121,6 @@ class Connection:
     outbox: Outbox
     epoch: int = 0
     session_hash: str | None = None
-    video: VideoHandle | None = None
-    """The video session this socket started. The hub closes it when the socket ends."""
     video_session_id: str | None = None
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
 
@@ -138,32 +137,31 @@ class Hub:
         self._limits = limits
         self.snapshots = snapshots if snapshots is not None else SnapshotCache()
         self._links: dict[str, _Link] = {}
-        self._releasing: set[asyncio.Future[None]] = set()
 
-    def _release_video(self, connection: Connection) -> None:
-        """Close the connection's video session. Callers are sync, so the close runs as a task."""
-        session, connection.video = connection.video, None
-        connection.video_session_id = None
-        if session is None:
+    def _stop_viewer_video(self, connection: Connection) -> None:
+        """Tell the agent that this viewer's video is over; the media does not pass through here."""
+        session_id, connection.video_session_id = connection.video_session_id, None
+        if connection.role != "control" or session_id is None:
             return
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(session.close())
+        link = self._links.get(connection.robot_id)
+        agent = link.agent if link is not None else None
+        if agent is None:
             return
-        task = asyncio.ensure_future(session.close())
-        self._releasing.add(task)
-        task.add_done_callback(self._released)
-
-    def _released(self, task: "asyncio.Future[None]") -> None:
-        self._releasing.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            logger.warning("video session close failed", exc_info=task.exception())
-
-    async def drain_video(self) -> None:
-        """Wait until every video session the hub started closing is closed."""
-        while self._releasing:
-            await asyncio.gather(*list(self._releasing), return_exceptions=True)
+        frame = serialize_envelope(
+            VideoCloseEnvelope(
+                v=1,
+                robot_id=connection.robot_id,
+                session_id=session_id,
+                connection_epoch=agent.epoch,
+                request_id="video-close",
+                seq=0,
+                expires_at=time.time() + VIDEO_CLOSE_TTL_SECONDS,
+                type="video.close",
+                payload=EmptyPayload(),
+            )
+        )
+        if not agent.outbox.put(frame, VIDEO_CLOSE):
+            logger.warning("video close could not be queued for robot %s", connection.robot_id)
 
     def _link(self, robot_id: str) -> _Link:
         link = self._links.get(robot_id)
@@ -202,35 +200,33 @@ class Hub:
                 link.agent = None
                 self.snapshots.mark_offline(connection.robot_id)
             link.controllers.discard(connection)
+        self._stop_viewer_video(connection)
         connection.outbox.close(CLOSE_NORMAL)
-        self._release_video(connection)
 
     def revoke_robot(self, robot_id: str) -> None:
         link = self._links.get(robot_id)
         if link is None:
             return
+        for controller in link.controllers:
+            self._stop_viewer_video(controller)
+            controller.outbox.close(CLOSE_POLICY)
         if link.agent is not None:
             link.agent.outbox.close(CLOSE_POLICY)
-            self._release_video(link.agent)
-        for controller in link.controllers:
-            controller.outbox.close(CLOSE_POLICY)
-            self._release_video(controller)
 
     def close_session(self, session_hash: str) -> None:
         for link in self._links.values():
             for controller in link.controllers:
                 if controller.session_hash == session_hash:
+                    self._stop_viewer_video(controller)
                     controller.outbox.close(CLOSE_POLICY)
-                    self._release_video(controller)
 
     def close_all(self) -> None:
         for link in self._links.values():
+            for controller in link.controllers:
+                self._stop_viewer_video(controller)
+                controller.outbox.close(CLOSE_NORMAL)
             if link.agent is not None:
                 link.agent.outbox.close(CLOSE_NORMAL)
-                self._release_video(link.agent)
-            for controller in link.controllers:
-                controller.outbox.close(CLOSE_NORMAL)
-                self._release_video(controller)
 
     def handle_agent_frame(self, connection: Connection, raw: bytes) -> None:
         link = self._links.get(connection.robot_id)
@@ -245,21 +241,32 @@ class Hub:
             connection.outbox.close(CLOSE_BAD_FRAME)
             return
         if envelope.connection_epoch != connection.epoch and isinstance(
-            envelope, (SnapshotEnvelope, ResponseEnvelope, VideoSdpEnvelope, VideoCandidateEnvelope)
+            envelope,
+            (
+                SnapshotEnvelope,
+                ResponseEnvelope,
+                VideoSdpEnvelope,
+                VideoCandidateEnvelope,
+                VideoCloseEnvelope,
+            ),
         ):
             return
         if isinstance(envelope, SnapshotEnvelope):
             self.snapshots.store(snapshot_from_envelope(envelope))
             return
-        if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope)):
+        if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):
             if envelope.type == "video.offer":
                 connection.outbox.close(CLOSE_POLICY)
                 return
-            # An answer or candidate belongs to the one viewer whose offer opened this id.
+            # Signaling belongs to the one viewer whose offer opened this id. A frame that does
+            # not fit is dropped: ICE and the viewer's retry recover, and the control socket,
+            # which also carries stop and heartbeat replies, stays open.
+            ending = envelope.type == "video.close"
             for controller in list(link.controllers):
                 if controller.video_session_id == envelope.session_id:
-                    if not controller.outbox.put(raw, VIDEO):
-                        controller.outbox.close(CLOSE_OVERLOAD)
+                    controller.outbox.put(raw, VIDEO_CLOSE if ending else VIDEO)
+                    if ending:
+                        controller.video_session_id = None
             return
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
@@ -299,21 +306,23 @@ class Hub:
             self._reject(connection, envelope, ErrorCode.OFFLINE)
             return
         kind: str = envelope.type
-        if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope)):
-            kind = VIDEO
+        if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):
+            kind = VIDEO_CLOSE if envelope.type == "video.close" else VIDEO
             if not self._claim_video(connection, link, envelope):
                 self._reject(connection, envelope, ErrorCode.VALIDATION)
                 return
         if not agent.outbox.put(raw, kind):
             self._reject(connection, envelope, ErrorCode.CONFLICT)
+        elif kind == VIDEO_CLOSE:
+            connection.video_session_id = None
 
     @staticmethod
     def _claim_video(
         connection: Connection,
         link: _Link | None,
-        envelope: VideoSdpEnvelope | VideoCandidateEnvelope,
+        envelope: VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope,
     ) -> bool:
-        """An offer names the signaling id of this socket; candidates must use the same id."""
+        """An offer names the signaling id of this socket; later frames must use the same id."""
         if envelope.type == "video.offer":
             taken = link is not None and any(
                 other is not connection and other.video_session_id == envelope.session_id
