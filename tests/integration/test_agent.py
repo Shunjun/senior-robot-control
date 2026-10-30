@@ -42,7 +42,7 @@ from agent_fakes import (
 from senior_control.agent import Agent, RobotSnapshot
 from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
-from senior_control.agent.snapshots import SnapshotCache
+from senior_control.agent.snapshots import SnapshotCache, snapshot_envelope, snapshot_from_envelope
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.storage.database import Database
@@ -388,6 +388,40 @@ async def test_expired_command_is_rejected(rig: Rig) -> None:
         await rig.agent.dispatch(operation("task.create", "op-old", expires_in=-1))
     assert caught.value.code is ErrorCode.TIMEOUT
     assert rig.tasks.calls == []
+    await finish(task, rig)
+
+
+async def test_published_snapshot_carries_the_home_edit_revision(rig: Rig) -> None:
+    """The page can only send the revision the store will compare."""
+    task = await start(rig, FakeLink(epoch=1))
+    unset = await rig.agent.publish_snapshot(ROBOT)
+    assert unset.home_revision == 0
+    frame = snapshot_envelope(
+        unset,
+        robot_id=ROBOT,
+        session_id="session-1",
+        connection_epoch=1,
+        request_id="snap-0",
+        seq=1,
+        expires_at=9e9,
+    )
+    assert frame.payload.home_revision == 0
+    assert snapshot_from_envelope(frame).home_revision == 0
+
+    rig.home.revision = 4
+    published = await rig.agent.publish_snapshot(ROBOT)
+    assert published.home_revision == 4
+    frame = snapshot_envelope(
+        published,
+        robot_id=ROBOT,
+        session_id="session-1",
+        connection_epoch=1,
+        request_id="snap-4",
+        seq=2,
+        expires_at=9e9,
+    )
+    assert frame.payload.home_revision == 4
+    assert snapshot_from_envelope(frame).home_revision == 4
     await finish(task, rig)
 
 

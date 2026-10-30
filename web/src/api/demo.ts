@@ -23,6 +23,7 @@ function demoSnapshot(robot: RobotSummary): RobotSnapshot {
     collected_at: now,
     last_synced_at: robot.online ? now : now - 3600,
     stale: !robot.online,
+    home_revision: 0,
   };
 }
 

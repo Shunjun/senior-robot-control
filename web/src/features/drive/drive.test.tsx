@@ -55,6 +55,7 @@ function snapshot(robotId: string, overrides: Partial<RobotSnapshot> = {}): Robo
     collected_at: 1_000,
     last_synced_at: 1_000,
     stale: false,
+    home_revision: 0,
     ...overrides,
   };
 }

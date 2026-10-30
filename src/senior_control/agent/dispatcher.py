@@ -59,6 +59,8 @@ class TaskPort(Protocol):
 class HomePort(Protocol):
     async def set_current(self, expected_revision: int) -> int: ...
 
+    async def home_revision(self) -> int: ...
+
 
 class MapPort(Protocol):
     async def export(self, operation_id: str, map_ref: MapRef, destination: Path) -> None: ...
@@ -376,6 +378,9 @@ class StoreHomePort:
         if pose is None or not pose.healthy:
             raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "robot is not localized")
         await self._service.set_current(pose, expected_revision=expected_revision)
+        return await self._service.home_revision()
+
+    async def home_revision(self) -> int:
         return await self._service.home_revision()
 
 

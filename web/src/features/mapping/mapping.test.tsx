@@ -20,6 +20,7 @@ function snapshot(overrides: Partial<RobotSnapshot> = {}): RobotSnapshot {
     collected_at: 1,
     stale: false,
     last_synced_at: 1,
+    home_revision: 0,
     ...overrides,
   };
 }

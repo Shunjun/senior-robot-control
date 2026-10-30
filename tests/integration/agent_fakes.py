@@ -211,10 +211,15 @@ class FakeTasks:
 class FakeHome:
     def __init__(self) -> None:
         self.calls = 0
+        self.revision = 0
+
+    async def home_revision(self) -> int:
+        return self.revision
 
     async def set_current(self, expected_revision: int) -> int:
         self.calls += 1
-        return expected_revision + 1
+        self.revision = expected_revision + 1
+        return self.revision
 
 
 class FakeMaps:

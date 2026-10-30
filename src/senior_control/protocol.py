@@ -126,6 +126,8 @@ class SnapshotPayload(StrictModel):
     stale: bool = False
     last_synced_at: float | None = None
     tasks: list[TaskSummaryPayload] = Field(default_factory=list, max_length=200)
+    # home_edit.revision. 0 is the store's answer when that row does not exist yet.
+    home_revision: int = Field(default=0, ge=0)
 
 
 class SnapshotEnvelope(EnvelopeBase):

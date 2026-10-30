@@ -59,6 +59,7 @@ class RobotSnapshot:
     collected_at: float
     runnable_task_ids: tuple[str, ...] = ()
     tasks: tuple[TaskSummary, ...] = ()
+    home_revision: int = 0
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -119,6 +120,7 @@ def snapshot_envelope(
                 )
                 for item in snapshot.tasks
             ],
+            home_revision=snapshot.home_revision,
         ),
     )
 
@@ -147,6 +149,7 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         tasks=tuple(
             TaskSummary(item.task_id, item.revision, item.enabled) for item in payload.tasks
         ),
+        home_revision=payload.home_revision,
     )
 
 

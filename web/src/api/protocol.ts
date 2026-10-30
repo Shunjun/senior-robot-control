@@ -86,6 +86,7 @@ export const SNAPSHOT_FIELDS = [
   "stale",
   "last_synced_at",
   "tasks",
+  "home_revision",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -156,6 +157,11 @@ export interface SnapshotPayload {
   last_synced_at: number;
   /** Missing on older frames. The parser fills an empty list. */
   tasks?: TaskSummary[];
+  /**
+   * `home_edit.revision`. Missing on an older frame means 0, the same answer as a store
+   * with no row.
+   */
+  home_revision: number;
 }
 
 export interface ResponsePayload {
@@ -261,6 +267,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   }
   const tasks = parseTasks(value["tasks"]);
   if (tasks === null) return null;
+  const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
+  if (!isCount(homeRevision)) return null;
   return {
     connected: value["connected"],
     localized: value["localized"],
@@ -273,6 +281,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     stale: value["stale"],
     last_synced_at: value["last_synced_at"],
     tasks,
+    home_revision: homeRevision,
   };
 }
 

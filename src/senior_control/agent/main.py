@@ -94,6 +94,7 @@ class Agent:
         self._clock = clock if clock is not None else SystemClock()
         self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
         self._auth_heartbeat_failed = False
+        self._home = home
         self._dispatcher = Dispatcher(
             robot_id,
             journal=journal,
@@ -469,7 +470,10 @@ class Agent:
         return snapshot
 
     async def _collect(self) -> RobotSnapshot:
-        live = await asyncio.wait_for(self._state.collect(), timeout=self._deadlines.edit)
+        live, home_revision = await asyncio.wait_for(
+            asyncio.gather(self._state.collect(), self._home.home_revision()),
+            timeout=self._deadlines.edit,
+        )
         deleted = await self._journal.deleted_task_ids()
         home = live.home
         snapshot = RobotSnapshot(
@@ -483,6 +487,7 @@ class Agent:
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
             tasks=live.tasks,
+            home_revision=home_revision,
         )
         return snapshot
 

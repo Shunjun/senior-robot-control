@@ -5,7 +5,12 @@ import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError, type RobotLink } from "../../api/client";
-import type { LinkStatus, ResponsePayload, RobotSnapshot } from "../../api/protocol";
+import {
+  parseInbound,
+  type LinkStatus,
+  type ResponsePayload,
+  type RobotSnapshot,
+} from "../../api/protocol";
 import { HomeControls } from "./HomeControls";
 import {
   MapCanvas,
@@ -70,6 +75,7 @@ function snapshot(overrides: Partial<RobotSnapshot> = {}): RobotSnapshot {
     collected_at: 1_000,
     last_synced_at: 1_000,
     stale: false,
+    home_revision: 0,
     ...overrides,
   };
 }
@@ -481,6 +487,54 @@ describe("HomeControls", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("安全保护拒绝");
     expect(screen.queryByText(/车端已应答/)).toBeNull();
+  });
+
+  it("sends the published home revision with 设为 Home", async () => {
+    const frame = {
+      v: 1,
+      robot_id: "robot-alpha",
+      session_id: "s",
+      connection_epoch: 1,
+      request_id: "r",
+      seq: 1,
+      expires_at: 9e9,
+      type: "snapshot",
+      payload: {
+        connected: true,
+        localized: true,
+        map_ref: MAP_REF,
+        home: null,
+        task_revision: 7,
+        runnable_task_ids: [],
+        execution_status: "idle",
+        collected_at: 1,
+        stale: false,
+        last_synced_at: 1,
+        home_revision: 4,
+      },
+    };
+    const parsed = parseInbound(JSON.stringify(frame));
+    expect(parsed?.type).toBe("snapshot");
+    if (parsed?.type === "snapshot") expect(parsed.payload.home_revision).toBe(4);
+    const { home_revision, ...withoutRevision } = frame.payload;
+    expect(home_revision).toBe(4);
+    const omitted = parseInbound(JSON.stringify({ ...frame, payload: withoutRevision }));
+    if (omitted?.type === "snapshot") expect(omitted.payload.home_revision).toBe(0);
+
+    const link = new FakeLink();
+    const { rerender } = render(
+      <HomeControls snapshot={snapshot({ home: null, home_revision: 0 })} link={link} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "设为 Home" }));
+    await flush();
+    expect(link.sent[0]?.payload).toMatchObject({ expected_revision: 0, body: {} });
+
+    link.sent.length = 0;
+    rerender(<HomeControls snapshot={snapshot({ home_revision: 4 })} link={link} />);
+    fireEvent.click(screen.getByRole("button", { name: "设为 Home" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认替换 Home" }));
+    await flush();
+    expect(link.sent[0]?.payload).toMatchObject({ expected_revision: 4, body: {} });
   });
 
   it("sets Home through an operation, only when localized, and confirms only on ok", async () => {

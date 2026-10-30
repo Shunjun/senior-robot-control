@@ -82,12 +82,17 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
   }
 
   function setHome(): void {
-    if (snapshot?.home != null && !confirmReplace) {
+    if (!isLive(snapshot)) return;
+    if (snapshot.home != null && !confirmReplace) {
       setConfirmReplace(true);
       return;
     }
     setConfirmReplace(false);
-    void run("home", "home.set", { operation_id: crypto.randomUUID(), body: {} });
+    void run("home", "home.set", {
+      operation_id: crypto.randomUUID(),
+      expected_revision: snapshot.home_revision,
+      body: {},
+    });
   }
 
   const home = snapshot?.home ?? null;
