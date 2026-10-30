@@ -1,0 +1,23 @@
+[Unit]
+Description=Senior Control robot agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/senior-control/agent.env
+
+[Service]
+Type=simple
+User=senior-control
+Group=senior-control
+WorkingDirectory=/opt/senior-control
+EnvironmentFile=/etc/senior-control/agent.env
+ExecStart=/opt/senior-control/.venv/bin/python -m senior_control.agent.main
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/senior-control /run/senior-control
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+FROM ghcr.io/astral-sh/uv:0.5.11 AS uv
+FROM python:3.10.15-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/app/.venv/bin:$PATH
+
+WORKDIR /app
+COPY --from=uv /uv /bin/uv
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+RUN uv sync --frozen --no-dev --extra cloud --no-editable \
+    && uv pip install --no-cache "uvicorn==0.32.1"
+
+RUN useradd --system --uid 10001 --home /nonexistent senior
+USER 10001:10001
+
+EXPOSE 8000
+CMD ["python", "-c", "import os; from pathlib import Path; import uvicorn; from senior_control.cloud.app import create_app; from senior_control.config import CloudSettings; from senior_control.storage.database import Database; app=create_app(CloudSettings(secret=os.environ['SENIOR_SECRET']), database=Database(Path(os.environ['DATABASE_PATH'])), admin_password_hash=os.environ['ADMIN_PASSWORD_HASH'], allowed_origins=(os.environ['ALLOWED_ORIGIN'],)); uvicorn.run(app, host='0.0.0.0', port=8000, proxy_headers=True, forwarded_allow_ips=os.environ['TRUSTED_PROXY'])"]
