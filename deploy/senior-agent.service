@@ -12,6 +12,7 @@ WorkingDirectory=/opt/senior-control
 EnvironmentFile=/etc/senior-control/agent.env
 ExecStart=/opt/senior-control/.venv/bin/python -m senior_control.agent.main
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true

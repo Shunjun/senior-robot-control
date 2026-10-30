@@ -11,6 +11,9 @@
 Compose 只运行一个云进程（其中包含中继与登录限流器）、Caddy 和 coturn。ROS、DDS
 及机器人代理不进入 Compose，也不向公网发布。
 
+当前机器人 agent 的进程入口尚未装配 connector、数据库和 ROS IPC；执行 unit 会以非零
+状态失败。入口完成并经过 Linux 集成验证前，不得启用 `senior-agent.service`。
+
 ## 准备和 TLS
 
 1. 将 `deploy/env.example` 复制为 `deploy/.env`，替换所有占位符。两个共享密钥分别生成

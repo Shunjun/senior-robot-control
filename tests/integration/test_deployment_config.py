@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -60,6 +62,21 @@ def test_example_has_no_real_credentials() -> None:
         r"\b(?:10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)\b",
         ENV_EXAMPLE.read_text(encoding="utf-8"),
     )
+
+
+def test_unassembled_agent_entry_fails_loudly() -> None:
+    completed = subprocess.run(
+        (sys.executable, "-m", "senior_control.agent.main"),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0, "an unassembled agent entry must not report success"
+    assert "connector" in completed.stderr
+    assert "database" in completed.stderr
+    assert "ROS IPC" in completed.stderr
 
 
 def test_doctor_detects_duplicate_cmd_vel_and_tf(

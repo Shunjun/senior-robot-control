@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import signal
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -453,3 +454,17 @@ class Agent:
 
     def _log(self, event: str) -> None:
         logger.info(event, extra={"event": event, "robot_id": self.robot_id})
+
+
+def main() -> int:
+    """Fail closed until the host process composition is implemented."""
+    print(
+        "senior agent process entry is not assembled: connector, database, "
+        "and ROS IPC are still unwired",
+        file=sys.stderr,
+    )
+    return 78
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
