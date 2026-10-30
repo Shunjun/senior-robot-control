@@ -97,6 +97,20 @@ export const RESPONSE_STATUSES = [
 ] as const;
 export type ResponseStatus = (typeof RESPONSE_STATUSES)[number];
 
+export const VIDEO_SIGNAL_TYPES = [
+  "video.offer",
+  "video.answer",
+  "video.candidate",
+  "video.close",
+] as const;
+export type VideoSignalType = (typeof VIDEO_SIGNAL_TYPES)[number];
+export type VideoSignalEnvelope = EnvelopeBase &
+  (
+    | { type: "video.offer" | "video.answer"; payload: { sdp: string } }
+    | { type: "video.candidate"; payload: { candidate: string } }
+    | { type: "video.close"; payload: Record<string, never> }
+  );
+
 export interface EnvelopeBase {
   v: 1;
   robot_id: string;
@@ -307,6 +321,50 @@ export function parseInbound(raw: unknown): InboundEnvelope | null {
   if (data["type"] === "response") {
     const payload = parseResponsePayload(data["payload"]);
     return payload === null ? null : { ...base, type: "response", payload };
+  }
+  return null;
+}
+
+/** Parse only the four existing signaling frame shapes; command parsing remains unchanged. */
+export function parseVideoInbound(raw: unknown): VideoSignalEnvelope | null {
+  if (typeof raw !== "string" || raw.length > MAX_MESSAGE_BYTES) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(data) || data["v"] !== PROTOCOL_VERSION || !isRecord(data["payload"])) return null;
+  if (
+    !isText(data["robot_id"], 128) ||
+    !isText(data["session_id"], 128) ||
+    !isCount(data["connection_epoch"]) ||
+    !isText(data["request_id"], 128) ||
+    !isCount(data["seq"]) ||
+    !isFiniteNumber(data["expires_at"])
+  ) return null;
+  const base: EnvelopeBase = {
+    v: PROTOCOL_VERSION,
+    robot_id: data["robot_id"],
+    session_id: data["session_id"],
+    connection_epoch: data["connection_epoch"],
+    request_id: data["request_id"],
+    seq: data["seq"],
+    expires_at: data["expires_at"],
+  };
+  const payload = data["payload"];
+  if ((data["type"] === "video.offer" || data["type"] === "video.answer") && isText(payload["sdp"], 16_384)) {
+    return { ...base, type: data["type"], payload: { sdp: payload["sdp"] } };
+  }
+  if (
+    data["type"] === "video.candidate" &&
+    isText(payload["candidate"], 512) &&
+    payload["candidate"].startsWith("candidate:")
+  ) {
+    return { ...base, type: data["type"], payload: { candidate: payload["candidate"] } };
+  }
+  if (data["type"] === "video.close" && Object.keys(payload).length === 0) {
+    return { ...base, type: data["type"], payload: {} };
   }
   return null;
 }

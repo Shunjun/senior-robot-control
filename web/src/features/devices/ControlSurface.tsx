@@ -6,6 +6,9 @@ import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
 import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
+import { MapManager } from "../mapping/MapManager";
+import { TaskList } from "../tasks/TaskList";
+import { VideoPanel } from "../video/VideoPanel";
 import styles from "./Devices.module.css";
 
 export interface ControlSurfaceProps {
@@ -76,6 +79,9 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
           {note}
         </p>
       )}
+      <TaskList snapshot={snapshot} link={link} />
+      <MapManager robotId={robotId} snapshot={snapshot} link={link} />
+      <VideoPanel link={link} />
     </div>
   );
 }

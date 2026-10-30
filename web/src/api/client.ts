@@ -3,6 +3,7 @@ import {
   PROTOCOL_VERSION,
   isRequestType,
   parseInbound,
+  parseVideoInbound,
   type EnvelopeBase,
   type ErrorCode,
   type LinkStatus,
@@ -10,6 +11,8 @@ import {
   type RobotSnapshot,
   type RobotSummary,
   type SnapshotEnvelope,
+  type VideoSignalType,
+  type VideoSignalEnvelope,
 } from "./protocol";
 
 // ---------------------------------------------------------------- errors
@@ -192,6 +195,9 @@ export interface RobotLink {
   disconnect(): void;
   /** Resolves with the robot's response only when it says ok; every failure rejects. */
   request<T = ResponsePayload>(type: string, payload: unknown): Promise<T>;
+  /** Video signaling uses the existing socket envelope but never enters the command queue. */
+  sendVideoSignal?(type: VideoSignalType, payload: { sdp: string } | { candidate: string } | Record<string, never>): void;
+  subscribeVideo?(listener: (frame: VideoSignalEnvelope) => void): () => void;
   subscribe(listener: (snapshot: RobotSnapshot) => void): () => void;
   subscribeStatus(listener: (status: LinkStatus) => void): () => void;
 }
@@ -245,6 +251,7 @@ export class RobotClient implements RobotLink {
   private readonly requestTimeoutMs: number;
   private readonly snapshotListeners = new Set<(snapshot: RobotSnapshot) => void>();
   private readonly statusListeners = new Set<(status: LinkStatus) => void>();
+  private readonly videoListeners = new Set<(frame: VideoSignalEnvelope) => void>();
   private readonly pending = new Map<string, Pending>();
 
   private generation = 0;
@@ -373,9 +380,46 @@ export class RobotClient implements RobotLink {
     });
   }
 
+  sendVideoSignal(
+    type: VideoSignalType,
+    payload: { sdp: string } | { candidate: string } | Record<string, never>,
+  ): void {
+    const socket = this.socket;
+    const robotId = this.robotId;
+    if (socket === null || robotId === null || socket.readyState !== SOCKET_OPEN || this.epoch < 1) {
+      throw new CommandError("offline", "control socket is not open for video signaling");
+    }
+    const envelope: EnvelopeBase & { type: VideoSignalType; payload: typeof payload } = {
+      v: PROTOCOL_VERSION,
+      robot_id: robotId,
+      session_id: this.sessionId,
+      connection_epoch: this.epoch,
+      request_id: crypto.randomUUID(),
+      seq: ++this.seq,
+      expires_at: Date.now() / 1000 + COMMAND_TTL_SECONDS,
+      type,
+      payload,
+    };
+    const text = JSON.stringify(envelope);
+    if (text.length > MAX_MESSAGE_BYTES) {
+      throw new CommandError("validation", "video signaling frame is too large");
+    }
+    try {
+      socket.send(text);
+    } catch {
+      // A media signaling failure must not tear down the control socket or its drive slot.
+      throw new CommandError("offline", "control socket rejected the video signaling frame");
+    }
+  }
+
   subscribe(listener: (snapshot: RobotSnapshot) => void): () => void {
     this.snapshotListeners.add(listener);
     return () => this.snapshotListeners.delete(listener);
+  }
+
+  subscribeVideo(listener: (frame: VideoSignalEnvelope) => void): () => void {
+    this.videoListeners.add(listener);
+    return () => this.videoListeners.delete(listener);
   }
 
   subscribeStatus(listener: (status: LinkStatus) => void): () => void {
@@ -418,7 +462,14 @@ export class RobotClient implements RobotLink {
 
   private receive(raw: unknown): void {
     const envelope = parseInbound(raw);
-    if (envelope === null || envelope.robot_id !== this.robotId) return;
+    if (envelope === null) {
+      const video = parseVideoInbound(raw);
+      if (video !== null && video.robot_id === this.robotId) {
+        this.videoListeners.forEach((listener) => listener(video));
+      }
+      return;
+    }
+    if (envelope.robot_id !== this.robotId) return;
     if (envelope.type === "snapshot") {
       this.onSnapshot(envelope);
       return;

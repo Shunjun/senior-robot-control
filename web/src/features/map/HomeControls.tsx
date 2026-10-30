@@ -60,7 +60,8 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
   const live = isLive(snapshot);
   const blocks = navigationBlocks(snapshot);
   const canNavigate = blocks.length === 0;
-  const canSetHome = live && snapshot.localized && snapshot.map_ref !== null;
+  const homeWaiting = snapshot?.home?.status === "pending_confirmation";
+  const canSetHome = live && snapshot.localized && snapshot.map_ref !== null && !homeWaiting;
 
   async function run(action: ActionName, type: string, payload: unknown): Promise<void> {
     setPending(action);
@@ -96,7 +97,13 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
       <dl className={styles.facts}>
         <div>
           <dt>Home</dt>
-          <dd>{home === null ? "未设置" : `${home.waypoint_id} · ${home.status}`}</dd>
+          <dd>
+            {home === null
+              ? "未设置"
+              : home.status === "pending_confirmation"
+                ? `${home.waypoint_id} · 等待跨车导入确认（尚未采用）`
+                : `${home.waypoint_id} · ${home.status}`}
+          </dd>
         </div>
         <div>
           <dt>定位</dt>
@@ -166,6 +173,7 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
           </button>
         )}
       </div>
+      {homeWaiting && <p className={styles.quiet}>该 Home 正在等待确认，控制台不会发送替换指令。</p>}
       {live && !canSetHome && <p className={styles.quiet}>设置 Home 需要车辆已定位并在地图上。</p>}
 
       {outcome?.kind === "error" && (
