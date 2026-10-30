@@ -38,6 +38,14 @@ class Deadlines:
             raise ValueError("deadlines must be positive")
 
 
+class OperationNotCommitted(DomainError):
+    """A retry found an operation that is not ``succeeded``. ``status`` is what is stored."""
+
+    def __init__(self, code: ErrorCode, message: str, status: OperationStatus) -> None:
+        super().__init__(code, message)
+        self.status = status
+
+
 class TaskPort(Protocol):
     async def create(self, body: Mapping[str, Any]) -> int: ...
 
@@ -114,9 +122,18 @@ class Dispatcher:
     def _replay(self, entry: JournalEntry, fingerprint: str) -> OperationResult:
         if entry.fingerprint != fingerprint:
             raise DomainError(ErrorCode.CONFLICT, "operation id was used for other content")
+        # A retry is acknowledged as success only when the robot's commit is on record.
+        if entry.status is OperationStatus.SUCCEEDED:
+            return OperationResult(entry.operation_id, entry.status)
         if entry.status is OperationStatus.FAILED:
-            raise DomainError(entry.error or ErrorCode.CONFLICT, "operation failed earlier")
-        return OperationResult(entry.operation_id, entry.status)
+            raise OperationNotCommitted(
+                entry.error or ErrorCode.CONFLICT, "operation failed earlier", entry.status
+            )
+        if entry.status is OperationStatus.NEEDS_REVIEW:
+            raise OperationNotCommitted(
+                ErrorCode.OPERATION_UNKNOWN, "operation outcome needs review", entry.status
+            )
+        raise OperationNotCommitted(ErrorCode.CONFLICT, "operation is still running", entry.status)
 
     async def _execute(
         self, envelope: OperationEnvelope, lane: str, action: Action

@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from agent_fakes import (
@@ -568,3 +569,134 @@ async def test_task_delete_succeeds_only_after_both_commits(
     entry = await journal.get("op-del")
     assert entry is not None and entry.status is OperationStatus.NEEDS_REVIEW
     monkeypatch.setattr(journal, "mark_deleted", real)
+
+
+class CachingLink(FakeLink):
+    """A link whose far end is a SnapshotCache, as the relay's Hub is."""
+
+    def __init__(self, epoch: int, cache: SnapshotCache) -> None:
+        super().__init__(epoch)
+        self.cache = cache
+
+    async def send_snapshot(self, snapshot: Any) -> None:
+        await super().send_snapshot(snapshot)
+        self.cache.store(snapshot)
+
+
+async def idle_agent(tmp_path: Path, link: FakeLink, state: FakeState, **extra: Any) -> Agent:
+    database = await Database(tmp_path / "robot.db").__aenter__()
+    journal = AgentJournal(database, robot_id=ROBOT)
+    await journal.prepare()
+    return Agent(
+        ROBOT,
+        connector=FakeConnector(link),
+        journal=journal,
+        tasks=FakeTasks(),
+        home=FakeHome(),
+        maps=FakeMaps(),
+        state=state,
+        motion=FakeMotion(),
+        heartbeat_seconds=0.02,
+        retry_delay=0.01,
+        **extra,
+    )
+
+
+async def test_idle_connected_robot_stays_fresh_past_stale_after(tmp_path: Path) -> None:
+    cache = SnapshotCache(stale_after=0.3)
+    link = CachingLink(1, cache)
+    agent = await idle_agent(
+        tmp_path, link, FakeState(), snapshot_seconds=0.05, state_poll_seconds=0.02
+    )
+    runner = asyncio.ensure_future(agent.run())
+    await until(lambda: agent.connected)
+    for _ in range(4):
+        await asyncio.sleep(0.2)  # no edit, no state change; the clock passes stale_after
+        cached = cache.get(ROBOT)
+        assert cached is not None
+        assert cached.stale is False and cached.snapshot.connected is True
+    agent.request_shutdown()
+    await asyncio.wait_for(runner, timeout=2)
+    # Offline still becomes stale, once the robot stops refreshing and the cache is told.
+    cache.mark_offline(ROBOT)
+    gone = cache.get(ROBOT)
+    assert gone is not None and gone.stale is True and gone.snapshot.connected is False
+    await asyncio.sleep(0.4)
+    assert cache.get(ROBOT) is not None and cache.get(ROBOT).stale is True  # type: ignore[union-attr]
+
+
+async def test_state_change_is_pushed_without_an_edit(tmp_path: Path) -> None:
+    link = FakeLink(1)
+    state = FakeState()
+    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=30.0, state_poll_seconds=0.02)
+    runner = asyncio.ensure_future(agent.run())
+    await until(lambda: len(link.snapshots) == 1)
+    await asyncio.sleep(0.15)
+    assert len(link.snapshots) == 1  # nothing changed, so nothing is re-sent before the keepalive
+    state.localized = False
+    await until(lambda: len(link.snapshots) == 2)
+    assert link.snapshots[1].localized is False
+    state.execution_status = "navigating"
+    await until(lambda: len(link.snapshots) == 3)
+    assert link.snapshots[2].execution_status == "navigating"
+    agent.request_shutdown()
+    await asyncio.wait_for(runner, timeout=2)
+
+
+async def test_replay_of_needs_review_is_not_acknowledged_as_success(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    rig.maps.gate = asyncio.Event()
+    export = operation(
+        "map.export",
+        "op-review",
+        {"map_id": MAP.map_id, "reference_revision": 3, "name": "export-1"},
+    )
+    link.inbox.put_nowait(export)
+    await until(lambda: len(link.responses) == 1)  # the deadline passed
+    assert link.responses[0].payload.ok is False
+    assert link.responses[0].payload.error is ErrorCode.TIMEOUT
+
+    link.inbox.put_nowait(export)
+    await until(lambda: len(link.responses) == 2)
+    retry = link.responses[1].payload
+    assert retry.ok is False and retry.error is ErrorCode.OPERATION_UNKNOWN
+    assert retry.status == "needs_review"
+    assert rig.maps.calls == ["export"]
+
+    link.inbox.put_nowait(operation("operation.query", "op-review"))
+    await until(lambda: len(link.responses) == 3)
+    queried = link.responses[2].payload
+    assert queried.ok is True and queried.status == "needs_review"
+    with pytest.raises(DomainError) as caught:
+        await rig.agent.dispatch(export)
+    assert caught.value.code is ErrorCode.OPERATION_UNKNOWN
+    await finish(task, rig)
+
+
+async def test_replay_of_a_running_operation_is_a_conflict(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    rig.tasks.gate = asyncio.Event()
+    edit = operation("task.create", "op-running", {"task_id": "t1"})
+    link.inbox.put_nowait(edit)
+    await until(lambda: len(rig.tasks.calls) == 1)
+    link.inbox.put_nowait(edit)
+    await until(lambda: len(link.responses) == 1)
+    duplicate = link.responses[0].payload
+    assert duplicate.ok is False and duplicate.error is ErrorCode.CONFLICT
+    assert duplicate.status == "running"
+    assert len(rig.tasks.calls) == 1
+
+    link.inbox.put_nowait(operation("operation.query", "op-running"))
+    await until(lambda: len(link.responses) == 2)
+    assert link.responses[1].payload.ok is True and link.responses[1].payload.status == "running"
+
+    rig.tasks.gate.set()
+    await until(lambda: len(link.responses) == 3)
+    done = link.responses[2].payload
+    assert done.ok is True and done.status == "succeeded" and done.operation_id == "op-running"
+    link.inbox.put_nowait(edit)
+    await until(lambda: len(link.responses) == 4)
+    assert link.responses[3].payload.ok is True and link.responses[3].payload.status == "succeeded"
+    await finish(task, rig)

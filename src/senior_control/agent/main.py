@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from senior_control.agent.connection import HeartbeatFrame, HeartbeatLedger, Link, MotionPort
-from senior_control.agent.dispatcher import Deadlines, Dispatcher, HomePort, MapPort, TaskPort
+from senior_control.agent.dispatcher import (
+    Deadlines,
+    Dispatcher,
+    HomePort,
+    MapPort,
+    OperationNotCommitted,
+    TaskPort,
+)
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import HomeSummary, RobotSnapshot, StatePort
 from senior_control.clock import Clock, SystemClock
@@ -56,6 +63,8 @@ class Agent:
         heartbeat_seconds: float = 0.2,
         retry_delay: float = 1.0,
         heartbeat_window: float = 1.0,
+        snapshot_seconds: float = 2.0,
+        state_poll_seconds: float = 0.25,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         wall_clock: Callable[[], float] = time.time,
@@ -97,6 +106,10 @@ class Agent:
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._signals: list[signal.Signals] = []
+        if snapshot_seconds <= 0 or state_poll_seconds <= 0:
+            raise ValueError("snapshot intervals must be positive")
+        self._snapshot_seconds = snapshot_seconds
+        self._state_poll_seconds = state_poll_seconds
 
     # ------------------------------------------------------------------ state
 
@@ -207,12 +220,17 @@ class Agent:
         try:
             # The cloud holds no state it can trust after a reconnect: send everything again.
             await self.publish_snapshot(self.robot_id)
-            while True:
-                frame = await link.recv()
-                if isinstance(frame, HeartbeatFrame):
-                    self._ledger.note(frame.robot_id)
-                else:
-                    self._accept(link, frame)
+            keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
+            try:
+                while True:
+                    frame = await link.recv()
+                    if isinstance(frame, HeartbeatFrame):
+                        self._ledger.note(frame.robot_id)
+                    else:
+                        self._accept(link, frame)
+            finally:
+                keepalive.cancel()
+                await asyncio.gather(keepalive, return_exceptions=True)
         except (ConnectionError, OSError):
             return
         finally:
@@ -220,6 +238,40 @@ class Agent:
                 self._link, self._epoch = None, 0
             self._log("connection_closed")
             await self._quietly(link.close())
+
+    async def _keep_snapshot_fresh(self, link: Link) -> None:
+        """Push on a state change, and at least every ``snapshot_seconds``.
+
+        The relay refreshes ``last_synced_at`` only from snapshots, so an idle robot must keep
+        sending them or the cloud would show it stale.
+        """
+        loop = asyncio.get_running_loop()
+        last_key: tuple[Any, ...] | None = None
+        last_sent = loop.time()
+        while True:
+            await asyncio.sleep(self._state_poll_seconds)
+            try:
+                snapshot = await self._collect()
+                key = (
+                    snapshot.localized,
+                    snapshot.map_ref,
+                    snapshot.home,
+                    snapshot.task_revision,
+                    snapshot.execution_status,
+                    snapshot.runnable_task_ids,
+                )
+                if last_key is None:
+                    last_key = key
+                if key == last_key and loop.time() - last_sent < self._snapshot_seconds:
+                    continue
+                await link.send_snapshot(snapshot)
+                last_key, last_sent = key, loop.time()
+            except (ConnectionError, OSError):
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("periodic snapshot failed", exc_info=True)
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
@@ -237,8 +289,15 @@ class Agent:
     async def _answer(self, link: Link, envelope: Envelope) -> None:
         try:
             result = await self.dispatch(envelope)
+        except OperationNotCommitted as exc:
+            await self._reply(link, envelope, error=exc.code, status=exc.status)
+            return
         except DomainError as exc:
             await self._reply(link, envelope, error=exc.code)
+            return
+        if result.status is not OperationStatus.SUCCEEDED and envelope.type != "operation.query":
+            # Only a query may report a status that is not committed, and it says so honestly.
+            await self._reply(link, envelope, error=ErrorCode.CONFLICT, status=result.status)
             return
         await self._reply(link, envelope, result=result)
         if isinstance(envelope, OperationEnvelope) and envelope.type != "operation.query":
@@ -257,8 +316,10 @@ class Agent:
         *,
         result: OperationResult | None = None,
         error: ErrorCode | None = None,
+        status: OperationStatus | None = None,
     ) -> None:
         request_type: Any = envelope.type
+        shown = result.status if result is not None else status
         operation_id = (
             envelope.payload.operation_id if isinstance(envelope, OperationEnvelope) else None
         )
@@ -277,7 +338,7 @@ class Agent:
                 ok=error is None,
                 error=error,
                 operation_id=operation_id,
-                status=result.status.value if result is not None else None,
+                status=shown.value if shown is not None else None,
             ),
         )
         try:
@@ -362,6 +423,13 @@ class Agent:
     async def publish_snapshot(self, robot_id: str) -> RobotSnapshot:
         if robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "snapshot is for another robot")
+        snapshot = await self._collect()
+        link = self._link
+        if link is not None:
+            await link.send_snapshot(snapshot)
+        return snapshot
+
+    async def _collect(self) -> RobotSnapshot:
         live = await asyncio.wait_for(self._state.collect(), timeout=self._deadlines.edit)
         deleted = await self._journal.deleted_task_ids()
         home = live.home
@@ -376,9 +444,6 @@ class Agent:
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
         )
-        link = self._link
-        if link is not None:
-            await link.send_snapshot(snapshot)
         return snapshot
 
     def _log(self, event: str) -> None:
