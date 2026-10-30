@@ -540,6 +540,26 @@ def test_aiortc_is_not_imported_with_the_package() -> None:
     assert result.returncode == 0, result.stderr
 
 
+async def test_encode_work_does_not_block_the_session_loop() -> None:
+    from senior_control.vision.stream import _EncodeLoop
+
+    encode = _EncodeLoop()
+
+    async def block() -> None:
+        time.sleep(0.25)
+
+    async def watcher() -> float:
+        await asyncio.sleep(0.05)
+        return time.monotonic()
+
+    try:
+        started = time.monotonic()
+        _blocked, seen = await asyncio.gather(encode.submit(block()), watcher())
+        assert seen - started < 0.15
+    finally:
+        encode.close()
+
+
 async def test_missing_aiortc_reports_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 

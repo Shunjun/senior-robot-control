@@ -138,7 +138,9 @@ class HomeService:
         self._bind(waypoint, localized.anchor_pose)
         return HomeResult(True, waypoint, "")
 
-    async def set_current(self, pose: LocalizedPose) -> Waypoint:
+    async def set_current(
+        self, pose: LocalizedPose, *, expected_revision: int | None = None
+    ) -> Waypoint:
         if not pose.healthy:
             raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unhealthy")
         waypoint = await self._store.save_home(
@@ -152,10 +154,14 @@ class HomeService:
             adopted=True,
             latitude=pose.latitude,
             longitude=pose.longitude,
+            expected_revision=expected_revision,
         )
         self._remember(pose)
         self._bind(waypoint, pose.anchor_pose)
         return waypoint
+
+    async def home_revision(self) -> int:
+        return await self._store.home_revision()
 
     async def return_home(self, expected: MapRef) -> str:
         async with self._return_lock:

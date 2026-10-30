@@ -252,6 +252,94 @@ async def test_waypoint_source_must_match_manifest(tmp_path: Path) -> None:
     assert caught.value.code is ErrorCode.VALIDATION
 
 
+def test_exported_grid_uses_one_frame_with_the_yaml_origin(tmp_path: Path) -> None:
+    """Negative cell indexes stay inside the grid, and the image row is map_server order."""
+    from senior_control.mapping.archive import _write_grid
+
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    origin = Pose2D(0.0, 0.0, 0.0)
+    occupied = ((4, 0), (-5, -18))
+    for cell in occupied:
+        world = (cell[0] * CELL + 0.1, cell[1] * CELL + 0.1)
+        store.place(
+            CellEvidence(cell, "kf-1", 3, 0, 1.0, 3.0, "geometric_confirmation"),
+            world=world,
+            anchor_pose=origin,
+        )
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            MAP,
+            "wheel_odom",
+            (AnchorPose("kf-1", origin, True),),
+            GridExtent(200, 200, -10.0, -10.0),
+        )
+    )
+    _write_grid(store.snapshot(Path("pose_graph"), ()), tmp_path)
+    payload = (tmp_path / "map.pgm").read_bytes()
+    header, _, pixels = payload.partition(b"\n255\n")
+    assert header == b"P5\n200 200"
+    origin_index = int(-10.0 // CELL)
+    width = height = 200
+    for cell in occupied:
+        px = cell[0] - origin_index
+        py = cell[1] - origin_index
+        row = height - 1 - py
+        assert pixels[row * width + px] == 0
+    yaml_text = (tmp_path / "map.yaml").read_text(encoding="utf-8")
+    assert "origin: [-10.0, -10.0, 0.0]" in yaml_text
+
+
+def test_zero_grid_is_not_promoted_to_a_pixel(tmp_path: Path) -> None:
+    from senior_control.mapping.archive import _write_grid
+    from senior_control.mapping.evidence import OccupancySnapshot
+    from senior_control.mapping.references import SlamSnapshot
+
+    snapshot = SlamSnapshot(
+        MAP,
+        "wheel_odom",
+        CELL,
+        Path("pose_graph"),
+        OccupancySnapshot(MAP, ()),
+        (),
+        (),
+        (),
+        GridExtent(0, 0, 0.0, 0.0),
+        (),
+        (),
+        False,
+    )
+    _write_grid(snapshot, tmp_path)
+    payload = (tmp_path / "map.pgm").read_bytes()
+    assert payload.startswith(b"P5\n0 0\n")
+    assert payload.partition(b"\n255\n")[2] == b""
+
+
+@pytest.mark.asyncio
+async def test_waypoints_file_must_match_the_hashed_manifest(tmp_path: Path) -> None:
+    store = filled_store()
+    source = tmp_path / "yard.zip"
+    await archive_for(store).export_bundle(store, store.map_ref, source)
+    tampered = tmp_path / "moved.zip"
+
+    def move_waypoint(files: dict[str, bytes]) -> None:
+        waypoints = json.loads(files["waypoints.json"])
+        waypoints["waypoints"][0]["x"] = 99
+        files["waypoints.json"] = json.dumps(waypoints).encode()
+        manifest = json.loads(files["manifest.json"])
+        manifest["file_hashes"] = {
+            name: hashlib.sha256(payload).hexdigest()
+            for name, payload in files.items()
+            if name != "manifest.json"
+        }
+        files["manifest.json"] = json.dumps(manifest).encode()
+
+    _rewrite(source, tampered, move_waypoint)
+    with pytest.raises(DomainError) as caught:
+        await archive_for(store).validate_and_extract(tampered, tmp_path / "unpack")
+
+    assert caught.value.code is ErrorCode.VALIDATION
+
+
 def test_replace_and_clear_change_identity_together() -> None:
     source = MapReferenceStore(MapRef("yard", 4), "lidar_odom", 0.25)
     point = (0.3, 0.1)

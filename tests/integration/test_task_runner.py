@@ -66,6 +66,9 @@ class HoldNavigation:
         self.started.set()
         await self.release.wait()
 
+    async def cancel(self, execution_id: str) -> None:
+        self.calls.append(f"cancel:{execution_id}")
+
 
 class RecordingNavigation:
     def __init__(self) -> None:
@@ -74,6 +77,9 @@ class RecordingNavigation:
     async def start(self, execution_id: str, task: TaskDefinition) -> None:
         del task
         self.calls.append(execution_id)
+
+    async def cancel(self, execution_id: str) -> None:
+        self.calls.append(f"cancel:{execution_id}")
 
 
 async def saved_task(database: Database, created: datetime) -> tuple[TaskStore, TaskDefinition]:
@@ -426,6 +432,81 @@ async def test_pause_persists_and_lets_the_next_occurrence_claim(tmp_path: Path)
     assert claimed.status is ExecutionStatus.DISPATCHING
     assert still_paused is not None
     assert still_paused.status is ExecutionStatus.PAUSED
+
+
+async def test_claim_rejects_a_disabled_or_deleted_task(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        disabled = await store.update(
+            replace(saved, enabled=False), expected_revision=saved.revision
+        )
+        caller = replace(disabled, enabled=True)
+        with pytest.raises(DomainError) as caught:
+            await store.claim(caller, due)
+        assert caught.value.code is ErrorCode.CONFLICT
+        await database.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_deleted_task (
+                task_id TEXT PRIMARY KEY,
+                robot_id TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                revision INTEGER NOT NULL
+            )
+            """
+        )
+        enabled = await store.update(
+            replace(disabled, enabled=True), expected_revision=disabled.revision
+        )
+        await database.connection.execute(
+            """
+            INSERT INTO agent_deleted_task (task_id, robot_id, operation_id, revision)
+            VALUES (?, ?, ?, ?)
+            """,
+            (enabled.task_id, "robot-a", "op-delete", enabled.revision),
+        )
+        await database.connection.commit()
+        with pytest.raises(DomainError) as deleted:
+            await store.claim(enabled, due)
+
+    assert deleted.value.code is ErrorCode.CONFLICT
+
+
+async def test_offline_link_does_not_start_navigation(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        navigation = RecordingNavigation()
+        executor = TaskExecutor(database, store, navigation, link_up=lambda: False)
+        record = await executor.persist_and_dispatch(due_intent(saved, due), saved)
+
+    assert navigation.calls == []
+    assert record.status is ExecutionStatus.NEEDS_REVIEW
+    assert record.navigation_sent is False
+
+
+async def test_pause_cancels_a_sent_goal(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, saved = await saved_task(database, created)
+        navigation = RecordingNavigation()
+        executor = TaskExecutor(database, store, navigation)
+        running = await executor.persist_and_dispatch(due_intent(saved, due), saved)
+        await executor.apply(
+            TaskIntent(
+                saved.task_id,
+                IntentAction.PAUSE,
+                "manual",
+                occurrence_utc=due,
+                execution_id=running.execution_id,
+            ),
+            saved,
+        )
+
+    assert f"cancel:{running.execution_id}" in navigation.calls
 
 
 async def test_skipped_occurrence_occupies_the_claim_key(tmp_path: Path) -> None:

@@ -447,6 +447,14 @@ describe("HomeControls", () => {
     expect(link.sent).toEqual([{ type: "navigation.start", payload: {} }]);
   });
 
+  it("blocks start and resume while a cross-robot Home is unconfirmed", () => {
+    const home = { waypoint_id: "home-1", map_ref: MAP_REF, status: "pending_confirmation" };
+    render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);
+    expect((screen.getByRole("button", { name: "开始导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "继续导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/尚未确认/)).toBeTruthy();
+  });
+
   it("blocks navigation when Home belongs to another map", () => {
     const home = { waypoint_id: "home-1", map_ref: { map_id: "map-9", reference_revision: 1 }, status: "ready" };
     render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);

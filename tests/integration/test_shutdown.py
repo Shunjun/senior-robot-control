@@ -141,7 +141,7 @@ async def test_shutdown_disables_motion_before_ros_exit(
         await until(lambda: agent.connected)
         agent.request_shutdown()
         await asyncio.wait_for(runner, timeout=2)
-    assert events == ["ros:disable_motion", "ros:exit"]
+    assert events == ["ros:disable_motion", "ros:disable_motion", "ros:exit"]
     assert [m["type"] for m in side.messages if m["type"] != "ping"][-2:] == [
         "disable_motion",
         "exit",
@@ -262,7 +262,9 @@ class ArbiterRig:
         self.exits: list[bool] = []
         self.core = _load_adapter().AdapterCore(
             robot_id=ROBOT,
-            submit=lambda envelope: self.arbiter.accept(envelope, self.now).accepted,
+            submit=lambda envelope, received_at=None: self.arbiter.accept(
+                envelope, self.now, received_at=received_at
+            ).accepted,
             disconnect=self.arbiter.disconnect,
             request_exit=lambda: self.exits.append(True),
         )
@@ -320,7 +322,55 @@ async def test_adapter_stop_and_estop_hold_zero_through_the_arbiter() -> None:
     assert rig.arbiter.mode(rig.now) == "estop"
     assert rig.tick() == (0.0, 0.0)
     refused = await rig.send("drive", velocity(seq=6))
-    assert refused == {"ok": True, "accepted": False}
+    assert refused["ok"] is False
+    assert rig.tick() == (0.0, 0.0)
+
+
+async def test_old_epoch_stop_and_estop_do_not_drop_the_new_lease() -> None:
+    """An old page must not tear down the generation that is driving, or look successful."""
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1, epoch=2))
+    await rig.send("drive", velocity(epoch=2, seq=2))
+    assert rig.tick() == (0.2, 0.0)
+    stop = await rig.send("stop", simple("drive.stop", seq=1, epoch=1))
+    estop = await rig.send("estop", simple("safety.estop", seq=2, epoch=1))
+    assert stop["ok"] is False
+    assert estop["ok"] is False
+    assert rig.tick() == (0.2, 0.0)
+    assert rig.arbiter.mode(rig.now) == "manual"
+
+
+async def test_accepted_estop_locks_without_releasing_the_lease() -> None:
+    """A real estop latches. A rejected stop during that latch must not drop the lease."""
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1, epoch=2))
+    await rig.send("drive", velocity(epoch=2, seq=2))
+    estop = await rig.send("estop", simple("safety.estop", seq=3, epoch=2))
+    assert estop["ok"] is True
+    assert rig.arbiter.mode(rig.now) == "estop"
+    assert rig.tick() == (0.0, 0.0)
+    refused = await rig.send("stop", simple("drive.stop", seq=4, epoch=2))
+    assert refused["ok"] is False
+    reset = await rig.send("command", simple("safety.reset", seq=5, epoch=2))
+    assert reset["ok"] is True
+    assert rig.arbiter.mode(rig.now) != "estop"
+    resumed = await rig.send("drive", velocity(epoch=2, seq=6))
+    assert resumed["ok"] is True
+    assert rig.tick() == (0.2, 0.0)
+
+
+async def test_rejected_drive_is_not_reported_as_success() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    await rig.send("command", simple("control.acquire", seq=1))
+    await rig.send("estop", simple("safety.estop", seq=2))
+    refused = await rig.send("drive", velocity(seq=3))
+    assert refused["ok"] is False
     assert rig.tick() == (0.0, 0.0)
 
 
@@ -331,11 +381,11 @@ async def test_adapter_stop_the_arbiter_refuses_still_ends_motion() -> None:
     await rig.send("command", simple("control.acquire", seq=5))
     await rig.send("drive", velocity(seq=6))
     assert rig.tick() == (0.2, 0.0)
-    # Stale seq: the arbiter refuses it, so the adapter must still bring motion to zero.
+    # A stale stop is not a success and does not tear down the lease that is driving.
     reply = await rig.send("stop", simple("drive.stop", seq=1))
-    assert reply["ok"] is True and reply["accepted"] is False
-    assert rig.tick() == (0.0, 0.0)
-    assert rig.arbiter.mode(rig.now) == "idle"
+    assert reply["ok"] is False
+    assert rig.tick() == (0.2, 0.0)
+    assert rig.arbiter.mode(rig.now) == "manual"
 
 
 async def test_adapter_disable_motion_zeroes_through_the_arbiter_and_refuses_drive() -> None:

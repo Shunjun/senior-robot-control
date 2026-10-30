@@ -33,6 +33,7 @@ from agent_fakes import (
     FakeState,
     FakeTasks,
     operation,
+    simple,
     stop,
     until,
     velocity,
@@ -314,6 +315,61 @@ async def test_other_robot_heartbeat_not_eligible(rig: Rig) -> None:
     await rig.agent.dispatch(velocity())
     await until(lambda: any(event.startswith("drive") for event in rig.motion.events))
     assert "drive:3:0.2:0.0" in rig.motion.events
+    await finish(task, rig)
+
+
+async def test_auth_heartbeat_failure_revokes_motion_until_the_next_success(rig: Rig) -> None:
+    link = FakeLink(epoch=4)
+    task = await start(rig, link)
+    rig.agent.note_heartbeat(ROBOT)
+    original = link.send_heartbeat
+    failed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def flaky() -> None:
+        if not failed.is_set():
+            failed.set()
+            raise ConnectionError("auth heartbeat failed")
+        await release.wait()
+        await original()
+
+    link.send_heartbeat = flaky  # type: ignore[method-assign]
+    await until(lambda: not rig.agent.eligible_for_motion)
+    await until(lambda: "disable:4" in rig.motion.events)
+    with pytest.raises(DomainError) as caught:
+        await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
+    assert caught.value.code is ErrorCode.SAFETY_REJECTED
+    assert not [event for event in rig.motion.events if event.startswith("forward")]
+    release.set()
+    await until(lambda: rig.agent.eligible_for_motion)
+    await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
+    assert "forward:control.acquire" in rig.motion.events
+    await finish(task, rig)
+
+
+async def test_dropped_link_disables_its_epoch(rig: Rig) -> None:
+    link = FakeLink(epoch=4)
+    task = await start(rig, link)
+    rig.agent.note_heartbeat(ROBOT)
+    link.drop()
+    await until(lambda: "disable:4" in rig.motion.events)
+    with pytest.raises(DomainError) as caught:
+        await rig.agent.dispatch(simple("navigation.start", seq=2, epoch=4))
+    assert caught.value.code is ErrorCode.OFFLINE
+    assert not [event for event in rig.motion.events if event.startswith("forward")]
+    await finish(task, rig)
+
+
+async def test_velocity_older_than_the_command_ttl_is_not_driven(rig: Rig) -> None:
+    task = await start(rig, FakeLink(epoch=1))
+    rig.agent.note_heartbeat(ROBOT)
+    late = velocity()
+    object.__setattr__(late, "expires_at", time.time() + 4)
+    with pytest.raises(DomainError) as caught:
+        await rig.agent.dispatch(late)
+    assert caught.value.code is ErrorCode.TIMEOUT
+    await asyncio.sleep(0.05)
+    assert not [event for event in rig.motion.events if event.startswith("drive")]
     await finish(task, rig)
 
 

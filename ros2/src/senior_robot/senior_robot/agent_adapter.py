@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from senior_control.protocol import (
-    Envelope,
     SimpleEnvelope,
     VelocityEnvelope,
     validate_envelope,
@@ -38,7 +37,7 @@ class AdapterCore:
         self,
         *,
         robot_id: str,
-        submit: Callable[[Envelope], bool],
+        submit: Callable[..., bool],
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
     ) -> None:
@@ -83,6 +82,7 @@ class AdapterCore:
         return {"ok": False, "error": "unknown_type"}
 
     def _send(self, message: dict[str, Any], kind: str | None, *, safety: bool) -> dict[str, Any]:
+        del safety
         raw = message.get("envelope")
         if not isinstance(raw, str):
             return {"ok": False, "error": "bad_request"}
@@ -95,11 +95,14 @@ class AdapterCore:
         if not isinstance(envelope, (VelocityEnvelope, SimpleEnvelope)):
             return {"ok": False, "error": "bad_request"}
         self._epochs.add(envelope.connection_epoch)
-        accepted = self._submit(envelope)
-        if safety and not accepted:
-            # The arbiter refused it (stale seq, no lease). Motion must still end.
-            self.release()
-        return {"ok": True, "accepted": accepted}
+        received_at = message.get("received_at")
+        if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
+            received_at = None
+        accepted = self._submit(envelope, received_at)
+        if not accepted:
+            # A refused stop or estop must not look successful and must not drop a newer lease.
+            return {"ok": False, "accepted": False}
+        return {"ok": True, "accepted": True}
 
 
 def main() -> None:
@@ -120,7 +123,7 @@ def main() -> None:
 
     core = AdapterCore(
         robot_id=robot_id,
-        submit=lambda envelope: node.submit(envelope).accepted,
+        submit=lambda envelope, received_at=None: node.submit(envelope, received_at).accepted,
         disconnect=node.disconnect,
         request_exit=request_exit,
     )

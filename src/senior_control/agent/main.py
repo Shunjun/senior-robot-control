@@ -39,6 +39,9 @@ logger = logging.getLogger("senior_control.agent")
 
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
+# Browser commands may be admitted for this long. The vehicle does not execute for that long:
+# a velocity older than command_ttl_seconds is refused on the local clock.
+ADMISSION_SECONDS = 5.0
 
 
 async def _never_publish(vx: float, wz: float) -> None:
@@ -64,6 +67,7 @@ class Agent:
         heartbeat_seconds: float = 0.2,
         retry_delay: float = 1.0,
         heartbeat_window: float = 1.0,
+        command_ttl_seconds: float = 0.3,
         snapshot_seconds: float = 2.0,
         state_poll_seconds: float = 0.25,
         metrics: Metrics | None = None,
@@ -83,10 +87,13 @@ class Agent:
         self._cleanup = cleanup
         self._heartbeat_seconds = heartbeat_seconds
         self._retry_delay = retry_delay
+        if command_ttl_seconds <= 0:
+            raise ValueError("command ttl must be positive")
+        self._command_ttl_seconds = command_ttl_seconds
         self._wall_clock = wall_clock
-        self._ledger = HeartbeatLedger(
-            clock if clock is not None else SystemClock(), heartbeat_window
-        )
+        self._clock = clock if clock is not None else SystemClock()
+        self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
+        self._auth_heartbeat_failed = False
         self._dispatcher = Dispatcher(
             robot_id,
             journal=journal,
@@ -206,8 +213,24 @@ class Agent:
 
     async def _beat(self) -> None:
         link = self._link
-        if link is not None:
+        if link is None:
+            return
+        try:
             await link.send_heartbeat()
+        except Exception:
+            self._auth_heartbeat_failed = True
+            self._ledger.forget(self.robot_id)
+            epoch = self._epoch
+            if epoch:
+                try:
+                    await self._motion.disable(epoch)
+                except Exception:
+                    logger.exception("could not disable motion after a failed heartbeat")
+            raise
+        if self._auth_heartbeat_failed:
+            # The next successful auth heartbeat may open a new lease. The old one stays disabled.
+            self._auth_heartbeat_failed = False
+            self._ledger.note(self.robot_id)
 
     async def _session(self) -> None:
         try:
@@ -235,9 +258,12 @@ class Agent:
         except (ConnectionError, OSError):
             return
         finally:
+            epoch = link.epoch
             if self._link is link:
                 self._link, self._epoch = None, 0
+            self._ledger.forget(self.robot_id)
             self._log("connection_closed")
+            await self._quietly(self._motion.disable(epoch))
             await self._quietly(link.close())
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
@@ -393,14 +419,21 @@ class Agent:
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         self._admit(envelope)
+        if not self.eligible_for_motion:
+            raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
         if isinstance(envelope, VelocityEnvelope):
-            supervisor = self._supervisor
-            if supervisor is None or not self.eligible_for_motion:
-                raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
+            implied_send = envelope.expires_at - ADMISSION_SECONDS
+            if self._wall_clock() - implied_send > self._command_ttl_seconds:
+                raise DomainError(ErrorCode.TIMEOUT, "command waited longer than the motion window")
+            received_at = self._clock.monotonic()
+            try:
+                await asyncio.wait_for(
+                    self._motion.drive(envelope, received_at=received_at),
+                    self._deadlines.safety,
+                )
+            except Exception as exc:
+                raise DomainError(ErrorCode.SAFETY_REJECTED, "motion was not accepted") from exc
             self._latest_velocity = envelope
-            if not supervisor.submit_drive(envelope.payload.vx, envelope.payload.wz):
-                self._latest_velocity = None
-                raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         try:
             await asyncio.wait_for(self._motion.forward(envelope), self._deadlines.safety)
@@ -449,6 +482,7 @@ class Agent:
             runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
+            tasks=live.tasks,
         )
         return snapshot
 

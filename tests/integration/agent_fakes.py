@@ -147,7 +147,8 @@ class FakeMotion:
     def __init__(self, events: list[str] | None = None) -> None:
         self.events: list[str] = events if events is not None else []
 
-    async def drive(self, envelope: VelocityEnvelope) -> None:
+    async def drive(self, envelope: VelocityEnvelope, *, received_at: float | None = None) -> None:
+        del received_at
         self.events.append(f"drive:{envelope.seq}:{envelope.payload.vx}:{envelope.payload.wz}")
 
     async def stop(self, envelope: SimpleEnvelope) -> None:
@@ -211,8 +212,9 @@ class FakeHome:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def set_current(self) -> None:
+    async def set_current(self, expected_revision: int) -> int:
         self.calls += 1
+        return expected_revision + 1
 
 
 class FakeMaps:

@@ -11,8 +11,16 @@ from senior_control.protocol import (
     MapRefPayload,
     SnapshotEnvelope,
     SnapshotPayload,
+    TaskSummaryPayload,
 )
 from senior_control.waypoints import Waypoint
+
+
+@dataclass(frozen=True)
+class TaskSummary:
+    task_id: str
+    revision: int
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,7 @@ class LiveState:
     task_revision: int
     execution_status: str
     runnable_task_ids: tuple[str, ...] = ()
+    tasks: tuple[TaskSummary, ...] = ()
 
 
 class StatePort(Protocol):
@@ -49,6 +58,7 @@ class RobotSnapshot:
     execution_status: str
     collected_at: float
     runnable_task_ids: tuple[str, ...] = ()
+    tasks: tuple[TaskSummary, ...] = ()
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -103,6 +113,12 @@ def snapshot_envelope(
             collected_at=snapshot.collected_at,
             stale=stale,
             last_synced_at=last_synced_at,
+            tasks=[
+                TaskSummaryPayload(
+                    task_id=item.task_id, revision=item.revision, enabled=item.enabled
+                )
+                for item in snapshot.tasks
+            ],
         ),
     )
 
@@ -128,6 +144,9 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         execution_status=payload.execution_status,
         collected_at=payload.collected_at,
         runnable_task_ids=tuple(payload.runnable_task_ids),
+        tasks=tuple(
+            TaskSummary(item.task_id, item.revision, item.enabled) for item in payload.tasks
+        ),
     )
 
 

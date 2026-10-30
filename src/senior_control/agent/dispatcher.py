@@ -57,7 +57,7 @@ class TaskPort(Protocol):
 
 
 class HomePort(Protocol):
-    async def set_current(self) -> None: ...
+    async def set_current(self, expected_revision: int) -> int: ...
 
 
 class MapPort(Protocol):
@@ -222,7 +222,8 @@ class Dispatcher:
                 task_id = _text(body, "task_id")
                 return "edit", lambda: self._tasks.set_enabled(task_id, enabled, revision)
             if kind == "home.set":
-                return "edit", self._set_home
+                revision = _required(expected)
+                return "edit", lambda: self._set_home(revision)
             if kind == "map.export":
                 map_ref = _map_ref(body)
                 destination = self._transfer_path(body)
@@ -239,9 +240,8 @@ class Dispatcher:
             raise DomainError(ErrorCode.VALIDATION, "invalid operation body") from exc
         raise DomainError(ErrorCode.VALIDATION, "unsupported operation")
 
-    async def _set_home(self) -> int | None:
-        await self._home.set_current()
-        return None
+    async def _set_home(self, expected_revision: int) -> int:
+        return await self._home.set_current(expected_revision)
 
     @staticmethod
     async def _none(call: Awaitable[None]) -> int | None:
@@ -371,11 +371,12 @@ class StoreHomePort:
         self._service = service
         self._localized = localized
 
-    async def set_current(self) -> None:
+    async def set_current(self, expected_revision: int) -> int:
         pose = self._localized()
         if pose is None or not pose.healthy:
             raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "robot is not localized")
-        await self._service.set_current(pose)
+        await self._service.set_current(pose, expected_revision=expected_revision)
+        return await self._service.home_revision()
 
 
 class StoreMapPort:

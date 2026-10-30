@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import stat
 import tempfile
 import zipfile
@@ -197,7 +198,11 @@ class MapArchive:
             waypoint_body = _object(json.loads(waypoint_bytes))
         except json.JSONDecodeError as exc:
             raise DomainError(ErrorCode.VALIDATION, "waypoints are not json") from exc
-        manifest = _manifest_from_json(manifest_body, _waypoint_list(waypoint_body))
+        hashed_waypoints = _waypoint_list({"waypoints": manifest_body.get("waypoints")})
+        loaded_waypoints = _waypoint_list(waypoint_body)
+        if hashed_waypoints != loaded_waypoints:
+            raise DomainError(ErrorCode.VALIDATION, "waypoints do not match the manifest")
+        manifest = _manifest_from_json(manifest_body, hashed_waypoints)
         if manifest.tasks_included:
             raise DomainError(ErrorCode.VALIDATION, "tasks are not part of a map bundle")
         for waypoint in manifest.waypoints:
@@ -373,13 +378,24 @@ def _canonical(body: dict[str, object]) -> bytes:
 
 
 def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
-    width = snapshot.grid.width if snapshot.grid.width > 0 else 1
-    height = snapshot.grid.height if snapshot.grid.height > 0 else 1
-    occupied = {evidence.cell for evidence in snapshot.occupancy.cells}
+    width = snapshot.grid.width
+    height = snapshot.grid.height
+    cell = snapshot.cell_size_m
+    if cell <= 0.0 or not math.isfinite(cell):
+        raise DomainError(ErrorCode.VALIDATION, "grid cell size is invalid")
+    origin_x = math.floor(snapshot.grid.origin_x / cell)
+    origin_y = math.floor(snapshot.grid.origin_y / cell)
+    occupied: set[tuple[int, int]] = set()
+    for evidence in snapshot.occupancy.cells:
+        px = evidence.cell[0] - origin_x
+        py = evidence.cell[1] - origin_y
+        if 0 <= px < width and 0 <= py < height:
+            occupied.add((px, py))
     pixels = bytearray()
-    for y in range(height):
+    for row in range(height):
+        py = height - 1 - row
         for x in range(width):
-            pixels.append(0 if (x, y) in occupied else 205)
+            pixels.append(0 if (x, py) in occupied else 205)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "map.pgm").write_bytes(f"P5\n{width} {height}\n255\n".encode() + bytes(pixels))
     origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"

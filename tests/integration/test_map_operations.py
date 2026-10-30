@@ -800,15 +800,21 @@ async def test_import_replace_after_identity_change_needs_review(tmp_path: Path)
     store = filled_store("local", 1, (2.25, 0.25))
     source = filled_store("yard", 3, (1.25, 0.25))
     bundle = tmp_path / "yard.zip"
+    original = store.map_ref
+    session = Session(store.map_ref)
+    calls = {"n": 0}
+    real_replace = store.replace
 
     def replace_then_fail(snapshot: SlamSnapshot) -> None:
-        MapReferenceStore.replace(store, snapshot)
-        raise RuntimeError("replace failed after identity")
+        calls["n"] += 1
+        real_replace(snapshot)
+        if calls["n"] == 1:
+            raise RuntimeError("replace failed after identity")
 
     store.replace = replace_then_fail  # type: ignore[method-assign]
     async with Database(tmp_path / "robot.db") as database:
         ops = session_operations(
-            database, store, tmp_path, Session(store.map_ref), robot_id="robot-a", loader=Loader()
+            database, store, tmp_path, session, robot_id="robot-a", loader=Loader()
         )
         await ops.prepare()
         async with Database(tmp_path / "source.db") as source_db:
@@ -820,9 +826,10 @@ async def test_import_replace_after_identity_change_needs_review(tmp_path: Path)
         record = await ops.operation_record("import-replace")
         queried = await ops.query("import-replace")
 
-    assert store.map_ref == source.map_ref
-    assert record.result.status is OperationStatus.NEEDS_REVIEW
-    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert store.map_ref == original
+    assert session.token == "live"
+    assert record.result.status is OperationStatus.FAILED
+    assert queried.status is OperationStatus.FAILED
     assert record.result.status is not OperationStatus.SUCCEEDED
 
 
@@ -831,6 +838,8 @@ async def test_import_publish_failure_after_running_needs_review(tmp_path: Path)
     store = filled_store("local", 1, (2.25, 0.25))
     source = filled_store("yard", 3, (1.25, 0.25))
     bundle = tmp_path / "yard.zip"
+    original = store.map_ref
+    session = Session(store.map_ref)
     async with Database(tmp_path / "robot.db") as database:
         ops = _operations(
             BrokenPublish,
@@ -839,7 +848,7 @@ async def test_import_publish_failure_after_running_needs_review(tmp_path: Path)
             tmp_path,
             robot_id="robot-a",
             loader=Loader(),
-            session=Session(store.map_ref),
+            session=session,
         )
         await ops.prepare()
         async with Database(tmp_path / "source.db") as source_db:
@@ -851,9 +860,10 @@ async def test_import_publish_failure_after_running_needs_review(tmp_path: Path)
         record = await ops.operation_record("import-publish")
         queried = await ops.query("import-publish")
 
-    assert store.map_ref == source.map_ref
-    assert record.result.status is OperationStatus.NEEDS_REVIEW
-    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert store.map_ref == original
+    assert session.token == "live"
+    assert record.result.status is OperationStatus.FAILED
+    assert queried.status is OperationStatus.FAILED
 
 
 @pytest.mark.asyncio
@@ -932,6 +942,7 @@ async def test_clear_reset_failure_is_failed(tmp_path: Path) -> None:
 async def test_clear_publish_failure_after_identity_change_needs_review(tmp_path: Path) -> None:
     store = filled_store("yard", 3, (1.25, 0.25))
     original = store.map_ref
+    session = Session(store.map_ref)
     async with Database(tmp_path / "robot.db") as database:
         ops = _operations(
             BrokenPublish,
@@ -939,7 +950,7 @@ async def test_clear_publish_failure_after_identity_change_needs_review(tmp_path
             store,
             tmp_path,
             robot_id="robot-a",
-            session=Session(store.map_ref),
+            session=session,
         )
         await ops.prepare()
         with pytest.raises(RuntimeError, match="active publish failed"):
@@ -947,9 +958,10 @@ async def test_clear_publish_failure_after_identity_change_needs_review(tmp_path
         record = await ops.operation_record("clear-publish")
         queried = await ops.query("clear-publish")
 
-    assert store.map_ref != original
-    assert record.result.status is OperationStatus.NEEDS_REVIEW
-    assert queried.status is OperationStatus.NEEDS_REVIEW
+    assert store.map_ref == original
+    assert session.token == "live"
+    assert record.result.status is OperationStatus.FAILED
+    assert queried.status is OperationStatus.FAILED
     assert record.result.status is not OperationStatus.SUCCEEDED
 
 

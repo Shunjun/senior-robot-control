@@ -1,7 +1,7 @@
 import { useState, type ReactElement } from "react";
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
-import type { ResponsePayload, RobotSnapshot } from "../../api/protocol";
+import type { ResponsePayload, RobotSnapshot, TaskSummary } from "../../api/protocol";
 import { ScheduleEditor, type TaskDraft } from "./ScheduleEditor";
 import styles from "./Tasks.module.css";
 
@@ -12,7 +12,7 @@ export function TaskList({ snapshot, link }: { snapshot: RobotSnapshot; link: Ro
   const live = snapshot.connected && !snapshot.stale;
 
   async function submit(): Promise<void> {
-    if (!live || draft === null || snapshot.map_ref === null) return;
+    if (!live || draft === null || snapshot.map_ref === null || draft.waypoint_id.trim() === "") return;
     setPending(true);
     setMessage("等待车端确认保存…");
     const createdAt = new Date().toISOString();
@@ -26,7 +26,7 @@ export function TaskList({ snapshot, link }: { snapshot: RobotSnapshot; link: Ro
           schedule: draft.schedule,
           map_id: snapshot.map_ref.map_id,
           reference_revision: snapshot.map_ref.reference_revision,
-          waypoint_ids: [],
+          waypoint_ids: [draft.waypoint_id.trim()],
           enabled: true,
         },
       });
@@ -39,15 +39,19 @@ export function TaskList({ snapshot, link }: { snapshot: RobotSnapshot; link: Ro
     }
   }
 
-  async function changeTask(taskId: string, type: "task.enable" | "task.delete"): Promise<void> {
+  async function changeTask(task: TaskSummary, action: "pause" | "enable" | "delete"): Promise<void> {
     if (!live) return;
     setPending(true);
     setMessage("等待车端确认变更…");
+    const type = action === "delete" ? "task.delete" : "task.enable";
     try {
       await link.request<ResponsePayload>(type, {
         operation_id: crypto.randomUUID(),
-        expected_revision: snapshot.task_revision,
-        body: type === "task.enable" ? { task_id: taskId, enabled: false } : { task_id: taskId },
+        expected_revision: task.revision,
+        body:
+          action === "delete"
+            ? { task_id: task.task_id }
+            : { task_id: task.task_id, enabled: action === "enable" },
       });
       setMessage("车端已确认任务变更。");
     } catch (error) {
@@ -71,12 +75,20 @@ export function TaskList({ snapshot, link }: { snapshot: RobotSnapshot; link: Ro
         <div><dt>下次触发</dt><dd>保存后由车端计划器计算</dd></div>
       </dl>
       <div>
-        <p>可执行任务：{snapshot.runnable_task_ids.length > 0 ? "" : "无"}</p>
-        {snapshot.runnable_task_ids.map((taskId) => (
-          <div className={styles.taskRow} key={taskId}>
-            <code>{taskId}</code>
-            <button type="button" disabled={!live || pending} onClick={() => void changeTask(taskId, "task.enable")}>暂停</button>
-            <button type="button" disabled={!live || pending} onClick={() => void changeTask(taskId, "task.delete")}>删除</button>
+        <p>任务：{(snapshot.tasks ?? []).length > 0 ? "" : "无"}</p>
+        {(snapshot.tasks ?? []).map((task) => (
+          <div className={styles.taskRow} key={task.task_id}>
+            <code>{task.task_id}</code>
+            <button
+              type="button"
+              disabled={!live || pending}
+              onClick={() => void changeTask(task, task.enabled ? "pause" : "enable")}
+            >
+              {task.enabled ? "暂停" : "启用"}
+            </button>
+            <button type="button" disabled={!live || pending} onClick={() => void changeTask(task, "delete")}>
+              删除
+            </button>
           </div>
         ))}
       </div>
@@ -85,7 +97,7 @@ export function TaskList({ snapshot, link }: { snapshot: RobotSnapshot; link: Ro
       <button
         type="button"
         className={styles.primary}
-        disabled={!live || draft === null || snapshot.map_ref === null || pending}
+        disabled={!live || draft === null || draft.waypoint_id.trim() === "" || snapshot.map_ref === null || pending}
         onClick={() => void submit()}
       >
         提交任务

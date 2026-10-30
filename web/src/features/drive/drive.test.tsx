@@ -418,6 +418,7 @@ describe("when driving is not allowed", () => {
     await flush();
     await tick(1_000);
     expect(screen.getByRole("alert").textContent).toContain("离线");
+    expect(screen.getByText(/vx 0\.00 m\/s/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
     expect(link.types().filter((type) => type === "control.acquire")).toHaveLength(1);
     expect(link.velocities()).toHaveLength(1);

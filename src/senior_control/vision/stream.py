@@ -16,6 +16,7 @@ import asyncio
 import importlib
 import logging
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -489,7 +490,7 @@ def _make_track(aiortc: Any) -> Any:
                 if image is None:
                     continue
                 pts, time_base = await self.next_timestamp()
-                frame = _to_av_frame(av, image)
+                frame = await asyncio.to_thread(_to_av_frame, av, image)
                 frame.pts = pts
                 frame.time_base = time_base
                 return frame
@@ -550,10 +551,59 @@ class _AiortcPeer:
         await self._pc.close()
 
 
+class _EncodeLoop:
+    """Pixel copy and encode stay off the session loop that also carries stop and estop."""
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run, name="video-encode", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def submit(self, coro: Any) -> Any:
+        return asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self._loop))
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+
+
+class _OffLoopPeer:
+    def __init__(self, loop: _EncodeLoop, peer: _AiortcPeer) -> None:
+        self._loop = loop
+        self._peer = peer
+
+    async def accept_offer(self, offer: SessionDescription) -> SessionDescription:
+        answer: SessionDescription = await self._loop.submit(self._peer.accept_offer(offer))
+        return answer
+
+    async def add_remote_candidate(self, candidate: str) -> None:
+        await self._loop.submit(self._peer.add_remote_candidate(candidate))
+
+    async def push(self, frame: ImageFrame) -> None:
+        await self._loop.submit(self._peer.push(frame))
+
+    async def stats(self) -> PeerStats:
+        report: PeerStats = await self._loop.submit(self._peer.stats())
+        return report
+
+    async def close(self) -> None:
+        await self._loop.submit(self._peer.close())
+
+
 class AiortcPeerFactory:
     """Builds real peers. Needs the `video` extra; importing this module does not."""
 
+    def __init__(self) -> None:
+        self._encode = _EncodeLoop()
+
     async def open(self, request: PeerRequest) -> PeerConnection:
+        peer = await self._encode.submit(self._open(request))
+        return _OffLoopPeer(self._encode, peer)
+
+    async def _open(self, request: PeerRequest) -> _AiortcPeer:
         aiortc = _load_aiortc()
         _lower_bitrate_cap(request.max_bitrate_bps)
         servers = []

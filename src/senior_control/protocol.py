@@ -105,6 +105,12 @@ class HomePayload(StrictModel):
     status: ShortText
 
 
+class TaskSummaryPayload(StrictModel):
+    task_id: ShortText
+    revision: int = Field(ge=0)
+    enabled: bool
+
+
 class SnapshotPayload(StrictModel):
     """The robot's own view of itself, pushed on connect and after each change."""
 
@@ -119,6 +125,7 @@ class SnapshotPayload(StrictModel):
     # Set only by the cloud when it sends its cached copy to a browser; an agent may omit both.
     stale: bool = False
     last_synced_at: float | None = None
+    tasks: list[TaskSummaryPayload] = Field(default_factory=list, max_length=200)
 
 
 class SnapshotEnvelope(EnvelopeBase):

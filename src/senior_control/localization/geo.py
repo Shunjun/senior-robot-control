@@ -240,7 +240,7 @@ def _explicit_rtk(fix: QualifiedFix) -> str | None:
 
 
 def _positive_std(value: float) -> bool:
-    return math.isfinite(value) and value >= 0.0
+    return math.isfinite(value) and value > 0.0
 
 
 def _geographic(latitude: float, longitude: float, altitude: float) -> bool:

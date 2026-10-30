@@ -131,6 +131,8 @@ def _cron_after(schedule: Schedule, moment: datetime) -> datetime:
     fired = _wall_utc(wall, zone)
     if fired is None or fired <= moment:
         wall += timedelta(minutes=1)
+    if _impossible_date(cron):
+        raise ValueError("no upcoming occurrence")
     limit = 366 * 24 * 60 * 8
     for _ in range(limit):
         if cron.matches(wall):
@@ -150,6 +152,23 @@ def _wall_utc(wall: datetime, zone: ZoneInfo) -> datetime | None:
     if observed != wanted:
         return None
     return utc
+
+
+def _impossible_date(cron: _Cron) -> bool:
+    """A day/month pair that no year contains. A restricted weekday can still occur."""
+    if cron.dom.unrestricted or cron.month.unrestricted or not cron.dow.unrestricted:
+        return False
+    return not any(
+        _month_has_day(month, day) for month in cron.month.values for day in cron.dom.values
+    )
+
+
+def _month_has_day(month: int, day: int) -> bool:
+    if month == 2:
+        return day <= 29
+    if month in {4, 6, 9, 11}:
+        return day <= 30
+    return 1 <= day <= 31
 
 
 def _compile(expression: str) -> _Cron:

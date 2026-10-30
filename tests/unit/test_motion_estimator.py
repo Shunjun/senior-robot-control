@@ -1,6 +1,7 @@
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.motion_estimator import (
     ImuYaw,
+    MotionEstimate,
     MotionEstimator,
     RelativeMotion,
     WheelOdom,
@@ -76,6 +77,18 @@ def test_source_must_be_scan_match_and_covariance_within_cap():
         assert not supports_degraded_reverse(disguised)
     loose = gate.update(*sample(covariance=(1.0e6, 1.0e6, 1.0e6)))
     assert not supports_degraded_reverse(loose)
+
+
+def test_wheel_wrapped_estimate_is_not_independent_motion():
+    wrapped = MotionEstimate(
+        Pose2D(0.2, 0.0, 0.0),
+        Velocity(-0.2, 0.0),
+        (0.01, 0.01, 0.01),
+        0.9,
+        0.1,
+    )
+    assert not supports_degraded_reverse(wrapped)
+    assert degraded_reverse_gate(wrapped).velocity == Velocity(0.0, 0.0)
 
 
 def test_unset_covariance_cap_fails_closed():

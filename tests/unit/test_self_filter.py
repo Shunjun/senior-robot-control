@@ -31,6 +31,30 @@ def test_nearby_wall_not_self():
     assert len(result.external_hits) == 3
 
 
+def test_no_return_clear_does_not_paint_inf_as_free():
+    raw = scan([math.inf, 1.0])
+    forced = ScanObservation(
+        raw.ranges,
+        raw.angle_min,
+        raw.angle_increment,
+        raw.range_min,
+        raw.range_max,
+        raw.stamp,
+        raw.clock_domain,
+        raw.sensor_to_body,
+        raw.transform_stamp,
+        raw.reference_frame,
+        raw.reference_stamp,
+        raw.interpolate,
+        raw.max_angular_gap,
+        True,
+        raw.transform_static,
+    )
+    result = filter_self(forced, DeviceProfile(self_mask_calibrated=True))
+    assert all(ray.kind != "clear" for ray in result.rays)
+    assert result.rays[0].kind == "invalid"
+
+
 def test_unverified_no_return_unknown():
     result = filter_self(scan([math.inf, math.nan, 1.0]), DeviceProfile(self_mask_calibrated=True))
     assert len(result.invalid_regions) == 2

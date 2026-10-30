@@ -46,6 +46,7 @@ _UNOBSERVED = frozenset(
         "no usable observation area",
     }
 )
+_MAP_REVERSE = frozenset({"required area contains unknown space"})
 Point2D = tuple[float, float]
 
 
@@ -98,8 +99,11 @@ class MapEvidenceProvider(Protocol):
         pose: Pose2D,
         distance: float,
         now: float,
+        *,
+        measured: Velocity | None = None,
+        sweep: tuple[tuple[Point2D, ...], ...] = (),
     ) -> MapCorridorEvidence | None:
-        """Return evidence for the corridor, or ``None`` when the caller has none."""
+        """Return evidence for the rejected body sweep, or ``None`` when the caller has none."""
 
 
 @dataclass(frozen=True)
@@ -364,8 +368,32 @@ class RecoveryController:
         travel = self._travel(speed)
         if travel is None:
             return False
+        return self._distance_within(travel, limits)
+
+    def _distance_within(self, travel: float, limits: _Limits) -> bool:
+        if not math.isfinite(travel) or travel < 0.0:
+            return False
         single, cumulative = self._remaining(limits)
         return travel <= single and travel <= cumulative
+
+    def _sweep_distance(self, command: Velocity, measured: Velocity) -> float | None:
+        """Braking distance of the motion the live gate refused, not only the speed cap."""
+        braking = self._profile.braking_deceleration
+        reaction = self._profile.reaction_time
+        if braking is None or reaction is None or braking <= 0.0 or reaction < 0.0:
+            return None
+        forward, backward = _axis_distances(command.vx, measured.vx, reaction, braking)
+        if command.vx < 0.0 or (command.vx == 0.0 and measured.vx < 0.0):
+            distance = backward
+        else:
+            distance = forward
+        yaw_speed = max(abs(command.wz), abs(measured.wz))
+        if yaw_speed > 0.0:
+            yaw_braking = self._profile.yaw_braking_deceleration
+            if yaw_braking is None or yaw_braking <= 0.0:
+                return None
+            distance = max(distance, stopping_distance(yaw_speed, reaction, yaw_braking))
+        return distance
 
     def _sensor(
         self, command: Velocity, context: RecoveryContext, now: float, max_age: float
@@ -460,7 +488,12 @@ class RecoveryController:
         )
 
     def _map_reverse(
-        self, context: RecoveryContext, now: float, limits: _Limits, distance: float
+        self,
+        context: RecoveryContext,
+        now: float,
+        limits: _Limits,
+        distance: float,
+        reverse: Velocity,
     ) -> bool:
         quality = context.localization_quality
         if (
@@ -468,10 +501,19 @@ class RecoveryController:
             or quality is None
             or not math.isfinite(quality)
             or quality < limits.min_localization_quality
-            or not supports_degraded_reverse(context.motion)
+            or not supports_degraded_reverse(
+                context.motion, now=now, max_age=limits.observation_max_age
+            )
         ):
             return False
-        evidence = self._maps.corridor(context.map_ref, context.pose, distance, now)
+        evidence = self._maps.corridor(
+            context.map_ref,
+            context.pose,
+            distance,
+            now,
+            measured=context.measured,
+            sweep=tuple(self._sweep_pieces(reverse.vx, context.measured.vx)),
+        )
         if evidence is None or evidence.map_ref != context.map_ref:
             return False
         age = evidence.observation_age
@@ -504,17 +546,23 @@ class RecoveryController:
             return self._finish(reason, cancelled=False)
         if reverse_collision:
             return self._finish("protection_refused", cancelled=False)
-        travel = self._travel(limits.speed)
-        if travel is None or not self._within_budget(limits.speed, limits):
-            return self._finish("distance_exceeded", cancelled=False)
         reverse = Velocity(-limits.speed, 0.0)
+        travel = self._sweep_distance(reverse, context.measured)
+        if travel is None or not self._distance_within(travel, limits):
+            return self._finish("distance_exceeded", cancelled=False)
         reason = self._sensor(reverse, context, now, limits.observation_max_age)
         if reason in _COLLISION or reason in _PROTECTION:
             return self._finish("protection_refused", cancelled=False)
         if reason == "":
             return self._command(reverse, "safe_reverse", now)
         checked = bool(context.observations) and self._protection_configured()
-        if reason in _UNOBSERVED and checked and self._map_reverse(context, now, limits, travel):
+        # Only rear unknown space may consult the map. A stale, uninterpolated,
+        # gapped, or expired-transform scan has no usable area and forbids the motion.
+        if (
+            reason in _MAP_REVERSE
+            and checked
+            and self._map_reverse(context, now, limits, travel, reverse)
+        ):
             return self._command(reverse, "map_assisted_reverse", now)
         if reason in _UNOBSERVED and checked:
             return self._finish("blind_zone_blocked", cancelled=False)

@@ -81,13 +81,36 @@ class TaskRunner:
                 continue
             cursor = start
             while True:
-                occurrence = task.schedule.next_after(cursor)
+                try:
+                    occurrence = task.schedule.next_after(cursor)
+                except ValueError:
+                    break
                 if occurrence > end:
                     break
                 cursor = occurrence
                 if (task.task_id, occurrence) in claimed:
                     continue
                 due.append((occurrence, task, _block_reason(task, context, busy)))
+        claimed_latest = max(
+            (
+                occurrence
+                for _task_id, occurrence in claimed
+                if start < occurrence <= end
+            ),
+            default=None,
+        )
+        if claimed_latest is not None:
+            blocked = [item for item in due if item[0] <= claimed_latest]
+            due = [item for item in due if item[0] > claimed_latest]
+            for occurrence, task, reason in blocked:
+                intents.append(
+                    TaskIntent(
+                        task.task_id,
+                        IntentAction.SKIP,
+                        reason if reason is not None else "busy",
+                        occurrence_utc=occurrence,
+                    )
+                )
         if not due:
             return intents
         latest = max(item[0] for item in due)

@@ -1,7 +1,8 @@
 """Per-robot lease, heartbeat, and command arbitration.
 
-Motion uses a monotonic deadline of accept time plus the command TTL.
-``expires_at`` is not compared with that clock. A latched estop outranks
+Motion uses a monotonic deadline of the local receive time plus the command TTL.
+``expires_at`` is not compared with that clock. A lease that has already died can be
+acquired again on the same connection generation. A latched estop outranks
 manual, then recovery, then navigation. Recovery has no remote command yet.
 Disconnect and lease expiry stop motion and do not resume navigation.
 """
@@ -75,7 +76,9 @@ class Arbiter:
         self._velocity = _ZERO
         self._deadline: float | None = None
 
-    def accept(self, command: Envelope, now: float) -> CommandResult:
+    def accept(
+        self, command: Envelope, now: float, *, received_at: float | None = None
+    ) -> CommandResult:
         self._expire(now)
         if not math.isfinite(now):
             return _reject(ErrorCode.VALIDATION)
@@ -85,14 +88,19 @@ class Arbiter:
             return _reject(ErrorCode.VALIDATION)
         lease = self._lease
         if lease is None:
-            return self._accept_without_lease(command, now)
+            return self._accept_without_lease(command, now, received_at)
         if command.session_id != lease.session_id:
+            if command.connection_epoch < lease.epoch:
+                return _reject(ErrorCode.CONFLICT)
+            if command.type == "control.acquire" and not lease.alive:
+                # The reconnected page may take this generation once the old lease is dead.
+                return self._open_lease(command, now)
             if (
-                command.type == "control.acquire"
+                command.type in _SAFETY
                 and not lease.alive
                 and command.connection_epoch > lease.epoch
             ):
-                return self._open_lease(command, now)
+                return self._accept_safety(command, now, advance_epoch=True)
             return _reject(ErrorCode.CONFLICT)
         if command.connection_epoch < lease.epoch:
             return _reject(ErrorCode.CONFLICT)
@@ -105,10 +113,12 @@ class Arbiter:
         if command.seq <= lease.seq:
             return _reject(ErrorCode.CONFLICT)
         if not lease.alive:
+            if command.type == "control.acquire":
+                return self._open_lease(command, now)
             if command.type in _SAFETY:
                 return self._accept_safety(command, now, advance_epoch=False)
             return _reject(ErrorCode.OFFLINE)
-        return self._accept_live(command, now)
+        return self._accept_live(command, now, received_at)
 
     def tick(self, now: float) -> Velocity:
         self._expire(now)
@@ -139,7 +149,10 @@ class Arbiter:
         return "idle"
 
     def _accept_without_lease(
-        self, command: VelocityEnvelope | SimpleEnvelope, now: float
+        self,
+        command: VelocityEnvelope | SimpleEnvelope,
+        now: float,
+        _received_at: float | None,
     ) -> CommandResult:
         if command.type == "control.acquire":
             return self._open_lease(command, now)
@@ -151,7 +164,12 @@ class Arbiter:
             return _ok()
         return _reject(ErrorCode.OFFLINE)
 
-    def _accept_live(self, command: VelocityEnvelope | SimpleEnvelope, now: float) -> CommandResult:
+    def _accept_live(
+        self,
+        command: VelocityEnvelope | SimpleEnvelope,
+        now: float,
+        received_at: float | None,
+    ) -> CommandResult:
         kind = command.type
         if kind == "control.acquire":
             self._refresh(command, now)
@@ -169,17 +187,7 @@ class Arbiter:
             self._hold_manual_stop()
             return _ok()
         if kind == "drive.velocity":
-            if self._estop:
-                return _reject(ErrorCode.SAFETY_REJECTED)
-            if not isinstance(command, VelocityEnvelope):
-                return _reject(ErrorCode.VALIDATION)
-            self._refresh(command, now)
-            self._manual = True
-            self._navigation = False
-            self._recovery = False
-            self._velocity = Velocity(command.payload.vx, command.payload.wz)
-            self._deadline = now + self._command_ttl_seconds
-            return _ok()
+            return self._accept_velocity(command, now, received_at)
         if kind in _SAFETY:
             self._refresh(command, now)
             return self._apply_safety(kind)
@@ -197,6 +205,31 @@ class Arbiter:
             self._navigation = False
             return _ok()
         return _reject(ErrorCode.VALIDATION)
+
+    def _accept_velocity(
+        self,
+        command: VelocityEnvelope | SimpleEnvelope,
+        now: float,
+        received_at: float | None,
+    ) -> CommandResult:
+        if self._estop:
+            return _reject(ErrorCode.SAFETY_REJECTED)
+        if not isinstance(command, VelocityEnvelope):
+            return _reject(ErrorCode.VALIDATION)
+        received = now if received_at is None else received_at
+        if not math.isfinite(received):
+            return _reject(ErrorCode.VALIDATION)
+        deadline = received + self._command_ttl_seconds
+        # A command that already used up its TTL while queued does not start another window.
+        if now > deadline:
+            return _reject(ErrorCode.TIMEOUT)
+        self._refresh(command, now)
+        self._manual = True
+        self._navigation = False
+        self._recovery = False
+        self._velocity = Velocity(command.payload.vx, command.payload.wz)
+        self._deadline = deadline
+        return _ok()
 
     def _accept_safety(
         self,

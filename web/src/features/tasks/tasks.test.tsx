@@ -54,6 +54,49 @@ describe("task schedules", () => {
     expect(saved[1]?.timezone).toBe("Asia/Shanghai");
   });
 
+  it("submits a waypoint and edits each task with its own revision", async () => {
+    const robotLink = link();
+    const listed = {
+      ...snapshot,
+      tasks: [
+        { task_id: "daily", revision: 4, enabled: true },
+        { task_id: "night", revision: 9, enabled: false },
+      ],
+    };
+    render(<TaskList snapshot={listed} link={robotLink} />);
+    fireEvent.change(screen.getByLabelText("任务编号"), { target: { value: "evening" } });
+    fireEvent.change(screen.getByLabelText("航点编号"), { target: { value: "gate" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("已确认保存"));
+    const created = vi.mocked(robotLink.request).mock.calls[0]?.[1] as {
+      body: { waypoint_ids: string[] };
+    };
+    expect(created.body.waypoint_ids).toEqual(["gate"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "启用" }));
+    await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(3));
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]!);
+    await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(4));
+    const calls = vi.mocked(robotLink.request).mock.calls;
+    expect(calls[1]?.[0]).toBe("task.enable");
+    expect(calls[1]?.[1]).toMatchObject({
+      expected_revision: 4,
+      body: { task_id: "daily", enabled: false },
+    });
+    expect(calls[2]?.[1]).toMatchObject({
+      expected_revision: 9,
+      body: { task_id: "night", enabled: true },
+    });
+    expect(calls[3]?.[0]).toBe("task.delete");
+    expect(calls[3]?.[1]).toMatchObject({
+      expected_revision: 9,
+      body: { task_id: "night" },
+    });
+  });
+
   it("test_offline_edits_disabled", async () => {
     const stale = { ...snapshot, connected: false, stale: true };
     const robotLink = link();

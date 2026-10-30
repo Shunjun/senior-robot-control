@@ -35,6 +35,7 @@ class MotionSample:
     slip: bool
     jump: bool
     alignment_rotation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    horizontal_std_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class HeadingObserver:
     def observe(self, sample: MotionSample) -> HeadingObservation | None:
         if not _motion_window(sample, self._min_baseline_m):
             return None
-        if not sample.gnss_trusted:
+        if not sample.gnss_trusted or not _heading_precise(sample):
             return HeadingObservation(0.0, "gnss", False)
         psi = quaternion_yaw(sample.alignment_rotation)
         enu_course = math.atan2(sample.enu_north_m, sample.enu_east_m)
@@ -80,6 +81,17 @@ class HeadingObserver:
             return None
         residual = yaw_error if abs(yaw_error) >= abs(frame_error) else frame_error
         return HeadingObservation(residual, "unknown", False)
+
+
+def _heading_precise(sample: MotionSample) -> bool:
+    """A position sigma that can swing the course past the agreement window is not a heading."""
+    std = sample.horizontal_std_m
+    if std is None:
+        return True
+    baseline = math.hypot(sample.enu_east_m, sample.enu_north_m)
+    if not math.isfinite(std) or std <= 0.0 or baseline <= 0.0:
+        return False
+    return math.atan(std / baseline) <= _AGREE_RAD
 
 
 def _motion_window(sample: MotionSample, min_baseline_m: float) -> bool:

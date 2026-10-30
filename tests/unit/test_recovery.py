@@ -64,6 +64,10 @@ def observation(
     hit: float = 0.6,
     nan_rear: bool = False,
     no_return: bool = False,
+    stamp: float = 10.0,
+    interpolate: bool = True,
+    max_angular_gap: float | None = None,
+    transform_stamp: float = 10.0,
 ):
     steps = 180
     increment = 2 * math.pi / steps
@@ -89,14 +93,14 @@ def observation(
         increment,
         0.05,
         8.0,
-        10.0,
+        stamp,
         "sim",
         Pose2D(0.0, 0.0, 0.0),
-        10.0,
+        transform_stamp,
         "base_link",
         10.0,
-        True,
-        increment,
+        interpolate,
+        increment if max_angular_gap is None else max_angular_gap,
         no_return,
         False,
     )
@@ -136,6 +140,11 @@ def estimate(**overrides: object) -> MotionEstimate:
         "covariance": (0.01, 0.01, 0.01),
         "quality": 0.9,
         "dt": 0.05,
+        "source": "scan_match",
+        "stamp": 10.0,
+        "degenerate": False,
+        "aligned": True,
+        "max_covariance": 1.0,
     }
     values.update(overrides)
     return MotionEstimate(**values)  # type: ignore[arg-type]
@@ -147,11 +156,22 @@ class FixtureMap:
     def __init__(self, evidence: MapCorridorEvidence | None) -> None:
         self.evidence = evidence
         self.queries: list[tuple[MapRef, Pose2D, float, float]] = []
+        self.measured: list[Velocity] = []
 
     def corridor(
-        self, map_ref: MapRef, pose: Pose2D, distance: float, now: float
+        self,
+        map_ref: MapRef,
+        pose: Pose2D,
+        distance: float,
+        now: float,
+        *,
+        measured: Velocity | None = None,
+        sweep: tuple[object, ...] = (),
     ) -> MapCorridorEvidence | None:
+        del sweep
         self.queries.append((map_ref, pose, distance, now))
+        if measured is not None:
+            self.measured.append(measured)
         return self.evidence
 
 
@@ -215,6 +235,52 @@ def test_front_blocked_selects_safe_reverse():
     assert not decision.finished
     assert not decision.cancelled
     assert gate.allowed
+    assert maps.queries == []
+
+
+def test_map_reverse_queries_measured_speed_not_only_the_speed_cap():
+    """The map is asked for the sweep the live gate refused, including measured motion."""
+    measured = Velocity(-1.0, 0.5)
+    maps = FixtureMap(corridor())
+    machine = controller(
+        maps, speed=0.08, single_distance=2.0, cumulative_distance=2.0
+    )
+    sample = context(
+        candidates=(Velocity(0.8, 0.0),),
+        measured=measured,
+        observations=scan_pair(nan_rear=True),
+    )
+    decision = machine.step(sample, NOW)
+    assert maps.queries
+    queried = maps.queries[0]
+    cap = stopping_distance(0.08, 0.2, 1.0)
+    measured_travel = stopping_distance(1.0, 0.2, 1.0)
+    distance = queried[2]
+    assert distance == pytest.approx(measured_travel)
+    assert distance > cap
+    assert maps.measured[0] == measured
+    assert decision.reason == "map_assisted_reverse"
+
+
+@pytest.mark.parametrize("kind", ["stale", "not_interpolated", "angular_gap", "transform_expired"])
+def test_unusable_scan_does_not_approve_map_reverse(kind: str):
+    maps = FixtureMap(corridor())
+    machine = controller(maps, speed=0.08, single_distance=0.3, cumulative_distance=0.5)
+    kwargs: dict[str, object] = {"nan_rear": True}
+    if kind == "stale":
+        kwargs["stamp"] = NOW - 2.0
+    elif kind == "not_interpolated":
+        kwargs["interpolate"] = False
+    elif kind == "angular_gap":
+        kwargs["max_angular_gap"] = 1e-6
+    elif kind == "transform_expired":
+        kwargs["transform_stamp"] = 8.0
+    decision = machine.step(
+        context(candidates=(Velocity(0.8, 0.0),), observations=scan_pair(**kwargs)),
+        NOW,
+    )
+    assert decision.velocity == Velocity(0.0, 0.0)
+    assert decision.reason != "map_assisted_reverse"
     assert maps.queries == []
 
 
@@ -376,7 +442,7 @@ def test_no_return_ray_is_not_free_space():
         Velocity(-0.15, 0.0), sample.measured, list(sample.observations), limits(), NOW
     )
     decision = machine.step(sample, NOW)
-    assert sensor.allowed
+    assert sensor.allowed is False
     assert decision.velocity == Velocity(0.0, 0.0)
     assert decision.reason == "blind_zone_blocked"
     assert decision.finished

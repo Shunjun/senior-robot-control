@@ -201,6 +201,36 @@ def test_no_fix_status_is_rejected_and_ordinary_status_is_not_rtk() -> None:
         assert ordinary.pose.yaw is None
 
 
+def test_zero_gnss_std_is_not_a_fix_or_a_seed() -> None:
+    geo = alignment(referenced())
+    estimate = geo.to_map(satellite(horizontal_std_m=0.0, vertical_std_m=0.4))
+    assert estimate.accepted is False
+    machine = relocator(referenced(), object(), aligned=geo)
+    seeded = machine._gps_seed(PoseHint(None, "gps", satellite(horizontal_std_m=0.0)))
+    assert seeded is None
+
+
+def test_cap_horizontal_std_is_not_a_ready_heading() -> None:
+    observer = HeadingObserver(min_baseline_m=5.0, max_correction_rad=0.35)
+    psi = math.pi / 2
+    distance = 5.0
+    biased = straight(
+        map_yaw=psi - 0.2,
+        map_dx=math.cos(psi) * distance,
+        map_dy=math.sin(psi) * distance,
+        enu_east_m=distance,
+        enu_north_m=0.0,
+        odom_forward_m=distance,
+        alignment_rotation=YAW_90,
+        horizontal_std_m=3.0,
+    )
+    observation = observer.observe(biased)
+    assert observation is None or observation.ready is False
+    zero = replace(biased, horizontal_std_m=0.0)
+    zero_observation = observer.observe(zero)
+    assert zero_observation is None or zero_observation.ready is False
+
+
 def test_rotated_map_compares_heading_in_one_frame() -> None:
     observer = HeadingObserver(min_baseline_m=5.0, max_correction_rad=0.35)
     psi = math.pi / 2

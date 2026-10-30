@@ -7,6 +7,7 @@ not report that the side effect was rolled back.
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import Protocol
 
 from senior_control.storage.database import Database
@@ -27,6 +28,8 @@ class ProcessCrash(BaseException):
 class NavigationPort(Protocol):
     async def start(self, execution_id: str, task: TaskDefinition) -> None: ...
 
+    async def cancel(self, execution_id: str) -> None: ...
+
 
 class TaskExecutor:
     def __init__(
@@ -36,6 +39,7 @@ class TaskExecutor:
         navigation: NavigationPort | None,
         *,
         fault_after: str | None = None,
+        link_up: Callable[[], bool] | None = None,
     ) -> None:
         if store._database is not database:
             raise ValueError("executor store must use the given database")
@@ -43,6 +47,7 @@ class TaskExecutor:
         self._store = store
         self._navigation = navigation
         self._fault_after = fault_after
+        self._link_up = link_up if link_up is not None else (lambda: True)
 
     async def persist_and_dispatch(
         self, intent: TaskIntent, task: TaskDefinition
@@ -53,7 +58,7 @@ class TaskExecutor:
             raise ValueError("dispatch task does not match the intent")
         record = await self._store.claim(task, intent.occurrence_utc)
         self._crash_if("committed")
-        if self._navigation is None:
+        if self._navigation is None or not self._link_up():
             return await self._store.mark_needs_review(record.execution_id)
         try:
             await self._navigation.start(record.execution_id, task)
@@ -74,6 +79,8 @@ class TaskExecutor:
         if intent.action is IntentAction.PAUSE:
             if intent.execution_id is None:
                 raise ValueError("pause requires an execution id")
+            if self._navigation is not None:
+                await self._navigation.cancel(intent.execution_id)
             return await self._store.pause(intent.execution_id)
         if intent.action is IntentAction.SKIP and intent.reason == "clock_jump":
             if intent.skip_from is None or intent.skip_until is None:

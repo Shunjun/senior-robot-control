@@ -230,6 +230,9 @@ class MapOperations:
                 return await self.query(operation_id)
             self._crash_if("accepted")
             baseline = self.store.map_ref
+            previous: SlamSnapshot | None = None
+            history: Path | None = None
+            graph_switched = False
             try:
                 async with self._map_lock:
                     baseline = self.store.map_ref
@@ -244,10 +247,12 @@ class MapOperations:
                     await self._phase(operation_id, "running", OperationStatus.RUNNING)
                     try:
                         await self._archive.read_pose_graph(staging / "pose_graph")
+                        graph_switched = True
                         if self._loader is not None:
                             await self._loader.load(staging / "pose_graph", manifest.last_pose_hint)
                     except Exception:
                         await self._restore_saved(previous, history)
+                        graph_switched = False
                         await self._finish(
                             operation_id,
                             OperationStatus.FAILED,
@@ -261,9 +266,13 @@ class MapOperations:
                     await self._finish_import(operation_id, robot_id, manifest)
                 return OperationResult(operation_id, OperationStatus.SUCCEEDED)
             except asyncio.CancelledError:
+                if graph_switched and previous is not None and history is not None:
+                    await self._rollback_history(previous, history)
                 await self._needs_review(operation_id)
                 raise
             except Exception:
+                if graph_switched and previous is not None and history is not None:
+                    await self._rollback_history(previous, history)
                 await self._close_open(operation_id, baseline)
                 raise
 
@@ -279,6 +288,9 @@ class MapOperations:
             return await self.query(operation_id)
         self._crash_if("accepted")
         baseline = self.store.map_ref
+        previous: SlamSnapshot | None = None
+        history: Path | None = None
+        graph_switched = False
         try:
             async with self._map_lock:
                 baseline = self.store.map_ref
@@ -300,6 +312,7 @@ class MapOperations:
                 await self._phase(operation_id, "history_durable", None)
                 await self._phase(operation_id, "running", OperationStatus.RUNNING)
                 await self._archive.reset_pose_graph()
+                graph_switched = True
                 owner = previous.odom_owner
                 cell_size = previous.cell_size_m
                 cleared = MapRef(f"unmapped-{uuid.uuid4().hex}", 0)
@@ -316,9 +329,13 @@ class MapOperations:
                 )
             return OperationResult(operation_id, OperationStatus.SUCCEEDED)
         except asyncio.CancelledError:
+            if graph_switched and previous is not None and history is not None:
+                await self._rollback_history(previous, history)
             await self._needs_review(operation_id)
             raise
         except Exception:
+            if graph_switched and previous is not None and history is not None:
+                await self._rollback_history(previous, history)
             await self._close_open(operation_id, baseline)
             raise
 
@@ -684,6 +701,11 @@ class MapOperations:
             _copy_tree(pose_graph, stage / "pose_graph")
         snapshot.write(stage)
         durable_move_tree(stage, self.map_root / "active")
+
+    async def _rollback_history(self, snapshot: SlamSnapshot, history: Path) -> None:
+        """Put the pre-switch occupancy and pose graph back into the running session."""
+        self.store.replace(snapshot)
+        await self._restore_saved(snapshot, history)
 
     async def _restore_saved(self, snapshot: SlamSnapshot, history: Path) -> None:
         await self._archive.read_pose_graph(history / "pose_graph")

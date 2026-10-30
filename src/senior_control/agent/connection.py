@@ -57,11 +57,16 @@ class HeartbeatLedger:
         seen = self._seen.get(robot_id)
         return seen is not None and self._clock.monotonic() - seen <= self._window
 
+    def forget(self, robot_id: str) -> None:
+        self._seen.pop(robot_id, None)
+
 
 class MotionPort(Protocol):
     """The only way the agent reaches motion: through the ROS-side adapter."""
 
-    async def drive(self, envelope: VelocityEnvelope) -> None: ...
+    async def drive(
+        self, envelope: VelocityEnvelope, *, received_at: float | None = None
+    ) -> None: ...
 
     async def stop(self, envelope: SimpleEnvelope) -> None: ...
 
@@ -90,8 +95,13 @@ class IpcMotion:
             raise IpcError(f"ros side refused {kind}")
         return reply
 
-    async def drive(self, envelope: VelocityEnvelope) -> None:
-        await self._ok("drive", envelope=serialize_envelope(envelope).decode())
+    async def drive(
+        self, envelope: VelocityEnvelope, *, received_at: float | None = None
+    ) -> None:
+        fields: dict[str, Any] = {"envelope": serialize_envelope(envelope).decode()}
+        if received_at is not None:
+            fields["received_at"] = received_at
+        await self._ok("drive", **fields)
 
     async def stop(self, envelope: SimpleEnvelope) -> None:
         await self._ok("stop", envelope=serialize_envelope(envelope).decode())

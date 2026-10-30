@@ -66,6 +66,23 @@ async def test_schema_version_two_adds_waypoint_table(tmp_path: Path) -> None:
         ]
 
 
+async def test_home_revision_conflict_keeps_the_old_pose(tmp_path: Path) -> None:
+    async with Database(tmp_path / "revision.db") as database:
+        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        await service.prepare()
+        assert await service.home_revision() == 0
+        await service.set_current(localized(Pose2D(1.0, 2.0, 0.0)), expected_revision=0)
+        assert await service.home_revision() == 1
+        await service.set_current(localized(Pose2D(3.0, 4.0, 0.1)), expected_revision=1)
+        with pytest.raises(DomainError) as caught:
+            await service.set_current(localized(Pose2D(9.0, 9.0, 0.2)), expected_revision=0)
+        assert caught.value.code is ErrorCode.CONFLICT
+        stored = await service._store.home()
+        assert stored is not None
+        assert stored.waypoint.pose == Pose2D(3.0, 4.0, 0.1)
+        assert await service.home_revision() == 2
+
+
 async def test_one_home_per_robot(tmp_path: Path) -> None:
     async with Database(tmp_path / "one.db") as database:
         left = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)

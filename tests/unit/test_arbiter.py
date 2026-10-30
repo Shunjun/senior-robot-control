@@ -191,6 +191,51 @@ def test_newer_command_uses_accept_time_deadline():
     assert arbiter.tick(10.75 + 1e-9) == Velocity(0.0, 0.0)
 
 
+def test_dead_lease_same_generation_can_be_acquired_again():
+    """A lost lease does not require a new vehicle epoch before the same generation drives."""
+    arbiter = gate(disconnect_seconds=1.0, command_ttl_seconds=0.3)
+    assert arbiter.accept(command("control.acquire", seq=1, epoch=3), 0.0).accepted
+    assert arbiter.accept(command("drive.velocity", seq=2, epoch=3, vx=0.2), 0.0).accepted
+    assert arbiter.tick(1.0 + 1e-9) == Velocity(0.0, 0.0)
+    same = arbiter.accept(command("control.acquire", seq=3, epoch=3), 1.2)
+    assert same.accepted
+    assert arbiter.tick(2.2 + 1e-9) == Velocity(0.0, 0.0)
+    other = arbiter.accept(
+        command("control.acquire", seq=1, epoch=3, session="session-2"),
+        2.3,
+    )
+    assert other.accepted
+    assert arbiter.accept(
+        command("drive.velocity", seq=2, epoch=3, session="session-2", vx=0.15),
+        2.3,
+    ).accepted
+    assert arbiter.tick(2.3) == Velocity(0.15, 0.0)
+    older = arbiter.accept(command("control.acquire", seq=1, epoch=2, session="session-3"), 2.4)
+    assert older.accepted is False
+
+
+def test_queued_velocity_does_not_receive_a_fresh_command_ttl():
+    """A velocity that already waited past the command TTL must not start a new window."""
+    arbiter = gate(disconnect_seconds=5.0, command_ttl_seconds=0.3)
+    assert arbiter.accept(command("control.acquire", seq=1), 10.0).accepted
+    late = arbiter.accept(
+        command("drive.velocity", seq=2, vx=0.4),
+        10.5,
+        received_at=10.0,
+    )
+    assert late.accepted is False
+    assert arbiter.tick(10.5) == Velocity(0.0, 0.0)
+    assert arbiter.tick(10.8) == Velocity(0.0, 0.0)
+    fresh = arbiter.accept(
+        command("drive.velocity", seq=3, vx=0.2),
+        11.0,
+        received_at=10.9,
+    )
+    assert fresh.accepted
+    assert arbiter.tick(11.15) == Velocity(0.2, 0.0)
+    assert arbiter.tick(11.2 + 1e-9) == Velocity(0.0, 0.0)
+
+
 def test_wrong_robot_session_and_sequence_rejected():
     """Breaks if a bad owner or a non-increasing sequence replaces the live command."""
     arbiter = gate(disconnect_seconds=5.0, command_ttl_seconds=5.0)

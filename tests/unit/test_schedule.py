@@ -447,6 +447,84 @@ def test_one_tick_dispatches_at_most_one_navigation() -> None:
     )
 
 
+def test_claimed_winner_keeps_the_same_timestamp_loser_from_dispatch() -> None:
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    alpha = interval_task(created, task_id="alpha")
+    beta = interval_task(created, task_id="beta")
+    due = created + timedelta(minutes=30)
+    winner = ExecutionRecord(
+        "exec-alpha",
+        "alpha",
+        due,
+        ExecutionStatus.NEEDS_REVIEW,
+        False,
+        False,
+    )
+    intents = TaskRunner([alpha, beta], (winner,)).tick(
+        due,
+        1800.0,
+        context(active_map=alpha.map_ref, last_tick_utc=created, last_tick_mono=0.0),
+    )
+    assert [item for item in intents if item.action is IntentAction.DISPATCH] == []
+    assert any(
+        item.task_id == "beta" and item.action is IntentAction.SKIP and item.occurrence_utc == due
+        for item in intents
+    )
+    later = due + timedelta(minutes=30)
+    again = TaskRunner([alpha, beta], (winner,)).tick(
+        later,
+        3600.0,
+        context(active_map=alpha.map_ref, last_tick_utc=due, last_tick_mono=1800.0),
+    )
+    assert any(
+        item.action is IntentAction.DISPATCH and item.occurrence_utc == later for item in again
+    )
+
+
+def test_impossible_cron_does_not_drop_other_pauses() -> None:
+    import time
+
+    created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
+    patrol = interval_task(created)
+    bad = TaskDefinition(
+        "never",
+        "robot-a",
+        MAP,
+        ("gate",),
+        Schedule.cron("0 0 31 2 *"),
+        "Asia/Shanghai",
+        True,
+        1,
+        created,
+    )
+    active = ExecutionRecord(
+        "exec-patrol",
+        patrol.task_id,
+        created,
+        ExecutionStatus.RUNNING,
+        True,
+        False,
+    )
+    started = time.monotonic()
+    intents = TaskRunner([patrol, bad], (active,)).tick(
+        created + timedelta(minutes=1),
+        60.0,
+        context(
+            connected=False,
+            active_map=patrol.map_ref,
+            last_tick_utc=created,
+            last_tick_mono=0.0,
+        ),
+    )
+    assert time.monotonic() - started < 0.2
+    assert any(
+        item.task_id == patrol.task_id
+        and item.action is IntentAction.PAUSE
+        and item.reason == "offline"
+        for item in intents
+    )
+
+
 def test_monotonic_lead_does_not_reopen_scanned_time() -> None:
     created = datetime(2026, 1, 1, tzinfo=timezone.utc)
     task = interval_task(created, every_seconds=10)

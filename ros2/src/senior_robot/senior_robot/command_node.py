@@ -56,8 +56,8 @@ class CommandNode(Node):
         steady = RosClock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(period, self.publish_command, clock=steady)
 
-    def submit(self, envelope: Envelope) -> CommandResult:
-        result = self._arbiter.accept(envelope, self._clock.monotonic())
+    def submit(self, envelope: Envelope, received_at: float | None = None) -> CommandResult:
+        result = self._arbiter.accept(envelope, self._clock.monotonic(), received_at=received_at)
         self.publish_command()
         return result
 

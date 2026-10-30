@@ -47,6 +47,8 @@ function navigationBlocks(snapshot: RobotSnapshot | null): string[] {
     reasons.push("Home 未设置，不能开始导航。");
   } else if (snapshot.map_ref === null || !sameRef(snapshot.home.map_ref, snapshot.map_ref)) {
     reasons.push("Home 不属于当前地图，不能开始导航。");
+  } else if (snapshot.home.status === "pending_confirmation") {
+    reasons.push("跨车 Home 尚未确认，不能开始导航。");
   }
   if (!snapshot.localized) reasons.push("导航需要先完成定位。");
   return reasons;

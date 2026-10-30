@@ -85,6 +85,7 @@ export const SNAPSHOT_FIELDS = [
   "collected_at",
   "stale",
   "last_synced_at",
+  "tasks",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -136,6 +137,12 @@ export interface HomeSummary {
  * SnapshotPayload: the robot's own view of itself. On the control socket the cloud always adds
  * `stale` and `last_synced_at` from its cache; the console never substitutes its own clock.
  */
+export interface TaskSummary {
+  task_id: string;
+  revision: number;
+  enabled: boolean;
+}
+
 export interface SnapshotPayload {
   connected: boolean;
   localized: boolean;
@@ -147,6 +154,8 @@ export interface SnapshotPayload {
   collected_at: number;
   stale: boolean;
   last_synced_at: number;
+  /** Missing on older frames. The parser fills an empty list. */
+  tasks?: TaskSummary[];
 }
 
 export interface ResponsePayload {
@@ -250,6 +259,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   ) {
     return null;
   }
+  const tasks = parseTasks(value["tasks"]);
+  if (tasks === null) return null;
   return {
     connected: value["connected"],
     localized: value["localized"],
@@ -261,7 +272,20 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     collected_at: value["collected_at"],
     stale: value["stale"],
     last_synced_at: value["last_synced_at"],
+    tasks,
   };
+}
+
+function parseTasks(value: unknown): TaskSummary[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const tasks: TaskSummary[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || !isText(item["task_id"], 128) || !isCount(item["revision"])) return null;
+    if (typeof item["enabled"] !== "boolean") return null;
+    tasks.push({ task_id: item["task_id"], revision: item["revision"], enabled: item["enabled"] });
+  }
+  return tasks;
 }
 
 function parseResponsePayload(value: unknown): ResponsePayload | null {

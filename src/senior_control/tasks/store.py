@@ -198,6 +198,10 @@ class TaskStore:
                     current = await self._task_in(connection, task.task_id)
                     if current is None:
                         raise DomainError(ErrorCode.CONFLICT, "task does not exist")
+                    if not current.enabled:
+                        raise DomainError(ErrorCode.CONFLICT, "task is disabled")
+                    if await self._deleted(connection, task.task_id):
+                        raise DomainError(ErrorCode.CONFLICT, "task is deleted")
                     if await self._invalidated(connection, task.task_id):
                         raise DomainError(ErrorCode.CONFLICT, "map link invalidated")
                     if await self._in_flight(connection):
@@ -475,6 +479,17 @@ class TaskStore:
             ),
         ) as cursor:
             row = await cursor.fetchone()
+        return row is not None
+
+    async def _deleted(self, connection: aiosqlite.Connection, task_id: str) -> bool:
+        try:
+            async with connection.execute(
+                "SELECT 1 FROM agent_deleted_task WHERE task_id = ? AND robot_id = ?",
+                (task_id, self._robot_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        except sqlite3.OperationalError:
+            return False
         return row is not None
 
     async def _invalidated(self, connection: aiosqlite.Connection, task_id: str) -> bool:

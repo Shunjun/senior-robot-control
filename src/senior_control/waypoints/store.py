@@ -1,6 +1,7 @@
 """Waypoint rows. Version 2 of the domain schema lives with this table."""
 
 import math
+import sqlite3
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -162,6 +163,7 @@ class WaypointStore:
         adopted: bool,
         latitude: float | None,
         longitude: float | None,
+        expected_revision: int | None = None,
     ) -> Waypoint:
         return await self._save(
             waypoint_id=waypoint_id,
@@ -175,6 +177,7 @@ class WaypointStore:
             adopted=adopted,
             latitude=latitude,
             longitude=longitude,
+            expected_revision=expected_revision,
         )
 
     async def save_waypoint(
@@ -242,9 +245,12 @@ class WaypointStore:
         adopted: bool | None,
         latitude: float | None,
         longitude: float | None,
+        expected_revision: int | None = None,
     ) -> Waypoint:
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                if kind == "home":
+                    await self._bump_home_revision(connection, expected_revision)
                 target = await self._target_id(connection, kind, waypoint_id)
                 await _write_waypoint(
                     connection,
@@ -298,6 +304,49 @@ class WaypointStore:
             status,
             latitude,
             longitude,
+        )
+
+    async def home_revision(self) -> int:
+        async with self._database.write_lock:
+            connection = self._database.connection
+            try:
+                async with connection.execute(
+                    "SELECT revision FROM home_edit WHERE robot_id = ?",
+                    (self._robot_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+            except sqlite3.OperationalError:
+                return 0
+        if row is None:
+            return 0
+        return int(row[0])
+
+    async def _bump_home_revision(
+        self, connection: aiosqlite.Connection, expected_revision: int | None
+    ) -> None:
+        await connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS home_edit (
+                robot_id TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL
+            )
+            """
+        )
+        async with connection.execute(
+            "SELECT revision FROM home_edit WHERE robot_id = ?",
+            (self._robot_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        current = 0 if row is None else int(row[0])
+        if expected_revision is not None and expected_revision != current:
+            raise DomainError(ErrorCode.CONFLICT, "home revision conflict")
+        await connection.execute(
+            """
+            INSERT INTO home_edit (robot_id, revision)
+            VALUES (?, ?)
+            ON CONFLICT(robot_id) DO UPDATE SET revision = excluded.revision
+            """,
+            (self._robot_id, current + 1),
         )
 
     async def _target_id(

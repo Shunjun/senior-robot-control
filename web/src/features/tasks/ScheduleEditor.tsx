@@ -10,6 +10,7 @@ export interface TaskDraft {
   task_id: string;
   timezone: string;
   schedule: TaskSchedule;
+  waypoint_id: string;
 }
 
 export function ScheduleEditor({ value, onSave }: {
@@ -25,6 +26,7 @@ export function ScheduleEditor({ value, onSave }: {
   const [cron, setCron] = useState(
     value?.schedule.kind === "cron" ? value.schedule.expression : "0 9 * * 1",
   );
+  const [waypointId, setWaypointId] = useState(value?.waypoint_id ?? "");
 
   useEffect(() => {
     if (value === null) return;
@@ -33,6 +35,7 @@ export function ScheduleEditor({ value, onSave }: {
     setKind(value.schedule.kind);
     if (value.schedule.kind === "interval") setIntervalValue(String(value.schedule.every_seconds));
     else setCron(value.schedule.expression);
+    setWaypointId(value.waypoint_id);
   }, [value]);
 
   function save(): void {
@@ -40,7 +43,12 @@ export function ScheduleEditor({ value, onSave }: {
       kind === "interval"
         ? { kind, every_seconds: Math.max(1, Number.parseInt(interval, 10) || 1) }
         : { kind, expression: cron.trim() };
-    onSave({ task_id: taskId.trim(), timezone: timezone.trim() || "Asia/Shanghai", schedule });
+    onSave({
+      task_id: taskId.trim(),
+      timezone: timezone.trim() || "Asia/Shanghai",
+      schedule,
+      waypoint_id: waypointId.trim(),
+    });
   }
 
   return (
@@ -48,6 +56,10 @@ export function ScheduleEditor({ value, onSave }: {
       <label>
         任务编号
         <input aria-label="任务编号" value={taskId} onChange={(event) => setTaskId(event.target.value)} />
+      </label>
+      <label>
+        航点编号
+        <input aria-label="航点编号" value={waypointId} onChange={(event) => setWaypointId(event.target.value)} />
       </label>
       <label>
         时区

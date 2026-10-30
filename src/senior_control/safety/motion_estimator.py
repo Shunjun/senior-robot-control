@@ -50,6 +50,11 @@ class MotionEstimate:
     covariance: tuple[float, float, float]
     quality: float
     dt: float = 0.0
+    source: str = ""
+    stamp: float = float("nan")
+    degenerate: bool = True
+    aligned: bool = False
+    max_covariance: float | None = None
 
 
 def _unusable() -> MotionEstimate:
@@ -161,12 +166,48 @@ class MotionEstimator:
             scan_motion.covariance,
             scan_motion.quality,
             scan_motion.dt,
+            source=scan_motion.source,
+            stamp=scan_motion.stamp,
+            degenerate=False,
+            aligned=True,
+            max_covariance=self.max_covariance,
         )
 
 
-def supports_degraded_reverse(estimate: MotionEstimate) -> bool:
-    """Motion-quality precondition only. Map eligibility belongs to a later task."""
-    return estimate.quality > 0.0 and all(math.isfinite(value) for value in estimate.covariance)
+def supports_degraded_reverse(
+    estimate: MotionEstimate, *, now: float | None = None, max_age: float | None = None
+) -> bool:
+    """Independent scan match only. Wheel-wrapped numbers do not qualify a reverse."""
+    cap = estimate.max_covariance
+    if (
+        estimate.source != _INDEPENDENT_SOURCE
+        or estimate.degenerate
+        or not estimate.aligned
+        or estimate.quality <= 0.0
+        or not math.isfinite(estimate.quality)
+        or estimate.dt <= 0.0
+        or not math.isfinite(estimate.dt)
+        or cap is None
+        or not math.isfinite(cap)
+        or cap < 0.0
+        or not math.isfinite(estimate.stamp)
+        or any(
+            not math.isfinite(value) or value < 0.0 or value > cap for value in estimate.covariance
+        )
+    ):
+        return False
+    if now is None and max_age is None:
+        return True
+    if (
+        now is None
+        or max_age is None
+        or not math.isfinite(now)
+        or not math.isfinite(max_age)
+        or max_age < 0.0
+        or not 0.0 <= now - estimate.stamp <= max_age
+    ):
+        return False
+    return True
 
 
 def degraded_reverse_gate(estimate: MotionEstimate) -> SafetyDecision:

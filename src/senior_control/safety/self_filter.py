@@ -86,18 +86,20 @@ def filter_self(scan: ScanObservation, profile: DeviceProfile) -> FilteredObserv
     rays = []
     for i, distance in enumerate(scan.ranges):
         angle = scan.sensor_to_body.yaw + scan.angle_min + i * scan.angle_increment
-        clear = distance == float("inf") and scan.no_return_clear
-        valid = isfinite(distance) and scan.range_min <= distance <= scan.range_max
-        if not valid and not clear:
+        # A missing return is not free space, even when a caller asks to treat it as clear.
+        if scan.no_return_clear and distance == float("inf"):
             rays.append(RayEvidence(i, origin, None, "invalid"))
             continue
-        length = scan.range_max if clear else distance
-        endpoint = (origin[0] + length * cos(angle), origin[1] + length * sin(angle))
+        valid = isfinite(distance) and scan.range_min <= distance <= scan.range_max
+        if not valid:
+            rays.append(RayEvidence(i, origin, None, "invalid"))
+            continue
+        endpoint = (origin[0] + distance * cos(angle), origin[1] + distance * sin(angle))
         line = LineString((origin, endpoint))
         if any(mask.intersects(line) or mask.covers(Point(origin)) for mask in masks):
             rays.append(RayEvidence(i, origin, endpoint, "self"))
         else:
-            rays.append(RayEvidence(i, origin, endpoint, "clear" if clear else "hit"))
+            rays.append(RayEvidence(i, origin, endpoint, "hit"))
     evidence = tuple(rays)
     return FilteredObservation(
         scan,

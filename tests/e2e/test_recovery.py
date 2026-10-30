@@ -28,8 +28,11 @@ class AcceptanceMap:
         pose: Pose2D,
         distance: float,
         now: float,
+        *,
+        measured: Velocity | None = None,
+        sweep: tuple[object, ...] = (),
     ) -> MapCorridorEvidence:
-        del pose, distance, now
+        del pose, distance, now, measured, sweep
         return MapCorridorEvidence(map_ref, True, False, False, 0.1, False)
 
 
@@ -100,6 +103,11 @@ def test_rear_occlusion_requires_bounded_map_assisted_reverse(
             (0.01, 0.01, 0.01),
             0.9,
             0.05,
+            source="scan_match",
+            stamp=10.0,
+            degenerate=False,
+            aligned=True,
+            max_covariance=1.0,
         ),
         pose=Pose2D(1.0, 2.0, 0.0),
         map_ref=MAP,
