@@ -65,6 +65,8 @@ yolo export model=runs/senior-yolo/weights/best.pt format=onnx imgsz=640
 | `min_confidence` | 0.5 | 低于该置信度的检测不进掩码 |
 | `max_detection_age_s` | 0.3 | 检测与几何时间差上限，超过则语义视为不可用 |
 | `range_tolerance_m` | 0.5 | 框内与目标参考距离差在此范围内的列才标为动态 |
+| `max_object_speed_mps` | 2.0 | 检测框早于几何时，按“时间差 × 该速度”在角度和距离上外扩；外扩带内的列不确认为静态 |
+| `motion_threshold_m` | 0.2 | 相邻观测间（基线 0.15–0.6 s）距离变化超过该值的列标为 `unknown_dynamic`，检测器禁用时同样生效 |
 | `max_skew_s` | 0.03 | RGB 与深度帧时间差上限 |
 
 标定依据：在验证集上画 precision-recall 曲线，选择在 `person` 类召回率达标前提下误检最少的置信度。漏检比误检代价高，因为漏检的人会被当作静态物写入长期地图候选。

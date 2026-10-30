@@ -22,10 +22,10 @@ from senior_control.vision import (
     ImageFrame,
     InferenceWorker,
     RgbdSynchronizer,
+    Tracker,
     TrackingConfig,
     load_detector,
     project_depth,
-    track,
 )
 
 DEFAULT_RGB_TOPIC = "/camera/color/image_raw"
@@ -54,7 +54,7 @@ class PerceptionAdapter:
         self._calibration = calibration
         self._synchronizer = synchronizer
         self._geometry_config = geometry_config
-        self._tracking_config = tracking_config
+        self._tracker = Tracker(tracking_config)
         self._worker = worker
         self.published_topics: list[str] = []
 
@@ -71,14 +71,9 @@ class PerceptionAdapter:
         self._worker.submit(pair.rgb)
         batch = self._worker.latest()
         if batch is None:
-            mask = track([], geometry, config=self._tracking_config)
+            mask = self._tracker.update([], geometry)
         else:
-            mask = track(
-                batch.detections,
-                geometry,
-                config=self._tracking_config,
-                semantics_stamp=batch.stamp,
-            )
+            mask = self._tracker.update(batch.detections, geometry, semantics_stamp=batch.stamp)
         return PerceptionOutput(geometry, mask, self._worker.detector_status)
 
     def close(self) -> None:

@@ -243,6 +243,84 @@ def test_stale_low_confidence_and_other_labels_do_not_mask() -> None:
     assert not any(chair.dynamic)
 
 
+def test_person_who_moved_since_the_detection_is_not_confirmed_static() -> None:
+    # The detector saw the person in columns 3..5 at t=1.0. By t=1.2 (inside the 0.3 s age
+    # limit) they are in columns 4..6, so column 6 lies outside the original box.
+    def moved(u: int, v: int) -> float:
+        return 1500.0 if 4 <= u <= 6 else 3000.0
+
+    geometry = project_depth(aligned(depth(1.2, moved)), calibration(), CONFIG)
+    old_box = Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 1.0)
+    mask = track([old_box], geometry)
+
+    assert mask.semantics_available is True
+    for column in (4, 5, 6):
+        assert mask.kinds[column] != "static"
+        assert mask.dynamic[column]
+        assert mask.occluded[column]
+    # Wall columns beyond the range band stay static, near or far from the old box.
+    for column in (0, 1, 2, 3, 7, 8):
+        assert mask.kinds[column] == "static"
+        assert not mask.dynamic[column]
+
+    # A box that is not older than the geometry is not widened.
+    exact = track([Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 1.2)], geometry)
+    assert not exact.dynamic[6]
+    assert exact.kinds[6] == "static"
+
+
+def test_moving_column_is_dynamic_without_a_detector() -> None:
+    from senior_control.vision.tracking import Tracker
+
+    tracker = Tracker()
+    first = project_depth(aligned(depth(1.0)), calibration(), CONFIG)
+    start = tracker.update([], first)
+    assert start.semantics_available is False
+    assert start.motion_available is False  # no baseline yet: a miss, not a clean bill
+
+    def one_column_closer(u: int, v: int) -> float:
+        return 2000.0 if u == 6 else 3000.0
+
+    second = project_depth(aligned(depth(1.2, one_column_closer)), calibration(), CONFIG)
+    mask = tracker.update([], second)
+    assert mask.semantics_available is False
+    assert mask.motion_available is True
+    assert mask.dynamic[6]
+    assert mask.kinds[6] == "unknown_dynamic"
+    assert mask.occluded[6]
+    for column in (0, 1, 2, 3, 4, 5, 7, 8):
+        assert not mask.dynamic[column]
+        assert mask.kinds[column] == "unknown_static"
+
+
+def test_whole_scene_change_is_not_read_as_object_motion() -> None:
+    from senior_control.vision.tracking import Tracker
+
+    tracker = Tracker()
+    tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
+    closer = project_depth(aligned(depth(1.2, lambda u, v: 2000.0)), calibration(), CONFIG)
+    mask = tracker.update([], closer)
+    # The robot itself probably moved: nothing is marked and the mask says it cannot tell.
+    assert mask.motion_available is False
+    assert not any(mask.dynamic)
+    assert set(mask.kinds) == {"unknown_static"}
+
+
+def test_motion_needs_a_baseline_that_is_old_enough_and_not_too_old() -> None:
+    from senior_control.vision.tracking import Tracker
+
+    tracker = Tracker()
+    tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
+    near = project_depth(
+        aligned(depth(1.05, lambda u, v: 2000.0 if u == 6 else 3000.0)), calibration(), CONFIG
+    )
+    assert tracker.update([], near).motion_available is False  # 50 ms baseline is noise-level
+    stale = project_depth(
+        aligned(depth(9.0, lambda u, v: 2000.0 if u == 6 else 3000.0)), calibration(), CONFIG
+    )
+    assert tracker.update([], stale).motion_available is False  # the baseline expired
+
+
 class BlockingDetector:
     enabled = True
     reason = "ready"

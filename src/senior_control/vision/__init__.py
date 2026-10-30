@@ -27,7 +27,7 @@ from senior_control.vision.synchronizer import (
     RgbdSynchronizer,
     align,
 )
-from senior_control.vision.tracking import DynamicMask, TrackingConfig, track
+from senior_control.vision.tracking import DynamicMask, Tracker, TrackingConfig, track
 
 __all__ = [
     "AlignedRgbdFrame",
@@ -49,6 +49,7 @@ __all__ = [
     "ImageFrame",
     "InferenceWorker",
     "RgbdSynchronizer",
+    "Tracker",
     "TrackingConfig",
     "align",
     "load_detector",
