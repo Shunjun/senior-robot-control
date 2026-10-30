@@ -9,13 +9,14 @@ reported as occluded rather than free.
 Detections arrive later than the depth they are applied to. A box older than the
 geometry is widened by the elapsed time times ``max_object_speed_mps``, in angle
 and in range, so a target that walked out of the old box is not confirmed static.
+The object's range comes from the nearest return in that widened band, not from the
+old box center, which may show the background after a sideways shift.
 ``Tracker`` adds a geometric motion cue that works with the detector disabled: a
 column whose range changed between observations is dynamic. A column with no
 observed motion stays ``unknown_static``; motion that is missed stays missed.
 """
 
 import math
-import statistics
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -141,27 +142,28 @@ def _matching_columns(
     if not all(math.isfinite(value) for value in detection.box) or x1 < x0:
         return []
     in_box = [i for i, column in enumerate(geometry.columns) if x0 <= column <= x1]
-    inside = [i for i in in_box if geometry.status[i] == "hit"]
-    if not inside:
+    if not in_box:
         return []
-    # The object sits in the middle of its box; the box edges often show background.
-    quarter = (x1 - x0) / 4.0
-    center = [i for i in inside if x0 + quarter <= geometry.columns[i] <= x1 - quarter] or inside
-    reference = statistics.median(geometry.rays[i].range_m for i in center)
     # An older box can only be stale, never ahead of the geometry. The object may have
-    # moved up to speed * elapsed sideways (angle) or along the ray (range) since.
+    # moved up to speed * elapsed sideways or along the ray since the detection.
     reach = config.max_object_speed_mps * max(0.0, geometry.stamp - detection.stamp)
-    margin = math.atan2(reach, max(reference, 1e-3))
     angles = [geometry.rays[i].angle for i in in_box]
-    low, high = min(angles) - margin, max(angles) + margin
-    tolerance = config.range_tolerance_m + reach
-    return [
+    low, high = min(angles), max(angles)
+    # A column joins the band when its own sideways gap to the old box, in meters at the
+    # column's own range, is within reach. The band does not depend on any reference range.
+    band = [
         i
         for i, ray in enumerate(geometry.rays)
         if geometry.status[i] == "hit"
-        and low <= ray.angle <= high
-        and abs(ray.range_m - reference) <= tolerance
+        and ray.range_m * max(low - ray.angle, ray.angle - high, 0.0) <= reach
     ]
+    if not band:
+        return []
+    # The object is the nearest return in the band. The old box center is not used: after
+    # a sideways shift it often shows the background.
+    reference = min(geometry.rays[i].range_m for i in band)
+    tolerance = config.range_tolerance_m + reach
+    return [i for i in band if geometry.rays[i].range_m - reference <= tolerance]
 
 
 class Tracker:

@@ -269,6 +269,39 @@ def test_person_who_moved_since_the_detection_is_not_confirmed_static() -> None:
     assert exact.kinds[6] == "static"
 
 
+def test_person_shifted_past_the_old_box_center_is_not_confirmed_static() -> None:
+    # Old box covers columns 3..5; its center column 4 now shows the 3.0 m background.
+    # The person walked to columns 5..7 (1.5 m) within the 0.3 s age limit.
+    def shifted(u: int, v: int) -> float:
+        return 1500.0 if 5 <= u <= 7 else 3000.0
+
+    geometry = project_depth(aligned(depth(2.25, shifted)), calibration(), CONFIG)
+    old_box = Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 2.0)
+    # The person's leading edge moved 0.75 m in 0.25 s (3 m/s). A 3.2 m/s bound reaches it
+    # while its range tolerance (0.5 + 0.8 m) still stops short of the background 1.45 m behind.
+    fast = TrackingConfig(max_object_speed_mps=3.2)
+
+    mask = track([old_box], geometry, config=fast)
+    for column in (5, 6, 7):
+        assert mask.kinds[column] != "static", column
+        assert mask.dynamic[column], column
+    # The background that used to be the box center is not what the box marks.
+    for column in (3, 4):
+        assert mask.kinds[column] == "static", column
+        assert not mask.dynamic[column], column
+    # Outside the angle band the wall stays static whatever its range.
+    for column in (0, 1, 2, 8):
+        assert mask.kinds[column] == "static", column
+        assert not mask.dynamic[column], column
+
+    # At the default speed bound the person columns the bound can reach are still excluded.
+    default = track([old_box], geometry)
+    for column in (5, 6):
+        assert default.kinds[column] != "static", column
+    for column in (3, 4):
+        assert not default.dynamic[column], column
+
+
 def test_moving_column_is_dynamic_without_a_detector() -> None:
     from senior_control.vision.tracking import Tracker
 
