@@ -94,3 +94,48 @@ def test_serialization_rejects_mutated_and_constructed_nonfinite_payloads():
     envelope.payload = VelocityPayload.model_construct(vx=float("inf"), wz=0.0)
     with pytest.raises(ValueError):
         serialize_envelope(envelope)
+
+
+def video_message(kind="video.offer", payload=None, **changes):
+    return message(
+        type=kind,
+        payload={"sdp": "v=0\r\n"} if payload is None else payload,
+        **changes,
+    )
+
+
+def test_video_frames_validate_and_round_trip():
+    from senior_control.protocol import serialize_envelope, validate_frame
+
+    offer = validate_frame(video_message(), "r1")
+    assert offer.type == "video.offer" and offer.payload.sdp == "v=0\r\n"
+    assert validate_frame(serialize_envelope(offer), "r1") == offer
+    candidate = validate_frame(
+        video_message("video.candidate", {"candidate": "candidate:1 1 udp 1 10.0.0.1 9 typ host"}),
+        "r1",
+    )
+    assert candidate.payload.candidate.startswith("candidate:")
+    assert validate_frame(message(), "r1").payload.vx == 0.2  # commands still validate
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        video_message(payload={"sdp": ""}),
+        video_message(payload={"sdp": "x" * 17000}),
+        video_message(payload={"sdp": "v=0", "extra": 1}),
+        video_message("video.candidate", {"candidate": "not-a-candidate"}),
+        video_message("video.candidate", {"candidate": "candidate:" + "x" * 600}),
+        video_message(robot_id="other"),
+    ],
+)
+def test_reject_invalid_video_frames(raw):
+    from senior_control.protocol import validate_frame
+
+    with pytest.raises(ValueError):
+        validate_frame(raw, "r1")
+
+
+def test_commands_do_not_accept_video_types():
+    with pytest.raises(ValueError):
+        validate_envelope(video_message(), "r1")

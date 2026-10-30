@@ -590,3 +590,247 @@ async def test_aiortc_loopback_delivers_a_real_frame() -> None:
     finally:
         await session.close()
         await client.close()
+
+
+# ------------------------------------------------------------------- signaling on the wire
+#
+# Signaling rides the sockets the cloud already authenticated. The tests below drive the real
+# `Hub` with the frames a browser and the vehicle would send; no port, client or camera exists.
+
+
+def wire_frame(kind: str, payload: dict[str, object], **changes: object) -> bytes:
+    import json
+
+    data: dict[str, object] = {
+        "v": 1,
+        "type": kind,
+        "robot_id": "robot-a",
+        "session_id": "viewer-1",
+        "connection_epoch": 1,
+        "request_id": f"{kind}-1",
+        "seq": 1,
+        "expires_at": 9e9,
+        "payload": payload,
+    }
+    data.update(changes)
+    return json.dumps(data).encode()
+
+
+def offer_frame(**changes: object) -> bytes:
+    return wire_frame("video.offer", {"sdp": video_offer("VP8").sdp}, **changes)
+
+
+def candidate_frame(kind: str = "video.candidate", **changes: object) -> bytes:
+    return wire_frame(kind, {"candidate": "candidate:1 1 udp 1 10.0.0.1 9 typ host"}, **changes)
+
+
+def velocity_frame(vx: float = 0.2) -> bytes:
+    return wire_frame("drive.velocity", {"vx": vx, "wz": 0.0})
+
+
+def stop_frame() -> bytes:
+    return wire_frame("drive.stop", {})
+
+
+def drain_outbox(connection: object) -> list[bytes]:
+    from senior_control.cloud.relay import Outbox
+
+    outbox = connection.outbox  # type: ignore[attr-defined]
+    assert isinstance(outbox, Outbox)
+    items = [item for _, item in list(outbox._items)]
+    return items
+
+
+async def settle(condition: object) -> None:
+    for _ in range(100):
+        if condition():  # type: ignore[operator]
+            return
+        await asyncio.sleep(0.01)
+
+
+class WireRig:
+    def __init__(self, outbox_frames: int = 32) -> None:
+        from senior_control.cloud.limits import CloudLimits
+        from senior_control.cloud.relay import Hub
+
+        self.hub = Hub(CloudLimits(outbox_frames=outbox_frames))
+        controller = self.hub.attach_controller("robot-a", "session-hash")
+        assert controller is not None
+        self.controller = controller
+        self.agent = self.hub.attach_agent("robot-a")
+
+
+async def test_video_offer_on_control_connection_is_accepted_not_closed() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    offer = offer_frame()
+
+    rig.hub.handle_control_frame(rig.controller, offer)
+    rig.hub.handle_control_frame(rig.controller, candidate_frame())
+
+    assert not rig.controller.outbox.closed  # an unknown frame used to close with 1007
+    assert not rig.agent.outbox.closed
+    assert drain_outbox(rig.agent)[0] == offer
+    assert len(drain_outbox(rig.agent)) == 2
+    assert drain_outbox(rig.controller) == []  # no error answer either
+
+    answer = wire_frame("video.answer", {"sdp": "answer-for-VP8"}, connection_epoch=1)
+    rig.hub.handle_agent_frame(rig.agent, answer)
+    rig.hub.handle_agent_frame(rig.agent, candidate_frame(connection_epoch=1))
+    assert not rig.agent.outbox.closed
+    assert drain_outbox(rig.controller) == [answer, candidate_frame(connection_epoch=1)]
+
+
+async def test_video_answer_reaches_only_the_viewer_that_offered() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    bystander = rig.hub.attach_controller("robot-a", "other-session-hash")
+    assert bystander is not None
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    rig.hub.handle_agent_frame(
+        rig.agent, wire_frame("video.answer", {"sdp": "a"}, connection_epoch=1)
+    )
+    assert len(drain_outbox(rig.controller)) == 1
+    assert drain_outbox(bystander) == []
+    assert not bystander.outbox.closed
+
+
+async def test_malformed_or_misdirected_video_frames_are_refused() -> None:
+    pytest.importorskip("fastapi")
+    from senior_control.cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY
+
+    rig = WireRig()
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    queued = len(drain_outbox(rig.agent))
+
+    # Another robot, a browser-sent answer, and an unauthorized candidate get a refusal reply.
+    rig.hub.handle_control_frame(rig.controller, offer_frame(robot_id="robot-b"))
+    rig.hub.handle_control_frame(rig.controller, wire_frame("video.answer", {"sdp": "a"}))
+    rig.hub.handle_control_frame(rig.controller, candidate_frame(session_id="never-offered"))
+    assert len(drain_outbox(rig.agent)) == queued
+    assert len(drain_outbox(rig.controller)) == 3
+    assert not rig.controller.outbox.closed
+
+    # An oversized description or a non-candidate string is a bad frame.
+    huge = wire_frame("video.offer", {"sdp": "v=0\r\n" + "x" * 20000})
+    rig.hub.handle_control_frame(rig.controller, huge)
+    assert rig.controller.outbox.closed
+    other = WireRig()
+    other.hub.handle_control_frame(other.controller, offer_frame())
+    junk = wire_frame("video.candidate", {"candidate": "not-a-candidate"})
+    other.hub.handle_control_frame(other.controller, junk)
+    assert other.controller.outbox.closed
+    assert CLOSE_BAD_FRAME == 1007 and CLOSE_POLICY == 1008
+
+    # The agent never sends an offer.
+    agent_rig = WireRig()
+    agent_rig.hub.handle_agent_frame(agent_rig.agent, offer_frame())
+    assert agent_rig.agent.outbox.closed
+
+
+async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig(outbox_frames=3)
+    drive = velocity_frame(0.2)
+    rig.hub.handle_control_frame(rig.controller, drive)
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    rig.hub.handle_control_frame(rig.controller, candidate_frame())
+    # The outbox is full. A third video frame is refused instead of displacing the sample.
+    rig.hub.handle_control_frame(rig.controller, candidate_frame(request_id="c2"))
+    assert drain_outbox(rig.agent)[0] == drive
+    assert len(drain_outbox(rig.agent)) == 3
+    assert len(drain_outbox(rig.controller)) == 1  # the refusal
+
+    # A newer drive sample replaces the old one, evicting video rather than being refused.
+    newer = velocity_frame(0.4)
+    rig.hub.handle_control_frame(rig.controller, newer)
+    queue = drain_outbox(rig.agent)
+    assert queue.count(newer) == 1 and drive not in queue
+    assert not rig.controller.outbox.closed
+
+    # Stop still gets through a queue full of video.
+    flooded = WireRig(outbox_frames=2)
+    flooded.hub.handle_control_frame(flooded.controller, offer_frame())
+    flooded.hub.handle_control_frame(flooded.controller, candidate_frame())
+    flooded.hub.handle_control_frame(flooded.controller, stop_frame())
+    assert stop_frame() in drain_outbox(flooded.agent)
+
+
+async def test_video_frames_never_reach_the_supervisor_drive_slot() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    submitted: list[tuple[float, float]] = []
+
+    async def heartbeat() -> None:
+        return None
+
+    async def ros(name: str) -> None:
+        return None
+
+    async def sink(vx: float, wz: float) -> None:
+        submitted.append((vx, wz))
+
+    async def cmd_vel(vx: float, wz: float) -> None:
+        raise AssertionError("video must never publish drive")
+
+    supervisor = Supervisor(
+        send_heartbeat=heartbeat,
+        call_ros=ros,
+        drive_sink=sink,
+        publish_cmd_vel=cmd_vel,
+        heartbeat_seconds=0.01,
+    )
+    calls = 0
+    original = supervisor.submit_drive
+
+    def counted(vx: float, wz: float) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(vx, wz)
+
+    supervisor.submit_drive = counted  # type: ignore[method-assign]
+    async with supervisor:
+        assert supervisor.submit_drive(0.3, 0.0)
+        rig.hub.handle_control_frame(rig.controller, offer_frame())
+        rig.hub.handle_control_frame(rig.controller, candidate_frame())
+        # Only the drive frame is a drive frame: the relay hands the agent two video frames
+        # that it has no reason to turn into a velocity sample.
+        assert calls == 1
+        await asyncio.sleep(0.05)
+    assert not rig.controller.outbox.closed
+    assert submitted[:1] == [(0.3, 0.0)]
+
+
+@pytest.mark.parametrize("how", ["close_session", "revoke_robot", "detach"])
+async def test_closing_the_connection_releases_the_encoder(how: str) -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    budget = ViewerBudget(1)
+    session, factory, _, _ = make_session(viewer=rig.controller, budget=budget)  # type: ignore[arg-type]
+    await session.offer("robot-a", video_offer("VP8"))
+    rig.controller.video = session  # type: ignore[attr-defined]
+    assert factory.encoders == 1
+
+    if how == "close_session":
+        rig.hub.close_session("session-hash")
+    elif how == "revoke_robot":
+        rig.hub.revoke_robot("robot-a")
+    else:
+        rig.hub.detach(rig.controller)
+    await settle(lambda: factory.encoders == 0)
+
+    assert factory.encoders == 0
+    assert budget.active == 0
+    assert (await session.status()).state == "closed"
+
+
+async def test_closing_an_unrelated_session_keeps_the_encoder() -> None:
+    pytest.importorskip("fastapi")
+    rig = WireRig()
+    session, factory, _, _ = make_session(viewer=rig.controller)  # type: ignore[arg-type]
+    await session.offer("robot-a", video_offer("VP8"))
+    rig.controller.video = session  # type: ignore[attr-defined]
+    rig.hub.close_session("someone-else")
+    await asyncio.sleep(0.05)
+    assert factory.encoders == 1
+    await session.close()

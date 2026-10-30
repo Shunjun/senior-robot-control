@@ -143,6 +143,9 @@ class ResponsePayload(StrictModel):
         "navigation.start",
         "navigation.cancel",
         "navigation.resume",
+        "video.offer",
+        "video.answer",
+        "video.candidate",
     ]
     ok: bool
     error: ErrorCode | None = None
@@ -163,11 +166,50 @@ class ResponseEnvelope(EnvelopeBase):
     payload: ResponsePayload
 
 
+MAX_SDP_CHARS = 16384
+MAX_CANDIDATE_CHARS = 512
+
+
+class SdpPayload(StrictModel):
+    sdp: str = Field(min_length=1, max_length=MAX_SDP_CHARS)
+
+
+class CandidatePayload(StrictModel):
+    candidate: str = Field(min_length=1, max_length=MAX_CANDIDATE_CHARS, pattern=r"^candidate:")
+
+
+class VideoSdpEnvelope(EnvelopeBase):
+    """Video signaling. The controller sends the offer; the vehicle sends the answer."""
+
+    type: Literal["video.offer", "video.answer"]
+    payload: SdpPayload
+
+
+class VideoCandidateEnvelope(EnvelopeBase):
+    """An ICE candidate, in either direction."""
+
+    type: Literal["video.candidate"]
+    payload: CandidatePayload
+
+
+VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope
+
 Envelope = Annotated[
     VelocityEnvelope | SimpleEnvelope | OperationEnvelope | SnapshotEnvelope | ResponseEnvelope,
     Field(discriminator="type"),
 ]
+Frame = Annotated[
+    VelocityEnvelope
+    | SimpleEnvelope
+    | OperationEnvelope
+    | SnapshotEnvelope
+    | ResponseEnvelope
+    | VideoSdpEnvelope
+    | VideoCandidateEnvelope,
+    Field(discriminator="type"),
+]
 _adapter = TypeAdapter(Envelope)
+_frame_adapter = TypeAdapter(Frame)
 MAX_MESSAGE_BYTES = 65536
 
 
@@ -184,13 +226,26 @@ def validate_envelope(raw: bytes, expected_robot_id: str) -> Envelope:
     return envelope
 
 
-def serialize_envelope(envelope: Envelope) -> bytes:
+def validate_frame(raw: bytes, expected_robot_id: str) -> Envelope | VideoEnvelope:
+    """Like `validate_envelope`, and also accepts video signaling for the relay to forward."""
+    if len(raw) > MAX_MESSAGE_BYTES:
+        raise ValueError("message too large")
+    try:
+        frame = _frame_adapter.validate_json(raw)
+    except (ValidationError, ValueError) as exc:
+        raise ValueError("invalid envelope") from exc
+    if frame.robot_id != expected_robot_id:
+        raise ValueError("wrong robot")
+    return frame
+
+
+def serialize_envelope(envelope: Envelope | VideoEnvelope) -> bytes:
     """Serialize a validated envelope with the same size bound as input."""
     try:
-        validated = _adapter.validate_python(envelope)
+        validated = _frame_adapter.validate_python(envelope)
     except ValidationError as exc:
         raise ValueError("invalid envelope") from exc
-    raw = _adapter.dump_json(validated)
+    raw = _frame_adapter.dump_json(validated)
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("message too large")
     return raw
