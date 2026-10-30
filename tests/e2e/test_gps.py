@@ -1,38 +1,38 @@
 """GPS and passive heading may estimate pose but never publish velocity."""
 
-import importlib.util
-import inspect
-from pathlib import Path
+from dataclasses import fields
 
 from conftest import SimulationProfile
 
-from senior_control.localization.heading import HeadingObserver
+from senior_control.localization.heading import HeadingObserver, MotionSample
 from senior_control.models import Velocity
 
 
 def test_gps_passive_heading_never_moves_robot(
     simulation_profile: SimulationProfile,
 ) -> None:
-    signature = inspect.signature(HeadingObserver)
-    assert "publisher" not in signature.parameters
-    assert "cmd_vel" not in signature.parameters
-
-    node_path = (
-        Path(__file__).resolve().parents[2]
-        / "ros2"
-        / "src"
-        / "senior_robot"
-        / "senior_robot"
-        / "localization_node.py"
-    )
-    spec = importlib.util.spec_from_file_location("acceptance_localization_node", node_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    source = node_path.read_text(encoding="utf-8")
-    assert "create_publisher(Twist" not in source
-    assert "create_publisher(Velocity" not in source
     observer = HeadingObserver(min_baseline_m=5.0, max_correction_rad=0.35)
-    assert not isinstance(observer, Velocity)
+    result = observer.observe(
+        MotionSample(
+            stamp=20.0,
+            map_yaw=0.2,
+            map_dx=8.0,
+            map_dy=0.0,
+            enu_east_m=8.0,
+            enu_north_m=0.0,
+            odom_forward_m=8.0,
+            imu_yaw_delta_rad=0.01,
+            gnss_trusted=True,
+            georeferenced=True,
+            commanded_forward=True,
+            slip=False,
+            jump=False,
+        )
+    )
+
+    assert result is not None
+    assert not isinstance(result, Velocity)
+    assert {field.name for field in fields(result)} == {"correction_rad", "source", "ready"}
+    assert getattr(result, "velocity", None) is None
+    assert not hasattr(observer, "publish")
     assert len(simulation_profile.config_hash) == 64

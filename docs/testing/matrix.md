@@ -5,12 +5,12 @@
 | 范围 | 验收点 | 自动化入口 | 所需环境 |
 | --- | --- | --- | --- |
 | 驾驶安全链 | 只有 `safety_node` 发布 `/cmd_vel`，停发后停车 | `tests/e2e/test_drive.py`、`tests/ros/test_velocity_chain.py` | Linux、Humble、运行中的完整仿真栈 |
-| 后部遮挡 | 倒车限速、限距，并要求地图自由走廊；实时障碍优先 | `tests/e2e/test_recovery.py` | Python；实际运动另需 Linux 仿真 |
-| 长期地图 | 箱体确认、清除后重载仍为空；人不写入 | `tests/e2e/test_maps.py` | Python |
-| 任务断线 | 运行中暂停，重连不恢复、不补跑 | `tests/e2e/test_tasks.py` | Python |
-| Home | 数据库重开后仍使用原 Home | `tests/e2e/test_home.py` | Python |
-| GPS/航向 | 只产生定位信息，不发布速度 | `tests/e2e/test_gps.py` | Python；ROS 话题复核需 Linux |
-| 地图导入 | 无 GPS 可用人工提示；有 GPS 也须匹配确认；跨车 Home 待确认 | `tests/e2e/test_maps.py`、`tests/integration/test_map_operations.py::test_cross_robot_home_requires_confirmation` | Python |
+| 后部遮挡 | 倒车限速、限距，并要求地图自由走廊；实时障碍优先 | `tests/e2e/test_recovery.py` | 本机 Python 断言；实际运动与完整仿真路径未执行 |
+| 长期地图 | 箱体确认、清除后重载仍为空；人不写入 | `tests/e2e/test_maps.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
+| 任务断线 | 运行中暂停，重连不恢复、不补跑 | `tests/e2e/test_tasks.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
+| Home | 数据库重开后仍使用原 Home | `tests/e2e/test_home.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
+| GPS/航向 | 只产生定位信息，不发布速度 | `tests/e2e/test_gps.py` | 本机 Python 断言；ROS 话题与完整仿真路径未执行 |
+| 地图导入 | 无 GPS 可用人工提示；有 GPS 也须匹配确认；跨车 Home 待确认 | `tests/e2e/test_maps.py`、`tests/integration/test_map_operations.py::test_cross_robot_home_requires_confirmation` | 本机 Python 断言；完整仿真、车端与云端导入路径未执行 |
 | 浏览器驾驶 | 显式 `base_url`，桌面与手机横竖屏，真实仿真控制链 | `web/e2e/control.spec.ts` | 已运行的云端、网页和仿真栈、Chromium |
 
 ## Linux 复现
@@ -31,7 +31,7 @@ SENIOR_CONTROL_PASSWORD='从安全渠道读取' \
 npm --prefix web run test:e2e -- --project=chromium
 ```
 
-当前 `web/package.json` 尚未提供 `test:e2e` 脚本和 Playwright 直接依赖，因此该命令在依赖补齐前属于未执行项。
+`web/playwright.config.ts` 只指定 `web/e2e` 和 Chromium 项目，不包含 `webServer`。缺少显式 `PLAYWRIGHT_BASE_URL` 时测试保持跳过，不能计为通过。
 
 ## 故障注入入口
 

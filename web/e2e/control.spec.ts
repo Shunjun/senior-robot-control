@@ -3,10 +3,10 @@ import { expect, test } from "@playwright/test";
 const baseURL = process.env.PLAYWRIGHT_BASE_URL;
 const password = process.env.SENIOR_CONTROL_PASSWORD;
 
-test("test_browser_controls_simulated_robot", async ({ page }, testInfo) => {
-  test.skip(baseURL === undefined, "PLAYWRIGHT_BASE_URL is required; no server is started");
-  test.skip(password === undefined, "SENIOR_CONTROL_PASSWORD is required");
+test.skip(baseURL === undefined, "PLAYWRIGHT_BASE_URL is required; no server is started");
+test.skip(password === undefined, "SENIOR_CONTROL_PASSWORD is required");
 
+test("test_browser_controls_simulated_robot", async ({ page }, testInfo) => {
   await page.goto(new URL("/login", baseURL).toString());
   await page.getByLabel("管理员密码").fill(password as string);
   await page.getByRole("button", { name: "进入控制台" }).click();
@@ -31,9 +31,6 @@ test("test_browser_controls_simulated_robot", async ({ page }, testInfo) => {
 });
 
 test("mobile portrait and landscape controls remain reachable", async ({ page }, testInfo) => {
-  test.skip(baseURL === undefined, "PLAYWRIGHT_BASE_URL is required; no server is started");
-  test.skip(password === undefined, "SENIOR_CONTROL_PASSWORD is required");
-
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(new URL("/login", baseURL).toString());
   await page.getByLabel("管理员密码").fill(password as string);
