@@ -16,6 +16,9 @@ cloud = [
     "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
 ]
+video = [
+    "aiortc>=1.15,<2",
+]
 
 [dependency-groups]
 dev = [
