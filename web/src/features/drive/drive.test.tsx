@@ -83,11 +83,16 @@ class FakeLink implements RobotLink {
     this.sent.push({ type, payload, robot: this.current });
     return this.requestImpl(type, payload) as Promise<T>;
   }
-  subscribe(): () => void {
-    return () => undefined;
+  private listeners = new Set<(snapshot: RobotSnapshot) => void>();
+  subscribe(listener: (snapshot: RobotSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
   subscribeStatus(_listener: (status: LinkStatus) => void): () => void {
     return () => undefined;
+  }
+  emit(value: RobotSnapshot): void {
+    act(() => this.listeners.forEach((listener) => listener(value)));
   }
   types(): string[] {
     return this.sent.map((entry) => entry.type);
@@ -566,5 +571,78 @@ describe("test_landscape_controls_accessible", () => {
   it("exposes the stop as a named button", () => {
     render(<EmergencyStop link={new FakeLink()} />);
     expect(screen.getByRole("button", { name: "急停" })).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------- the selected-robot screen
+
+describe("selected-robot route", () => {
+  const api: ControlApi = {
+    login: async () => undefined,
+    logout: async () => undefined,
+    listRobots: async (): Promise<RobotSummary[]> => [
+      { id: "robot-alpha", name: "Alpha 仓库车", online: true },
+    ],
+  };
+
+  beforeEach(() => {
+    // jsdom has no canvas; the map's drawing path is covered by the coordinate tests.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  });
+
+  async function openRoute(link: FakeLink) {
+    render(
+      <MemoryRouter initialEntries={["/robots/robot-alpha"]}>
+        <App api={api} link={link} />
+      </MemoryRouter>,
+    );
+    await screen.findByText("等待车端快照");
+  }
+
+  it("test_route_renders_drive_and_map_with_one_stop", async () => {
+    const link = new FakeLink();
+    await openRoute(link);
+    link.emit(snapshot("robot-alpha"));
+
+    expect(screen.getByRole("group", { name: FORWARD })).toBeTruthy();
+    expect(screen.getByRole("group", { name: TURN })).toBeTruthy();
+    expect(screen.getByRole("application", { name: "地图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认目标" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "开始导航" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "急停" })).toHaveLength(1);
+  });
+
+  it("drives the selected robot through the screen's own client", async () => {
+    const link = new FakeLink();
+    await openRoute(link);
+    link.emit(snapshot("robot-alpha"));
+    await acquire();
+    fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
+    await flush();
+    expect(link.velocities()).toEqual([{ vx: MAX_LINEAR, wz: 0 }]);
+    expect(link.sent.every((entry) => entry.robot === "robot-alpha")).toBe(true);
+  });
+
+  it("shows a cached snapshot as a cached map that cannot produce a goal", async () => {
+    const link = new FakeLink();
+    await openRoute(link);
+    link.emit(snapshot("robot-alpha", { stale: true, connected: false }));
+
+    expect(screen.getByText(/缓存地图 · 非实时/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
+    expect((screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "获取控制权" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not claim a goal was sent, since the protocol has no goal command", async () => {
+    const link = new FakeLink();
+    await openRoute(link);
+    link.emit(snapshot("robot-alpha"));
+    fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
+    expect(screen.getByText(/未发送/)).toBeTruthy();
+    expect(link.sent).toEqual([]);
   });
 });

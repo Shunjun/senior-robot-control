@@ -518,3 +518,18 @@
     height: 88px;
   }
 }
+
+/* ------------------------------------------------------------ drive and map controls */
+
+.controlSurface {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+@media (orientation: landscape) and (min-width: 900px) {
+  .controlSurface {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}

@@ -32,6 +32,11 @@ import {
   type RobotSummary,
 } from "../../api/protocol";
 
+beforeEach(() => {
+  // The map on the robot screen draws on a canvas, which jsdom does not provide.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+});
+
 afterEach(cleanup);
 
 // ---------------------------------------------------------------- fakes

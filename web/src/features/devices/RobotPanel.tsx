@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { RobotLink } from "../../api/client";
 import type { RobotSnapshot, RobotSummary } from "../../api/protocol";
 import { EmergencyStop } from "../drive/EmergencyStop";
+import { ControlSurface } from "./ControlSurface";
 import styles from "./Devices.module.css";
 
 export interface RobotPanelProps {
@@ -180,7 +181,10 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
           </div>
         )
       ) : (
-        <Readout snapshot={snapshot} />
+        <>
+          <Readout snapshot={snapshot} />
+          <ControlSurface robotId={robot.id} link={link} snapshot={snapshot} />
+        </>
       )}
     </article>
     {/* Outside the clipped panel: a clip-path would cut off the fixed button. */}
