@@ -252,26 +252,31 @@ class Agent:
             await asyncio.sleep(self._state_poll_seconds)
             try:
                 snapshot = await self._collect()
-                key = (
-                    snapshot.localized,
-                    snapshot.map_ref,
-                    snapshot.home,
-                    snapshot.task_revision,
-                    snapshot.execution_status,
-                    snapshot.runnable_task_ids,
-                )
-                if last_key is None:
-                    last_key = key
-                if key == last_key and loop.time() - last_sent < self._snapshot_seconds:
-                    continue
-                await link.send_snapshot(snapshot)
-                last_key, last_sent = key, loop.time()
-            except (ConnectionError, OSError):
-                return
-            except asyncio.CancelledError:
-                raise
             except Exception:
-                logger.warning("periodic snapshot failed", exc_info=True)
+                # Any failed read, ``OSError`` and a timeout included, only skips this round: the
+                # link is still up, so the next successful collect must keep the cloud fresh.
+                logger.warning("periodic snapshot collect failed", exc_info=True)
+                continue
+            key = (
+                snapshot.localized,
+                snapshot.map_ref,
+                snapshot.home,
+                snapshot.task_revision,
+                snapshot.execution_status,
+                snapshot.runnable_task_ids,
+            )
+            if last_key is None:
+                last_key = key
+            if key == last_key and loop.time() - last_sent < self._snapshot_seconds:
+                continue
+            try:
+                await link.send_snapshot(snapshot)
+            except (ConnectionError, OSError):
+                return  # only a dead send ends this keepalive
+            except Exception:
+                logger.warning("periodic snapshot send failed", exc_info=True)
+                continue
+            last_key, last_sent = key, loop.time()
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):

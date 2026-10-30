@@ -625,6 +625,37 @@ async def test_idle_connected_robot_stays_fresh_past_stale_after(tmp_path: Path)
     assert cache.get(ROBOT) is not None and cache.get(ROBOT).stale is True  # type: ignore[union-attr]
 
 
+@pytest.mark.parametrize("failure", [OSError, asyncio.TimeoutError])
+async def test_failed_collect_does_not_end_the_keepalive(
+    tmp_path: Path, failure: type[Exception]
+) -> None:
+    class FlakyState(FakeState):
+        async def collect(self) -> Any:
+            if self.calls == 1:  # the first collect (the connect publish) already succeeded
+                self.calls += 1
+                raise failure("state port gone")  # a fresh instance: no traceback is kept
+            return await super().collect()
+
+    cache = SnapshotCache(stale_after=0.3)
+    link = CachingLink(1, cache)
+    state = FlakyState()
+    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=0.05, state_poll_seconds=0.02)
+    runner = asyncio.ensure_future(agent.run())
+    try:
+        await until(lambda: agent.connected)
+        await until(lambda: state.calls >= 2)  # the failing collect has happened
+        sent = len(link.snapshots)
+        await until(lambda: len(link.snapshots) >= sent + 2)  # later snapshots still arrive
+        for _ in range(3):
+            await asyncio.sleep(0.2)  # past stale_after, with the link up
+            cached = cache.get(ROBOT)
+            assert cached is not None
+            assert cached.stale is False and cached.snapshot.connected is True
+    finally:
+        agent.request_shutdown()
+        await asyncio.wait_for(runner, timeout=2)
+
+
 async def test_state_change_is_pushed_without_an_edit(tmp_path: Path) -> None:
     link = FakeLink(1)
     state = FakeState()
