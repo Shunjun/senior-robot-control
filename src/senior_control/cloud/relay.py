@@ -10,7 +10,11 @@ from typing import Any, Literal, cast
 
 from fastapi import WebSocket
 
-from senior_control.agent.snapshots import SnapshotCache, snapshot_from_envelope
+from senior_control.agent.snapshots import (
+    SnapshotCache,
+    snapshot_envelope,
+    snapshot_from_envelope,
+)
 from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
@@ -33,6 +37,8 @@ SAFETY_TYPES = frozenset({"drive.stop", "safety.estop"})
 VELOCITY = "drive.velocity"
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
+SNAPSHOT = "snapshot"
+SNAPSHOT_TTL_SECONDS = 60.0
 VIDEO_CLOSE_TTL_SECONDS = 300.0
 PROTECTED_TYPES = SAFETY_TYPES | {VIDEO_CLOSE}
 
@@ -49,6 +55,7 @@ class Outbox:
 
     Video signaling has its own kind. It never replaces a velocity sample, it is the first thing
     a full queue gives up for any other frame, and it is refused rather than evicting one.
+    A pushed snapshot replaces any snapshot still queued: only the newest cache state matters.
     A video close is the exception: it evicts video and survives both a stop and a socket close,
     because it is what makes the vehicle stop sending pictures.
     """
@@ -71,8 +78,8 @@ class Outbox:
         """Queue a frame; False means the caller must report overload."""
         if self._close_code is not None:
             return False
-        if kind == VELOCITY:
-            self._items = deque(item for item in self._items if item[0] != VELOCITY)
+        if kind in (VELOCITY, SNAPSHOT):
+            self._items = deque(item for item in self._items if item[0] != kind)
         if len(self._items) >= self._limit and not self._evict(kind):
             return False
         self._items.append((kind, frame))
@@ -173,6 +180,33 @@ class Hub:
         link = self._links.get(robot_id)
         return link is not None and link.agent is not None
 
+    def _push_snapshot(self, robot_id: str, only: Connection | None = None) -> None:
+        """Send the cache's view of a robot to its control sockets, or to the one given.
+
+        The frame carries the cache's own ``stale`` and ``last_synced_at``, and the epoch of the
+        connected agent. With no agent the epoch is 0, which no agent owns.
+        """
+        cached = self.snapshots.get(robot_id)
+        link = self._links.get(robot_id)
+        if cached is None or link is None:
+            return
+        agent = link.agent
+        envelope = snapshot_envelope(
+            cached.snapshot,
+            robot_id=robot_id,
+            session_id="cloud-cache",
+            connection_epoch=agent.epoch if agent is not None else 0,
+            request_id="cloud-cache",
+            seq=0,
+            expires_at=time.time() + SNAPSHOT_TTL_SECONDS,
+            stale=cached.stale,
+            last_synced_at=cached.last_synced_at,
+        )
+        frame = serialize_envelope(envelope)
+        for controller in list(link.controllers) if only is None else [only]:
+            if not controller.outbox.put(frame, SNAPSHOT):
+                controller.outbox.close(CLOSE_OVERLOAD)
+
     def attach_agent(self, robot_id: str) -> Connection:
         """The n-th live agent socket of a robot owns epoch n; the older one is closed."""
         link = self._link(robot_id)
@@ -181,6 +215,7 @@ class Hub:
         previous, link.agent = link.agent, connection
         if previous is not None:
             previous.outbox.close(CLOSE_SUPERSEDED)
+        self._push_snapshot(robot_id)
         return connection
 
     def attach_controller(self, robot_id: str, session_hash: str) -> Connection | None:
@@ -191,6 +226,7 @@ class Hub:
             "control", robot_id, Outbox(self._limits.outbox_frames), session_hash=session_hash
         )
         link.controllers.add(connection)
+        self._push_snapshot(robot_id, only=connection)
         return connection
 
     def detach(self, connection: Connection) -> None:
@@ -199,6 +235,7 @@ class Hub:
             if link.agent is connection:
                 link.agent = None
                 self.snapshots.mark_offline(connection.robot_id)
+                self._push_snapshot(connection.robot_id)
             link.controllers.discard(connection)
         self._stop_viewer_video(connection)
         connection.outbox.close(CLOSE_NORMAL)
@@ -253,6 +290,7 @@ class Hub:
             return
         if isinstance(envelope, SnapshotEnvelope):
             self.snapshots.store(snapshot_from_envelope(envelope))
+            self._push_snapshot(connection.robot_id)
             return
         if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):
             if envelope.type == "video.offer":

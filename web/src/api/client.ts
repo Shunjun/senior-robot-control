@@ -208,7 +208,10 @@ export interface SocketLike {
 
 export interface RobotClientOptions {
   socketFactory?: (url: string) => SocketLike;
-  /** A snapshot older than this without a newer one is a cached copy. Matches the cloud cache. */
+  /**
+   * A live snapshot with no newer frame after this long is shown as a cached copy. Matches the
+   * cloud cache. Frames the cloud already marks stale are never made live by this timer.
+   */
   staleAfterMs?: number;
   requestTimeoutMs?: number;
 }
@@ -248,6 +251,7 @@ export class RobotClient implements RobotLink {
   private socket: SocketLike | null = null;
   private robotId: string | null = null;
   private sessionId = "";
+  /** The agent epoch the last snapshot frame delivered. 0 means none: no agent owns epoch 0. */
   private epoch = 0;
   private seq = 0;
   private latest: RobotSnapshot | null = null;
@@ -324,6 +328,13 @@ export class RobotClient implements RobotLink {
     }
     if (socket === null || robotId === null || socket.readyState !== SOCKET_OPEN) {
       return Promise.reject(new CommandError("offline", "control socket is not open"));
+    }
+    // Commands name the agent's epoch, which only a live snapshot frame delivers. A cached
+    // snapshot, or none yet, would mean guessing it.
+    if (this.latest === null || this.latest.stale || this.epoch < 1) {
+      return Promise.reject(
+        new CommandError("offline", "no live snapshot from the vehicle, so no agent epoch to use"),
+      );
     }
     const requestId = crypto.randomUUID();
     const envelope: EnvelopeBase & { type: string; payload: unknown } = {
@@ -425,16 +436,14 @@ export class RobotClient implements RobotLink {
   }
 
   private onSnapshot(envelope: SnapshotEnvelope): void {
-    // Snapshot frames come from the agent, so they carry the epoch its commands must name.
+    // The cloud sends its cache with the epoch of the connected agent (0 when none is), and the
+    // cache's own `stale` and `last_synced_at`. Nothing here is the browser's receipt time.
     this.epoch = envelope.connection_epoch;
-    this.latest = {
-      robot_id: envelope.robot_id,
-      ...envelope.payload,
-      last_synced_at: Date.now() / 1000,
-      stale: false,
-    };
+    this.latest = { robot_id: envelope.robot_id, ...envelope.payload };
     this.clearStaleTimer();
-    this.staleTimer = setTimeout(() => this.markStale(), this.staleAfterMs);
+    if (!this.latest.stale) {
+      this.staleTimer = setTimeout(() => this.markStale(), this.staleAfterMs);
+    }
     this.snapshotListeners.forEach((listener) => listener(this.latest as RobotSnapshot));
   }
 

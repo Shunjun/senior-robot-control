@@ -66,8 +66,13 @@ def snapshot_envelope(
     request_id: str,
     seq: int,
     expires_at: float,
+    stale: bool = False,
+    last_synced_at: float | None = None,
 ) -> SnapshotEnvelope:
-    """The uplink frame a ``Link`` sends for a snapshot."""
+    """The uplink frame a ``Link`` sends for a snapshot.
+
+    ``stale`` and ``last_synced_at`` belong to the cloud's cached copy; an agent leaves them out.
+    """
     home = snapshot.home
     return SnapshotEnvelope(
         v=1,
@@ -96,6 +101,8 @@ def snapshot_envelope(
             runnable_task_ids=list(snapshot.runnable_task_ids),
             execution_status=snapshot.execution_status,
             collected_at=snapshot.collected_at,
+            stale=stale,
+            last_synced_at=last_synced_at,
         ),
     )
 

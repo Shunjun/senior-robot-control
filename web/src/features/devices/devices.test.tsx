@@ -446,18 +446,27 @@ const wirePayload = {
   runnable_task_ids: ["t1"],
   execution_status: "idle",
   collected_at: 1_000,
+  stale: false,
+  last_synced_at: 2_000,
 };
 
-async function connected(options: { staleAfterMs?: number; requestTimeoutMs?: number } = {}) {
+/** The epoch the cloud puts on a snapshot frame while an agent is connected. */
+const AGENT_EPOCH = 3;
+
+async function connected(
+  options: { staleAfterMs?: number; requestTimeoutMs?: number; snapshot?: boolean } = {},
+) {
   FakeSocket.instances = [];
+  const { snapshot: deliver = true, ...clientOptions } = options;
   const client = new RobotClient({
     socketFactory: (url) => new FakeSocket(url),
-    ...options,
+    ...clientOptions,
   });
   const pending = client.connect("robot-alpha");
   const socket = FakeSocket.instances[0]!;
   socket.open();
   await pending;
+  if (deliver) socket.receive(frame("snapshot", "robot-alpha", wirePayload));
   return { client, socket };
 }
 
@@ -533,10 +542,10 @@ describe("RobotClient", () => {
     const seen: RobotSnapshot[] = [];
     client.subscribe((value) => seen.push(value));
 
-    socket.receive(frame("snapshot", "robot-alpha", wirePayload));
+    socket.receive(frame("snapshot", "robot-alpha", { ...wirePayload, last_synced_at: 4_321 }));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ robot_id: "robot-alpha", stale: false, connected: true });
-    expect(seen[0]!.last_synced_at).toBeCloseTo(Date.now() / 1000, 0);
+    expect(seen[0]!.last_synced_at).toBe(4_321);
 
     await vi.advanceTimersByTimeAsync(5_001);
     expect(seen).toHaveLength(2);
@@ -544,8 +553,75 @@ describe("RobotClient", () => {
     expect(seen[1]!.last_synced_at).toBe(seen[0]!.last_synced_at);
   });
 
+  it("keeps the cloud's stale flag and sync time on a cached snapshot", async () => {
+    const { client, socket } = await connected({ snapshot: false });
+    const seen: RobotSnapshot[] = [];
+    client.subscribe((value) => seen.push(value));
+    socket.receive(
+      frame("snapshot", "robot-alpha", {
+        ...wirePayload,
+        connected: false,
+        stale: true,
+        last_synced_at: 1_700_000_000,
+      }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ stale: true, connected: false, last_synced_at: 1_700_000_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("ignores a snapshot that does not say when the cloud last synced it", async () => {
+    const { client, socket } = await connected({ snapshot: false });
+    const seen: RobotSnapshot[] = [];
+    client.subscribe((value) => seen.push(value));
+    const { stale: _stale, last_synced_at: _synced, ...bare } = wirePayload;
+    socket.receive(frame("snapshot", "robot-alpha", bare));
+    expect(seen).toHaveLength(0);
+    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
+  });
+
+  it("sends a command with the epoch the snapshot frame delivered", async () => {
+    const { client, socket } = await connected({ snapshot: false });
+    socket.receive(frame("snapshot", "robot-alpha", wirePayload));
+    void client.request("drive.stop", {}).catch(() => undefined);
+    expect(socket.lastSent()["connection_epoch"]).toBe(AGENT_EPOCH);
+    socket.receive({ ...frame("snapshot", "robot-alpha", wirePayload), connection_epoch: 4 });
+    void client.request("drive.stop", {}).catch(() => undefined);
+    expect(socket.lastSent()["connection_epoch"]).toBe(4);
+    client.disconnect();
+  });
+
+  it("sends no command before any snapshot has delivered an epoch", async () => {
+    const { client, socket } = await connected({ snapshot: false });
+    await expect(client.request("safety.estop", {})).rejects.toMatchObject({ code: "offline" });
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("sends no command on a stale cache or when the agent is offline", async () => {
+    const { client, socket } = await connected({ snapshot: false });
+    socket.receive(
+      frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }),
+    );
+    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
+
+    socket.receive({
+      ...frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }),
+      connection_epoch: 0,
+    });
+    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("stops sending commands once the cached snapshot times out", async () => {
+    const { client, socket } = await connected({ staleAfterMs: 5_000 });
+    await vi.advanceTimersByTimeAsync(5_001);
+    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
+    expect(socket.sent).toEqual([]);
+  });
+
   it("marks the last snapshot stale when the socket closes", async () => {
-    const { client, socket } = await connected();
+    const { client, socket } = await connected({ snapshot: false });
     const seen: RobotSnapshot[] = [];
     const statuses: LinkStatus[] = [];
     client.subscribe((value) => seen.push(value));
@@ -557,7 +633,7 @@ describe("RobotClient", () => {
   });
 
   it("drops frames for another robot and malformed frames", async () => {
-    const { client, socket } = await connected();
+    const { client, socket } = await connected({ snapshot: false });
     const seen: RobotSnapshot[] = [];
     client.subscribe((value) => seen.push(value));
     socket.receive(frame("snapshot", "robot-beta", wirePayload));
@@ -568,7 +644,7 @@ describe("RobotClient", () => {
   });
 
   it("ignores frames of the previous robot after switching", async () => {
-    const { client, socket: first } = await connected();
+    const { client, socket: first } = await connected({ snapshot: false });
     const seen: RobotSnapshot[] = [];
     client.subscribe((value) => seen.push(value));
     const next = client.connect("robot-beta");
@@ -589,6 +665,60 @@ describe("RobotClient", () => {
     const assertion = expect(pending).rejects.toMatchObject({ code: "offline" });
     FakeSocket.instances[0]!.serverClose(1008);
     await assertion;
+  });
+});
+
+// ---------------------------------------------------------------- cached snapshot in the page
+
+describe("cached snapshot delivered by the cloud", () => {
+  it("test_stale_snapshot_from_the_cloud_is_labeled_cache_in_the_page", async () => {
+    FakeSocket.instances = [];
+    const link = new RobotClient({ socketFactory: (url) => new FakeSocket(url) });
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+    const socket = FakeSocket.instances[0]!;
+    act(() => socket.open());
+
+    act(() =>
+      socket.receive(
+        frame("snapshot", "robot-alpha", {
+          ...wirePayload,
+          connected: false,
+          stale: true,
+          execution_status: "cached-idle",
+          last_synced_at: 1_700_000_000,
+        }),
+      ),
+    );
+
+    expect(screen.getByText("缓存快照 · 非实时")).toBeTruthy();
+    expect(screen.queryByText("实时快照")).toBeNull();
+    expect(screen.getByText("cached-idle")).toBeTruthy();
+    expect(screen.getByText(/最后同步/).textContent).toContain(
+      new Date(1_700_000_000 * 1000).toLocaleTimeString("zh-CN", { hour12: false }),
+    );
+    link.disconnect();
+  });
+
+  it("test_command_uses_the_epoch_the_cloud_delivered", async () => {
+    FakeSocket.instances = [];
+    const link = new RobotClient({ socketFactory: (url) => new FakeSocket(url) });
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+    const socket = FakeSocket.instances[0]!;
+    act(() => socket.open());
+    act(() =>
+      socket.receive({
+        ...frame("snapshot", "robot-alpha", { ...wirePayload, last_synced_at: Date.now() / 1000 }),
+        connection_epoch: 9,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "急停" }));
+
+    await waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.lastSent()).toMatchObject({ type: "safety.estop", connection_epoch: 9 });
+    link.disconnect();
   });
 });
 

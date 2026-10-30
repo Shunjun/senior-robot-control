@@ -116,6 +116,9 @@ class SnapshotPayload(StrictModel):
     runnable_task_ids: list[ShortText] = Field(max_length=200)
     execution_status: str = Field(min_length=1, max_length=64)
     collected_at: float
+    # Set only by the cloud when it sends its cached copy to a browser; an agent may omit both.
+    stale: bool = False
+    last_synced_at: float | None = None
 
 
 class SnapshotEnvelope(EnvelopeBase):

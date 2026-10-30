@@ -83,6 +83,8 @@ export const SNAPSHOT_FIELDS = [
   "runnable_task_ids",
   "execution_status",
   "collected_at",
+  "stale",
+  "last_synced_at",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -116,7 +118,10 @@ export interface HomeSummary {
   status: string;
 }
 
-/** SnapshotPayload: the robot's own view of itself. */
+/**
+ * SnapshotPayload: the robot's own view of itself. On the control socket the cloud always adds
+ * `stale` and `last_synced_at` from its cache; the console never substitutes its own clock.
+ */
 export interface SnapshotPayload {
   connected: boolean;
   localized: boolean;
@@ -126,6 +131,8 @@ export interface SnapshotPayload {
   runnable_task_ids: string[];
   execution_status: string;
   collected_at: number;
+  stale: boolean;
+  last_synced_at: number;
 }
 
 export interface ResponsePayload {
@@ -155,8 +162,6 @@ export type InboundEnvelope = SnapshotEnvelope | ResponseEnvelope;
  */
 export interface RobotSnapshot extends SnapshotPayload {
   robot_id: string;
-  last_synced_at: number;
-  stale: boolean;
 }
 
 /** One row of `GET /api/robots`. */
@@ -225,7 +230,9 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     runnable.length > 200 ||
     !runnable.every((id) => isText(id, 128)) ||
     !isText(value["execution_status"], 64) ||
-    !isFiniteNumber(value["collected_at"])
+    !isFiniteNumber(value["collected_at"]) ||
+    typeof value["stale"] !== "boolean" ||
+    !isFiniteNumber(value["last_synced_at"])
   ) {
     return null;
   }
@@ -238,6 +245,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     runnable_task_ids: runnable as string[],
     execution_status: value["execution_status"],
     collected_at: value["collected_at"],
+    stale: value["stale"],
+    last_synced_at: value["last_synced_at"],
   };
 }
 

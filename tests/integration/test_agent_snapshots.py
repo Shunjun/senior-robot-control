@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 from agent_fakes import MAP, ROBOT, simple
 
@@ -13,7 +16,7 @@ from senior_control.agent.snapshots import (
 )
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY, Connection, Hub
-from senior_control.protocol import serialize_envelope
+from senior_control.protocol import SnapshotEnvelope, serialize_envelope, validate_frame
 
 SNAPSHOT = RobotSnapshot(
     robot_id=ROBOT,
@@ -115,3 +118,106 @@ async def test_a_controller_cannot_inject_a_snapshot() -> None:
 def test_cache_requires_positive_staleness() -> None:
     with pytest.raises(ValueError):
         SnapshotCache(stale_after=0)
+
+
+# --------------------------------------------------------------- push to the browser
+
+
+def _pushed(controller: Connection) -> list[dict[str, Any]]:
+    frames: list[dict[str, Any]] = []
+    while controller.outbox.pending:
+        item = controller.outbox._items.popleft()  # noqa: SLF001
+        frames.append(json.loads(item[1]))
+    return frames
+
+
+def _controller(rig: Rig, robot_id: str = ROBOT) -> Connection:
+    controller = rig.hub.attach_controller(robot_id, "session-hash")
+    assert controller is not None
+    return controller
+
+
+async def test_a_new_controller_receives_the_cached_snapshot() -> None:
+    rig = Rig()
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    rig.now[0] = 5002.0
+    controller = _controller(rig)
+    (frame,) = _pushed(controller)
+    assert frame["type"] == "snapshot" and frame["robot_id"] == ROBOT
+    assert frame["connection_epoch"] == rig.agent.epoch
+    assert frame["payload"]["task_revision"] == 6
+    assert frame["payload"]["stale"] is False
+    assert frame["payload"]["last_synced_at"] == 5000.0
+    assert frame["payload"]["connected"] is True
+
+
+async def test_a_controller_with_no_cache_is_sent_nothing() -> None:
+    rig = Rig()
+    assert _pushed(_controller(rig)) == []
+
+
+async def test_a_stale_cache_reaches_a_new_controller_as_stale_with_its_own_sync_time() -> None:
+    rig = Rig()
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    rig.now[0] = 5100.0
+    (frame,) = _pushed(_controller(rig))
+    assert frame["payload"]["stale"] is True
+    assert frame["payload"]["last_synced_at"] == 5000.0
+    assert frame["payload"]["connected"] is False
+
+
+async def test_a_cache_change_is_pushed_to_that_robots_controllers_only() -> None:
+    rig = Rig()
+    mine = _controller(rig)
+    mine_too = _controller(rig)
+    other = _controller(rig, "robot-2")
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    for controller in (mine, mine_too):
+        (frame,) = _pushed(controller)
+        assert frame["payload"]["stale"] is False
+        assert frame["payload"]["last_synced_at"] == 5000.0
+        assert frame["connection_epoch"] == rig.agent.epoch
+    assert _pushed(other) == []
+
+
+async def test_losing_the_agent_pushes_a_stale_frame_without_an_epoch() -> None:
+    rig = Rig()
+    controller = _controller(rig)
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    _pushed(controller)
+    rig.now[0] = 5001.0
+    rig.hub.detach(rig.agent)
+    (frame,) = _pushed(controller)
+    assert frame["payload"]["stale"] is True
+    assert frame["payload"]["connected"] is False
+    assert frame["payload"]["last_synced_at"] == 5000.0
+    assert frame["connection_epoch"] == 0
+
+
+async def test_a_new_agent_epoch_reaches_the_controllers_with_the_cache() -> None:
+    rig = Rig()
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    controller = _controller(rig)
+    _pushed(controller)
+    newer = rig.hub.attach_agent(ROBOT)
+    (frame,) = _pushed(controller)
+    assert frame["connection_epoch"] == newer.epoch == rig.agent.epoch + 1
+
+
+async def test_queued_snapshots_coalesce_to_the_newest() -> None:
+    rig = Rig()
+    controller = _controller(rig)
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    rig.now[0] = 5001.0
+    rig.hub.handle_agent_frame(rig.agent, rig.frame())
+    (frame,) = _pushed(controller)
+    assert frame["payload"]["last_synced_at"] == 5001.0
+
+
+def test_an_agent_uplink_may_omit_the_cache_fields() -> None:
+    body = json.loads(Rig().frame())
+    body["payload"].pop("stale", None)
+    body["payload"].pop("last_synced_at", None)
+    envelope = validate_frame(json.dumps(body).encode(), ROBOT)
+    assert isinstance(envelope, SnapshotEnvelope)
+    assert envelope.payload.stale is False and envelope.payload.last_synced_at is None
