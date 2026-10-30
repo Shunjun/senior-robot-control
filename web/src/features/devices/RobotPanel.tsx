@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
+import type { RobotLink } from "../../api/client";
 import type { RobotSnapshot, RobotSummary } from "../../api/protocol";
+import { EmergencyStop } from "../drive/EmergencyStop";
 import styles from "./Devices.module.css";
 
 export interface RobotPanelProps {
@@ -32,67 +33,6 @@ function formatAge(seconds: number): string {
   if (age < 60) return `${age} 秒前`;
   if (age < 3600) return `${Math.floor(age / 60)} 分钟前`;
   return `${Math.floor(age / 3600)} 小时前`;
-}
-
-// ---------------------------------------------------------------- emergency stop
-
-type StopState =
-  | { phase: "idle" }
-  | { phase: "sending" }
-  | { phase: "confirmed" }
-  | { phase: "failed"; reason: string };
-
-interface EmergencyStopProps {
-  link: RobotLink;
-}
-
-/**
- * Fixed e-stop. "Confirmed" is shown only after the robot answered ok. Anything else, including
- * silence, is reported as not confirmed so the operator reaches for the physical stop.
- */
-function EmergencyStop({ link }: EmergencyStopProps): ReactElement {
-  const [state, setState] = useState<StopState>({ phase: "idle" });
-
-  async function press(): Promise<void> {
-    setState({ phase: "sending" });
-    try {
-      await link.request("safety.estop", {});
-      setState({ phase: "confirmed" });
-    } catch (error) {
-      const reason =
-        error instanceof CommandError ? describeCommandError(error.code) : "无法发送指令";
-      setState({ phase: "failed", reason });
-    }
-  }
-
-  return (
-    <div className={styles.estopDock}>
-      {state.phase === "failed" && (
-        <p className={styles.estopFailure} role="alert">
-          急停未确认：{state.reason}。请立即使用车上的物理急停。
-        </p>
-      )}
-      {state.phase === "confirmed" && (
-        <p className={styles.estopConfirmed} role="status">
-          急停已确认：车端已应答
-        </p>
-      )}
-      <button
-        type="button"
-        className={styles.estop}
-        aria-label="急停"
-        disabled={state.phase === "sending"}
-        onClick={() => void press()}
-      >
-        <span aria-hidden="true" className={styles.estopCap}>
-          急停
-        </span>
-        <span aria-hidden="true" className={styles.estopTag}>
-          {state.phase === "sending" ? "发送中" : "E-STOP"}
-        </span>
-      </button>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------- readout
