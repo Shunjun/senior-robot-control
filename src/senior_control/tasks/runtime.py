@@ -1,9 +1,10 @@
 """Drive persisted task decisions from the live connection and ROS state."""
 
+import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.tasks.executor import NavigationFailure, QualificationUnavailable, TaskExecutor
@@ -80,7 +81,7 @@ class TaskRuntime:
                 start, end = sorted((cursor, now))
                 for task in tasks:
                     if task.enabled:
-                        self._queue_range(task.task_id, start, end, "restart")
+                        self._queue_range(task.task_id, start, end, "restart", origin=cursor)
 
         scan_start, scan_end, _jump = _scan(now, monotonic, current)
         instances = await self._store.executions_for_scan(scan_start, scan_end)
@@ -143,11 +144,31 @@ class TaskRuntime:
             raise ValueError("skip intent is missing its occurrence or interval")
         self._queue_range(intent.task_id, intent.skip_from, intent.skip_until, intent.reason)
 
-    def _queue_range(self, task_id: str, start: datetime, end: datetime, reason: str) -> None:
+    def _queue_range(
+        self,
+        task_id: str,
+        start: datetime,
+        end: datetime,
+        reason: str,
+        *,
+        origin: datetime | None = None,
+    ) -> None:
         key = (task_id, reason)
         previous = self._pending_ranges.get(key)
         if previous is None:
-            self._pending_ranges[key] = _PendingRange(start, end, uuid.uuid4().hex)
+            if origin is None:
+                skip_id = uuid.uuid4().hex
+            else:
+                identity = json.dumps(
+                    [
+                        "task-skip-restart",
+                        task_id,
+                        reason,
+                        origin.astimezone(timezone.utc).isoformat(),
+                    ]
+                )
+                skip_id = uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
+            self._pending_ranges[key] = _PendingRange(start, end, skip_id)
         else:
             self._pending_ranges[key] = _PendingRange(
                 min(start, previous.start), max(end, previous.end), previous.skip_id

@@ -559,7 +559,7 @@ class KeepingNavigation(SyntheticQualifiedNavigation):
         return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
 
-async def test_disconnect_before_the_goal_is_accepted_keeps_the_later_goal(
+async def test_disconnect_before_guard_read_requires_a_new_return_request(
     tmp_path: Path,
 ) -> None:
     navigation = KeepingNavigation()
@@ -589,7 +589,11 @@ async def test_disconnect_before_the_goal_is_accepted_keeps_the_later_goal(
             assert navigation.events == []
         finally:
             database.write_lock.release()
-        assert await task == "nav-1"
+        with pytest.raises(DomainError) as error:
+            await task
+        assert error.value.code is ErrorCode.OFFLINE
+        assert navigation.events == []
+        assert await service.return_home(MAP) == "nav-1"
         assert navigation.events == ["navigate"]
         assert navigation.active == "nav-1"
 
@@ -1098,6 +1102,215 @@ class SharedHomeNavigation(SyntheticQualifiedNavigation):
         self.events.append(f"cancel:{execution_id}")
         self.active.discard(execution_id)
         return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+@pytest.mark.parametrize("confirmation", ["success", "failed", "wrong_id"])
+async def test_portless_observer_uses_owner_to_cancel_accepted_goal(
+    tmp_path: Path, confirmation: str
+) -> None:
+    class ConfirmingNavigation(SharedHomeNavigation):
+        async def cancel(self, execution_id: str) -> OperationResult:
+            if confirmation == "success":
+                return await super().cancel(execution_id)
+            self.events.append(f"cancel:{execution_id}")
+            if confirmation == "failed":
+                return OperationResult(execution_id, OperationStatus.FAILED)
+            return OperationResult("another-goal", OperationStatus.SUCCEEDED)
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = ConfirmingNavigation()
+    navigation.release.set()
+    async with Database(tmp_path / "portless-observer.db") as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await sender.prepare()
+        await observer.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        execution_id = await sender.return_home(MAP)
+
+        if confirmation == "success":
+            await observer.note_connection(False)
+            assert navigation.active == set()
+        else:
+            with pytest.raises(DomainError) as error:
+                await observer.note_connection(False)
+            assert error.value.code is ErrorCode.CONFLICT
+            assert navigation.active == {execution_id}
+
+        assert navigation.events == [f"accepted:{execution_id}", f"cancel:{execution_id}"]
+        async with database.connection.execute(
+            "SELECT execution_id, owner_token FROM home_execution_guard WHERE robot_id = ?",
+            (ROBOT,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if confirmation == "success":
+            assert row is None
+            assert not database.home_execution(ROBOT).cancel_required
+        else:
+            assert row == (execution_id, navigation.tokens[0])
+            assert database.home_execution(ROBOT).cancel_required
+
+
+async def test_portless_observer_uses_current_owner_after_goal_id_reuse(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    first_port = SharedHomeNavigation(reuse_id=True)
+    second_port = SharedHomeNavigation(reuse_id=True)
+    first_port.release.set()
+    second_port.release.set()
+    async with Database(tmp_path / "port-owner-reuse.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=first_port)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=second_port)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await first.prepare()
+        await second.prepare()
+        await observer.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        old_id = await first.return_home(MAP)
+        new_id = await second.return_home(MAP)
+        assert old_id == new_id == "same-id"
+        assert first_port.active == set()
+        assert second_port.active == {new_id}
+        await first.note_terminal(old_id, first_port.tokens[0])
+        assert second_port.active == {new_id}
+
+        await observer.note_connection(False)
+        assert first_port.events == ["accepted:same-id", "cancel:same-id"]
+        assert second_port.events == ["accepted:same-id", "cancel:same-id"]
+        assert second_port.active == set()
+
+
+@pytest.mark.parametrize("failure", ["raise", "cancelled"])
+async def test_portless_disconnect_cancels_accepted_goal_when_send_is_interrupted(
+    tmp_path: Path, failure: str
+) -> None:
+    class Interrupted(SharedHomeNavigation):
+        async def navigate(self, goal: object) -> str:
+            self.active.add("nav-interrupted")
+            self.events.append("accepted:nav-interrupted")
+            goal.on_accepted("nav-interrupted")
+            self.accepted.set()
+            await self.release.wait()
+            raise RuntimeError("send interrupted")
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = Interrupted()
+    async with Database(tmp_path / "portless-interrupted.db") as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await sender.prepare()
+        await observer.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        send = asyncio.create_task(sender.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        await observer.note_connection(False)
+        if failure == "cancelled":
+            send.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await send
+        else:
+            navigation.release.set()
+            with pytest.raises(RuntimeError, match="send interrupted"):
+                await send
+        assert navigation.events == ["accepted:nav-interrupted", "cancel:nav-interrupted"]
+        assert navigation.active == set()
+
+
+async def test_disconnect_during_stale_terminal_still_cancels_current_goal(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation()
+    navigation.release.set()
+    async with Database(tmp_path / "portless-stale-terminal.db") as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await sender.prepare()
+        await observer.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        execution_id = await sender.return_home(MAP)
+        await database.write_lock.acquire()
+        stale = asyncio.create_task(observer.note_terminal(execution_id, "old-owner-token"))
+        try:
+            for _ in range(50):
+                if database.home_execution(ROBOT).lock.locked():
+                    break
+                await asyncio.sleep(0)
+            assert database.home_execution(ROBOT).lock.locked()
+            await observer.note_connection(False)
+        finally:
+            database.write_lock.release()
+        await stale
+        assert navigation.events == [f"accepted:{execution_id}", f"cancel:{execution_id}"]
+        assert navigation.active == set()
+
+
+async def test_disconnect_while_waiting_for_target_requires_a_new_return_request(
+    tmp_path: Path,
+) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation()
+    navigation.release.set()
+    async with Database(tmp_path / "reconnected-before-claim.db") as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await sender.prepare()
+        await observer.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        target_lock = database.home_target_lock(ROBOT)
+        await target_lock.acquire()
+        send = asyncio.create_task(sender.return_home(MAP))
+        try:
+            for _ in range(500):
+                if getattr(target_lock, "_waiters", None):
+                    break
+                await asyncio.sleep(0)
+            assert getattr(target_lock, "_waiters", None)
+            await observer.note_connection(False)
+            await observer.note_connection(True)
+        finally:
+            target_lock.release()
+        with pytest.raises(DomainError) as error:
+            await send
+        assert error.value.code is ErrorCode.OFFLINE
+        assert navigation.events == []
+        execution_id = await sender.return_home(MAP)
+        assert navigation.events == [f"accepted:{execution_id}"]
+        assert navigation.active == {execution_id}
+
+
+@pytest.mark.parametrize("known", [True, False])
+async def test_portless_disconnect_reports_unavailable_for_persisted_guard(
+    tmp_path: Path, known: bool
+) -> None:
+    class UnknownNavigation(SharedHomeNavigation):
+        async def navigate(self, goal: object) -> str:
+            raise RuntimeError("unknown send outcome")
+
+    path = tmp_path / "portless-restart.db"
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation() if known else UnknownNavigation()
+    navigation.release.set()
+    async with Database(path) as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await sender.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        if known:
+            await sender.return_home(MAP)
+        else:
+            with pytest.raises(RuntimeError, match="unknown send outcome"):
+                await sender.return_home(MAP)
+
+    async with Database(path) as database:
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT)
+        await observer.prepare()
+        with pytest.raises(DomainError) as error:
+            await observer.note_connection(False)
+        assert error.value.code is (ErrorCode.UNAVAILABLE if known else ErrorCode.OPERATION_UNKNOWN)
+        assert database.home_execution(ROBOT).cancel_required
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (("nav-1" if known else None),)
 
 
 @pytest.mark.parametrize("reuse_id", [False, True])

@@ -1,10 +1,13 @@
 """Owned asynchronous SQLite connection with serialized writes."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import TracebackType
 
 import aiosqlite
+
+from senior_control.models import OperationResult
 
 
 class HomeExecutionCoordination:
@@ -15,6 +18,9 @@ class HomeExecutionCoordination:
         self.connected = True
         self.disconnect_generation = 0
         self.cancel_required = False
+        self.cancel_attempt_generation = 0
+        self.cancel_owner_token: str | None = None
+        self.cancel_owner: Callable[[str], Awaitable[OperationResult]] | None = None
 
 
 class Database:

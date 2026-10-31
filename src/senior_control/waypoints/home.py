@@ -4,7 +4,8 @@ import asyncio
 import math
 import sqlite3
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -232,22 +233,50 @@ class HomeService:
     async def home_revision(self) -> int:
         return await self._store.home_revision()
 
-    async def return_home(self, expected: MapRef) -> str:
+    @asynccontextmanager
+    async def _coordinated_execution(self) -> AsyncIterator[None]:
         async with self._return_lock:
+            generation = self._home_execution.disconnect_generation
+            failed = False
+            try:
+                yield
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                shared = self._home_execution
+                if (
+                    shared.cancel_required
+                    and shared.disconnect_generation != generation
+                    and shared.cancel_attempt_generation < shared.disconnect_generation
+                ):
+                    try:
+                        await self._cancel_if_required()
+                    except DomainError as exc:
+                        if not failed or exc.code is not ErrorCode.OPERATION_UNKNOWN:
+                            raise
+
+    async def return_home(self, expected: MapRef) -> str:
+        request_generation = self._home_execution.disconnect_generation
+        async with self._coordinated_execution():
             await self._refresh_guard()
             if self._execution_id is not None:
                 await self._cancel_owed_goal()
             elif self._guard_unresolved:
                 raise DomainError(ErrorCode.CONFLICT, "navigation outcome needs review")
+            if self._home_execution.disconnect_generation != request_generation:
+                raise DomainError(ErrorCode.OFFLINE, "connection changed during home request")
             self._home_execution.cancel_required = False
             async with self._home_target_lock:
-                execution_id, cancel_this = await self._send_home(expected)
+                execution_id, cancel_this = await self._send_home(expected, request_generation)
             if cancel_this:
                 await self._cancel_owed_goal()
             return execution_id
 
-    async def _send_home(self, expected: MapRef) -> tuple[str, bool]:
+    async def _send_home(self, expected: MapRef, request_generation: int) -> tuple[str, bool]:
         waypoint = await self._ready(expected)
+        if self._home_execution.disconnect_generation != request_generation:
+            raise DomainError(ErrorCode.OFFLINE, "connection changed during home request")
         navigation = self._navigation
         assert navigation is not None
         if not callable(getattr(navigation, "navigate_qualified", None)):
@@ -258,12 +287,14 @@ class HomeService:
         self._in_send = True
         self._send_interrupted = False
         self._send_map_generation = map_generation
-        self._send_disconnect_generation = self._home_execution.disconnect_generation
+        self._send_disconnect_generation = request_generation
         cancel_this = False
         try:
             # Persist an unknown outcome before the external operation can accept a goal.
             self._guard_unresolved = True
             await self._write_guard(None)
+            self._home_execution.cancel_owner_token = self._guard_token
+            self._home_execution.cancel_owner = navigation.cancel
             if self._send_lost_qualification():
                 await self._clear_guard(None)
                 raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
@@ -380,6 +411,9 @@ class HomeService:
                     raise
 
         await _finish_guard_write(clear())
+        if self._home_execution.cancel_owner_token == token:
+            self._home_execution.cancel_owner_token = None
+            self._home_execution.cancel_owner = None
         self._guard_unresolved = False
         self._guard_token = None
 
@@ -491,18 +525,21 @@ class HomeService:
             accepted = self._accepted_id if self._in_send else self._execution_id
             if accepted is not None:
                 self._cancel_id = accepted
-        if self._navigation is None or self._return_lock.locked():
+        if self._return_lock.locked():
             return
-        async with self._return_lock:
-            if not self._home_execution.cancel_required:
-                return
-            await self._refresh_guard()
-            if not self._guard_unresolved:
-                self._home_execution.cancel_required = False
-                return
-            if self._execution_id is None:
-                return
-            await self._cancel_owed_goal()
+        async with self._coordinated_execution():
+            await self._cancel_if_required()
+
+    async def _cancel_if_required(self) -> None:
+        if not self._home_execution.cancel_required:
+            return
+        await self._refresh_guard()
+        if not self._guard_unresolved:
+            self._home_execution.cancel_required = False
+            return
+        if self._execution_id is None:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "navigation outcome needs review")
+        await self._cancel_owed_goal()
 
     def _note_accepted(self, intent_token: str, execution_id: str) -> None:
         if (
@@ -518,31 +555,18 @@ class HomeService:
     async def note_terminal(self, execution_id: str, intent_token: str | None = None) -> None:
         if not intent_token:
             return
-        async with self._return_lock:
+        async with self._coordinated_execution():
             if await self._read_guard() != (execution_id, intent_token):
                 return
             self._execution_id = execution_id
             self._guard_token = intent_token
             self._guard_unresolved = True
-            navigation = self._navigation
-            if navigation is not None:
-                result = await navigation.cancel(execution_id)
-                if (
-                    result.status != OperationStatus.SUCCEEDED
-                    or result.operation_id != execution_id
-                ):
-                    raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
-            else:
-                raise DomainError(ErrorCode.UNAVAILABLE, "navigation cancellation is unavailable")
-            await self._clear_guard(execution_id)
-            self._execution_id = None
-            self._home_execution.cancel_required = False
-            if self._cancel_id == execution_id:
-                self._cancel_id = None
+            await self._cancel_owed_goal()
 
     async def _cancel_owed_goal(self) -> None:
         execution_id = self._execution_id
         assert execution_id is not None
+        self._home_execution.cancel_attempt_generation = self._home_execution.disconnect_generation
         result = await self._finish_execution(execution_id)
         if result.status != OperationStatus.SUCCEEDED or result.operation_id != execution_id:
             raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
@@ -553,6 +577,10 @@ class HomeService:
             self._cancel_id = None
 
     async def _finish_execution(self, execution_id: str) -> OperationResult:
+        if self._home_execution.cancel_owner_token == self._guard_token:
+            cancel = self._home_execution.cancel_owner
+            if cancel is not None:
+                return await cancel(execution_id)
         navigation = self._navigation
         if navigation is None:
             raise DomainError(ErrorCode.UNAVAILABLE, "navigation cancellation is unavailable")

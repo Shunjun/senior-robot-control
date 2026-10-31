@@ -1868,6 +1868,69 @@ async def test_persisted_range_is_not_duplicated_when_cursor_write_fails(tmp_pat
         assert navigation.calls == []
 
 
+async def test_restart_range_retry_survives_process_restart_and_extends_both_ends(
+    tmp_path: Path,
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    old_cursor = created + timedelta(minutes=30)
+    path = tmp_path / "restart-cursor.db"
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        await store.create(interval_task(created, "second-patrol"))
+        await store.save_scan_cursor(old_cursor)
+        await database.connection.execute(
+            "CREATE TRIGGER reject_cursor BEFORE UPDATE ON task_scan_cursor "
+            "BEGIN SELECT RAISE(ABORT, 'cursor unavailable'); END"
+        )
+        await database.connection.commit()
+
+    context = ExecutionContext(False, False, False, False, task.map_ref)
+    for offset, expected_start, expected_end in (
+        (1, 0, 1),
+        (2, 0, 2),
+        (-1, -1, 2),
+    ):
+        async with Database(path) as database:
+            store = TaskStore(database, robot_id="robot-a")
+            await store.prepare()
+            navigation = RecordingNavigation()
+            runtime = TaskRuntime(store, TaskExecutor(database, store, navigation))
+            with pytest.raises(sqlite3.IntegrityError, match="cursor unavailable"):
+                await runtime.tick(old_cursor + timedelta(seconds=offset), 1.0, context)
+            skips = await store.skips()
+            assert len(skips) == 2
+            assert {item.task_id for item in skips} == {task.task_id, "second-patrol"}
+            assert all(item.reason == "restart" for item in skips)
+            assert all(
+                item.skip_from == old_cursor + timedelta(seconds=expected_start) for item in skips
+            )
+            assert all(
+                item.skip_until == old_cursor + timedelta(seconds=expected_end) for item in skips
+            )
+            assert await store.scan_cursor() == old_cursor
+            assert navigation.calls == []
+
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        await database.connection.execute("DROP TRIGGER reject_cursor")
+        await database.connection.commit()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, RecordingNavigation()))
+        await runtime.tick(old_cursor + timedelta(seconds=3), 1.0, context)
+
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, RecordingNavigation()))
+        await runtime.tick(old_cursor + timedelta(seconds=4), 1.0, context)
+        skips = await store.skips()
+        assert len(skips) == 4
+        assert {item.skip_from for item in skips} == {
+            old_cursor - timedelta(seconds=1),
+            old_cursor + timedelta(seconds=3),
+        }
+
+
 async def test_cancelling_prior_execution_does_not_dispatch_same_tick(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     first_due = created + timedelta(minutes=30)
