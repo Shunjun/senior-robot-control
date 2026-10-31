@@ -100,11 +100,22 @@ class MotionPort(Protocol):
 class IpcMotion:
     """``MotionPort`` over the local socket. It never touches rclpy or ``/cmd_vel``."""
 
-    def __init__(self, client: IpcClient) -> None:
+    def __init__(
+        self,
+        client: IpcClient,
+        *,
+        heartbeat_client: IpcClient | None = None,
+        disable_client: IpcClient | None = None,
+    ) -> None:
         self._client = client
+        # //Compatible: isolated callers can still supply one serialized IPC client.
+        self._heartbeat_client = heartbeat_client if heartbeat_client is not None else client
+        self._disable_client = disable_client if disable_client is not None else client
 
-    async def _ok(self, kind: str, **fields: Any) -> dict[str, Any]:
-        reply = await self._client.request(kind, **fields)
+    async def _ok(
+        self, kind: str, *, client: IpcClient | None = None, **fields: Any
+    ) -> dict[str, Any]:
+        reply = await (client if client is not None else self._client).request(kind, **fields)
         if reply.get("ok") is not True and reply.get("error") in {"unsupported", "unavailable"}:
             raise DomainError(ErrorCode.UNAVAILABLE, f"ROS {kind} is unavailable")
         if reply.get("ok") is not True:
@@ -127,16 +138,24 @@ class IpcMotion:
         await self._ok("command", envelope=serialize_envelope(envelope).decode())
 
     async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
-        await self._ok("server_heartbeat", connection_epoch=connection_epoch, deadline=deadline)
+        await self._ok(
+            "server_heartbeat",
+            client=self._heartbeat_client,
+            connection_epoch=connection_epoch,
+            deadline=deadline,
+        )
 
     async def disable(self, connection_epoch: int) -> None:
-        await self._ok("disable_motion", connection_epoch=connection_epoch)
+        await self._ok(
+            "disable_motion", client=self._disable_client, connection_epoch=connection_epoch
+        )
 
     async def exit(self) -> None:
-        await self._ok("exit")
+        await self._ok("exit", client=self._disable_client)
 
     async def call(self, name: str) -> Any:
         return (await self._ok("ros_call", name=name)).get("result")
 
     async def close(self) -> None:
-        await self._client.close()
+        for client in {self._client, self._heartbeat_client, self._disable_client}:
+            await client.close()

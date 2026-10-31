@@ -320,6 +320,8 @@ async def test_other_robot_heartbeat_not_eligible(rig: Rig) -> None:
 
 
 async def test_heartbeat_send_success_does_not_restore_eligibility(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
     link = FakeLink(epoch=4)
     task = await start(rig, link)
     rig.agent.note_heartbeat(ROBOT)
@@ -335,19 +337,21 @@ async def test_heartbeat_send_success_does_not_restore_eligibility(rig: Rig) -> 
         await original()
 
     link.send_heartbeat = flaky  # type: ignore[method-assign]
-    await until(lambda: not rig.agent.eligible_for_motion)
-    await until(lambda: "disable:4" in rig.motion.events)
-    with pytest.raises(DomainError) as caught:
-        await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
-    assert caught.value.code is ErrorCode.SAFETY_REJECTED
-    assert not [event for event in rig.motion.events if event.startswith("forward")]
-    release.set()
-    await until(lambda: link.heartbeats > 0)
-    assert rig.agent.eligible_for_motion is False
-    rig.agent.note_heartbeat(ROBOT)
-    await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
-    assert "forward:control.acquire" in rig.motion.events
-    await finish(task, rig)
+    try:
+        await until(lambda: not rig.agent.eligible_for_motion)
+        await until(lambda: "disable:4" in rig.motion.events)
+        with pytest.raises(DomainError) as caught:
+            await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
+        assert caught.value.code is ErrorCode.SAFETY_REJECTED
+        release.set()
+        await original()
+        assert not rig.agent.eligible_for_motion
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+        await until(lambda: not rig.agent.connected)
+        assert not rig.agent.eligible_for_motion
+    finally:
+        release.set()
+        await finish(task, rig)
 
 
 async def test_dropped_link_disables_its_epoch(rig: Rig) -> None:
@@ -1031,3 +1035,148 @@ async def test_heartbeat_survives_full_work_slots_before_overload_closes_session
     finally:
         release.set()
         await finish(task, rig)
+
+
+async def test_disconnect_and_reconnect_records_loss_between_scans(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    lost = asyncio.Event()
+
+    async def persist_loss(generation: int) -> None:
+        lost.set()
+
+    rig.agent._on_eligibility_lost = persist_loss
+    first, second = FakeLink(1), FakeLink(2)
+    task = await start(rig, first, second)
+    try:
+        first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+        await until(lambda: rig.agent.eligible_for_motion)
+        before = rig.agent.continuity_generation
+        first.drop()
+        await asyncio.wait_for(lost.wait(), 1)
+        await until(lambda: rig.agent._epoch == 2)
+        second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+        await until(lambda: rig.agent.eligible_for_motion)
+        assert rig.agent.continuity_generation > before
+    finally:
+        await finish(task, rig)
+
+
+async def test_agent_release_is_bounded_for_cancellation_resistant_work(rig: Rig) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def stubborn() -> None:
+        entered.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    task = asyncio.create_task(stubborn())
+    rig.agent._inflight.add(task)
+    await entered.wait()
+    try:
+        await asyncio.wait_for(rig.agent._release(), timeout=1.5)
+        assert rig.agent.runtime_failed
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_agent_release_is_bounded_for_stubborn_cleanup(rig: Rig) -> None:
+    release = asyncio.Event()
+
+    async def stubborn_cleanup() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    rig.agent._cleanup = stubborn_cleanup
+    task = asyncio.create_task(rig.agent._release())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=1.5)
+        assert task in done
+        assert rig.agent.runtime_failed
+    finally:
+        release.set()
+        await task
+
+
+async def test_eligibility_gap_during_heartbeat_ack_invalidates_generation(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame, HeartbeatLedger
+
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = FakeClock()
+    rig.agent._clock = clock
+    rig.agent._ledger = HeartbeatLedger(clock, 1.0)
+    link = FakeLink(1)
+    runner = await start(rig, link)
+    gate, entered = asyncio.Event(), asyncio.Event()
+    calls = [0]
+
+    async def delayed(epoch: int, deadline: float) -> None:
+        calls[0] += 1
+        if calls[0] == 2:
+            entered.set()
+            await gate.wait()
+
+    rig.motion.server_heartbeat = delayed  # type: ignore[method-assign]
+    try:
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, 0.8))
+        await until(lambda: rig.agent.eligible_for_motion)
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, 1.5))
+        await asyncio.wait_for(entered.wait(), 1)
+        clock.now = 0.81
+        assert not rig.agent.eligible_for_motion
+        gate.set()
+        await asyncio.sleep(0.05)
+        assert rig.agent._continuity_generation > 0
+        assert not rig.agent.eligible_for_motion
+    finally:
+        gate.set()
+        await finish(runner, rig)
+
+
+async def test_background_fault_cannot_be_undone_by_late_heartbeat_ack(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    fail, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def failing() -> None:
+        await fail.wait()
+        raise RuntimeError("background failure")
+
+    async def delayed(epoch: int, deadline: float) -> None:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    rig.agent._background["task-loop"] = failing
+    rig.motion.server_heartbeat = delayed  # type: ignore[method-assign]
+    link = FakeLink(1)
+    task = await start(rig, link)
+    try:
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+        await asyncio.wait_for(entered.wait(), 1)
+        fail.set()
+        await until(lambda: rig.agent._stopping)
+        release.set()
+        await asyncio.wait_for(task, 2)
+        assert not rig.agent.eligible_for_motion
+        assert "disable:1" in rig.motion.events
+    finally:
+        release.set()
+        if not task.done():
+            rig.agent.request_shutdown()
+            await asyncio.wait_for(task, 2)

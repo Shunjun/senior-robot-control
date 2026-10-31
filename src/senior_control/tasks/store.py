@@ -104,6 +104,15 @@ class TaskStore:
                     "(robot_id TEXT PRIMARY KEY, last_tick_utc TEXT NOT NULL)"
                 )
                 await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_execution_generation "
+                    "(execution_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, "
+                    "FOREIGN KEY(execution_id) REFERENCES task_execution(execution_id))"
+                )
+                await connection.execute(
+                    "CREATE INDEX IF NOT EXISTS task_execution_generation_idx "
+                    "ON task_execution_generation(generation, execution_id)"
+                )
+                await connection.execute(
                     "CREATE INDEX IF NOT EXISTS task_execution_scan_idx "
                     "ON task_execution(task_id, status, occurrence_utc)"
                 )
@@ -127,7 +136,7 @@ class TaskStore:
                           )
                         """,
                         (
-                            ExecutionStatus.NEEDS_REVIEW.value,
+                            ExecutionStatus.CANCEL_PENDING.value,
                             ExecutionStatus.DISPATCHING.value,
                             ExecutionStatus.RUNNING.value,
                             self._robot_id,
@@ -289,7 +298,9 @@ class TaskStore:
             raise DomainError(ErrorCode.CONFLICT, "revision conflict")
         return stored
 
-    async def claim(self, task: TaskDefinition, occurrence_utc: datetime) -> ExecutionRecord:
+    async def claim(
+        self, task: TaskDefinition, occurrence_utc: datetime, *, generation: int = 0
+    ) -> ExecutionRecord:
         self._require_robot(task)
         occurrence = _utc(occurrence_utc)
         execution_id = uuid.uuid4().hex
@@ -322,6 +333,11 @@ class TaskStore:
                             ExecutionStatus.DISPATCHING.value,
                         ),
                     )
+                    await connection.execute(
+                        "INSERT INTO task_execution_generation(execution_id, generation) "
+                        "VALUES (?, ?)",
+                        (execution_id, generation),
+                    )
                     stored = await self._execution_in(connection, execution_id)
         except sqlite3.IntegrityError as exc:
             raise DomainError(ErrorCode.CONFLICT, "duplicate execution") from exc
@@ -330,12 +346,42 @@ class TaskStore:
         return stored
 
     async def mark_running(self, execution_id: str) -> ExecutionRecord:
-        return await self._mark(
-            execution_id,
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                await connection.execute(
+                    "UPDATE task_execution SET status = ?, navigation_sent = 1 "
+                    "WHERE execution_id = ? AND status = ? AND task_id IN "
+                    "(SELECT task_id FROM task_definition WHERE robot_id = ?)",
+                    (
+                        ExecutionStatus.RUNNING.value,
+                        execution_id,
+                        ExecutionStatus.DISPATCHING.value,
+                        self._robot_id,
+                    ),
+                )
+                stored = await self._execution_in(connection, execution_id)
+        if stored is None or stored.status not in {
             ExecutionStatus.RUNNING,
-            navigation_sent=True,
-            rollback_confirmed=False,
-        )
+            ExecutionStatus.CANCEL_PENDING,
+        }:
+            raise DomainError(ErrorCode.CONFLICT, "execution cannot be marked running")
+        return stored
+
+    async def mark_active_cancel_pending(self, generation: int) -> None:
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                await connection.execute(
+                    "UPDATE task_execution SET status = ? WHERE status IN (?, ?) AND task_id IN "
+                    "(SELECT task_id FROM task_definition WHERE robot_id = ?) AND execution_id IN "
+                    "(SELECT execution_id FROM task_execution_generation WHERE generation = ?)",
+                    (
+                        ExecutionStatus.CANCEL_PENDING.value,
+                        ExecutionStatus.RUNNING.value,
+                        ExecutionStatus.DISPATCHING.value,
+                        self._robot_id,
+                        generation,
+                    ),
+                )
 
     async def mark_cancel_pending(self, execution_id: str) -> ExecutionRecord:
         async with self._database.write_lock:

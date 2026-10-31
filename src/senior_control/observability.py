@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from typing import TextIO
 
 _EVENTS = frozenset(
     {
@@ -35,6 +36,23 @@ class JsonFormatter(logging.Formatter):
             if isinstance(value, str) and _IDENTIFIER.fullmatch(value):
                 data[key] = value
         return json.dumps(data, ensure_ascii=False)
+
+
+def configure_logging(stream: TextIO | None = None) -> None:
+    """Configure only this application's namespace when starting a process."""
+    parent = logging.getLogger("senior_control")
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    parent.handlers[:] = [handler]
+    parent.setLevel(logging.INFO)
+    parent.propagate = False
+    parent.disabled = False
+    for name, child in logging.root.manager.loggerDict.items():
+        if name.startswith("senior_control.") and isinstance(child, logging.Logger):
+            child.handlers.clear()
+            child.setLevel(logging.NOTSET)
+            child.propagate = True
+            child.disabled = False
 
 
 _METRIC_NAMES = frozenset({"agent_operations_total", "agent_reconnects_total"})

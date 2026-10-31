@@ -40,12 +40,23 @@ def log_output() -> Iterator[io.StringIO]:
     handler.setFormatter(JsonFormatter())
     logger = logging.getLogger("senior_control")
     previous = (logger.level, logger.propagate)
+    leaves = [
+        logging.getLogger("senior_control.agent"),
+        logging.getLogger("senior_control.runtime.supervisor"),
+    ]
+    leaf_states = [(leaf.level, leaf.propagate, leaf.disabled) for leaf in leaves]
+    for leaf in leaves:
+        leaf.setLevel(logging.NOTSET)
+        leaf.propagate = True
+        leaf.disabled = False
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
     yield stream
     logger.removeHandler(handler)
     logger.setLevel(previous[0])
     logger.propagate = previous[1]
+    for leaf, state in zip(leaves, leaf_states, strict=True):
+        leaf.level, leaf.propagate, leaf.disabled = state
 
 
 @pytest.fixture
@@ -125,3 +136,28 @@ def test_metrics_labels_are_bounded() -> None:
 
     with pytest.raises(ValueError):
         metrics.inc("per_user_metric", operation="task.create", result="succeeded")
+
+
+def test_cli_logging_config_restores_leaf_propagation_and_is_idempotent() -> None:
+    from senior_control.observability import configure_logging
+
+    parent = logging.getLogger("senior_control")
+    leaf = logging.getLogger("senior_control.agent")
+    saved_parent = (list(parent.handlers), parent.level, parent.propagate, parent.disabled)
+    saved_leaf = (leaf.level, leaf.propagate, leaf.disabled)
+    output = io.StringIO()
+    try:
+        leaf.propagate = False
+        leaf.disabled = True
+        configure_logging(output)
+        configure_logging(output)
+        leaf.info(
+            "secret %s", SECRET, extra={"event": "operation_completed", "operation_id": "op-1"}
+        )
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert len(records) == 1
+        assert records[0]["operation_id"] == "op-1"
+        assert SECRET not in output.getvalue()
+    finally:
+        parent.handlers, parent.level, parent.propagate, parent.disabled = saved_parent
+        leaf.level, leaf.propagate, leaf.disabled = saved_leaf

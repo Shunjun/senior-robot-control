@@ -67,6 +67,7 @@ class Agent:
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
+        on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
         heartbeat_seconds: float = 0.2,
         retry_delay: float = 1.0,
         heartbeat_window: float = 1.0,
@@ -89,6 +90,11 @@ class Agent:
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
+        self._on_eligibility_lost = on_eligibility_lost
+        self._loss_tasks: set[asyncio.Task[None]] = set()
+        self._stragglers: set[asyncio.Task[Any]] = set()
+        self._continuity_generation = 0
+        self._was_eligible = False
         self._heartbeat_seconds = heartbeat_seconds
         self._retry_delay = retry_delay
         if command_ttl_seconds <= 0:
@@ -111,6 +117,7 @@ class Agent:
             admit=self._admit,
         )
         self._link: Link | None = None
+        self._revoked_link: Link | None = None
         self._epoch = 0
         self._last_epoch = 0
         self._heartbeat_generation = 0
@@ -118,9 +125,11 @@ class Agent:
         self._supervisor: Supervisor | None = None
         self._stopping = False
         self.auth_rejected = False
+        self.runtime_failed = False
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
+        self._safety_pending: dict[str, tuple[Link, Envelope]] = {}
         self._signals: list[signal.Signals] = []
         if snapshot_seconds <= 0 or state_poll_seconds <= 0:
             raise ValueError("snapshot intervals must be positive")
@@ -141,7 +150,36 @@ class Agent:
     @property
     def eligible_for_motion(self) -> bool:
         """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
+        self._expire_eligibility()
         return self.connected and self.motion_allowed and self._ledger.eligible(self.robot_id)
+
+    @property
+    def continuity_generation(self) -> int:
+        self._expire_eligibility()
+        return self._continuity_generation
+
+    def _expire_eligibility(self) -> None:
+        if self._was_eligible and not self._ledger.eligible(self.robot_id):
+            self._lose_eligibility()
+
+    def _lose_eligibility(self) -> None:
+        if not self._was_eligible:
+            return
+        self._was_eligible = False
+        lost_generation = self._continuity_generation
+        self._continuity_generation += 1
+        self._heartbeat_generation += 1
+        self._revoked_link = self._link
+        self._ledger.forget(self.robot_id)
+        if self._on_eligibility_lost is not None:
+            task = asyncio.ensure_future(self._on_eligibility_lost(lost_generation))
+            self._loss_tasks.add(task)
+            task.add_done_callback(self._loss_finished)
+
+    def _loss_finished(self, task: asyncio.Task[None]) -> None:
+        self._loss_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            self._supervisor_fault("failed to persist connection loss")
 
     def note_heartbeat(self, robot_id: str) -> None:
         self._ledger.note(robot_id)
@@ -158,6 +196,7 @@ class Agent:
             background=self._background,
             heartbeat_seconds=self._heartbeat_seconds,
             retry_delay=self._retry_delay,
+            on_fault=self._supervisor_fault,
         )
         self._supervisor = supervisor
         self._log("startup")
@@ -170,9 +209,14 @@ class Agent:
         finally:
             await self._release()
 
+    def _supervisor_fault(self, reason: str) -> None:
+        self.runtime_failed = True
+        self.request_shutdown()
+
     def request_shutdown(self) -> None:
         """Synchronous and signal-safe: motion is revoked before anything else happens."""
         self._stopping = True
+        self._lose_eligibility()
         self._heartbeat_generation += 1
         if self._supervisor is not None:
             self._supervisor.revoke("shutdown requested")
@@ -187,19 +231,18 @@ class Agent:
     async def _disable_motion(self, supervisor: Supervisor) -> None:
         self._stopping = True
         supervisor.revoke("shutting down")
-        try:
-            await asyncio.wait_for(
-                self._motion.disable(self._last_epoch), timeout=self._deadlines.safety
-            )
-        except Exception:
-            logger.exception("ros side did not acknowledge disabling motion")
+        await self._quietly(self._motion.disable(self._last_epoch))
+        await self._settle_safety()
 
     async def _release(self) -> None:
         self._log("shutdown")
         inflight = list(self._inflight)
         for task in inflight:
-            task.cancel()
-        await asyncio.gather(*inflight, return_exceptions=True)
+            if task is not self._safety_task:
+                task.cancel()
+        await self._settle_safety()
+        await self._wait_inflight(inflight)
+        await self._wait_inflight(list(self._loss_tasks))
         link, self._link = self._link, None
         if link is not None:
             await self._quietly(link.close())
@@ -212,9 +255,43 @@ class Agent:
             loop.remove_signal_handler(number)
         self._signals.clear()
 
+    async def _wait_inflight(self, tasks: list[asyncio.Task[None]]) -> None:
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(tasks, timeout=self._deadlines.safety)
+        if done:
+            await asyncio.gather(*done, return_exceptions=True)
+        if pending:
+            self._stragglers.update(pending)
+            for task in pending:
+                task.add_done_callback(self._straggler_finished)
+            self.runtime_failed = True
+            self.request_shutdown()
+            logger.error("inflight work did not stop before shutdown deadline")
+
+    def _straggler_finished(self, task: asyncio.Task[Any]) -> None:
+        self._stragglers.discard(task)
+        if not task.cancelled():
+            task.exception()
+
     async def _quietly(self, call: Awaitable[Any]) -> None:
+        task = asyncio.ensure_future(call)
         try:
-            await asyncio.wait_for(call, timeout=self._deadlines.safety)
+            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+        except BaseException:
+            task.cancel()
+            self._stragglers.add(task)
+            task.add_done_callback(self._straggler_finished)
+            raise
+        if not done:
+            task.cancel()
+            self._stragglers.add(task)
+            task.add_done_callback(self._straggler_finished)
+            self.runtime_failed = True
+            logger.error("shutdown step exceeded its deadline")
+            return
+        try:
+            task.result()
         except Exception:
             logger.exception("shutdown step failed")
 
@@ -222,7 +299,12 @@ class Agent:
 
     async def _beat(self) -> None:
         link = self._link
-        if link is None:
+        if link is None or not self.motion_allowed:
+            return
+        self._expire_eligibility()
+        if self._revoked_link is link:
+            await self._quietly(self._motion.disable(link.epoch))
+            await self._quietly(link.close())
             return
         try:
             await link.send_heartbeat()
@@ -230,13 +312,12 @@ class Agent:
             if self._link is not link:
                 raise
             self._heartbeat_generation += 1
+            self._revoked_link = link
+            self._lose_eligibility()
             self._ledger.forget(self.robot_id)
             epoch = link.epoch
             if epoch:
-                try:
-                    await self._motion.disable(epoch)
-                except Exception:
-                    logger.exception("could not disable motion after a failed heartbeat")
+                await self._quietly(self._motion.disable(epoch))
             await self._quietly(link.close())
             raise
 
@@ -248,6 +329,7 @@ class Agent:
             self.request_shutdown()
             raise
         self._heartbeat_generation += 1
+        self._revoked_link = None
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
@@ -258,8 +340,15 @@ class Agent:
                 while True:
                     frame = await link.recv()
                     if isinstance(frame, HeartbeatFrame):
+                        was_eligible = self._was_eligible
+                        self._expire_eligibility()
+                        if was_eligible and not self._was_eligible:
+                            raise ConnectionError("heartbeat continuity expired")
+                        if not self.motion_allowed or self._revoked_link is link:
+                            raise ConnectionError("motion is revoked")
                         if (
-                            frame.robot_id != self.robot_id
+                            not self.motion_allowed
+                            or frame.robot_id != self.robot_id
                             or frame.deadline <= self._clock.monotonic()
                         ):
                             raise ConnectionError("invalid heartbeat")
@@ -268,19 +357,24 @@ class Agent:
                             self._motion.server_heartbeat(link.epoch, frame.deadline),
                             timeout=self._deadlines.safety,
                         )
+                        was_eligible = self._was_eligible
+                        self._expire_eligibility()
                         if (
-                            frame.deadline <= self._clock.monotonic()
+                            (was_eligible and not self._was_eligible)
+                            or frame.deadline <= self._clock.monotonic()
                             or self._link is not link
+                            or self._revoked_link is link
                             or generation != self._heartbeat_generation
-                            or self._stopping
+                            or not self.motion_allowed
                         ):
                             raise ConnectionError("heartbeat expired before ROS acknowledgement")
                         self._ledger.note(frame.robot_id, deadline=frame.deadline)
+                        self._was_eligible = self._ledger.eligible(frame.robot_id)
                     else:
                         self._accept(link, frame)
             finally:
                 keepalive.cancel()
-                await asyncio.gather(keepalive, return_exceptions=True)
+                await self._wait_inflight([keepalive])
         except AuthRejected:
             self.auth_rejected = True
             self.request_shutdown()
@@ -290,14 +384,17 @@ class Agent:
         finally:
             epoch = link.epoch
             if self._link is link:
+                self._lose_eligibility()
                 self._link, self._epoch = None, 0
                 self._ledger.forget(self.robot_id)
             self._log("connection_closed")
             inflight = list(self._inflight)
             for task in inflight:
-                task.cancel()
+                if task is not self._safety_task:
+                    task.cancel()
             await self._quietly(self._motion.disable(epoch))
-            await asyncio.gather(*inflight, return_exceptions=True)
+            await self._settle_safety()
+            await self._wait_inflight(inflight)
             await self._quietly(link.close())
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
@@ -346,16 +443,51 @@ class Agent:
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
             return
-        safety = envelope.type in HALT_TYPES
+        if envelope.type in HALT_TYPES:
+            # At most one unsent request of each safety kind; estop always wins over stop.
+            self._safety_pending.setdefault(envelope.type, (link, envelope))
+            if self._safety_task is None or self._safety_task.done():
+                self._safety_task = self._spawn(self._drain_safety())
+            return
         safety_active = self._safety_task is not None and not self._safety_task.done()
-        if (safety and safety_active) or (
-            not safety and len(self._inflight) - int(safety_active) >= MAX_INFLIGHT
-        ):
-            # Closing the session cancels queued work and disables its motion epoch.
+        if len(self._inflight) - int(safety_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
-        task = self._spawn(self._answer(link, envelope))
-        if safety:
-            self._safety_task = task
+        self._spawn(self._answer(link, envelope))
+
+    async def _drain_safety(self) -> None:
+        while self._safety_pending:
+            kind = "safety.estop" if "safety.estop" in self._safety_pending else "drive.stop"
+            link, envelope = self._safety_pending.pop(kind)
+            if kind == "safety.estop":
+                # An emergency latch already implies the queued zero-motion stop.
+                self._safety_pending.pop("drive.stop", None)
+            try:
+                result = await self.dispatch(envelope)
+            except DomainError as exc:
+                if len(self._inflight) < MAX_INFLIGHT + 1:
+                    self._spawn(self._reply(link, envelope, error=exc.code))
+                if link.epoch == self._last_epoch and kind == "safety.estop":
+                    self.auth_rejected = True
+                    self.request_shutdown()
+                continue
+            if len(self._inflight) < MAX_INFLIGHT + 1:
+                self._spawn(self._reply(link, envelope, result=result))
+
+    async def _settle_safety(self) -> bool:
+        task = self._safety_task
+        if task is None:
+            return True
+        done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+        failed = task not in done or task.cancelled()
+        if not failed:
+            failed = task.exception() is not None
+        if failed:
+            self.auth_rejected = True
+            self.runtime_failed = True
+            self.request_shutdown()
+            logger.error("safety command did not complete; restart is disabled")
+            return False
+        return True
 
     def _spawn(self, work: Awaitable[None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(work)
@@ -460,7 +592,7 @@ class Agent:
                     await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
             except Exception as exc:
                 if supervisor is not None:
-                    supervisor.revoke("stop was not acknowledged")
+                    self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         self._admit(envelope)
@@ -598,6 +730,9 @@ def main() -> int:
     except (OSError, ValueError) as exc:
         print(f"invalid agent configuration: {exc}", file=sys.stderr)
         return 78
+    from senior_control.observability import configure_logging
+
+    configure_logging()
     return asyncio.run(run_agent(config))
 
 

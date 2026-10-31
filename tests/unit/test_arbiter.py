@@ -358,3 +358,13 @@ def test_reset_queued_before_other_session_estop_cannot_clear_it():
     assert arbiter.accept(command("safety.estop", seq=1, session="page-b"), 0.1).accepted
     assert not arbiter.accept(queued, 0.2).accepted
     assert arbiter.mode(0.2) == "estop"
+
+
+def test_buffered_estop_same_epoch_latches_after_heartbeat_deadline():
+    arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 0.0, 0.8)
+    assert arbiter.accept(command("control.acquire", seq=1, session="a"), 0.0).accepted
+    assert arbiter.accept(command("safety.estop", seq=1, session="b"), 0.81).accepted
+    assert arbiter.mode(0.81) == "estop"
+    assert arbiter.server_heartbeat(2, 0.9, 1.7)
+    assert not arbiter.accept(command("safety.estop", seq=2, epoch=1, session="b"), 1.0).accepted

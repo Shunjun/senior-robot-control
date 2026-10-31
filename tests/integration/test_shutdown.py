@@ -661,3 +661,339 @@ async def test_adapter_navigation_reports_unavailable_without_ros_consumer() -> 
     result = await rig.send("command", simple("navigation.start", seq=2))
     assert result == {"ok": False, "error": "unavailable"}
     assert rig.arbiter.mode(rig.now) == "idle"
+
+
+async def test_background_failure_revokes_ros_heartbeat_and_stops_agent(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.models import Velocity
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    adapter = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    server = IpcServer(socket_path, adapter.handle)
+    await server.start()
+    trigger = asyncio.Event()
+
+    async def background() -> None:
+        await trigger.wait()
+        raise RuntimeError("database failure")
+
+    link = FakeLink(epoch=1)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=IpcMotion(IpcClient(socket_path)),
+            heartbeat_seconds=0.02,
+            background={"tasks": background},
+            source_clock_verified=True,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.connected)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            trigger.set()
+            await asyncio.wait_for(asyncio.shield(runner), 1.5)
+            assert adapter.motion_disabled
+            assert arbiter.tick(time.monotonic()) == Velocity(0.0, 0.0)
+        finally:
+            agent.request_shutdown()
+            if not runner.done():
+                await asyncio.wait_for(runner, 2)
+    await server.close()
+
+
+async def test_buffered_stop_then_estop_latches_estop(tmp_path: Path, socket_path: Path) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    adapter = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    server = IpcServer(socket_path, adapter.handle)
+    await server.start()
+    link = FakeLink(epoch=1)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=IpcMotion(IpcClient(socket_path)),
+            heartbeat_seconds=0.05,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.connected)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            await agent.dispatch(simple("control.acquire", seq=1))
+            link.inbox.put_nowait(simple("drive.stop", seq=2))
+            link.inbox.put_nowait(simple("safety.estop", seq=3))
+            await until(lambda: arbiter.mode(time.monotonic()) == "estop", timeout=0.5)
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+    await server.close()
+
+
+async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "stop":
+            entered.set()
+            await release.wait()
+        return await core.handle(message)
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    link = FakeLink(epoch=1)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=IpcMotion(IpcClient(socket_path)),
+            heartbeat_seconds=0.05,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.connected)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            await agent.dispatch(simple("control.acquire", seq=1))
+            link.inbox.put_nowait(simple("drive.stop", seq=2))
+            await asyncio.wait_for(entered.wait(), 1)
+            link.inbox.put_nowait(simple("safety.estop", seq=3))
+            link.drop()
+            await asyncio.sleep(0.02)
+            release.set()
+            await until(lambda: arbiter.mode(time.monotonic()) == "estop")
+        finally:
+            release.set()
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+    await server.close()
+
+
+async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    entered, release, fail = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "stop":
+            entered.set()
+            await release.wait()
+        return await core.handle(message)
+
+    async def background() -> None:
+        await fail.wait()
+        raise RuntimeError("background failure")
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    link = FakeLink(1)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        motion = IpcMotion(
+            IpcClient(socket_path),
+            heartbeat_client=IpcClient(socket_path),
+            disable_client=IpcClient(socket_path),
+        )
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=motion,
+            background={"tasks": background},
+            heartbeat_seconds=0.05,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.connected)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            await agent.dispatch(simple("control.acquire", seq=1))
+            link.inbox.put_nowait(simple("drive.stop", seq=2))
+            await asyncio.wait_for(entered.wait(), 1)
+            fail.set()
+            await until(lambda: core.motion_disabled, timeout=0.3)
+        finally:
+            release.set()
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 3)
+    await server.close()
+
+
+async def test_fault_disables_ros_before_delayed_heartbeat_ack_returns(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    entered, release, fail = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    count = [0]
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        result = await core.handle(message)
+        if message["type"] == "server_heartbeat":
+            count[0] += 1
+            if count[0] == 2:
+                entered.set()
+                await release.wait()
+        return result
+
+    async def background() -> None:
+        await fail.wait()
+        raise RuntimeError("database failure")
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    link = FakeLink(1)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        motion = IpcMotion(
+            IpcClient(socket_path),
+            heartbeat_client=IpcClient(socket_path),
+            disable_client=IpcClient(socket_path),
+        )
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=motion,
+            background={"tasks": background},
+            heartbeat_seconds=0.05,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.connected)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            await agent.dispatch(simple("control.acquire", seq=1))
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await asyncio.wait_for(entered.wait(), 1)
+            fail.set()
+            await until(lambda: core.motion_disabled, timeout=0.3)
+            release.set()
+            await asyncio.wait_for(runner, 2)
+            assert not agent.eligible_for_motion
+            assert not (
+                await core.handle(
+                    {
+                        "type": "server_heartbeat",
+                        "connection_epoch": 1,
+                        "deadline": time.monotonic() + 0.5,
+                    }
+                )
+            )["ok"]
+        finally:
+            release.set()
+            agent.request_shutdown()
+            if not runner.done():
+                await asyncio.wait_for(runner, 2)
+    await server.close()

@@ -102,7 +102,11 @@ async def run_agent(config: AgentConfig) -> int:
         await tasks.prepare()
         await waypoints.prepare()
         await journal.prepare()
-        motion = IpcMotion(IpcClient(config.socket_path))
+        motion = IpcMotion(
+            IpcClient(config.socket_path),
+            heartbeat_client=IpcClient(config.socket_path),
+            disable_client=IpcClient(config.socket_path),
+        )
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
         navigation_client = IpcClient(config.socket_path)
@@ -111,9 +115,13 @@ async def run_agent(config: AgentConfig) -> int:
         navigation = IpcNavigation(navigation_client)
         agent: Agent
         executor = TaskExecutor(
-            database, tasks, navigation, link_up=lambda: agent.eligible_for_motion
+            database,
+            tasks,
+            navigation,
+            link_up=lambda: agent.eligible_for_motion,
+            generation=lambda: agent.continuity_generation,
         )
-        runtime = TaskRuntime(tasks, executor)
+        runtime = TaskRuntime(tasks, executor, generation=lambda: agent.continuity_generation)
 
         async def task_loop() -> None:
             while True:
@@ -150,7 +158,8 @@ async def run_agent(config: AgentConfig) -> int:
             map_root=config.database_path.parent / "map-transfer",
             background={"tasks": task_loop},
             cleanup=cleanup,
+            on_eligibility_lost=tasks.mark_active_cancel_pending,
         )
         agent.install_signal_handlers()
         await agent.run()
-        return 78 if agent.auth_rejected else 0
+        return 78 if agent.auth_rejected else 1 if agent.runtime_failed else 0

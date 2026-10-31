@@ -156,7 +156,7 @@ async def test_crash_after_dispatch_never_redispatches_unknown(tmp_path: Path) -
 
     assert saved is not None
     assert record is not None
-    assert record.status is ExecutionStatus.NEEDS_REVIEW
+    assert record.status is ExecutionStatus.CANCEL_PENDING
     assert record.navigation_sent is False
     assert record.rollback_confirmed is False
     assert caught.value.code is ErrorCode.CONFLICT
@@ -175,7 +175,7 @@ async def test_crash_after_dispatch_never_redispatches_unknown(tmp_path: Path) -
             5.0,
         ),
     )
-    assert intents == []
+    assert len(intents) == 1 and intents[0].action is IntentAction.PAUSE
 
 
 async def test_claim_conflicts_while_another_execution_is_in_flight(tmp_path: Path) -> None:
@@ -832,3 +832,186 @@ async def test_runtime_propagates_database_failure(
             await runtime.tick(
                 datetime.now(timezone.utc), 0.0, ExecutionContext(False, False, False, False, None)
             )
+
+
+async def test_start_ack_after_reconnect_requires_cancel(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    generation = [1]
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = HoldNavigation(store)
+        executor = TaskExecutor(database, store, nav, generation=lambda: generation[0])
+        dispatch = asyncio.create_task(
+            executor.persist_and_dispatch(due_intent(task, created + timedelta(seconds=1800)), task)
+        )
+        await nav.started.wait()
+        generation[0] = 2
+        nav.release.set()
+        await dispatch
+        record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+        assert record is not None and record.status is not ExecutionStatus.RUNNING
+        assert f"cancel:{record.execution_id}" in nav.calls
+
+
+async def test_running_task_is_cancelled_after_generation_changes_between_ticks(
+    tmp_path: Path,
+) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    generation = [1]
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = RecordingNavigation()
+        runtime = TaskRuntime(
+            store,
+            TaskExecutor(database, store, nav, generation=lambda: generation[0]),
+            generation=lambda: generation[0],
+        )
+        live = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 1.0, live)
+        await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
+        generation[0] = 2
+        await runtime.tick(created + timedelta(seconds=1801), 3.0, live)
+        record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+        assert record is not None and record.status is ExecutionStatus.PAUSED
+        assert f"cancel:{record.execution_id}" in nav.calls
+
+
+async def test_delayed_old_loss_callback_does_not_cancel_new_generation(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        old = await store.claim(task, created + timedelta(seconds=1800), generation=1)
+        await store.mark_running(old.execution_id)
+        await store.mark_active_cancel_pending(1)
+        await store.pause(old.execution_id)
+        fresh = await store.claim(task, created + timedelta(seconds=3600), generation=2)
+        await store.mark_running(fresh.execution_id)
+        await store.mark_active_cancel_pending(1)
+        got = await store.execution_by_id(fresh.execution_id)
+        assert got is not None and got.status is ExecutionStatus.RUNNING
+
+
+async def test_agent_disconnect_during_start_persists_cancel_before_reconnect(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from agent_fakes import (
+        ROBOT,
+        FakeConnector,
+        FakeHome,
+        FakeLink,
+        FakeMaps,
+        FakeMotion,
+        FakeState,
+        FakeTasks,
+        until,
+    )
+
+    from senior_control.agent import Agent
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.tasks.runtime import TaskRuntime
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        first, second = FakeLink(1), FakeLink(2)
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(first, second),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=FakeMotion(),
+            heartbeat_seconds=0.02,
+            retry_delay=0.01,
+            on_eligibility_lost=store.mark_active_cancel_pending,
+        )
+        nav = HoldNavigation(store)
+        executor = TaskExecutor(
+            database,
+            store,
+            nav,
+            link_up=lambda: agent.eligible_for_motion,
+            generation=lambda: agent.continuity_generation,
+        )
+        runtime = TaskRuntime(store, executor, generation=lambda: agent.continuity_generation)
+        runner = asyncio.create_task(agent.run())
+        tick = None
+        try:
+            await until(lambda: agent.connected)
+            first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            context = ExecutionContext(True, True, True, False, task.map_ref)
+            await runtime.tick(created + timedelta(seconds=1799), 1.0, context)
+            tick = asyncio.create_task(
+                runtime.tick(created + timedelta(seconds=1800), 2.0, context)
+            )
+            await asyncio.wait_for(nav.started.wait(), 1)
+            first.drop()
+            await until(lambda: agent.continuity_generation > 0)
+            await until(lambda: second.epoch == agent._epoch)
+            second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+            await until(lambda: agent.eligible_for_motion)
+            nav.release.set()
+            await tick
+            record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+            assert record is not None and record.status is not ExecutionStatus.RUNNING
+            assert f"cancel:{record.execution_id}" in nav.calls
+        finally:
+            nav.release.set()
+            if tick is not None:
+                await asyncio.gather(tick, return_exceptions=True)
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+
+
+async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
+    tmp_path: Path,
+) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    class HoldCancel(RecordingNavigation):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def cancel(self, execution_id: str) -> None:
+            self.calls.append(f"cancel:{execution_id}")
+            self.entered.set()
+            await self.release.wait()
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    generation = [1]
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = HoldCancel()
+        runtime = TaskRuntime(
+            store,
+            TaskExecutor(database, store, nav, generation=lambda: generation[0]),
+            generation=lambda: generation[0],
+        )
+        live = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 1.0, live)
+        await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
+        generation[0] = 2
+        tick = asyncio.create_task(runtime.tick(created + timedelta(seconds=1801), 3.0, live))
+        try:
+            await asyncio.wait_for(nav.entered.wait(), 1)
+            record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+            assert record is not None and record.status is ExecutionStatus.CANCEL_PENDING
+            generation[0] = 3
+            assert len([x for x in nav.calls if not x.startswith("cancel:")]) == 1
+        finally:
+            nav.release.set()
+            await tick
+        record = await store.execution_by_id(record.execution_id)
+        assert record is not None and record.status is ExecutionStatus.PAUSED

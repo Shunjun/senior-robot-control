@@ -33,6 +33,7 @@ class Supervisor:
         retry_delay: float = 1.0,
         max_retry_delay: float | None = None,
         shutdown_timeout: float = 1.0,
+        on_fault: Callable[[str], None] | None = None,
     ) -> None:
         if (
             heartbeat_seconds <= 0
@@ -50,6 +51,7 @@ class Supervisor:
         self._background = dict(background or {})
         self._heartbeat_seconds = heartbeat_seconds
         self._shutdown_timeout = shutdown_timeout
+        self._on_fault = on_fault
         self._retry_delay = retry_delay
         self._max_retry_delay = (
             max_retry_delay if max_retry_delay is not None else max(retry_delay * 30, retry_delay)
@@ -129,6 +131,11 @@ class Supervisor:
             logger.error("motion revoked: %s", reason)
         self._pending = None
 
+    def _fault(self, reason: str) -> None:
+        self._revoke(reason)
+        if self._on_fault is not None:
+            self._on_fault(reason)
+
     async def _heartbeat_loop(self) -> None:
         loop = asyncio.get_running_loop()
         interval = self._heartbeat_seconds
@@ -159,7 +166,7 @@ class Supervisor:
                     await self._drive_sink(vx, wz)
                 except Exception:
                     logger.exception("drive sink failed")
-                    self._revoke("drive sink failed")
+                    self._fault("drive sink failed")
             self._wake.clear()
 
     async def _watch(self, name: str, factory: Callable[[], Awaitable[None]]) -> None:
@@ -168,10 +175,10 @@ class Supervisor:
         except Exception:
             logger.exception("background task %s failed", name)
             if self._running:
-                self._revoke(f"background task {name} failed")
+                self._fault(f"background task {name} failed")
         else:
             if self._running:
-                self._revoke(f"background task {name} ended")
+                self._fault(f"background task {name} ended")
 
     async def _uplink_loop(self, connect: Callable[[], Awaitable[None]]) -> None:
         delay = self._retry_delay

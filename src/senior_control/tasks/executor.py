@@ -13,6 +13,7 @@ from typing import Protocol
 from senior_control.storage.database import Database
 from senior_control.tasks.models import (
     ExecutionRecord,
+    ExecutionStatus,
     IntentAction,
     SkipRecord,
     TaskDefinition,
@@ -44,6 +45,7 @@ class TaskExecutor:
         *,
         fault_after: str | None = None,
         link_up: Callable[[], bool] | None = None,
+        generation: Callable[[], int] | None = None,
     ) -> None:
         if store._database is not database:
             raise ValueError("executor store must use the given database")
@@ -52,17 +54,26 @@ class TaskExecutor:
         self._navigation = navigation
         self._fault_after = fault_after
         self._link_up = link_up if link_up is not None else (lambda: True)
+        # //Compatible: injected legacy callers without a connection use one fixed generation.
+        self._generation = generation if generation is not None else (lambda: 0)
 
     async def persist_and_dispatch(
-        self, intent: TaskIntent, task: TaskDefinition
+        self, intent: TaskIntent, task: TaskDefinition, *, expected_generation: int | None = None
     ) -> ExecutionRecord:
         if intent.action is not IntentAction.DISPATCH or intent.occurrence_utc is None:
             raise ValueError("dispatch intent required")
         if intent.task_id != task.task_id:
             raise ValueError("dispatch task does not match the intent")
-        record = await self._store.claim(task, intent.occurrence_utc)
+        started_generation = self._generation()
+        if expected_generation is not None and expected_generation != started_generation:
+            return await self._store.skip_occurrence(task, intent.occurrence_utc)
+        record = await self._store.claim(task, intent.occurrence_utc, generation=started_generation)
         self._crash_if("committed")
-        if self._navigation is None or not self._link_up():
+        if (
+            self._navigation is None
+            or not self._link_up()
+            or self._generation() != started_generation
+        ):
             return await self._store.mark_needs_review(record.execution_id)
         try:
             await self._navigation.start(record.execution_id, task)
@@ -78,13 +89,36 @@ class TaskExecutor:
                 raise NavigationFailure("start and cancellation are unconfirmed") from exc
             await self._store.mark_needs_review(record.execution_id)
             raise NavigationFailure("start outcome is unknown") from exc
-        return await self._store.mark_running(record.execution_id)
+        if not self._link_up() or self._generation() != started_generation:
+            await self._store.mark_cancel_pending(record.execution_id)
+            try:
+                await self._navigation.cancel(record.execution_id)
+            except Exception as exc:
+                raise NavigationFailure("reconnected action cancellation is unconfirmed") from exc
+            return await self._store.mark_needs_review(record.execution_id)
+        running = await self._store.mark_running(record.execution_id)
+        if (
+            running.status is ExecutionStatus.CANCEL_PENDING
+            or not self._link_up()
+            or self._generation() != started_generation
+        ):
+            await self._store.mark_cancel_pending(record.execution_id)
+            try:
+                await self._navigation.cancel(record.execution_id)
+            except Exception as exc:
+                raise NavigationFailure("reconnected action cancellation is unconfirmed") from exc
+            return await self._store.mark_needs_review(record.execution_id)
+        return running
 
-    async def apply(self, intent: TaskIntent, task: TaskDefinition) -> ExecutionRecord | SkipRecord:
+    async def apply(
+        self, intent: TaskIntent, task: TaskDefinition, *, expected_generation: int | None = None
+    ) -> ExecutionRecord | SkipRecord:
         if intent.task_id != task.task_id:
             raise ValueError("intent task does not match")
         if intent.action is IntentAction.DISPATCH:
-            return await self.persist_and_dispatch(intent, task)
+            return await self.persist_and_dispatch(
+                intent, task, expected_generation=expected_generation
+            )
         if intent.action is IntentAction.PAUSE:
             if intent.execution_id is None:
                 raise ValueError("pause requires an execution id")

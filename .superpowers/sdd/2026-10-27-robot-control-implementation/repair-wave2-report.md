@@ -36,3 +36,5 @@
 - 仍需 Linux Humble/Python 3.10 全依赖重同步与 cv_bridge 导入、ROS 图真实节点、ROS 时钟冻结、设备撤销／重连、真实网络半开、任务终态/取消、地图事务、传感器、SLAM、Nav2、视频和受控实车联调。服务端多 worker 跨进程旧连接抢占尚未验证；数据库恢复到旧备份可能回退 epoch，需部署规定和更强代次防回退措施。
 
 复审首轮修复及后续验证见同目录 [repair-wave2-fixround1-report.md](repair-wave2-fixround1-report.md)。
+
+第二轮竞态修复与日志交接见同目录 [repair-wave2-fixround2-report.md](repair-wave2-fixround2-report.md)。

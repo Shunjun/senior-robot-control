@@ -109,7 +109,6 @@ class Arbiter:
             if (
                 command.connection_epoch != self._server_epoch
                 or command.connection_epoch <= self._server_disabled_epoch
-                or now > self._server_deadline
             ):
                 return _reject(ErrorCode.OFFLINE)
             if command.type == "safety.estop":

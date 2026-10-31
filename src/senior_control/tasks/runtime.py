@@ -1,5 +1,6 @@
 """Drive persisted task decisions from the live connection and ROS state."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 
@@ -10,13 +11,26 @@ from senior_control.tasks.store import TaskStore
 
 
 class TaskRuntime:
-    def __init__(self, store: TaskStore, executor: TaskExecutor) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        executor: TaskExecutor,
+        *,
+        generation: Callable[[], int] | None = None,
+    ) -> None:
         self._store = store
         self._executor = executor
         self._last_wall: datetime | None = None
         self._last_mono: float | None = None
+        # //Compatible: isolated callers without an agent use a fixed generation.
+        self._generation = generation if generation is not None else (lambda: 0)
+        self._last_generation: int | None = None
 
     async def tick(self, now: datetime, monotonic: float, context: ExecutionContext) -> None:
+        generation = self._generation()
+        if self._last_generation is not None and generation != self._last_generation:
+            await self._store.mark_active_cancel_pending(self._last_generation)
+        self._last_generation = generation
         tasks = await self._store.list_tasks()
         if self._last_wall is None:
             cursor = await self._store.scan_cursor()
@@ -32,7 +46,9 @@ class TaskRuntime:
         by_id = {task.task_id: task for task in tasks}
         for intent in runner.tick(now, monotonic, current):
             try:
-                await self._executor.apply(intent, by_id[intent.task_id])
+                await self._executor.apply(
+                    intent, by_id[intent.task_id], expected_generation=generation
+                )
             except NavigationFailure:
                 # The execution is durably marked unknown; the next tick retries cancellation.
                 continue
