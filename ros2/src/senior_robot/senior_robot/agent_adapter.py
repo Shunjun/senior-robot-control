@@ -45,26 +45,34 @@ class AdapterCore:
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
-        self._epochs: set[int] = set()
+        self._active_epoch: int | None = None
+        self._highest_epoch = -1
         self.motion_disabled = False
+        self._exiting = False
 
     def release(self) -> None:
-        """End every lease epoch this adapter has seen. Safe to repeat."""
-        for epoch in sorted(self._epochs):
-            self._disconnect(epoch)
+        """End the active epoch only. Safe to repeat."""
+        if self._active_epoch is not None:
+            self._disconnect(self._active_epoch)
+            self._active_epoch = None
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
         if kind == "ping":
             return {"ok": True}
         if kind == "disable_motion":
-            self.motion_disabled = True
             epoch = message.get("connection_epoch")
-            if isinstance(epoch, int) and not isinstance(epoch, bool):
-                self._epochs.add(epoch)
+            if not isinstance(epoch, int) or isinstance(epoch, bool):
+                return {"ok": False, "error": "bad_request"}
+            if self._active_epoch is not None and epoch != self._active_epoch:
+                return {"ok": True}
+            if epoch < self._highest_epoch:
+                return {"ok": True}
+            self.motion_disabled = True
             self.release()
             return {"ok": True}
         if kind == "exit":
+            self._exiting = True
             self.motion_disabled = True
             self.release()
             self._request_exit()
@@ -72,7 +80,7 @@ class AdapterCore:
         if kind in {"stop", "estop"}:
             return self._send(message, kind, safety=True)
         if self.motion_disabled:
-            if kind == "command":
+            if kind == "command" and not self._exiting:
                 return self._reenable(message)
             return {"ok": False, "error": "motion_disabled"}
         if kind == "drive":
@@ -91,7 +99,7 @@ class AdapterCore:
             envelope = validate_envelope(raw.encode(), self._robot_id)
         except ValueError:
             return {"ok": False, "error": "motion_disabled"}
-        if envelope.type != "control.acquire" or envelope.connection_epoch <= max(self._epochs, default=-1):
+        if envelope.type != "control.acquire" or envelope.connection_epoch <= self._highest_epoch:
             return {"ok": False, "error": "motion_disabled"}
         result = self._send(message, None, safety=False)
         if result.get("ok"):
@@ -111,7 +119,6 @@ class AdapterCore:
             return {"ok": False, "error": "bad_request"}
         if not isinstance(envelope, (VelocityEnvelope, SimpleEnvelope)):
             return {"ok": False, "error": "bad_request"}
-        self._epochs.add(envelope.connection_epoch)
         received_at = message.get("received_at")
         if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
             received_at = None
@@ -119,6 +126,11 @@ class AdapterCore:
         if not accepted:
             # A refused stop or estop must not look successful and must not drop a newer lease.
             return {"ok": False, "accepted": False}
+        if envelope.type not in {"safety.estop", "safety.reset"}:
+            self._highest_epoch = max(self._highest_epoch, envelope.connection_epoch)
+            self._active_epoch = (
+                None if envelope.type == "control.release" else envelope.connection_epoch
+            )
         return {"ok": True, "accepted": True}
 
 

@@ -2,7 +2,7 @@
 
 面向 WHEELTEC senior_4wd_dl 的车端 ROS 2 程序、自托管云端和中文网页控制台。阶段一至阶段四已有代码并完成复审，包含控制基础、地图与任务、云端中转、车端代理、视频、网页和自托管部署资产。Linux 上尚未执行 `safety_node`、完整速度链、Nav2、`slam_toolbox` 和任务 21 端到端套件；此前任务 2 的仿真记录和任务 3 的后部遮挡扫描记录保留在本文及 `docs/testing/2026-10-27-linux-simulation.md`，未据此扩展其他通过结论。
 
-速度只走一条链：导航、遥控或脱困进入控制仲裁，再进入独立安全门，最后由安全门发布 `/cmd_vel`。Nav2 控制器的输出重映射到 `/control/navigation_cmd`，脱困速度进入 `/control/recovery_cmd`，由 `command_node` 按模式和有效期仲裁后独占发布 `/safety/command_in`。仿真底盘把 `/cmd_vel` 接到差速控制器，控制器自己还有 0.3 秒命令超时。`command_node` 还没有网络入口，单独启动时只会向安全门发零速度。调度和返航也还没有调用方把指令送进这个入口。
+速度只走一条链：导航、遥控或脱困进入控制仲裁，再进入独立安全门，最后由安全门发布 `/cmd_vel`。Nav2 和脱困的裸速度暂不接入仲裁：它们没有来源代次和生成时间，无法排除旧动作的迟到消息。`command_node` 独占发布 `/safety/command_in`，自主运动需待具备来源代次和时间戳的桥接实现后才能启用。仿真底盘把 `/cmd_vel` 接到差速控制器，控制器自己还有 0.3 秒命令超时。`command_node` 还没有网络入口，单独启动时只会向安全门发零速度。调度和返航也还没有调用方把指令送进这个入口。
 
 ## 已完成的功能
 
@@ -11,7 +11,7 @@
 - 自车过滤。车体后方附件回波被去掉，且不会变成后方空闲；附件外的近墙仍保留。仿真世界是 `rear_occlusion.sdf`。历史地图辅助倒车在脱困模块里：实时障碍否决历史空闲，缺边界则拒绝动作。后部遮挡仿真已跑通；脱困本身还没有在 Linux 上跑过。
 - 独立安全门 `safety_node`。按车体矩形预测扫掠，硬边界拦截，预警区允许已观测空闲方向的倒车。传感器过期、扫描运动来源不对或打滑时停车。速度命令按车端单调时钟超时后发零。逻辑有单元测试；这个节点还没有在 Linux 上作为进程跑过。
 - 控制仲裁 `command_node`。每台车一份租约。优先级是锁定急停、手动、脱困、导航。手动接管停掉导航，松开后不自动续跑。旧连接和旧序号不能把过期速度重新激活。它只发布 `/safety/command_in`。仲裁器单元测试已通过；整条 ROS 速度链还没有在 Linux 上跑过。
-- 有界脱困和 Nav2 适配。速度、距离、时间和次数由调用方给出，缺一项就拒绝。导航适配等待目标终态，接受取消本身不算结束。`navigation.launch.py` 把 Nav2 输出接到 `/control/navigation_cmd`。单元测试已通过；这个 launch 和 lattice 还没有在 Linux 上加载。
+- 有界脱困和 Nav2 适配。速度、距离、时间和次数由调用方给出，缺一项就拒绝。导航适配等待目标终态，接受取消本身不算结束。`navigation.launch.py` 把 Nav2 输出重映射到 `/control/navigation_cmd`，但目前仲裁器不接收无代次的裸速度。单元测试已通过；这个 launch 和 lattice 还没有在 Linux 上加载。
 - 长期占据层。重复观测才确认障碍。自由观测不覆盖几何锚点。清空代价地图不能代替清除这一层。
 - SLAM 适配。位姿图按后端写入的内容保存，长期占据层是单独的 `occupancy.json`。网格变大不改变地图参考。Humble 2.6.10 上，反序列化没有返回对象就算恢复失败。`slam_toolbox` 还没有在本机加载。
 - 地图包导入、导出和清除。一次操作先把日志写稳，再切换位姿图和占据层。跨车导入的 Home 保持待确认，不会覆盖已经采纳的 Home。格式见 `docs/protocol/map-bundle.md`。
@@ -159,7 +159,7 @@ ros2 run senior_robot command_node --ros-args \
 ros2 launch senior_robot navigation.launch.py use_sim_time:=true
 ```
 
-它启动 Nav2 控制器、规划器、行为树和 `navigation_adapter`，不启动仿真。控制器输出重映射到 `/control/navigation_cmd`。`safety_node` 仍然是唯一发布 `/cmd_vel` 的进程，需要另外启动。
+它启动 Nav2 控制器、规划器、行为树和 `navigation_adapter`，不启动仿真。控制器输出重映射到 `/control/navigation_cmd`，当前仲裁器不会接收其裸速度。`safety_node` 仍然是唯一发布 `/cmd_vel` 的进程，需要另外启动。
 
 ```sh
 ros2 launch senior_robot mapping.launch.py use_sim_time:=true

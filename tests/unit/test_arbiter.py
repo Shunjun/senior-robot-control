@@ -259,8 +259,8 @@ def test_autonomous_velocity_requires_mode_and_expires_without_resuming():
     arbiter = gate(disconnect_seconds=5.0, command_ttl_seconds=0.3)
     assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
     assert arbiter.accept(command("navigation.start", seq=2), 0.0).accepted
-    assert arbiter.accept_autonomous("navigation", Velocity(0.2, 0.0), 0.0)
-    assert arbiter.tick(0.1) == Velocity(0.2, 0.0)
+    assert not arbiter.accept_autonomous("navigation", Velocity(0.2, 0.0), 0.0)
+    assert arbiter.tick(0.1) == Velocity(0.0, 0.0)
     assert arbiter.tick(0.31) == Velocity(0.0, 0.0)
     assert arbiter.accept(command("drive.stop", seq=3), 0.32).accepted
     assert not arbiter.accept_autonomous("navigation", Velocity(0.3, 0.0), 0.33)
@@ -282,8 +282,8 @@ def test_recovery_requires_explicit_transition_and_stops_on_disconnect():
     assert arbiter.accept(command("navigation.start", seq=2), 0.0).accepted
     assert arbiter.begin_recovery(0.1)
     assert not arbiter.accept_autonomous("navigation", Velocity(0.2, 0), 0.1)
-    assert arbiter.accept_autonomous("recovery", Velocity(-0.1, 0), 0.1)
-    assert arbiter.tick(0.1) == Velocity(-0.1, 0)
+    assert not arbiter.accept_autonomous("recovery", Velocity(-0.1, 0), 0.1)
+    assert arbiter.tick(0.1) == Velocity(0, 0)
     arbiter.disconnect(1)
     assert arbiter.tick(0.2) == Velocity(0, 0)
     assert not arbiter.accept_autonomous("recovery", Velocity(-0.1, 0), 0.2)
@@ -293,7 +293,17 @@ def test_cancel_and_resume_cannot_replay_previous_autonomous_velocity():
     arbiter = gate()
     assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
     assert arbiter.accept(command("navigation.start", seq=2), 0.0).accepted
-    assert arbiter.accept_autonomous("navigation", Velocity(0.2, 0), 0.0)
+    assert not arbiter.accept_autonomous("navigation", Velocity(0.2, 0), 0.0)
     assert arbiter.accept(command("navigation.cancel", seq=3), 0.1).accepted
     assert arbiter.accept(command("navigation.resume", seq=4), 0.2).accepted
     assert arbiter.tick(0.2) == Velocity(0, 0)
+
+
+def test_unstamped_autonomous_command_cannot_drive_after_resume():
+    arbiter = gate()
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    assert arbiter.accept(command("navigation.start", seq=2), 0.0).accepted
+    assert arbiter.accept(command("navigation.cancel", seq=3), 0.1).accepted
+    assert arbiter.accept(command("navigation.resume", seq=4), 0.2).accepted
+    assert not arbiter.accept_autonomous("navigation", Velocity(0.2, 0.0), 0.21)
+    assert arbiter.tick(0.21) == Velocity(0, 0)

@@ -48,8 +48,6 @@ class CommandNode(Node):
         else:
             self._arbiter = arbiter
         self._publisher = self.create_publisher(Twist, topic, 10)
-        self.create_subscription(Twist, "/control/navigation_cmd", lambda msg: self._autonomous("navigation", msg), 10)
-        self.create_subscription(Twist, "/control/recovery_cmd", lambda msg: self._autonomous("recovery", msg), 10)
         heartbeat = float(self.get_parameter("heartbeat_seconds").value)
         ttl = float(self.get_parameter("command_ttl_seconds").value)
         period = min(heartbeat, ttl) / 2.0
@@ -59,16 +57,14 @@ class CommandNode(Node):
         self.create_timer(period, self.publish_command, clock=steady)
 
     def submit(self, envelope: Envelope, received_at: float | None = None) -> CommandResult:
-        result = self._arbiter.accept(envelope, self._monotonic_clock.monotonic(), received_at=received_at)
+        result = self._arbiter.accept(
+            envelope, self._monotonic_clock.monotonic(), received_at=received_at
+        )
         self.publish_command()
         return result
 
     def disconnect(self, connection_epoch: int) -> None:
         self._arbiter.disconnect(connection_epoch)
-        self.publish_command()
-
-    def _autonomous(self, source: str, message: Twist) -> None:
-        self._arbiter.accept_autonomous(source, Velocity(message.linear.x, message.angular.z), self._monotonic_clock.monotonic())
         self.publish_command()
 
     def publish_command(self) -> None:

@@ -262,9 +262,9 @@ class ArbiterRig:
         self.exits: list[bool] = []
         self.core = _load_adapter().AdapterCore(
             robot_id=ROBOT,
-            submit=lambda envelope, received_at=None: self.arbiter.accept(
-                envelope, self.now, received_at=received_at
-            ).accepted,
+            submit=lambda envelope, received_at=None: (
+                self.arbiter.accept(envelope, self.now, received_at=received_at).accepted
+            ),
             disconnect=self.arbiter.disconnect,
             request_exit=lambda: self.exits.append(True),
         )
@@ -408,8 +408,7 @@ async def test_adapter_exit_and_release_zero_through_the_arbiter() -> None:
     await rig.send("command", simple("control.acquire", seq=1, epoch=4))
     await rig.send("drive", velocity(seq=2, epoch=4))
     assert rig.tick() == (0.2, 0.0)
-    # disable_motion named another epoch; the adapter still zeroes the epoch it has seen.
-    await rig.send("disable_motion", connection_epoch=0)
+    await rig.send("disable_motion", connection_epoch=4)
     assert rig.tick() == (0.0, 0.0)
 
     other = ArbiterRig()
@@ -465,3 +464,34 @@ async def test_disabled_adapter_requires_new_epoch_acquire_to_reenable() -> None
     assert rig.tick() == (0.0, 0.0)
     assert (await rig.send("drive", velocity(seq=2, epoch=2)))["ok"]
     assert rig.tick() == (0.2, 0.0)
+
+
+async def test_stale_disable_does_not_disable_new_epoch() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+    assert (await rig.send("drive", velocity(seq=2, epoch=2)))["ok"]
+    await rig.send("disable_motion", connection_epoch=1)
+    assert rig.tick() == (0.2, 0.0)
+    assert (await rig.send("drive", velocity(seq=3, epoch=2)))["ok"]
+
+
+async def test_rejected_epoch_does_not_block_valid_reenable() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
+    assert not (await rig.send("drive", velocity(seq=1, epoch=99)))["ok"]
+    await rig.send("disable_motion", connection_epoch=1)
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+
+
+async def test_exit_permanently_rejects_later_acquire() -> None:
+    from agent_fakes import simple
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
+    await rig.send("exit")
+    assert not (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]

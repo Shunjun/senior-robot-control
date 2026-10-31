@@ -122,6 +122,7 @@ def test_safety_gate_alone_publishes_cmd_vel():
     safety = SafetyGate()
     command = CommandNode()
     try:
+        assert safety._profile().footprint == []
         assert "/cmd_vel" in _publisher_topics(safety)
         command_topics = _publisher_topics(command)
         assert "/safety/command_in" in command_topics
@@ -136,16 +137,18 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement():
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import TransformStamped, TwistStamped
     from rclpy.parameter import Parameter
-    from sensor_msgs.msg import LaserScan
     from senior_robot.safety_node import SafetyGate
+    from sensor_msgs.msg import LaserScan
 
     rclpy.init()
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=0.5),
-        Parameter("measurement_max_age", value=0.5),
-        Parameter("transform_static", value=True),
-        Parameter("self_mask_calibrated", value=True),
-    ])
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=0.5),
+            Parameter("measurement_max_age", value=0.5),
+            Parameter("transform_static", value=True),
+            Parameter("self_mask_calibrated", value=True),
+        ]
+    )
     try:
         tf = TransformStamped()
         tf.header.frame_id = "base_link"
@@ -165,6 +168,7 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement():
         assert gate._filtered.rays[0].endpoint == (1.25, 0.0)
         now = gate.get_clock().now().nanoseconds / 1e9
         import time
+
         assert not gate._freshness.usable(now, time.monotonic())
         measured = TwistStamped()
         measured.header.frame_id = "base_link"
@@ -201,4 +205,38 @@ def test_safety_steady_timer_publishes_zero_while_ros_time_is_frozen():
     finally:
         listener.destroy_node()
         gate.destroy_node()
+        rclpy.shutdown()
+
+
+def test_safety_unconfigured_arrays_fail_closed_without_callback_exception():
+    rclpy = pytest.importorskip("rclpy")
+    from senior_robot.safety_node import SafetyGate
+
+    rclpy.init()
+    gate = SafetyGate()
+    try:
+        profile = gate._profile()
+        assert not profile.footprint
+        assert not profile.self_mask
+        gate._on_timer()
+    finally:
+        gate.destroy_node()
+        rclpy.shutdown()
+
+
+def test_unstamped_autonomous_twist_has_no_motion_input():
+    rclpy = pytest.importorskip("rclpy")
+    from senior_robot.command_node import CommandNode
+
+    rclpy.init()
+    node = CommandNode()
+    try:
+        subscriptions = getattr(node, "subscriptions", None)
+        if subscriptions is None or callable(subscriptions):
+            subscriptions = node._subscriptions
+        topics = {subscription.topic_name for subscription in subscriptions}
+        assert "/control/navigation_cmd" not in topics
+        assert "/control/recovery_cmd" not in topics
+    finally:
+        node.destroy_node()
         rclpy.shutdown()

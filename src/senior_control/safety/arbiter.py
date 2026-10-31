@@ -88,7 +88,11 @@ class Arbiter:
         if not isinstance(command, (VelocityEnvelope, SimpleEnvelope)):
             return _reject(ErrorCode.VALIDATION)
         lease = self._lease
-        if (lease is None or command.session_id != lease.session_id or command.connection_epoch != lease.epoch) and command.seq <= self._history.get((command.session_id, command.connection_epoch), -1):
+        if (
+            lease is None
+            or command.session_id != lease.session_id
+            or command.connection_epoch != lease.epoch
+        ) and command.seq <= self._history.get((command.session_id, command.connection_epoch), -1):
             return _reject(ErrorCode.CONFLICT)
         if lease is None:
             return self._accept_without_lease(command, now, received_at)
@@ -127,21 +131,20 @@ class Arbiter:
         self._expire(now)
         if self._estop or not self._connected(now):
             return _ZERO
-        if (self._manual or self._navigation or self._recovery) and self._deadline is not None and now <= self._deadline:
+        if (
+            (self._manual or self._navigation or self._recovery)
+            and self._deadline is not None
+            and now <= self._deadline
+        ):
             return self._velocity
         return _ZERO
 
-    def accept_autonomous(self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float) -> bool:
-        self._expire(now)
-        if (not self._connected(now) or self._estop or self._manual
-                or (source == "navigation" and not self._navigation)
-                or (source == "recovery" and not self._recovery)
-                or source not in ("navigation", "recovery")
-                or not math.isfinite(velocity.vx) or not math.isfinite(velocity.wz)):
-            return False
-        self._velocity = velocity
-        self._deadline = now + self._command_ttl_seconds
-        return True
+    def accept_autonomous(
+        self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float
+    ) -> bool:
+        """Reject unbound commands until a source-stamped generation bridge exists."""
+        del source, velocity, now
+        return False
 
     def begin_recovery(self, now: float) -> bool:
         self._expire(now)
@@ -201,7 +204,10 @@ class Arbiter:
             return _ok()
         if kind == "control.release":
             self._refresh(command, now)
-            self._lease.alive = False
+            lease = self._lease
+            if lease is None:
+                raise RuntimeError("lease missing")
+            lease.alive = False
             self._clear_motion()
             return _ok()
         if kind == "drive.stop":

@@ -1,6 +1,6 @@
 # ROS 安全拓扑修复 wave 1
 
-基线 5923581。Nav2 与脱困分别进入 CommandNode 的 `/control/navigation_cmd`、`/control/recovery_cmd`；仲裁按连接、模式和单调时钟有效期选择速度，安全门输入只由仲裁发布。急停、接管、失联、取消及重新获取均清除旧速度。脱困模式需调用 `begin_recovery` 明确切换；当前尚无运行时调用者，默认拒绝脱困速度。租约释放后新会话可获取，保留每会话代次序号；适配器停用后必须以更高代次明确获取才重新启用。CommandNode 的业务时钟不覆盖 rclpy 内部时钟。
+基线 5923581。Nav2 与脱困的裸 Twist 因无动作代次及生成时间暂不接收；手动速度由仲裁器按连接和单调时钟有效期选择，安全门输入由仲裁发布。急停、接管、失联、取消及重新获取均清除旧速度。脱困模式需调用 `begin_recovery` 明确切换；当前尚无运行时调用者，默认拒绝脱困速度。租约释放后新会话可获取，保留每会话代次序号；适配器停用后必须以更高代次明确获取才重新启用。CommandNode 的业务时钟不覆盖 rclpy 内部时钟。
 
 安全门改用稳态定时器，查询扫描时间的 TF 并计算实际激光坐标；扫描、带时间戳的车体速度均需新鲜且时间递增，缺失、超时、时钟回退或 TF 无效停车。odom 配置统一 `/wheel/odom`，验收节点名统一 `safety_gate`。
 
@@ -18,3 +18,20 @@
 ## 未验收
 
 Linux Humble 构建、启动及完整速度链、时钟冻结/恢复、真实 TF、底盘 watchdog、测量源质量和硬件停车均未在本轮执行。独立扫描匹配/运动估计的 ROS 供应者尚未接入；安全门没有新鲜质量合格的 TwistStamped 时保持零输出。脱困控制器、动作取消与网络 Agent 仍未组装，不据此声称可自动导航或实机安全。Nav2 原始 Twist 无来源时间戳，网络或 ROS 中间层排队后的旧消息无法根据消息自身时间识别，需 Linux 故障注入验证并在系统组装时处理。安全限值与测量源须现场标定和验收。
+
+## 质量门与 Linux 回归补充
+
+- Linux Humble 上复跑 b7f1559 的 ROS 节点测试：6 passed、1 failed。失败为 TF 测试触发未配置的 `footprint_xy` 参数抛 `ParameterUninitializedException`；这是真实 RED。已将未配置的 footprint 与 self-mask 数组视为空配置，仍由安全评估拒绝运动，并增加默认配置的 ROS 回归检查。修复后的 Linux 测试尚待复跑。
+- `ruff check .`：All checks passed。
+- `mypy src`（项目配置 strict）：Success: no issues found in 65 source files。
+- `pytest tests/unit tests/integration/test_shutdown.py -k 'not ipc_frames and not shutdown_disables_motion_before_ros_exit and not sigterm_revokes_motion_before_cleanup and not cancel_propagates_and_releases_resources and not ipc_motion_sends_validated_envelopes_and_the_epoch' -q`：248 passed、5 deselected；排除项为上述本环境禁止 socket 的测试。
+
+## 独立复审修复
+
+复审指出裸 Twist 无法绑定动作来源：旧任务的消息可在 resume 后被当作新速度。新测试 `test_unstamped_autonomous_command_cannot_drive_after_resume` 在 b7f1559 真实失败；当前拒绝纯核心无代次自主速度，并取消 CommandNode 裸 Twist 订阅，Nav2/脱困运动不可用，待实现源端时间戳和代次桥后再启用。ROS 订阅回归尚待 Linux。
+
+旧 epoch 的 disable 不再撤销新租约，只有仲裁接受的 epoch 推进水位；exit 永久关闭。`test_stale_disable_does_not_disable_new_epoch`、`test_rejected_epoch_does_not_block_valid_reenable`、`test_exit_permanently_rejects_later_acquire` 修复前均失败。前文将裸自主速度描述为已接入属于 b7f1559 状态，以本节为准。
+
+复审修复后验证：`ruff check .` 全通过；`mypy src` 65 个源文件无问题；本地单元加非 socket 的 shutdown 测试 252 passed、5 deselected。旧停用与被拒绝高 epoch 的两项测试在修复前均失败，修复后通过；退出后禁止重新启用测试亦先失败后通过。Linux ROS 测试尚待重跑。
+
+`ruff format --check` 检查本轮 14 个 Python 文件：13 个已格式化，`tests/unit/test_recovery.py` 一处既有格式不符；从基线 5923581 提取的同文件同一位置复核仍不符，未改动无关内容。
