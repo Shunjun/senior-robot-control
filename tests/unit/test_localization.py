@@ -512,4 +512,3 @@ def test_bad_gps_does_not_kill_healthy_local_navigation() -> None:
 def test_localization_console_script_is_registered() -> None:
     text = (ROOT / "ros2" / "src" / "senior_robot" / "setup.py").read_text()
     assert "localization_node = senior_robot.localization_node:main" in text
-

@@ -1,7 +1,9 @@
 """The on-robot agent: owns the robot database and the cloud link, never an rclpy executor."""
 
+import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
@@ -42,6 +44,7 @@ MAX_INFLIGHT = 64
 # Browser commands may be admitted for this long. The vehicle does not execute for that long:
 # a velocity older than command_ttl_seconds is refused on the local clock.
 ADMISSION_SECONDS = 5.0
+MAX_COMMAND_CLOCK_ERROR = 0.05
 
 
 async def _never_publish(vx: float, wz: float) -> None:
@@ -68,6 +71,7 @@ class Agent:
         retry_delay: float = 1.0,
         heartbeat_window: float = 1.0,
         command_ttl_seconds: float = 0.3,
+        source_clock_verified: bool = False,
         snapshot_seconds: float = 2.0,
         state_poll_seconds: float = 0.25,
         metrics: Metrics | None = None,
@@ -90,10 +94,10 @@ class Agent:
         if command_ttl_seconds <= 0:
             raise ValueError("command ttl must be positive")
         self._command_ttl_seconds = command_ttl_seconds
+        self._source_clock_verified = source_clock_verified
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
         self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
-        self._auth_heartbeat_failed = False
         self._home = home
         self._dispatcher = Dispatcher(
             robot_id,
@@ -112,6 +116,7 @@ class Agent:
         self._latest_velocity: VelocityEnvelope | None = None
         self._supervisor: Supervisor | None = None
         self._stopping = False
+        self.auth_rejected = False
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._signals: list[signal.Signals] = []
@@ -219,52 +224,69 @@ class Agent:
         try:
             await link.send_heartbeat()
         except Exception:
-            self._auth_heartbeat_failed = True
+            if self._link is not link:
+                raise
             self._ledger.forget(self.robot_id)
-            epoch = self._epoch
+            epoch = link.epoch
             if epoch:
                 try:
                     await self._motion.disable(epoch)
                 except Exception:
                     logger.exception("could not disable motion after a failed heartbeat")
+            await self._quietly(link.close())
             raise
-        if self._auth_heartbeat_failed:
-            # The next successful auth heartbeat may open a new lease. The old one stays disabled.
-            self._auth_heartbeat_failed = False
-            self._ledger.note(self.robot_id)
 
     async def _session(self) -> None:
         try:
             link = await self._connector()
         except AuthRejected:
+            self.auth_rejected = True
             self.request_shutdown()
             raise
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
         try:
-            # The cloud holds no state it can trust after a reconnect: send everything again.
-            await self.publish_snapshot(self.robot_id)
+            # Snapshot collection is independent of heartbeat and control reception.
             keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
             try:
                 while True:
                     frame = await link.recv()
                     if isinstance(frame, HeartbeatFrame):
+                        if (
+                            frame.robot_id != self.robot_id
+                            or frame.deadline <= self._clock.monotonic()
+                        ):
+                            raise ConnectionError("invalid heartbeat")
+                        await asyncio.wait_for(
+                            self._motion.server_heartbeat(link.epoch, frame.deadline),
+                            timeout=self._deadlines.safety,
+                        )
+                        if frame.deadline <= self._clock.monotonic() or self._link is not link:
+                            raise ConnectionError("heartbeat expired before ROS acknowledgement")
                         self._ledger.note(frame.robot_id)
                     else:
                         self._accept(link, frame)
             finally:
                 keepalive.cancel()
                 await asyncio.gather(keepalive, return_exceptions=True)
+        except AuthRejected:
+            self.auth_rejected = True
+            self.request_shutdown()
+            raise
         except (ConnectionError, OSError):
             return
         finally:
             epoch = link.epoch
             if self._link is link:
                 self._link, self._epoch = None, 0
-            self._ledger.forget(self.robot_id)
+                self._ledger.forget(self.robot_id)
             self._log("connection_closed")
+            inflight = list(self._inflight)
+            for task in inflight:
+                task.cancel()
             await self._quietly(self._motion.disable(epoch))
+            await asyncio.gather(*inflight, return_exceptions=True)
             await self._quietly(link.close())
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
@@ -273,6 +295,10 @@ class Agent:
         The relay refreshes ``last_synced_at`` only from snapshots, so an idle robot must keep
         sending them or the cloud would show it stale.
         """
+        try:
+            await self.publish_snapshot(self.robot_id)
+        except Exception:
+            logger.warning("initial snapshot unavailable", exc_info=True)
         loop = asyncio.get_running_loop()
         last_key: tuple[Any, ...] | None = None
         last_sent = loop.time()
@@ -423,10 +449,18 @@ class Agent:
         if not self.eligible_for_motion:
             raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
         if isinstance(envelope, VelocityEnvelope):
+            if not self._source_clock_verified:
+                raise DomainError(ErrorCode.UNAVAILABLE, "controller clock is not verified")
+            if self._link is None or not self._link.command_clock_valid():
+                raise DomainError(ErrorCode.TIMEOUT, "command clock is not synchronized")
             implied_send = envelope.expires_at - ADMISSION_SECONDS
-            if self._wall_clock() - implied_send > self._command_ttl_seconds:
-                raise DomainError(ErrorCode.TIMEOUT, "command waited longer than the motion window")
-            received_at = self._clock.monotonic()
+            age = self._wall_clock() - implied_send
+            if (
+                age < -MAX_COMMAND_CLOCK_ERROR
+                or age + MAX_COMMAND_CLOCK_ERROR > self._command_ttl_seconds
+            ):
+                raise DomainError(ErrorCode.TIMEOUT, "command time is outside the motion window")
+            received_at = self._clock.monotonic() - max(0.0, age + MAX_COMMAND_CLOCK_ERROR)
             try:
                 await asyncio.wait_for(
                     self._motion.drive(envelope, received_at=received_at),
@@ -438,6 +472,8 @@ class Agent:
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         try:
             await asyncio.wait_for(self._motion.forward(envelope), self._deadlines.safety)
+        except DomainError:
+            raise
         except Exception as exc:
             raise DomainError(ErrorCode.TIMEOUT, "ros side did not accept the command") from exc
         return OperationResult(request_id, OperationStatus.SUCCEEDED)
@@ -496,13 +532,55 @@ class Agent:
 
 
 def main() -> int:
-    """Fail closed until the host process composition is implemented."""
-    print(
-        "senior agent process entry is not assembled: connector, database, "
-        "and ROS IPC are still unwired",
-        file=sys.stderr,
-    )
-    return 78
+    """Load explicit configuration and run the owned agent composition."""
+    from senior_control.agent.composition import AgentConfig, run_agent
+
+    parser = argparse.ArgumentParser(description="Robot cloud agent")
+    parser.add_argument("--robot-id")
+    parser.add_argument("--cloud-url")
+    parser.add_argument("--database-path")
+    parser.add_argument("--socket-path")
+    parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--credentials-file", type=Path)
+    parser.add_argument("--pair", action="store_true")
+    parser.add_argument("--device-name")
+    args = parser.parse_args()
+    values = dict(os.environ)
+    for name, value in (
+        ("SENIOR_ROBOT_ID", args.robot_id),
+        ("SENIOR_CLOUD_URL", args.cloud_url),
+        ("SENIOR_DATABASE_PATH", args.database_path),
+        ("SENIOR_AGENT_SOCKET", args.socket_path),
+    ):
+        if value is not None:
+            values[name] = value
+    try:
+        from senior_control.agent.pairing import pair_device, read_credentials, read_token
+
+        credentials_file = args.credentials_file
+        if credentials_file is None and values.get("SENIOR_CREDENTIALS_FILE"):
+            credentials_file = Path(values["SENIOR_CREDENTIALS_FILE"])
+        if args.pair:
+            import getpass
+
+            cloud_url = values.get("SENIOR_CLOUD_URL")
+            if not cloud_url or credentials_file is None or not args.device_name:
+                raise ValueError("pair requires cloud URL, device name and credentials file")
+            code = getpass.getpass("Pairing code: ")
+            robot_id = asyncio.run(pair_device(cloud_url, code, args.device_name, credentials_file))
+            print(f"Paired robot {robot_id}")
+            return 0
+        if credentials_file is not None:
+            credentials = read_credentials(credentials_file)
+            values["SENIOR_ROBOT_ID"] = credentials.robot_id
+            values["SENIOR_DEVICE_TOKEN"] = credentials.device_token
+        if args.token_file is not None:
+            values["SENIOR_DEVICE_TOKEN"] = read_token(args.token_file)
+        config = AgentConfig.from_environment(values)
+    except (OSError, ValueError) as exc:
+        print(f"invalid agent configuration: {exc}", file=sys.stderr)
+        return 78
+    return asyncio.run(run_agent(config))
 
 
 if __name__ == "__main__":

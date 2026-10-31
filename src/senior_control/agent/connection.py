@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from senior_control.agent.snapshots import RobotSnapshot
 from senior_control.clock import Clock
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
     Envelope,
     ResponseEnvelope,
@@ -20,6 +21,7 @@ class HeartbeatFrame:
     """A cloud heartbeat addressed to one robot."""
 
     robot_id: str
+    deadline: float
 
 
 class Link(Protocol):
@@ -30,6 +32,8 @@ class Link(Protocol):
     async def recv(self) -> Envelope | HeartbeatFrame:
         """Next frame. A dropped socket raises ``ConnectionError``."""
         ...
+
+    def command_clock_valid(self) -> bool: ...
 
     async def send_response(self, envelope: ResponseEnvelope) -> None: ...
 
@@ -74,6 +78,8 @@ class MotionPort(Protocol):
 
     async def forward(self, envelope: Envelope) -> None: ...
 
+    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None: ...
+
     async def disable(self, connection_epoch: int) -> None: ...
 
     async def exit(self) -> None: ...
@@ -91,13 +97,13 @@ class IpcMotion:
 
     async def _ok(self, kind: str, **fields: Any) -> dict[str, Any]:
         reply = await self._client.request(kind, **fields)
+        if reply.get("ok") is not True and reply.get("error") in {"unsupported", "unavailable"}:
+            raise DomainError(ErrorCode.UNAVAILABLE, f"ROS {kind} is unavailable")
         if reply.get("ok") is not True:
             raise IpcError(f"ros side refused {kind}")
         return reply
 
-    async def drive(
-        self, envelope: VelocityEnvelope, *, received_at: float | None = None
-    ) -> None:
+    async def drive(self, envelope: VelocityEnvelope, *, received_at: float | None = None) -> None:
         fields: dict[str, Any] = {"envelope": serialize_envelope(envelope).decode()}
         if received_at is not None:
             fields["received_at"] = received_at
@@ -111,6 +117,9 @@ class IpcMotion:
 
     async def forward(self, envelope: Envelope) -> None:
         await self._ok("command", envelope=serialize_envelope(envelope).decode())
+
+    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
+        await self._ok("server_heartbeat", connection_epoch=connection_epoch, deadline=deadline)
 
     async def disable(self, connection_epoch: int) -> None:
         await self._ok("disable_motion", connection_epoch=connection_epoch)

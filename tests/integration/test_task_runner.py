@@ -570,3 +570,51 @@ async def test_skip_interval_survives_restart(tmp_path: Path) -> None:
         loaded = await store.skips()
 
     assert loaded == (recorded,)
+
+
+async def test_store_lists_tasks_and_executions_for_robot(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        record = await store.claim(task, created + timedelta(minutes=30))
+        assert await store.list_tasks() == (task,)
+        assert await store.list_executions() == (record,)
+
+
+async def test_runtime_dispatches_due_task_and_cancels_on_disconnect(tmp_path: Path) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        navigation = RecordingNavigation()
+        executor = TaskExecutor(database, store, navigation)
+        runtime = TaskRuntime(store, executor)
+        context = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 10.0, context)
+        await runtime.tick(created + timedelta(seconds=1801), 12.0, context)
+        assert len(navigation.calls) == 1
+        await runtime.tick(
+            created + timedelta(seconds=1802), 13.0, replace(context, connected=False)
+        )
+        assert navigation.calls[1] == f"cancel:{navigation.calls[0]}"
+
+
+async def test_runtime_restart_records_offline_gap_without_dispatch(tmp_path: Path) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        runtime = TaskRuntime(store, TaskExecutor(database, store, RecordingNavigation()))
+        context = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created, 10.0, context)
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        navigation = RecordingNavigation()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, navigation))
+        await runtime.tick(created + timedelta(hours=1), 1.0, context)
+        assert navigation.calls == []
+        assert len(await store.skips()) == 1

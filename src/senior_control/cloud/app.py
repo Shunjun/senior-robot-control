@@ -30,6 +30,9 @@ from senior_control.storage.schema import DOMAIN_MIGRATIONS
 SESSION_COOKIE = "__Host-session"
 CSRF_HEADER = "X-CSRF-Token"
 CLOUD_MIGRATION = Migration(4, SESSION_STATEMENTS + PAIRING_STATEMENTS + ROBOT_STATEMENTS)
+EPOCH_MIGRATION = Migration(
+    5, ("ALTER TABLE cloud_robot ADD COLUMN connection_epoch INTEGER NOT NULL DEFAULT 0",)
+)
 
 _ASGIReceive = Callable[[], Awaitable[dict[str, Any]]]
 _ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
@@ -136,11 +139,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        owned = not hasattr(database, "connection")
+        owned = not database.is_open
         if owned:
             await database.__aenter__()
         try:
-            await migrate(database, [*DOMAIN_MIGRATIONS, CLOUD_MIGRATION])
+            await migrate(database, [*DOMAIN_MIGRATIONS, CLOUD_MIGRATION, EPOCH_MIGRATION])
             yield
         finally:
             hub.close_all()
@@ -248,7 +251,11 @@ def create_app(
         if robot is None:
             await websocket.close(code=CLOSE_POLICY)
             return
-        connection = hub.attach_agent(robot.robot_id)
+        epoch = await registry.allocate_epoch(robot.robot_id)
+        if epoch is None:
+            await websocket.close(code=CLOSE_POLICY)
+            return
+        connection = hub.attach_agent(robot.robot_id, epoch=epoch)
         try:
             if await registry.get_active(robot.robot_id) is None:
                 await websocket.close(code=CLOSE_POLICY)

@@ -561,13 +561,25 @@ class _EncodeLoop:
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.close()
 
     def submit(self, coro: Any) -> Any:
         return asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self._loop))
 
     def close(self) -> None:
-        self._loop.call_soon_threadsafe(self._loop.stop)
+        if not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5)
+        if self._thread.is_alive():
+            raise RuntimeError("video worker did not stop")
 
 
 class _OffLoopPeer:
@@ -598,6 +610,9 @@ class AiortcPeerFactory:
 
     def __init__(self) -> None:
         self._encode = _EncodeLoop()
+
+    def close(self) -> None:
+        self._encode.close()
 
     async def open(self, request: PeerRequest) -> PeerConnection:
         peer = await self._encode.submit(self._open(request))

@@ -17,6 +17,15 @@ class StrictModel(BaseModel):
     )
 
 
+class HeartbeatRequest(StrictModel):
+    v: Literal[1]
+    type: Literal["heartbeat.request"]
+    robot_id: str = Field(min_length=1, max_length=128)
+    connection_epoch: int = Field(ge=1)
+    nonce: str = Field(min_length=1, max_length=128)
+    sent_at: float
+
+
 class EmptyPayload(StrictModel):
     pass
 
@@ -163,9 +172,9 @@ class ResponsePayload(StrictModel):
     ok: bool
     error: ErrorCode | None = None
     operation_id: str | None = None
-    status: Literal[
-        "accepted", "dispatching", "running", "succeeded", "failed", "needs_review"
-    ] | None = None
+    status: (
+        Literal["accepted", "dispatching", "running", "succeeded", "failed", "needs_review"] | None
+    ) = None
 
     @model_validator(mode="after")
     def consistent_result(self) -> "ResponsePayload":

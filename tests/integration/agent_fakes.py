@@ -83,7 +83,7 @@ def velocity(
         connection_epoch=epoch,
         request_id="req-velocity",
         seq=seq,
-        expires_at=time.time() + 30,
+        expires_at=time.time() + 5,
         type="drive.velocity",
         payload=VelocityPayload(vx=vx, wz=0.0),
     )
@@ -111,6 +111,9 @@ class FakeLink:
         if item is None:
             raise ConnectionError("link dropped")
         return item
+
+    def command_clock_valid(self) -> bool:
+        return True
 
     async def send_response(self, envelope: ResponseEnvelope) -> None:
         self.responses.append(envelope)
@@ -159,6 +162,9 @@ class FakeMotion:
 
     async def forward(self, envelope: Envelope) -> None:
         self.events.append(f"forward:{envelope.type}")
+
+    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
+        self.events.append(f"heartbeat:{connection_epoch}")
 
     async def disable(self, connection_epoch: int) -> None:
         self.events.append(f"disable:{connection_epoch}")

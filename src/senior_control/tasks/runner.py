@@ -92,11 +92,7 @@ class TaskRunner:
                     continue
                 due.append((occurrence, task, _block_reason(task, context, busy)))
         claimed_latest = max(
-            (
-                occurrence
-                for _task_id, occurrence in claimed
-                if start < occurrence <= end
-            ),
+            (occurrence for _task_id, occurrence in claimed if start < occurrence <= end),
             default=None,
         )
         if claimed_latest is not None:

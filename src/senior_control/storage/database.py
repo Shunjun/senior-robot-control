@@ -15,8 +15,23 @@ class Database:
         self.busy_timeout_ms = busy_timeout_ms
         self.write_lock = asyncio.Lock()
         self.connection: aiosqlite.Connection
+        self._entered = False
+
+    @property
+    def is_open(self) -> bool:
+        return self._entered
 
     async def __aenter__(self) -> "Database":
+        if self._entered:
+            raise RuntimeError("database already open")
+        self._entered = True
+        try:
+            return await self._open()
+        except BaseException:
+            self._entered = False
+            raise
+
+    async def _open(self) -> "Database":
         connect = asyncio.ensure_future(
             aiosqlite.connect(self.path, timeout=self.busy_timeout_ms / 1000)
         )
@@ -46,4 +61,7 @@ class Database:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        await self.connection.close()
+        try:
+            await self.connection.close()
+        finally:
+            self._entered = False

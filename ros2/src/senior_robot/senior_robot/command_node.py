@@ -27,6 +27,7 @@ class CommandNode(Node):
         clock: Clock | None = None,
         *,
         parameter_overrides: list[Parameter] | None = None,
+        require_server_heartbeat: bool = False,
     ) -> None:
         super().__init__("command_node", parameter_overrides=parameter_overrides or [])
         self.declare_parameter("robot_id", "robot")
@@ -44,6 +45,7 @@ class CommandNode(Node):
                 heartbeat_seconds=float(self.get_parameter("heartbeat_seconds").value),
                 disconnect_seconds=float(self.get_parameter("disconnect_seconds").value),
                 command_ttl_seconds=float(self.get_parameter("command_ttl_seconds").value),
+                require_server_heartbeat=require_server_heartbeat,
             )
         else:
             self._arbiter = arbiter
@@ -62,6 +64,11 @@ class CommandNode(Node):
         )
         self.publish_command()
         return result
+
+    def server_heartbeat(self, connection_epoch: int, deadline: float) -> bool:
+        return self._arbiter.server_heartbeat(
+            connection_epoch, self._monotonic_clock.monotonic(), deadline
+        )
 
     def disconnect(self, connection_epoch: int) -> None:
         self._arbiter.disconnect(connection_epoch)

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from fastapi import WebSocket
+from pydantic import ValidationError
 
 from senior_control.agent.snapshots import (
     SnapshotCache,
@@ -20,6 +21,7 @@ from senior_control.errors import ErrorCode
 from senior_control.protocol import (
     EmptyPayload,
     Envelope,
+    HeartbeatRequest,
     ResponseEnvelope,
     ResponsePayload,
     SnapshotEnvelope,
@@ -38,6 +40,7 @@ VELOCITY = "drive.velocity"
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
 SNAPSHOT = "snapshot"
+HEARTBEAT_WINDOW_SECONDS = 1.0
 SNAPSHOT_TTL_SECONDS = 60.0
 VIDEO_CLOSE_TTL_SECONDS = 300.0
 PROTECTED_TYPES = SAFETY_TYPES | {VIDEO_CLOSE}
@@ -129,6 +132,8 @@ class Connection:
     epoch: int = 0
     session_hash: str | None = None
     video_session_id: str | None = None
+    heartbeat_at: float | None = None
+    started_at: float = 0.0
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
 
 
@@ -178,7 +183,12 @@ class Hub:
 
     def is_online(self, robot_id: str) -> bool:
         link = self._links.get(robot_id)
-        return link is not None and link.agent is not None
+        agent = link.agent if link is not None else None
+        return (
+            agent is not None
+            and agent.heartbeat_at is not None
+            and time.monotonic() - agent.heartbeat_at <= HEARTBEAT_WINDOW_SECONDS
+        )
 
     def _push_snapshot(self, robot_id: str, only: Connection | None = None) -> None:
         """Send the cache's view of a robot to its control sockets, or to the one given.
@@ -207,16 +217,40 @@ class Hub:
             if not controller.outbox.put(frame, SNAPSHOT):
                 controller.outbox.close(CLOSE_OVERLOAD)
 
-    def attach_agent(self, robot_id: str) -> Connection:
+    def attach_agent(self, robot_id: str, *, epoch: int | None = None) -> Connection:
         """The n-th live agent socket of a robot owns epoch n; the older one is closed."""
         link = self._link(robot_id)
-        link.epoch += 1
-        connection = Connection("agent", robot_id, Outbox(self._limits.outbox_frames), link.epoch)
+        if epoch is None:
+            epoch = link.epoch + 1
+        if epoch <= link.epoch:
+            raise ValueError("connection epoch must increase")
+        link.epoch = epoch
+        connection = Connection(
+            "agent",
+            robot_id,
+            Outbox(self._limits.outbox_frames),
+            link.epoch,
+            started_at=time.monotonic(),
+        )
         previous, link.agent = link.agent, connection
         if previous is not None:
             previous.outbox.close(CLOSE_SUPERSEDED)
         self._push_snapshot(robot_id)
         return connection
+
+    def expire_stale_agent(self, connection: Connection) -> None:
+        link = self._links.get(connection.robot_id)
+        if link is None or link.agent is not connection:
+            return
+        last = (
+            connection.heartbeat_at
+            if connection.heartbeat_at is not None
+            else connection.started_at
+        )
+        if time.monotonic() - last > HEARTBEAT_WINDOW_SECONDS:
+            self.snapshots.mark_offline(connection.robot_id)
+            self._push_snapshot(connection.robot_id)
+            connection.outbox.close(CLOSE_NORMAL)
 
     def attach_controller(self, robot_id: str, session_hash: str) -> Connection | None:
         link = self._link(robot_id)
@@ -273,8 +307,25 @@ class Hub:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
         try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and data.get("type") == "heartbeat.request":
+                heartbeat = HeartbeatRequest.model_validate(data)
+                if (
+                    heartbeat.robot_id != connection.robot_id
+                    or heartbeat.connection_epoch != connection.epoch
+                ):
+                    connection.outbox.close(CLOSE_POLICY)
+                    return
+                reply = heartbeat.model_dump()
+                reply["type"] = "heartbeat.reply"
+                reply["server_time"] = time.time()
+                if not connection.outbox.put(json.dumps(reply).encode(), "heartbeat"):
+                    connection.outbox.close(CLOSE_OVERLOAD)
+                    return
+                connection.heartbeat_at = time.monotonic()
+                return
             envelope = validate_frame(raw, connection.robot_id)
-        except ValueError:
+        except (ValueError, ValidationError):
             connection.outbox.close(CLOSE_BAD_FRAME)
             return
         if envelope.connection_epoch != connection.epoch and isinstance(
@@ -424,14 +475,29 @@ async def _pump_out(websocket: WebSocket, connection: Connection) -> None:
         await websocket.send_text(item.decode())
 
 
+async def _watch_heartbeat(connection: Connection, hub: Hub) -> None:
+    while True:
+        await asyncio.sleep(0.2)
+        hub.expire_stale_agent(connection)
+
+
 async def serve_connection(websocket: WebSocket, connection: Connection, hub: Hub) -> None:
     """Run one accepted socket until either side ends it, then release every task."""
     reader = asyncio.ensure_future(_pump_in(websocket, connection, hub))
     writer = asyncio.ensure_future(_pump_out(websocket, connection))
+    watcher = (
+        asyncio.ensure_future(_watch_heartbeat(connection, hub))
+        if connection.role == "agent"
+        else None
+    )
     try:
         await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         reader.cancel()
         writer.cancel()
-        await asyncio.gather(reader, writer, return_exceptions=True)
+        if watcher is not None:
+            watcher.cancel()
+        await asyncio.gather(
+            reader, writer, *([watcher] if watcher is not None else []), return_exceptions=True
+        )
         hub.detach(connection)

@@ -20,6 +20,7 @@ import struct
 import tempfile
 import time
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +83,11 @@ async def build(
 ) -> tuple[Agent, FakeConnector, Database]:
     database = await Database(tmp_path / "robot.db").__aenter__()
     journal = AgentJournal(database, robot_id=ROBOT)
-    await journal.prepare()
+    try:
+        await journal.prepare()
+    except BaseException:
+        await database.__aexit__(None, None, None)
+        raise
     connector = FakeConnector()
     client = IpcClient(socket_path)
     agent = Agent(
@@ -99,6 +104,14 @@ async def build(
         **extra,
     )
     return agent, connector, database
+
+
+@asynccontextmanager
+async def closing_database(database: Database) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await database.__aexit__(None, None, None)
 
 
 async def test_ipc_frames_are_versioned_and_length_limited(socket_path: Path) -> None:
@@ -135,7 +148,7 @@ async def test_shutdown_disables_motion_before_ros_exit(
 ) -> None:
     side, events = ros
     agent, connector, database = await build(tmp_path, socket_path, events)
-    async with database:
+    async with closing_database(database):
         connector.add(FakeLink(epoch=1))
         runner = asyncio.ensure_future(agent.run())
         await until(lambda: agent.connected)
@@ -160,7 +173,7 @@ async def test_sigterm_revokes_motion_before_cleanup(
         seen["events_at_cleanup"] = list(events)
 
     agent, connector, database = await build(tmp_path, socket_path, events, cleanup=cleanup)
-    async with database:
+    async with closing_database(database):
         connector.add(FakeLink(epoch=1))
         agent.install_signal_handlers()
         runner = asyncio.ensure_future(agent.run())
@@ -179,7 +192,7 @@ async def test_cancel_propagates_and_releases_resources(
     agent, connector, database = await build(tmp_path, socket_path, events)
     link = FakeLink(epoch=1)
     before = set(asyncio.all_tasks())
-    async with database:
+    async with closing_database(database):
         connector.add(link)
         runner = asyncio.ensure_future(agent.run())
         await until(lambda: agent.connected)
@@ -225,14 +238,16 @@ async def test_slow_encoder_does_not_delay_stop(tmp_path: Path) -> None:
             retry_delay=0.01,
         )
         runner = asyncio.ensure_future(agent.run())
-        await until(lambda: agent.connected and started.is_set())
-        began = time.monotonic()
-        await agent.dispatch(stop())
-        assert time.monotonic() - began < 0.1
-        assert "stop:req-stop" in motion.events
-        release.set()
-        agent.request_shutdown()
-        await asyncio.wait_for(runner, timeout=2)
+        try:
+            await until(lambda: agent.connected and started.is_set())
+            began = time.monotonic()
+            await agent.dispatch(stop())
+            assert time.monotonic() - began < 0.1
+            assert "stop:req-stop" in motion.events
+        finally:
+            release.set()
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, timeout=2)
 
 
 ADAPTER = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/agent_adapter.py"
@@ -523,3 +538,126 @@ async def test_newer_disable_revokes_older_lease_and_rejects_its_own_epoch() -> 
     assert (await rig.send("command", simple("control.acquire", seq=1, epoch=3)))["ok"]
     assert (await rig.send("drive", velocity(seq=2, epoch=3)))["ok"]
     assert rig.tick() == (0.2, 0.0)
+
+
+async def test_adapter_server_heartbeat_is_epoch_bound() -> None:
+    rig = ArbiterRig()
+    rig.arbiter = __import__("senior_control.safety.arbiter", fromlist=["Arbiter"]).Arbiter(
+        ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True
+    )
+    rig.core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        ),
+        disconnect=rig.arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: rig.arbiter.server_heartbeat(
+            epoch, rig.now, deadline
+        ),
+    )
+    assert (await rig.send("server_heartbeat", connection_epoch=1, deadline=100.8))["ok"]
+    assert not (await rig.send("server_heartbeat", connection_epoch=0, deadline=100.8))["ok"]
+
+
+async def test_cloud_heartbeat_drives_ros_eligibility_and_half_open_stops(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple, velocity
+
+    from senior_control.agent.websocket import WebSocketLink
+    from senior_control.cloud.limits import CloudLimits
+    from senior_control.cloud.relay import Hub
+    from senior_control.models import Velocity
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    adapter = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+    )
+    server = IpcServer(socket_path, adapter.handle)
+    await server.start()
+    hub = Hub(CloudLimits())
+    connection = hub.attach_agent(ROBOT)
+
+    class Wire:
+        dropping = False
+        closed = False
+
+        async def send(self, data: str) -> None:
+            if not self.dropping:
+                hub.handle_agent_frame(connection, data.encode())
+
+        async def recv(self) -> str:
+            frame = await connection.outbox.get()
+            if isinstance(frame, int):
+                raise ConnectionError("closed")
+            return frame.decode()
+
+        async def close(self) -> None:
+            self.closed = True
+            connection.outbox.close(1000)
+
+    wire = Wire()
+    link = WebSocketLink(wire, ROBOT, connection.epoch, heartbeat_timeout=0.4)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+
+        async def connect() -> WebSocketLink:
+            return link
+
+        agent = Agent(
+            ROBOT,
+            connector=connect,
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=IpcMotion(IpcClient(socket_path)),
+            heartbeat_seconds=0.05,
+            retry_delay=1.0,
+            source_clock_verified=True,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.eligible_for_motion)
+            await agent.dispatch(simple("control.acquire", seq=1))
+            await agent.dispatch(velocity(seq=2))
+            assert arbiter.tick(time.monotonic()).vx > 0
+            wire.dropping = True
+            await until(lambda: arbiter.tick(time.monotonic()) == Velocity(0.0, 0.0), timeout=2)
+            await until(lambda: not agent.eligible_for_motion, timeout=2)
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+    await server.close()
+
+
+async def test_adapter_navigation_reports_unavailable_without_ros_consumer() -> None:
+    from agent_fakes import simple
+
+    rig = ArbiterRig()
+    rig.core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        ),
+        disconnect=rig.arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: True,
+    )
+    assert (await rig.send("server_heartbeat", connection_epoch=1, deadline=100.8))["ok"]
+    assert (await rig.send("command", simple("control.acquire", seq=1)))["ok"]
+    result = await rig.send("command", simple("navigation.start", seq=2))
+    assert result == {"ok": False, "error": "unavailable"}
+    assert rig.arbiter.mode(rig.now) == "idle"

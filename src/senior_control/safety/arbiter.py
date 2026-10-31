@@ -55,6 +55,7 @@ class Arbiter:
         heartbeat_seconds: float,
         disconnect_seconds: float,
         command_ttl_seconds: float,
+        require_server_heartbeat: bool = False,
     ) -> None:
         if not (
             math.isfinite(heartbeat_seconds)
@@ -66,6 +67,11 @@ class Arbiter:
         ):
             raise ValueError("heartbeat must be shorter than disconnect threshold")
         self._robot_id = robot_id
+        # //Compatible: isolated legacy callers do not have a server heartbeat port.
+        self._require_server_heartbeat = require_server_heartbeat
+        self._server_epoch = 0
+        self._server_deadline = float("-inf")
+        self._server_disabled_epoch = 0
         self._disconnect_seconds = disconnect_seconds
         self._command_ttl_seconds = command_ttl_seconds
         self._lease: _Lease | None = None
@@ -87,7 +93,35 @@ class Arbiter:
             return _reject(ErrorCode.SAFETY_REJECTED)
         if not isinstance(command, (VelocityEnvelope, SimpleEnvelope)):
             return _reject(ErrorCode.VALIDATION)
+        if (
+            self._require_server_heartbeat
+            and command.type not in _SAFETY
+            and command.type != "drive.stop"
+            and (
+                command.connection_epoch != self._server_epoch
+                or now > self._server_deadline
+                or command.connection_epoch <= self._server_disabled_epoch
+            )
+        ):
+            return _reject(ErrorCode.OFFLINE)
         lease = self._lease
+        if self._require_server_heartbeat and command.type in _SAFETY:
+            if (
+                command.connection_epoch != self._server_epoch
+                or command.connection_epoch <= self._server_disabled_epoch
+                or now > self._server_deadline
+            ):
+                return _reject(ErrorCode.OFFLINE)
+            if command.type == "safety.estop":
+                key = (command.session_id, command.connection_epoch)
+                if command.seq <= self._history.get(key, -1):
+                    return _reject(ErrorCode.CONFLICT)
+                self._history[key] = command.seq
+                if lease is not None and lease.session_id == command.session_id:
+                    lease.seq = command.seq
+                return self._apply_safety(command.type)
+            # No reset may clear an estop until the command carries an estop fence.
+            return _reject(ErrorCode.UNAVAILABLE)
         if (
             lease is None
             or command.session_id != lease.session_id
@@ -126,6 +160,27 @@ class Arbiter:
                 return self._accept_safety(command, now, advance_epoch=False)
             return _reject(ErrorCode.OFFLINE)
         return self._accept_live(command, now, received_at)
+
+    def server_heartbeat(self, epoch: int, now: float, deadline: float) -> bool:
+        """Renew only a fresh, bounded server lease; expiry requires a new epoch."""
+        if not math.isfinite(now) or not math.isfinite(deadline):
+            return False
+        if deadline <= now or deadline - now > self._disconnect_seconds:
+            return False
+        if self._server_epoch and now > self._server_deadline:
+            self._server_disabled_epoch = max(self._server_disabled_epoch, self._server_epoch)
+            if self._lease is not None:
+                self._lease.alive = False
+            self._clear_motion()
+        if epoch <= self._server_disabled_epoch or epoch < self._server_epoch:
+            return False
+        if epoch > self._server_epoch:
+            if self._lease is not None:
+                self._lease.alive = False
+            self._clear_motion()
+            self._server_epoch = epoch
+        self._server_deadline = deadline
+        return True
 
     def tick(self, now: float) -> Velocity:
         self._expire(now)
@@ -338,7 +393,14 @@ class Arbiter:
         if (
             not math.isfinite(now)
             or now < lease.refreshed_at
-            or now - lease.refreshed_at > self._disconnect_seconds
+            or (
+                self._require_server_heartbeat
+                and (lease.epoch != self._server_epoch or now > self._server_deadline)
+            )
+            or (
+                not self._require_server_heartbeat
+                and now - lease.refreshed_at > self._disconnect_seconds
+            )
         ):
             lease.alive = False
             self._clear_motion()
@@ -350,5 +412,15 @@ class Arbiter:
             and lease.alive
             and math.isfinite(now)
             and now >= lease.refreshed_at
-            and now - lease.refreshed_at <= self._disconnect_seconds
+            and (
+                (
+                    self._require_server_heartbeat
+                    and lease.epoch == self._server_epoch
+                    and now <= self._server_deadline
+                )
+                or (
+                    not self._require_server_heartbeat
+                    and now - lease.refreshed_at <= self._disconnect_seconds
+                )
+            )
         )

@@ -12,11 +12,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --frozen --group dev --extra safety
-      - run: uv run --frozen ruff check .
-      - run: uv run --frozen ruff format --check .
-      - run: uv run --frozen mypy src/senior_control
-      - run: uv run --frozen pytest tests/unit tests/integration
+      - run: uv sync --frozen --group dev --extra safety --extra cloud --extra agent --extra video --extra ros
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync mypy src/senior_control
+      - run: uv run --no-sync pytest tests/unit tests/integration
       - run: uv build
       - run: |
           python -m venv /tmp/wheel-test

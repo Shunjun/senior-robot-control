@@ -2,7 +2,7 @@
 
 面向 WHEELTEC senior_4wd_dl 的车端 ROS 2 程序、自托管云端和中文网页控制台。阶段一至阶段四已有代码并完成复审，包含控制基础、地图与任务、云端中转、车端代理、视频、网页和自托管部署资产。Linux 上尚未执行 `safety_node`、完整速度链、Nav2、`slam_toolbox` 和任务 21 端到端套件；此前任务 2 的仿真记录和任务 3 的后部遮挡扫描记录保留在本文及 `docs/testing/2026-10-27-linux-simulation.md`，未据此扩展其他通过结论。
 
-速度只走一条链：导航、遥控或脱困进入控制仲裁，再进入独立安全门，最后由安全门发布 `/cmd_vel`。Nav2 和脱困的裸速度暂不接入仲裁：它们没有来源代次和生成时间，无法排除旧动作的迟到消息。`command_node` 独占发布 `/safety/command_in`，自主运动需待具备来源代次和时间戳的桥接实现后才能启用。仿真底盘把 `/cmd_vel` 接到差速控制器，控制器自己还有 0.3 秒命令超时。`command_node` 还没有网络入口，单独启动时只会向安全门发零速度。调度和返航也还没有调用方把指令送进这个入口。
+速度只走一条链：导航、遥控或脱困进入控制仲裁，再进入独立安全门，最后由安全门发布 `/cmd_vel`。Nav2 和脱困的裸速度暂不接入仲裁：它们没有来源代次和生成时间，无法排除旧动作的迟到消息。`command_node` 独占发布 `/safety/command_in`，自主运动需待具备来源代次和时间戳的桥接实现后才能启用。仿真底盘把 `/cmd_vel` 接到差速控制器，控制器自己还有 0.3 秒命令超时。单独启动 `command_node` 时没有网络入口；车端代理可通过独立的 `agent_adapter` 使用本地 IPC，运行链仍需 Linux 验证。
 
 ## 已完成的功能
 
@@ -68,7 +68,7 @@ python3 tools/detect_environment.py
 ```sh
 source /opt/ros/humble/setup.bash
 python3.10 -m venv --system-site-packages .ros-venv
-.ros-venv/bin/pip install -e ".[safety]"
+.ros-venv/bin/pip install -e ".[safety,ros]"
 rosdep update --rosdistro humble
 rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
 cd ros2
@@ -179,7 +179,21 @@ ros2 run senior_robot localization_node
 
 ### 云端与车端代理
 
-云端认证、配对、多车中转、TURN、部署清单和车端代理代码已经存在。部署入口仍须按 `deploy/README.md` 核对密钥、允许来源和硬件参数。`python -m senior_control.agent.main` 当前因进程入口尚未组装而退出码 `78`；这项状态不能当作可运行服务，也不能启用仓库中的 systemd 单元。只有 `safety_node` 可以发布 `/cmd_vel`。
+云端认证、配对、多车中转和车端代理已有实现。先配置 HTTPS 云服务、管理员密码、允许的 Origin 和 TURN；生产网络与硬件参数仍需现场核对。管理员登录后，以返回的 CSRF token 和会话 cookie 调用 `POST /api/pairing-codes`，在车端用一次性配对码兑换身份：
+
+```sh
+python -m senior_control.agent.main --pair \
+  --cloud-url wss://<cloud-domain>/ws/agent --device-name <robot-name> \
+  --credentials-file /etc/senior-control/device.json
+```
+
+命令会交互式读取配对码，通过 HTTPS 兑换并原子创建权限为 `0600` 的凭据文件；文件已存在时拒绝覆盖。凭据文件包含 robot ID 和设备 token，不要写入版本库或日志。安装车端依赖 `pip install '.[safety,agent,ros]'`，设置 `SENIOR_CLOUD_URL`、`SENIOR_DATABASE_PATH`（绝对路径）和 `SENIOR_AGENT_SOCKET`（绝对路径），再运行：
+
+```sh
+python -m senior_control.agent.main --credentials-file /etc/senior-control/device.json
+```
+
+同样支持 `SENIOR_CREDENTIALS_FILE` 指向该文件；也可通过 `SENIOR_ROBOT_ID`、`SENIOR_DEVICE_TOKEN` 提供身份。使用 `deploy/senior-agent.service` 时将环境值放入 `/etc/senior-control/agent.env`，文件由服务用户可读且权限为 `0600`。缺少配置或认证被拒绝时进程退出 78。Agent 在 ROS 状态、地图、导航处理器缺失时返回 unavailable；浏览器时钟尚不能验证，生产远程速度暂不可用。跨页面急停已锁定，安全复位暂不可用，需后续带急停 fence 的协议。任务终态、ROS 全链路、Linux 和实车均未验收；只有 `safety_node` 可以发布 `/cmd_vel`。
 
 ### 网页
 

@@ -566,9 +566,13 @@ async def test_missing_aiortc_reports_unavailable(monkeypatch: pytest.MonkeyPatc
     from senior_control.vision.stream import AiortcPeerFactory
 
     monkeypatch.setitem(sys.modules, "aiortc", None)  # makes `import aiortc` raise ImportError
-    with pytest.raises(VideoUnavailable) as raised:
-        await AiortcPeerFactory().open(PeerRequest("VP8", 1_000_000, None, False))
-    assert raised.value.reason == "aiortc_not_installed"
+    factory = AiortcPeerFactory()
+    try:
+        with pytest.raises(VideoUnavailable) as raised:
+            await factory.open(PeerRequest("VP8", 1_000_000, None, False))
+        assert raised.value.reason == "aiortc_not_installed"
+    finally:
+        factory.close()
 
 
 async def test_aiortc_loopback_delivers_a_real_frame() -> None:
@@ -581,11 +585,12 @@ async def test_aiortc_loopback_delivers_a_real_frame() -> None:
             await asyncio.sleep(0.05)
             return ImageFrame(time.time(), 64, 48, "rgb8", bytes([200, 10, 10]) * 64 * 48)
 
+    factory = AiortcPeerFactory()
     session = VideoSession(
         robot_id="robot-a",
         viewer=Viewer("control", "robot-a"),
         source=Camera(),
-        factory=AiortcPeerFactory(),
+        factory=factory,
     )
     client = aiortc.RTCPeerConnection()
     client.addTransceiver("video", direction="recvonly")
@@ -610,6 +615,7 @@ async def test_aiortc_loopback_delivers_a_real_frame() -> None:
     finally:
         await session.close()
         await client.close()
+        factory.close()
 
 
 # ------------------------------------------------------------------- signaling on the wire
@@ -932,3 +938,12 @@ async def test_a_full_controller_queue_drops_video_and_keeps_the_socket() -> Non
     rig.hub.handle_agent_frame(rig.agent, reply)
     assert reply in drain_outbox(rig.controller)
     assert not rig.controller.outbox.closed
+
+
+def test_encode_loop_close_joins_thread_and_closes_loop() -> None:
+    from senior_control.vision.stream import _EncodeLoop
+
+    encode = _EncodeLoop()
+    encode.close()
+    assert not encode._thread.is_alive()
+    assert encode._loop.is_closed()

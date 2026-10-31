@@ -83,6 +83,10 @@ class TaskStore:
         await migrate(self._database, list(DOMAIN_MIGRATIONS))
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_scan_cursor "
+                    "(robot_id TEXT PRIMARY KEY, last_tick_utc TEXT NOT NULL)"
+                )
                 async with connection.execute(
                     "SELECT boot_id FROM task_runtime WHERE robot_id = ?",
                     (self._robot_id,),
@@ -113,6 +117,47 @@ class TaskStore:
                         """,
                         (self._robot_id, self._boot_id),
                     )
+
+    async def scan_cursor(self) -> datetime | None:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT last_tick_utc FROM task_scan_cursor WHERE robot_id = ?",
+                (self._robot_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return _moment(_text(row[0])) if row is not None else None
+
+    async def save_scan_cursor(self, moment: datetime) -> None:
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                await connection.execute(
+                    "INSERT INTO task_scan_cursor(robot_id, last_tick_utc) VALUES (?, ?) "
+                    "ON CONFLICT(robot_id) DO UPDATE SET last_tick_utc=excluded.last_tick_utc",
+                    (self._robot_id, _stamp(moment)),
+                )
+
+    async def list_tasks(self) -> tuple[TaskDefinition, ...]:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT task_id, robot_id, map_id, reference_revision, waypoint_ids, "
+                "schedule_kind, every_seconds, cron_expression, timezone, enabled, revision, "
+                "created_at FROM task_definition WHERE robot_id = ? ORDER BY task_id",
+                (self._robot_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return tuple(_task(row) for row in rows)
+
+    async def list_executions(self) -> tuple[ExecutionRecord, ...]:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT e.execution_id, e.task_id, e.occurrence_utc, e.status, "
+                "e.navigation_sent, e.rollback_confirmed FROM task_execution e "
+                "JOIN task_definition t ON t.task_id = e.task_id WHERE t.robot_id = ? "
+                "ORDER BY e.occurrence_utc, e.execution_id",
+                (self._robot_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return tuple(_execution(row) for row in rows)
 
     async def create(self, task: TaskDefinition) -> TaskDefinition:
         self._require_robot(task)

@@ -77,6 +77,7 @@ class WsClient:
         self._task: asyncio.Task[None] | None = None
         self.accepted = False
         self.closed = False
+        self.response_headers: dict[bytes, bytes] = {}
 
     async def connect(self) -> bool:
         self._task = asyncio.ensure_future(
@@ -86,6 +87,7 @@ class WsClient:
         message = await self._next(2.0)
         if message is not None and message["type"] == "websocket.accept":
             self.accepted = True
+            self.response_headers = dict(message.get("headers", []))
         else:
             self.closed = True
         return self.accepted
@@ -383,3 +385,63 @@ async def test_wrong_robot_command_rejected(cloud: Cloud) -> None:
     delivered = await agent_a.receive()
     assert delivered is not None
     assert json.loads(delivered)["robot_id"] == robot_a
+
+
+async def test_owned_database_reopens_for_repeated_app_lifespan(tmp_path: Path) -> None:
+    database = Database(tmp_path / "cloud.db")
+    app = create_app(
+        CloudSettings(secret=SecretStr("s" * 32)),
+        database=database,
+        admin_password_hash=hash_password(PASSWORD),
+        allowed_origins=(ORIGIN,),
+    )
+    for _ in range(2):
+        async with app.router.lifespan_context(app):
+            async with database.connection.execute("SELECT 1") as cursor:
+                assert await cursor.fetchone() == (1,)
+
+
+async def test_agent_epoch_increases_across_cloud_app_restart(tmp_path: Path) -> None:
+    path = tmp_path / "cloud.db"
+    settings = CloudSettings(secret=SecretStr("s" * 32))
+
+    def app() -> FastAPI:
+        return create_app(
+            settings,
+            database=Database(path),
+            admin_password_hash=hash_password(PASSWORD),
+            allowed_origins=(ORIGIN,),
+        )
+
+    first = app()
+    async with first.router.lifespan_context(first):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=first), base_url=ORIGIN
+        ) as client:
+            cloud = Cloud(first, client, [])
+            robot_id, token = await cloud.pair(await cloud.login())
+            socket = await cloud.agent(token)
+            assert await socket.connect()
+            first_epoch = int(socket.response_headers[b"x-connection-epoch"])
+            await socket.aclose()
+    second = app()
+    async with second.router.lifespan_context(second):
+        socket = WsClient(second, "/ws/agent", {"Authorization": f"Bearer {token}"})
+        assert await socket.connect()
+        second_epoch = int(socket.response_headers[b"x-connection-epoch"])
+        assert second_epoch > first_epoch
+        await socket.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "type": "heartbeat.request",
+                    "robot_id": robot_id,
+                    "connection_epoch": first_epoch,
+                    "nonce": "old",
+                    "sent_at": time.time(),
+                }
+            ).encode()
+        )
+        assert await socket.receive() is None
+        assert socket.closed
+        await socket.aclose()

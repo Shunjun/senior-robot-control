@@ -40,15 +40,18 @@ class AdapterCore:
         submit: Callable[..., bool],
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
+        server_heartbeat: Callable[[int, float], bool] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
+        self._server_heartbeat = server_heartbeat
         self._active_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
-        self.motion_disabled = False
+        # //Compatible: legacy isolated adapter tests do not have a heartbeat callback.
+        self.motion_disabled = server_heartbeat is not None
         self._exiting = False
 
     def release(self) -> None:
@@ -59,6 +62,20 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind == "server_heartbeat":
+            epoch, deadline = message.get("connection_epoch"), message.get("deadline")
+            if (
+                self._exiting
+                or self._server_heartbeat is None
+                or not isinstance(epoch, int)
+                or isinstance(epoch, bool)
+                or isinstance(deadline, bool)
+                or not isinstance(deadline, (int, float))
+                or epoch <= self._disabled_through_epoch
+            ):
+                return {"ok": False, "error": "bad_request"}
+            accepted = self._server_heartbeat(epoch, float(deadline))
+            return {"ok": accepted}
         if kind == "ping":
             return {"ok": True}
         if kind == "disable_motion":
@@ -121,6 +138,10 @@ class AdapterCore:
             return {"ok": False, "error": "bad_request"}
         if not isinstance(envelope, (VelocityEnvelope, SimpleEnvelope)):
             return {"ok": False, "error": "bad_request"}
+        if self._server_heartbeat is not None and (
+            envelope.type.startswith("navigation.") or envelope.type == "safety.reset"
+        ):
+            return {"ok": False, "error": "unavailable"}
         received_at = message.get("received_at")
         if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
             received_at = None
@@ -143,7 +164,7 @@ def main() -> None:
     from senior_robot.command_node import CommandNode
 
     rclpy.init()
-    node = CommandNode()
+    node = CommandNode(require_server_heartbeat=True)
     robot_id = str(node.get_parameter("robot_id").value)
     path = Path(os.environ[SOCKET_ENV])
     exiting = False
@@ -157,6 +178,7 @@ def main() -> None:
         submit=lambda envelope, received_at=None: node.submit(envelope, received_at).accepted,
         disconnect=node.disconnect,
         request_exit=request_exit,
+        server_heartbeat=node.server_heartbeat,
     )
 
     async def serve() -> None:

@@ -53,6 +53,17 @@ class RobotRegistry:
         )
         return RobotRecord(str(rows[0][0]), str(rows[0][1])) if rows else None
 
+    async def allocate_epoch(self, robot_id: str) -> int | None:
+        """Atomically allocate a persistent epoch for an active credential."""
+        async with write_transaction(self._database) as connection:
+            async with connection.execute(
+                "UPDATE cloud_robot SET connection_epoch = connection_epoch + 1 "
+                "WHERE robot_id = ? AND revoked_at IS NULL RETURNING connection_epoch",
+                (robot_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            return int(row[0]) if row is not None else None
+
     async def list_active(self) -> list[RobotRecord]:
         rows = await fetch_all(
             self._database,

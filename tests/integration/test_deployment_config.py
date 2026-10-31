@@ -37,9 +37,7 @@ def test_deploy_never_exposes_dds() -> None:
     compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     assert all(service.get("network_mode") != "host" for service in compose["services"].values())
     published = " ".join(
-        str(port)
-        for service in compose["services"].values()
-        for port in service.get("ports", ())
+        str(port) for service in compose["services"].values() for port in service.get("ports", ())
     )
     assert not re.search(r"\b(?:7400|7410|11811)\b", published)
     assert "robot" not in compose["services"]
@@ -64,7 +62,7 @@ def test_example_has_no_real_credentials() -> None:
     )
 
 
-def test_unassembled_agent_entry_fails_loudly() -> None:
+def test_agent_entry_reports_missing_configuration() -> None:
     completed = subprocess.run(
         (sys.executable, "-m", "senior_control.agent.main"),
         cwd=ROOT,
@@ -73,10 +71,8 @@ def test_unassembled_agent_entry_fails_loudly() -> None:
         check=False,
     )
 
-    assert completed.returncode != 0, "an unassembled agent entry must not report success"
-    assert "connector" in completed.stderr
-    assert "database" in completed.stderr
-    assert "ROS IPC" in completed.stderr
+    assert completed.returncode == 78
+    assert "SENIOR_ROBOT_ID" in completed.stderr
 
 
 def test_doctor_detects_duplicate_cmd_vel_and_tf(

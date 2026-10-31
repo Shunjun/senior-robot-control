@@ -242,9 +242,7 @@ def test_map_reverse_queries_measured_speed_not_only_the_speed_cap():
     """The map is asked for the sweep the live gate refused, including measured motion."""
     measured = Velocity(-1.0, 0.5)
     maps = FixtureMap(corridor())
-    machine = controller(
-        maps, speed=0.08, single_distance=2.0, cumulative_distance=2.0
-    )
+    machine = controller(maps, speed=0.08, single_distance=2.0, cumulative_distance=2.0)
     sample = context(
         candidates=(Velocity(0.8, 0.0),),
         measured=measured,
