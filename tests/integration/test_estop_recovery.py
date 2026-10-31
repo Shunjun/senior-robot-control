@@ -606,3 +606,575 @@ async def test_canceled_replay_clear_cannot_erase_new_estop_obligation(
                     await asyncio.wait_for(runner, 2)
     finally:
         await server.close()
+
+
+async def test_replay_clear_lock_counts_toward_new_estop_deadline(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.dispatcher import Deadlines
+
+    rig = heartbeat_arbiter_rig()
+    disabled, clear_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        result = await rig.core.handle(message)
+        if message["type"] == "disable_motion":
+            disabled.set()
+        return result
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    try:
+        async with Database(tmp_path / "robot.db") as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+            marks = 0
+
+            async def late_clear() -> None:
+                clear_started.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+                await original_clear()
+
+            async def delayed_mark() -> None:
+                nonlocal marks
+                marks += 1
+                if marks > 1:
+                    await release.wait()
+                await original_mark()
+
+            journal.safety.clear_rejected = late_clear  # type: ignore[method-assign]
+            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            first, second = FakeLink(1), FakeLink(2)
+            agent = ipc_agent(
+                journal,
+                FakeConnector(first, second),
+                socket_path,
+                rig,
+                deadlines=Deadlines(safety=0.1),
+            )
+            runner = asyncio.create_task(agent.run())
+            try:
+                await until(lambda: agent.connected)
+                first.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
+                await until(lambda: agent.eligible_for_motion)
+                await agent.dispatch(simple("control.acquire", seq=5))
+                first.inbox.put_nowait(simple("safety.estop", seq=4))
+                await asyncio.wait_for(clear_started.wait(), 1)
+                new_estop = simple("safety.estop", seq=1, request_id="new-estop").model_copy(
+                    update={"session_id": "page-b"}
+                )
+                started = asyncio.get_running_loop().time()
+                first.inbox.put_nowait(new_estop)
+                await until(lambda: agent._safety_admitting)
+                assert not agent.eligible_for_motion
+                await asyncio.wait_for(disabled.wait(), 0.15)
+                assert asyncio.get_running_loop().time() - started < 0.15
+                assert agent.recovery_required and agent.auth_rejected
+                assert not any(
+                    r.request_id == "new-estop" and r.payload.ok for r in first.responses
+                )
+                release.set()
+                await asyncio.wait_for(runner, 2)
+                if agent._stragglers:
+                    await asyncio.wait_for(
+                        asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                    )
+                assert await journal.safety.pending()
+                assert not any(
+                    r.request_id == "new-estop" and r.payload.ok for r in first.responses
+                )
+                restarted = ipc_agent(journal, FakeConnector(second), socket_path, rig)
+                await asyncio.wait_for(restarted.run(), 2)
+                assert restarted.recovery_required and not restarted.connected
+            finally:
+                release.set()
+                agent.request_shutdown()
+                if not runner.done():
+                    await asyncio.wait_for(runner, 3)
+                if agent._stragglers:
+                    await asyncio.wait_for(
+                        asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                    )
+    finally:
+        await server.close()
+
+
+async def test_estop_mark_uses_only_time_left_after_replay_clear(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.dispatcher import Deadlines
+
+    rig = heartbeat_arbiter_rig()
+    disabled, clear_started, release_clear = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    mark_started, release_mark = asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        result = await rig.core.handle(message)
+        if message["type"] == "disable_motion":
+            disabled.set()
+        return result
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    try:
+        async with Database(tmp_path / "robot.db") as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+            marks = 0
+
+            async def delayed_clear() -> None:
+                clear_started.set()
+                await release_clear.wait()
+                await original_clear()
+
+            async def delayed_mark() -> None:
+                nonlocal marks
+                marks += 1
+                if marks > 1:
+                    mark_started.set()
+                    await release_mark.wait()
+                await original_mark()
+
+            journal.safety.clear_rejected = delayed_clear  # type: ignore[method-assign]
+            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            link = FakeLink(1)
+            agent = ipc_agent(
+                journal,
+                FakeConnector(link),
+                socket_path,
+                rig,
+                deadlines=Deadlines(safety=0.3),
+            )
+            runner = asyncio.create_task(agent.run())
+            try:
+                await until(lambda: agent.connected)
+                link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
+                await until(lambda: agent.eligible_for_motion)
+                await agent.dispatch(simple("control.acquire", seq=5))
+                link.inbox.put_nowait(simple("safety.estop", seq=4))
+                await asyncio.wait_for(clear_started.wait(), 1)
+                link.inbox.put_nowait(
+                    simple("safety.estop", seq=1, request_id="new-estop").model_copy(
+                        update={"session_id": "page-b"}
+                    )
+                )
+                await until(lambda: agent._safety_admitting)
+                await asyncio.sleep(0.18)
+                release_clear.set()
+                await asyncio.wait_for(mark_started.wait(), 1)
+                await asyncio.wait_for(disabled.wait(), 0.24)
+                assert agent.recovery_required and agent.auth_rejected
+                assert not any(r.request_id == "new-estop" and r.payload.ok for r in link.responses)
+            finally:
+                release_clear.set()
+                release_mark.set()
+                agent.request_shutdown()
+                if not runner.done():
+                    await asyncio.wait_for(runner, 3)
+                if agent._stragglers:
+                    await asyncio.wait_for(
+                        asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                    )
+    finally:
+        await server.close()
+
+
+async def test_canceled_new_receipt_does_not_let_old_clear_erase_marker(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    rig = heartbeat_arbiter_rig()
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        await journal.safety.mark()
+        original_clear = journal.safety.clear_rejected
+        clear_started, release_clear = asyncio.Event(), asyncio.Event()
+
+        async def delayed_clear() -> None:
+            clear_started.set()
+            await release_clear.wait()
+            await original_clear()
+
+        journal.safety.clear_rejected = delayed_clear  # type: ignore[method-assign]
+        link = FakeLink(1)
+        agent = ipc_agent(journal, FakeConnector(link), socket_path, rig)
+        clearing = asyncio.create_task(agent._clear_replayed_safety())
+        try:
+            await asyncio.wait_for(clear_started.wait(), 1)
+            receipt = asyncio.create_task(
+                agent._receive_command(link, simple("safety.estop", seq=1))
+            )
+            await until(lambda: agent._safety_admitting)
+            receipt.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await receipt
+            assert agent.recovery_required
+            release_clear.set()
+            await asyncio.wait_for(clearing, 1)
+            assert await journal.safety.pending()
+            assert not link.responses
+        finally:
+            release_clear.set()
+            await asyncio.gather(clearing, return_exceptions=True)
+            if agent._stragglers:
+                await asyncio.wait_for(
+                    asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                )
+
+
+async def test_canceling_replay_cleanup_cannot_cancel_marker_repair(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    rig = heartbeat_arbiter_rig()
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        await journal.safety.mark()
+        original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+        clear_started, release_clear = asyncio.Event(), asyncio.Event()
+        repair_started, release_repair = asyncio.Event(), asyncio.Event()
+
+        async def delayed_clear() -> None:
+            clear_started.set()
+            await release_clear.wait()
+            await original_clear()
+
+        async def delayed_repair() -> None:
+            repair_started.set()
+            await release_repair.wait()
+            await original_mark()
+
+        journal.safety.clear_rejected = delayed_clear  # type: ignore[method-assign]
+        journal.safety.mark = delayed_repair  # type: ignore[method-assign]
+        link = FakeLink(1)
+        agent = ipc_agent(journal, FakeConnector(link), socket_path, rig)
+        clearing = asyncio.create_task(agent._clear_replayed_safety())
+        receipt: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(clear_started.wait(), 1)
+            receipt = asyncio.create_task(
+                agent._receive_command(link, simple("safety.estop", seq=1))
+            )
+            await until(lambda: agent._safety_admitting)
+            release_clear.set()
+            await asyncio.wait_for(repair_started.wait(), 1)
+            clearing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await clearing
+            receipt.cancel()
+            await asyncio.gather(receipt, return_exceptions=True)
+            release_repair.set()
+            if agent._stragglers:
+                await asyncio.wait_for(
+                    asyncio.gather(*agent._stragglers, return_exceptions=True), 1
+                )
+            assert agent.recovery_required
+            assert await journal.safety.pending()
+        finally:
+            release_clear.set()
+            release_repair.set()
+            await asyncio.gather(clearing, return_exceptions=True)
+            if receipt is not None:
+                await asyncio.gather(receipt, return_exceptions=True)
+            if agent._stragglers:
+                await asyncio.wait_for(
+                    asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                )
+
+
+async def test_estop_actual_mark_uses_remaining_lock_budget(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.dispatcher import Deadlines
+
+    rig = heartbeat_arbiter_rig()
+    disabled, mark_started, release_mark = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        result = await rig.core.handle(message)
+        if message["type"] == "disable_motion":
+            disabled.set()
+        return result
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    try:
+        async with Database(tmp_path / "robot.db") as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            original_mark = journal.safety.mark
+
+            async def delayed_mark() -> None:
+                mark_started.set()
+                await release_mark.wait()
+                await original_mark()
+
+            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            link = FakeLink(1)
+            agent = ipc_agent(
+                journal,
+                FakeConnector(link),
+                socket_path,
+                rig,
+                deadlines=Deadlines(safety=0.3),
+            )
+            runner = asyncio.create_task(agent.run())
+            held = False
+            try:
+                await until(lambda: agent.connected)
+                link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
+                await until(lambda: agent.eligible_for_motion)
+                await agent._safety_lock.acquire()
+                held = True
+                link.inbox.put_nowait(simple("safety.estop", seq=1, request_id="new-estop"))
+                await until(lambda: agent._safety_admitting)
+                await asyncio.sleep(0.18)
+                agent._safety_lock.release()
+                held = False
+                await asyncio.wait_for(mark_started.wait(), 1)
+                await asyncio.wait_for(disabled.wait(), 0.24)
+                assert agent.recovery_required and agent.auth_rejected
+                assert not any(r.request_id == "new-estop" and r.payload.ok for r in link.responses)
+            finally:
+                if held:
+                    agent._safety_lock.release()
+                release_mark.set()
+                agent.request_shutdown()
+                if not runner.done():
+                    await asyncio.wait_for(runner, 3)
+                if agent._stragglers:
+                    await asyncio.wait_for(
+                        asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                    )
+    finally:
+        await server.close()
+
+
+async def test_canceling_estop_as_lock_is_granted_does_not_leak_the_lock(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    rig = heartbeat_arbiter_rig()
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        link = FakeLink(1)
+        agent = ipc_agent(journal, FakeConnector(link), socket_path, rig)
+        await agent._safety_lock.acquire()
+        receipt = asyncio.create_task(agent._receive_command(link, simple("safety.estop", seq=1)))
+        await until(lambda: agent._safety_admitting)
+        await asyncio.sleep(0)
+        agent._safety_lock.release()
+        await asyncio.sleep(0)
+        assert agent._safety_lock.locked() and not receipt.done()
+        receipt.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await receipt
+        await asyncio.wait_for(agent._safety_lock.acquire(), 0.2)
+        agent._safety_lock.release()
+        assert agent.recovery_required and not link.responses
+
+
+async def test_repeated_cleanup_cancellation_cannot_let_late_clear_erase_repair(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    rig = heartbeat_arbiter_rig()
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        await journal.safety.mark()
+        original_clear = journal.safety.clear_rejected
+        clear_started, cancel_seen, release_clear, clear_done = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+
+        async def late_clear() -> None:
+            clear_started.set()
+            try:
+                await release_clear.wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                await release_clear.wait()
+            await original_clear()
+            clear_done.set()
+
+        journal.safety.clear_rejected = late_clear  # type: ignore[method-assign]
+        link = FakeLink(1)
+        agent = ipc_agent(journal, FakeConnector(link), socket_path, rig)
+        clearing = asyncio.create_task(agent._clear_replayed_safety())
+        receipt: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(clear_started.wait(), 1)
+            receipt = asyncio.create_task(
+                agent._receive_command(link, simple("safety.estop", seq=1))
+            )
+            await until(lambda: agent._safety_admitting)
+            receipt.cancel()
+            await asyncio.gather(receipt, return_exceptions=True)
+            clearing.cancel()
+            await asyncio.gather(clearing, return_exceptions=True)
+            await asyncio.wait_for(cancel_seen.wait(), 1)
+            worker = next(iter(agent._safety_cleanups))
+            worker.cancel()
+            await asyncio.sleep(0.05)
+            release_clear.set()
+            await asyncio.wait_for(clear_done.wait(), 1)
+            await asyncio.gather(worker, return_exceptions=True)
+            assert await journal.safety.pending()
+            assert agent.recovery_required and not link.responses
+        finally:
+            release_clear.set()
+            await asyncio.gather(clearing, return_exceptions=True)
+            if receipt is not None:
+                await asyncio.gather(receipt, return_exceptions=True)
+            if agent._stragglers:
+                await asyncio.wait_for(
+                    asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                )
+
+
+async def test_canceling_cleanup_worker_during_repair_keeps_the_marker(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    rig = heartbeat_arbiter_rig()
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        await journal.safety.mark()
+        original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+        clear_started, release_clear = asyncio.Event(), asyncio.Event()
+        repair_started, release_repair = asyncio.Event(), asyncio.Event()
+
+        async def delayed_clear() -> None:
+            clear_started.set()
+            await release_clear.wait()
+            await original_clear()
+
+        async def delayed_repair() -> None:
+            repair_started.set()
+            await release_repair.wait()
+            await original_mark()
+
+        journal.safety.clear_rejected = delayed_clear  # type: ignore[method-assign]
+        journal.safety.mark = delayed_repair  # type: ignore[method-assign]
+        link = FakeLink(1)
+        agent = ipc_agent(journal, FakeConnector(link), socket_path, rig)
+        clearing = asyncio.create_task(agent._clear_replayed_safety())
+        receipt: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(clear_started.wait(), 1)
+            receipt = asyncio.create_task(
+                agent._receive_command(link, simple("safety.estop", seq=1))
+            )
+            await until(lambda: agent._safety_admitting)
+            receipt.cancel()
+            await asyncio.gather(receipt, return_exceptions=True)
+            release_clear.set()
+            await asyncio.wait_for(repair_started.wait(), 1)
+            worker = next(iter(agent._safety_cleanups))
+            worker.cancel()
+            await asyncio.sleep(0)
+            release_repair.set()
+            await asyncio.gather(clearing, return_exceptions=True)
+            assert agent.recovery_required and await journal.safety.pending()
+        finally:
+            release_clear.set()
+            release_repair.set()
+            await asyncio.gather(clearing, return_exceptions=True)
+            if receipt is not None:
+                await asyncio.gather(receipt, return_exceptions=True)
+            if agent._stragglers:
+                await asyncio.wait_for(
+                    asyncio.gather(*agent._stragglers, return_exceptions=True), 2
+                )
+
+
+async def test_estop_lock_timeout_disables_without_waiting_for_lock_owner(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.dispatcher import Deadlines
+
+    rig = heartbeat_arbiter_rig()
+    disabled = asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        result = await rig.core.handle(message)
+        if message["type"] == "disable_motion":
+            disabled.set()
+        return result
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    try:
+        async with Database(tmp_path / "robot.db") as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            first, second = FakeLink(1), FakeLink(2)
+            agent = ipc_agent(
+                journal,
+                FakeConnector(first, second),
+                socket_path,
+                rig,
+                deadlines=Deadlines(safety=0.1),
+            )
+            runner = asyncio.create_task(agent.run())
+            held = False
+            try:
+                await until(lambda: agent.connected)
+                first.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
+                await until(lambda: agent.eligible_for_motion)
+                await journal.safety.mark()
+                await agent._safety_lock.acquire()
+                held = True
+                first.inbox.put_nowait(simple("safety.estop", seq=1, request_id="new-estop"))
+                await until(lambda: agent._safety_admitting)
+                assert not agent.eligible_for_motion
+                await asyncio.wait_for(disabled.wait(), 0.15)
+                assert agent.recovery_required and agent.auth_rejected
+                assert await journal.safety.pending()
+                assert not any(
+                    r.request_id == "new-estop" and r.payload.ok for r in first.responses
+                )
+                agent._safety_lock.release()
+                held = False
+                await asyncio.wait_for(runner, 2)
+                restarted = ipc_agent(journal, FakeConnector(second), socket_path, rig)
+                await asyncio.wait_for(restarted.run(), 2)
+                assert restarted.recovery_required and not restarted.connected
+            finally:
+                if held:
+                    agent._safety_lock.release()
+                agent.request_shutdown()
+                if not runner.done():
+                    await asyncio.wait_for(runner, 3)
+    finally:
+        await server.close()

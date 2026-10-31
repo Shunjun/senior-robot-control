@@ -138,8 +138,10 @@ class Agent:
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
+        self._safety_cleanups: set[asyncio.Task[None]] = set()
         self._safety_lock = asyncio.Lock()
-        self._safety_admitting = False
+        self._safety_admitting = 0
+        self._safety_receipts = 0
         self._safety_resolving = False
         self._estop_inflight = False
         self._signals: list[signal.Signals] = []
@@ -174,7 +176,7 @@ class Agent:
     def _safety_blocked(self) -> bool:
         return (
             self.recovery_required
-            or self._safety_admitting
+            or self._safety_admitting > 0
             or self._safety_resolving
             or self._estop_inflight
             or any(key[0] == "safety.estop" for key in self._safety_pending)
@@ -286,6 +288,7 @@ class Agent:
             if task is not self._safety_task:
                 task.cancel()
         await self._settle_safety()
+        await self._wait_inflight(list(self._safety_cleanups))
         await self._wait_inflight(inflight)
         await self._wait_inflight(list(self._loss_tasks))
         link, self._link = self._link, None
@@ -489,11 +492,13 @@ class Agent:
                 continue
             last_key, last_sent = key, loop.time()
 
-    async def _safety_storage(self, work: Awaitable[Any]) -> Any:
+    async def _safety_storage(self, work: Awaitable[Any], deadline: float | None = None) -> Any:
         """Bound storage waits without assuming cancellation can stop SQLite immediately."""
         task = asyncio.ensure_future(work)
+        loop = asyncio.get_running_loop()
+        timeout = self._deadlines.safety if deadline is None else max(0.0, deadline - loop.time())
         try:
-            done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
+            done, _ = await asyncio.wait({task}, timeout=timeout)
         except BaseException:
             task.cancel()
             self._stragglers.add(task)
@@ -504,7 +509,31 @@ class Agent:
             self._stragglers.add(task)
             task.add_done_callback(self._straggler_finished)
             raise TimeoutError("safety storage deadline exceeded")
+        if deadline is not None and loop.time() >= deadline:
+            if not task.cancelled():
+                task.exception()
+            raise TimeoutError("safety storage deadline exceeded")
         return task.result()
+
+    async def _acquire_safety_lock(self, deadline: float) -> None:
+        """Wait for the lock within the receipt budget, including cancellation races."""
+        loop = asyncio.get_running_loop()
+        task = asyncio.create_task(self._safety_lock.acquire())
+        try:
+            done, _ = await asyncio.wait({task}, timeout=max(0.0, deadline - loop.time()))
+        except BaseException:
+            if task.done() and not task.cancelled() and task.exception() is None:
+                self._safety_lock.release()
+            else:
+                task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            raise TimeoutError("safety lock deadline exceeded")
+        task.result()
+        if loop.time() >= deadline:
+            self._safety_lock.release()
+            raise TimeoutError("safety lock deadline exceeded")
 
     async def _receive_command(self, link: Link, envelope: Envelope) -> None:
         if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
@@ -520,23 +549,44 @@ class Agent:
             self._accept(link, envelope)
             return
         # From receipt until durable admission, no new motion or ROS heartbeat is authorized.
-        self._safety_admitting = True
+        deadline = asyncio.get_running_loop().time() + self._deadlines.safety
+        self._safety_admitting += 1
+        self._safety_receipts += 1
         self._latest_velocity = None
         try:
-            async with self._safety_lock:
-                await self._safety_storage(self._journal.safety.mark())
+            await self._acquire_safety_lock(deadline)
+            try:
+                await self._safety_storage(self._journal.safety.mark(), deadline)
+                if self.recovery_required:
+                    raise ConnectionError("safety recovery is required")
                 if overflow:
                     self.recovery_required = True
                 self._accept(link, envelope)
+            finally:
+                self._safety_lock.release()
         except BaseException as exc:
             self._safety_fault()
             if isinstance(exc, asyncio.CancelledError):
                 raise
             raise ConnectionError("safety admission failed") from exc
         finally:
-            self._safety_admitting = False
+            self._safety_admitting -= 1
 
     async def _clear_replayed_safety(self) -> None:
+        interrupted = asyncio.Event()
+        task = asyncio.create_task(self._clear_replayed_safety_locked(interrupted))
+        self._safety_cleanups.add(task)
+        task.add_done_callback(self._safety_cleanups.discard)
+        self._stragglers.add(task)
+        task.add_done_callback(self._straggler_finished)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            self._safety_fault()
+            interrupted.set()
+            raise
+
+    async def _clear_replayed_safety_locked(self, interrupted: asyncio.Event) -> None:
         async with self._safety_lock:
             if (
                 self.recovery_required
@@ -545,19 +595,53 @@ class Agent:
                 or any(key[0] == "safety.estop" for key in self._safety_pending)
             ):
                 return
+            receipts = self._safety_receipts
+            clear = asyncio.create_task(self._journal.safety.clear_rejected())
+            interruption: BaseException | None = None
+            cancel = asyncio.create_task(interrupted.wait())
             try:
-                await self._safety_storage(self._journal.safety.clear_rejected())
+                done, _ = await asyncio.wait(
+                    {clear, cancel},
+                    timeout=self._deadlines.safety,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if cancel in done:
+                    raise asyncio.CancelledError()
+                if clear not in done:
+                    raise TimeoutError("safety storage deadline exceeded")
+                clear.result()
             except BaseException as exc:
+                interruption = exc
                 logger.exception("could not resolve rejected safety intent")
-                if self._safety_admitting:
-                    # A new receipt can be waiting while the delete's outcome is unknown.
-                    try:
-                        await self._safety_storage(self._journal.safety.mark())
-                    except BaseException:
-                        logger.exception("could not retain safety intent after interrupted clear")
                 self._safety_fault()
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
+                if not clear.done():
+                    clear.cancel()
+                while not clear.done():
+                    try:
+                        await asyncio.shield(clear)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if clear.done() and not clear.cancelled():
+                    clear.exception()
+            finally:
+                cancel.cancel()
+            if self._safety_receipts != receipts:
+                # A canceled or timed-out receipt still needs the old delete's outcome repaired.
+                repair = asyncio.create_task(self._safety_storage(self._journal.safety.mark()))
+                try:
+                    while not repair.done():
+                        try:
+                            await asyncio.shield(repair)
+                        except asyncio.CancelledError:
+                            self._safety_fault()
+                    repair.result()
+                except BaseException:
+                    logger.exception("could not retain safety intent after interrupted clear")
+                    self._safety_fault()
+            if isinstance(interruption, asyncio.CancelledError):
+                raise interruption
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
