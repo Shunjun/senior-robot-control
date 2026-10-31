@@ -47,6 +47,7 @@ class AdapterCore:
         self._request_exit = request_exit
         self._active_epoch: int | None = None
         self._highest_epoch = -1
+        self._disabled_through_epoch = -1
         self.motion_disabled = False
         self._exiting = False
 
@@ -64,10 +65,9 @@ class AdapterCore:
             epoch = message.get("connection_epoch")
             if not isinstance(epoch, int) or isinstance(epoch, bool):
                 return {"ok": False, "error": "bad_request"}
-            if self._active_epoch is not None and epoch != self._active_epoch:
+            if epoch < max(self._highest_epoch, self._disabled_through_epoch):
                 return {"ok": True}
-            if epoch < self._highest_epoch:
-                return {"ok": True}
+            self._disabled_through_epoch = epoch
             self.motion_disabled = True
             self.release()
             return {"ok": True}
@@ -99,7 +99,9 @@ class AdapterCore:
             envelope = validate_envelope(raw.encode(), self._robot_id)
         except ValueError:
             return {"ok": False, "error": "motion_disabled"}
-        if envelope.type != "control.acquire" or envelope.connection_epoch <= self._highest_epoch:
+        if envelope.type != "control.acquire" or envelope.connection_epoch <= max(
+            self._highest_epoch, self._disabled_through_epoch
+        ):
             return {"ok": False, "error": "motion_disabled"}
         result = self._send(message, None, safety=False)
         if result.get("ok"):

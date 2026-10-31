@@ -35,3 +35,9 @@ Linux Humble 构建、启动及完整速度链、时钟冻结/恢复、真实 TF
 复审修复后验证：`ruff check .` 全通过；`mypy src` 65 个源文件无问题；本地单元加非 socket 的 shutdown 测试 252 passed、5 deselected。旧停用与被拒绝高 epoch 的两项测试在修复前均失败，修复后通过；退出后禁止重新启用测试亦先失败后通过。Linux ROS 测试尚待重跑。
 
 `ruff format --check` 检查本轮 14 个 Python 文件：13 个已格式化，`tests/unit/test_recovery.py` 一处既有格式不符；从基线 5923581 提取的同文件同一位置复核仍不符，未改动无关内容。
+
+## 第二轮复审修复
+
+复审指出，停用新 epoch 先于 acquire 时没有记住停用水位；较新 epoch 的停用还会被误认为过期事件，不能撤销旧租约。新增 `test_disable_before_acquire_blocks_same_epoch_until_new_handshake` 和 `test_newer_disable_revokes_older_lease_and_rejects_its_own_epoch`，在 bc494ac 运行结果 `2 failed`，分别实际出现同 epoch 错误获准及旧速度仍为 0.2。修复后记录已接受和已停用的独立水位：较新或相同的停用撤销当前租约，较旧停用无副作用，重新启用须明确获取更高 epoch。水位仅保存在进程内，不声称跨重启持久化。
+
+验证：`pytest tests/integration/test_shutdown.py -k 'not ipc_frames and not shutdown_disables_motion_before_ros_exit and not sigterm_revokes_motion_before_cleanup and not cancel_propagates_and_releases_resources and not ipc_motion_sends_validated_envelopes_and_the_epoch' -q` 为 17 passed、5 deselected；`ruff check .` 通过；`ruff format --check` 两个本轮 Python 文件通过；`mypy src` 65 文件无问题。排除项仍是本环境的 Unix socket 限制。

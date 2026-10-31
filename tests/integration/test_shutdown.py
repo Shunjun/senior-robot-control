@@ -495,3 +495,31 @@ async def test_exit_permanently_rejects_later_acquire() -> None:
     assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
     await rig.send("exit")
     assert not (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+
+
+async def test_disable_before_acquire_blocks_same_epoch_until_new_handshake() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("disable_motion", connection_epoch=2))["ok"]
+    assert (await rig.send("disable_motion", connection_epoch=2))["ok"]
+    assert not (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+    assert not (await rig.send("drive", velocity(seq=2, epoch=2)))["ok"]
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=3)))["ok"]
+    assert rig.tick() == (0.0, 0.0)
+
+
+async def test_newer_disable_revokes_older_lease_and_rejects_its_own_epoch() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
+    assert (await rig.send("drive", velocity(seq=2, epoch=1)))["ok"]
+    assert rig.tick() == (0.2, 0.0)
+    assert (await rig.send("disable_motion", connection_epoch=2))["ok"]
+    assert rig.tick() == (0.0, 0.0)
+    assert (await rig.send("disable_motion", connection_epoch=1))["ok"]
+    assert not (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=3)))["ok"]
+    assert (await rig.send("drive", velocity(seq=2, epoch=3)))["ok"]
+    assert rig.tick() == (0.2, 0.0)
