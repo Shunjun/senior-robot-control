@@ -11,7 +11,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from senior_control.agent.connection import HeartbeatFrame, HeartbeatLedger, Link, MotionPort
+from senior_control.agent.connection import (
+    HeartbeatFrame,
+    HeartbeatLedger,
+    Link,
+    MotionPort,
+    MotionRejected,
+)
 from senior_control.agent.dispatcher import (
     Deadlines,
     Dispatcher,
@@ -41,6 +47,7 @@ logger = logging.getLogger("senior_control.agent")
 
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
+MAX_SAFETY_PENDING = 64
 # Browser commands may be admitted for this long. The vehicle does not execute for that long:
 # a velocity older than command_ttl_seconds is refused on the local clock.
 ADMISSION_SECONDS = 5.0
@@ -129,7 +136,7 @@ class Agent:
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
-        self._safety_pending: dict[str, tuple[Link, Envelope]] = {}
+        self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
         self._signals: list[signal.Signals] = []
         if snapshot_seconds <= 0 or state_poll_seconds <= 0:
             raise ValueError("snapshot intervals must be positive")
@@ -444,8 +451,18 @@ class Agent:
         if isinstance(envelope, ResponseEnvelope):
             return
         if envelope.type in HALT_TYPES:
-            # At most one unsent request of each safety kind; estop always wins over stop.
-            self._safety_pending.setdefault(envelope.type, (link, envelope))
+            key = (envelope.type, envelope.connection_epoch, envelope.session_id)
+            existing = self._safety_pending.get(key)
+            if existing is not None:
+                if envelope.seq > existing[1].seq:
+                    self._safety_pending[key] = (link, envelope)
+            elif len(self._safety_pending) >= MAX_SAFETY_PENDING:
+                self.auth_rejected = True
+                self.runtime_failed = True
+                self.request_shutdown()
+                raise ConnectionError("agent safety capacity exceeded")
+            else:
+                self._safety_pending[key] = (link, envelope)
             if self._safety_task is None or self._safety_task.done():
                 self._safety_task = self._spawn(self._drain_safety())
             return
@@ -456,17 +473,22 @@ class Agent:
 
     async def _drain_safety(self) -> None:
         while self._safety_pending:
-            kind = "safety.estop" if "safety.estop" in self._safety_pending else "drive.stop"
-            link, envelope = self._safety_pending.pop(kind)
-            if kind == "safety.estop":
-                # An emergency latch already implies the queued zero-motion stop.
-                self._safety_pending.pop("drive.stop", None)
+            key = next(
+                (key for key in self._safety_pending if key[0] == "safety.estop"),
+                next(iter(self._safety_pending)),
+            )
+            kind = key[0]
+            link, envelope = self._safety_pending.pop(key)
             try:
                 result = await self.dispatch(envelope)
             except DomainError as exc:
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))
-                if link.epoch == self._last_epoch and kind == "safety.estop":
+                if (
+                    exc.code is not ErrorCode.SAFETY_REJECTED
+                    and link.epoch == self._last_epoch
+                    and kind == "safety.estop"
+                ):
                     self.auth_rejected = True
                     self.request_shutdown()
                 continue
@@ -590,6 +612,8 @@ class Agent:
                     await asyncio.wait_for(self._motion.estop(envelope), self._deadlines.safety)
                 else:
                     await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
+            except MotionRejected as exc:
+                raise DomainError(ErrorCode.SAFETY_REJECTED, "stop was rejected") from exc
             except Exception as exc:
                 if supervisor is not None:
                     self._supervisor_fault("stop was not acknowledged")

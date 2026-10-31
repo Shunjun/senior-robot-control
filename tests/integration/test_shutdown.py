@@ -997,3 +997,97 @@ async def test_fault_disables_ros_before_delayed_heartbeat_ack_returns(
             if not runner.done():
                 await asyncio.wait_for(runner, 2)
     await server.close()
+
+
+@pytest.mark.parametrize("second_session", ["page-a", "page-b"])
+@pytest.mark.parametrize("first_inflight", [False, True])
+@pytest.mark.parametrize("fill", [False, True])
+async def test_newer_or_other_session_estop_is_not_swallowed(
+    tmp_path: Path, socket_path: Path, second_session: str, first_inflight: bool, fill: bool
+) -> None:
+    from agent_fakes import simple
+
+    from senior_control.agent.main import MAX_SAFETY_PENDING
+    from senior_control.safety.arbiter import Arbiter
+
+    rig = ArbiterRig()
+    rig.arbiter = Arbiter(ROBOT, 0.2, 1.0, 1.0, require_server_heartbeat=True)
+    rig.core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None: (
+            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        ),
+        disconnect=rig.arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: rig.arbiter.server_heartbeat(
+            epoch, rig.now, deadline
+        ),
+    )
+    assert (await rig.send("server_heartbeat", connection_epoch=1, deadline=100.8))["ok"]
+    assert (
+        await rig.send(
+            "command", simple("control.acquire", seq=5).model_copy(update={"session_id": "page-a"})
+        )
+    )["ok"]
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def handle(message: dict[str, Any]) -> dict[str, Any]:
+        if first_inflight and message["type"] == "estop" and not entered.is_set():
+            entered.set()
+            await release.wait()
+        return await rig.core.handle(message)
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    try:
+        async with Database(tmp_path / "robot.db") as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            link = FakeLink(1)
+            agent = Agent(
+                ROBOT,
+                connector=FakeConnector(link),
+                journal=journal,
+                tasks=FakeTasks(),
+                home=FakeHome(),
+                maps=FakeMaps(),
+                state=FakeState(),
+                motion=IpcMotion(IpcClient(socket_path)),
+            )
+            agent._last_epoch = 1
+            first = simple("safety.estop", seq=4).model_copy(update={"session_id": "page-a"})
+            second = simple(
+                "safety.estop",
+                seq=6 if second_session == "page-a" else 1,
+            ).model_copy(update={"session_id": second_session})
+            try:
+                agent._accept(link, first)
+                if first_inflight:
+                    await asyncio.wait_for(entered.wait(), 1)
+                agent._accept(link, second)
+                if fill:
+                    for index in range(MAX_SAFETY_PENDING - len(agent._safety_pending)):
+                        agent._accept(
+                            link,
+                            simple("safety.estop", seq=1).model_copy(
+                                update={"session_id": f"other-{index}"}
+                            ),
+                        )
+                    with pytest.raises(ConnectionError, match="safety capacity"):
+                        agent._accept(
+                            link,
+                            simple("safety.estop", seq=1).model_copy(
+                                update={"session_id": "overflow"}
+                            ),
+                        )
+                    assert agent.auth_rejected and agent.runtime_failed
+                    assert len(agent._safety_pending) == MAX_SAFETY_PENDING
+                release.set()
+                assert agent._safety_task is not None
+                await asyncio.wait_for(agent._safety_task, 1)
+                assert rig.arbiter.mode(rig.now) == "estop"
+            finally:
+                release.set()
+                await agent._release()
+    finally:
+        await server.close()

@@ -867,6 +867,8 @@ async def test_authenticated_reply_renews_ros_eligibility(rig: Rig) -> None:
 
 
 async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
     class BrokenLink(FakeLink):
         async def send_heartbeat(self) -> None:
             raise ConnectionError("half open")
@@ -876,10 +878,17 @@ async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) ->
             self.drop()
 
     link = BrokenLink(epoch=1)
-    task = await start(rig, link)
+    replacement = FakeLink(epoch=2)
+    rig.connector.add(link)
+    rig.connector.add(replacement)
+    task = asyncio.create_task(rig.agent.run())
     try:
         await until(lambda: link.closed)
+        await until(lambda: rig.agent.connected and rig.agent._epoch == 2)
         assert not rig.agent.eligible_for_motion
+        replacement.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        assert "disable:1" in rig.motion.events
     finally:
         await finish(task, rig)
 

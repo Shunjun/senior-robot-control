@@ -38,3 +38,5 @@
 复审首轮修复及后续验证见同目录 [repair-wave2-fixround1-report.md](repair-wave2-fixround1-report.md)。
 
 第二轮竞态修复与日志交接见同目录 [repair-wave2-fixround2-report.md](repair-wave2-fixround2-report.md)。
+
+第 3 轮安全队列及测试清理修复见 [repair-wave2-fixround3-report.md](repair-wave2-fixround3-report.md)。
