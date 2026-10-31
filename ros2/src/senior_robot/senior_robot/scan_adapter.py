@@ -121,4 +121,4 @@ class ScanAdapter(Node):
 
 
 def main():
-    run(ScanAdapter)
+    run(ScanAdapter, cli=True)

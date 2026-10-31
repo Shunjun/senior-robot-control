@@ -64,12 +64,14 @@ private:
     pose_ = {};
     extrinsic_valid_ = false;
     published_qualified_ = false;
+    previous_stamp_valid_ = false;
   }
   void invalidate(senior_motion_msgs::msg::ScanMotion & output, const std::string & reason,
                   bool restart)
   {
     if (restart) {
       matcher_->reset();
+      previous_stamp_valid_ = false;
       // A sustained bad stream is one interruption, not hundreds of source
       // lifetimes. Rotate after qualified continuity is actually broken.
       if (published_qualified_) new_epoch();
@@ -139,7 +141,14 @@ private:
       scan.ranges.assign(message.ranges.begin(), message.ranges.end());
       auto match = matcher_->update(scan);
       if (!match.valid) {
+        if (match.reason == "initializing") {
+          previous_stamp_ = rclcpp::Time(message.header.stamp);
+          previous_stamp_valid_ = true;
+        }
         invalidate(output, match.reason, match.reason != "initializing"); return;
+      }
+      if (!previous_stamp_valid_ || previous_stamp_.seconds() != match.start) {
+        invalidate(output, "source_stamp_unavailable", true); return;
       }
       const Pose delta = to_body_delta(match.sensor_delta, extrinsic_);
       const double dt = match.end-match.start;
@@ -149,8 +158,9 @@ private:
       }
       pose_ = compose(pose_, delta);
       //Compatible: Humble rclcpp::Time converts to builtin_interfaces::msg::Time.
-      output.interval_start = rclcpp::Time(static_cast<int64_t>(std::llround(match.start*1e9)),
-                                         RCL_ROS_TIME);
+      // Keep the original integer source identity; match.start is a double.
+      output.interval_start = previous_stamp_;
+      previous_stamp_ = rclcpp::Time(message.header.stamp);
       output.source_epoch = epoch_;
       output.valid = true;
       output.reason = match.reason;
@@ -180,6 +190,8 @@ private:
   bool extrinsic_valid_ = false;
   bool bound_source_ = false;
   bool published_qualified_ = false;
+  rclcpp::Time previous_stamp_{static_cast<int64_t>(0), RCL_ROS_TIME};
+  bool previous_stamp_valid_ = false;
   std::array<uint8_t, RMW_GID_STORAGE_SIZE> source_gid_{};
   std::unique_ptr<LocalMatcher> matcher_;
   tf2_ros::Buffer buffer_;

@@ -8,7 +8,7 @@ qualification is not decided here.
 import math
 from dataclasses import dataclass
 
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import SafetyDecision
 
 _INDEPENDENT_SOURCE = "scan_match"
@@ -57,6 +57,8 @@ class MotionEstimate:
     degenerate: bool = True
     aligned: bool = False
     max_covariance: float | None = None
+    # //Compatible: old estimates remain explicitly unqualified for full body twist.
+    body_twist: BodyTwist | None = None
 
 
 def body_twist_delta(delta: Pose2D) -> Pose2D:
@@ -206,6 +208,11 @@ class MotionEstimator:
             degenerate=False,
             aligned=True,
             max_covariance=self.max_covariance,
+            body_twist=BodyTwist(
+                twist_delta.x / scan_motion.dt,
+                twist_delta.y / scan_motion.dt,
+                twist_delta.yaw / scan_motion.dt,
+            ),
         )
 
 

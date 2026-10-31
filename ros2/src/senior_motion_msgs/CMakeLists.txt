@@ -5,7 +5,8 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/MotionEvidence.msg"
+rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHeader.msg" "msg/MotionEvidence.msg"
+  "msg/BoundedSafetyScan.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

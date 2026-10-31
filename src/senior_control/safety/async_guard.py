@@ -5,19 +5,33 @@ import multiprocessing
 import queue
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Velocity
-from senior_control.safety.guard import SafetyDecision, evaluate_motion
+from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.safety.guard import SafetyDecision, evaluate_motion, stopping_distance
 from senior_control.safety.motion_runtime import (
     StampedObservation,
     TimedPoseBuffer,
     newer_scan_veto,
     select_safety_observation,
 )
+from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_control.safety.velocity_uncertainty import IntervalVelocityBounds
+
+
+@dataclass(frozen=True)
+class RawSafetyObservation:
+    """Bounded ingress message retained without decoding its rays in the ROS executor."""
+
+    message: Any
+    received: float
+    received_ros: float
+    clock_advance_steady: float
+    stamp: float
 
 
 @dataclass(frozen=True)
@@ -72,9 +86,9 @@ class SafetyTicket:
 @dataclass(frozen=True)
 class SafetyWork:
     command: Velocity
-    measured: Velocity
+    measured: BodyTwist
     profile: DeviceProfile
-    observations: tuple[StampedObservation, ...]
+    observations: tuple[StampedObservation | RawSafetyObservation, ...]
     history: TimedPoseBuffer
     evaluation_ros_time: float
     evaluation_steady_time: float
@@ -83,6 +97,14 @@ class SafetyWork:
     yaw_bound: float
     radius: float
     diagnostics: bool
+    interpolate: bool = False
+    max_angular_gap: float = 0.0
+    no_return_clear: bool = False
+    transform_static: bool = False
+    self_mask_range_uncertainty: float = 0.0
+    body_frame: str = "base_link"
+    interval_bounds: IntervalVelocityBounds | None = None
+    physical_cap_qualified: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,15 +117,111 @@ class SafetyWorkResult:
     reference_stamp: float | None = None
     uncertainty_margin: float | None = None
     sensor_origin: tuple[float, float, float] | None = None
+    self_masked_rays: int = 0
+    ambiguous_rays: int = 0
+
+
+_filtered_cache: OrderedDict[tuple[object, ...], StampedObservation] = OrderedDict()
+
+
+def _filtered_observations(work: SafetyWork) -> tuple[StampedObservation, ...]:
+    """Decode/filter only inside the spawned worker; reuse at most eight scans."""
+    result = []
+    profile_key = work.profile.model_dump_json()
+    for sample in work.observations:
+        if isinstance(sample, StampedObservation):
+            result.append(sample)
+            continue
+        msg = sample.message
+        key = (
+            msg.source_epoch,
+            msg.sequence,
+            profile_key,
+            work.interpolate,
+            work.max_angular_gap,
+            work.no_return_clear,
+            work.transform_static,
+            work.self_mask_range_uncertainty,
+            work.body_frame,
+        )
+        filtered = _filtered_cache.get(key)
+        if filtered is None:
+            scan = ScanObservation(
+                tuple(msg.ranges),
+                msg.angle_min,
+                msg.angle_increment,
+                msg.range_min,
+                msg.range_max,
+                sample.stamp,
+                "ros",
+                Pose2D(msg.sensor_x, msg.sensor_y, msg.sensor_yaw),
+                msg.transform_stamp,
+                work.body_frame,
+                sample.stamp,
+                work.interpolate,
+                work.max_angular_gap,
+                work.no_return_clear,
+                work.transform_static,
+            )
+            observation = filter_self(
+                scan, work.profile, self_mask_range_uncertainty=work.self_mask_range_uncertainty
+            )
+            if not observation.free_rays:
+                raise ValueError("scan has no usable returns")
+            filtered = StampedObservation(
+                observation, sample.received, sample.received_ros, sample.clock_advance_steady
+            )
+            _filtered_cache[key] = filtered
+            while len(_filtered_cache) > 8:
+                _filtered_cache.popitem(last=False)
+        else:
+            _filtered_cache.move_to_end(key)
+        result.append(filtered)
+    return tuple(result)
 
 
 def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
     """Run geometry at the ticket's future deadline, not at a restamped scan."""
     start = time.monotonic()
     details: dict[str, object] = {}
+    interval = work.interval_bounds
+    if (
+        not work.physical_cap_qualified
+        or interval is None
+        or not all(math.isfinite(value) and value >= 0 for value in (interval.linear, interval.yaw))
+        or not all(
+            math.isfinite(value) and value > 0 for value in (work.linear_bound, work.yaw_bound)
+        )
+    ):
+        decision = SafetyDecision(False, Velocity(0.0, 0.0), "motion_uncertainty_unqualified")
+        return SafetyWorkResult(decision, details, time.monotonic() - start)
+    braking = work.profile.braking_deceleration
+    lateral_braking = work.profile.lateral_braking_deceleration
+    yaw_braking = work.profile.yaw_braking_deceleration
+    reaction = work.profile.reaction_time
+    if braking is None or lateral_braking is None or yaw_braking is None or reaction is None:
+        decision = SafetyDecision(False, Velocity(0.0, 0.0), "motion_braking_unqualified")
+        return SafetyWorkResult(decision, details, time.monotonic() - start)
+    # The interval-average confidence cannot bound instantaneous speed. Use
+    # the complete separately assumed physical cap in each body axis.
+    translation = stopping_distance(work.linear_bound, reaction, braking) + stopping_distance(
+        work.linear_bound, reaction, lateral_braking
+    )
+    yaw_stop = stopping_distance(work.yaw_bound, reaction, yaw_braking)
+    body_radius = max(math.hypot(x, y) for x, y in work.profile.footprint)
+    rotation = 2 * body_radius * math.sin(min(math.pi, yaw_stop) / 2)
+    motion_margin = translation + rotation
+    details.update(
+        interval_linear_upper=interval.linear,
+        interval_yaw_upper=interval.yaw,
+        assumed_instantaneous_linear_cap=work.linear_bound,
+        assumed_instantaneous_yaw_cap=work.yaw_bound,
+        motion_uncertainty_sweep_margin=motion_margin,
+    )
+    observations = _filtered_observations(work)
     assert work.profile.observation_max_age is not None
     prepared = select_safety_observation(
-        list(work.observations),
+        list(observations),
         work.history,
         steady=work.evaluation_steady_time,
         now=work.evaluation_ros_time,
@@ -119,11 +237,11 @@ def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
     selected_stamp = prepared.observation.scan.stamp
     selected_received = next(
         item.received
-        for item in reversed(work.observations)
+        for item in reversed(observations)
         if item.observation.scan.stamp == selected_stamp
     )
     if newer_scan_veto(
-        work.observations[-1],
+        observations[-1],
         selected_stamp,
         work.command,
         work.measured,
@@ -133,6 +251,7 @@ def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
         linear_bound=work.linear_bound,
         yaw_bound=work.yaw_bound,
         radius=work.radius,
+        motion_sweep_margin=motion_margin,
     ):
         decision = SafetyDecision(False, Velocity(0.0, 0.0), "newer scan vetoed motion")
     else:
@@ -142,7 +261,7 @@ def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
             [prepared.observation],
             work.profile,
             work.evaluation_ros_time,
-            uncertainty_margin=prepared.added_margin,
+            uncertainty_margin=prepared.added_margin + motion_margin,
             coverage_diagnostics=details if work.diagnostics else None,
         )
     for key, value in tuple(details.items()):
@@ -157,8 +276,10 @@ def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
         selected_received,
         selected_stamp,
         prepared.observation.scan.reference_stamp,
-        prepared.added_margin,
+        prepared.added_margin + motion_margin,
         (sensor.x, sensor.y, sensor.yaw),
+        len(observations[-1].observation.occluded_regions),
+        sum(ray.kind == "ambiguous_self_overlap" for ray in observations[-1].observation.rays),
     )
 
 

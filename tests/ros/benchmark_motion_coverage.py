@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
 
@@ -50,7 +50,7 @@ def main():
         filtered = time.perf_counter()
         decision = evaluate_motion(
             Velocity(0.05, 0.0),
-            Velocity(-1.3947176746853806e-19, -6.938893903907376e-17),
+            BodyTwist(-1.3947176746853806e-19, 0.0, -6.938893903907376e-17),
             [observation],
             profile,
             stamp,

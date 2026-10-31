@@ -28,7 +28,7 @@ name = sys.argv[1]
 sys.argv = [sys.argv[0], *sys.argv[2:]]
 module = importlib.import_module("senior_robot." + name)
 class_name = {"scan_adapter": "ScanAdapter", "safety_node": "SafetyGate",
-              "motion_fusion": "MotionFusion"}[name]
+              "motion_fusion": "MotionFusion", "safety_scan_ingress": "SafetyScanIngress"}[name]
 original = getattr(module, class_name)
 
 def construct():
@@ -84,7 +84,9 @@ module.main()
 )
 
 
-@pytest.mark.parametrize("entry", ["scan_adapter", "safety_node", "motion_fusion"])
+@pytest.mark.parametrize(
+    "entry", ["scan_adapter", "safety_node", "motion_fusion", "safety_scan_ingress"]
+)
 @pytest.mark.parametrize("first_signal", [signal.SIGINT, signal.SIGTERM])
 def test_owned_nodes_handle_signal_and_repeated_interrupt(entry, first_signal, monkeypatch):
     pytest.importorskip("rclpy")

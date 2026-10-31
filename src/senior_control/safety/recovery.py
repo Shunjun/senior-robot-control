@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from senior_control.config import DeviceProfile
-from senior_control.models import MapRef, Pose2D, Velocity
+from senior_control.models import BodyTwist, MapRef, Pose2D, Velocity
 from senior_control.safety.coverage import SweptRegion, supports
 from senior_control.safety.guard import evaluate_motion, stopping_distance
 from senior_control.safety.motion_estimator import (
@@ -100,7 +100,7 @@ class MapEvidenceProvider(Protocol):
         distance: float,
         now: float,
         *,
-        measured: Velocity | None = None,
+        measured: BodyTwist | Velocity | None = None,
         sweep: tuple[tuple[Point2D, ...], ...] = (),
     ) -> MapCorridorEvidence | None:
         """Return evidence for the rejected body sweep, or ``None`` when the caller has none."""
@@ -111,7 +111,8 @@ class RecoveryContext:
     """Candidate commands, body progress, and the observations that cover them."""
 
     candidates: tuple[Velocity, ...]
-    measured: Velocity
+    # //Compatible: a legacy Velocity remains representable but cannot qualify lateral safety.
+    measured: BodyTwist | Velocity
     observations: Sequence[FilteredObservation]
     motion: MotionEstimate
     pose: Pose2D
@@ -376,7 +377,7 @@ class RecoveryController:
         single, cumulative = self._remaining(limits)
         return travel <= single and travel <= cumulative
 
-    def _sweep_distance(self, command: Velocity, measured: Velocity) -> float | None:
+    def _sweep_distance(self, command: Velocity, measured: BodyTwist | Velocity) -> float | None:
         """Braking distance of the motion the live gate refused, not only the speed cap."""
         braking = self._profile.braking_deceleration
         reaction = self._profile.reaction_time
@@ -497,7 +498,8 @@ class RecoveryController:
     ) -> bool:
         quality = context.localization_quality
         if (
-            context.map_ref is None
+            getattr(context.measured, "vy", None) != 0.0
+            or context.map_ref is None
             or quality is None
             or not math.isfinite(quality)
             or quality < limits.min_localization_quality

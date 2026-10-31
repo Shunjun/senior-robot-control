@@ -3,7 +3,7 @@ import math
 from pathlib import Path
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
 
@@ -69,7 +69,9 @@ def test_self_overlap_within_range_uncertainty_is_unknown_not_free_or_hit():
         hard_margin=0.02,
         observation_max_age=1.0,
     )
-    decision = evaluate_motion(Velocity(-0.05, 0), Velocity(0, 0), [outside], safety_profile, 10.0)
+    decision = evaluate_motion(
+        Velocity(-0.05, 0), BodyTwist(0, 0.0, 0), [outside], safety_profile, 10.0
+    )
     assert not decision.allowed and decision.reason == "hard_contact"
     different_ray = filter_self(
         forward(0.895, math.pi / 2), profile, self_mask_range_uncertainty=0.01
@@ -116,7 +118,7 @@ def test_actual_rear_fixture_overlap_remains_unknown_coverage():
     assert sum(ray.kind == "ambiguous_self_overlap" for ray in filtered.rays) == 64
     decision = evaluate_motion(
         Velocity(0.05, 0),
-        Velocity(0, 0),
+        BodyTwist(0, 0.0, 0),
         [filtered],
         profile,
         stamp,

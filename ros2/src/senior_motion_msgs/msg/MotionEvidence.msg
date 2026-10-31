@@ -1,8 +1,10 @@
-std_msgs/Header header
+senior_motion_msgs/BoundedHeader header
 builtin_interfaces/Time interval_start
-string source_epoch
+builtin_interfaces/Time scan_received_ros
+float64 scan_received_steady
+string<=128 source_epoch
 bool valid
-string reason
+string<=64 reason
 geometry_msgs/Pose2D body_delta
 geometry_msgs/Pose2D local_pose
 geometry_msgs/Twist body_velocity

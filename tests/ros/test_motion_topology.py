@@ -40,6 +40,8 @@ def test_duplicate_and_replaced_producers_cannot_restore_old_evidence():
         msg.header.frame_id = "base_link"
         msg.header.stamp = Time(nanoseconds=stamp).to_msg()
         msg.interval_start = Time(nanoseconds=stamp - 100_000_000).to_msg()
+        msg.scan_received_ros = producer.get_clock().now().to_msg()
+        msg.scan_received_steady = time.monotonic()
         msg.source_epoch = epoch
         msg.valid = msg.imu_valid = msg.wheel_valid = True
         msg.quality = 0.8
@@ -178,6 +180,8 @@ def test_new_invalid_epoch_retires_old_valid_and_invalid_evidence():
         message.header.frame_id = "base_link"
         message.header.stamp = Time(nanoseconds=stamp).to_msg()
         message.interval_start = Time(nanoseconds=stamp - 100_000_000).to_msg()
+        message.scan_received_ros = producer.get_clock().now().to_msg()
+        message.scan_received_steady = time.monotonic()
         message.source_epoch = epoch
         message.valid = message.imu_valid = message.wheel_valid = valid
         message.startup_reference_valid = True  # Old claims cannot restore a retired epoch.
@@ -245,6 +249,9 @@ def test_fusion_retires_old_scan_epoch_on_new_invalid_message(monkeypatch):
 
     def message(epoch, valid):
         value = ScanMotion()
+        value.response = 0.8
+        value.valid_rays = 720
+        value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         value.header.frame_id = "base_link"
         stamp = fusion.get_clock().now().nanoseconds
         value.header.stamp = Time(nanoseconds=stamp).to_msg()
@@ -305,6 +312,8 @@ def test_later_invalid_prevents_older_valid_from_restoring_same_epoch():
         message.header.frame_id = "base_link"
         message.header.stamp = Time(nanoseconds=stamp).to_msg()
         message.interval_start = Time(nanoseconds=stamp - 100_000_000).to_msg()
+        message.scan_received_ros = producer.get_clock().now().to_msg()
+        message.scan_received_steady = time.monotonic()
         message.source_epoch = "epoch-a"
         message.valid = message.imu_valid = message.wheel_valid = valid
         message.quality = 0.8 if valid else 0.0
@@ -368,6 +377,9 @@ def test_fusion_later_invalid_blocks_older_same_epoch_scan(monkeypatch):
 
     def deliver(stamp, valid):
         value = ScanMotion()
+        value.response = 0.8
+        value.valid_rays = 720
+        value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         value.header.frame_id = "base_link"
         value.header.stamp = Time(nanoseconds=stamp).to_msg()
         value.interval_start = Time(nanoseconds=stamp - 1).to_msg()
@@ -428,6 +440,8 @@ def test_gate_rejects_valid_interval_crossing_same_epoch_failure():
         message.header.frame_id = "base_link"
         message.header.stamp = Time(nanoseconds=end).to_msg()
         message.interval_start = Time(nanoseconds=start).to_msg()
+        message.scan_received_ros = producer.get_clock().now().to_msg()
+        message.scan_received_steady = time.monotonic()
         message.source_epoch = "epoch-a"
         message.valid = message.imu_valid = message.wheel_valid = valid
         message.startup_reference_valid = True
@@ -486,6 +500,9 @@ def test_fusion_rejects_scan_interval_crossing_same_epoch_failure(monkeypatch):
 
     def deliver(start, end, valid):
         value = ScanMotion()
+        value.response = 0.8
+        value.valid_rays = 720
+        value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         value.header.frame_id = "base_link"
         value.header.stamp = Time(nanoseconds=end).to_msg()
         value.interval_start = Time(nanoseconds=start).to_msg()
@@ -540,6 +557,9 @@ def test_fusion_retired_epoch_cannot_cancel_new_epoch_pending(monkeypatch):
 
     def deliver(epoch, end, valid):
         value = ScanMotion()
+        value.response = 0.8
+        value.valid_rays = 720
+        value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         value.header.frame_id = "base_link"
         value.header.stamp = Time(nanoseconds=end).to_msg()
         value.interval_start = Time(nanoseconds=end - 1).to_msg()
@@ -596,6 +616,9 @@ def test_fusion_rejects_nonpositive_or_reversed_interval(monkeypatch, invalid_st
 
     def deliver(start, end):
         value = ScanMotion()
+        value.response = 0.8
+        value.valid_rays = 720
+        value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         value.header.frame_id = "base_link"
         value.header.stamp = Time(nanoseconds=end).to_msg()
         value.interval_start = Time(nanoseconds=start).to_msg()
@@ -661,6 +684,7 @@ def test_fusion_clock_rollback_retires_pending_and_old_epoch(monkeypatch):
         value.valid = True
         value.startup_reference_valid = True
         value.response = 0.8
+        value.valid_rays = 720
         value.covariance[0] = value.covariance[4] = value.covariance[8] = 0.001
         return value
 
@@ -700,13 +724,14 @@ def test_fusion_clock_rollback_retires_pending_and_old_epoch(monkeypatch):
 def test_real_fusion_publisher_restart_requalifies_same_matcher_epoch():
     """Exercise ROS discovery; aligned stationary samples are test-owned inputs."""
     rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import Twist
     from rclpy.parameter import Parameter
     from rclpy.time import Time
     from senior_motion_msgs.msg import MotionEvidence, ScanMotion
     from senior_robot.motion_fusion import MotionFusion
     from senior_robot.safety_node import SafetyGate
 
-    from senior_control.models import Pose2D, Velocity
+    from senior_control.models import Pose2D
     from senior_control.safety.motion_runtime import ImuSample, TimedPoseSample
 
     values = {
@@ -720,6 +745,8 @@ def test_real_fusion_publisher_restart_requalifies_same_matcher_epoch():
         "wheel_motion_limit": 0.005,
         "lateral_limit": 0.02,
         "yaw_limit": 0.1,
+        "progress_stationary_max_linear_speed": 0.001,
+        "progress_stationary_max_yaw_rate": 0.001,
     }
     rclpy.init()
     matcher = rclpy.create_node("scan_motion_node")
@@ -751,24 +778,44 @@ def test_real_fusion_publisher_restart_requalifies_same_matcher_epoch():
         pytest.fail("fusion restart graph or evidence did not reach expected state")
 
     def publish_stationary():
-        end_ns = matcher.get_clock().now().nanoseconds - 20_000_000
-        start_ns = end_ns - 100_000_000
-        start, end = start_ns / 1e9, end_ns / 1e9
-        for stamp in (start, end):
+        previous_ns = None
+        for _ in range(12):
+            fusion._on_requested(Twist())
+            fusion._on_command(Twist())
+            end_ns = matcher.get_clock().now().nanoseconds
+            stamp = end_ns / 1e9
             assert fusion._wheel.add(TimedPoseSample(stamp, Pose2D(0, 0, 0), (0.001,) * 3, "odom"))
             assert fusion._imu.add(ImuSample(stamp, 0.0, 0.001))
-            assert fusion._commands.add(stamp, Velocity(0, 0))
-        fusion._wheel_received = fusion._imu_received = time.monotonic()
-        message = ScanMotion()
-        message.header.frame_id = "base_link"
-        message.header.stamp = Time(nanoseconds=end_ns).to_msg()
-        message.interval_start = Time(nanoseconds=start_ns).to_msg()
-        message.source_epoch = "unchanged-matcher-epoch"
-        message.valid = True
-        message.startup_reference_valid = True
-        message.response = 0.8
-        message.covariance[0] = message.covariance[4] = message.covariance[8] = 0.001
-        publisher.publish(message)
+            fusion._wheel_received = fusion._imu_received = time.monotonic()
+            if previous_ns is not None:
+                message = ScanMotion()
+                message.header.frame_id = "base_link"
+                message.header.stamp = Time(nanoseconds=end_ns).to_msg()
+                message.interval_start = Time(nanoseconds=previous_ns).to_msg()
+                message.source_epoch = "unchanged-matcher-epoch"
+                message.valid = True
+                message.startup_reference_valid = True
+                message.response = 0.8
+                message.valid_rays = 720
+                message.covariance[0] = message.covariance[4] = message.covariance[8] = 0.001
+                publisher.publish(message)
+            previous_ns = end_ns
+            for node in (fusion, gate, observer):
+                rclpy.spin_once(node, timeout_sec=0.01)
+            time.sleep(0.04)
+        return previous_ns
+
+    def last_source_sample_consumed(stamp_ns):
+        if not heard or not heard[-1].valid or gate._reference_admission is None:
+            return False
+        header = heard[-1].header.stamp
+        observed_ns = header.sec * 1_000_000_000 + header.nanosec
+        return (
+            observed_ns == stamp_ns
+            and gate._reference_admission[0] == stamp_ns / 1e9
+            and gate._epoch_fence.active == heard[-1].source_epoch
+            and gate._freshness.measured_received is not None
+        )
 
     try:
         fusion = MotionFusion(
@@ -782,10 +829,8 @@ def test_real_fusion_publisher_restart_requalifies_same_matcher_epoch():
                 and fusion._publisher.get_subscription_count() >= 2
             )
         )
-        publish_stationary()
-        spin_until(
-            lambda: heard and heard[-1].valid and gate._freshness.measured_received is not None
-        )
+        last_stamp = publish_stationary()
+        spin_until(lambda: last_source_sample_consumed(last_stamp))
         old = heard[-1]
         assert not old.startup_reference_valid
         fusion.destroy_node()
@@ -804,8 +849,8 @@ def test_real_fusion_publisher_restart_requalifies_same_matcher_epoch():
             )
         )
         old_count = len(heard)
-        publish_stationary()
-        spin_until(lambda: len(heard) > old_count and heard[-1].valid)
+        last_stamp = publish_stationary()
+        spin_until(lambda: len(heard) > old_count and last_source_sample_consumed(last_stamp))
         new = heard[-1]
         assert new.source_epoch != old.source_epoch
         spin_until(lambda: gate._freshness.measured_received is not None)

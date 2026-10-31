@@ -16,6 +16,7 @@ setup(
                 "config/lattice_diff.json",
                 "config/slam.yaml",
                 "config/simulation_motion.yaml",
+                "config/simulation_motion_flat_lateral.yaml",
                 "config/simulation_motion_rear_mask.yaml",
             ],
         ),
@@ -25,6 +26,7 @@ setup(
                 "launch/navigation.launch.py",
                 "launch/mapping.launch.py",
                 "launch/simulation_motion.launch.py",
+                "launch/safety_motion.launch.py",
             ],
         ),
         ("share/senior_robot/behavior_trees", ["behavior_trees/navigate.xml"]),
@@ -32,6 +34,7 @@ setup(
     entry_points={
         "console_scripts": [
             "scan_adapter = senior_robot.scan_adapter:main",
+            "safety_scan_ingress = senior_robot.safety_scan_ingress:main",
             "safety_node = senior_robot.safety_node:main",
             "motion_fusion = senior_robot.motion_fusion:main",
             "command_node = senior_robot.command_node:main",

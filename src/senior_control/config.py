@@ -39,6 +39,7 @@ class DeviceProfile(ConfigModel):
     frames: dict[str, str] = Field(default_factory=dict)
     sensor_coverage: dict[str, float] = Field(default_factory=dict)
     braking_deceleration: float | None = None
+    lateral_braking_deceleration: float | None = None
     yaw_braking_deceleration: float | None = None
     reaction_time: float | None = None
     hard_margin: float | None = None
@@ -82,6 +83,7 @@ class DeviceProfile(ConfigModel):
                 raise ValueError("hardware frame and topic names must be nonempty")
         positive = {
             "braking deceleration": self.braking_deceleration,
+            "lateral braking deceleration": self.lateral_braking_deceleration,
             "yaw braking deceleration": self.yaw_braking_deceleration,
         }
         nonnegative = {

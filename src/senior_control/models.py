@@ -20,6 +20,18 @@ class Velocity:
 
 
 @dataclass(frozen=True)
+class BodyTwist:
+    """Measured interval-average body twist, including independent lateral motion."""
+
+    vx: float
+    vy: float
+    wz: float
+
+    def __post_init__(self) -> None:
+        _finite(self.vx, self.vy, self.wz)
+
+
+@dataclass(frozen=True)
 class Pose2D:
     x: float
     y: float

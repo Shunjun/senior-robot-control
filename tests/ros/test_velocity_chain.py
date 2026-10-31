@@ -188,53 +188,80 @@ def test_motion_fusion_compares_the_safety_applied_command():
         rclpy.shutdown()
 
 
-def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement():
+def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import TransformStamped
     from rclpy.parameter import Parameter
     from rclpy.time import Time
     from senior_motion_msgs.msg import MotionEvidence
     from senior_robot.safety_node import SafetyGate
+    from senior_robot.safety_scan_ingress import SafetyScanIngress
     from sensor_msgs.msg import LaserScan
 
+    from senior_control.safety.async_guard import _filtered_observations
+
     rclpy.init()
-    gate = SafetyGate(
-        parameter_overrides=[
-            Parameter("observation_max_age", value=0.5),
-            Parameter("measurement_max_age", value=0.5),
-            Parameter("transform_static", value=True),
-            Parameter("self_mask_calibrated", value=True),
-            Parameter("motion_min_quality", value=0.4),
-            Parameter("motion_max_variance", value=0.1),
-            Parameter("motion_max_interval", value=0.3),
-        ]
-    )
+    values = [
+        Parameter("observation_max_age", value=0.5),
+        Parameter("measurement_max_age", value=0.5),
+        Parameter("transform_static", value=True),
+        Parameter("self_mask_calibrated", value=True),
+        Parameter("motion_min_quality", value=0.4),
+        Parameter("motion_max_variance", value=0.1),
+        Parameter("motion_max_interval", value=0.3),
+    ]
+    gate = SafetyGate(parameter_overrides=values)
+    ingress = SafetyScanIngress(parameter_overrides=values)
     try:
+        topics = {subscription.topic_name for subscription in gate._subscriptions}
+        assert "/scan" not in topics and "/tf" not in topics and "/tf_static" not in topics
         tf = TransformStamped()
         tf.header.frame_id = "base_link"
         tf.child_frame_id = "laser_link"
         tf.transform.translation.x = 0.25
         tf.transform.rotation.w = 1.0
-        gate._tf_buffer.set_transform_static(tf, "test")
+        ingress._tf_buffer.set_transform_static(tf, "test")
+        bounded = []
+        ingress._source = "test-raw-source"
+        monkeypatch.setattr(ingress, "_check_source", lambda: True)
+        ingress._publisher = SimpleNamespace(publish=bounded.append)
+        monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
         scan = LaserScan()
         scan.header.frame_id = "laser_link"
         scan.header.stamp = gate.get_clock().now().to_msg()
         scan.angle_increment = 0.1
         scan.range_min, scan.range_max = 0.1, 10.0
         scan.ranges = [1.0]
-        gate._on_scan(scan)
-        assert gate._filtered is not None
-        assert gate._filtered.rays[0].origin == (0.25, 0.0)
-        assert gate._filtered.rays[0].endpoint == (1.25, 0.0)
+        ingress._on_scan(scan)
+        assert bounded and bounded[-1].valid
+        gate._on_scan(bounded[-1])
+        assert gate._scans and gate._scans[-1].message is bounded[-1]
+        # The production worker, not the Gate executor, performs this conversion/filter.
+        work = SimpleNamespace(
+            observations=tuple(gate._scans),
+            profile=gate._profile(),
+            interpolate=False,
+            max_angular_gap=0.0,
+            no_return_clear=False,
+            transform_static=True,
+            self_mask_range_uncertainty=0.0,
+            body_frame="base_link",
+        )
+        filtered = _filtered_observations(work)[0].observation
+        assert filtered.rays[0].origin == (0.25, 0.0)
+        assert filtered.rays[0].endpoint == (1.25, 0.0)
         now = gate.get_clock().now().nanoseconds / 1e9
-        import time
-
         assert not gate._freshness.usable(now, time.monotonic())
         measured = MotionEvidence()
         measured.header.frame_id = "base_link"
         measured.header.stamp = scan.header.stamp
         start = Time.from_msg(scan.header.stamp).nanoseconds - 100_000_000
         measured.interval_start = Time(nanoseconds=start).to_msg()
+        measured.scan_received_ros = gate.get_clock().now().to_msg()
+        measured.scan_received_steady = time.monotonic()
         measured.source_epoch = "scan-epoch"
         measured.valid = measured.imu_valid = measured.wheel_valid = True
         measured.quality = 0.8
@@ -247,6 +274,7 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement():
         gate._accept_evidence(measured)
         assert not gate._freshness.usable(now, time.monotonic())
     finally:
+        ingress.destroy_node()
         gate.destroy_node()
         rclpy.shutdown()
 
@@ -326,19 +354,19 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import Twist
     from rclpy.parameter import Parameter
+    from senior_motion_msgs.msg import BoundedSafetyScan
     from senior_robot import safety_node as module
-    from sensor_msgs.msg import LaserScan
 
     from senior_control.config import DeviceProfile
-    from senior_control.models import Pose2D, Velocity
-    from senior_control.safety.async_guard import BoundedSafetyWorker
+    from senior_control.models import BodyTwist, Pose2D, Velocity
+    from senior_control.safety.async_guard import BoundedSafetyWorker, RawSafetyObservation
     from senior_control.safety.guard import SafetyDecision
     from senior_control.safety.motion_runtime import (
         SafetyObservation,
-        StampedObservation,
         TimedPoseSample,
     )
     from senior_control.safety.self_filter import ScanObservation, filter_self
+    from senior_control.safety.velocity_uncertainty import IntervalVelocityBounds
 
     rclpy.init()
     gate = module.SafetyGate(
@@ -349,8 +377,9 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
             Parameter("motion_max_interval", value=5.0),
             Parameter("motion_max_variance", value=1.0),
             Parameter("max_reference_lag", value=5.0),
-            Parameter("max_linear_speed", value=1.0),
-            Parameter("max_yaw_rate", value=1.0),
+            Parameter("max_linear_speed", value=0.3),
+            Parameter("max_yaw_rate", value=0.5),
+            Parameter("physical_cap_context", value="fortress-flat-v1"),
         ]
     )
     monkeypatch.setenv("SENIOR_GUARD_TEST_PATH", str(tmp_path))
@@ -362,12 +391,14 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
     )
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+    monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_clock_ok", lambda now: True)
     profile = DeviceProfile(
-        footprint=[(-0.3, -0.2), (0.3, -0.2), (0.3, 0.2), (-0.3, 0.2)],
+        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
         self_mask_calibrated=True,
-        braking_deceleration=1.0,
-        yaw_braking_deceleration=1.0,
+        braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
+        yaw_braking_deceleration=0.5,
         reaction_time=0.2,
         hard_margin=0.02,
         observation_max_age=10.0,
@@ -393,8 +424,11 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
         True,
     )
     observation = filter_self(scan, profile)
-    gate._scans.append(StampedObservation(observation, now_steady))
-    gate._filtered = observation
+    gate._scans.append(RawSafetyObservation(None, now_steady, now_ros, now_steady, now_ros))
+    gate._scan_fence.accept("fixture-scan")
+    gate._scan_source = "fixture-raw"
+    gate._measured = BodyTwist(0, 0, 0)
+    gate._velocity_interval = IntervalVelocityBounds(6.0, 0.25)
     gate._command = Velocity(0.05, 0.0)
     gate._command_monotonic = now_steady
     gate._epoch_fence.accept("epoch-a")
@@ -430,7 +464,10 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
         if change == "stop":
             gate._on_command(Twist())
         elif change == "scan_loss":
-            gate._on_scan(LaserScan())
+            invalid = BoundedSafetyScan()
+            invalid.source_epoch = "invalid-scan"
+            invalid.sequence = 1
+            gate._on_scan(invalid)
         else:
             gate._epoch_fence.retire_active()
             gate._epoch_fence.accept("epoch-b")
@@ -456,11 +493,15 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
     from senior_robot import safety_node as module
 
     from senior_control.config import DeviceProfile
-    from senior_control.models import Pose2D, Velocity
-    from senior_control.safety.async_guard import SafetyWorkResult, WorkerReply
+    from senior_control.models import BodyTwist, Pose2D, Velocity
+    from senior_control.safety.async_guard import (
+        RawSafetyObservation,
+        SafetyWorkResult,
+        WorkerReply,
+    )
     from senior_control.safety.guard import SafetyDecision
-    from senior_control.safety.motion_runtime import StampedObservation, TimedPoseSample
-    from senior_control.safety.self_filter import ScanObservation, filter_self
+    from senior_control.safety.motion_runtime import TimedPoseSample
+    from senior_control.safety.velocity_uncertainty import IntervalVelocityBounds
 
     class ImmediateWorker:
         def __init__(self):
@@ -477,8 +518,8 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
                 {},
                 0.0,
                 selected.received,
-                selected.observation.scan.stamp,
-                selected.observation.scan.reference_stamp,
+                selected.stamp,
+                selected.stamp,
                 0.1,
                 (0, 0, 0),
             )
@@ -502,8 +543,9 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
             Parameter("motion_max_variance", value=1.0),
             Parameter("motion_min_quality", value=0.3),
             Parameter("max_reference_lag", value=0.4),
-            Parameter("max_linear_speed", value=1.0),
-            Parameter("max_yaw_rate", value=1.0),
+            Parameter("max_linear_speed", value=0.3),
+            Parameter("max_yaw_rate", value=0.5),
+            Parameter("physical_cap_context", value="fortress-flat-v1"),
         ]
     )
     values = {"steady": 100.0, "ros": 20.2}
@@ -516,11 +558,13 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
     monkeypatch.setattr(gate, "_clock_ok", lambda now: True)
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+    monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     profile = DeviceProfile(
-        footprint=[(-0.3, -0.2), (0.3, -0.2), (0.3, 0.2), (-0.3, 0.2)],
+        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
         self_mask_calibrated=True,
-        braking_deceleration=1.0,
-        yaw_braking_deceleration=1.0,
+        braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
+        yaw_braking_deceleration=0.5,
         reaction_time=0.2,
         hard_margin=0.02,
         observation_max_age=0.8,
@@ -530,26 +574,11 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
     monkeypatch.setattr(gate, "_publish", lambda velocity, reason: outputs.append(velocity))
     gate._worker.close()
     gate._worker = ImmediateWorker()
-    scan = ScanObservation(
-        (2.0, 2.0),
-        -0.1,
-        0.2,
-        0.05,
-        5.0,
-        20.0,
-        "ros",
-        Pose2D(0, 0, 0),
-        0,
-        "base_link",
-        20.0,
-        True,
-        0.2,
-        False,
-        True,
-    )
-    obs = filter_self(scan, profile)
-    gate._scans.append(StampedObservation(obs, 100.0))
-    gate._filtered = obs
+    gate._scans.append(RawSafetyObservation(None, 100.0, 20.2, 100.0, 20.0))
+    gate._scan_fence.accept("fixture-scan")
+    gate._scan_source = "fixture-raw"
+    gate._measured = BodyTwist(0, 0, 0)
+    gate._velocity_interval = IntervalVelocityBounds(6.0, 0.25)
     gate._command = Velocity(0.05, 0.0)
     gate._command_monotonic = 100.0
     gate._epoch_fence.accept("epoch-a")
@@ -581,6 +610,8 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
         late.header.frame_id = "base_link"
         late.header.stamp = Time(nanoseconds=20_050_000_000).to_msg()
         late.interval_start = Time(nanoseconds=20_000_000_000).to_msg()
+        late.scan_received_ros = Time(nanoseconds=20_000_000_000).to_msg()
+        late.scan_received_steady = 100.0
         late.source_epoch = "epoch-a"
         late.valid = late.imu_valid = late.wheel_valid = True
         late.quality = 0.8

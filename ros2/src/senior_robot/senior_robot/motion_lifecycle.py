@@ -26,7 +26,8 @@ def _shutdown_subscription_conversion(exc: RuntimeError) -> bool:
     return False
 
 
-def run(factory: Callable[[], Node]) -> None:
+def run(factory: Callable[[], Node], *, cli: bool = False) -> None:
+    # //Compatible: library callers retain their original signal-handler policy.
     rclpy.init()
     node = None
     try:
@@ -52,4 +53,7 @@ def run(factory: Callable[[], Node]) -> None:
                 # //Compatible: Humble may already have closed the ROS context.
                 rclpy.try_shutdown()
         finally:
-            signal.signal(signal.SIGINT, previous)
+            # In a standalone entrypoint, multiprocessing's owned-child
+            # atexit work runs after this function returns. Keep late launch
+            # interrupts ignored until the interpreter exits.
+            signal.signal(signal.SIGINT, signal.SIG_IGN if cli else previous)

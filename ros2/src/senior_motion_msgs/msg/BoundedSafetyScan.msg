@@ -1,0 +1,19 @@
+# Bounded, process-isolated safety ingress. Monotonic time is from this host.
+builtin_interfaces/Time stamp
+string<=128 frame_id
+string<=64 source_epoch
+string<=128 raw_source
+uint64 sequence
+float64 ingress_steady
+float64 ingress_ros
+bool valid
+string<=64 reason
+float32 angle_min
+float32 angle_increment
+float32 range_min
+float32 range_max
+float64 transform_stamp
+float64 sensor_x
+float64 sensor_y
+float64 sensor_yaw
+float32[<=2048] ranges

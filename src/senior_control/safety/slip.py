@@ -9,9 +9,10 @@ acknowledged through ``reset``, and it never requests more torque.
 """
 
 import math
+from collections import deque
 from dataclasses import dataclass
 
-from senior_control.models import Velocity
+from senior_control.models import Pose2D, Velocity
 from senior_control.safety.motion_estimator import MotionEstimate, WheelOdom, body_twist_delta
 
 
@@ -21,6 +22,19 @@ class MotionAnomaly:
     velocity: Velocity
     increase_torque: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class SlipIntervalDiagnostic:
+    """One bounded snapshot of the actual aligned inputs and monitor state."""
+
+    command: Velocity
+    wheel: WheelOdom
+    actual: MotionEstimate
+    wheel_twist: Pose2D
+    body_twist: Pose2D
+    state: tuple[tuple[str, float | int | bool], ...]
+    causes: tuple[str, ...]
 
 
 def _stop(reason: str) -> MotionAnomaly:
@@ -64,6 +78,20 @@ class SlipMonitor:
         self._linear_wheel = self._linear_body = 0.0
         self._command_progress = self._command_body = 0.0
         self._lateral_error = self._yaw_error = 0.0
+        self._recent_intervals: deque[SlipIntervalDiagnostic] = deque(maxlen=128)
+        self._first_latch: SlipIntervalDiagnostic | None = None
+
+    @property
+    def recent_intervals(self) -> tuple[SlipIntervalDiagnostic, ...]:
+        return tuple(self._recent_intervals)
+
+    @property
+    def first_latch(self) -> SlipIntervalDiagnostic | None:
+        return self._first_latch
+
+    @property
+    def latched(self) -> bool:
+        return self._latched
 
     def reset(self) -> None:
         """Clear the latched anomaly and the startup window."""
@@ -82,6 +110,8 @@ class SlipMonitor:
         self._linear_wheel = self._linear_body = 0.0
         self._command_progress = self._command_body = 0.0
         self._lateral_error = self._yaw_error = 0.0
+        self._recent_intervals.clear()
+        self._first_latch = None
 
     def update(
         self, command: Velocity, wheel_odom: WheelOdom, actual: MotionEstimate
@@ -249,6 +279,71 @@ class SlipMonitor:
             self._yaw_error += body_yaw - expected_yaw
         lateral = abs(self._lateral_error) > self.lateral_limit
         accumulated_yaw = abs(self._yaw_error) > self.yaw_limit
+        causes = tuple(
+            name
+            for name, active in (
+                ("lateral", lateral),
+                ("accumulated_yaw", accumulated_yaw),
+                ("unexpected_yaw", unexpected_yaw),
+                ("opposite", opposite),
+                ("uncommanded", uncommanded),
+                ("yaw_stall", yaw_stall),
+                ("turn_stall", turn_stall),
+                (
+                    "wheel_stall",
+                    stalled
+                    and wheel_progress > 0
+                    and wheel_progress >= self.stall_distance
+                    and wheel_body_progress < 0.5 * wheel_progress,
+                ),
+                (
+                    "command_stall",
+                    stalled
+                    and self._command_progress > 0
+                    and self._command_progress >= self.stall_distance
+                    and self._command_body < 0.5 * self._command_progress,
+                ),
+            )
+            if active
+        )
+        state = (
+            ("startup_window", self.startup_window),
+            ("wheel_motion_limit", self.wheel_motion_limit),
+            ("lateral_limit", self.lateral_limit),
+            ("yaw_limit", self.yaw_limit),
+            ("stall_distance", self.stall_distance),
+            ("scale", scale),
+            ("elapsed", self._elapsed),
+            ("driving", driving),
+            ("in_window", in_window),
+            ("braked_from_motion", self._braked_from_motion),
+            ("wheel_yaw", self._wheel_yaw),
+            ("body_yaw", self._body_yaw),
+            ("yaw_elapsed", self._yaw_elapsed),
+            ("turn_sign", self._turn_sign),
+            ("turn_elapsed", self._turn_elapsed),
+            ("turn_command", self._turn_command),
+            ("turn_body", self._turn_body),
+            ("linear_sign", self._linear_sign),
+            ("linear_elapsed", self._linear_elapsed),
+            ("linear_zero_elapsed", self._linear_zero_elapsed),
+            ("linear_wheel", self._linear_wheel),
+            ("linear_body", self._linear_body),
+            ("command_progress", self._command_progress),
+            ("command_body", self._command_body),
+            ("lateral_error", self._lateral_error),
+            ("yaw_error", self._yaw_error),
+        )
+        diagnostic = SlipIntervalDiagnostic(
+            command,
+            wheel_odom,
+            actual,
+            wheel_twist,
+            Pose2D(body_x, body_y, body_yaw),
+            state,
+            causes,
+        )
+        self._recent_intervals.append(diagnostic)
         if (
             lateral
             or accumulated_yaw
@@ -260,6 +355,7 @@ class SlipMonitor:
             or stalled
         ):
             self._latched = True
+            self._first_latch = diagnostic
             return _stop("motion_anomaly")
         if self._latched:
             return _stop("motion_anomaly")

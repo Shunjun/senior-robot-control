@@ -16,6 +16,8 @@ from collections import deque
 from pathlib import Path
 
 import pytest
+from motion_anomaly_trace import AnomalyTrace
+from motion_stand_geometry import load_wheel_geometry, wheel_ground_clearance
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SENIOR_MOTION_LIVE") != "1", reason="explicit Fortress acceptance only"
@@ -30,6 +32,7 @@ from rosgraph_msgs.msg import Clock  # noqa: E402
 from senior_motion_msgs.msg import MotionEvidence, ScanMotion  # noqa: E402
 from senior_robot.command_node import CommandNode  # noqa: E402
 from sensor_msgs.msg import Imu, JointState, LaserScan  # noqa: E402
+from std_msgs.msg import String  # noqa: E402
 
 from senior_control.protocol import (  # noqa: E402
     EmptyPayload,
@@ -39,9 +42,82 @@ from senior_control.protocol import (  # noqa: E402
 )
 
 
+def _stamp_ns(stamp):
+    return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+
+def _vector(vector):
+    return [vector.x, vector.y, vector.z]
+
+
+def _quaternion(quaternion):
+    return [quaternion.x, quaternion.y, quaternion.z, quaternion.w]
+
+
+def _planar(pose):
+    return [pose.x, pose.y, pose.theta]
+
+
+def _trace_message(topic, message):
+    if topic in ("output", "requests"):
+        return {"linear": _vector(message.linear), "angular": _vector(message.angular)}
+    if topic == "clocks":
+        return {"stamp_ns": _stamp_ns(message.clock)}
+    record = {
+        "stamp_ns": _stamp_ns(message.header.stamp),
+        "frame_id": message.header.frame_id,
+    }
+    if topic in ("wheels", "truth"):
+        record.update(
+            child_frame_id=message.child_frame_id,
+            position=_vector(message.pose.pose.position),
+            orientation=_quaternion(message.pose.pose.orientation),
+            linear_velocity=_vector(message.twist.twist.linear),
+            angular_velocity=_vector(message.twist.twist.angular),
+            pose_covariance=list(message.pose.covariance),
+            twist_covariance=list(message.twist.covariance),
+        )
+    elif topic == "imu":
+        record.update(
+            orientation=_quaternion(message.orientation),
+            angular_velocity=_vector(message.angular_velocity),
+            linear_acceleration=_vector(message.linear_acceleration),
+            angular_velocity_covariance=list(message.angular_velocity_covariance),
+        )
+    elif topic in ("scans", "motion"):
+        record.update(
+            interval_start_ns=_stamp_ns(message.interval_start),
+            source_epoch=message.source_epoch,
+            valid=message.valid,
+            reason=message.reason,
+            body_delta=_planar(message.body_delta),
+            local_pose=_planar(message.local_pose),
+            covariance=list(message.covariance),
+        )
+        if topic == "motion":
+            record.update(
+                motion_anomaly=message.motion_anomaly,
+                quality=message.quality,
+                scan_received_ros_ns=_stamp_ns(message.scan_received_ros),
+                scan_received_steady=message.scan_received_steady,
+                body_linear_velocity=_vector(message.body_velocity.linear),
+                body_angular_velocity=_vector(message.body_velocity.angular),
+            )
+        else:
+            record.update(response=message.response, residual=message.residual)
+    return record
+
+
 class LiveRun:
     def __init__(
-        self, tmp_path, monkeypatch, *, rear_attachment=False, scan_relay=False, low_friction=False
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        rear_attachment=False,
+        scan_relay=False,
+        low_friction=False,
+        fixed_stand=False,
     ):
         domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
         assert domain.isdecimal() and 0 <= int(domain) <= 101, (
@@ -56,7 +132,14 @@ class LiveRun:
             command.append("rear_attachment:=true")
         if scan_relay:
             command.append("scan_relay:=true")
-        if low_friction:
+        if fixed_stand:
+            assert not low_friction and not rear_attachment and not scan_relay
+            command.append("fixed_stand:=true")
+            command.append(f"world:={Path(__file__).with_name('motion_fixed_stand.sdf')}")
+            command.append(
+                f"safety_overlay:={Path(__file__).with_name('motion_fixed_stand_profile.yaml')}"
+            )
+        elif low_friction:
             source_world = Path(__file__).with_name("motion_qualification.sdf")
             model = ET.parse(source_world)
             ground = model.find("./world/model[@name='ground']/link/collision")
@@ -67,12 +150,27 @@ class LiveRun:
             slip_world = tmp_path / "low-friction.sdf"
             model.write(slip_world, encoding="utf-8", xml_declaration=True)
             command.append(f"world:={slip_world}")
+        else:
+            # Explicitly opt in only for the measured normal-friction flat fixture.
+            overlay = (
+                Path(__file__).parents[2]
+                / "ros2/src/senior_robot/config/simulation_motion_flat_lateral.yaml"
+            )
+            command.append(f"safety_overlay:={overlay}")
         if not os.environ.get("DISPLAY") and shutil.which("xvfb-run"):
             command = ["xvfb-run", "-a", *command]
         self.log_path = tmp_path / "motion-launch.log"
         self.capture_path = tmp_path / "motion-coverage-capture.json"
+        self.anomaly_path = tmp_path / "motion-first-anomaly-trace.json"
+        self.progress_break_path = tmp_path / "motion-first-progress-break-trace.json"
         self.summary_path = tmp_path / "motion-run-summary.json"
         self.metrics = {}
+        self.anomaly_trace = AnomalyTrace()
+        self.first_trace_kind = None
+        self.seen_qualified_motion = False
+        self.progress_break_at = None
+        self.progress_break_events = deque(maxlen=128)
+        self.motion_progress_unqualified = False
         self.log = self.log_path.open("w", encoding="utf-8")
         self.process = subprocess.Popen(
             command, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True
@@ -95,6 +193,7 @@ class LiveRun:
         self.wheels = deque(maxlen=4000)
         self.joints = deque(maxlen=4000)
         self.clocks = deque(maxlen=4000)
+        self.stand_states = deque(maxlen=100)
         self.command = self.listener = self.executor = None
         try:
             rclpy.init()
@@ -103,23 +202,25 @@ class LiveRun:
             self.executor = SingleThreadedExecutor()
             self.executor.add_node(self.command)
             self.executor.add_node(self.listener)
-            for kind, topic, destination, qos in (
-                (Twist, "/cmd_vel", self.output, 10),
-                (Twist, "/safety/command_in", self.requests, 10),
-                (DiagnosticArray, "/safety/status", self.status, 10),
-                (ScanMotion, "/motion/scan", self.scans, 10),
-                (LaserScan, "/scan", self.raw_scans, qos_profile_sensor_data),
-                (Imu, "/imu/data", self.imu, qos_profile_sensor_data),
-                (MotionEvidence, "/motion/evidence", self.motion, 10),
-                (Odometry, "/ground_truth/odom", self.truth, qos_profile_sensor_data),
-                (Odometry, "/wheel/odom", self.wheels, qos_profile_sensor_data),
-                (JointState, "/joint_states", self.joints, qos_profile_sensor_data),
-                (Clock, "/clock", self.clocks, qos_profile_sensor_data),
+            for kind, topic, destination, label, qos in (
+                (Twist, "/cmd_vel", self.output, "output", 10),
+                (Twist, "/safety/command_in", self.requests, "requests", 10),
+                (DiagnosticArray, "/safety/status", self.status, "status", 10),
+                (ScanMotion, "/motion/scan", self.scans, "scans", 10),
+                (LaserScan, "/scan", self.raw_scans, "raw", qos_profile_sensor_data),
+                (Imu, "/imu/data", self.imu, "imu", qos_profile_sensor_data),
+                (MotionEvidence, "/motion/evidence", self.motion, "motion", 10),
+                (Odometry, "/ground_truth/odom", self.truth, "truth", qos_profile_sensor_data),
+                (Odometry, "/wheel/odom", self.wheels, "wheels", qos_profile_sensor_data),
+                (JointState, "/joint_states", self.joints, "joints", qos_profile_sensor_data),
+                (Clock, "/clock", self.clocks, "clocks", qos_profile_sensor_data),
             ):
                 self.listener.create_subscription(
                     kind,
                     topic,
-                    lambda msg, values=destination: values.append((time.monotonic(), msg)),
+                    lambda msg, values=destination, key=label: self._record_message(
+                        key, values, msg
+                    ),
                     qos,
                 )
             if scan_relay:
@@ -129,15 +230,151 @@ class LiveRun:
                 self.listener.create_subscription(
                     LaserScan, "/fault_test/source_scan", self._relay_scan, qos_profile_sensor_data
                 )
+            if fixed_stand:
+                self.listener.create_subscription(
+                    String,
+                    "/qualification/stand_state",
+                    lambda msg: self.stand_states.append((time.monotonic(), msg.data)),
+                    10,
+                )
+                self._qualify_fixed_stand()
             self.submit("control.acquire")
         except BaseException:
             self.close()
             raise
 
+    def _record_message(self, topic, destination, message):
+        received = time.monotonic()
+        destination.append((received, message))
+        if topic not in {
+            "output",
+            "requests",
+            "scans",
+            "imu",
+            "motion",
+            "truth",
+            "wheels",
+            "clocks",
+        }:
+            return
+        anomaly = topic == "motion" and message.valid and message.motion_anomaly
+        progress_break = (
+            topic == "motion"
+            and self.seen_qualified_motion
+            and not message.valid
+            and message.reason == "progress_history_unqualified"
+        )
+        if topic == "motion" and message.valid and not message.motion_anomaly:
+            self.seen_qualified_motion = True
+            self.motion_progress_unqualified = False
+        if progress_break and not self.motion_progress_unqualified:
+            self.progress_break_events.append(received)
+            self.motion_progress_unqualified = True
+        if progress_break and self.progress_break_at is None:
+            self.progress_break_at = received
+        if (anomaly or progress_break) and self.first_trace_kind is None:
+            self.first_trace_kind = "motion_anomaly" if anomaly else "progress_break"
+        observed_clock = _stamp_ns(self.clocks[-1][1].clock) if self.clocks else None
+        self.anomaly_trace.record(
+            topic,
+            received,
+            observed_clock,
+            message,
+            anomaly=anomaly or progress_break,
+        )
+
+    def _save_anomaly_trace(self):
+        document = self.anomaly_trace.document(_trace_message)
+        if document is not None:
+            document["trigger"] = self.first_trace_kind
+            path = (
+                self.progress_break_path
+                if self.first_trace_kind == "progress_break"
+                else self.anomaly_path
+            )
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.metrics[
+                "first_progress_break_trace"
+                if self.first_trace_kind == "progress_break"
+                else "first_anomaly_trace"
+            ] = str(path)
+
     def _relay_scan(self, message):
         self.source_scans.append((time.monotonic(), message))
         if self.relay_enabled:
             self.relay_publisher.publish(message)
+
+    def _stand_control(self, action, expected):
+        started = time.monotonic()
+        process = subprocess.Popen(
+            [
+                "ign",
+                "topic",
+                "-t",
+                f"/qualification/stand_{action}",
+                "-m",
+                "ignition.msgs.Empty",
+                "-p",
+                "unused: true",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            deadline = started + 5.0
+            while process.poll() is None and time.monotonic() < deadline:
+                self.executor.spin_once(timeout_sec=0.03)
+            assert process.poll() is not None, f"stand {action} publisher timed out"
+            output = process.communicate(timeout=1)[0]
+            assert process.returncode == 0, output
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if any(
+                    received >= started and state == expected
+                    for received, state in self.stand_states
+                ):
+                    return True
+                self.executor.spin_once(timeout_sec=0.03)
+            return False
+        finally:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
+            active = self._active_group(process.pid)
+            if active:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                deadline = time.monotonic() + 3.0
+                while active and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                    active = self._active_group(process.pid)
+            self.metrics.setdefault("stand_control_groups", []).append(
+                {"pgid": process.pid, "active_after_cleanup": active}
+            )
+            assert not active, f"stand control process group still active: {active}"
+
+    def _qualify_fixed_stand(self):
+        # No drive request is submitted until both fresh state transitions are
+        # observed. Retry the pair if a one-shot transport event was missed.
+        deadline = time.monotonic() + 40.0
+        while time.monotonic() < deadline:
+            if self._stand_control("detach", "detached"):
+                if self._stand_control("attach", "attached"):
+                    assert not any(
+                        msg.linear.x != 0.0 or msg.angular.z != 0.0 for _, msg in self.output
+                    ), "nonzero output preceded stand qualification"
+                    self.metrics["stand_state_transitions"] = list(self.stand_states)
+                    return
+            else:
+                self._stand_control("attach", "attached")
+        raise AssertionError("fixed stand did not demonstrate fresh detach and attach")
 
     def submit(self, kind, vx=0.0):
         self.sequence += 1
@@ -174,6 +411,7 @@ class LiveRun:
 
     def diagnostics(self, description):
         self.log.flush()
+        self._save_anomaly_trace()
         tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-6000:]
         recent_scans = [(m.valid, m.reason) for _, m in list(self.scans)[-5:]]
         recent_motion = [(m.valid, m.reason, m.motion_anomaly) for _, m in list(self.motion)[-5:]]
@@ -293,14 +531,16 @@ class LiveRun:
         )
         os.kill(matches[0], signal.SIGTERM)
 
-    def _active_group(self):
+    def _active_group(self, pgid=None):
+        if pgid is None:
+            pgid = self.process.pid
         members = []
         for entry in Path("/proc").iterdir():
             if not entry.name.isdecimal():
                 continue
             pid = int(entry.name)
             try:
-                if os.getpgid(pid) != self.process.pid:
+                if os.getpgid(pid) != pgid:
                     continue
                 # Zombies are not active and must be reaped by their own parent.
                 state = (entry / "stat").read_text().rsplit(")", 1)[1].strip().split()[0]
@@ -390,6 +630,7 @@ class LiveRun:
                 self.metrics.update(
                     owned_pids_seen=sorted(self.owned_pids), active_owned_after_cleanup=active
                 )
+                self._save_anomaly_trace()
                 self.save_summary()
                 self.log.close()
                 assert not active, f"owned simulation process group still active: {active}"
@@ -431,8 +672,33 @@ def live_low_friction(tmp_path, monkeypatch):
         run.close()
 
 
-def _await_healthy(live):
+@pytest.fixture
+def live_fixed_stand(tmp_path, monkeypatch):
+    run = LiveRun(tmp_path, monkeypatch, fixed_stand=True)
+    try:
+        yield run
+    finally:
+        run.close()
+
+
+def _fail_on_progress_break(live, since=None):
+    if any(since is None or event >= since for event in live.progress_break_events):
+        pytest.fail(live.diagnostics("qualified motion progress became unqualified"))
+
+
+def _fail_on_anomaly_since(live, since):
+    _fail_on_progress_break(live, since)
+    if any(t >= since and m.valid and m.motion_anomaly for t, m in live.motion):
+        pytest.fail(live.diagnostics("first motion anomaly while healthy motion was required"))
+
+
+def _await_healthy(live, *, reject_anomaly=False):
+    started = time.monotonic()
+
     def healthy():
+        _fail_on_progress_break(live)
+        if reject_anomaly:
+            _fail_on_anomaly_since(live, started)
         recent = time.monotonic() - 1.0
         valid_scan = [m for t, m in live.scans if t >= recent and m.valid]
         valid_motion = [
@@ -451,8 +717,15 @@ def _await_healthy(live):
 
     live.pump(healthy, vx=0.0, timeout=90, description="healthy stationary evidence unavailable")
     noise_start = time.monotonic()
+
+    def baseline_elapsed():
+        _fail_on_progress_break(live)
+        if reject_anomaly:
+            _fail_on_anomaly_since(live, started)
+        return time.monotonic() - noise_start >= 1.2
+
     live.pump(
-        lambda: time.monotonic() - noise_start >= 1.2,
+        baseline_elapsed,
         vx=0.0,
         timeout=3,
         description="stationary baseline unavailable",
@@ -467,6 +740,22 @@ def _await_healthy(live):
         f"stationary baseline exceeded: speed={noise}, drift={stationary_drift}"
     )
     live.metrics.update(stationary_max_speed=noise, stationary_net_drift=stationary_drift)
+
+    def latest_qualified():
+        _fail_on_progress_break(live)
+        if not live.motion:
+            return False
+        received, message = live.motion[-1]
+        return (
+            0 <= time.monotonic() - received <= 0.8 and message.valid and not message.motion_anomaly
+        )
+
+    live.pump(
+        latest_qualified,
+        vx=0.0,
+        timeout=3,
+        description="fresh stationary progress evidence unavailable",
+    )
     _, start_truth = live.truth[-1]
     start_motion = next(m for _, m in reversed(live.motion) if m.valid and not m.motion_anomaly)
     assert start_motion.valid and all(start_motion.covariance[i] > 0 for i in (0, 4, 8))
@@ -480,6 +769,7 @@ def _drive_and_verify(live):
     start_local = start_motion.local_pose
 
     def moved():
+        _fail_on_progress_break(live)
         if not live.truth or not live.motion:
             return False
         truth = live.truth[-1][1].pose.pose.position
@@ -509,7 +799,59 @@ def _drive_and_verify(live):
     live.pump(moved, vx=0.05, timeout=30, description="no verified independent forward motion")
 
 
-def _wait_for_stop_with_active_request(live, fault_time):
+def test_healthy_forward_across_multiple_motion_windows(live):
+    start_truth, start_motion = _await_healthy(live, reject_anomaly=True)
+    start_position, start_local = start_truth.pose.pose.position, start_motion.local_pose
+    started = time.monotonic()
+    window_started = started
+    milestones = (0.04, 0.08, 0.12, 0.16, 0.20)
+    windows = []
+
+    def progressing_without_anomaly():
+        nonlocal window_started
+        _fail_on_anomaly_since(live, started)
+        if not live.truth:
+            return False
+        motion = [
+            (t, m)
+            for t, m in live.motion
+            if t >= window_started and m.valid and not m.motion_anomaly
+        ]
+        if any(m.source_epoch != start_motion.source_epoch for _, m in motion):
+            pytest.fail(live.diagnostics("independent motion epoch changed during healthy drive"))
+        if not motion:
+            return False
+        truth = live.truth[-1][1].pose.pose.position
+        local = motion[-1][1].local_pose
+        truth_distance = math.hypot(truth.x - start_position.x, truth.y - start_position.y)
+        local_distance = math.hypot(local.x - start_local.x, local.y - start_local.y)
+        if len(windows) == len(milestones):
+            return local_distance >= 0.16 and abs(truth_distance - local_distance) <= 0.04
+        if truth_distance < milestones[len(windows)] or abs(truth_distance - local_distance) > 0.04:
+            return False
+        windows.append(
+            {
+                "milestone": milestones[len(windows)],
+                "truth_distance": truth_distance,
+                "local_distance": local_distance,
+                "qualified_intervals": len(motion),
+            }
+        )
+        window_started = time.monotonic()
+        live.metrics["healthy_forward_windows"] = windows
+        return len(windows) == len(milestones) and local_distance >= 0.16
+
+    live.pump(
+        progressing_without_anomaly,
+        vx=0.05,
+        timeout=90,
+        description="healthy forward progress across independent-motion windows unavailable",
+    )
+    live.metrics["independent_crossed_0_12m"] = windows[-1]["local_distance"] >= 0.12
+    live.save_summary()
+
+
+def _wait_for_stop_with_active_request(live, fault_time, *, motion_must_expire=True):
     def stopped_after_loss():
         after = [(t, m) for t, m in live.output if t >= fault_time + 2.0]
         requests = [(t, m) for t, m in live.requests if t >= fault_time + 2.0]
@@ -531,7 +873,11 @@ def _wait_for_stop_with_active_request(live, fault_time):
             and len(requests) >= 5
             and time.monotonic() - requests[-1][0] < 0.3
             and all(abs(m.linear.x - 0.05) < 1e-9 for _, m in requests)
-            and not any(t >= fault_time + 1.0 and m.valid for t, m in live.motion)
+            and (
+                not any(t >= fault_time + 1.0 and m.valid for t, m in live.motion)
+                if motion_must_expire
+                else sum(t >= fault_time + 1.0 and m.valid for t, m in live.motion) >= 5
+            )
             and truth[-1][0] - truth[0][0] >= 1.0
             and max(speeds) <= stop_limit
             and net_drift <= 0.01
@@ -580,6 +926,208 @@ def test_raw_scan_loss_stops_while_other_sensors_and_requests_continue(live_scan
     assert sum(t >= fault_time + 2.0 for t, _ in live.imu) >= 5
     clock_values = [m.clock.sec + m.clock.nanosec / 1e9 for t, m in live.clocks if t >= fault_time]
     assert clock_values and max(clock_values) > min(clock_values)
+
+
+def test_progress_requalification_after_real_scan_gap(live_scan_drop):
+    from motion_progress_test_helpers import first_zero_acknowledgements
+    from std_srvs.srv import Trigger
+
+    live = live_scan_drop
+    _drive_and_verify(live)
+    fault_time = time.monotonic()
+    live.relay_enabled = False
+    _wait_for_stop_with_active_request(live, fault_time)
+    live.relay_enabled = True
+    restored = time.monotonic()
+
+    def source_returned_unqualified():
+        scans = [m for t, m in live.scans if t >= restored and m.valid]
+        invalid = [
+            m
+            for t, m in live.motion
+            if t >= restored and not m.valid and m.reason == "progress_history_unqualified"
+        ]
+        return len(scans) >= 3 and bool(invalid)
+
+    live.pump(
+        source_returned_unqualified,
+        vx=0.05,
+        timeout=15,
+        description="restored scan source did not remain progress-unqualified",
+    )
+    client = live.listener.create_client(Trigger, "/motion_fusion/requalify_progress")
+    live.pump(
+        lambda: client.service_is_ready(),
+        vx=0.05,
+        timeout=5,
+        description="progress requalification service unavailable",
+    )
+    future = client.call_async(Trigger.Request())
+    live.pump(
+        future.done,
+        vx=0.05,
+        timeout=5,
+        description="progress requalification request timed out",
+    )
+    assert future.result() is not None and future.result().success
+    requested = time.monotonic()
+    live.pump(
+        lambda: time.monotonic() - requested >= 1.0,
+        vx=0.05,
+        timeout=3,
+        description="continued nonzero request observation unavailable",
+    )
+    assert not any(m.valid for t, m in live.motion if t >= requested)
+    assert all(m.linear.x == 0 and m.angular.z == 0 for t, m in live.output if t >= requested)
+    assert any(abs(m.linear.x - 0.05) < 1e-9 for t, m in live.requests if t >= requested)
+
+    # Fence old nonzero messages from the same CommandNode publisher before
+    # sending zero. No history is erased, and a protective Gate zero alone is
+    # not an explicit requalification request.
+    marker_start_truth = live.truth[-1][1]
+    marker_intent = time.monotonic()
+    live.submit("drive.velocity", 0.04)
+
+    def observed_marker():
+        return any(
+            received >= marker_intent
+            and abs(message.linear.x - 0.04) < 1e-9
+            and message.angular.z == 0
+            for received, message in live.requests
+        ) and any(received >= marker_intent for received, _ in live.truth)
+
+    live.pump(observed_marker, vx=0.04, timeout=5, description="nonzero marker not observed")
+    marker_ack = next(
+        received
+        for received, message in live.requests
+        if received >= marker_intent
+        and abs(message.linear.x - 0.04) < 1e-9
+        and message.angular.z == 0
+    )
+    zero_requested = time.monotonic()
+    marker_truth = [marker_start_truth] + [
+        message for received, message in live.truth if received >= marker_intent
+    ]
+    marker_positions = [message.pose.pose.position for message in marker_truth]
+    marker_path = sum(
+        math.hypot(b.x - a.x, b.y - a.y)
+        for a, b in zip(marker_positions, marker_positions[1:], strict=False)
+    )
+    marker_speed = max(
+        math.hypot(message.twist.twist.linear.x, message.twist.twist.linear.y)
+        for message in marker_truth
+    )
+    marker_speed_limit = min(0.015, max(0.005, live.metrics["stationary_max_speed"] * 2 + 0.002))
+    live.metrics.update(
+        zero_marker_intent_steady=marker_intent,
+        zero_marker_observed_steady=marker_ack,
+        zero_intent_steady=zero_requested,
+        zero_marker_truth_path=marker_path,
+        zero_marker_truth_max_speed=marker_speed,
+        zero_marker_truth_speed_limit=marker_speed_limit,
+    )
+    assert not any(message.valid for received, message in live.motion if received >= requested)
+    assert all(
+        message.linear.x == 0 and message.angular.z == 0
+        for received, message in live.output
+        if received >= requested
+    )
+    assert marker_path <= 0.02 and marker_speed <= marker_speed_limit
+    live.submit("drive.velocity", 0.0)
+    live.metrics["zero_submit_completed_steady"] = live.last_submit
+    live.pump(
+        lambda: (
+            first_zero_acknowledgements(live.requests, live.output, intent_steady=zero_requested)
+            is not None
+        ),
+        vx=0.0,
+        timeout=5,
+        description="explicit zero request and safety output not observed",
+    )
+    acknowledgements = first_zero_acknowledgements(
+        live.requests, live.output, intent_steady=zero_requested
+    )
+    assert acknowledgements is not None
+    request_ack, output_ack = acknowledgements
+    live.metrics.update(
+        zero_request_observed_steady=request_ack,
+        zero_output_observed_steady=output_ack,
+    )
+    boundary = max(request_ack, output_ack)
+
+    def requalified_stopped():
+        qualifying = [
+            m
+            for t, m in live.motion
+            if t >= boundary
+            and m.scan_received_steady >= boundary
+            and m.valid
+            and not m.motion_anomaly
+        ]
+        outputs = [m for t, m in live.output if t >= output_ack]
+        requests = [m for t, m in live.requests if t >= request_ack]
+        assert all(m.linear.x == 0 and m.angular.z == 0 for t, m in live.output if t >= requested)
+        return (
+            len(qualifying) >= 2
+            and len(outputs) >= 3
+            and len(requests) >= 3
+            and all(m.linear.x == 0 and m.angular.z == 0 for m in outputs + requests)
+        )
+
+    live.pump(
+        requalified_stopped,
+        vx=0.0,
+        timeout=15,
+        description="explicit zero and stationary evidence did not requalify progress",
+    )
+    start_truth = live.truth[-1][1].pose.pose.position
+    start_motion = next(m for _, m in reversed(live.motion) if m.valid and not m.motion_anomaly)
+    started = time.monotonic()
+
+    def moved_after_requalification():
+        _fail_on_anomaly_since(live, started)
+        truth = live.truth[-1][1].pose.pose.position
+        qualifying = [
+            m
+            for t, m in live.motion
+            if t >= started and m.valid and m.source_epoch == start_motion.source_epoch
+        ]
+        if not qualifying:
+            return False
+        local = qualifying[-1].local_pose
+        truth_distance = math.hypot(truth.x - start_truth.x, truth.y - start_truth.y)
+        local_distance = math.hypot(
+            local.x - start_motion.local_pose.x, local.y - start_motion.local_pose.y
+        )
+        live.metrics.update(
+            requalified_truth_distance=truth_distance, requalified_local_distance=local_distance
+        )
+        return (
+            truth_distance >= 0.03
+            and local_distance >= 0.02
+            and abs(truth_distance - local_distance) <= 0.04
+        )
+
+    live.pump(
+        moved_after_requalification,
+        vx=0.05,
+        timeout=30,
+        description="drive did not resume after explicit stationary requalification",
+    )
+    live.save_summary()
+
+
+def test_ingress_loss_stops_while_raw_scan_motion_and_requests_continue(live):
+    _drive_and_verify(live)
+    fault_time = time.monotonic()
+    live.kill_owned_node("safety_scan_ingress")
+    _wait_for_stop_with_active_request(live, fault_time, motion_must_expire=False)
+    assert sum(t >= fault_time + 2.0 for t, _ in live.raw_scans) >= 5
+    assert any(
+        message.status and message.status[0].message == "scan_topology_unqualified"
+        for received, message in live.status
+        if received >= fault_time
+    )
 
 
 def test_paused_clock_stops_and_expired_request_does_not_resume(live):
@@ -704,15 +1252,199 @@ def test_real_rear_attachment_keeps_unknown_side_coverage_closed(live_rear):
     assert truth_distance < 0.02
 
 
-def test_physical_wheel_spin_without_body_progress_latches_stop(live_low_friction):
+def test_unqualified_low_friction_context_stays_stopped_with_fresh_request(live_low_friction):
     live = live_low_friction
-    start_truth, start_motion = _await_healthy(live)
+    start_truth, _ = _await_healthy(live)
+    start = start_truth.pose.pose.position
+    started = time.monotonic()
+    reason_key = "count.physical_motion_cap_unqualified"
+
+    def stopped_for_missing_cap():
+        statuses = [
+            {entry.key: entry.value for entry in message.status[0].values}
+            for received, message in live.status
+            if received >= started and message.status
+        ]
+        outputs = [(t, m) for t, m in live.output if t >= started]
+        requests = [(t, m) for t, m in live.requests if t >= started]
+        return (
+            time.monotonic() - started >= 2.0
+            and any(int(values.get(reason_key, "0")) > 0 for values in statuses)
+            and len(outputs) >= 5
+            and all(m.linear.x == 0.0 and m.angular.z == 0.0 for _, m in outputs)
+            and len(requests) >= 5
+            and time.monotonic() - requests[-1][0] < 0.3
+            and all(abs(m.linear.x - 0.05) < 1e-9 for _, m in requests)
+            and any(t >= started and m.valid and not m.motion_anomaly for t, m in live.motion)
+        )
+
     live.pump(
-        lambda: bool(live.wheels) and bool(live.joints),
+        stopped_for_missing_cap,
+        vx=0.05,
+        timeout=10,
+        description="unqualified low-friction physical cap did not hold zero",
+    )
+    last = live.truth[-1][1].pose.pose.position
+    drift = math.hypot(last.x - start.x, last.y - start.y)
+    live.metrics.update(unqualified_low_friction_truth_drift=drift)
+    live.save_summary()
+    assert drift < 0.01
+
+
+def _stand_truth_values(initial, current, geometry, ground_z):
+    initial_position, position = initial.pose.pose.position, current.pose.pose.position
+    translation = math.sqrt(
+        (position.x - initial_position.x) ** 2
+        + (position.y - initial_position.y) ** 2
+        + (position.z - initial_position.z) ** 2
+    )
+    initial_q, q = initial.pose.pose.orientation, current.pose.pose.orientation
+    initial_norm = math.sqrt(initial_q.x**2 + initial_q.y**2 + initial_q.z**2 + initial_q.w**2)
+    norm = math.sqrt(q.x**2 + q.y**2 + q.z**2 + q.w**2)
+    if abs(initial_norm - 1) > 0.001 or abs(norm - 1) > 0.001:
+        raise ValueError("invalid stand truth orientation")
+    dot = abs(q.x * initial_q.x + q.y * initial_q.y + q.z * initial_q.z + q.w * initial_q.w)
+    rotation = 2 * math.acos(min(1.0, dot / (norm * initial_norm)))
+    linear, angular = current.twist.twist.linear, current.twist.twist.angular
+    linear_speed = math.sqrt(linear.x**2 + linear.y**2 + linear.z**2)
+    angular_speed = math.sqrt(angular.x**2 + angular.y**2 + angular.z**2)
+    clearance = wheel_ground_clearance(position, q, geometry, ground_z)
+    values = (translation, rotation, linear_speed, angular_speed, clearance)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("nonfinite stand truth")
+    return values
+
+
+def _qualify_stationary_stand(live):
+    started = time.monotonic()
+
+    def feedback_ready():
+        _fail_on_anomaly_since(live, started)
+        return bool(live.wheels) and bool(live.joints) and bool(live.truth)
+
+    live.pump(
+        feedback_ready,
         vx=0.0,
         timeout=5,
         description="wheel odometry or joint states absent",
     )
+    geometry = load_wheel_geometry(
+        Path(__file__).parents[2] / "ros2/src/senior_sim/urdf/senior.urdf.xacro"
+    )
+    world = ET.parse(Path(__file__).with_name("motion_fixed_stand.sdf"))
+    ground_pose = world.findtext("./world/model[@name='ground']/pose")
+    assert ground_pose is not None
+    ground_z = float(ground_pose.split()[2])
+    wheel_start = live.wheels[-1][1].pose.pose.position
+    joint_message = live.joints[-1][1]
+    start_joints = dict(zip(joint_message.name, joint_message.position, strict=True))
+    wheel_names = {"left_front_joint", "left_back_joint", "right_front_joint", "right_back_joint"}
+    assert wheel_names <= start_joints.keys()
+    baseline_at = time.monotonic()
+    initial_truth = live.truth[-1][1]
+
+    def still_and_clear():
+        _fail_on_anomaly_since(live, started)
+        if any(t >= started and state == "detached" for t, state in live.stand_states):
+            pytest.fail(live.diagnostics("fixed stand detached before drive"))
+        joints = [m for t, m in live.joints if t >= baseline_at]
+        wheels = [m for t, m in live.wheels if t >= baseline_at]
+        truth = [m for t, m in live.truth if t >= baseline_at]
+        motions = [
+            m for t, m in live.motion if t >= baseline_at and m.valid and not m.motion_anomaly
+        ]
+        outputs = [m for t, m in live.output if t >= baseline_at]
+        requests = [m for t, m in live.requests if t >= baseline_at]
+        if any(
+            not math.isfinite(value)
+            for message in wheels
+            for value in (message.pose.pose.position.x, message.pose.pose.position.y)
+        ):
+            pytest.fail(live.diagnostics("nonfinite wheel odometry"))
+        joint_drift, joint_speed = 0.0, 0.0
+        for message in joints:
+            positions = dict(zip(message.name, message.position, strict=True))
+            velocities = dict(zip(message.name, message.velocity, strict=True))
+            if not wheel_names <= positions.keys() or not wheel_names <= velocities.keys():
+                pytest.fail(live.diagnostics("complete wheel positions and velocities required"))
+            if not all(
+                math.isfinite(positions[n]) and math.isfinite(velocities[n]) for n in wheel_names
+            ):
+                pytest.fail(live.diagnostics("nonfinite wheel feedback"))
+            joint_drift = max(
+                joint_drift, *(abs(positions[n] - start_joints[n]) for n in wheel_names)
+            )
+            joint_speed = max(joint_speed, *(abs(velocities[n]) for n in wheel_names))
+        wheel_drift = max(
+            (
+                math.hypot(
+                    message.pose.pose.position.x - wheel_start.x,
+                    message.pose.pose.position.y - wheel_start.y,
+                )
+                for message in wheels
+            ),
+            default=0.0,
+        )
+        body_values = [
+            _stand_truth_values(initial_truth, message, geometry, ground_z) for message in truth
+        ]
+        clearance = min((values[4] for values in body_values), default=float("inf"))
+        if (
+            joint_drift > 0.01
+            or joint_speed > 0.02
+            or wheel_drift > 0.001
+            or clearance < 0.1
+            or any(
+                translation > 0.01 or rotation > 0.01 or speed > 0.01 or yaw_rate > 0.02
+                for translation, rotation, speed, yaw_rate, _ in body_values
+            )
+            or any(
+                value != 0
+                for m in outputs + requests
+                for value in (
+                    m.linear.x,
+                    m.linear.y,
+                    m.linear.z,
+                    m.angular.x,
+                    m.angular.y,
+                    m.angular.z,
+                )
+            )
+        ):
+            pytest.fail(
+                live.diagnostics(
+                    "stand not stationary and clear before drive: "
+                    f"joint_drift={joint_drift}, joint_speed={joint_speed}, "
+                    f"wheel_drift={wheel_drift}, clearance={clearance}"
+                )
+            )
+        live.metrics.update(
+            stand_baseline_joint_drift=joint_drift,
+            stand_baseline_joint_speed=joint_speed,
+            stand_baseline_wheel_drift=wheel_drift,
+            stand_baseline_min_wheel_clearance=clearance,
+        )
+        return (
+            time.monotonic() - baseline_at >= 1.2
+            and min(len(joints), len(wheels), len(truth), len(motions), len(outputs), len(requests))
+            >= 3
+            and all(
+                max(_stamp_ns(m.header.stamp) for m in samples)
+                > min(_stamp_ns(m.header.stamp) for m in samples)
+                for samples in (joints, wheels, truth)
+            )
+        )
+
+    live.pump(still_and_clear, vx=0.0, timeout=5, description="stand baseline unavailable")
+    return geometry, ground_z
+
+
+def test_physical_wheel_spin_without_body_progress_latches_stop(live_fixed_stand):
+    live = live_fixed_stand
+    _await_healthy(live, reject_anomaly=True)
+    geometry, ground_z = _qualify_stationary_stand(live)
+    start_truth = live.truth[-1][1]
+    start_motion = next(m for _, m in reversed(live.motion) if m.valid and not m.motion_anomaly)
     wheel_start = live.wheels[-1][1].pose.pose.position
     joint_message = live.joints[-1][1]
     start_joints = dict(zip(joint_message.name, joint_message.position, strict=True))
@@ -721,12 +1453,30 @@ def test_physical_wheel_spin_without_body_progress_latches_stop(live_low_frictio
     truth_start = start_truth.pose.pose.position
     local_start = start_motion.local_pose
     started = time.monotonic()
+    wheel_motion_proven_at = None
+    wheel_motion_proven_stamp_ns = None
 
     def spun_and_tripped():
+        nonlocal wheel_motion_proven_at, wheel_motion_proven_stamp_ns
         if not live.wheels or not live.truth or not live.joints:
             return False
         wheel_now = live.wheels[-1][1].pose.pose.position
         truth_now = live.truth[-1][1].pose.pose.position
+        translation, rotation, speed, yaw_rate, clearance = _stand_truth_values(
+            start_truth, live.truth[-1][1], geometry, ground_z
+        )
+        live.metrics["stand_min_driving_wheel_clearance"] = min(
+            clearance, live.metrics.get("stand_min_driving_wheel_clearance", float("inf"))
+        )
+        if (
+            translation > 0.01
+            or rotation > 0.01
+            or speed > 0.01
+            or yaw_rate > 0.02
+            or clearance < 0.1
+            or any(t >= started and s == "detached" for t, s in live.stand_states)
+        ):
+            pytest.fail(live.diagnostics("fixed stand lost attachment or wheel clearance"))
         motion = [
             m
             for t, m in live.motion
@@ -743,7 +1493,9 @@ def test_physical_wheel_spin_without_body_progress_latches_stop(live_low_frictio
         if not wheel_names <= joints.keys():
             return False
         turns = [abs(joints[name] - start_joints[name]) for name in wheel_names]
-        anomalies = [t for t, m in live.motion if t >= started and m.valid and m.motion_anomaly]
+        anomalies = [
+            (t, m) for t, m in live.motion if t >= started and m.valid and m.motion_anomaly
+        ]
         live.metrics.update(
             wheel_distance=wheel_distance,
             truth_distance=truth_distance,
@@ -752,13 +1504,42 @@ def test_physical_wheel_spin_without_body_progress_latches_stop(live_low_frictio
             wheel_joint_rotations=turns,
         )
         if (
-            wheel_distance >= 0.03
+            wheel_motion_proven_at is None
+            and wheel_distance >= 0.03
+            and all(turn >= 0.3 for turn in turns)
+            and any(t >= started and m.linear.x > 0.03 for t, m in live.output)
+            and not anomalies
+        ):
+            wheel_motion_proven_at = time.monotonic()
+            wheel_stamp = live.wheels[-1][1].header.stamp
+            joint_stamp = joint_message.header.stamp
+            wheel_motion_proven_stamp_ns = max(
+                wheel_stamp.sec * 1_000_000_000 + wheel_stamp.nanosec,
+                joint_stamp.sec * 1_000_000_000 + joint_stamp.nanosec,
+            )
+            live.metrics["wheel_motion_proven_at"] = wheel_motion_proven_at
+            live.metrics["wheel_motion_proven_stamp_ns"] = wheel_motion_proven_stamp_ns
+        if (
+            wheel_motion_proven_at is not None
+            and wheel_motion_proven_stamp_ns is not None
+            and wheel_distance >= 0.03
             and truth_distance < 0.01
             and local_distance < 0.02
-            and sum(turn >= 0.3 for turn in turns) >= 2
+            and all(turn >= 0.3 for turn in turns)
+            and any(t >= started and m.linear.x > 0.03 for t, m in live.output)
             and anomalies
+            and anomalies[0][0] > wheel_motion_proven_at
+            and (
+                anomalies[0][1].header.stamp.sec * 1_000_000_000
+                + anomalies[0][1].header.stamp.nanosec
+                > wheel_motion_proven_stamp_ns
+            )
         ):
-            live.metrics["trip_steady"] = anomalies[0]
+            live.metrics["trip_steady"] = anomalies[0][0]
+            live.metrics["trip_stamp_ns"] = (
+                anomalies[0][1].header.stamp.sec * 1_000_000_000
+                + anomalies[0][1].header.stamp.nanosec
+            )
             return True
         return False
 
@@ -768,6 +1549,76 @@ def test_physical_wheel_spin_without_body_progress_latches_stop(live_low_frictio
         timeout=45,
         description="no physical wheel spin with a latched independent-body anomaly",
     )
+    assert live.stand_states and live.stand_states[-1][1] == "attached"
+    assert not any(t >= started and state == "detached" for t, state in live.stand_states)
+    body_samples = [m for t, m in live.truth if t >= started]
+    assert body_samples
+    body_drift = max(
+        math.hypot(
+            message.pose.pose.position.x - truth_start.x,
+            message.pose.pose.position.y - truth_start.y,
+        )
+        for message in body_samples
+    )
+    body_speed = max(
+        math.hypot(message.twist.twist.linear.x, message.twist.twist.linear.y)
+        for message in body_samples
+    )
+
+    def heading(message):
+        q = message.pose.pose.orientation
+        return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+    initial_yaw = heading(start_truth)
+    yaw_drift = max(
+        abs(
+            math.atan2(
+                math.sin(heading(message) - initial_yaw), math.cos(heading(message) - initial_yaw)
+            )
+        )
+        for message in body_samples
+    )
+    angular_speed = max(abs(message.twist.twist.angular.z) for message in body_samples)
+
+    def vector_norm(vector):
+        return math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+
+    start_position = start_truth.pose.pose.position
+    initial_q = start_truth.pose.pose.orientation
+    initial_q_norm = math.sqrt(initial_q.x**2 + initial_q.y**2 + initial_q.z**2 + initial_q.w**2)
+    assert abs(initial_q_norm - 1.0) < 0.001
+    translation_3d = max(
+        math.sqrt(
+            (message.pose.pose.position.x - start_position.x) ** 2
+            + (message.pose.pose.position.y - start_position.y) ** 2
+            + (message.pose.pose.position.z - start_position.z) ** 2
+        )
+        for message in body_samples
+    )
+    linear_speed_3d = max(vector_norm(message.twist.twist.linear) for message in body_samples)
+    angular_speed_3d = max(vector_norm(message.twist.twist.angular) for message in body_samples)
+    rotations = []
+    for message in body_samples:
+        q = message.pose.pose.orientation
+        q_norm = math.sqrt(q.x**2 + q.y**2 + q.z**2 + q.w**2)
+        assert abs(q_norm - 1.0) < 0.001
+        dot = abs(q.x * initial_q.x + q.y * initial_q.y + q.z * initial_q.z + q.w * initial_q.w)
+        rotations.append(2 * math.acos(min(1.0, dot / (q_norm * initial_q_norm))))
+    rotation_3d = max(rotations)
+    live.metrics.update(
+        stand_max_body_drift=body_drift,
+        stand_max_body_speed=body_speed,
+        stand_max_yaw_drift=yaw_drift,
+        stand_max_yaw_rate=angular_speed,
+        stand_max_translation_3d=translation_3d,
+        stand_max_linear_speed_3d=linear_speed_3d,
+        stand_max_rotation_3d=rotation_3d,
+        stand_max_angular_speed_3d=angular_speed_3d,
+    )
+    assert body_drift < 0.01 and body_speed < 0.01
+    assert yaw_drift < 0.01 and angular_speed < 0.02
+    assert translation_3d < 0.01 and linear_speed_3d < 0.01
+    assert rotation_3d < 0.01 and angular_speed_3d < 0.02
     trip = live.metrics["trip_steady"]
 
     def held_stopped():

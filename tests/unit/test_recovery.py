@@ -10,7 +10,14 @@ from pathlib import Path
 import pytest
 
 from senior_control.config import DeviceProfile
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D, Velocity
+from senior_control.models import (
+    BodyTwist,
+    MapRef,
+    OperationResult,
+    OperationStatus,
+    Pose2D,
+    Velocity,
+)
 from senior_control.safety.guard import evaluate_motion, stopping_distance
 from senior_control.safety.motion_estimator import MotionEstimate, body_displacement
 from senior_control.safety.recovery import (
@@ -191,7 +198,7 @@ def corridor(**overrides: object) -> MapCorridorEvidence:
 def context(**overrides: object) -> RecoveryContext:
     values: dict[str, object] = {
         "candidates": (Velocity(0.8, 0.0), Velocity(-0.8, 0.0)),
-        "measured": Velocity(0.0, 0.0),
+        "measured": BodyTwist(0.0, 0.0, 0.0),
         "observations": scan_pair(),
         "motion": estimate(),
         "pose": Pose2D(1.0, 2.0, 0.0),
@@ -240,7 +247,7 @@ def test_front_blocked_selects_safe_reverse():
 
 def test_map_reverse_queries_measured_speed_not_only_the_speed_cap():
     """The map is asked for the sweep the live gate refused, including measured motion."""
-    measured = Velocity(-1.0, 0.5)
+    measured = BodyTwist(-1.0, 0.0, 0.5)
     maps = FixtureMap(corridor())
     machine = controller(maps, speed=0.08, single_distance=2.0, cumulative_distance=2.0)
     sample = context(

@@ -15,7 +15,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import split
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Velocity
+from senior_control.models import BodyTwist, Velocity
 from senior_control.safety.coverage import SweptRegion, supports
 from senior_control.safety.geometry import inflation_step, swept_footprint, swept_trajectory
 from senior_control.safety.self_filter import FilteredObservation
@@ -210,7 +210,7 @@ def _require(
 
 def evaluate_motion(
     command: Velocity,
-    measured: Velocity,
+    measured: BodyTwist | Velocity,
     observations: list[FilteredObservation],
     profile: DeviceProfile,
     now: float,
@@ -218,6 +218,15 @@ def evaluate_motion(
     uncertainty_margin: float = 0.0,
     coverage_diagnostics: dict[str, object] | None = None,
 ) -> SafetyDecision:
+    """Evaluate a nominal measured sweep plus the caller's qualified margin.
+
+    The ROS safety worker supplies its complete physical-cap uncertainty
+    margin before this low-level geometry is allowed to authorize output.
+    """
+    # //Compatible: legacy two-axis input is accepted but cannot qualify actual lateral motion.
+    lateral_velocity = getattr(measured, "vy", None)
+    if not isinstance(lateral_velocity, (int, float)) or not math.isfinite(lateral_velocity):
+        return _stop("measured_lateral_velocity_unqualified")
     braking = profile.braking_deceleration
     reaction = profile.reaction_time
     margin = profile.hard_margin
@@ -227,7 +236,20 @@ def evaluate_motion(
     if not math.isfinite(uncertainty_margin) or uncertainty_margin < 0:
         return _stop("uncertainty_unqualified")
     base_margin = margin
-    margin += uncertainty_margin
+    contact_margin = margin + uncertainty_margin
+    lateral_braking = profile.lateral_braking_deceleration
+    if lateral_velocity != 0.0 and (lateral_braking is None or lateral_braking <= 0):
+        return _stop("lateral_braking_unset")
+    lateral_reach = (
+        stopping_distance(abs(lateral_velocity), reaction, lateral_braking)
+        if lateral_velocity != 0.0 and lateral_braking is not None
+        else 0.0
+    )
+    if not math.isfinite(lateral_reach):
+        return _stop("lateral_braking_unqualified")
+    # An isotropic Minkowski superset covers lateral braking through rotation.
+    # The secant factor makes the polygonal buffer cover the full round reach.
+    margin = contact_margin + lateral_reach / math.cos(math.pi / 64.0)
     yaw_braking = profile.yaw_braking_deceleration
     if (command.wz != 0.0 or measured.wz != 0.0) and (yaw_braking is None or yaw_braking <= 0):
         return _stop("yaw_braking_unset")
@@ -259,10 +281,10 @@ def evaluate_motion(
     ]
     contact = Polygon(
         (
-            (xmin - margin, ymin - margin),
-            (xmax + margin, ymin - margin),
-            (xmax + margin, ymax + margin),
-            (xmin - margin, ymax + margin),
+            (xmin - contact_margin, ymin - contact_margin),
+            (xmax + contact_margin, ymin - contact_margin),
+            (xmax + contact_margin, ymax + contact_margin),
+            (xmin - contact_margin, ymax + contact_margin),
         )
     )
     if any(contact.intersects(hit) for hit in hits):
@@ -359,7 +381,11 @@ def evaluate_motion(
     # remain subject to the full observation test.
     receding_rear = (
         base_margin
-        if forward > 0 and backward == 0 and command.wz == 0 and measured.wz == 0
+        if forward > 0
+        and backward == 0
+        and command.wz == 0
+        and measured.wz == 0
+        and lateral_velocity == 0.0
         else 0.0
     )
     for vertices in _rectangles(xmin, ymin, xmax, ymax, forward, backward, margin, receding_rear):
@@ -383,7 +409,7 @@ def evaluate_motion(
 
 def _coupled_arcs(
     command: Velocity,
-    measured: Velocity,
+    measured: BodyTwist | Velocity,
     forward: float,
     backward: float,
     positive_yaw: float,

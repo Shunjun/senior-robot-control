@@ -4,17 +4,21 @@ import os
 import signal
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.async_guard import (
     BoundedSafetyWorker,
+    RawSafetyObservation,
     SafetyTicket,
     SafetyWork,
     _worker_main,
+    evaluate_safety_work,
 )
 from senior_control.safety.motion_runtime import (
     StampedObservation,
@@ -22,6 +26,7 @@ from senior_control.safety.motion_runtime import (
     TimedPoseSample,
 )
 from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_control.safety.velocity_uncertainty import IntervalVelocityBounds
 
 
 def _wait_for_release(job):
@@ -158,6 +163,7 @@ def test_spawned_worker_processes_real_scan_with_future_motion_allowance():
         footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
         self_mask_calibrated=True,
         braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
         yaw_braking_deceleration=0.5,
         reaction_time=0.2,
         hard_margin=0.02,
@@ -186,7 +192,7 @@ def test_spawned_worker_processes_real_scan_with_future_motion_allowance():
     steady = time.monotonic()
     work = SafetyWork(
         Velocity(0.05, 0),
-        Velocity(0, 0),
+        BodyTwist(0, 0.0, 0),
         profile,
         (StampedObservation(observation, steady),),
         history.snapshot(),
@@ -197,6 +203,17 @@ def test_spawned_worker_processes_real_scan_with_future_motion_allowance():
         0.5,
         0.5,
         False,
+        interval_bounds=IntervalVelocityBounds(6.0, 0.25),
+        physical_cap_qualified=True,
+    )
+    assert (
+        evaluate_safety_work(replace(work, physical_cap_qualified=False)).decision.reason
+        == "motion_uncertainty_unqualified"
+    )
+    missing_brake = profile.model_copy(update={"lateral_braking_deceleration": None})
+    assert (
+        evaluate_safety_work(replace(work, profile=missing_brake)).decision.reason
+        == "motion_braking_unqualified"
     )
     worker = BoundedSafetyWorker()
     try:
@@ -210,6 +227,95 @@ def test_spawned_worker_processes_real_scan_with_future_motion_allowance():
         assert result.value.decision.allowed
         assert result.value.uncertainty_margin >= (0.3 + 0.5 * 0.5) * 0.199
         assert result.value.reference_stamp == stamp
+        first_details = result.value.diagnostics
+        assert first_details["interval_linear_upper"] == 6.0
+        assert first_details["assumed_instantaneous_linear_cap"] == 0.3
+        assert first_details["motion_uncertainty_sweep_margin"] > 0.42
+        # A narrow interval-average estimate does not shrink the instantaneous cap.
+        assert worker.submit(
+            _ticket(), replace(work, interval_bounds=IntervalVelocityBounds(0.001, 0.001))
+        )
+        again = None
+        deadline = time.monotonic() + 10
+        while again is None and time.monotonic() < deadline:
+            again = worker.poll()
+            time.sleep(0.01)
+        assert again is not None and again.error is None and again.value.decision.allowed
+        assert again.value.diagnostics["interval_linear_upper"] == 0.001
+        assert (
+            again.value.diagnostics["motion_uncertainty_sweep_margin"]
+            == first_details["motion_uncertainty_sweep_margin"]
+        )
+    finally:
+        worker.close()
+
+
+def test_spawned_worker_decodes_bounded_raw_scan_and_retains_sensor_transform():
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures/fortress_scan_seam.json").read_text()
+    )
+    raw = fixture["scan"]
+    stamp = raw["stamp"]
+    profile = DeviceProfile(
+        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
+        self_mask_calibrated=True,
+        braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
+        yaw_braking_deceleration=0.5,
+        reaction_time=0.2,
+        hard_margin=0.02,
+        observation_max_age=0.8,
+    )
+    sensor = tuple(map(float, fixture["sensor_origin"]))
+    message = SimpleNamespace(
+        source_epoch="raw-boot",
+        sequence=1,
+        ranges=raw["ranges"],
+        angle_min=raw["angle_min"],
+        angle_increment=raw["angle_increment"],
+        range_min=raw["range_min"],
+        range_max=raw["range_max"],
+        sensor_x=sensor[0],
+        sensor_y=sensor[1],
+        sensor_yaw=sensor[2],
+        transform_stamp=0.0,
+    )
+    history = TimedPoseBuffer(max_gap=0.4, max_samples=4, max_variance=0.1)
+    assert history.add(TimedPoseSample(stamp, Pose2D(0, 0, 0), (0.001,) * 3, "epoch-a"))
+    steady = time.monotonic()
+    sample = RawSafetyObservation(message, steady, stamp, steady, stamp)
+    work = SafetyWork(
+        Velocity(0.05, 0),
+        BodyTwist(0, 0, 0),
+        profile,
+        (sample,),
+        history.snapshot(),
+        stamp + 0.2,
+        steady,
+        0.4,
+        0.3,
+        0.5,
+        0.5,
+        False,
+        interpolate=True,
+        max_angular_gap=0.01,
+        transform_static=True,
+        interval_bounds=IntervalVelocityBounds(6.0, 0.25),
+        physical_cap_qualified=True,
+    )
+    worker = BoundedSafetyWorker()
+    try:
+        assert worker.submit(_ticket(), work)
+        deadline = time.monotonic() + 10
+        reply = None
+        while reply is None and time.monotonic() < deadline:
+            reply = worker.poll()
+            time.sleep(0.01)
+        assert reply is not None and reply.error is None
+        assert reply.value.decision.allowed
+        assert reply.value.selected_stamp == stamp
+        assert reply.value.selected_received == steady
+        assert reply.value.sensor_origin == pytest.approx(sensor)
     finally:
         worker.close()
 

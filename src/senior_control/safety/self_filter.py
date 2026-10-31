@@ -8,6 +8,7 @@ from shapely.geometry import LineString, Point, Polygon
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
+from senior_control.safety.geometry_bounds import mask_bounds, segment_bounds, strictly_disjoint
 
 Point2D = tuple[float, float]
 
@@ -88,6 +89,9 @@ def filter_self(
             raise ValueError("invalid self-mask polygon")
         masks.append(polygon)
     origin = (scan.sensor_to_body.x, scan.sensor_to_body.y)
+    mask_geometry = [(mask, mask_bounds(mask)) for mask in masks]
+    origin_point = Point(origin) if masks else None
+    origin_covered = origin_point is not None and any(mask.covers(origin_point) for mask in masks)
     rays = []
     for i, distance in enumerate(scan.ranges):
         angle = scan.sensor_to_body.yaw + scan.angle_min + i * scan.angle_increment
@@ -100,8 +104,24 @@ def filter_self(
             rays.append(RayEvidence(i, origin, None, "invalid"))
             continue
         endpoint = (origin[0] + distance * cos(angle), origin[1] + distance * sin(angle))
-        line = LineString((origin, endpoint))
-        if any(mask.intersects(line) or mask.covers(Point(origin)) for mask in masks):
+        ray_bounds = segment_bounds(origin, endpoint)
+        if ray_bounds is None:
+            # Retain the exact old GEOS path for nonfinite/extreme or
+            # numerically degenerate line geometry.
+            line = LineString((origin, endpoint))
+            overlaps = any(mask.intersects(line) or mask.covers(Point(origin)) for mask in masks)
+        elif origin_covered:
+            overlaps = True
+        else:
+            candidates = [
+                mask for mask, bounds in mask_geometry if not strictly_disjoint(ray_bounds, bounds)
+            ]
+            if candidates:
+                line = LineString((origin, endpoint))
+                overlaps = any(mask.intersects(line) for mask in candidates)
+            else:
+                overlaps = False
+        if overlaps:
             rays.append(RayEvidence(i, origin, endpoint, "self"))
         elif self_mask_range_uncertainty and masks:
             extended_distance = distance + self_mask_range_uncertainty
@@ -109,7 +129,15 @@ def filter_self(
                 origin[0] + extended_distance * cos(angle),
                 origin[1] + extended_distance * sin(angle),
             )
-            if any(mask.intersects(LineString((origin, extended))) for mask in masks):
+            extended_bounds = segment_bounds(origin, extended)
+            candidates = [
+                mask
+                for mask, bounds in mask_geometry
+                if not strictly_disjoint(extended_bounds, bounds)
+            ]
+            if candidates and any(
+                mask.intersects(LineString((origin, extended))) for mask in candidates
+            ):
                 rays.append(RayEvidence(i, origin, endpoint, "ambiguous_self_overlap"))
             else:
                 rays.append(RayEvidence(i, origin, endpoint, "hit"))

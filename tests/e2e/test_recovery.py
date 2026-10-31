@@ -8,7 +8,7 @@ from pathlib import Path
 from conftest import SimulationProfile
 
 from senior_control.config import DeviceProfile
-from senior_control.models import MapRef, Pose2D, Velocity
+from senior_control.models import BodyTwist, MapRef, Pose2D, Velocity
 from senior_control.safety.motion_estimator import MotionEstimate
 from senior_control.safety.recovery import (
     MapCorridorEvidence,
@@ -95,7 +95,7 @@ def test_rear_occlusion_requires_bounded_map_assisted_reverse(
     controller = RecoveryController(limits, bounds, AcceptanceMap(), clock_domain="sim")
     context = RecoveryContext(
         candidates=(Velocity(0.8, 0.0),),
-        measured=Velocity(0.0, 0.0),
+        measured=BodyTwist(0.0, 0.0, 0.0),
         observations=rear_occluded_scan(),
         motion=MotionEstimate(
             Pose2D(0.0, 0.0, 0.0),

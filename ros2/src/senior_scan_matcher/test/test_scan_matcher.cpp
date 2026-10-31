@@ -71,6 +71,21 @@ TEST(LocalMatcher, AccumulatesSubcellTranslationAndYawAcrossManyScans)
   EXPECT_NEAR(integrated.yaw, 0.06, 0.025);
 }
 
+TEST(LocalMatcher, AccumulatesSubcellLateralMotionInBothDirections)
+{
+  for (int side : {-1, 1}) {
+    LocalMatcher matcher;
+    EXPECT_FALSE(matcher.update(room({0, 0, 0}, 1.0)).valid);
+    Pose integrated{};
+    for (int index = 1; index <= 40; ++index) {
+      const auto result = matcher.update(room({0, side * 0.002 * index, 0}, 1.0 + 0.1 * index));
+      ASSERT_TRUE(result.valid) << "side=" << side << " frame=" << index << " " << result.reason;
+      integrated = senior_scan_matcher::compose(integrated, result.sensor_delta);
+    }
+    EXPECT_NEAR(integrated.y, side * 0.08, 0.03);
+  }
+}
+
 TEST(LocalMatcher, ReanchorKeepsMeasuredContinuity)
 {
   LocalMatcher matcher;

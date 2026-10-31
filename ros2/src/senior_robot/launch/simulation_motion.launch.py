@@ -17,6 +17,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("headless", default_value="true"),
+            DeclareLaunchArgument("safety_overlay", default_value=params),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([sim, "launch", "simulation.launch.py"])
@@ -29,7 +30,12 @@ def generate_launch_description():
             Node(package="senior_robot", executable="scan_adapter", parameters=[params, rear_mask]),
             Node(package="senior_scan_matcher", executable="scan_motion_node", parameters=[params]),
             Node(package="senior_robot", executable="motion_fusion", parameters=[params]),
-            Node(package="senior_robot", executable="safety_node", parameters=[params, rear_mask]),
+            Node(package="senior_robot", executable="safety_scan_ingress", parameters=[params]),
+            Node(
+                package="senior_robot",
+                executable="safety_node",
+                parameters=[params, LaunchConfiguration("safety_overlay"), rear_mask],
+            ),
             Node(
                 package="senior_robot",
                 executable="agent_adapter",

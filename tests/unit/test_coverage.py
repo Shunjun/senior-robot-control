@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.coverage import SweptRegion, supports
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
@@ -130,7 +130,7 @@ def test_actual_fortress_scan_allows_measured_forward_candidate():
     )
     decision = evaluate_motion(
         Velocity(0.05, 0.0),
-        Velocity(-1.3947176746853806e-19, -6.938893903907376e-17),
+        BodyTwist(-1.3947176746853806e-19, 0.0, -6.938893903907376e-17),
         [obs],
         profile,
         scan.stamp,
@@ -163,7 +163,7 @@ def test_gate_reuses_visible_area_across_all_required_polygons(monkeypatch):
     monkeypatch.setattr(coverage, "unary_union", counted)
     decision = evaluate_motion(
         Velocity(0.05, 0.0),
-        Velocity(-1.3947176746853806e-19, -6.938893903907376e-17),
+        BodyTwist(-1.3947176746853806e-19, 0.0, -6.938893903907376e-17),
         [obs],
         profile,
         scan.stamp,

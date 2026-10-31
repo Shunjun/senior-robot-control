@@ -3,7 +3,7 @@
 import math
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
 
@@ -109,10 +109,14 @@ def test_warning_overlap_allows_safe_reverse():
     # contains the 0.60 m hit. The reverse hard sweep stays at x=0.357.
     observations = scan_pair()
     profile = limits()
-    reverse = evaluate_motion(Velocity(-0.8, 0.0), Velocity(0.0, 0.0), observations, profile, 10.2)
-    forward = evaluate_motion(Velocity(0.8, 0.0), Velocity(0.0, 0.0), observations, profile, 10.2)
+    reverse = evaluate_motion(
+        Velocity(-0.8, 0.0), BodyTwist(0.0, 0.0, 0.0), observations, profile, 10.2
+    )
+    forward = evaluate_motion(
+        Velocity(0.8, 0.0), BodyTwist(0.0, 0.0, 0.0), observations, profile, 10.2
+    )
     clear = evaluate_motion(
-        Velocity(-0.8, 0.0), Velocity(0.0, 0.0), scan_pair(hit=5.0), profile, 10.2
+        Velocity(-0.8, 0.0), BodyTwist(0.0, 0.0, 0.0), scan_pair(hit=5.0), profile, 10.2
     )
     assert reverse.allowed
     assert reverse.velocity == Velocity(-0.8, 0.0)
@@ -128,7 +132,9 @@ def test_forward_measured_warning_overlap_allows_reverse():
     # Measured 0.3 m/s still coasts forward 0.105 m, so the hard front is
     # 0.462 m. Commanded 0.8 m/s puts the forward warning out to 0.837 m,
     # which contains the 0.60 m hit without putting it in the hard sweep.
-    decision = evaluate_motion(Velocity(-0.8, 0.0), Velocity(0.3, 0.0), scan_pair(), limits(), 10.2)
+    decision = evaluate_motion(
+        Velocity(-0.8, 0.0), BodyTwist(0.3, 0.0, 0.0), scan_pair(), limits(), 10.2
+    )
     assert decision.allowed
     assert decision.velocity == Velocity(-0.8, 0.0)
     assert decision.reason == "warning_overlap"
@@ -137,11 +143,11 @@ def test_forward_measured_warning_overlap_allows_reverse():
 def test_invalid_depth_is_unknown():
     profile = limits()
     valid = evaluate_motion(
-        Velocity(-0.4, 0.0), Velocity(0.0, 0.0), scan_pair(hit=5.0), profile, 10.2
+        Velocity(-0.4, 0.0), BodyTwist(0.0, 0.0, 0.0), scan_pair(hit=5.0), profile, 10.2
     )
     unknown = evaluate_motion(
         Velocity(-0.4, 0.0),
-        Velocity(0.0, 0.0),
+        BodyTwist(0.0, 0.0, 0.0),
         scan_pair(hit=5.0, nan_rear=True),
         profile,
         10.2,
@@ -156,7 +162,7 @@ def test_stale_sensor_stops():
     observations = scan_pair()
     profile = limits()
     command = Velocity(0.4, 0.0)
-    measured = Velocity(0.4, 0.0)
+    measured = BodyTwist(0.4, 0.0, 0.0)
     fresh = evaluate_motion(command, measured, observations, profile, 10.2)
     stale = evaluate_motion(command, measured, observations, profile, 11.0)
     assert fresh.allowed
@@ -171,8 +177,8 @@ def test_measured_velocity_extends_braking():
     observations = scan_pair()
     profile = limits()
     command = Velocity(0.4, 0.0)
-    held = evaluate_motion(command, Velocity(0.4, 0.0), observations, profile, 10.2)
-    overrun = evaluate_motion(command, Velocity(0.9, 0.0), observations, profile, 10.2)
+    held = evaluate_motion(command, BodyTwist(0.4, 0.0, 0.0), observations, profile, 10.2)
+    overrun = evaluate_motion(command, BodyTwist(0.9, 0.0, 0.0), observations, profile, 10.2)
     assert held.allowed
     assert held.velocity == command
     assert not overrun.allowed
@@ -182,7 +188,7 @@ def test_measured_velocity_extends_braking():
 def test_unset_safety_limits_stop():
     observations = scan_pair()
     command = Velocity(-0.4, 0.0)
-    measured = Velocity(0.0, 0.0)
+    measured = BodyTwist(0.0, 0.0, 0.0)
     configured = evaluate_motion(command, measured, observations, limits(), 10.2)
     assert configured.allowed
     assert configured.velocity == command
@@ -205,7 +211,7 @@ def test_unset_safety_limits_stop():
 def test_hard_contact_does_not_command_escape():
     profile = limits(hard_margin=0.0)
     command = Velocity(-0.4, 0.0)
-    measured = Velocity(0.0, 0.0)
+    measured = BodyTwist(0.0, 0.0, 0.0)
     contact = evaluate_motion(command, measured, scan_pair(hit=0.2), profile, 10.2)
     clear = evaluate_motion(command, measured, scan_pair(hit=0.6), profile, 10.2)
     assert not contact.allowed
@@ -217,7 +223,7 @@ def test_hard_contact_does_not_command_escape():
 def test_reference_mismatch_rejected():
     profile = limits(hard_margin=0.0)
     command = Velocity(-0.4, 0.0)
-    measured = Velocity(0.0, 0.0)
+    measured = BodyTwist(0.0, 0.0, 0.0)
     aligned = [observation(-math.pi / 2, hit=5.0)]
     mismatched = aligned + [observation(math.pi / 2, hit=5.0, reference_stamp=10.5)]
     accepted = evaluate_motion(command, measured, aligned, profile, 10.2)
@@ -238,7 +244,7 @@ def test_mid_arc_corner_hit_blocks_rotation():
     ]
     decision = evaluate_motion(
         Velocity(0.0, 0.8),
-        Velocity(0.0, 0.0),
+        BodyTwist(0.0, 0.0, 0.0),
         observations,
         limits(hard_margin=0.0),
         10.2,
@@ -261,7 +267,9 @@ def test_combined_arc_carries_body_into_obstacle():
     world_x = travel_x + cosine * body_x - sine * body_y
     world_y = travel_y + sine * body_x + cosine * body_y
     observations = scan_pair(hit=5.0) + [point_hit(world_x, world_y)]
-    decision = evaluate_motion(Velocity(0.8, 0.8), Velocity(0.0, 0.0), observations, limits(), 10.2)
+    decision = evaluate_motion(
+        Velocity(0.8, 0.8), BodyTwist(0.0, 0.0, 0.0), observations, limits(), 10.2
+    )
     assert not decision.allowed
     assert decision.velocity == Velocity(0.0, 0.0)
     assert decision.reason == "hard_sweep_collision"
@@ -271,8 +279,12 @@ def test_tiny_yaw_does_not_block_beside_the_body():
     # 0.15 m outside the side face. Straight 0.8 m/s leaves it clear.
     # 0.01 rad/s must not inflate the hard sweep out to that point.
     observations = scan_pair(hit=5.0) + [point_hit(0.0, 0.27 + 0.15)]
-    straight = evaluate_motion(Velocity(0.8, 0.0), Velocity(0.0, 0.0), observations, limits(), 10.2)
-    turning = evaluate_motion(Velocity(0.8, 0.01), Velocity(0.0, 0.0), observations, limits(), 10.2)
+    straight = evaluate_motion(
+        Velocity(0.8, 0.0), BodyTwist(0.0, 0.0, 0.0), observations, limits(), 10.2
+    )
+    turning = evaluate_motion(
+        Velocity(0.8, 0.01), BodyTwist(0.0, 0.0, 0.0), observations, limits(), 10.2
+    )
     assert straight.allowed
     assert straight.reason == "hard_sweep_clear"
     assert turning.allowed
@@ -282,7 +294,7 @@ def test_tiny_yaw_does_not_block_beside_the_body():
 
 def test_stationary_roundoff_keeps_full_hard_collision_check():
     # Actual candidate-5c stationary result, not an imposed velocity deadband.
-    measured = Velocity(-1.3947e-19, -6.9389e-17)
+    measured = BodyTwist(-1.3947e-19, 0.0, -6.9389e-17)
     command = Velocity(0.05, 0.0)
     clear = evaluate_motion(command, measured, scan_pair(hit=5.0), limits(), 10.2)
     collision = evaluate_motion(
@@ -293,7 +305,7 @@ def test_stationary_roundoff_keeps_full_hard_collision_check():
 
 
 def test_stationary_roundoff_does_not_exempt_unknown_rear():
-    measured = Velocity(-1.3947e-19, -6.9389e-17)
+    measured = BodyTwist(-1.3947e-19, 0.0, -6.9389e-17)
     decision = evaluate_motion(
         Velocity(0.05, 0.0), measured, scan_pair(hit=5.0, nan_rear=True), limits(), 10.2
     )
@@ -305,7 +317,7 @@ def test_unobserved_rotation_stops():
     # 0.8 rad/s, reaction 0.2 s, yaw braking 1 rad/s^2 stops in 0.48 rad.
     profile = limits(hard_margin=0.0)
     command = Velocity(0.0, 0.8)
-    measured = Velocity(0.0, 0.0)
+    measured = BodyTwist(0.0, 0.0, 0.0)
     clear = evaluate_motion(command, measured, scan_pair(hit=5.0), profile, 10.2)
     unknown = evaluate_motion(
         command,
@@ -323,7 +335,7 @@ def test_unobserved_rotation_stops():
 def test_static_extrinsic_stamp_zero_allows_motion():
     profile = limits()
     command = Velocity(-0.4, 0.0)
-    measured = Velocity(0.0, 0.0)
+    measured = BodyTwist(0.0, 0.0, 0.0)
     static = scan_pair(transform_static=True, transform_stamp=0.0)
     dynamic = scan_pair(transform_static=False, transform_stamp=0.0)
     allowed = evaluate_motion(command, measured, static, profile, 10.2)
@@ -361,17 +373,19 @@ def rear_shadow():
 
 
 def test_forward_can_leave_rear_self_shadow_with_sides_observed():
-    decision = evaluate_motion(Velocity(0.1, 0), Velocity(0, 0), rear_shadow(), limits(), 10.2)
+    decision = evaluate_motion(
+        Velocity(0.1, 0), BodyTwist(0, 0.0, 0), rear_shadow(), limits(), 10.2
+    )
     assert decision.allowed
 
 
 def test_rear_shadow_still_blocks_reverse_backward_coast_and_turn():
     shadow = rear_shadow()
     for command, measured in (
-        (Velocity(-0.1, 0), Velocity(0, 0)),
-        (Velocity(0.1, 0), Velocity(-0.05, 0)),
-        (Velocity(0.1, 0.2), Velocity(0, 0)),
-        (Velocity(0.1, 0), Velocity(0, -0.2)),
+        (Velocity(-0.1, 0), BodyTwist(0, 0.0, 0)),
+        (Velocity(0.1, 0), BodyTwist(-0.05, 0.0, 0)),
+        (Velocity(0.1, 0.2), BodyTwist(0, 0.0, 0)),
+        (Velocity(0.1, 0), BodyTwist(0, 0.0, -0.2)),
     ):
         assert not evaluate_motion(command, measured, shadow, limits(), 10.2).allowed
 
@@ -379,10 +393,10 @@ def test_rear_shadow_still_blocks_reverse_backward_coast_and_turn():
 def test_parallel_unknown_side_and_known_hard_contact_are_not_exempt():
     unknown_side = scan_pair(hit=5.0, nan_center=2.4, nan_width=0.2)
     assert not evaluate_motion(
-        Velocity(0.1, 0), Velocity(0, 0), unknown_side, limits(), 10.2
+        Velocity(0.1, 0), BodyTwist(0, 0.0, 0), unknown_side, limits(), 10.2
     ).allowed
     hard_hit = rear_shadow() + [point_hit(-0.347, 0)]
-    decision = evaluate_motion(Velocity(0.1, 0), Velocity(0, 0), hard_hit, limits(), 10.2)
+    decision = evaluate_motion(Velocity(0.1, 0), BodyTwist(0, 0.0, 0), hard_hit, limits(), 10.2)
     assert not decision.allowed
     assert decision.reason == "hard_contact"
 
@@ -390,7 +404,7 @@ def test_parallel_unknown_side_and_known_hard_contact_are_not_exempt():
 def test_unknown_rear_with_latency_uncertainty_outside_old_margin_still_stops():
     decision = evaluate_motion(
         Velocity(0.1, 0),
-        Velocity(0, 0),
+        BodyTwist(0, 0.0, 0),
         rear_shadow(),
         limits(),
         10.2,

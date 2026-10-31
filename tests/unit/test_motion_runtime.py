@@ -3,7 +3,7 @@ import math
 import pytest
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.motion_estimator import MotionEstimator
 from senior_control.safety.motion_runtime import (
@@ -142,7 +142,7 @@ def test_safety_compensates_an_aged_scan_and_bounds_remaining_latency():
     assert result.observation.scan.reference_stamp == 1.2
     assert result.added_margin > 0.3 * 0.05
     decision = evaluate_motion(
-        Velocity(0.1, 0), Velocity(0.1, 0), [result.observation], profile, 1.25
+        Velocity(0.1, 0), BodyTwist(0.1, 0.0, 0), [result.observation], profile, 1.25
     )
     assert decision.reason == "hard_contact"
     assert (
@@ -256,7 +256,7 @@ def test_newer_unaligned_scan_still_vetoes_new_hard_obstacle():
         latest,
         1.1,
         Velocity(0.05, 0),
-        Velocity(0, 0),
+        BodyTwist(0, 0, 0),
         profile,
         now=1.21,
         steady=100.11,
@@ -268,13 +268,53 @@ def test_newer_unaligned_scan_still_vetoes_new_hard_obstacle():
         latest,
         1.2,
         Velocity(0.05, 0),
-        Velocity(0, 0),
+        BodyTwist(0, 0, 0),
         profile,
         now=1.21,
         steady=100.11,
         linear_bound=0.3,
         yaw_bound=0.5,
         radius=0.5,
+    )
+
+
+def test_newer_scan_veto_includes_the_full_physical_motion_envelope():
+    profile = DeviceProfile(
+        self_mask_calibrated=True,
+        footprint=[(-0.337, -0.27), (0.337, -0.27), (0.337, 0.27), (-0.337, 0.27)],
+        braking_deceleration=1.0,
+        yaw_braking_deceleration=1.0,
+        reaction_time=0.1,
+        hard_margin=0.02,
+        observation_max_age=0.5,
+    )
+    scan = ScanObservation(
+        (0.74301, 2.0),
+        0.0,
+        0.01,
+        0.05,
+        5.0,
+        1.2,
+        "ros",
+        Pose2D(0.15699, 0, 0),
+        1.2,
+        "base_link",
+        1.2,
+        transform_static=True,
+    )
+    latest = StampedObservation(filter_self(scan, profile), 100.1)
+    arguments = dict(now=1.21, steady=100.11, linear_bound=0.3, yaw_bound=0.5, radius=0.5)
+    assert not newer_scan_veto(
+        latest, 1.1, Velocity(0.05, 0), BodyTwist(0, 0, 0), profile, **arguments
+    )
+    assert newer_scan_veto(
+        latest,
+        1.1,
+        Velocity(0.05, 0),
+        BodyTwist(0, 0, 0),
+        profile,
+        motion_sweep_margin=0.6,
+        **arguments,
     )
 
 

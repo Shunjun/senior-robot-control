@@ -3,9 +3,10 @@
 import math
 from collections import deque
 from dataclasses import dataclass, replace
+from typing import Generic, Literal, TypeVar
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
+from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.motion_estimator import (
     ImuYaw,
@@ -21,6 +22,74 @@ from senior_control.safety.slip import SlipMonitor
 
 def angle(value: float) -> float:
     return math.atan2(math.sin(value), math.cos(value))
+
+
+_DeferredValue = TypeVar("_DeferredValue")
+
+
+@dataclass(frozen=True)
+class DeferredSample(Generic[_DeferredValue]):
+    stamp_ns: int
+    received_ros_ns: int
+    received_steady: float
+    value: _DeferredValue
+
+
+class DeferredSourceQueue(Generic[_DeferredValue]):
+    """Bounded, source-ordered future observations retaining first receipt time."""
+
+    def __init__(self, *, max_pending: int) -> None:
+        if max_pending < 1:
+            raise ValueError("deferred source capacity must be positive")
+        self.max_pending = max_pending
+        self._pending: deque[DeferredSample[_DeferredValue]] = deque()
+
+    def offer(self, item: DeferredSample[_DeferredValue]) -> bool:
+        if (
+            item.stamp_ns <= 0
+            or item.received_ros_ns <= 0
+            or not math.isfinite(item.received_steady)
+            or item.received_steady <= 0
+            or len(self._pending) >= self.max_pending
+            or (self._pending and item.stamp_ns <= self._pending[-1].stamp_ns)
+        ):
+            return False
+        self._pending.append(item)
+        return True
+
+    def peek(self) -> DeferredSample[_DeferredValue] | None:
+        return self._pending[0] if self._pending else None
+
+    def latest(self) -> DeferredSample[_DeferredValue] | None:
+        return self._pending[-1] if self._pending else None
+
+    def consume(self) -> DeferredSample[_DeferredValue] | None:
+        return self._pending.popleft() if self._pending else None
+
+    def clear(self) -> None:
+        self._pending.clear()
+
+    def status(
+        self, *, now_ros_ns: int, now_steady: float, max_age: float, pending_wait: float
+    ) -> Literal["empty", "waiting", "ready", "expired", "clock_rollback"]:
+        item = self.peek()
+        if item is None:
+            return "empty"
+        if now_ros_ns < item.received_ros_ns:
+            return "clock_rollback"
+        if (
+            not all(math.isfinite(value) for value in (now_steady, max_age, pending_wait))
+            or max_age <= 0
+            or pending_wait <= 0
+            or not 0 <= now_steady - item.received_steady <= min(max_age, pending_wait)
+            or (now_ros_ns - item.received_ros_ns) / 1e9 > max_age
+        ):
+            return "expired"
+        if item.stamp_ns > now_ros_ns:
+            return "waiting"
+        if (now_ros_ns - item.stamp_ns) / 1e9 > max_age:
+            return "expired"
+        return "ready"
 
 
 def compose_pose(a: Pose2D, b: Pose2D) -> Pose2D:
@@ -101,6 +170,7 @@ class CommandInterval:
     velocity: Velocity
     lateral_velocity: float
     max_sample_gap: float
+    all_zero: bool
 
 
 @dataclass(frozen=True)
@@ -139,10 +209,252 @@ class ScanInterval:
 
 
 @dataclass(frozen=True)
+class ProgressInterval:
+    """One independently measured source interval with exact endpoint identities."""
+
+    source_epoch: str
+    start_ns: int
+    end_ns: int
+    scan: ScanInterval
+    received_steady: float
+    received_ros_ns: int
+
+
+def progress_interval_fresh(
+    item: ProgressInterval,
+    *,
+    now_steady: float,
+    now_ros_ns: int,
+    max_age: float,
+    pending_wait: float,
+) -> bool:
+    """Retain each source interval's original steady and ROS expiry."""
+    if not all(
+        math.isfinite(value) for value in (item.received_steady, now_steady, max_age, pending_wait)
+    ):
+        return False
+    if max_age <= 0 or pending_wait <= 0:
+        return False
+    return (
+        0 <= now_steady - item.received_steady <= min(max_age, pending_wait)
+        and 0 < item.received_ros_ns <= now_ros_ns
+        and (now_ros_ns - item.received_ros_ns) / 1e9 <= max_age
+        and 0 <= (now_ros_ns - item.end_ns) / 1e9 <= max_age
+    )
+
+
+class ProgressQueue:
+    """Bounded source-order FIFO; missing continuity stays closed until requalified."""
+
+    def __init__(self, *, max_pending: int) -> None:
+        if max_pending < 1:
+            raise ValueError("progress queue capacity must be positive")
+        self.max_pending = max_pending
+        self._pending: deque[ProgressInterval] = deque()
+        self._epoch: str | None = None
+        self._last_end_ns: int | None = None
+        self._unqualified = False
+
+    @property
+    def unqualified(self) -> bool:
+        return self._unqualified
+
+    def diagnostic_state(self) -> dict[str, str | int | bool | ProgressInterval | None]:
+        return {
+            "source_epoch": self._epoch,
+            "last_end_ns": self._last_end_ns,
+            "pending_count": len(self._pending),
+            "unqualified": self._unqualified,
+            "head": self.peek(),
+        }
+
+    def offer(self, item: ProgressInterval) -> bool:
+        if self._unqualified:
+            return False
+        if (
+            not item.source_epoch
+            or item.start_ns <= 0
+            or item.end_ns <= item.start_ns
+            or item.scan.start != item.start_ns / 1e9
+            or item.scan.end != item.end_ns / 1e9
+            or not math.isfinite(item.received_steady)
+            or item.received_steady < 0
+            or item.received_ros_ns <= 0
+            or len(self._pending) >= self.max_pending
+            or (self._epoch is not None and item.source_epoch != self._epoch)
+            or (self._last_end_ns is not None and item.start_ns != self._last_end_ns)
+        ):
+            self.invalidate()
+            return False
+        self._epoch = item.source_epoch
+        self._last_end_ns = item.end_ns
+        self._pending.append(item)
+        return True
+
+    def peek(self) -> ProgressInterval | None:
+        return self._pending[0] if self._pending else None
+
+    def consume(self) -> ProgressInterval | None:
+        return self._pending.popleft() if self._pending else None
+
+    def invalidate(self) -> None:
+        self._pending.clear()
+        self._unqualified = True
+
+    def reset_after_requalification(self) -> None:
+        """Caller must first establish the explicit stop/requalification contract."""
+        self._pending.clear()
+        self._epoch = None
+        self._last_end_ns = None
+        self._unqualified = False
+
+
+class ProgressRequalification:
+    """Arm first, then require fresh zero streams and contiguous stationary evidence."""
+
+    def __init__(self, *, max_gap: float, required_intervals: int) -> None:
+        if not math.isfinite(max_gap) or max_gap <= 0 or required_intervals < 1:
+            raise ValueError("invalid progress requalification limits")
+        self.max_gap = max_gap
+        self.required_intervals = required_intervals
+        self._armed = False
+        self._armed_ros_ns = 0
+        self._armed_steady = 0.0
+        self._requested_since: tuple[float, int] | None = None
+        self._requested_last: tuple[float, int] | None = None
+        self._applied_since: tuple[float, int] | None = None
+        self._applied_last: tuple[float, int] | None = None
+        self._candidate_epoch: str | None = None
+        self._candidate_end_ns: int | None = None
+        self._candidate_count = 0
+
+    @property
+    def armed(self) -> bool:
+        return self._armed
+
+    def _clear_candidate(self) -> None:
+        self._candidate_epoch = None
+        self._candidate_end_ns = None
+        self._candidate_count = 0
+
+    def arm(self, *, steady: float, ros_ns: int) -> None:
+        if not math.isfinite(steady) or steady < 0 or ros_ns <= 0:
+            raise ValueError("invalid requalification request time")
+        self._armed = True
+        self._armed_steady, self._armed_ros_ns = steady, ros_ns
+        self._requested_since = self._requested_last = None
+        self._applied_since = self._applied_last = None
+        self._clear_candidate()
+
+    def disarm(self) -> None:
+        self._armed = False
+        self.interrupt()
+
+    def interrupt(self) -> None:
+        """Discard zero-stream evidence without granting a new request."""
+        self._requested_since = self._requested_last = None
+        self._applied_since = self._applied_last = None
+        self._clear_candidate()
+
+    def _zero_sample(
+        self,
+        velocity: Velocity,
+        steady: float,
+        ros_ns: int,
+        since: tuple[float, int] | None,
+        last: tuple[float, int] | None,
+    ) -> tuple[tuple[float, int] | None, tuple[float, int] | None]:
+        if (
+            not math.isfinite(steady)
+            or steady < self._armed_steady
+            or ros_ns < self._armed_ros_ns
+            or velocity != Velocity(0.0, 0.0)
+        ):
+            self._clear_candidate()
+            return None, None
+        if (
+            last is None
+            or not 0 <= steady - last[0] <= self.max_gap
+            or not 0 <= (ros_ns - last[1]) / 1e9 <= self.max_gap
+        ):
+            self._clear_candidate()
+            since = (steady, ros_ns)
+        return since, (steady, ros_ns)
+
+    def requested(self, velocity: Velocity, *, steady: float, ros_ns: int) -> None:
+        if self._armed:
+            self._requested_since, self._requested_last = self._zero_sample(
+                velocity, steady, ros_ns, self._requested_since, self._requested_last
+            )
+
+    def applied(self, velocity: Velocity, *, steady: float, ros_ns: int) -> None:
+        if self._armed:
+            self._applied_since, self._applied_last = self._zero_sample(
+                velocity, steady, ros_ns, self._applied_since, self._applied_last
+            )
+
+    def observe(
+        self,
+        epoch: str,
+        start_ns: int,
+        end_ns: int,
+        *,
+        stationary: bool,
+        steady: float,
+        ros_ns: int,
+    ) -> bool:
+        samples = (
+            self._requested_since,
+            self._requested_last,
+            self._applied_since,
+            self._applied_last,
+        )
+        if (
+            not self._armed
+            or not stationary
+            or not epoch
+            or start_ns <= 0
+            or end_ns <= start_ns
+            or not math.isfinite(steady)
+            or any(sample is None for sample in samples)
+        ):
+            self._clear_candidate()
+            return False
+        requested_since, requested_last, applied_since, applied_last = samples
+        assert requested_since is not None and requested_last is not None
+        assert applied_since is not None and applied_last is not None
+        if (
+            start_ns < max(self._armed_ros_ns, requested_since[1], applied_since[1])
+            or not 0 <= steady - requested_last[0] <= self.max_gap
+            or not 0 <= steady - applied_last[0] <= self.max_gap
+            or not 0 <= (ros_ns - requested_last[1]) / 1e9 <= self.max_gap
+            or not 0 <= (ros_ns - applied_last[1]) / 1e9 <= self.max_gap
+            or not 0 <= (ros_ns - end_ns) / 1e9 <= self.max_gap
+        ):
+            self._clear_candidate()
+            return False
+        if self._candidate_epoch != epoch or self._candidate_end_ns != start_ns:
+            self._candidate_count = 0
+        self._candidate_epoch, self._candidate_end_ns = epoch, end_ns
+        self._candidate_count += 1
+        if self._candidate_count < self.required_intervals:
+            return False
+        self.disarm()
+        return True
+
+
+@dataclass(frozen=True)
 class QualifiedInterval:
     estimate: MotionEstimate
     wheel: WheelOdom
     anomalous: bool
+
+
+@dataclass(frozen=True)
+class AlignedInterval:
+    estimate: MotionEstimate
+    wheel: WheelOdom
+    inertial: IntegratedImu
 
 
 class SourceEpochFence:
@@ -164,6 +476,20 @@ class SourceEpochFence:
         else:
             self._retired.add(self.active)
         self.active = None
+
+    def is_retired(self, epoch: str) -> bool:
+        return epoch in self._retired
+
+    def retire_unadmitted(self, epoch: str) -> None:
+        """Fence a replaced deferred source without making it the active source."""
+        if not epoch or epoch in self._retired:
+            return
+        if self.active == epoch:
+            self.retire_active()
+        elif len(self._retired) >= self.max_retired:
+            self._exhausted = True
+        else:
+            self._retired.add(epoch)
 
     def accept(self, epoch: str) -> bool:
         if self._exhausted or not epoch or epoch in self._retired:
@@ -278,6 +604,11 @@ class TimedPoseBuffer:
 
     def clear(self) -> None:
         self._samples.clear()
+
+    def diagnostic_bounds(self) -> tuple[float | None, float | None, int]:
+        if not self._samples:
+            return None, None, 0
+        return self._samples[0].stamp, self._samples[-1].stamp, len(self._samples)
 
     def snapshot(self) -> "TimedPoseBuffer":
         """Copy bounded immutable samples before crossing a worker boundary."""
@@ -446,7 +777,7 @@ def newer_scan_veto(
     latest: StampedObservation,
     selected_stamp: float,
     command: Velocity,
-    measured: Velocity,
+    measured: BodyTwist | Velocity,
     profile: DeviceProfile,
     *,
     now: float,
@@ -454,8 +785,12 @@ def newer_scan_veto(
     linear_bound: float,
     yaw_bound: float,
     radius: float,
+    motion_sweep_margin: float = 0.0,
 ) -> bool:
     """Newer hits veto while their pose is pending; they never add free coverage."""
+    # //Compatible: callers without additional uncertainty retain the prior margin.
+    if not math.isfinite(motion_sweep_margin) or motion_sweep_margin < 0:
+        return True
     stamp = latest.observation.scan.stamp
     if stamp <= selected_stamp:
         return False
@@ -467,7 +802,7 @@ def newer_scan_veto(
         or not latest.observation.free_rays
     ):
         return True
-    uncertainty = (linear_bound + radius * yaw_bound) * (now - stamp)
+    uncertainty = (linear_bound + radius * yaw_bound) * (now - stamp) + motion_sweep_margin
     decision = evaluate_motion(
         command, measured, [latest.observation], profile, now, uncertainty_margin=uncertainty
     )
@@ -484,6 +819,11 @@ class TimedImuBuffer:
         self.max_gap = max_gap
         self.max_variance = max_variance
         self._samples: deque[ImuSample] = deque(maxlen=max_samples)
+
+    def diagnostic_bounds(self) -> tuple[float | None, float | None, int]:
+        if not self._samples:
+            return None, None, 0
+        return self._samples[0].stamp, self._samples[-1].stamp, len(self._samples)
 
     def add(self, sample: ImuSample) -> bool:
         if (
@@ -542,6 +882,11 @@ class TimedCommandBuffer:
             raise ValueError("invalid command history limits")
         self.max_gap = max_gap
         self._samples: deque[tuple[float, Velocity]] = deque(maxlen=max_samples)
+
+    def diagnostic_bounds(self) -> tuple[float | None, float | None, int]:
+        if not self._samples:
+            return None, None, 0
+        return self._samples[0][0], self._samples[-1][0], len(self._samples)
 
     def add(self, stamp: float, velocity: Velocity) -> bool:
         if (
@@ -605,7 +950,13 @@ class TimedCommandBuffer:
         twist = body_twist_delta(total)
         dt = end - start
         return CommandInterval(
-            start, end, total, Velocity(twist.x / dt, twist.yaw / dt), twist.y / dt, largest_gap
+            start,
+            end,
+            total,
+            Velocity(twist.x / dt, twist.yaw / dt),
+            twist.y / dt,
+            largest_gap,
+            all(command == Velocity(0.0, 0.0) for command, duration in segments if duration > 0),
         )
 
     def interval(self, start: float, end: float) -> Velocity | None:
@@ -614,15 +965,13 @@ class TimedCommandBuffer:
         return result.velocity if result is not None else None
 
 
-def qualify_interval(
+def align_interval(
     scan: ScanInterval,
     wheel_history: TimedPoseBuffer,
     imu_history: TimedImuBuffer,
-    command: Velocity,
     estimator: MotionEstimator,
-    slip: SlipMonitor,
-) -> QualifiedInterval | None:
-    """Compare only samples covering the same independent scan interval."""
+) -> AlignedInterval | None:
+    """Build fully aligned independent, wheel and inertial observations."""
     if not math.isfinite(scan.start) or not math.isfinite(scan.end) or scan.end <= scan.start:
         return None
     start, end = wheel_history.at(scan.start), wheel_history.at(scan.end)
@@ -650,5 +999,46 @@ def qualify_interval(
     )
     if estimate.quality <= 0:
         return None
-    anomaly = slip.update(command, wheel, estimate)
-    return QualifiedInterval(estimate, wheel, anomaly.anomalous)
+    return AlignedInterval(estimate, wheel, inertial)
+
+
+def stationary_interval(
+    aligned: AlignedInterval,
+    command: CommandInterval,
+    *,
+    max_linear_speed: float,
+    max_yaw_rate: float,
+) -> bool:
+    """Require aligned, observed near-stillness and zero command for the full interval."""
+    if (
+        not all(math.isfinite(value) and value > 0 for value in (max_linear_speed, max_yaw_rate))
+        or not command.all_zero
+        or aligned.estimate.dt <= 0
+        or aligned.wheel.dt <= 0
+    ):
+        return False
+    body = body_twist_delta(aligned.estimate.pose_delta)
+    wheel = body_twist_delta(aligned.wheel.pose_delta)
+    return (
+        math.hypot(body.x, body.y) / aligned.estimate.dt <= max_linear_speed
+        and math.hypot(wheel.x, wheel.y) / aligned.wheel.dt <= max_linear_speed
+        and abs(body.yaw) / aligned.estimate.dt <= max_yaw_rate
+        and abs(wheel.yaw) / aligned.wheel.dt <= max_yaw_rate
+        and abs(aligned.inertial.yaw_delta) / aligned.estimate.dt <= max_yaw_rate
+    )
+
+
+def qualify_interval(
+    scan: ScanInterval,
+    wheel_history: TimedPoseBuffer,
+    imu_history: TimedImuBuffer,
+    command: Velocity,
+    estimator: MotionEstimator,
+    slip: SlipMonitor,
+) -> QualifiedInterval | None:
+    """Compare only samples covering the same independent scan interval."""
+    aligned = align_interval(scan, wheel_history, imu_history, estimator)
+    if aligned is None:
+        return None
+    anomaly = slip.update(command, aligned.wheel, aligned.estimate)
+    return QualifiedInterval(aligned.estimate, aligned.wheel, anomaly.anomalous)
