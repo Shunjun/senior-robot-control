@@ -1,0 +1,10 @@
+# Applied only with the default physical rear attachment in the simulator.
+scan_adapter:
+  ros__parameters:
+    self_mask_xy: [-0.33, -0.24, -0.23, -0.24, -0.23, 0.24, -0.33, 0.24]
+    # Simulation-only bound based on the lidar's 0.01 m range resolution.
+    self_mask_range_uncertainty: 0.01
+safety_gate:
+  ros__parameters:
+    self_mask_xy: [-0.33, -0.24, -0.23, -0.24, -0.23, 0.24, -0.33, 0.24]
+    self_mask_range_uncertainty: 0.01

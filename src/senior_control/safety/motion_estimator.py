@@ -1,7 +1,7 @@
 """Quality-gated body motion from an independent scan match.
 
-Wheel odometry and ground-truth poses are inputs only. They are not body
-displacement. A loop-closure jump is not motion. Historical-map reverse
+Wheel odometry is compared with independent body motion. Ground truth is not
+an input here. A loop-closure jump is not motion. Historical-map reverse
 qualification is not decided here.
 """
 
@@ -45,6 +45,8 @@ class ImuYaw:
 
 @dataclass(frozen=True)
 class MotionEstimate:
+    """Independent displacement and interval-average body-frame SE(2) twist."""
+
     pose_delta: Pose2D
     velocity: Velocity
     covariance: tuple[float, float, float]
@@ -55,6 +57,24 @@ class MotionEstimate:
     degenerate: bool = True
     aligned: bool = False
     max_covariance: float | None = None
+
+
+def body_twist_delta(delta: Pose2D) -> Pose2D:
+    """SE(2) logarithm: integrated body twist for a measured relative pose."""
+    theta = math.atan2(math.sin(delta.yaw), math.cos(delta.yaw))
+    if abs(theta) < 1e-8:
+        a, b = 1.0, theta / 2.0
+    else:
+        a = math.sin(theta) / theta
+        b = 2.0 * math.sin(theta / 2.0) ** 2 / theta
+    denominator = a * a + b * b
+    if denominator <= 1e-12:
+        raise ValueError("unobservable body twist")
+    return Pose2D(
+        (a * delta.x + b * delta.y) / denominator,
+        (-b * delta.x + a * delta.y) / denominator,
+        theta,
+    )
 
 
 def _unusable() -> MotionEstimate:
@@ -149,20 +169,35 @@ class MotionEstimator:
             or not math.isfinite(scan_motion.quality)
             or scan_motion.dt <= 0
             or imu.dt <= 0
+            or wheel_odom.dt <= 0
+            or not all(math.isfinite(dt) for dt in (scan_motion.dt, imu.dt, wheel_odom.dt))
             or not self._covariance_accepted(scan_motion.covariance)
             or not _aligned(scan_motion.stamp, now, self.max_skew)
             or not _aligned(imu.stamp, scan_motion.stamp, self.max_skew)
             or not _aligned(wheel_odom.stamp, scan_motion.stamp, self.max_skew)
+            or not _aligned(imu.stamp - imu.dt, scan_motion.stamp - scan_motion.dt, self.max_skew)
+            or not _aligned(
+                wheel_odom.stamp - wheel_odom.dt,
+                scan_motion.stamp - scan_motion.dt,
+                self.max_skew,
+            )
             or not math.isfinite(imu.yaw_delta)
-            or abs(scan_motion.pose_delta.yaw - imu.yaw_delta) > self.max_yaw_error
+            or abs(
+                math.atan2(
+                    math.sin(scan_motion.pose_delta.yaw - imu.yaw_delta),
+                    math.cos(scan_motion.pose_delta.yaw - imu.yaw_delta),
+                )
+            )
+            > self.max_yaw_error
         ):
             return _unusable()
         if visual_motion is not None and self._visual_conflicts(scan_motion, visual_motion):
             return _unusable()
         delta = scan_motion.pose_delta
+        twist_delta = body_twist_delta(delta)
         return MotionEstimate(
             delta,
-            Velocity(delta.x / scan_motion.dt, delta.yaw / scan_motion.dt),
+            Velocity(twist_delta.x / scan_motion.dt, twist_delta.yaw / scan_motion.dt),
             scan_motion.covariance,
             scan_motion.quality,
             scan_motion.dt,

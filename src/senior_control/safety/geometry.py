@@ -92,10 +92,19 @@ def swept_trajectory(
         or not math.isfinite(margin)
         or step <= 0.0
         or margin < 0.0
-        or abs(yaw) <= 1e-12
     ):
         raise ValueError("invalid trajectory sweep")
     body = _valid_body(footprint)
+    if abs(yaw) <= 1e-4:
+        # Bound the exact small-angle arc by the straight swept convex hull.
+        # Rotation displaces any body point by at most radius*|yaw|; arc
+        # translation deviates from linear by at most |distance*yaw| here.
+        # The extra ulps also cover floating point rounding of the hull.
+        radius = max(math.hypot(x, y) for x, y in body.exterior.coords)
+        rounding = 8 * math.ulp(max(1.0, radius, abs(distance)))
+        error = abs(yaw) * (abs(distance) + radius) + rounding
+        straight = unary_union([body, translate(body, xoff=distance)]).convex_hull
+        return _inflate(straight, error, margin)
     path_radius = distance / yaw
     reach = max(math.hypot(point[0], point[1] - path_radius) for point in body.exterior.coords)
     # A step chosen from the body radius is far too coarse when the turning

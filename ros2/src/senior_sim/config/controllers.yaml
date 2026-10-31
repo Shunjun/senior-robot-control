@@ -17,3 +17,6 @@ drive:
     odom_frame_id: odom
     base_frame_id: base_link
     publish_rate: 30.0
+    # Simulation-only wheel-feedback uncertainty; hardware requires independent calibration.
+    pose_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.001]
+    twist_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.001]

@@ -1,3 +1,5 @@
+import pytest
+
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.motion_estimator import (
     ImuYaw,
@@ -68,6 +70,39 @@ def test_nan_imu_yaw_is_not_independent():
     estimate = estimator().update(wheel, scan, ImuYaw(float("nan"), now, 0.5), visual, now)
     assert estimate.quality == 0.0
     assert not supports_degraded_reverse(estimate)
+
+
+def test_imu_and_scan_angles_are_compared_across_pi_boundary():
+    wheel, scan, _imu, visual, now = sample(yaw=3.13)
+    estimate = estimator().update(wheel, scan, ImuYaw(-3.13, now, 0.5), visual, now)
+    assert estimate.quality > 0.0
+
+
+def test_wheel_interval_must_match_scan_interval():
+    wheel, scan, imu, visual, now = sample()
+    assert wheel is not None
+    mismatched = WheelOdom(wheel.pose_delta, wheel.stamp, 0.1)
+    assert estimator().update(mismatched, scan, imu, visual, now).quality == 0.0
+
+
+def test_velocity_uses_the_body_twist_of_an_arc():
+    import math
+
+    wheel, scan, _imu, visual, now = sample()
+    assert scan is not None
+    arc = RelativeMotion(
+        Pose2D(0.5 * math.sin(0.5), 0.5 * (1 - math.cos(0.5)), 0.5),
+        scan.covariance,
+        scan.quality,
+        False,
+        now,
+        "scan_match",
+        False,
+        0.5,
+    )
+    result = estimator().update(wheel, arc, ImuYaw(0.5, now, 0.5), visual, now)
+    assert result.velocity.vx == pytest.approx(0.5)
+    assert result.pose_delta == arc.pose_delta
 
 
 def test_source_must_be_scan_match_and_covariance_within_cap():

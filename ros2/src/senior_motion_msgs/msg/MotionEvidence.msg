@@ -1,0 +1,15 @@
+std_msgs/Header header
+builtin_interfaces/Time interval_start
+string source_epoch
+bool valid
+string reason
+geometry_msgs/Pose2D body_delta
+geometry_msgs/Pose2D local_pose
+geometry_msgs/Twist body_velocity
+float64[9] covariance
+float64 quality
+bool imu_valid
+bool wheel_valid
+bool motion_anomaly
+bool startup_reference_valid
+builtin_interfaces/Time startup_reference_stamp

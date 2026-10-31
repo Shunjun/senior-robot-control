@@ -15,11 +15,17 @@ setup(
                 "config/nav2.yaml",
                 "config/lattice_diff.json",
                 "config/slam.yaml",
+                "config/simulation_motion.yaml",
+                "config/simulation_motion_rear_mask.yaml",
             ],
         ),
         (
             "share/senior_robot/launch",
-            ["launch/navigation.launch.py", "launch/mapping.launch.py"],
+            [
+                "launch/navigation.launch.py",
+                "launch/mapping.launch.py",
+                "launch/simulation_motion.launch.py",
+            ],
         ),
         ("share/senior_robot/behavior_trees", ["behavior_trees/navigate.xml"]),
     ],
@@ -27,6 +33,7 @@ setup(
         "console_scripts": [
             "scan_adapter = senior_robot.scan_adapter:main",
             "safety_node = senior_robot.safety_node:main",
+            "motion_fusion = senior_robot.motion_fusion:main",
             "command_node = senior_robot.command_node:main",
             "navigation_adapter = senior_robot.navigation_adapter:main",
             "slam_adapter = senior_robot.slam_adapter:main",

@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="senior">
   <xacro:arg name="controllers_file" default=""/>
+  <xacro:arg name="rear_attachment" default="true"/>
   <link name="base_link">
     <inertial><mass value="30"/><origin xyz="0 0 0.0593"/><inertia ixx="0.8" iyy="1.2" izz="1.7" ixy="0" ixz="0" iyz="0"/></inertial>
     <!-- Camera aperture is visual only; conservative collision envelope remains intact. -->
@@ -10,8 +11,10 @@
     <visual><origin xyz="0.2685 -0.155 0.1232125"/><geometry><box size="0.137 0.23 0.026425"/></geometry></visual>
     <collision><origin xyz="0 0 0.0593"/><geometry><box size="0.674 0.54 0.15425"/></geometry></collision>
     <!-- Conservative rear attachment represents actual occlusion, not masked scan values. -->
-    <visual><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></visual>
-    <collision><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></collision>
+    <xacro:if value="$(arg rear_attachment)">
+      <visual><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></visual>
+      <collision><origin xyz="-0.28 0 0.20"/><geometry><box size="0.10 0.48 0.18"/></geometry></collision>
+    </xacro:if>
   </link>
   <xacro:macro name="wheel" params="name x y">
     <link name="${name}_wheel"><inertial><mass value="1"/><inertia ixx="0.002" iyy="0.003" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial><visual><origin rpy="1.57079632679 0 0"/><geometry><cylinder radius="0.076" length="0.06615"/></geometry></visual><collision><origin rpy="1.57079632679 0 0"/><geometry><cylinder radius="0.076" length="0.06615"/></geometry></collision></link>

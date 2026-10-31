@@ -1,0 +1,77 @@
+# Fortress-only no-attachment baseline. Default rear-attached launch adds its calibrated mask.
+# Values require runtime measurement and do not qualify hardware.
+scan_adapter:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    max_age_seconds: 0.8
+    self_mask_calibrated: true
+    transform_static: true
+    no_return_clear: false
+scan_motion_node:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    scan_max_age: 0.8
+    transform_static: true
+    max_interval: 0.4
+    max_linear_speed: 0.5
+    max_yaw_rate: 0.8
+    range_limit: 8.0
+    min_response: 0.3
+    max_residual: 0.09
+    min_inlier_fraction: 0.55
+    min_spread: 0.04
+    min_translation_observability: 0.05
+    min_yaw_observability: 0.01
+    max_variance: 0.05
+    reanchor_distance: 0.12
+    reanchor_yaw: 0.1
+    min_rays: 100
+motion_fusion:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    wheel_frame: odom
+    imu_frame: imu_link
+    sensor_max_age: 0.8
+    alignment_max_gap: 0.25
+    pending_wait: 0.25
+    max_variance: 0.1
+    imu_zero_variance: 0.01
+    min_quality: 0.3
+    max_yaw_error: 0.12
+    startup_window: 0.6
+    wheel_motion_limit: 0.004
+    stall_distance: 0.04
+    lateral_limit: 0.04
+    yaw_limit: 0.12
+safety_gate:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    simulation_rate_hz: 20.0
+    footprint_xy: [-0.337, -0.276, 0.337, -0.276, 0.337, 0.276, -0.337, 0.276]
+    self_mask_calibrated: true
+    transform_static: true
+    interpolate: true
+    max_angular_gap: 0.01
+    braking_deceleration: 0.3
+    yaw_braking_deceleration: 0.5
+    reaction_time: 0.2
+    hard_margin: 0.02
+    observation_max_age: 0.8
+    measurement_max_age: 0.8
+    motion_min_quality: 0.3
+    motion_max_variance: 0.1
+    motion_max_interval: 0.4
+    max_reference_lag: 0.4
+    max_linear_speed: 0.3
+    max_yaw_rate: 0.5
+    command_ttl_seconds: 0.3
+command_node:
+  ros__parameters:
+    use_sim_time: true
+    heartbeat_seconds: 0.2
+    disconnect_seconds: 1.0
+    command_ttl_seconds: 0.3

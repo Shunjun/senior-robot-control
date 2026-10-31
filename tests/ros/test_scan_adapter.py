@@ -1,6 +1,7 @@
 """Runtime gate plus a local negative control for the evidence predicate."""
 
 import math
+import os
 import time
 from types import SimpleNamespace
 
@@ -29,6 +30,20 @@ def test_invalid_finite_values_do_not_prove_attachment():
     assert not attachment_evidence(raw, filtered, (0.15699, 0.00201), 0.0)
 
 
+def test_explicitly_calibrated_empty_self_mask_is_accepted():
+    rclpy = pytest.importorskip("rclpy")
+    from rclpy.parameter import Parameter
+    from senior_robot.scan_adapter import ScanAdapter
+
+    rclpy.init()
+    node = ScanAdapter(parameter_overrides=[Parameter("self_mask_calibrated", value=True)])
+    try:
+        assert node.profile.self_mask_calibrated and not node.profile.self_mask
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
 def yaw_of(q):
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
@@ -47,6 +62,10 @@ def wall_evidence(raw, filtered, origin, laser_yaw, pose):
     return False
 
 
+@pytest.mark.skipif(
+    os.environ.get("SENIOR_AMBIENT_SCAN_TEST") != "1",
+    reason="requires an explicitly started baseline Fortress world and scan adapter",
+)
 def test_simulated_self_and_wall_evidence():
     rclpy = pytest.importorskip("rclpy")
     from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus

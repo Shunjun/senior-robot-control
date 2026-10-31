@@ -63,6 +63,8 @@ def _arc_step(
     footprint: list[tuple[float, float]], distance: float, yaw: float, margin: float
 ) -> float:
     """Step from the distance to the turning center, not from the body radius alone."""
+    if abs(yaw) <= 1e-4:
+        return abs(yaw)
     center = distance / yaw
     radius = max(math.hypot(point[0], point[1] - center) for point in footprint)
     return min(abs(yaw), inflation_step(radius, margin))
@@ -122,6 +124,7 @@ def _rectangles(
     forward: float,
     backward: float,
     margin: float,
+    receding_rear_margin: float = 0.0,
 ) -> list[tuple[Point2D, ...]]:
     """Newly entered area around the current rectangle, split so the body is excluded."""
     x_back = xmin - backward - margin
@@ -131,8 +134,9 @@ def _rectangles(
     pieces: list[tuple[Point2D, ...]] = []
     if x_front > xmax:
         pieces.append(((xmax, y_low), (x_front, y_low), (x_front, y_high), (xmax, y_high)))
-    if x_back < xmin:
-        pieces.append(((x_back, y_low), (xmin, y_low), (xmin, y_high), (x_back, y_high)))
+    back_end = xmin - receding_rear_margin
+    if x_back < back_end:
+        pieces.append(((x_back, y_low), (back_end, y_low), (back_end, y_high), (x_back, y_high)))
     if y_high > ymax:
         pieces.append(((xmin, ymax), (xmax, ymax), (xmax, y_high), (xmin, y_high)))
     if y_low < ymin:
@@ -182,11 +186,21 @@ def _require(
     now: float,
     clock: str,
     max_age: float,
+    diagnostics: dict[str, object] | None = None,
+    cache: dict[tuple[object, ...], tuple[BaseGeometry, ...]] | None = None,
 ) -> SafetyDecision | None:
     if len(vertices) < 3:
         return _stop("coverage_rejected")
     try:
-        result = supports(SweptRegion(vertices, frame, stamp), observations, now, clock, max_age)
+        result = supports(
+            SweptRegion(vertices, frame, stamp),
+            observations,
+            now,
+            clock,
+            max_age,
+            diagnostics=diagnostics,
+            cache=cache,
+        )
     except ValueError:
         return _stop("coverage_rejected")
     if not result.supported:
@@ -200,6 +214,9 @@ def evaluate_motion(
     observations: list[FilteredObservation],
     profile: DeviceProfile,
     now: float,
+    *,
+    uncertainty_margin: float = 0.0,
+    coverage_diagnostics: dict[str, object] | None = None,
 ) -> SafetyDecision:
     braking = profile.braking_deceleration
     reaction = profile.reaction_time
@@ -207,6 +224,10 @@ def evaluate_motion(
     max_age = profile.observation_max_age
     if braking is None or reaction is None or margin is None or max_age is None or braking <= 0:
         return _stop("safety_limits_unset")
+    if not math.isfinite(uncertainty_margin) or uncertainty_margin < 0:
+        return _stop("uncertainty_unqualified")
+    base_margin = margin
+    margin += uncertainty_margin
     yaw_braking = profile.yaw_braking_deceleration
     if (command.wz != 0.0 or measured.wz != 0.0) and (yaw_braking is None or yaw_braking <= 0):
         return _stop("yaw_braking_unset")
@@ -302,16 +323,57 @@ def evaluate_motion(
         return _stop("hard_sweep_collision")
     warning_overlap = any(warning.intersects(hit) for hit in hits)
 
+    coverage_cache: dict[tuple[object, ...], tuple[BaseGeometry, ...]] = {}
     for spun in spins:
-        decision = _cover_difference(spun, body, frame, stamp, observations, now, clock, max_age)
+        decision = _cover_difference(
+            spun,
+            body,
+            frame,
+            stamp,
+            observations,
+            now,
+            clock,
+            max_age,
+            coverage_diagnostics,
+            coverage_cache,
+        )
         if decision is not None:
             return decision
     for arc in arcs:
-        decision = _cover_difference(arc, body, frame, stamp, observations, now, clock, max_age)
+        decision = _cover_difference(
+            arc,
+            body,
+            frame,
+            stamp,
+            observations,
+            now,
+            clock,
+            max_age,
+            coverage_diagnostics,
+            coverage_cache,
+        )
         if decision is not None:
             return decision
-    for vertices in _rectangles(xmin, ymin, xmax, ymax, forward, backward, margin):
-        decision = _require(vertices, frame, stamp, observations, now, clock, max_age)
+    # Only the initial rear strip strictly recedes during pure forward travel.
+    # Side strips, braking backwards, rotations and the extra temporal margin
+    # remain subject to the full observation test.
+    receding_rear = (
+        base_margin
+        if forward > 0 and backward == 0 and command.wz == 0 and measured.wz == 0
+        else 0.0
+    )
+    for vertices in _rectangles(xmin, ymin, xmax, ymax, forward, backward, margin, receding_rear):
+        decision = _require(
+            vertices,
+            frame,
+            stamp,
+            observations,
+            now,
+            clock,
+            max_age,
+            coverage_diagnostics,
+            coverage_cache,
+        )
         if decision is not None:
             return decision
     if warning_overlap:
@@ -349,6 +411,8 @@ def _cover_difference(
     now: float,
     clock: str,
     max_age: float,
+    diagnostics: dict[str, object] | None = None,
+    cache: dict[tuple[object, ...], tuple[BaseGeometry, ...]] | None = None,
 ) -> SafetyDecision | None:
     pieces = _simple_pieces(swept.difference(body))
     if pieces is None:
@@ -357,7 +421,9 @@ def _cover_difference(
         coords = tuple((float(point[0]), float(point[1])) for point in piece.exterior.coords)
         if len(coords) > 1 and coords[0] == coords[-1]:
             coords = coords[:-1]
-        decision = _require(coords, frame, stamp, observations, now, clock, max_age)
+        decision = _require(
+            coords, frame, stamp, observations, now, clock, max_age, diagnostics, cache
+        )
         if decision is not None:
             return decision
     return None

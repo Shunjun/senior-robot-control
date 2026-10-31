@@ -5,6 +5,7 @@ import math
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -14,20 +15,26 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
 from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_robot.motion_lifecycle import run
 
 
 class ScanAdapter(Node):
-    def __init__(self):
-        super().__init__("scan_adapter")
+    def __init__(self, *, parameter_overrides=None):
+        super().__init__("scan_adapter", parameter_overrides=parameter_overrides or [])
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("max_age_seconds", 0.5)
         self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("no_return_clear", False)
         self.declare_parameter("self_mask_calibrated", False)
+        # //Compatible: unset profiles retain exact-mask filtering, uncalibrated by default.
+        self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.declare_parameter("transform_static", False)
         self.body = self.get_parameter("body_frame").value
         self.max_age = self.get_parameter("max_age_seconds").value
-        coords = self.get_parameter("self_mask_xy").value or []
+        try:
+            coords = self.get_parameter("self_mask_xy").value or []
+        except ParameterUninitializedException:
+            coords = []
         if len(coords) % 2 or (coords and len(coords) < 6):
             raise ValueError("self_mask_xy requires at least three coordinate pairs")
         self.profile = DeviceProfile(
@@ -35,8 +42,15 @@ class ScanAdapter(Node):
             self_mask=[list(zip(coords[::2], coords[1::2], strict=False))] if coords else [],
         )
         self.transform_static = self.get_parameter("transform_static").value
+        self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)
         self.no_return_clear = self.get_parameter("no_return_clear").value
-        if not self.body or not math.isfinite(self.max_age) or self.max_age <= 0:
+        if (
+            not self.body
+            or not math.isfinite(self.max_age)
+            or self.max_age <= 0
+            or not math.isfinite(self.mask_range_uncertainty)
+            or self.mask_range_uncertainty < 0
+        ):
             raise ValueError("invalid body frame or max age")
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
@@ -93,9 +107,11 @@ class ScanAdapter(Node):
                 no_return_clear=self.no_return_clear,
                 transform_static=self.transform_static,
             )
-            filtered = filter_self(observation, self.profile)
+            filtered = filter_self(
+                observation, self.profile, self_mask_range_uncertainty=self.mask_range_uncertainty
+            )
             for ray in filtered.rays:
-                if ray.kind in ("self", "invalid"):
+                if ray.kind in ("self", "ambiguous_self_overlap", "invalid"):
                     result.ranges[ray.index] = float("nan")
             self.report("usable", True, msg.header.stamp)
         except (ValueError, TransformException) as exc:
@@ -105,10 +121,4 @@ class ScanAdapter(Node):
 
 
 def main():
-    rclpy.init()
-    node = ScanAdapter()
-    try:
-        rclpy.spin(node)
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    run(ScanAdapter)

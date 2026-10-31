@@ -1,5 +1,6 @@
 import math
 
+import pytest
 from shapely.affinity import rotate
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
@@ -22,7 +23,7 @@ def test_corner_rotation_blocked():
 
 
 def test_rectangle_mid_arc_corner_is_inside_sweep():
-    # RECT corner radius is hypot(0.337, 0.27). One 0.48 rad step leaves the
+    # This synthetic rectangle's corner radius is hypot(0.337, 0.27). One step leaves the
     # reviewer's mid-arc sample, angle 0.908 rad at 0.995r, outside the
     # endpoint union. A conservative sweep has to contain that point.
     footprint = ((-0.337, -0.27), (0.337, -0.27), (0.337, 0.27), (-0.337, 0.27))
@@ -50,3 +51,13 @@ def test_tiny_yaw_keeps_inflation_inside_hard_margin():
     assert maxy < 0.27 + 0.15
     assert miny > -(0.27 + 0.15)
     assert not sweep.intersects(Point(0.0, 0.27 + 0.15))
+
+
+@pytest.mark.parametrize("yaw", [-1e-17, 1e-17, -1e-8, 1e-8])
+def test_near_zero_yaw_still_conservatively_covers_translation_and_margin(yaw):
+    footprint = ((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))
+    sweep = swept_trajectory(footprint, distance=0.1, yaw=yaw, step=abs(yaw), margin=0.02)
+    for x in (-0.337, 0.0, 0.337, 0.437):
+        assert sweep.covers(Point(x, 0.276))
+    assert sweep.covers(Point(0.437 + 0.019, 0.0))
+    assert not sweep.intersects(Point(0.437 + 0.03, 0.0))

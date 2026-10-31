@@ -21,6 +21,8 @@ def generate_launch_description():
             PathJoinSubstitution([share, "urdf", "senior.urdf.xacro"]),
             " controllers_file:=",
             LaunchConfiguration("controllers_file"),
+            " rear_attachment:=",
+            LaunchConfiguration("rear_attachment"),
         ]
     )
     gz_launch = PathJoinSubstitution([FindPackageShare("ros_gz_sim"), "launch", "gz_sim.launch.py"])
@@ -34,6 +36,7 @@ def generate_launch_description():
                 default_value=PathJoinSubstitution([share, "config", "controllers.yaml"]),
             ),
             DeclareLaunchArgument("headless", default_value="true"),
+            DeclareLaunchArgument("rear_attachment", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(gz_launch),

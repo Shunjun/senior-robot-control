@@ -143,3 +143,61 @@ def test_launch_supports_isolated_controller_configuration() -> None:
     launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
     assert '"controllers_file",' in launch
     assert 'LaunchConfiguration("controllers_file")' in launch
+
+
+def test_no_attachment_variant_is_explicit_and_default_keeps_attachment() -> None:
+    import xml.etree.ElementTree as ET
+
+    model = ET.parse(ROOT / "ros2/src/senior_sim/urdf/senior.urdf.xacro").getroot()
+    ns = {"xacro": "http://www.ros.org/wiki/xacro"}
+    arg = model.find("xacro:arg[@name='rear_attachment']", ns)
+    assert arg is not None and arg.attrib["default"] == "true"
+    conditional = model.find("./link[@name='base_link']/xacro:if", ns)
+    assert conditional is not None and conditional.attrib["value"] == "$(arg rear_attachment)"
+    assert conditional.find("collision/geometry/box[@size='0.10 0.48 0.18']") is not None
+
+
+def test_sim_footprints_cover_chassis_and_every_wheel_collision_projection() -> None:
+    import math
+    import xml.etree.ElementTree as ET
+
+    from shapely.geometry import Polygon, box
+
+    model = ET.parse(ROOT / "ros2/src/senior_sim/urdf/senior.urdf.xacro").getroot()
+    ns = {"xacro": "http://www.ros.org/wiki/xacro"}
+    wheel_macro = model.find("xacro:macro[@name='wheel']", ns)
+    assert wheel_macro is not None
+    cylinder = wheel_macro.find("link/collision/geometry/cylinder")
+    assert cylinder is not None
+    wheel_origin = wheel_macro.find("link/collision/origin")
+    assert wheel_origin is not None
+    roll, pitch, yaw = map(float, wheel_origin.attrib["rpy"].split())
+    assert math.isclose(abs(roll), math.pi / 2, abs_tol=1e-9)
+    assert pitch == yaw == 0
+    radius, length = float(cylinder.attrib["radius"]), float(cylinder.attrib["length"])
+    wheel_boxes = []
+    for wheel in model.findall("xacro:wheel", ns):
+        x, y = float(wheel.attrib["x"]), float(wheel.attrib["y"])
+        wheel_boxes.append(box(x - radius, y - length / 2, x + radius, y + length / 2))
+    assert len(wheel_boxes) == 4
+    base = model.find("./link[@name='base_link']")
+    assert base is not None
+    body_boxes = []
+    for collision in base.findall(".//collision"):
+        geometry = collision.find("geometry/box")
+        origin = collision.find("origin")
+        assert geometry is not None and origin is not None
+        assert origin.get("rpy", "0 0 0") == "0 0 0"
+        x, y, _ = map(float, origin.attrib["xyz"].split())
+        sx, sy, _ = map(float, geometry.attrib["size"].split())
+        body_boxes.append(box(x - sx / 2, y - sy / 2, x + sx / 2, y + sy / 2))
+    assert len(body_boxes) == 2  # chassis plus the default rear attachment
+    required = [*body_boxes, *wheel_boxes]
+    generic = yaml.safe_load((ROOT / "config/simulation.yaml").read_text())["footprint"]
+    motion_config = ROOT / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = yaml.safe_load(motion_config.read_text())
+    flat = params["safety_gate"]["ros__parameters"]["footprint_xy"]
+    motion = list(zip(flat[::2], flat[1::2], strict=True))
+    for points in (generic, motion):
+        footprint = Polygon(points)
+        assert all(footprint.covers(collision) for collision in required)

@@ -1,3 +1,5 @@
+import math
+
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.motion_estimator import MotionEstimate, WheelOdom
 from senior_control.safety.slip import SlipMonitor
@@ -95,7 +97,7 @@ def test_lateral_slip_and_unexpected_yaw():
     assert yaw.increase_torque is False
 
 
-def test_anomaly_latches_until_command_is_zero():
+def test_anomaly_latches_until_explicit_reset_after_stop():
     checker = monitor()
     command = Velocity(0.2, 0.0)
     for _ in range(3):
@@ -104,6 +106,8 @@ def test_anomaly_latches_until_command_is_zero():
     assert held.anomalous is True
     assert held.velocity == Velocity(0.0, 0.0)
     assert held.increase_torque is False
+    assert checker.update(Velocity(0.0, 0.0), wheel(0.0), still_body()).anomalous
+    checker.reset()
     cleared = checker.update(Velocity(0.0, 0.0), wheel(0.0), still_body())
     assert cleared.anomalous is False
     assert cleared.velocity == Velocity(0.0, 0.0)
@@ -173,3 +177,186 @@ def test_body_and_wheel_intervals_share_one_yaw_budget():
     )
     assert aligned.anomalous is False
     assert aligned.velocity == Velocity(0.0, 0.8)
+
+
+def test_curved_differential_drive_is_not_lateral_slip():
+    # A one-second 0.5 m/s, 1 rad/s arc has y≈0.23 m despite zero side slip.
+    dx, dy, dyaw = 0.5 * math.sin(1.0), 0.5 * (1 - math.cos(1.0)), 1.0
+    command = Velocity(0.5, 1.0)
+    actual = body(dx, dy, dyaw, dt=1.0, vx=0.5, wz=1.0)
+    wheel_arc = WheelOdom(Pose2D(dx, dy, dyaw), 10.0, 1.0)
+    assert not monitor().update(command, wheel_arc, actual).anomalous
+    slipped = body(dx, dy + 0.1, dyaw, dt=1.0, vx=0.5, wz=1.0)
+    assert monitor().update(command, wheel_arc, slipped).anomalous
+
+
+def test_changing_curvature_is_not_lateral_slip_but_real_drift_is():
+    from senior_control.safety.motion_runtime import TimedCommandBuffer
+
+    commands = TimedCommandBuffer(max_gap=1.01, max_samples=10)
+    assert commands.add(1.0, Velocity(1.0, 0.1))
+    assert commands.add(2.0, Velocity(0.1, 1.0))
+    integrated = commands.integrated(1.0, 3.0)
+    assert integrated is not None and abs(integrated.lateral_velocity) > 0.03125
+    delta = integrated.pose_delta
+    wheel_path = WheelOdom(delta, 3.0, 2.0)
+    actual = body(delta.x, delta.y, delta.yaw, dt=2.0)
+    assert not monitor().update(integrated.velocity, wheel_path, actual).anomalous
+    drift = body(delta.x, delta.y + 0.1, delta.yaw, dt=2.0)
+    assert monitor().update(integrated.velocity, wheel_path, drift).anomalous
+
+
+def test_sustained_turning_wheels_with_stationary_body_trips_after_startup():
+    checker = monitor()
+    command = Velocity(0.0, 0.4)
+    for _ in range(5):
+        assert not checker.update(
+            command, WheelOdom(Pose2D(0, 0, 0.04), 10, 0.1), body(dt=0.1)
+        ).anomalous
+    decisions = [
+        checker.update(command, WheelOdom(Pose2D(0, 0, 0.04), 10, 0.1), body(dt=0.1))
+        for _ in range(5)
+    ]
+    assert any(decision.anomalous for decision in decisions)
+
+
+def _low_speed_monitor():
+    return SlipMonitor(
+        startup_window=0.6,
+        wheel_motion_limit=0.004,
+        lateral_limit=0.04,
+        yaw_limit=0.12,
+        stall_distance=0.04,
+    )
+
+
+def test_sustained_low_speed_wheel_stall_is_detected():
+    checker = _low_speed_monitor()
+    decisions = [
+        checker.update(Velocity(0.02, 0), wheel(0.002, 0.1), body(dt=0.1)) for _ in range(100)
+    ]
+    assert any(item.anomalous for item in decisions)
+
+
+def test_protection_zero_pulses_do_not_reset_low_speed_stall_budget():
+    checker = _low_speed_monitor()
+    decisions = [
+        checker.update(
+            Velocity(0.02 if i % 2 == 0 else 0.0, 0),
+            wheel(0.002 if i % 2 == 0 else 0.0, 0.1),
+            body(dt=0.1),
+        )
+        for i in range(100)
+    ]
+    assert any(item.anomalous for item in decisions)
+
+
+def test_long_safety_zero_intervals_do_not_reopen_startup_budget():
+    checker = _low_speed_monitor()
+    decisions = []
+    for _ in range(30):
+        decisions.append(checker.update(Velocity(0.02, 0), wheel(0.002, 0.1), body(dt=0.1)))
+        for _ in range(8):
+            decisions.append(checker.update(Velocity(0, 0), wheel(0, 0.1), body(dt=0.1)))
+    assert any(item.anomalous for item in decisions)
+
+
+def test_normal_low_speed_and_quantized_body_motion_are_not_stall():
+    low = _low_speed_monitor()
+    for _ in range(100):
+        assert not low.update(Velocity(0.02, 0), wheel(0.002, 0.1), body(0.002, dt=0.1)).anomalous
+    quantized = _low_speed_monitor()
+    for i in range(100):
+        body_step = 0.02 if i % 4 == 3 else 0.0
+        assert not quantized.update(
+            Velocity(0.05, 0), wheel(0.005, 0.1), body(body_step, dt=0.1)
+        ).anomalous
+
+
+def test_applied_motion_without_wheel_or_body_progress_eventually_stops():
+    checker = _low_speed_monitor()
+    decisions = [
+        checker.update(Velocity(0.02, 0), wheel(0.0, 0.1), body(dt=0.1)) for _ in range(100)
+    ]
+    assert any(item.anomalous for item in decisions)
+
+
+def test_wheels_turn_while_applied_zero_and_body_stationary_are_detected():
+    checker = _low_speed_monitor()
+    decisions = [
+        checker.update(Velocity(0, 0), wheel(0.002, 0.1), body(dt=0.1)) for _ in range(100)
+    ]
+    assert any(item.anomalous for item in decisions)
+
+
+def test_small_zero_mean_wheel_noise_does_not_accumulate_as_one_way_rotation():
+    checker = _low_speed_monitor()
+    for i in range(100):
+        sample = 0.002 if i % 2 == 0 else -0.002
+        assert not checker.update(Velocity(0, 0), wheel(sample, 0.1), body(dt=0.1)).anomalous
+
+
+def test_wheel_noise_then_sustained_opposite_spin_is_detected():
+    checker = _low_speed_monitor()
+    checker.update(Velocity(0, 0), wheel(0.002, 0.1), body(dt=0.1))
+    decisions = [
+        checker.update(Velocity(0, 0), wheel(-0.002, 0.1), body(dt=0.1)) for _ in range(100)
+    ]
+    assert any(item.anomalous for item in decisions)
+
+
+def test_persistent_subthreshold_lateral_and_yaw_drift_are_detected():
+    lateral = _low_speed_monitor()
+    sideways = [
+        lateral.update(Velocity(0.02, 0), wheel(0.002, 0.1), body(0.002, 0.003, dt=0.1))
+        for _ in range(100)
+    ]
+    assert any(item.anomalous for item in sideways)
+    yaw = _low_speed_monitor()
+    turning = [
+        yaw.update(Velocity(0.02, 0), wheel(0.002, 0.1), body(0.002, 0, 0.005, dt=0.1))
+        for _ in range(100)
+    ]
+    assert any(item.anomalous for item in turning)
+
+
+def test_sustained_wheel_rotation_while_applied_zero_and_body_stationary_stops():
+    checker = _low_speed_monitor()
+    results = [
+        checker.update(Velocity(0, 0), WheelOdom(Pose2D(0, 0, 0.003), 10.0, 0.1), body(dt=0.1))
+        for _ in range(100)
+    ]
+    assert any(result.anomalous for result in results)
+
+
+def test_sustained_aligned_low_yaw_is_not_an_anomaly():
+    checker = _low_speed_monitor()
+    for _ in range(100):
+        result = checker.update(
+            Velocity(0, 0.03),
+            WheelOdom(Pose2D(0, 0, 0.003), 10.0, 0.1),
+            body(yaw=0.003, dt=0.1),
+        )
+        assert not result.anomalous
+
+
+def test_applied_turn_pulses_without_wheel_or_body_progress_eventually_stop():
+    checker = _low_speed_monitor()
+    decisions = [
+        checker.update(Velocity(0, 0.02 if i % 2 == 0 else 0.0), wheel(0, 0.1), body(dt=0.1))
+        for i in range(200)
+    ]
+    assert any(result.anomalous for result in decisions)
+
+
+def test_gate_forced_zero_cannot_clear_anomaly_without_a_stop_acknowledgement():
+    checker = SlipMonitor(
+        startup_window=0,
+        wheel_motion_limit=0.01,
+        lateral_limit=0.03,
+        yaw_limit=0.1,
+    )
+    assert checker.update(Velocity(0.2, 0), wheel(0.1), still_body()).anomalous
+    assert checker.update(Velocity(0, 0), wheel(0), still_body()).anomalous
+    checker.reset()
+    assert not checker.update(Velocity(0, 0), wheel(0), still_body()).anomalous

@@ -7,6 +7,7 @@ from senior_control.models import Pose2D, Velocity
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
 
+# Synthetic rectangle for these geometry tests; the actual sim footprint is wider.
 RECT = ((-0.337, -0.27), (0.337, -0.27), (0.337, 0.27), (-0.337, 0.27))
 
 
@@ -279,6 +280,26 @@ def test_tiny_yaw_does_not_block_beside_the_body():
     assert turning.reason == "hard_sweep_clear"
 
 
+def test_stationary_roundoff_keeps_full_hard_collision_check():
+    # Actual candidate-5c stationary result, not an imposed velocity deadband.
+    measured = Velocity(-1.3947e-19, -6.9389e-17)
+    command = Velocity(0.05, 0.0)
+    clear = evaluate_motion(command, measured, scan_pair(hit=5.0), limits(), 10.2)
+    collision = evaluate_motion(
+        command, measured, scan_pair(hit=5.0) + [point_hit(0.0, 0.27 + 0.01)], limits(), 10.2
+    )
+    assert clear.allowed
+    assert collision.reason == "hard_contact" and not collision.allowed
+
+
+def test_stationary_roundoff_does_not_exempt_unknown_rear():
+    measured = Velocity(-1.3947e-19, -6.9389e-17)
+    decision = evaluate_motion(
+        Velocity(0.05, 0.0), measured, scan_pair(hit=5.0, nan_rear=True), limits(), 10.2
+    )
+    assert not decision.allowed
+
+
 def test_unobserved_rotation_stops():
     # Zero hard margin leaves no translation sliver, so only the corner arc is new.
     # 0.8 rad/s, reaction 0.2 s, yaw braking 1 rad/s^2 stops in 0.48 rad.
@@ -311,3 +332,68 @@ def test_static_extrinsic_stamp_zero_allows_motion():
     assert allowed.velocity == command
     assert not rejected.allowed
     assert rejected.velocity == Velocity(0.0, 0.0)
+
+
+def rear_shadow():
+    """Rear attachment shadows the center; both side margins remain observed."""
+    mask = [[(-0.21, -0.02), (-0.16, -0.02), (-0.16, 0.02), (-0.21, 0.02)]]
+    profile = DeviceProfile(self_mask_calibrated=True, self_mask=mask)
+    observations = []
+    for minimum in (-math.pi / 2, math.pi / 2):
+        increment = 2 * math.pi / 720
+        scan = ScanObservation(
+            (5.0,) * 721,
+            minimum,
+            increment,
+            0.05,
+            8.0,
+            10.0,
+            "sim",
+            Pose2D(0, 0, 0),
+            10.0,
+            "base_link",
+            10.0,
+            True,
+            increment,
+        )
+        observations.append(filter_self(scan, profile))
+    return observations
+
+
+def test_forward_can_leave_rear_self_shadow_with_sides_observed():
+    decision = evaluate_motion(Velocity(0.1, 0), Velocity(0, 0), rear_shadow(), limits(), 10.2)
+    assert decision.allowed
+
+
+def test_rear_shadow_still_blocks_reverse_backward_coast_and_turn():
+    shadow = rear_shadow()
+    for command, measured in (
+        (Velocity(-0.1, 0), Velocity(0, 0)),
+        (Velocity(0.1, 0), Velocity(-0.05, 0)),
+        (Velocity(0.1, 0.2), Velocity(0, 0)),
+        (Velocity(0.1, 0), Velocity(0, -0.2)),
+    ):
+        assert not evaluate_motion(command, measured, shadow, limits(), 10.2).allowed
+
+
+def test_parallel_unknown_side_and_known_hard_contact_are_not_exempt():
+    unknown_side = scan_pair(hit=5.0, nan_center=2.4, nan_width=0.2)
+    assert not evaluate_motion(
+        Velocity(0.1, 0), Velocity(0, 0), unknown_side, limits(), 10.2
+    ).allowed
+    hard_hit = rear_shadow() + [point_hit(-0.347, 0)]
+    decision = evaluate_motion(Velocity(0.1, 0), Velocity(0, 0), hard_hit, limits(), 10.2)
+    assert not decision.allowed
+    assert decision.reason == "hard_contact"
+
+
+def test_unknown_rear_with_latency_uncertainty_outside_old_margin_still_stops():
+    decision = evaluate_motion(
+        Velocity(0.1, 0),
+        Velocity(0, 0),
+        rear_shadow(),
+        limits(),
+        10.2,
+        uncertainty_margin=0.01,
+    )
+    assert not decision.allowed
