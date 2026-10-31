@@ -95,7 +95,7 @@ class TaskExecutor:
             raise ValueError("dispatch task does not match the intent")
         started_generation = self._generation()
         if expected_generation is not None and expected_generation != started_generation:
-            return await self._store.skip_occurrence(task, intent.occurrence_utc)
+            raise QualificationUnavailable()
         if not self._map_qualified(
             task, map_generation, localization_generation, localized
         ) or not callable(getattr(self._navigation, "start_qualified", None)):

@@ -7,6 +7,16 @@ from types import TracebackType
 import aiosqlite
 
 
+class HomeExecutionCoordination:
+    """Shared same-robot connection continuity and execution serialization."""
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.connected = True
+        self.disconnect_generation = 0
+        self.cancel_required = False
+
+
 class Database:
     def __init__(self, path: Path, busy_timeout_ms: int = 1000) -> None:
         if isinstance(busy_timeout_ms, bool) or not 1 <= busy_timeout_ms <= 60000:
@@ -15,12 +25,16 @@ class Database:
         self.busy_timeout_ms = busy_timeout_ms
         self.write_lock = asyncio.Lock()
         self._home_target_locks: dict[str, asyncio.Lock] = {}
+        self._home_execution: dict[str, HomeExecutionCoordination] = {}
         self.connection: aiosqlite.Connection
         self._entered = False
 
     def home_target_lock(self, robot_id: str) -> asyncio.Lock:
         """Serialize one robot's Home target edits and acceptance across services."""
         return self._home_target_locks.setdefault(robot_id, asyncio.Lock())
+
+    def home_execution(self, robot_id: str) -> HomeExecutionCoordination:
+        return self._home_execution.setdefault(robot_id, HomeExecutionCoordination())
 
     @property
     def is_open(self) -> bool:

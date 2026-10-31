@@ -507,10 +507,15 @@ class TaskStore:
         skip_from: datetime,
         skip_until: datetime,
         reason: str,
+        # //Compatible: existing callers omit the id and receive a fresh record.
+        *,
+        skip_id: str | None = None,
     ) -> SkipRecord:
         if not reason.strip():
             raise DomainError(ErrorCode.VALIDATION, "skip reason is required")
-        skip_id = uuid.uuid4().hex
+        skip_id = uuid.uuid4().hex if skip_id is None else skip_id
+        if not skip_id.strip():
+            raise DomainError(ErrorCode.VALIDATION, "skip identity is required")
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 current = await self._task_in(connection, task_id)
@@ -520,10 +525,19 @@ class TaskStore:
                     """
                     INSERT INTO task_skip (skip_id, task_id, skip_from, skip_until, reason)
                     VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(skip_id) DO UPDATE SET
+                        skip_from = MIN(task_skip.skip_from, excluded.skip_from),
+                        skip_until = MAX(task_skip.skip_until, excluded.skip_until)
+                    WHERE task_skip.task_id = excluded.task_id
+                      AND task_skip.reason = excluded.reason
                     """,
                     (skip_id, task_id, _stamp(_utc(skip_from)), _stamp(_utc(skip_until)), reason),
                 )
                 stored = await self._skip_in(connection, skip_id)
+                if stored is not None and (stored.task_id != task_id or stored.reason != reason):
+                    raise DomainError(
+                        ErrorCode.CONFLICT, "skip identity belongs to another interval"
+                    )
         if stored is None:
             raise DomainError(ErrorCode.VALIDATION, "skip was not stored")
         return stored

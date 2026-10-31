@@ -222,8 +222,10 @@ class AdapterPort(SyntheticQualifiedNavigation):
         module = navigation_module()
         self._module = module
         self._adapter = module.NavigationAdapter(executor)
+        self.goals: list[object] = []
 
     async def navigate(self, goal: object) -> str:
+        self.goals.append(goal)
         map_goal = self._module.MapGoal(goal.map_ref, goal.pose)
         return await self._adapter.navigate(map_goal)
 
@@ -383,9 +385,10 @@ class FailingSecondNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.starts = 0
         self.cancelled: list[str] = []
+        self.goals: list[object] = []
 
     async def navigate(self, goal: object) -> str:
-        del goal
+        self.goals.append(goal)
         self.starts += 1
         if self.starts == 2:
             raise RuntimeError("send failed")
@@ -409,7 +412,7 @@ async def test_failed_send_keeps_unknown_separate_from_finished_execution(tmp_pa
         await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
         assert await service.return_home(MAP) == "exec-1"
-        await service.note_terminal("exec-1")
+        await service.note_terminal("exec-1", navigation.goals[0].intent_token)
         sent = False
         try:
             await service.return_home(MAP)
@@ -514,19 +517,20 @@ class ReleasingExecutor:
 
 async def test_terminal_note_releases_the_adapter_goal(tmp_path: Path) -> None:
     executor = ReleasingExecutor()
+    navigation = AdapterPort(executor)
     async with Database(tmp_path / "terminal.db") as database:
         service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
-            navigation=AdapterPort(executor),
+            navigation=navigation,
         )
         await service.prepare()
         await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
         first = await service.return_home(MAP)
         assert first == "nav-1"
-        await service.note_terminal(first)
+        await service.note_terminal(first, navigation.goals[0].intent_token)
         second: str | None = None
         caught: Exception | None = None
         try:
@@ -798,7 +802,7 @@ async def test_home_reference_nonce_survives_obstacle_and_new_anchor_but_not_mov
         )
         assert reference.map_generation == generation
         assert await service.return_home(MAP) == "exec-1"
-        await service.note_terminal("exec-1")
+        await service.note_terminal("exec-1", navigation.goals[0].intent_token)
         reference.apply_anchor_update(
             AnchorSnapshot(
                 MAP,
@@ -1066,3 +1070,372 @@ async def test_home_edit_does_not_wait_for_interrupted_goal_cancellation(tmp_pat
             await send
         assert navigation.events == ["navigate", "cancel"]
         assert navigation.active is None
+
+
+class SharedHomeNavigation(SyntheticQualifiedNavigation):
+    def __init__(self, *, reuse_id: bool = False) -> None:
+        self.events: list[str] = []
+        self.active: set[str] = set()
+        self.count = 0
+        self.tokens: list[str] = []
+        self.reuse_id = reuse_id
+        self.accepted = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def navigate(self, goal: object) -> str:
+        self.count += 1
+        self.tokens.append(goal.intent_token)
+        execution_id = "same-id" if self.reuse_id else f"nav-{self.count}"
+        self.active.add(execution_id)
+        self.events.append(f"accepted:{execution_id}")
+        goal.on_accepted(execution_id)
+        if self.count == 1:
+            self.accepted.set()
+            await self.release.wait()
+        return execution_id
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.events.append(f"cancel:{execution_id}")
+        self.active.discard(execution_id)
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+@pytest.mark.parametrize("reuse_id", [False, True])
+async def test_shared_home_guard_serializes_claim_and_ignores_old_terminal(
+    tmp_path: Path, reuse_id: bool
+) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation(reuse_id=reuse_id)
+    async with Database(tmp_path / "shared-guard.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await first.prepare()
+        await second.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        send_first = asyncio.create_task(first.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        send_second = asyncio.create_task(second.return_home(MAP))
+        await asyncio.sleep(0)
+        navigation.release.set()
+        old_id, new_id = await asyncio.gather(send_first, send_second)
+        assert navigation.events == [f"accepted:{old_id}", f"cancel:{old_id}", f"accepted:{new_id}"]
+        assert navigation.active == {new_id}
+        await first.note_terminal(old_id, navigation.tokens[0])
+        assert navigation.events == [f"accepted:{old_id}", f"cancel:{old_id}", f"accepted:{new_id}"]
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (new_id,)
+        third = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await third.prepare()
+        await third.note_localization(pose)
+        third_id = await third.return_home(MAP)
+        assert navigation.events[-2:] == [f"cancel:{new_id}", f"accepted:{third_id}"]
+        assert navigation.active == {third_id}
+
+
+async def test_other_home_service_cannot_replace_unknown_send(tmp_path: Path) -> None:
+    class Unknown(SyntheticQualifiedNavigation):
+        async def navigate(self, goal: object) -> str:
+            raise RuntimeError("send outcome unknown")
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            raise AssertionError("unknown goal cannot be cancelled by an invented ID")
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = Unknown()
+    async with Database(tmp_path / "unknown-shared.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await first.prepare()
+        await second.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        with pytest.raises(RuntimeError, match="send outcome unknown"):
+            await first.return_home(MAP)
+        with pytest.raises(DomainError) as error:
+            await second.return_home(MAP)
+        assert error.value.code is ErrorCode.CONFLICT
+
+
+async def test_wrong_goal_cancel_confirmation_cannot_release_shared_guard(tmp_path: Path) -> None:
+    class WrongConfirmation(SharedHomeNavigation):
+        async def cancel(self, execution_id: str) -> OperationResult:
+            self.events.append(f"cancel:{execution_id}")
+            return OperationResult("unrelated-goal", OperationStatus.SUCCEEDED)
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = WrongConfirmation()
+    navigation.release.set()
+    async with Database(tmp_path / "wrong-confirmation.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await first.prepare()
+        await second.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        first_id = await first.return_home(MAP)
+        with pytest.raises(DomainError):
+            await second.return_home(MAP)
+        assert navigation.active == {first_id}
+        assert navigation.events == [f"accepted:{first_id}", f"cancel:{first_id}"]
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (first_id,)
+
+
+@pytest.mark.parametrize("reuse_id", [False, True])
+async def test_late_terminal_does_not_remove_newer_home_guard(
+    tmp_path: Path, reuse_id: bool
+) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation(reuse_id=reuse_id)
+    async with Database(tmp_path / "late-owner.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await first.prepare()
+        await second.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        navigation.release.set()
+        old_id = await first.return_home(MAP)
+        new_id = await second.return_home(MAP)
+        events_before = tuple(navigation.events)
+        await first.note_terminal(old_id, navigation.tokens[0])
+        await second.note_terminal(new_id, navigation.tokens[0])
+        assert tuple(navigation.events) == events_before
+        assert navigation.active == {new_id}
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (new_id,)
+        await second.note_terminal(new_id, navigation.tokens[1])
+        assert navigation.active == set()
+
+
+@pytest.mark.parametrize("reuse_id", [False, True])
+async def test_old_home_guard_owner_cannot_update_or_delete_new_claim(
+    tmp_path: Path, reuse_id: bool
+) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation(reuse_id=reuse_id)
+    navigation.release.set()
+    async with Database(tmp_path / "guard-cas.db") as database:
+        first = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        second = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await first.prepare()
+        await second.prepare()
+        pose = localized(Pose2D(1, 2, 0.4))
+        await first.initialize(STILL, pose)
+        await second.note_localization(pose)
+        old_id = await first.return_home(MAP)
+        new_id = await second.return_home(MAP)
+        for identity in (None, old_id):
+            with pytest.raises(DomainError) as error:
+                await first._write_guard(identity)
+            assert error.value.code is ErrorCode.CONFLICT
+        with pytest.raises(DomainError) as error:
+            await first._clear_guard(old_id)
+        assert error.value.code is ErrorCode.CONFLICT
+        async with database.connection.execute(
+            "SELECT execution_id, owner_token FROM home_execution_guard WHERE robot_id = ?",
+            (ROBOT,),
+        ) as cursor:
+            assert await cursor.fetchone() == (new_id, navigation.tokens[1])
+        assert navigation.active == {new_id}
+
+
+async def test_disconnect_from_other_home_service_cancels_late_acceptance(tmp_path: Path) -> None:
+    class LateShared(SharedHomeNavigation):
+        async def navigate(self, goal: object) -> str:
+            self.accepted.set()
+            await self.release.wait()
+            self.active.add("nav-late")
+            self.events.append("accepted:nav-late")
+            goal.on_accepted("nav-late")
+            return "nav-late"
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = LateShared()
+    async with Database(tmp_path / "shared-connection.db") as database:
+        sender = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        observer = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await sender.prepare()
+        await observer.prepare()
+        await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        send = asyncio.create_task(sender.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        await observer.note_connection(False)
+        await observer.note_connection(True)
+        navigation.release.set()
+        await send
+        assert navigation.events == ["accepted:nav-late", "cancel:nav-late"]
+        assert navigation.active == set()
+
+
+async def test_terminal_without_intent_proof_keeps_current_guard(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = SharedHomeNavigation(reuse_id=True)
+    navigation.release.set()
+    async with Database(tmp_path / "unqualified-terminal.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        execution_id = await service.return_home(MAP)
+        await service.note_terminal(execution_id)
+        assert navigation.active == {execution_id}
+        assert navigation.events == [f"accepted:{execution_id}"]
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (execution_id,)
+
+
+async def test_late_acceptance_callback_cannot_bind_new_home_intent(tmp_path: Path) -> None:
+    class LateCallback(SyntheticQualifiedNavigation):
+        def __init__(self) -> None:
+            self.goals: list[object] = []
+            self.second_started = asyncio.Event()
+
+        async def navigate(self, goal: object) -> str:
+            self.goals.append(goal)
+            if len(self.goals) == 1:
+                return "old-goal"
+            self.second_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = LateCallback()
+    async with Database(tmp_path / "late-accept-owner.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        assert await service.return_home(MAP) == "old-goal"
+        pending = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.second_started.wait(), 1)
+        navigation.goals[0].on_accepted("old-goal")
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        async with database.connection.execute(
+            "SELECT execution_id, owner_token FROM home_execution_guard WHERE robot_id = ?",
+            (ROBOT,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row == (None, navigation.goals[1].intent_token)
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.CONFLICT
+
+
+async def test_mismatched_acceptance_identity_keeps_unknown_guard(tmp_path: Path) -> None:
+    class Ambiguous(SyntheticQualifiedNavigation):
+        async def navigate(self, goal: object) -> str:
+            goal.on_accepted("accepted-a")
+            return "returned-b"
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            raise AssertionError("ambiguous identities cannot be treated as one cancelled goal")
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "ambiguous-acceptance.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=Ambiguous())
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == (None,)
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.CONFLICT
+
+
+async def test_acceptance_callback_after_response_cannot_replace_returned_identity(
+    tmp_path: Path,
+) -> None:
+    class Returned(SyntheticQualifiedNavigation):
+        def __init__(self) -> None:
+            self.goal: object | None = None
+
+        async def navigate(self, goal: object) -> str:
+            self.goal = goal
+            return "returned-goal"
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = Returned()
+    async with Database(tmp_path / "late-current-callback.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        write_guard = service._write_guard
+        entered = asyncio.Event()
+        block_once = True
+
+        async def paused_guard(execution_id: str | None) -> None:
+            nonlocal block_once
+            if execution_id == "returned-goal" and block_once:
+                block_once = False
+                entered.set()
+                await asyncio.Event().wait()
+            await write_guard(execution_id)
+
+        service._write_guard = paused_guard
+        send = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(entered.wait(), 1)
+        assert navigation.goal is not None
+        navigation.goal.on_accepted("late-unrelated-goal")
+        send.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await send
+        async with database.connection.execute(
+            "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?", (ROBOT,)
+        ) as cursor:
+            assert await cursor.fetchone() == ("returned-goal",)
+
+
+@pytest.mark.parametrize("execution_id", [None, "nav-before-upgrade"])
+async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
+    tmp_path: Path, execution_id: str | None
+) -> None:
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.storage.core_schema import CORE_MIGRATIONS, migrate_core
+    from senior_control.storage.migrations import migrate
+    from senior_control.storage.schema import DOMAIN_MIGRATIONS
+
+    async with Database(tmp_path / "legacy-home-guard.db") as database:
+        await migrate(database, list(DOMAIN_MIGRATIONS))
+        await migrate_core(database, CORE_MIGRATIONS[:3])
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        await journal.safety.mark()
+        await database.connection.execute(
+            "INSERT INTO home_execution_guard (robot_id, execution_id) VALUES (?, ?)",
+            (ROBOT, execution_id),
+        )
+        await database.connection.commit()
+        await migrate_core(database)
+        async with database.connection.execute(
+            "SELECT execution_id, owner_token FROM home_execution_guard WHERE robot_id = ?",
+            (ROBOT,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None and row[0] == execution_id
+        assert isinstance(row[1], str) and len(row[1]) == 32
+        assert await journal.safety.pending()

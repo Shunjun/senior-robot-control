@@ -2,6 +2,8 @@
 
 import asyncio
 import math
+import sqlite3
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +62,7 @@ class HomeGoal:
     map_ref: MapRef
     pose: Pose2D
     map_generation: str
+    intent_token: str
     on_accepted: Callable[[str], None] | None = None
 
 
@@ -87,6 +90,8 @@ class QualifiedHomeNavigationPort(Protocol):
 
     The receiver must reject stale or unknown qualification before accepting a goal;
     local verification immediately before an await is not a receiver-side fence.
+    A successful return identifies the accepted goal; callbacks belong to the same
+    intent and must be delivered before this call returns or raises.
     """
 
     async def navigate_qualified(self, goal: HomeGoal) -> str: ...
@@ -107,15 +112,18 @@ class HomeService:
         self._navigation = navigation
         self._store = WaypointStore(database, robot_id=robot_id)
         self._localized: LocalizedPose | None = None
-        self._connected = True
+        self._home_execution = database.home_execution(robot_id)
         self._execution_id: str | None = None
         self._accepted_id: str | None = None
         self._cancel_id: str | None = None
         self._in_send = False
         self._send_interrupted = False
         self._send_map_generation: str | None = None
+        self._send_disconnect_generation = 0
+        self._accept_callback_open = False
         self._guard_unresolved = False
-        self._return_lock = asyncio.Lock()
+        self._guard_token: str | None = None
+        self._return_lock = self._home_execution.lock
         self._home_target_lock = database.home_target_lock(robot_id)
 
     async def prepare(self) -> None:
@@ -123,16 +131,29 @@ class HomeService:
 
         await self._store.prepare()
         await migrate_core(self._database)
+        await self._refresh_guard()
+
+    async def _read_guard(self) -> tuple[str | None, str] | None:
         async with self._database.write_lock:
             async with self._database.connection.execute(
-                "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?",
+                "SELECT execution_id, owner_token FROM home_execution_guard WHERE robot_id = ?",
                 (self._robot_id,),
             ) as cursor:
                 row = await cursor.fetchone()
-        if row is not None:
-            self._guard_unresolved = True
-            self._execution_id = row[0]
-            self._cancel_id = row[0]
+        if row is None:
+            return None
+        if not isinstance(row[1], str) or not row[1]:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "home guard ownership is unavailable")
+        if row[0] is not None and not isinstance(row[0], str):
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "home execution identity is unavailable")
+        return row[0], row[1]
+
+    async def _refresh_guard(self) -> None:
+        guard = await self._read_guard()
+        self._guard_unresolved = guard is not None
+        self._execution_id = guard[0] if guard is not None else None
+        self._guard_token = guard[1] if guard is not None else None
+        self._cancel_id = self._execution_id
 
     async def initialize(self, start: StartupReference, localized: LocalizedPose) -> HomeResult:
         async with self._home_target_lock:
@@ -213,10 +234,12 @@ class HomeService:
 
     async def return_home(self, expected: MapRef) -> str:
         async with self._return_lock:
+            await self._refresh_guard()
             if self._execution_id is not None:
                 await self._cancel_owed_goal()
             elif self._guard_unresolved:
                 raise DomainError(ErrorCode.CONFLICT, "navigation outcome needs review")
+            self._home_execution.cancel_required = False
             async with self._home_target_lock:
                 execution_id, cancel_this = await self._send_home(expected)
             if cancel_this:
@@ -235,22 +258,45 @@ class HomeService:
         self._in_send = True
         self._send_interrupted = False
         self._send_map_generation = map_generation
+        self._send_disconnect_generation = self._home_execution.disconnect_generation
         cancel_this = False
         try:
             # Persist an unknown outcome before the external operation can accept a goal.
             self._guard_unresolved = True
             await self._write_guard(None)
-            if not self._generation_ready(map_generation) or not self._connected:
-                await self._clear_guard()
+            if self._send_lost_qualification():
+                await self._clear_guard(None)
                 raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
             try:
-                execution_id = await qualified.navigate_qualified(
-                    HomeGoal(expected, waypoint.pose, map_generation, self._note_accepted)
-                )
+                assert self._guard_token is not None
+                intent_token = self._guard_token
+                self._accept_callback_open = True
+                try:
+                    execution_id = await qualified.navigate_qualified(
+                        HomeGoal(
+                            expected,
+                            waypoint.pose,
+                            map_generation,
+                            intent_token,
+                            lambda accepted_id: self._note_accepted(intent_token, accepted_id),
+                        )
+                    )
+                finally:
+                    self._accept_callback_open = False
+                if (
+                    not isinstance(execution_id, str)
+                    or not execution_id.strip()
+                    or (self._accepted_id is not None and self._accepted_id != execution_id)
+                ):
+                    self._accepted_id = None
+                    self._execution_id = None
+                    raise DomainError(
+                        ErrorCode.OPERATION_UNKNOWN, "home goal identity is ambiguous"
+                    )
                 self._execution_id = execution_id
-                if self._send_interrupted or not self._generation_ready(map_generation):
-                    self._cancel_id = execution_id
                 await self._write_guard(execution_id)
+                if self._send_interrupted or self._send_lost_qualification():
+                    self._cancel_id = execution_id
                 cancel_this = self._cancel_id == execution_id
             except asyncio.CancelledError:
                 self._execution_id = self._accepted_id or self._execution_id
@@ -274,29 +320,68 @@ class HomeService:
         return execution_id, cancel_this
 
     async def _write_guard(self, execution_id: str | None) -> None:
+        claim = self._guard_token is None
+        if claim:
+            if execution_id is not None:
+                raise DomainError(ErrorCode.CONFLICT, "home guard has no owner")
+            self._guard_token = uuid.uuid4().hex
+        token = self._guard_token
+
         async def write() -> None:
             async with self._database.write_lock:
                 connection = self._database.connection
-                await connection.execute(
-                    "INSERT INTO home_execution_guard (robot_id, execution_id) VALUES (?, ?) "
-                    "ON CONFLICT(robot_id) DO UPDATE SET execution_id=excluded.execution_id",
-                    (self._robot_id, execution_id),
-                )
-                await connection.commit()
+                try:
+                    if claim:
+                        await connection.execute(
+                            "INSERT INTO home_execution_guard "
+                            "(robot_id, execution_id, owner_token) VALUES (?, ?, ?)",
+                            (self._robot_id, execution_id, token),
+                        )
+                    else:
+                        async with connection.execute(
+                            "UPDATE home_execution_guard SET execution_id = ? "
+                            "WHERE robot_id = ? AND owner_token = ? "
+                            "AND (execution_id IS NULL OR execution_id = ?)",
+                            (execution_id, self._robot_id, token, execution_id),
+                        ) as cursor:
+                            if cursor.rowcount != 1:
+                                raise DomainError(
+                                    ErrorCode.CONFLICT, "home guard ownership changed"
+                                )
+                    await connection.commit()
+                except sqlite3.IntegrityError as exc:
+                    await connection.rollback()
+                    raise DomainError(ErrorCode.CONFLICT, "home guard is already claimed") from exc
+                except BaseException:
+                    await connection.rollback()
+                    raise
 
         await _finish_guard_write(write())
 
-    async def _clear_guard(self) -> None:
+    async def _clear_guard(self, execution_id: str | None) -> None:
+        token = self._guard_token
+        if token is None:
+            raise DomainError(ErrorCode.CONFLICT, "home guard has no owner")
+
         async def clear() -> None:
             async with self._database.write_lock:
                 connection = self._database.connection
-                await connection.execute(
-                    "DELETE FROM home_execution_guard WHERE robot_id = ?", (self._robot_id,)
-                )
-                await connection.commit()
+                try:
+                    async with connection.execute(
+                        "DELETE FROM home_execution_guard "
+                        "WHERE robot_id = ? AND owner_token = ? AND execution_id IS ?",
+                        (self._robot_id, token, execution_id),
+                    ) as cursor:
+                        if cursor.rowcount != 1:
+                            raise DomainError(ErrorCode.CONFLICT, "home guard ownership changed")
+                    await connection.commit()
+                except BaseException:
+                    await connection.rollback()
+                    raise
 
         await _finish_guard_write(clear())
         self._guard_unresolved = False
+        self._guard_token = None
 
     async def home(self) -> Waypoint | None:
         stored = await self._store.home()
@@ -397,8 +482,10 @@ class HomeService:
         self._localized = pose
 
     async def note_connection(self, connected: bool) -> None:
-        self._connected = connected
+        self._home_execution.connected = connected
         if not connected:
+            self._home_execution.disconnect_generation += 1
+            self._home_execution.cancel_required = True
             if self._in_send:
                 self._send_interrupted = True
             accepted = self._accepted_id if self._in_send else self._execution_id
@@ -407,29 +494,49 @@ class HomeService:
         if self._navigation is None or self._return_lock.locked():
             return
         async with self._return_lock:
-            if self._cancel_id is None or self._execution_id != self._cancel_id:
-                if not self._in_send:
-                    self._cancel_id = None
+            if not self._home_execution.cancel_required:
+                return
+            await self._refresh_guard()
+            if not self._guard_unresolved:
+                self._home_execution.cancel_required = False
+                return
+            if self._execution_id is None:
                 return
             await self._cancel_owed_goal()
 
-    def _note_accepted(self, execution_id: str) -> None:
-        if execution_id.strip():
+    def _note_accepted(self, intent_token: str, execution_id: str) -> None:
+        if (
+            self._accept_callback_open
+            and self._guard_token == intent_token
+            and execution_id.strip()
+        ):
             self._accepted_id = execution_id
-            if self._send_interrupted or not self._generation_ready(self._send_map_generation):
+            if self._send_interrupted or self._send_lost_qualification():
                 self._cancel_id = execution_id
 
-    async def note_terminal(self, execution_id: str) -> None:
+    # //Compatible: terminal events without an intent token do not clear a guard.
+    async def note_terminal(self, execution_id: str, intent_token: str | None = None) -> None:
+        if not intent_token:
+            return
         async with self._return_lock:
-            if self._execution_id != execution_id:
+            if await self._read_guard() != (execution_id, intent_token):
                 return
+            self._execution_id = execution_id
+            self._guard_token = intent_token
+            self._guard_unresolved = True
             navigation = self._navigation
             if navigation is not None:
                 result = await navigation.cancel(execution_id)
-                if result.status != OperationStatus.SUCCEEDED:
+                if (
+                    result.status != OperationStatus.SUCCEEDED
+                    or result.operation_id != execution_id
+                ):
                     raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
-            await self._clear_guard()
+            else:
+                raise DomainError(ErrorCode.UNAVAILABLE, "navigation cancellation is unavailable")
+            await self._clear_guard(execution_id)
             self._execution_id = None
+            self._home_execution.cancel_required = False
             if self._cancel_id == execution_id:
                 self._cancel_id = None
 
@@ -437,16 +544,18 @@ class HomeService:
         execution_id = self._execution_id
         assert execution_id is not None
         result = await self._finish_execution(execution_id)
-        if result.status != OperationStatus.SUCCEEDED:
+        if result.status != OperationStatus.SUCCEEDED or result.operation_id != execution_id:
             raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
-        await self._clear_guard()
+        await self._clear_guard(execution_id)
         self._execution_id = None
+        self._home_execution.cancel_required = False
         if self._cancel_id == execution_id:
             self._cancel_id = None
 
     async def _finish_execution(self, execution_id: str) -> OperationResult:
         navigation = self._navigation
-        assert navigation is not None
+        if navigation is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "navigation cancellation is unavailable")
         return await navigation.cancel(execution_id)
 
     async def _ready(self, expected: MapRef) -> Waypoint:
@@ -478,7 +587,7 @@ class HomeService:
             or not _same_pose(binding.anchor_pose, stored.anchor_pose)
         ):
             raise DomainError(ErrorCode.CONFLICT, "home binding needs review")
-        if not self._connected:
+        if not self._home_execution.connected:
             raise DomainError(ErrorCode.OFFLINE, "connection is offline")
         if self._navigation is None:
             raise DomainError(ErrorCode.OFFLINE, "navigation port is unavailable")
@@ -502,6 +611,13 @@ class HomeService:
             and self._localized.healthy
             and self._localized.map_ref == self._reference.map_ref
             and self._localized.map_generation == generation
+        )
+
+    def _send_lost_qualification(self) -> bool:
+        return (
+            not self._home_execution.connected
+            or self._home_execution.disconnect_generation != self._send_disconnect_generation
+            or not self._generation_ready(self._send_map_generation)
         )
 
     def _remember(self, localized: LocalizedPose) -> None:

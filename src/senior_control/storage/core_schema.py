@@ -26,6 +26,14 @@ CORE_MIGRATIONS = (
             "(robot_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, history TEXT NOT NULL)",
         ),
     ),
+    # //Compatible: preserve old unknown/accepted Home guards while adding owner identity.
+    Migration(
+        4,
+        (
+            "ALTER TABLE home_execution_guard ADD COLUMN owner_token TEXT",
+            "UPDATE home_execution_guard SET owner_token = lower(hex(randomblob(16)))",
+        ),
+    ),
 )
 
 
