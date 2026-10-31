@@ -78,16 +78,10 @@ class SnapshotState:
                 "unavailable",
                 tasks=summaries,
             )
-        runnable = tuple(
-            task.task_id
-            for task in tasks
-            if task.enabled
-            and state.localized
-            and state.safety_clear
-            and task.map_ref == state.map_ref
-        )
+        # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
+        runnable: tuple[str, ...] = ()
         return LiveState(
-            state.localized,
+            False,
             state.map_ref,
             home.waypoint if home else None,
             sum(task.revision for task in tasks),

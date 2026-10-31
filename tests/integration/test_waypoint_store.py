@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,36 @@ from senior_control.storage.database import Database
 from senior_control.storage.migrations import migrate
 from senior_control.storage.schema import DOMAIN_MIGRATIONS
 from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+
+
+class SyntheticHomeService(HomeService):
+    """A local fixture supplies a fresh generation with each synthetic observation."""
+
+    async def initialize(self, start: StartupReference, localized: LocalizedPose):
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        return await super().initialize(start, localized)
+
+    async def set_current(self, pose: LocalizedPose, *, expected_revision: int | None = None):
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        return await super().set_current(pose, expected_revision=expected_revision)
+
+    async def save_waypoint(self, pose: LocalizedPose, *, waypoint_id: str):
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        return await super().save_waypoint(pose, waypoint_id=waypoint_id)
+
+    def _remember(self, localized: LocalizedPose) -> None:
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        super()._remember(localized)
+
+    async def note_localization(self, pose: LocalizedPose) -> None:
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        await super().note_localization(pose)
+
 
 MAP = MapRef("yard", 3)
 ROBOT = "robot-a"
@@ -68,7 +99,9 @@ async def test_schema_version_two_adds_waypoint_table(tmp_path: Path) -> None:
 
 async def test_home_revision_conflict_keeps_the_old_pose(tmp_path: Path) -> None:
     async with Database(tmp_path / "revision.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         assert await service.home_revision() == 0
         await service.set_current(localized(Pose2D(1.0, 2.0, 0.0)), expected_revision=0)
@@ -85,8 +118,10 @@ async def test_home_revision_conflict_keeps_the_old_pose(tmp_path: Path) -> None
 
 async def test_one_home_per_robot(tmp_path: Path) -> None:
     async with Database(tmp_path / "one.db") as database:
-        left = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
-        right = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id="robot-b")
+        left = SyntheticHomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        right = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id="robot-b"
+        )
         await left.prepare()
         await right.prepare()
         first = await left.set_current(localized(Pose2D(1.0, 2.0, 0.4)))
@@ -107,7 +142,9 @@ async def test_one_home_per_robot(tmp_path: Path) -> None:
 
 async def test_foreign_home_stays_pending(tmp_path: Path) -> None:
     async with Database(tmp_path / "foreign.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         imported = await service.import_home(
             BundleWaypoint("home-b", "home", Pose2D(1.0, 1.0, 0.25), MAP, "node-1", "robot-b"),
@@ -141,7 +178,9 @@ async def test_gps_does_not_rewrite_map_pose(tmp_path: Path) -> None:
     path = tmp_path / "gps.db"
     pose = Pose2D(1.5, 2.5, 0.3)
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         waypoint = await service.set_current(
             localized(pose, latitude=31.2, longitude=121.4),
@@ -150,7 +189,9 @@ async def test_gps_does_not_rewrite_map_pose(tmp_path: Path) -> None:
         assert waypoint.latitude == pytest.approx(31.2)
         assert waypoint.longitude == pytest.approx(121.4)
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         home = await service.home()
         assert home is not None
@@ -162,14 +203,18 @@ async def test_gps_does_not_rewrite_map_pose(tmp_path: Path) -> None:
 async def test_waypoint_pose_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "points.db"
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         saved = await service.save_waypoint(localized(Pose2D(3.0, 4.0, 0.5)), waypoint_id="gate")
         assert saved.id == "gate"
         assert saved.kind == "waypoint"
         assert saved.pose == Pose2D(3.0, 4.0, 0.5)
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         found = await service.waypoint("gate")
         assert found is not None
@@ -180,7 +225,9 @@ async def test_waypoint_pose_round_trip(tmp_path: Path) -> None:
 async def test_reference_change_moves_home_and_survives_restart(tmp_path: Path) -> None:
     path = tmp_path / "shift.db"
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         created = await service.initialize(STILL, localized(Pose2D(4.0, 5.0, 0.2)))
         assert created.waypoint is not None
@@ -197,7 +244,9 @@ async def test_reference_change_moves_home_and_survives_restart(tmp_path: Path) 
         assert moved.pose.y == pytest.approx(5.0)
         assert moved.pose.yaw == pytest.approx(0.2)
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         home = await service.home()
         assert home is not None
@@ -206,7 +255,14 @@ async def test_reference_change_moves_home_and_survives_restart(tmp_path: Path) 
         assert home.pose.yaw == pytest.approx(0.2)
 
 
-class BlockingNavigation:
+class SyntheticQualifiedNavigation:
+    """Test-only stand-in for a receiver enforcing map-generation eligibility."""
+
+    async def navigate_qualified(self, goal: object) -> str:
+        return await self.navigate(goal)  # type: ignore[attr-defined,no-any-return]
+
+
+class BlockingNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.events: list[str] = []
         self.goals: list[object] = []
@@ -227,7 +283,7 @@ class BlockingNavigation:
 async def test_cancel_waits_outside_write_transaction(tmp_path: Path) -> None:
     navigation = BlockingNavigation()
     async with Database(tmp_path / "lock.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -265,7 +321,7 @@ async def test_cancel_waits_outside_write_transaction(tmp_path: Path) -> None:
 async def test_unadopted_home_is_rejected(tmp_path: Path) -> None:
     navigation = BlockingNavigation()
     async with Database(tmp_path / "unadopted.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -294,7 +350,7 @@ async def test_unadopted_home_is_rejected(tmp_path: Path) -> None:
 async def test_disconnect_does_not_resume_navigation(tmp_path: Path) -> None:
     navigation = BlockingNavigation()
     async with Database(tmp_path / "offline.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -315,7 +371,7 @@ async def test_disconnect_does_not_resume_navigation(tmp_path: Path) -> None:
 async def test_review_required_reference_rejects_return(tmp_path: Path) -> None:
     navigation = BlockingNavigation()
     async with Database(tmp_path / "review.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -364,7 +420,7 @@ async def test_bundle_import_home_pose_is_visible(tmp_path: Path) -> None:
         await target.prepare()
         await origin.export_bundle(source.map_ref, bundle, operation_id="export-a")
         await target.import_bundle(bundle, "robot-b", operation_id="import-b")
-        service = HomeService(database_b, target.store, robot_id="robot-b")
+        service = SyntheticHomeService(database_b, target.store, robot_id="robot-b")
         await service.prepare()
         home = await service.home()
         link = await service.home_link()
@@ -389,7 +445,7 @@ async def test_bundle_import_home_pose_is_visible(tmp_path: Path) -> None:
         await ops.prepare()
         await ops.export_bundle(own.map_ref, own_bundle, operation_id="export-own")
         await ops.import_bundle(own_bundle, "robot-a", operation_id="import-own")
-        service = HomeService(database, ops.store, robot_id="robot-a")
+        service = SyntheticHomeService(database, ops.store, robot_id="robot-a")
         await service.prepare()
         home = await service.home()
         link = await service.home_link()
@@ -406,7 +462,9 @@ async def test_bundle_import_home_pose_is_visible(tmp_path: Path) -> None:
 
 async def test_recoverable_initialize_keeps_pending_home(tmp_path: Path) -> None:
     async with Database(tmp_path / "pending.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         imported = await service.import_home(
             BundleWaypoint("home-b", "home", Pose2D(1.0, 1.0, 0.25), MAP, "node-1", "robot-b"),
@@ -439,7 +497,7 @@ async def test_recoverable_initialize_keeps_pending_home(tmp_path: Path) -> None
 async def test_cancel_then_unhealthy_does_not_send_replacement(tmp_path: Path) -> None:
     navigation = BlockingNavigation()
     async with Database(tmp_path / "recheck.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -477,7 +535,7 @@ async def test_foreign_bundle_keeps_adopted_home(tmp_path: Path) -> None:
         target = helpers.operations_for(database_b, local, tmp_path / "b", robot_id="robot-b")
         await origin.prepare()
         await target.prepare()
-        service = HomeService(database_b, local, robot_id="robot-b")
+        service = SyntheticHomeService(database_b, local, robot_id="robot-b")
         await service.prepare()
         adopted = await service.set_current(
             LocalizedPose(kept, local.map_ref, "kf-1", Pose2D(0.0, 0.0, 0.0), True)

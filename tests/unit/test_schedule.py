@@ -40,6 +40,8 @@ def context(
         invalidated_task_ids,
         last_tick_utc,
         last_tick_mono,
+        "synthetic-reference",
+        "synthetic-reference",
     )
 
 
@@ -603,4 +605,17 @@ def test_multi_second_live_stall_does_not_dispatch_a_missed_trigger() -> None:
     intents = TaskRunner([task]).tick(end, 3.0, context(last_tick_utc=created, last_tick_mono=0.0))
     assert intents == [
         TaskIntent(task.task_id, IntentAction.SKIP, "clock_jump", skip_from=created, skip_until=end)
+    ]
+
+
+def test_stale_localization_generation_cannot_dispatch_same_map_ref() -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    task = interval_task(created, every_seconds=1)
+    due = created + timedelta(seconds=1)
+    state = context(last_tick_utc=due - timedelta(seconds=0.2), last_tick_mono=0.8)
+    object.__setattr__(state, "map_generation", "new-generation")
+    object.__setattr__(state, "localization_generation", "old-generation")
+    intents = TaskRunner([task]).tick(due, 1.0, state)
+    assert intents == [
+        TaskIntent(task.task_id, IntentAction.SKIP, "localization", occurrence_utc=due)
     ]

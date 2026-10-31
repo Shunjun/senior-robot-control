@@ -427,3 +427,38 @@ async def test_single_map_odom_owner() -> None:
     assert "cmd_vel" not in launch
     assert "async_slam_toolbox_node" in launch
     assert "gazebo" not in launch.lower()
+
+
+def test_nonce_ignores_obstacle_and_new_anchor_but_tracks_old_anchor() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    origin = Pose2D(0.0, 0.0, 0.0)
+    store.place(evidence(BOX, "kf-a"), world=BOX, anchor_pose=origin)
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            MAP, "wheel_odom", (AnchorPose("kf-a", origin, True),), GridExtent(8, 8, 0, 0)
+        )
+    )
+    generation = store.map_generation
+    store.place(evidence(WALL, "kf-a"), world=WALL, anchor_pose=origin)
+    store.remove(evidence(WALL, "kf-a"))
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            MAP,
+            "wheel_odom",
+            (AnchorPose("kf-a", origin, True), AnchorPose("kf-new", Pose2D(3, 0, 0), True)),
+            GridExtent(12, 12, 0, 0),
+        )
+    )
+    assert store.map_generation == generation
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            MAP,
+            "wheel_odom",
+            (
+                AnchorPose("kf-a", Pose2D(1, 0, 0), True),
+                AnchorPose("kf-new", Pose2D(3, 0, 0), True),
+            ),
+            GridExtent(12, 12, 0, 0),
+        )
+    )
+    assert store.map_generation != generation

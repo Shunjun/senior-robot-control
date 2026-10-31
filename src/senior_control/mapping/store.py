@@ -1,6 +1,7 @@
 """Reconcile long-term occupancy and waypoints with pose-graph anchors."""
 
 import math
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -71,11 +72,45 @@ class MapReferenceStore:
         self.odom_owner = owner
         self.cell_size_m = float(cell_size_m)
         self.grid = GridExtent(0, 0, 0.0, 0.0)
-        self.review_required = False
+        self._review_required = False
+        self._guarded = False
+        self._map_generation = uuid.uuid4().hex
+        self._change_sequence = 0
+        self._known_anchors: dict[str, Pose2D] = {}
         self._live: dict[int, _Record] = {}
         self._removed: dict[int, _Record] = {}
         self._waypoints: list[_Waypoint] = []
         self._seq = 0
+
+    @property
+    def review_required(self) -> bool:
+        return self._guarded or self._review_required
+
+    @review_required.setter
+    def review_required(self, value: bool) -> None:
+        self._review_required = value
+
+    @property
+    def change_sequence(self) -> int:
+        return self._change_sequence
+
+    @property
+    def map_generation(self) -> str:
+        """Reference/localization nonce, not the backend graph capture generation.
+
+        Restart, map switch and changes to existing reference anchors invalidate it.
+        """
+        return self._map_generation
+
+    def _advance_generation(self) -> None:
+        self._map_generation = uuid.uuid4().hex
+
+    def guard_reference(self) -> None:
+        self._advance_generation()
+        self._guarded = True
+
+    def release_reference(self) -> None:
+        self._guarded = False
 
     def place(
         self,
@@ -88,6 +123,8 @@ class MapReferenceStore:
         if not anchor_id or self._index(*world) != evidence.cell:
             raise ValueError("cell is not bound to its anchor point")
         record = _Record(replace(evidence, anchor_id=anchor_id), world[0], world[1], anchor_pose)
+        self._notice_anchor(anchor_id, anchor_pose)
+        self._change_sequence += 1
         found = self._find(self._live, evidence.cell)
         if found is None:
             self._seq += 1
@@ -103,6 +140,8 @@ class MapReferenceStore:
         if not waypoint.waypoint_id.strip() or not anchor_id:
             raise ValueError("waypoint anchor is required")
         stored = replace(waypoint, anchor_id=anchor_id)
+        self._notice_anchor(anchor_id, anchor_pose)
+        self._change_sequence += 1
         for index, item in enumerate(self._waypoints):
             if item.waypoint.waypoint_id == stored.waypoint_id:
                 self._waypoints[index] = _Waypoint(stored, anchor_pose)
@@ -114,6 +153,7 @@ class MapReferenceStore:
         if found is None:
             return
         key, current = found
+        self._change_sequence += 1
         tombstone = replace(evidence, anchor_id=current.evidence.anchor_id)
         self._removed[key] = _Record(
             tombstone, current.world_x, current.world_y, current.anchor_pose
@@ -125,6 +165,10 @@ class MapReferenceStore:
         if update.map_ref.map_id != self.map_ref.map_id or owner != self.odom_owner:
             raise DomainError(ErrorCode.CONFLICT, "one map has one odometry owner")
         poses, review = self._usable_poses(update.anchors)
+        if any(poses.get(anchor_id) != pose for anchor_id, pose in self._known_anchors.items()):
+            self._advance_generation()
+        self._known_anchors = dict(poses)
+        self._change_sequence += 1
         self.grid = update.grid
         self._move_records(self._live, poses)
         self._move_records(self._removed, poses)
@@ -189,6 +233,8 @@ class MapReferenceStore:
             raise DomainError(ErrorCode.CONFLICT, "one map has one odometry owner")
         if not math.isclose(snapshot.cell_size_m, self.cell_size_m):
             raise DomainError(ErrorCode.CONFLICT, "cell size does not match the store")
+        self._advance_generation()
+        self._change_sequence += 1
         self.grid = snapshot.grid
         self.review_required = snapshot.review_required
         self._install(snapshot)
@@ -197,6 +243,8 @@ class MapReferenceStore:
         """Switch identity, resolution, odometry owner, and sequence together."""
 
         self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
+        self._advance_generation()
+        self._change_sequence += 1
         self.grid = snapshot.grid
         self.review_required = snapshot.review_required
         self._install(snapshot)
@@ -205,6 +253,8 @@ class MapReferenceStore:
         """Empty the layer and publish a new identity in the same update."""
 
         self._reset_identity(map_ref, odom_owner, cell_size_m)
+        self._advance_generation()
+        self._change_sequence += 1
         self.grid = GridExtent(0, 0, 0.0, 0.0)
         self.review_required = False
 
@@ -218,11 +268,17 @@ class MapReferenceStore:
         self.odom_owner = owner
         self.cell_size_m = float(cell_size_m)
         self._seq = 0
+        self._known_anchors.clear()
         self._live.clear()
         self._removed.clear()
         self._waypoints.clear()
 
     def _install(self, snapshot: SlamSnapshot) -> None:
+        self._known_anchors = {
+            anchor.anchor_id: anchor.pose
+            for anchor in snapshot.anchors
+            if anchor.available and anchor.pose is not None
+        }
         for binding in snapshot.bindings:
             self._seq += 1
             record = _Record(
@@ -248,12 +304,18 @@ class MapReferenceStore:
         )
 
     def _anchor_snapshot(self) -> tuple[AnchorPose, ...]:
-        found: dict[str, Pose2D] = {}
+        found = dict(self._known_anchors)
         for record in list(self._live.values()) + list(self._removed.values()):
             found[record.evidence.anchor_id] = record.anchor_pose
         for item in self._waypoints:
             found[item.waypoint.anchor_id] = item.anchor_pose
         return tuple(AnchorPose(anchor_id, pose, True) for anchor_id, pose in found.items())
+
+    def _notice_anchor(self, anchor_id: str, pose: Pose2D) -> None:
+        previous = self._known_anchors.get(anchor_id)
+        if previous is not None and previous != pose:
+            self._advance_generation()
+        self._known_anchors[anchor_id] = pose
 
     def _usable_poses(self, anchors: tuple[AnchorPose, ...]) -> tuple[dict[str, Pose2D], bool]:
         found: dict[str, Pose2D] = {}

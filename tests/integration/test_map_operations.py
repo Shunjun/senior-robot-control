@@ -3,7 +3,9 @@
 import asyncio
 import hashlib
 import json
+import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,13 @@ def cell_of(x: float, y: float) -> tuple[int, int]:
     return (int(x // CELL), int(y // CELL))
 
 
+def synthetic_capture_proof(snapshot: SlamSnapshot) -> str:
+    """Fake provenance for tests; real backends must prove graph-anchor identity."""
+    with tempfile.TemporaryDirectory() as raw:
+        snapshot.write(Path(raw))
+        return json.dumps(json.loads((Path(raw) / "occupancy.json").read_text()), sort_keys=True)
+
+
 class Graph:
     def __init__(self, map_ref: MapRef, hint: Pose2D | None = _HINT) -> None:
         self._map_ref = map_ref
@@ -51,6 +60,21 @@ class Graph:
         (directory / "graph.posegraph").write_text(self.current_graph, encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
+
+    async def capture_consistent(
+        self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+    ) -> SlamSnapshot:
+        # Synthetic single-loop backend: no graph or anchor update runs after write returns.
+        await self.write(directory)
+        captured = snapshot()
+        (directory / "capture-proof.json").write_text(synthetic_capture_proof(captured))
+        return captured
+
+    async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+        proof = directory / "capture-proof.json"
+        return proof.is_file() and json.loads(proof.read_text()) == json.loads(
+            synthetic_capture_proof(snapshot)
+        )
 
     async def read(self, directory: Path) -> None:
         self.current_graph = (directory / "graph.posegraph").read_text()
@@ -153,13 +177,15 @@ def seed_active_for_test(root: Path, store: MapReferenceStore, graph: Graph) -> 
     if maps.exists():
         return
     active = maps / "active"
-    store.snapshot(Path("pose_graph"), ()).write(active)
+    snapshot = store.snapshot(Path("pose_graph"), ())
+    snapshot.write(active)
     graph_dir = active / "pose_graph"
     graph_dir.mkdir()
     token = getattr(graph, "token", graph.current_graph)
     identity = getattr(graph, "graph_identity", "scans")
     (graph_dir / "graph.posegraph").write_text(token, encoding="utf-8")
     (graph_dir / "graph.data").write_text(identity, encoding="utf-8")
+    (graph_dir / "capture-proof.json").write_text(synthetic_capture_proof(snapshot))
 
 
 def operations_for(
@@ -1280,6 +1306,8 @@ async def test_prepare_requires_live_backend_match_for_existing_active_map(tmp_p
     (active / "pose_graph").mkdir()
     (active / "pose_graph" / "graph.posegraph").write_text("yard")
     (active / "pose_graph" / "graph.data").write_text("scans")
+    snapshot = store.snapshot(Path("pose_graph"), ())
+    (active / "pose_graph" / "capture-proof.json").write_text(synthetic_capture_proof(snapshot))
     graph = Graph(store.map_ref)
     graph.current_graph = "different"
     gate = Gate()
@@ -1401,7 +1429,7 @@ async def test_verified_bootstrap_can_reconcile_initial_missing_snapshot(tmp_pat
         assert gate.blocked and store.review_required
         active = tmp_path / "maps" / "active"
         snapshot.write(active)
-        await graph.write(active / "pose_graph")
+        await graph.capture_consistent(active / "pose_graph", lambda: snapshot)
         await ops.reconcile()
         assert not store.review_required
         assert store.map_ref == snapshot.map_ref
@@ -1433,3 +1461,414 @@ async def test_startup_blocks_motion_before_waiting_for_database(tmp_path: Path)
         finally:
             database.write_lock.release()
             await prepare
+
+
+async def test_backup_rejects_graph_and_occupancy_change_during_capture(tmp_path: Path) -> None:
+    class ChangingGraph(Session):
+        def __init__(self, map_ref: MapRef) -> None:
+            super().__init__(map_ref)
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def write(self, directory: Path) -> tuple[str, ...]:
+            self.entered.set()
+            await self.release.wait()
+            return await super().write(directory)
+
+        async def capture_consistent(self, directory: Path, capture):
+            await self.write(directory)
+            return capture()
+
+        async def reset(self) -> None:
+            self.resets += 1
+            self.token = "reset"
+            raise RuntimeError("changed graph")
+
+        async def quiesce(self) -> None:
+            return None
+
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = ChangingGraph(store.map_ref)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r")
+        await ops.prepare()
+        task = asyncio.create_task(ops.clear_map(store.map_ref, operation_id="race"))
+        await asyncio.wait_for(graph.entered.wait(), 1)
+        graph.token = "live-generation-2"
+        store.apply_anchor_update(
+            AnchorSnapshot(
+                store.map_ref,
+                "wheel_odom",
+                (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
+                GridExtent(8, 8, 0, 0),
+            )
+        )
+        graph.release.set()
+        try:
+            await task
+        except (DomainError, RuntimeError):
+            pass
+        assert graph.resets == 0
+        assert store.review_required
+        assert await ops._graph_guard() is not None
+        assert (await ops.query("race")).status is OperationStatus.NEEDS_REVIEW
+
+
+async def test_backup_without_consistent_capture_stays_unavailable(tmp_path: Path) -> None:
+    class NoCapture(Session):
+        capture_consistent = None
+
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = NoCapture(store.map_ref)
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        with pytest.raises(DomainError) as error:
+            await ops.clear_map(store.map_ref, operation_id="unsupported-capture")
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert graph.resets == 0
+        assert store.review_required and gate.blocked
+        assert await ops._graph_guard() is not None
+        assert (await ops.query("unsupported-capture")).status is OperationStatus.NEEDS_REVIEW
+
+
+async def test_failed_reconcile_guard_deletion_keeps_reference_in_review(tmp_path: Path) -> None:
+    import sqlite3
+
+    from senior_control.waypoints import HomeService, LocalizedPose
+
+    class Nav:
+        def __init__(self) -> None:
+            self.goals: list[object] = []
+
+        async def navigate_qualified(self, goal: object) -> str:
+            self.goals.append(goal)
+            return "goal"
+
+        async def cancel(self, execution_id: str):
+            from senior_control.models import OperationResult
+
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    class Recoverable(Session):
+        async def quiesce(self) -> None:
+            return None
+
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = Recoverable(store.map_ref)
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        navigation = Nav()
+        home = HomeService(database, store, robot_id="r", navigation=navigation)
+        await home.prepare()
+        await home.set_current(
+            LocalizedPose(
+                Pose2D(2, 2, 0),
+                store.map_ref,
+                "kf-1",
+                Pose2D(0, 0, 0),
+                True,
+                map_generation=store.map_generation,
+            )
+        )
+        await ops._set_graph_guard("unknown", tmp_path / "maps" / "active")
+        await database.connection.execute(
+            "CREATE TRIGGER reject_guard_deletion BEFORE DELETE ON map_graph_guard "
+            "BEGIN SELECT RAISE(ABORT, 'cannot delete'); END"
+        )
+        await database.connection.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            await ops.reconcile()
+        assert await ops._graph_guard() is not None
+        assert store.review_required
+        assert gate.blocked
+        await home.note_localization(
+            LocalizedPose(
+                Pose2D(2, 2, 0),
+                store.map_ref,
+                "kf-1",
+                Pose2D(0, 0, 0),
+                True,
+                map_generation=store.map_generation,
+            )
+        )
+        with pytest.raises(DomainError):
+            await home.return_home(store.map_ref)
+        assert navigation.goals == []
+
+
+async def test_same_reference_import_invalidates_old_home_localization(tmp_path: Path) -> None:
+    from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+
+    class Nav:
+        def __init__(self) -> None:
+            self.goals: list[object] = []
+
+        async def navigate_qualified(self, goal: object) -> str:
+            self.goals.append(goal)
+            return "goal"
+
+        async def cancel(self, execution_id: str):
+            from senior_control.models import OperationResult
+
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    old = filled_store("yard", 3, (2.0, 2.0))
+    source = filled_store("yard", 3, (8.0, 8.0))
+    bundle = tmp_path / "same-ref.zip"
+    await archive_for(source, "r").export_bundle(source, source.map_ref, bundle)
+    graph, gate, nav = Session(old.map_ref), Gate(), Nav()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, old, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        home = HomeService(database, old, robot_id="r", navigation=nav)
+        await home.prepare()
+        pose = LocalizedPose(Pose2D(2, 2, 0), old.map_ref, "kf-1", Pose2D(0, 0, 0), True)
+        object.__setattr__(pose, "map_generation", old.map_generation)
+        await home.initialize(StartupReference(False, True, True), pose)
+        await ops.import_bundle(bundle, "r", operation_id="same-ref")
+        with pytest.raises(DomainError) as error:
+            await home.return_home(old.map_ref)
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert nav.goals == []
+        fresh = LocalizedPose(
+            Pose2D(8, 8, 0),
+            old.map_ref,
+            "kf-1",
+            Pose2D(0, 0, 0),
+            True,
+            map_generation=old.map_generation,
+        )
+        await home.note_localization(fresh)
+        assert await home.return_home(old.map_ref) == "goal"
+        assert len(nav.goals) == 1
+        assert nav.goals[0].map_generation == old.map_generation
+
+
+async def test_startup_rejects_legacy_snapshot_without_same_generation_proof(
+    tmp_path: Path,
+) -> None:
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = Session(store.map_ref)
+    active = tmp_path / "maps" / "active"
+    store.snapshot(Path("pose_graph"), ()).write(active)
+    await graph.write(active / "pose_graph")
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = MapOperations(
+            database,
+            store,
+            MapArchive(graph, source_robot_id="r"),
+            gate,
+            robot_id="r",
+            map_root=tmp_path / "maps",
+            config_dir=tmp_path / "config",
+        )
+        await ops.prepare()
+        assert gate.blocked
+        assert store.review_required
+        assert await ops._graph_guard() is not None
+
+
+async def test_valid_checksum_bundle_with_unproven_snapshot_stays_in_review(tmp_path: Path) -> None:
+    source = filled_store("yard", 3, (1.0, 1.0))
+    local = filled_store("local", 1, (2.0, 2.0))
+    original = tmp_path / "original.zip"
+    bad = tmp_path / "mixed.zip"
+    await archive_for(source, "r").export_bundle(source, source.map_ref, original)
+    with zipfile.ZipFile(original) as bundle:
+        files = {info.filename: bundle.read(info) for info in bundle.infolist()}
+    occupancy = json.loads(files["occupancy/occupancy.json"])
+    occupancy["bindings"][0]["hit_count"] += 1
+    files["occupancy/occupancy.json"] = json.dumps(occupancy).encode()
+    manifest = json.loads(files["manifest.json"])
+    manifest["file_hashes"]["occupancy/occupancy.json"] = hashlib.sha256(
+        files["occupancy/occupancy.json"]
+    ).hexdigest()
+    files["manifest.json"] = json.dumps(manifest).encode()
+    with zipfile.ZipFile(bad, "w") as bundle:
+        for name, payload in files.items():
+            bundle.writestr(name, payload)
+    graph = Session(local.map_ref)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, local, tmp_path, graph, robot_id="r")
+        await ops.prepare()
+        with pytest.raises(DomainError) as error:
+            await ops.import_bundle(bad, "r", operation_id="mixed")
+        assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+        assert graph.reads == []
+        assert local.review_required
+        assert (await ops.query("mixed")).status is OperationStatus.NEEDS_REVIEW
+
+
+async def test_reconcile_rejects_unproven_history_before_reading_graph(tmp_path: Path) -> None:
+    class Recoverable(Session):
+        async def quiesce(self) -> None:
+            return None
+
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = Recoverable(store.map_ref)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r")
+        await ops.prepare()
+        active = tmp_path / "maps" / "active"
+        await ops._set_graph_guard("unknown", active)
+        payload = json.loads((active / "occupancy.json").read_text())
+        payload["bindings"][0]["hit_count"] += 1
+        (active / "occupancy.json").write_text(json.dumps(payload))
+        with pytest.raises(DomainError) as error:
+            await ops.reconcile()
+        assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+        assert graph.reads == []
+        assert store.review_required
+        assert await ops._graph_guard() is not None
+
+
+async def test_startup_without_authoritative_snapshot_verifier_remains_guarded(
+    tmp_path: Path,
+) -> None:
+    class NoVerifier(Session):
+        verify_consistent = None  # type: ignore[assignment]
+
+    store = filled_store("yard", 3, (2.0, 2.0))
+    graph = NoVerifier(store.map_ref)
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        assert store.review_required and gate.blocked
+        assert await ops._graph_guard() is not None
+
+
+@pytest.mark.parametrize("foreign_home", [False, True])
+async def test_same_ref_import_cannot_return_to_unverified_old_home(
+    tmp_path: Path, foreign_home: bool
+) -> None:
+    from senior_control.waypoints import HomeService, LocalizedPose
+
+    class Nav:
+        def __init__(self) -> None:
+            self.goals: list[object] = []
+
+        async def navigate_qualified(self, goal: object) -> str:
+            self.goals.append(goal)
+            return "goal"
+
+        async def cancel(self, execution_id: str):
+            from senior_control.models import OperationResult
+
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    local = filled_store("yard", 3, (2.0, 2.0))
+    if foreign_home:
+        source = filled_store("yard", 3, (8.0, 8.0))
+    else:
+        source = MapReferenceStore(local.map_ref, "wheel_odom", CELL)
+    bundle = tmp_path / "no-local-home.zip"
+    await archive_for(source, "foreign").export_bundle(source, source.map_ref, bundle)
+    navigation = Nav()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, local, tmp_path, Session(local.map_ref), robot_id="r")
+        await ops.prepare()
+        home = HomeService(database, local, robot_id="r", navigation=navigation)
+        await home.prepare()
+        pose = LocalizedPose(
+            Pose2D(2, 2, 0),
+            local.map_ref,
+            "kf-1",
+            Pose2D(0, 0, 0),
+            True,
+            map_generation=local.map_generation,
+        )
+        saved = await home.set_current(pose)
+        await ops.import_bundle(bundle, "r", operation_id="import")
+        assert (await home.home()).id == saved.id
+        await home.note_localization(
+            LocalizedPose(
+                Pose2D(8, 8, 0),
+                local.map_ref,
+                "kf-1",
+                Pose2D(0, 0, 0),
+                True,
+                map_generation=local.map_generation,
+            )
+        )
+        with pytest.raises(DomainError) as error:
+            await home.return_home(local.map_ref)
+        assert error.value.code is ErrorCode.CONFLICT
+        assert navigation.goals == []
+        restarted = HomeService(database, local, robot_id="r", navigation=navigation)
+        await restarted.prepare()
+        from senior_control.waypoints import StartupReference
+
+        fresh = LocalizedPose(
+            Pose2D(8, 8, 0),
+            local.map_ref,
+            "kf-1",
+            Pose2D(0, 0, 0),
+            True,
+            map_generation=local.map_generation,
+        )
+        assert (await restarted.initialize(StartupReference(False, True, True), fresh)).initialized
+        with pytest.raises(DomainError):
+            await restarted.return_home(local.map_ref)
+        assert navigation.goals == []
+
+
+async def test_retained_home_remains_usable_when_current_binding_is_verified(
+    tmp_path: Path,
+) -> None:
+    from senior_control.waypoints import HomeService, LocalizedPose
+
+    class Nav:
+        def __init__(self) -> None:
+            self.goals: list[object] = []
+
+        async def navigate_qualified(self, goal: object) -> str:
+            self.goals.append(goal)
+            return "goal"
+
+        async def cancel(self, execution_id: str):
+            from senior_control.models import OperationResult
+
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    local = filled_store("yard", 3, (2.0, 2.0))
+    navigation = Nav()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, local, tmp_path, Session(local.map_ref), robot_id="r")
+        await ops.prepare()
+        home = HomeService(database, local, robot_id="r", navigation=navigation)
+        await home.prepare()
+        pose = LocalizedPose(
+            Pose2D(2, 2, 0),
+            local.map_ref,
+            "kf-1",
+            Pose2D(0, 0, 0),
+            True,
+            map_generation=local.map_generation,
+        )
+        saved = await home.set_current(pose)
+        source = MapReferenceStore(local.map_ref, "wheel_odom", CELL)
+        source.replace(local.snapshot(Path("pose_graph"), ()))
+        bundle = tmp_path / "without-home-kind.zip"
+        await MapArchive(Graph(source.map_ref), source_robot_id="r").export_bundle(
+            source, source.map_ref, bundle
+        )
+        await ops.import_bundle(bundle, "r", operation_id="import")
+        assert (await home.home()).id == saved.id
+        await home.note_localization(
+            LocalizedPose(
+                Pose2D(2, 2, 0),
+                local.map_ref,
+                "kf-1",
+                Pose2D(0, 0, 0),
+                True,
+                map_generation=local.map_generation,
+            )
+        )
+        assert await home.return_home(local.map_ref) == "goal"
+        assert len(navigation.goals) == 1

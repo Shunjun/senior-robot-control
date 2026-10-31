@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
+from senior_control.models import MapRef
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import TaskDefinition
 from senior_control.waypoints.store import WaypointStore
@@ -67,14 +67,9 @@ class IpcNavigation:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable")
 
     async def start(self, execution_id: str, task: TaskDefinition) -> None:
-        await self._call(
-            "navigation.task_start",
-            execution_id,
-            task_id=task.task_id,
-            map_id=task.map_ref.map_id,
-            reference_revision=task.map_ref.reference_revision,
-            waypoint_ids=list(task.waypoint_ids),
-        )
+        # //Compatible: legacy task IPC cannot fence an accepted reference generation.
+        del execution_id, task
+        raise DomainError(ErrorCode.UNAVAILABLE, "qualified ROS navigation unavailable")
 
     async def cancel(self, execution_id: str) -> None:
         await self._call("navigation.task_cancel", execution_id)
@@ -159,26 +154,6 @@ class IpcHomePort:
         return await self._store.home_revision()
 
     async def set_current(self, expected_revision: int) -> int:
-        try:
-            reply = PoseReply.model_validate(await self._client.request("pose.get"))
-            if not 0 <= time.monotonic() - reply.sampled_at <= 0.5 or not reply.anchor_id.strip():
-                raise ValueError("localization is stale")
-            map_ref = MapRef(reply.map_id, reply.reference_revision)
-            pose = Pose2D(reply.x, reply.y, reply.yaw)
-            anchor = Pose2D(reply.anchor_x, reply.anchor_y, reply.anchor_yaw)
-        except (IpcError, OSError, ValueError, ValidationError) as exc:
-            raise DomainError(ErrorCode.UNAVAILABLE, "ROS localization unavailable") from exc
-        await self._store.save_home(
-            waypoint_id=None,
-            pose=pose,
-            map_ref=map_ref,
-            anchor_id=reply.anchor_id,
-            anchor_pose=anchor,
-            source_robot_id=self._robot_id,
-            status="confirmed",
-            adopted=True,
-            latitude=None,
-            longitude=None,
-            expected_revision=expected_revision,
-        )
-        return await self._store.home_revision()
+        # //Compatible: legacy pose IPC lacks a reference nonce, so it cannot qualify Home.
+        del expected_revision
+        raise DomainError(ErrorCode.UNAVAILABLE, "qualified ROS localization unavailable")

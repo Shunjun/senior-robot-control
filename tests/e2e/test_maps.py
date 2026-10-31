@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from conftest import SimulationProfile
@@ -40,6 +43,13 @@ class FixedClock:
         return 100.0
 
 
+def synthetic_capture_proof(snapshot: SlamSnapshot) -> str:
+    """Fake provenance for tests; real backends must prove graph-anchor identity."""
+    with tempfile.TemporaryDirectory() as raw:
+        snapshot.write(Path(raw))
+        return json.dumps(json.loads((Path(raw) / "occupancy.json").read_text()), sort_keys=True)
+
+
 class Graph:
     def __init__(self, map_ref: MapRef) -> None:
         self._map_ref = map_ref
@@ -59,6 +69,21 @@ class Graph:
         (directory / "graph.posegraph").write_text(self._graph, encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
+
+    async def capture_consistent(
+        self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+    ) -> SlamSnapshot:
+        # Synthetic single-loop backend: no graph or anchor update runs after write returns.
+        await self.write(directory)
+        captured = snapshot()
+        (directory / "capture-proof.json").write_text(synthetic_capture_proof(captured))
+        return captured
+
+    async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+        proof = directory / "capture-proof.json"
+        return proof.is_file() and json.loads(proof.read_text()) == json.loads(
+            synthetic_capture_proof(snapshot)
+        )
 
     async def read(self, directory: Path) -> None:
         self._graph = (directory / "graph.posegraph").read_text()
@@ -140,11 +165,13 @@ def operations(
     graph = Graph(store.map_ref)
     active = root / "maps" / "active"
     if not active.parent.exists():
-        store.snapshot(Path("pose_graph"), ()).write(active)
+        snapshot = store.snapshot(Path("pose_graph"), ())
+        snapshot.write(active)
         graph_dir = active / "pose_graph"
         graph_dir.mkdir()
         (graph_dir / "graph.posegraph").write_text(graph._graph, encoding="utf-8")
         (graph_dir / "graph.data").write_text("scans", encoding="utf-8")
+        (graph_dir / "capture-proof.json").write_text(synthetic_capture_proof(snapshot))
     return (
         MapOperations(
             database,

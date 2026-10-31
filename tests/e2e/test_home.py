@@ -12,8 +12,10 @@ from senior_control.waypoints import HomeService, LocalizedPose, StartupReferenc
 MAP = MapRef("yard", 3)
 
 
-def localized(pose: Pose2D) -> LocalizedPose:
-    return LocalizedPose(pose, MAP, "node-1", Pose2D(0.0, 0.0, 0.0), True)
+def localized(pose: Pose2D, generation: str) -> LocalizedPose:
+    return LocalizedPose(
+        pose, MAP, "node-1", Pose2D(0.0, 0.0, 0.0), True, map_generation=generation
+    )
 
 
 async def test_home_returns_after_restart(
@@ -23,26 +25,30 @@ async def test_home_returns_after_restart(
     database_path = tmp_path / "home.sqlite3"
     original = Pose2D(1.0, 2.0, 0.4)
     async with Database(database_path) as database:
+        reference = MapReferenceStore(MAP, "wheel_odom", 0.5)
         service = HomeService(
             database,
-            MapReferenceStore(MAP, "wheel_odom", 0.5),
+            reference,
             robot_id="robot-a",
         )
         await service.prepare()
-        first = await service.initialize(StartupReference(False, True, True), localized(original))
+        first = await service.initialize(
+            StartupReference(False, True, True), localized(original, reference.map_generation)
+        )
         assert first.waypoint is not None
         waypoint_id = first.waypoint.id
 
     async with Database(database_path) as database:
+        reference = MapReferenceStore(MAP, "wheel_odom", 0.5)
         restarted = HomeService(
             database,
-            MapReferenceStore(MAP, "wheel_odom", 0.5),
+            reference,
             robot_id="robot-a",
         )
         await restarted.prepare()
         result = await restarted.initialize(
             StartupReference(False, True, True),
-            localized(Pose2D(9.0, 9.0, 1.0)),
+            localized(Pose2D(9.0, 9.0, 1.0), reference.map_generation),
         )
 
     assert result.waypoint is not None

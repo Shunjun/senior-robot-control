@@ -4,7 +4,9 @@ import hashlib
 import json
 import os
 import stat
+import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from senior_control.mapping.references import (
     AnchorPose,
     AnchorSnapshot,
     GridExtent,
+    SlamSnapshot,
 )
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, Pose2D
@@ -28,6 +31,13 @@ MAP = MapRef("yard", 3)
 
 def cell_of(x: float, y: float) -> tuple[int, int]:
     return (int(x // CELL), int(y // CELL))
+
+
+def synthetic_capture_proof(snapshot: SlamSnapshot) -> str:
+    """Fake provenance for tests; real backends must prove graph-anchor identity."""
+    with tempfile.TemporaryDirectory() as raw:
+        snapshot.write(Path(raw))
+        return json.dumps(json.loads((Path(raw) / "occupancy.json").read_text()), sort_keys=True)
 
 
 class Graph:
@@ -49,6 +59,21 @@ class Graph:
         (directory / "graph.posegraph").write_text("nodes", encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
+
+    async def capture_consistent(
+        self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+    ) -> SlamSnapshot:
+        # Synthetic single-loop backend: no graph or anchor update runs after write returns.
+        await self.write(directory)
+        captured = snapshot()
+        (directory / "capture-proof.json").write_text(synthetic_capture_proof(captured))
+        return captured
+
+    async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+        proof = directory / "capture-proof.json"
+        return proof.is_file() and json.loads(proof.read_text()) == json.loads(
+            synthetic_capture_proof(snapshot)
+        )
 
 
 def filled_store(map_ref: MapRef = MAP) -> MapReferenceStore:
@@ -457,3 +482,120 @@ def test_excessive_member_count_is_rejected_before_opening() -> None:
     archive = MapArchive(Graph(MAP), source_robot_id="r")
     with pytest.raises(DomainError):
         archive._read_members(TooMany())  # type: ignore[arg-type]
+
+
+async def test_archive_rejects_normalized_alias_before_materialization(tmp_path: Path) -> None:
+    source = filled_store()
+    base = tmp_path / "base.zip"
+    await archive_for(source).export_bundle(source, source.map_ref, base)
+    with zipfile.ZipFile(base) as original:
+        files = {info.filename: original.read(info) for info in original.infolist()}
+    manifest = json.loads(files["manifest.json"])
+    files["./manifest.json"] = b"shadow"
+    manifest["file_hashes"]["./manifest.json"] = hashlib.sha256(b"shadow").hexdigest()
+    files["manifest.json"] = json.dumps(manifest).encode()
+    hostile = tmp_path / "alias.zip"
+    with zipfile.ZipFile(hostile, "w") as bundle:
+        for name, payload in files.items():
+            bundle.writestr(name, payload)
+    destination = tmp_path / "extract"
+    with pytest.raises(DomainError) as error:
+        await archive_for(source).validate_and_extract(hostile, destination)
+    assert error.value.code is ErrorCode.VALIDATION
+    assert not destination.exists()
+
+
+async def test_export_rejects_snapshot_changed_during_graph_capture(tmp_path: Path) -> None:
+    import asyncio
+
+    class ChangingGraph(Graph):
+        def __init__(self, map_ref: MapRef) -> None:
+            super().__init__(map_ref)
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def write(self, directory: Path) -> tuple[str, ...]:
+            self.entered.set()
+            await self.release.wait()
+            return await super().write(directory)
+
+        async def capture_consistent(self, directory: Path, capture):
+            await self.write(directory)
+            return capture()
+
+    store = filled_store()
+    graph = ChangingGraph(store.map_ref)
+    path = tmp_path / "mixed.zip"
+    export = asyncio.create_task(
+        archive_for(store, graph).export_bundle(store, store.map_ref, path)
+    )
+    await asyncio.wait_for(graph.entered.wait(), 1)
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            store.map_ref,
+            "wheel_odom",
+            (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
+            GridExtent(8, 8, 0, 0),
+        )
+    )
+    graph.release.set()
+    with pytest.raises(DomainError):
+        await export
+    assert not path.exists()
+
+
+async def test_archive_rejects_file_and_directory_with_same_normalized_name(tmp_path: Path) -> None:
+    path = tmp_path / "collision.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr("manifest.json", "{}")
+        bundle.writestr("manifest.json/", b"")
+    with pytest.raises(DomainError) as error:
+        await archive_for(filled_store()).validate_and_extract(path, tmp_path / "extract")
+    assert error.value.code is ErrorCode.VALIDATION
+    assert "duplicated" in str(error.value)
+
+
+async def test_export_without_consistent_capture_is_unavailable(tmp_path: Path) -> None:
+    class UnverifiedGraph(Graph):
+        capture_consistent = None  # type: ignore[assignment]
+
+    store = filled_store()
+    destination = tmp_path / "unsupported.zip"
+    with pytest.raises(DomainError) as error:
+        await archive_for(store, UnverifiedGraph(store.map_ref)).export_bundle(
+            store, store.map_ref, destination
+        )
+    assert error.value.code is ErrorCode.UNAVAILABLE
+    assert not destination.exists()
+
+
+async def test_directory_member_cannot_hide_payload_from_bundle_fingerprint(tmp_path: Path) -> None:
+    source = filled_store()
+    original = tmp_path / "original.zip"
+    await archive_for(source).export_bundle(source, source.map_ref, original)
+    with zipfile.ZipFile(original) as archive:
+        files = {info.filename: archive.read(info) for info in archive.infolist()}
+    files["unused/"] = b"hidden-data"
+    path = tmp_path / "hidden.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    with pytest.raises(DomainError) as error:
+        await archive_for(source).validate_and_extract(path, tmp_path / "extract")
+    assert error.value.code is ErrorCode.VALIDATION
+
+
+async def test_export_without_authoritative_snapshot_verifier_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    class NoVerifier(Graph):
+        verify_consistent = None  # type: ignore[assignment]
+
+    store = filled_store()
+    destination = tmp_path / "unverified.zip"
+    with pytest.raises(DomainError) as error:
+        await archive_for(store, NoVerifier(store.map_ref)).export_bundle(
+            store, store.map_ref, destination
+        )
+    assert error.value.code is ErrorCode.UNAVAILABLE
+    assert not destination.exists()

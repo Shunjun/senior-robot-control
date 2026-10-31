@@ -8,7 +8,7 @@ import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -171,7 +171,7 @@ class MapOperations:
         from senior_control.storage.migrations import migrate
         from senior_control.storage.schema import DOMAIN_MIGRATIONS
 
-        self.store.review_required = True
+        self.store.guard_reference()
         await self._motion.stop_and_block_navigation()
         await migrate(self._database, list(DOMAIN_MIGRATIONS))
         await migrate_core(self._database)
@@ -186,12 +186,14 @@ class MapOperations:
         if guard is None and active.exists():
             try:
                 snapshot = SlamSnapshot.read(active)
+                await self._archive.verify_snapshot(active / "pose_graph", snapshot)
                 await self._confirm_graph(active / "pose_graph", snapshot.map_ref)
             except Exception:
                 await self._set_graph_guard("startup-" + uuid.uuid4().hex, active)
                 guard = await self._graph_guard()
             else:
                 self.store.replace(snapshot)
+                self.store.release_reference()
         if guard is not None:
             self._recovery_required = True
             self.store.review_required = True
@@ -296,13 +298,15 @@ class MapOperations:
                     await self._pause_or_review(operation_id)
                     previous = self.store.snapshot(Path("pose_graph"), ())
                     history = _history_dir(self.map_root, previous.map_ref)
-                    await self._backup(previous, history)
+                    await self._set_graph_guard(operation_id, self.map_root / "active")
+                    graph_switched = True
+                    await self._archive.verify_snapshot(staging / "pose_graph", snapshot)
+                    previous = await self._backup(previous, history)
+                    await self._update_graph_guard_history(operation_id, history)
                     await self._phase(operation_id, "history_durable", None)
                     await self._phase(operation_id, "running", OperationStatus.RUNNING)
                     graph_stage = self._stage_dir() / "pose_graph"
                     _copy_tree(staging / "pose_graph", graph_stage)
-                    await self._set_graph_guard(operation_id, history)
-                    graph_switched = True
                     self._graph_verifier()
                     await self._graph_step(self._archive.read_pose_graph(graph_stage))
                     if self._loader is not None:
@@ -316,6 +320,7 @@ class MapOperations:
                     await self._phase(operation_id, "active_durable", None)
                     await self._finish_import(operation_id, robot_id, manifest)
                     self.store.review_required = snapshot.review_required
+                    self.store.release_reference()
                 return OperationResult(operation_id, OperationStatus.SUCCEEDED)
             except asyncio.CancelledError:
                 if graph_switched:
@@ -363,20 +368,20 @@ class MapOperations:
                 await self._pause_or_review(operation_id)
                 previous = self.store.snapshot(Path("pose_graph"), ())
                 history = _history_dir(self.map_root, previous.map_ref)
-                await self._backup(previous, history)
+                await self._set_graph_guard(operation_id, self.map_root / "active")
+                graph_switched = True
+                previous = await self._backup(previous, history)
+                await self._update_graph_guard_history(operation_id, history)
                 await self._phase(operation_id, "history_durable", None)
                 await self._phase(operation_id, "running", OperationStatus.RUNNING)
-                await self._set_graph_guard(operation_id, history)
-                graph_switched = True
                 self._graph_verifier()
                 await self._graph_step(self._archive.reset_pose_graph())
                 cleared = MapRef(f"unmapped-{uuid.uuid4().hex}", 0)
                 cleared_store = MapReferenceStore(
                     cleared, previous.odom_owner, previous.cell_size_m
                 )
-                snapshot = cleared_store.snapshot(Path("pose_graph"), ())
                 graph_stage = self._stage_dir() / "pose_graph"
-                await self._archive.write_pose_graph(graph_stage)
+                snapshot = await self._archive.capture_snapshot(cleared_store, graph_stage)
                 await self._confirm_graph(graph_stage, cleared)
                 self.store.replace(snapshot)
                 self.store.review_required = True
@@ -392,6 +397,7 @@ class MapOperations:
                     clear_graph_guard=True,
                 )
                 self.store.review_required = snapshot.review_required
+                self.store.release_reference()
             return OperationResult(operation_id, OperationStatus.SUCCEEDED)
         except asyncio.CancelledError:
             if graph_switched:
@@ -765,13 +771,18 @@ class MapOperations:
             relocalized=False,
         )
 
-    async def _backup(self, snapshot: SlamSnapshot, destination: Path) -> None:
+    async def _backup(self, snapshot: SlamSnapshot, destination: Path) -> SlamSnapshot:
         _check_owned_path(self.map_root, destination)
         stage = self._stage_dir()
-        await self._archive.write_pose_graph(stage / "pose_graph")
-        snapshot.write(stage)
+        captured = await self._archive.capture_snapshot(
+            self.store, stage / "pose_graph", review_required=snapshot.review_required
+        )
+        if captured.map_ref != snapshot.map_ref:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map reference changed during capture")
+        captured.write(stage)
         _check_owned_path(self.map_root, destination)
         durable_move_tree(stage, destination)
+        return captured
 
     async def _publish_active(self, snapshot: SlamSnapshot, pose_graph: Path | None) -> None:
         stage = self._stage_dir()
@@ -790,7 +801,7 @@ class MapOperations:
         _check_owned_path(self.map_root, history)
         relative = history.relative_to(self.map_root).as_posix()
         self._recovery_required = True
-        self.store.review_required = True
+        self.store.guard_reference()
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 await connection.execute(
@@ -798,6 +809,19 @@ class MapOperations:
                     "VALUES (?, ?, ?)",
                     (self.robot_id, operation_id, relative),
                 )
+
+    async def _update_graph_guard_history(self, operation_id: str, history: Path) -> None:
+        _check_owned_path(self.map_root, history)
+        relative = history.relative_to(self.map_root).as_posix()
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                cursor = await connection.execute(
+                    "UPDATE map_graph_guard SET history = ? "
+                    "WHERE robot_id = ? AND operation_id = ?",
+                    (relative, self.robot_id, operation_id),
+                )
+                if cursor.rowcount != 1:
+                    raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map recovery guard was lost")
 
     def _graph_verifier(self) -> PoseGraphVerifier:
         graph = self._archive._pose_graph
@@ -882,6 +906,7 @@ class MapOperations:
                 if not history.is_dir():
                     raise DomainError(ErrorCode.UNAVAILABLE, "verified map snapshot is unavailable")
                 snapshot = SlamSnapshot.read(history)
+                await self._archive.verify_snapshot(history / "pose_graph", snapshot)
                 await self._graph_step(
                     self._archive.read_pose_graph(history / "pose_graph"), bounded=True
                 )
@@ -896,8 +921,10 @@ class MapOperations:
             _copy_tree(history / "pose_graph", stage / "pose_graph")
             snapshot.write(stage)
             durable_move_tree(stage, _owned_path(self.map_root, "active"))
-            self.store.replace(snapshot)
+            self.store.replace(replace(snapshot, review_required=True))
             await self._clear_graph_guard()
+            self.store.review_required = snapshot.review_required
+            self.store.release_reference()
 
     def _stage_dir(self) -> Path:
         stage = _owned_path(self.map_root, ".staging", uuid.uuid4().hex)

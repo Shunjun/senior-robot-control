@@ -46,6 +46,9 @@ class ExecutionContext:
     invalidated_task_ids: frozenset[str] = field(default_factory=frozenset)
     last_tick_utc: datetime | None = None
     last_tick_mono: float | None = None
+    # //Compatible: legacy context without both reference nonces cannot qualify motion.
+    map_generation: str | None = None
+    localization_generation: str | None = None
 
 
 @dataclass(frozen=True)

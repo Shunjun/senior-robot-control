@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,31 @@ from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_control.storage.database import Database
 from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+
+
+class SyntheticHomeService(HomeService):
+    """A local fixture supplies a fresh generation with each synthetic observation."""
+
+    async def initialize(self, start: StartupReference, localized: LocalizedPose):
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        return await super().initialize(start, localized)
+
+    async def set_current(self, pose: LocalizedPose, *, expected_revision: int | None = None):
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        return await super().set_current(pose, expected_revision=expected_revision)
+
+    def _remember(self, localized: LocalizedPose) -> None:
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        super()._remember(localized)
+
+    async def note_localization(self, pose: LocalizedPose) -> None:
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        await super().note_localization(pose)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MAP = MapRef("yard", 3)
@@ -48,7 +74,14 @@ def navigation_module() -> object:
     return module
 
 
-class RecordingNavigation:
+class SyntheticQualifiedNavigation:
+    """Single-loop fake; real receivers must independently enforce the generation."""
+
+    async def navigate_qualified(self, goal: object) -> str:
+        return await self.navigate(goal)  # type: ignore[attr-defined,no-any-return]
+
+
+class RecordingNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.goals: list[object] = []
 
@@ -63,7 +96,9 @@ class RecordingNavigation:
 async def test_home_persists_restart(tmp_path: Path) -> None:
     path = tmp_path / "home.db"
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         first = await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         assert first.initialized
@@ -71,7 +106,9 @@ async def test_home_persists_restart(tmp_path: Path) -> None:
         assert first.waypoint.pose == Pose2D(1.0, 2.0, 0.4)
         original_id = first.waypoint.id
     async with Database(path) as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         again = await service.initialize(STILL, localized(Pose2D(9.0, 9.0, 1.0)))
         assert again.initialized
@@ -82,7 +119,9 @@ async def test_home_persists_restart(tmp_path: Path) -> None:
 
 async def test_moved_before_localization_not_silently_home(tmp_path: Path) -> None:
     async with Database(tmp_path / "moved.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         later = localized(Pose2D(5.0, 6.0, 0.2))
         for start in (
@@ -99,7 +138,9 @@ async def test_moved_before_localization_not_silently_home(tmp_path: Path) -> No
 
 async def test_trusted_start_transform_recovers_start(tmp_path: Path) -> None:
     async with Database(tmp_path / "trusted.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         current = Pose2D(5.0, 5.0, 1.5707963267948966)
         result = await service.initialize(
@@ -125,7 +166,7 @@ async def test_trusted_start_transform_recovers_start(tmp_path: Path) -> None:
 async def test_obstacle_does_not_move_home(tmp_path: Path) -> None:
     async with Database(tmp_path / "obstacle.db") as database:
         reference = MapReferenceStore(MAP, "odom", CELL)
-        service = HomeService(database, reference, robot_id=ROBOT)
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT)
         await service.prepare()
         created = await service.initialize(STILL, localized(Pose2D(4.0, 5.0, 0.2)))
         assert created.waypoint is not None
@@ -144,7 +185,7 @@ async def test_obstacle_does_not_move_home(tmp_path: Path) -> None:
 async def test_reference_mismatch_rejected(tmp_path: Path) -> None:
     navigation = RecordingNavigation()
     async with Database(tmp_path / "mismatch.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -176,7 +217,7 @@ class RejectingExecutor:
         return OperationResult(execution_id, OperationStatus.FAILED)
 
 
-class AdapterPort:
+class AdapterPort(SyntheticQualifiedNavigation):
     def __init__(self, executor: RejectingExecutor) -> None:
         module = navigation_module()
         self._module = module
@@ -193,7 +234,7 @@ class AdapterPort:
 async def test_rejected_cancel_does_not_start_replacement(tmp_path: Path) -> None:
     executor = RejectingExecutor()
     async with Database(tmp_path / "cancel.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -219,7 +260,7 @@ async def test_rejected_cancel_does_not_start_replacement(tmp_path: Path) -> Non
 async def test_unhealthy_localization_rejects_return(tmp_path: Path) -> None:
     navigation = RecordingNavigation()
     async with Database(tmp_path / "unhealthy.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -237,7 +278,9 @@ async def test_unhealthy_localization_rejects_return(tmp_path: Path) -> None:
 
 async def test_missing_port_rejects_without_navigation(tmp_path: Path) -> None:
     async with Database(tmp_path / "noport.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
@@ -273,7 +316,7 @@ async def test_finished_goal_does_not_block_the_next_return(tmp_path: Path) -> N
     module = navigation_module()
     executor = TerminalCodeExecutor(module)
     async with Database(tmp_path / "finished.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -293,7 +336,7 @@ async def test_finished_goal_does_not_block_the_next_return(tmp_path: Path) -> N
         assert len(executor.started) == 2
 
 
-class SlowNavigation:
+class SlowNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.started = 0
         self.release = asyncio.Event()
@@ -312,7 +355,7 @@ class SlowNavigation:
 async def test_overlapping_returns_do_not_both_navigate(tmp_path: Path) -> None:
     navigation = SlowNavigation()
     async with Database(tmp_path / "overlap.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -336,7 +379,7 @@ async def test_overlapping_returns_do_not_both_navigate(tmp_path: Path) -> None:
         assert await second == "exec-2"
 
 
-class FailingSecondNavigation:
+class FailingSecondNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.starts = 0
         self.cancelled: list[str] = []
@@ -356,7 +399,7 @@ class FailingSecondNavigation:
 async def test_failed_send_keeps_unknown_separate_from_finished_execution(tmp_path: Path) -> None:
     navigation = FailingSecondNavigation()
     async with Database(tmp_path / "send-fail.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -382,7 +425,9 @@ async def test_failed_send_keeps_unknown_separate_from_finished_execution(tmp_pa
 
 async def test_recovered_start_keeps_its_own_fix(tmp_path: Path) -> None:
     async with Database(tmp_path / "fix.db") as database:
-        service = HomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
         await service.prepare()
         result = await service.initialize(
             StartupReference(
@@ -404,7 +449,7 @@ async def test_recovered_start_keeps_its_own_fix(tmp_path: Path) -> None:
         assert result.waypoint.longitude == pytest.approx(120.0)
 
 
-class AcceptThenWait:
+class AcceptThenWait(SyntheticQualifiedNavigation):
     """Goal is accepted before navigate returns, so disconnect can land in that window."""
 
     def __init__(self) -> None:
@@ -432,7 +477,7 @@ class AcceptThenWait:
 async def test_disconnect_during_navigate_cancels_the_accepted_goal(tmp_path: Path) -> None:
     navigation = AcceptThenWait()
     async with Database(tmp_path / "inflight.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -470,7 +515,7 @@ class ReleasingExecutor:
 async def test_terminal_note_releases_the_adapter_goal(tmp_path: Path) -> None:
     executor = ReleasingExecutor()
     async with Database(tmp_path / "terminal.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -493,7 +538,7 @@ async def test_terminal_note_releases_the_adapter_goal(tmp_path: Path) -> None:
         assert len(executor.started) == 2
 
 
-class KeepingNavigation:
+class KeepingNavigation(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.events: list[str] = []
         self.active: str | None = None
@@ -515,7 +560,7 @@ async def test_disconnect_before_the_goal_is_accepted_keeps_the_later_goal(
 ) -> None:
     navigation = KeepingNavigation()
     async with Database(tmp_path / "before-accept.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -545,7 +590,7 @@ async def test_disconnect_before_the_goal_is_accepted_keeps_the_later_goal(
         assert navigation.active == "nav-1"
 
 
-class FailThenAccept:
+class FailThenAccept(SyntheticQualifiedNavigation):
     def __init__(self) -> None:
         self.events: list[str] = []
         self.started = asyncio.Event()
@@ -571,7 +616,7 @@ class FailThenAccept:
 async def test_failed_send_without_acceptance_stays_unknown(tmp_path: Path) -> None:
     navigation = FailThenAccept()
     async with Database(tmp_path / "stale-debt.db") as database:
-        service = HomeService(
+        service = SyntheticHomeService(
             database,
             MapReferenceStore(MAP, "odom", CELL),
             robot_id=ROBOT,
@@ -609,10 +654,9 @@ async def test_cancelled_accepted_home_goal_survives_disconnect_and_restart(tmp_
 
     navigation = AcceptedUnknown()
     path = tmp_path / "accepted.db"
+    first_ref = MapReferenceStore(MAP, "odom", CELL)
     async with Database(path) as database:
-        service = HomeService(
-            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
-        )
+        service = SyntheticHomeService(database, first_ref, robot_id=ROBOT, navigation=navigation)
         await service.prepare()
         await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         task = asyncio.create_task(service.return_home(MAP))
@@ -624,10 +668,11 @@ async def test_cancelled_accepted_home_goal_survives_disconnect_and_restart(tmp_
             await service.note_connection(False)
         assert navigation.events == ["navigate", "cancel:nav-1"]
         assert navigation.active == "nav-1"
+    saved_snapshot = first_ref.snapshot(Path("pose_graph"), ())
+    next_ref = MapReferenceStore(MAP, "odom", CELL)
+    next_ref.replace(saved_snapshot)
     async with Database(path) as database:
-        service = HomeService(
-            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
-        )
+        service = SyntheticHomeService(database, next_ref, robot_id=ROBOT, navigation=navigation)
         await service.prepare()
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
         with pytest.raises(DomainError):
@@ -643,3 +688,247 @@ async def test_cancelled_accepted_home_goal_survives_disconnect_and_restart(tmp_
             "cancel:nav-1",
             "navigate",
         ]
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_disconnect_before_acceptance_cancels_late_accepted_goal(
+    tmp_path: Path, reconnect: bool
+) -> None:
+    class LateAcceptance(AcceptThenWait):
+        async def navigate(self, goal: object) -> str:
+            self.events.append("navigate")
+            self.accepted.set()
+            await self.release.wait()
+            self.active = "nav-1"
+            notify = goal.on_accepted
+            notify(self.active)
+            return self.active
+
+    navigation = LateAcceptance()
+    async with Database(tmp_path / "late.db") as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        task = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        await service.note_connection(False)
+        if reconnect:
+            await service.note_connection(True)
+        navigation.release.set()
+        await task
+        assert navigation.events == ["navigate", "cancel"]
+        assert navigation.active is None
+
+
+async def test_home_without_generation_fenced_port_is_unavailable(tmp_path: Path) -> None:
+    class LegacyNavigation(RecordingNavigation):
+        navigate_qualified = None  # type: ignore[assignment]
+
+    navigation = LegacyNavigation()
+    async with Database(tmp_path / "legacy.db") as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0)))
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert navigation.goals == []
+
+
+async def test_map_switch_during_home_send_cancels_accepted_goal(tmp_path: Path) -> None:
+    navigation = AcceptThenWait()
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "switch.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0)))
+        task = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        reference.guard_reference()
+        navigation.release.set()
+        await task
+        assert navigation.events == ["navigate", "cancel"]
+        assert navigation.active is None
+
+
+async def test_home_without_localization_generation_stays_unavailable(tmp_path: Path) -> None:
+    navigation = RecordingNavigation()
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "no-generation.db") as database:
+        service = HomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        pose = replace(localized(Pose2D(1, 2, 0)), map_generation=reference.map_generation)
+        await service.initialize(STILL, pose)
+        await service.note_localization(localized(Pose2D(1, 2, 0)))
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert navigation.goals == []
+
+
+async def test_home_reference_nonce_survives_obstacle_and_new_anchor_but_not_moved_anchor(
+    tmp_path: Path,
+) -> None:
+    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = RecordingNavigation()
+    async with Database(tmp_path / "anchor-qualification.db") as database:
+        service = HomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        pose = replace(localized(Pose2D(1, 2, 0)), map_generation=reference.map_generation)
+        await service.initialize(STILL, pose)
+        generation = reference.map_generation
+        obstacle = CellEvidence((2, 0), "node-1", 3, 0, 1.0, 3.0, "geometric_confirmation")
+        reference.place(obstacle, world=(1, 0), anchor_pose=Pose2D(0, 0, 0))
+        reference.apply_anchor_update(
+            AnchorSnapshot(
+                MAP,
+                "odom",
+                (
+                    AnchorPose("node-1", Pose2D(0, 0, 0), True),
+                    AnchorPose("node-new", Pose2D(4, 0, 0), True),
+                ),
+                GridExtent(8, 8, 0, 0),
+            )
+        )
+        assert reference.map_generation == generation
+        assert await service.return_home(MAP) == "exec-1"
+        await service.note_terminal("exec-1")
+        reference.apply_anchor_update(
+            AnchorSnapshot(
+                MAP,
+                "odom",
+                (
+                    AnchorPose("node-1", Pose2D(1, 0, 0), True),
+                    AnchorPose("node-new", Pose2D(4, 0, 0), True),
+                ),
+                GridExtent(8, 8, 0, 0),
+            )
+        )
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert len(navigation.goals) == 1
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_late_acceptance_with_rejected_cancel_blocks_replacement_after_restart(
+    tmp_path: Path, reconnect: bool
+) -> None:
+    class RejectLate(AcceptThenWait):
+        async def navigate(self, goal: object) -> str:
+            self.events.append("navigate")
+            self.accepted.set()
+            await self.release.wait()
+            self.active = "nav-1"
+            goal.on_accepted(self.active)
+            return self.active
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            self.events.append("cancel:" + execution_id)
+            return OperationResult(execution_id, OperationStatus.NEEDS_REVIEW)
+
+    navigation = RejectLate()
+    path = tmp_path / "late-rejected.db"
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0)))
+        send = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        await service.note_connection(False)
+        if reconnect:
+            await service.note_connection(True)
+        navigation.release.set()
+        with pytest.raises(DomainError):
+            await send
+        assert navigation.events == ["navigate", "cancel:nav-1"]
+        assert navigation.active == "nav-1"
+    async with Database(path) as database:
+        restarted = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await restarted.prepare()
+        await restarted.note_localization(localized(Pose2D(1, 2, 0)))
+        with pytest.raises(DomainError):
+            await restarted.return_home(MAP)
+        assert navigation.events == ["navigate", "cancel:nav-1", "cancel:nav-1"]
+
+
+async def test_home_cannot_be_set_from_unqualified_localization(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "set-unqualified.db") as database:
+        service = HomeService(database, reference, robot_id=ROBOT)
+        await service.prepare()
+        with pytest.raises(DomainError) as error:
+            await service.set_current(localized(Pose2D(1, 2, 0)))
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert await service.home() is None
+
+
+async def test_home_initialize_without_generation_does_not_store_pose(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "initialize-unqualified.db") as database:
+        service = HomeService(database, reference, robot_id=ROBOT)
+        await service.prepare()
+        result = await service.initialize(STILL, localized(Pose2D(1, 2, 0)))
+        assert not result.initialized
+        assert await service.home() is None
+
+
+async def test_home_restart_rejects_old_localization_nonce(tmp_path: Path) -> None:
+    path = tmp_path / "restart-localization.db"
+    first_ref = MapReferenceStore(MAP, "odom", CELL)
+    old = replace(localized(Pose2D(1, 2, 0)), map_generation=first_ref.map_generation)
+    async with Database(path) as database:
+        service = HomeService(database, first_ref, robot_id=ROBOT)
+        await service.prepare()
+        result = await service.initialize(STILL, old)
+        assert result.initialized
+    next_ref = MapReferenceStore(MAP, "odom", CELL)
+    next_ref.replace(first_ref.snapshot(Path("pose_graph"), ()))
+    navigation = RecordingNavigation()
+    async with Database(path) as database:
+        restarted = HomeService(database, next_ref, robot_id=ROBOT, navigation=navigation)
+        await restarted.prepare()
+        await restarted.note_localization(old)
+        with pytest.raises(DomainError) as error:
+            await restarted.return_home(MAP)
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        fresh = replace(old, map_generation=next_ref.map_generation)
+        await restarted.note_localization(fresh)
+        assert await restarted.return_home(MAP) == "exec-1"
+
+
+async def test_map_switch_during_home_save_never_binds_the_stale_pose(tmp_path: Path) -> None:
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    navigation = RecordingNavigation()
+    async with Database(tmp_path / "save-race.db") as database:
+        service = HomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        pose = replace(localized(Pose2D(1, 2, 0)), map_generation=reference.map_generation)
+        await database.write_lock.acquire()
+        pending = asyncio.create_task(service.set_current(pose))
+        try:
+            for _ in range(30):
+                if getattr(database.write_lock, "_waiters", None):
+                    break
+                await asyncio.sleep(0)
+            reference.guard_reference()
+        finally:
+            database.write_lock.release()
+        with pytest.raises(DomainError) as error:
+            await pending
+        assert error.value.code is ErrorCode.LOCALIZATION_UNAVAILABLE
+        reference.release_reference()
+        await service.note_localization(replace(pose, map_generation=reference.map_generation))
+        with pytest.raises(DomainError):
+            await service.return_home(MAP)
+        assert navigation.goals == []

@@ -5,7 +5,7 @@ import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.archive import BundleWaypoint
@@ -36,6 +36,8 @@ class StartupReference:
 
 @dataclass(frozen=True)
 class LocalizedPose:
+    """Localization must be produced and certified for the supplied reference nonce."""
+
     pose: Pose2D
     map_ref: MapRef
     anchor_id: str
@@ -43,6 +45,8 @@ class LocalizedPose:
     healthy: bool
     latitude: float | None = None
     longitude: float | None = None
+    # //Compatible: legacy poses omit this nonce and remain unqualified for motion.
+    map_generation: str | None = None
 
     def __post_init__(self) -> None:
         if not self.anchor_id.strip():
@@ -55,6 +59,7 @@ class LocalizedPose:
 class HomeGoal:
     map_ref: MapRef
     pose: Pose2D
+    map_generation: str
     on_accepted: Callable[[str], None] | None = None
 
 
@@ -70,13 +75,21 @@ class HomeResult:
 
 
 class NavigationPort(Protocol):
-    """Injected goal port. A missing port must not open Nav2."""
-
-    async def navigate(self, goal: HomeGoal) -> str: ...
+    """Injected cancellation port. A missing qualified goal port must not open Nav2."""
 
     async def cancel(self, execution_id: str) -> OperationResult:
         """Report success only when the accepted goal is confirmed terminal."""
         ...
+
+
+class QualifiedHomeNavigationPort(Protocol):
+    """Atomically fence admission on the reference nonce and fresh healthy localization.
+
+    The receiver must reject stale or unknown qualification before accepting a goal;
+    local verification immediately before an await is not a receiver-side fence.
+    """
+
+    async def navigate_qualified(self, goal: HomeGoal) -> str: ...
 
 
 class HomeService:
@@ -99,6 +112,8 @@ class HomeService:
         self._accepted_id: str | None = None
         self._cancel_id: str | None = None
         self._in_send = False
+        self._send_interrupted = False
+        self._send_map_generation: str | None = None
         self._guard_unresolved = False
         self._return_lock = asyncio.Lock()
 
@@ -117,19 +132,18 @@ class HomeService:
             self._guard_unresolved = True
             self._execution_id = row[0]
             self._cancel_id = row[0]
-        for item in await self._store.points():
-            self._bind(item.waypoint, item.anchor_pose)
 
     async def initialize(self, start: StartupReference, localized: LocalizedPose) -> HomeResult:
         existing = await self._store.home()
         if existing is not None:
-            self._bind(existing.waypoint, existing.anchor_pose)
             if _kept(existing):
                 self._remember(localized)
                 return HomeResult(True, existing.waypoint, "")
             return HomeResult(False, None, "home is not adopted")
         if not localized.healthy:
             return HomeResult(False, None, "localization is unhealthy")
+        if not self._pose_qualified(localized):
+            return HomeResult(False, None, "localization is unavailable")
         if not _recoverable(start):
             return HomeResult(False, None, "home is uninitialized")
         pose = localized.pose
@@ -151,6 +165,8 @@ class HomeService:
             latitude=latitude,
             longitude=longitude,
         )
+        if not self._pose_qualified(localized):
+            return HomeResult(False, None, "localization is unavailable")
         self._remember(localized)
         self._bind(waypoint, localized.anchor_pose)
         return HomeResult(True, waypoint, "")
@@ -160,6 +176,8 @@ class HomeService:
     ) -> Waypoint:
         if not pose.healthy:
             raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unhealthy")
+        if not self._pose_qualified(pose):
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
         waypoint = await self._store.save_home(
             waypoint_id=None,
             pose=pose.pose,
@@ -173,6 +191,8 @@ class HomeService:
             longitude=pose.longitude,
             expected_revision=expected_revision,
         )
+        if not self._pose_qualified(pose):
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
         self._remember(pose)
         self._bind(waypoint, pose.anchor_pose)
         return waypoint
@@ -189,18 +209,31 @@ class HomeService:
             waypoint = await self._ready(expected)
             navigation = self._navigation
             assert navigation is not None
+            if not callable(getattr(navigation, "navigate_qualified", None)):
+                raise DomainError(ErrorCode.UNAVAILABLE, "qualified home navigation is unavailable")
+            qualified = cast(QualifiedHomeNavigationPort, navigation)
+            map_generation = self._reference.map_generation
             self._accepted_id = None
             self._in_send = True
+            self._send_interrupted = False
+            self._send_map_generation = map_generation
             cancel_this = False
             try:
                 # Persist an unknown outcome before the external operation can accept a goal.
                 self._guard_unresolved = True
                 await self._write_guard(None)
+                if not self._generation_ready(map_generation) or not self._connected:
+                    await self._clear_guard()
+                    raise DomainError(
+                        ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable"
+                    )
                 try:
-                    execution_id = await navigation.navigate(
-                        HomeGoal(expected, waypoint.pose, self._note_accepted)
+                    execution_id = await qualified.navigate_qualified(
+                        HomeGoal(expected, waypoint.pose, map_generation, self._note_accepted)
                     )
                     self._execution_id = execution_id
+                    if self._send_interrupted or not self._generation_ready(map_generation):
+                        self._cancel_id = execution_id
                     await self._write_guard(execution_id)
                     cancel_this = self._cancel_id == execution_id
                 except asyncio.CancelledError:
@@ -221,6 +254,7 @@ class HomeService:
             finally:
                 self._in_send = False
                 self._accepted_id = None
+                self._send_map_generation = None
             if cancel_this:
                 await self._cancel_owed_goal()
             return execution_id
@@ -309,10 +343,11 @@ class HomeService:
             latitude=None,
             longitude=None,
         )
-        self._bind(waypoint, anchor_pose)
         return waypoint
 
     async def save_waypoint(self, pose: LocalizedPose, *, waypoint_id: str) -> Waypoint:
+        if not self._pose_qualified(pose):
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
         waypoint = await self._store.save_waypoint(
             waypoint_id=waypoint_id,
             pose=pose.pose,
@@ -324,6 +359,8 @@ class HomeService:
             latitude=pose.latitude,
             longitude=pose.longitude,
         )
+        if not self._pose_qualified(pose):
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
         self._bind(waypoint, pose.anchor_pose)
         return waypoint
 
@@ -339,6 +376,8 @@ class HomeService:
     async def note_connection(self, connected: bool) -> None:
         self._connected = connected
         if not connected:
+            if self._in_send:
+                self._send_interrupted = True
             accepted = self._accepted_id if self._in_send else self._execution_id
             if accepted is not None:
                 self._cancel_id = accepted
@@ -354,6 +393,8 @@ class HomeService:
     def _note_accepted(self, execution_id: str) -> None:
         if execution_id.strip():
             self._accepted_id = execution_id
+            if self._send_interrupted or not self._generation_ready(self._send_map_generation):
+                self._cancel_id = execution_id
 
     async def note_terminal(self, execution_id: str) -> None:
         async with self._return_lock:
@@ -398,13 +439,47 @@ class HomeService:
             raise DomainError(ErrorCode.CONFLICT, "coordinate reference needs review")
         if self._localized is None or not self._localized.healthy:
             raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unhealthy")
+        if self._localized.map_generation != self._reference.map_generation:
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "localization is unavailable")
         if self._localized.map_ref != expected:
             raise DomainError(ErrorCode.CONFLICT, "map reference does not match")
+        bindings = self._reference.snapshot(Path("pose_graph"), ()).waypoint_bindings
+        binding = next(
+            (item for item in bindings if item.waypoint.waypoint_id == waypoint.id), None
+        )
+        if (
+            binding is None
+            or binding.waypoint.review_required
+            or binding.waypoint.anchor_id != waypoint.anchor_id
+            or not _same_pose(binding.waypoint.pose, waypoint.pose)
+            or not _same_pose(binding.anchor_pose, stored.anchor_pose)
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "home binding needs review")
         if not self._connected:
             raise DomainError(ErrorCode.OFFLINE, "connection is offline")
         if self._navigation is None:
             raise DomainError(ErrorCode.OFFLINE, "navigation port is unavailable")
         return waypoint
+
+    def _pose_qualified(self, pose: LocalizedPose) -> bool:
+        return (
+            pose.healthy
+            and not self._reference.review_required
+            and pose.map_ref == self._reference.map_ref
+            and pose.map_generation is not None
+            and pose.map_generation == self._reference.map_generation
+        )
+
+    def _generation_ready(self, generation: str | None) -> bool:
+        return (
+            generation is not None
+            and not self._reference.review_required
+            and self._reference.map_generation == generation
+            and self._localized is not None
+            and self._localized.healthy
+            and self._localized.map_ref == self._reference.map_ref
+            and self._localized.map_generation == generation
+        )
 
     def _remember(self, localized: LocalizedPose) -> None:
         if localized.healthy:
@@ -417,6 +492,14 @@ class HomeService:
             AnchoredWaypoint(waypoint.id, waypoint.pose, waypoint.anchor_id, False),
             anchor_pose=anchor_pose,
         )
+
+
+def _same_pose(left: Pose2D, right: Pose2D) -> bool:
+    # //Compatible: tolerate floating-point serialization round trips.
+    return all(
+        math.isclose(a, b, rel_tol=0.0, abs_tol=1e-9)
+        for a, b in ((left.x, right.x), (left.y, right.y), (left.yaw, right.yaw))
+    )
 
 
 def _kept(stored: StoredWaypoint | None) -> bool:

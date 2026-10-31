@@ -40,6 +40,8 @@ def test_task_disconnect_stops_no_resume(simulation_profile: SimulationProfile) 
         map_ref,
         last_tick_utc=due,
         last_tick_mono=100.0,
+        map_generation="synthetic-reference",
+        localization_generation="synthetic-reference",
     )
 
     stopped = TaskRunner([task], [active]).tick(due + timedelta(seconds=1), 101.0, offline)
@@ -55,6 +57,8 @@ def test_task_disconnect_stops_no_resume(simulation_profile: SimulationProfile) 
         map_ref,
         last_tick_utc=due + timedelta(seconds=1),
         last_tick_mono=101.0,
+        map_generation="synthetic-reference",
+        localization_generation="synthetic-reference",
     )
     after_reconnect = TaskRunner([task], [active]).tick(
         due + timedelta(seconds=2),

@@ -39,7 +39,18 @@ class TaskRuntime:
                 for task in tasks:
                     if task.enabled:
                         await self._store.record_skip(task.task_id, start, end, "restart")
-        current = replace(context, last_tick_utc=self._last_wall, last_tick_mono=self._last_mono)
+        reference = self._executor.map_reference
+        map_generation = (
+            reference.map_generation
+            if reference is not None and not reference.review_required
+            else None
+        )
+        current = replace(
+            context,
+            last_tick_utc=self._last_wall,
+            last_tick_mono=self._last_mono,
+            map_generation=map_generation,
+        )
         scan_start, scan_end, _jump = _scan(now, monotonic, current)
         instances = await self._store.executions_for_scan(scan_start, scan_end)
         runner = TaskRunner(tasks, instances)
@@ -47,7 +58,12 @@ class TaskRuntime:
         for intent in runner.tick(now, monotonic, current):
             try:
                 await self._executor.apply(
-                    intent, by_id[intent.task_id], expected_generation=generation
+                    intent,
+                    by_id[intent.task_id],
+                    expected_generation=generation,
+                    map_generation=current.map_generation,
+                    localization_generation=current.localization_generation,
+                    localized=current.localized,
                 )
             except NavigationFailure:
                 # The execution is durably marked unknown; the next tick retries cancellation.

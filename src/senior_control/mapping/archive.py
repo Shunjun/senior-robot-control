@@ -1,14 +1,16 @@
 """Portable SLAM map bundle. Tasks, secrets, and vehicle config stay out."""
 
+import asyncio
 import hashlib
 import json
 import math
 import stat
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.references import AnchorPose, SlamSnapshot, durable_replace
@@ -81,6 +83,28 @@ class PoseGraphSource(Protocol):
     async def reset(self) -> None: ...
 
 
+class ConsistentCapture(Protocol):
+    """Capture graph and callback snapshot while both belong to one frozen generation.
+
+    The backend must fence graph changes and the anchor/occupancy ingestion path for
+    the entire capture. A local no-change check alone is not proof of that fence.
+    """
+
+    async def capture_consistent(
+        self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+    ) -> SlamSnapshot: ...
+
+
+class ConsistentSnapshotVerifier(Protocol):
+    """Verify graph and snapshot have authoritative common-generation provenance.
+
+    A checksum or MapRef supplied by a bundle is not proof. The backend must validate
+    the actual graph anchor identities/poses and their binding to the snapshot.
+    """
+
+    async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool: ...
+
+
 class MapArchive:
     def __init__(
         self,
@@ -108,22 +132,23 @@ class MapArchive:
         if destination.exists():
             raise DomainError(ErrorCode.CONFLICT, "bundle destination already exists")
 
-        snapshot = store.snapshot(Path("pose_graph"), self._pose_graph.painted_cells())
-        waypoints = tuple(
-            BundleWaypoint(
-                item.waypoint.waypoint_id,
-                "home" if item.waypoint.waypoint_id == self._home_waypoint_id else "waypoint",
-                item.waypoint.pose,
-                map_ref,
-                item.waypoint.anchor_id,
-                self._source_robot_id,
-            )
-            for item in snapshot.waypoint_bindings
-        )
         georeference = self._georeference or Georeference("unreferenced")
         with tempfile.TemporaryDirectory() as raw:
             staging = Path(raw)
-            await self._pose_graph.write(staging / "pose_graph")
+            snapshot = await self.capture_snapshot(store, staging / "pose_graph")
+            if snapshot.map_ref != map_ref:
+                raise DomainError(ErrorCode.CONFLICT, "pose graph and occupancy revisions differ")
+            waypoints = tuple(
+                BundleWaypoint(
+                    item.waypoint.waypoint_id,
+                    "home" if item.waypoint.waypoint_id == self._home_waypoint_id else "waypoint",
+                    item.waypoint.pose,
+                    map_ref,
+                    item.waypoint.anchor_id,
+                    self._source_robot_id,
+                )
+                for item in snapshot.waypoint_bindings
+            )
             snapshot.write(staging / "occupancy")
             waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
             (staging / "waypoints.json").write_bytes(waypoint_bytes)
@@ -154,6 +179,52 @@ class MapArchive:
             files["manifest.json"] = _dumps(_manifest_json(manifest))
         _write_zip(destination, files)
         return manifest
+
+    async def capture_snapshot(
+        self, store: MapReferenceStore, directory: Path, *, review_required: bool | None = None
+    ) -> SlamSnapshot:
+        capture = getattr(self._pose_graph, "capture_consistent", None)
+        if not callable(capture):
+            raise DomainError(ErrorCode.UNAVAILABLE, "consistent map capture is unavailable")
+        expected_ref = store.map_ref
+        start_sequence = store.change_sequence
+        snapshots: list[SlamSnapshot] = []
+
+        def snapshot() -> SlamSnapshot:
+            if snapshots:
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture callback repeated")
+            captured = store.snapshot(Path("pose_graph"), self._pose_graph.painted_cells())
+            if review_required is not None:
+                captured = replace(captured, review_required=review_required)
+            snapshots.append(captured)
+            return captured
+
+        backend = cast(ConsistentCapture, self._pose_graph)
+        captured = await backend.capture_consistent(directory, snapshot)
+        if (
+            len(snapshots) != 1
+            or captured is not snapshots[0]
+            or captured.map_ref != expected_ref
+            or store.change_sequence != start_sequence
+        ):
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
+        await self.verify_snapshot(directory, captured)
+        return captured
+
+    async def verify_snapshot(self, directory: Path, snapshot: SlamSnapshot) -> None:
+        if not callable(getattr(self._pose_graph, "verify_consistent", None)):
+            raise DomainError(ErrorCode.UNAVAILABLE, "map snapshot verification is unavailable")
+        verifier = cast(ConsistentSnapshotVerifier, self._pose_graph)
+        try:
+            verified = await asyncio.wait_for(
+                verifier.verify_consistent(directory, snapshot), timeout=0.25
+            )
+        except asyncio.TimeoutError as exc:  # //Compatible: Python 3.10 timeout type.
+            raise DomainError(
+                ErrorCode.OPERATION_UNKNOWN, "map snapshot verification timed out"
+            ) from exc
+        if verified is not True:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map snapshot generation is unconfirmed")
 
     async def write_pose_graph(self, directory: Path) -> tuple[str, ...]:
         return await self._pose_graph.write(directory)
@@ -227,9 +298,12 @@ class MapArchive:
         names: set[str] = set()
         for info in infos:
             _reject_member(info.filename, info)
-            if info.filename in names:
+            if info.is_dir() and info.file_size:
+                raise DomainError(ErrorCode.VALIDATION, "bundle directory contains data")
+            normalized = PurePosixPath(info.filename).as_posix()
+            if normalized in names:
                 raise DomainError(ErrorCode.VALIDATION, "bundle path is duplicated")
-            names.add(info.filename)
+            names.add(normalized)
             declared += info.file_size
             if (
                 info.file_size > self._max_uncompressed_bytes
@@ -266,8 +340,11 @@ def _reject_member(name: str, info: zipfile.ZipInfo) -> None:
     if not name or "\x00" in name or "\\" in name or stat.S_ISLNK(mode):
         raise DomainError(ErrorCode.VALIDATION, "bundle member is not a regular file")
     relative = PurePosixPath(name)
-    if relative.is_absolute() or ".." in relative.parts:
+    if relative.is_absolute() or ".." in relative.parts or relative == PurePosixPath("."):
         raise DomainError(ErrorCode.VALIDATION, "bundle path escapes the archive")
+    canonical = relative.as_posix() + ("/" if name.endswith("/") else "")
+    if name != canonical:
+        raise DomainError(ErrorCode.VALIDATION, "bundle path is not canonical")
 
 
 def _file_bytes(root: Path) -> dict[str, bytes]:

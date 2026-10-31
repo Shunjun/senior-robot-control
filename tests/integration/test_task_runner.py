@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from senior_control.errors import DomainError, ErrorCode
+from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef
 from senior_control.storage.database import Database
 from senior_control.storage.migrations import migrate
 from senior_control.storage.schema import DOMAIN_MIGRATIONS
-from senior_control.tasks.executor import ProcessCrash, TaskExecutor
+from senior_control.tasks.executor import ProcessCrash
+from senior_control.tasks.executor import TaskExecutor as CoreTaskExecutor
 from senior_control.tasks.models import (
     ExecutionContext,
     ExecutionStatus,
@@ -22,6 +24,7 @@ from senior_control.tasks.models import (
     TaskIntent,
 )
 from senior_control.tasks.runner import TaskRunner
+from senior_control.tasks.runtime import TaskRuntime as CoreTaskRuntime
 from senior_control.tasks.schedule import Schedule
 from senior_control.tasks.store import TaskStore
 
@@ -80,6 +83,49 @@ class RecordingNavigation:
 
     async def cancel(self, execution_id: str) -> None:
         self.calls.append(f"cancel:{execution_id}")
+
+
+class SyntheticNavigationFence:
+    """Test port checks a supplied token at the local fake dispatch boundary."""
+
+    def __init__(self, navigation, reference: MapReferenceStore) -> None:
+        self.navigation = navigation
+        self.reference = reference
+
+    async def start_qualified(
+        self, execution_id: str, task: TaskDefinition, generation: str
+    ) -> None:
+        if self.reference.review_required or generation != self.reference.map_generation:
+            raise RuntimeError("stale synthetic reference")
+        await self.navigation.start(execution_id, task)
+
+    async def cancel(self, execution_id: str) -> None:
+        await self.navigation.cancel(execution_id)
+
+
+class TaskExecutor(CoreTaskExecutor):
+    """Other task tests run with an explicitly supplied synthetic qualified backend."""
+
+    def __init__(self, database, store, navigation, **kwargs) -> None:
+        reference = MapReferenceStore(MAP, "synthetic-odom", 0.5)
+        port = None if navigation is None else SyntheticNavigationFence(navigation, reference)
+        super().__init__(database, store, port, map_reference=reference, **kwargs)
+
+    async def persist_and_dispatch(self, intent, task, **kwargs):
+        if "map_generation" not in kwargs:
+            assert self.map_reference is not None
+            kwargs["map_generation"] = self.map_reference.map_generation
+            kwargs["localization_generation"] = self.map_reference.map_generation
+            kwargs["localized"] = True
+        return await super().persist_and_dispatch(intent, task, **kwargs)
+
+
+class TaskRuntime(CoreTaskRuntime):
+    async def tick(self, now, monotonic, context):
+        reference = self._executor.map_reference
+        if reference is not None:
+            context = replace(context, localization_generation=reference.map_generation)
+        return await super().tick(now, monotonic, context)
 
 
 async def saved_task(database: Database, created: datetime) -> tuple[TaskStore, TaskDefinition]:
@@ -173,6 +219,8 @@ async def test_crash_after_dispatch_never_redispatches_unknown(tmp_path: Path) -
             frozenset(),
             due - timedelta(seconds=0.2),
             9.8,
+            "synthetic-reference",
+            "synthetic-reference",
         ),
     )
     assert len(intents) == 1 and intents[0].action is IntentAction.PAUSE
@@ -300,16 +348,14 @@ async def test_missing_navigation_port_does_not_report_success(tmp_path: Path) -
     due = created + timedelta(minutes=30)
     async with Database(tmp_path / "robot.db") as database:
         store, saved = await saved_task(database, created)
-        record = await TaskExecutor(database, store, None).persist_and_dispatch(
-            due_intent(saved, due),
-            saved,
-        )
+        with pytest.raises(DomainError) as error:
+            await TaskExecutor(database, store, None).persist_and_dispatch(
+                due_intent(saved, due), saved
+            )
         stored = await store.execution_for(saved.task_id, due)
 
-    assert record.status is ExecutionStatus.NEEDS_REVIEW
-    assert record.navigation_sent is False
-    assert record.rollback_confirmed is False
-    assert stored == record
+    assert error.value.code is ErrorCode.UNAVAILABLE
+    assert stored is None
 
 
 async def test_invalidated_link_keeps_definition_and_blocks_dispatch(tmp_path: Path) -> None:
@@ -358,6 +404,8 @@ async def test_invalidated_link_keeps_definition_and_blocks_dispatch(tmp_path: P
             frozenset({loaded.task_id}),
             due - timedelta(seconds=0.2),
             999.8,
+            "synthetic-reference",
+            "synthetic-reference",
         ),
     )
     assert intents == [
@@ -582,8 +630,6 @@ async def test_store_lists_tasks_and_executions_for_robot(tmp_path: Path) -> Non
 
 
 async def test_runtime_dispatches_due_task_and_cancels_on_disconnect(tmp_path: Path) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     async with Database(tmp_path / "robot.db") as database:
         store, task = await saved_task(database, created)
@@ -601,8 +647,6 @@ async def test_runtime_dispatches_due_task_and_cancels_on_disconnect(tmp_path: P
 
 
 async def test_runtime_restart_records_offline_gap_without_dispatch(tmp_path: Path) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     path = tmp_path / "robot.db"
     async with Database(path) as database:
@@ -621,8 +665,6 @@ async def test_runtime_restart_records_offline_gap_without_dispatch(tmp_path: Pa
 
 
 async def test_runtime_recovers_after_navigation_start_failure(tmp_path: Path) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     class Flaky(RecordingNavigation):
         async def start(self, execution_id: str, task: TaskDefinition) -> None:
             if not self.calls:
@@ -647,8 +689,6 @@ async def test_runtime_recovers_after_navigation_start_failure(tmp_path: Path) -
 
 
 async def test_runtime_retries_unknown_cancel_even_after_connection_returns(tmp_path: Path) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     class FlakyCancel(RecordingNavigation):
         async def cancel(self, execution_id: str) -> None:
             self.calls.append(f"cancel:{execution_id}")
@@ -759,8 +799,6 @@ async def test_scan_overflow_fails_closed_with_bounded_result(tmp_path: Path) ->
 async def test_failed_start_with_unknown_cancel_remains_pending_until_confirmed(
     tmp_path: Path,
 ) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     class BrokenStart(RecordingNavigation):
         async def start(self, execution_id: str, task: TaskDefinition) -> None:
             self.calls.append(f"start:{execution_id}")
@@ -817,8 +855,6 @@ async def test_scan_queries_use_indexes_for_existing_database(tmp_path: Path) ->
 async def test_runtime_propagates_database_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     async with Database(tmp_path / "robot.db") as database:
         store = TaskStore(database, robot_id="robot-a")
         await store.prepare()
@@ -856,8 +892,6 @@ async def test_start_ack_after_reconnect_requires_cancel(tmp_path: Path) -> None
 async def test_running_task_is_cancelled_after_generation_changes_between_ticks(
     tmp_path: Path,
 ) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     generation = [1]
     async with Database(tmp_path / "robot.db") as database:
@@ -913,7 +947,6 @@ async def test_agent_disconnect_during_start_persists_cancel_before_reconnect(
     from senior_control.agent import Agent
     from senior_control.agent.connection import HeartbeatFrame
     from senior_control.agent.journal import AgentJournal
-    from senior_control.tasks.runtime import TaskRuntime
 
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     async with Database(tmp_path / "robot.db") as database:
@@ -976,8 +1009,6 @@ async def test_agent_disconnect_during_start_persists_cancel_before_reconnect(
 async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
     tmp_path: Path,
 ) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     class HoldCancel(RecordingNavigation):
         def __init__(self) -> None:
             super().__init__()
@@ -1149,8 +1180,6 @@ async def test_core_migration_failure_rolls_back_and_preserves_safety(tmp_path: 
 
 
 async def test_runtime_persists_long_stall_skip_and_allows_fresh_tick(tmp_path: Path) -> None:
-    from senior_control.tasks.runtime import TaskRuntime
-
     created = datetime(2026, 1, 1, tzinfo=timezone.utc)
     stalled = created + timedelta(days=120)
     async with Database(tmp_path / "robot.db") as database:
@@ -1170,3 +1199,201 @@ async def test_runtime_persists_long_stall_skip_and_allows_fresh_tick(tmp_path: 
         await runtime.tick(stalled + timedelta(seconds=0.8), 120 * 86400.0 + 0.8, live)
         await runtime.tick(stalled + timedelta(seconds=1), 120 * 86400.0 + 1, live)
         assert len(navigation.calls) == 1
+
+
+async def test_dispatch_without_map_generation_authority_is_unavailable(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(database, store, navigation)
+        with pytest.raises(DomainError) as error:
+            await executor.persist_and_dispatch(
+                due_intent(task, created + timedelta(minutes=30)), task
+            )
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert navigation.calls == []
+        assert await store.list_executions() == ()
+
+
+async def test_task_runtime_rejects_stale_localization_after_same_reference_switch(
+    tmp_path: Path,
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        port = SyntheticNavigationFence(navigation, reference)
+        executor = CoreTaskExecutor(database, store, port, map_reference=reference)
+        runtime = CoreTaskRuntime(store, executor)
+        old = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, old)
+        reference.replace(reference.snapshot(Path("pose_graph"), ()))
+        await runtime.tick(due, 1.2, old)
+        skipped = await store.execution_for(task.task_id, due)
+        assert skipped is not None and skipped.status is ExecutionStatus.SKIPPED
+        assert navigation.calls == []
+        fresh = replace(old, localization_generation=reference.map_generation)
+        next_due = due + timedelta(minutes=30)
+        await runtime.tick(next_due - timedelta(seconds=0.2), 1801.0, fresh)
+        await runtime.tick(next_due, 1801.2, fresh)
+        assert len(navigation.calls) == 1
+
+
+async def test_task_requires_navigation_receiver_that_fences_reference_generation(
+    tmp_path: Path,
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(database, store, navigation, map_reference=reference)
+        with pytest.raises(DomainError) as error:
+            await executor.persist_and_dispatch(
+                due_intent(task, created + timedelta(minutes=30)),
+                task,
+                map_generation=reference.map_generation,
+                localization_generation=reference.map_generation,
+                localized=True,
+            )
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert navigation.calls == []
+
+
+async def test_task_map_switch_during_start_requires_cancellation(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = HoldNavigation(store)
+        port = SyntheticNavigationFence(navigation, reference)
+        executor = CoreTaskExecutor(database, store, port, map_reference=reference)
+        generation = reference.map_generation
+        dispatch = asyncio.create_task(
+            executor.persist_and_dispatch(
+                due_intent(task, created + timedelta(minutes=30)),
+                task,
+                map_generation=generation,
+                localization_generation=generation,
+                localized=True,
+            )
+        )
+        await asyncio.wait_for(navigation.started.wait(), 1)
+        reference.guard_reference()
+        navigation.release.set()
+        record = await dispatch
+        assert record.status is ExecutionStatus.NEEDS_REVIEW
+        assert f"cancel:{record.execution_id}" in navigation.calls
+
+
+async def test_task_reference_qualification_survives_new_anchor_but_not_moved_anchor(
+    tmp_path: Path,
+) -> None:
+    from senior_control.mapping.evidence import CellEvidence
+    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+    from senior_control.models import Pose2D
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        origin = Pose2D(0, 0, 0)
+        obstacle = CellEvidence((2, 0), "a", 3, 0, 1.0, 3.0, "geometric_confirmation")
+        reference.place(obstacle, world=(1, 0), anchor_pose=origin)
+        nav = RecordingNavigation()
+        executor = CoreTaskExecutor(
+            database, store, SyntheticNavigationFence(nav, reference), map_reference=reference
+        )
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+        await runtime.tick(due, 1.2, live)
+        record = await store.execution_for(task.task_id, due)
+        assert record is not None and record.status is ExecutionStatus.RUNNING
+        reference.place(
+            CellEvidence((4, 0), "a", 3, 0, 2.0, 3.0, "geometric_confirmation"),
+            world=(2, 0),
+            anchor_pose=origin,
+        )
+        reference.apply_anchor_update(
+            AnchorSnapshot(
+                task.map_ref,
+                "odom",
+                (
+                    AnchorPose("a", origin, True),
+                    AnchorPose("new", Pose2D(4, 0, 0), True),
+                ),
+                GridExtent(10, 10, 0, 0),
+            )
+        )
+        await runtime.tick(due + timedelta(seconds=0.2), 1.4, live)
+        assert nav.calls == [record.execution_id]
+        reference.apply_anchor_update(
+            AnchorSnapshot(
+                task.map_ref,
+                "odom",
+                (
+                    AnchorPose("a", Pose2D(1, 0, 0), True),
+                    AnchorPose("new", Pose2D(4, 0, 0), True),
+                ),
+                GridExtent(10, 10, 0, 0),
+            )
+        )
+        await runtime.tick(due + timedelta(seconds=0.4), 1.6, live)
+        assert nav.calls == [record.execution_id, f"cancel:{record.execution_id}"]
+
+
+async def test_task_dispatch_rejects_stale_or_missing_localization_nonce(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(
+            database,
+            store,
+            SyntheticNavigationFence(navigation, reference),
+            map_reference=reference,
+        )
+        generation = reference.map_generation
+        intent = due_intent(task, created + timedelta(minutes=30))
+        for nonce in (None, "old-reference"):
+            with pytest.raises(DomainError) as error:
+                await executor.persist_and_dispatch(
+                    intent,
+                    task,
+                    map_generation=generation,
+                    localization_generation=nonce,
+                    localized=True,
+                )
+            assert error.value.code is ErrorCode.UNAVAILABLE
+        assert navigation.calls == []
+        assert await store.list_executions() == ()
+
+
+async def test_legacy_ipc_state_does_not_claim_tasks_are_runnable(tmp_path: Path) -> None:
+    from senior_control.agent.composition import SnapshotState
+    from senior_control.agent.ports import RuntimeState
+    from senior_control.waypoints.store import WaypointStore
+
+    class LegacyState:
+        async def read(self) -> RuntimeState:
+            return RuntimeState(True, True, False, MAP, "idle")
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        waypoints = WaypointStore(database, robot_id="robot-a")
+        await waypoints.prepare()
+        snapshot = await SnapshotState(LegacyState(), store, waypoints).collect()  # type: ignore[arg-type]
+        assert snapshot.tasks[0].task_id == task.task_id
+        assert not snapshot.localized
+        assert snapshot.runnable_task_ids == ()

@@ -176,7 +176,11 @@ def _block_reason(task: TaskDefinition, context: ExecutionContext, busy: bool) -
         return "manual"
     if not context.safety_clear:
         return "safety"
-    if not context.localized:
+    if (
+        not context.localized
+        or context.map_generation is None
+        or context.localization_generation != context.map_generation
+    ):
         return "localization"
     if context.active_map != task.map_ref:
         return "map"
