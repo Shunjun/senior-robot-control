@@ -133,10 +133,15 @@ class Agent:
         self._stopping = False
         self.auth_rejected = False
         self.runtime_failed = False
+        self.recovery_required = False
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
+        self._safety_lock = asyncio.Lock()
+        self._safety_admitting = False
+        self._safety_resolving = False
+        self._estop_inflight = False
         self._signals: list[signal.Signals] = []
         if snapshot_seconds <= 0 or state_poll_seconds <= 0:
             raise ValueError("snapshot intervals must be positive")
@@ -158,7 +163,22 @@ class Agent:
     def eligible_for_motion(self) -> bool:
         """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
         self._expire_eligibility()
-        return self.connected and self.motion_allowed and self._ledger.eligible(self.robot_id)
+        return (
+            self.connected
+            and self.motion_allowed
+            and not self._safety_blocked
+            and self._ledger.eligible(self.robot_id)
+        )
+
+    @property
+    def _safety_blocked(self) -> bool:
+        return (
+            self.recovery_required
+            or self._safety_admitting
+            or self._safety_resolving
+            or self._estop_inflight
+            or any(key[0] == "safety.estop" for key in self._safety_pending)
+        )
 
     @property
     def continuity_generation(self) -> int:
@@ -194,6 +214,18 @@ class Agent:
     # ------------------------------------------------------------------ lifecycle
 
     async def run(self) -> None:
+        try:
+            unresolved = await self._safety_storage(self._journal.safety.pending())
+        except Exception:
+            logger.exception("could not read persistent safety state")
+            self._safety_fault()
+            await self._release()
+            return
+        if unresolved:
+            logger.error("unresolved safety intent requires controlled recovery")
+            self._safety_fault()
+            await self._release()
+            return
         supervisor = Supervisor(
             send_heartbeat=self._beat,
             call_ros=self._motion.call,
@@ -217,6 +249,12 @@ class Agent:
             await self._release()
 
     def _supervisor_fault(self, reason: str) -> None:
+        self.runtime_failed = True
+        self.request_shutdown()
+
+    def _safety_fault(self) -> None:
+        self.recovery_required = True
+        self.auth_rejected = True
         self.runtime_failed = True
         self.request_shutdown()
 
@@ -306,7 +344,7 @@ class Agent:
 
     async def _beat(self) -> None:
         link = self._link
-        if link is None or not self.motion_allowed:
+        if link is None or not self.motion_allowed or self._safety_blocked:
             return
         self._expire_eligibility()
         if self._revoked_link is link:
@@ -347,6 +385,8 @@ class Agent:
                 while True:
                     frame = await link.recv()
                     if isinstance(frame, HeartbeatFrame):
+                        if self._safety_blocked:
+                            continue
                         was_eligible = self._was_eligible
                         self._expire_eligibility()
                         if was_eligible and not self._was_eligible:
@@ -378,7 +418,7 @@ class Agent:
                         self._ledger.note(frame.robot_id, deadline=frame.deadline)
                         self._was_eligible = self._ledger.eligible(frame.robot_id)
                     else:
-                        self._accept(link, frame)
+                        await self._receive_command(link, frame)
             finally:
                 keepalive.cancel()
                 await self._wait_inflight([keepalive])
@@ -401,6 +441,8 @@ class Agent:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
+            if self.recovery_required:
+                self.request_shutdown()
             await self._wait_inflight(inflight)
             await self._quietly(link.close())
 
@@ -447,6 +489,76 @@ class Agent:
                 continue
             last_key, last_sent = key, loop.time()
 
+    async def _safety_storage(self, work: Awaitable[Any]) -> Any:
+        """Bound storage waits without assuming cancellation can stop SQLite immediately."""
+        task = asyncio.ensure_future(work)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
+        except BaseException:
+            task.cancel()
+            self._stragglers.add(task)
+            task.add_done_callback(self._straggler_finished)
+            raise
+        if not done:
+            task.cancel()
+            self._stragglers.add(task)
+            task.add_done_callback(self._straggler_finished)
+            raise TimeoutError("safety storage deadline exceeded")
+        return task.result()
+
+    async def _receive_command(self, link: Link, envelope: Envelope) -> None:
+        if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
+            self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
+            return
+        key = (envelope.type, envelope.connection_epoch, envelope.session_id)
+        overflow = (
+            envelope.type in HALT_TYPES
+            and key not in self._safety_pending
+            and len(self._safety_pending) >= MAX_SAFETY_PENDING
+        )
+        if envelope.type != "safety.estop" and not overflow:
+            self._accept(link, envelope)
+            return
+        # From receipt until durable admission, no new motion or ROS heartbeat is authorized.
+        self._safety_admitting = True
+        self._latest_velocity = None
+        try:
+            async with self._safety_lock:
+                await self._safety_storage(self._journal.safety.mark())
+                if overflow:
+                    self.recovery_required = True
+                self._accept(link, envelope)
+        except BaseException as exc:
+            self._safety_fault()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise ConnectionError("safety admission failed") from exc
+        finally:
+            self._safety_admitting = False
+
+    async def _clear_replayed_safety(self) -> None:
+        async with self._safety_lock:
+            if (
+                self.recovery_required
+                or self._safety_admitting
+                or self._estop_inflight
+                or any(key[0] == "safety.estop" for key in self._safety_pending)
+            ):
+                return
+            try:
+                await self._safety_storage(self._journal.safety.clear_rejected())
+            except BaseException as exc:
+                logger.exception("could not resolve rejected safety intent")
+                if self._safety_admitting:
+                    # A new receipt can be waiting while the delete's outcome is unknown.
+                    try:
+                        await self._safety_storage(self._journal.safety.mark())
+                    except BaseException:
+                        logger.exception("could not retain safety intent after interrupted clear")
+                self._safety_fault()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
             return
@@ -465,33 +577,51 @@ class Agent:
                 self._safety_pending[key] = (link, envelope)
             if self._safety_task is None or self._safety_task.done():
                 self._safety_task = self._spawn(self._drain_safety())
+                self._safety_task.add_done_callback(self._safety_finished)
             return
         safety_active = self._safety_task is not None and not self._safety_task.done()
         if len(self._inflight) - int(safety_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
         self._spawn(self._answer(link, envelope))
 
+    def _safety_finished(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled() or task.exception() is not None:
+            self._safety_fault()
+
     async def _drain_safety(self) -> None:
         while self._safety_pending:
+            if self.recovery_required and self._stopping:
+                return
             key = next(
                 (key for key in self._safety_pending if key[0] == "safety.estop"),
                 next(iter(self._safety_pending)),
             )
             kind = key[0]
             link, envelope = self._safety_pending.pop(key)
+            self._estop_inflight = kind == "safety.estop"
+            replay = False
             try:
                 result = await self.dispatch(envelope)
             except DomainError as exc:
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))
                 if (
-                    exc.code is not ErrorCode.SAFETY_REJECTED
+                    exc.code is not ErrorCode.CONFLICT
                     and link.epoch == self._last_epoch
                     and kind == "safety.estop"
                 ):
-                    self.auth_rejected = True
-                    self.request_shutdown()
+                    self._safety_fault()
+                replay = exc.code is ErrorCode.CONFLICT
                 continue
+            finally:
+                if kind == "safety.estop":
+                    self._estop_inflight = False
+                    if replay:
+                        self._safety_resolving = True
+                        try:
+                            await self._clear_replayed_safety()
+                        finally:
+                            self._safety_resolving = False
             if len(self._inflight) < MAX_INFLIGHT + 1:
                 self._spawn(self._reply(link, envelope, result=result))
 
@@ -504,10 +634,14 @@ class Agent:
         if not failed:
             failed = task.exception() is not None
         if failed:
-            self.auth_rejected = True
-            self.runtime_failed = True
-            self.request_shutdown()
+            self._safety_fault()
             logger.error("safety command did not complete; restart is disabled")
+            if not task.done():
+                task.cancel()
+                done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
+                if not done:
+                    self._stragglers.add(task)
+                    task.add_done_callback(self._straggler_finished)
             return False
         return True
 
@@ -610,10 +744,13 @@ class Agent:
             try:
                 if envelope.type == "safety.estop":
                     await asyncio.wait_for(self._motion.estop(envelope), self._deadlines.safety)
+                    self.recovery_required = True
                 else:
                     await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
             except MotionRejected as exc:
-                raise DomainError(ErrorCode.SAFETY_REJECTED, "stop was rejected") from exc
+                raise DomainError(
+                    exc.code or ErrorCode.SAFETY_REJECTED, "stop was rejected"
+                ) from exc
             except Exception as exc:
                 if supervisor is not None:
                     self._supervisor_fault("stop was not acknowledged")
@@ -654,6 +791,8 @@ class Agent:
 
     async def _drive(self, vx: float, wz: float) -> None:
         """Supervisor sink. The arbiter gets the controller's own validated envelope."""
+        if self._safety_blocked:
+            return
         latest = self._latest_velocity
         if latest is None or (latest.payload.vx, latest.payload.wz) != (vx, wz):
             return

@@ -277,8 +277,8 @@ class ArbiterRig:
         self.exits: list[bool] = []
         self.core = _load_adapter().AdapterCore(
             robot_id=ROBOT,
-            submit=lambda envelope, received_at=None: (
-                self.arbiter.accept(envelope, self.now, received_at=received_at).accepted
+            submit=lambda envelope, received_at=None: self.arbiter.accept(
+                envelope, self.now, received_at=received_at
             ),
             disconnect=self.arbiter.disconnect,
             request_exit=lambda: self.exits.append(True),
@@ -547,8 +547,8 @@ async def test_adapter_server_heartbeat_is_epoch_bound() -> None:
     )
     rig.core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: rig.arbiter.accept(
+            envelope, rig.now, received_at=received_at
         ),
         disconnect=rig.arbiter.disconnect,
         request_exit=lambda: None,
@@ -574,8 +574,8 @@ async def test_cloud_heartbeat_drives_ros_eligibility_and_half_open_stops(
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     adapter = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -649,8 +649,8 @@ async def test_adapter_navigation_reports_unavailable_without_ros_consumer() -> 
     rig = ArbiterRig()
     rig.core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: rig.arbiter.accept(
+            envelope, rig.now, received_at=received_at
         ),
         disconnect=rig.arbiter.disconnect,
         request_exit=lambda: None,
@@ -673,8 +673,8 @@ async def test_background_failure_revokes_ros_heartbeat_and_stops_agent(
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     adapter = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -732,8 +732,8 @@ async def test_buffered_stop_then_estop_latches_estop(tmp_path: Path, socket_pat
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     adapter = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -784,8 +784,8 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -849,8 +849,8 @@ async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -921,8 +921,8 @@ async def test_fault_disables_ros_before_delayed_heartbeat_ack_returns(
     arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
     core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            arbiter.accept(envelope, time.monotonic(), received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at
         ),
         disconnect=arbiter.disconnect,
         request_exit=lambda: None,
@@ -1014,8 +1014,8 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
     rig.arbiter = Arbiter(ROBOT, 0.2, 1.0, 1.0, require_server_heartbeat=True)
     rig.core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: (
-            rig.arbiter.accept(envelope, rig.now, received_at=received_at).accepted
+        submit=lambda envelope, received_at=None: rig.arbiter.accept(
+            envelope, rig.now, received_at=received_at
         ),
         disconnect=rig.arbiter.disconnect,
         request_exit=lambda: None,

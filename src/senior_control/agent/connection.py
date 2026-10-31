@@ -100,6 +100,10 @@ class MotionPort(Protocol):
 class MotionRejected(IpcError):
     """The adapter explicitly rejected a command without executing it."""
 
+    def __init__(self, kind: str, code: ErrorCode | None) -> None:
+        super().__init__(f"ros side rejected {kind}")
+        self.code = code
+
 
 class IpcMotion:
     """``MotionPort`` over the local socket. It never touches rclpy or ``/cmd_vel``."""
@@ -124,7 +128,11 @@ class IpcMotion:
             raise DomainError(ErrorCode.UNAVAILABLE, f"ROS {kind} is unavailable")
         if reply.get("ok") is not True:
             if reply.get("accepted") is False:
-                raise MotionRejected(f"ros side rejected {kind}")
+                try:
+                    code = ErrorCode(reply.get("error"))
+                except (TypeError, ValueError):
+                    code = None
+                raise MotionRejected(kind, code)
             raise IpcError(f"ros side refused {kind}")
         return reply
 

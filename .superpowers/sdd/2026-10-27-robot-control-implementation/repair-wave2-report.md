@@ -40,3 +40,5 @@
 第二轮竞态修复与日志交接见同目录 [repair-wave2-fixround2-report.md](repair-wave2-fixround2-report.md)。
 
 第 3 轮安全队列及测试清理修复见 [repair-wave2-fixround3-report.md](repair-wave2-fixround3-report.md)。
+
+第 4 轮急停持久受理与恢复合约见 [repair-wave2-fixround4-report.md](repair-wave2-fixround4-report.md)。

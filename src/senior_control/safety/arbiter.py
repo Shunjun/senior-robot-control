@@ -106,10 +106,11 @@ class Arbiter:
             return _reject(ErrorCode.OFFLINE)
         lease = self._lease
         if self._require_server_heartbeat and command.type in _SAFETY:
-            if (
-                command.connection_epoch != self._server_epoch
-                or command.connection_epoch <= self._server_disabled_epoch
-            ):
+            if self._server_epoch == 0:
+                return _reject(ErrorCode.OFFLINE)
+            if command.connection_epoch < self._server_epoch:
+                return _reject(ErrorCode.CONFLICT)
+            if command.connection_epoch != self._server_epoch:
                 return _reject(ErrorCode.OFFLINE)
             if command.type == "safety.estop":
                 key = (command.session_id, command.connection_epoch)

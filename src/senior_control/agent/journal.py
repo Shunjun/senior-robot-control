@@ -43,6 +43,52 @@ _OPEN = (
 )
 
 
+@asynccontextmanager
+async def _transaction(database: Database) -> AsyncIterator[aiosqlite.Connection]:
+    connection = database.connection
+    await connection.rollback()
+    async with connection.execute("BEGIN IMMEDIATE"):
+        pass
+    try:
+        yield connection
+    except BaseException:
+        await connection.rollback()
+        raise
+    else:
+        await connection.commit()
+
+
+class SafetyIntentStore:
+    """A single durable unresolved-safety obligation for this robot."""
+
+    def __init__(self, database: Database, robot_id: str) -> None:
+        self._database = database
+        self._robot_id = robot_id
+
+    async def pending(self) -> bool:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT 1 FROM agent_safety_intent WHERE robot_id = ?", (self._robot_id,)
+            ) as cursor:
+                return await cursor.fetchone() is not None
+
+    async def mark(self) -> None:
+        async with self._database.write_lock:
+            async with _transaction(self._database) as connection:
+                await connection.execute(
+                    "INSERT OR IGNORE INTO agent_safety_intent (robot_id) VALUES (?)",
+                    (self._robot_id,),
+                )
+
+    async def clear_rejected(self) -> None:
+        """Clear only after every recorded estop is known to be stale or a replay."""
+        async with self._database.write_lock:
+            async with _transaction(self._database) as connection:
+                await connection.execute(
+                    "DELETE FROM agent_safety_intent WHERE robot_id = ?", (self._robot_id,)
+                )
+
+
 @dataclass(frozen=True)
 class JournalEntry:
     operation_id: str
@@ -69,12 +115,32 @@ class AgentJournal:
             raise ValueError("robot id is required")
         self._database = database
         self._robot_id = robot_id
+        self.safety = SafetyIntentStore(database, robot_id)
 
     async def prepare(self) -> None:
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 for statement in AGENT_JOURNAL_STATEMENTS:
                     await connection.execute(statement)
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS agent_schema_version "
+                    "(id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)"
+                )
+                await connection.execute(
+                    "INSERT OR IGNORE INTO agent_schema_version (id, version) VALUES (1, 0)"
+                )
+                async with connection.execute(
+                    "SELECT version FROM agent_schema_version WHERE id = 1"
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row is None or row[0] not in (0, 1):
+                    raise ValueError("unknown agent schema")
+                if row[0] == 0:
+                    # //Compatible: upgrade agent databases created before safety state existed.
+                    await connection.execute(
+                        "CREATE TABLE agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+                    )
+                    await connection.execute("UPDATE agent_schema_version SET version = 1")
                 await connection.execute(
                     f"""
                     UPDATE agent_operation SET status = ?
@@ -185,14 +251,5 @@ class AgentJournal:
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        connection = self._database.connection
-        await connection.rollback()
-        async with connection.execute("BEGIN IMMEDIATE"):
-            pass
-        try:
+        async with _transaction(self._database) as connection:
             yield connection
-        except BaseException:
-            await connection.rollback()
-            raise
-        else:
-            await connection.commit()

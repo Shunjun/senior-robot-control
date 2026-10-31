@@ -20,6 +20,7 @@ from senior_control.protocol import (
     VelocityEnvelope,
     validate_envelope,
 )
+from senior_control.safety.arbiter import CommandResult
 
 SOCKET_ENV = "SENIOR_AGENT_SOCKET"
 
@@ -37,7 +38,7 @@ class AdapterCore:
         self,
         *,
         robot_id: str,
-        submit: Callable[..., bool],
+        submit: Callable[..., CommandResult],
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
         server_heartbeat: Callable[[int, float], bool] | None = None,
@@ -145,10 +146,10 @@ class AdapterCore:
         received_at = message.get("received_at")
         if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
             received_at = None
-        accepted = self._submit(envelope, received_at)
-        if not accepted:
-            # A refused stop or estop must not look successful and must not drop a newer lease.
-            return {"ok": False, "accepted": False}
+        result = self._submit(envelope, received_at)
+        if not result.accepted:
+            # The agent distinguishes stale frames from an unconfirmed safety request.
+            return {"ok": False, "accepted": False, "error": result.error.value}
         if envelope.type not in {"safety.estop", "safety.reset"}:
             self._highest_epoch = max(self._highest_epoch, envelope.connection_epoch)
             self._active_epoch = (
@@ -175,7 +176,7 @@ def main() -> None:
 
     core = AdapterCore(
         robot_id=robot_id,
-        submit=lambda envelope, received_at=None: node.submit(envelope, received_at).accepted,
+        submit=lambda envelope, received_at=None: node.submit(envelope, received_at),
         disconnect=node.disconnect,
         request_exit=request_exit,
         server_heartbeat=node.server_heartbeat,

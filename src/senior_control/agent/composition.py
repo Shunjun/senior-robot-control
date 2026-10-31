@@ -1,6 +1,7 @@
 """Configuration and composition for the robot agent."""
 
 import asyncio
+import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.waypoints.store import WaypointStore
+
+logger = logging.getLogger("senior_control.agent")
 
 
 @dataclass(frozen=True)
@@ -101,7 +104,11 @@ async def run_agent(config: AgentConfig) -> int:
         journal = AgentJournal(database, robot_id=config.robot_id)
         await tasks.prepare()
         await waypoints.prepare()
-        await journal.prepare()
+        try:
+            await journal.prepare()
+        except Exception:
+            logger.exception("could not initialize persistent agent safety state")
+            return 78
         motion = IpcMotion(
             IpcClient(config.socket_path),
             heartbeat_client=IpcClient(config.socket_path),
@@ -162,4 +169,6 @@ async def run_agent(config: AgentConfig) -> int:
         )
         agent.install_signal_handlers()
         await agent.run()
-        return 78 if agent.auth_rejected else 1 if agent.runtime_failed else 0
+        if agent.auth_rejected or agent.recovery_required:
+            return 78
+        return 1 if agent.runtime_failed else 0
