@@ -93,21 +93,15 @@ class TaskStore:
         self._boot_id = uuid.uuid4().hex
 
     async def prepare(self) -> None:
+        from senior_control.storage.core_schema import migrate_core
         from senior_control.storage.migrations import migrate
         from senior_control.storage.schema import DOMAIN_MIGRATIONS
 
         await migrate(self._database, list(DOMAIN_MIGRATIONS))
+        await migrate_core(self._database)
         async with self._database.write_lock:
             async with self._transaction() as connection:
-                await connection.execute(
-                    "CREATE TABLE IF NOT EXISTS task_scan_cursor "
-                    "(robot_id TEXT PRIMARY KEY, last_tick_utc TEXT NOT NULL)"
-                )
-                await connection.execute(
-                    "CREATE TABLE IF NOT EXISTS task_execution_generation "
-                    "(execution_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, "
-                    "FOREIGN KEY(execution_id) REFERENCES task_execution(execution_id))"
-                )
+                # //Compatible: indexes are rebuilt idempotently on existing databases.
                 await connection.execute(
                     "CREATE INDEX IF NOT EXISTS task_execution_generation_idx "
                     "ON task_execution_generation(generation, execution_id)"
@@ -312,6 +306,8 @@ class TaskStore:
                         raise DomainError(ErrorCode.CONFLICT, "task does not exist")
                     if not current.enabled:
                         raise DomainError(ErrorCode.CONFLICT, "task is disabled")
+                    if current != task:
+                        raise DomainError(ErrorCode.CONFLICT, "task definition changed")
                     if await self._deleted(connection, task.task_id):
                         raise DomainError(ErrorCode.CONFLICT, "task is deleted")
                     if await self._invalidated(connection, task.task_id):

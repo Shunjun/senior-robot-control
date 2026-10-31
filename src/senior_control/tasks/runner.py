@@ -13,6 +13,7 @@ from senior_control.tasks.models import (
 )
 
 _JUMP_SECONDS = 2.0
+_MAX_LIVE_SCAN_SECONDS = 2.0
 _ACTIVE = {ExecutionStatus.RUNNING, ExecutionStatus.DISPATCHING, ExecutionStatus.CANCEL_PENDING}
 
 
@@ -151,6 +152,8 @@ def _scan(
     last = _utc(context.last_tick_utc)
     wall = (now_utc - last).total_seconds()
     mono = now_mono - context.last_tick_mono
+    if wall >= 0 and mono > _MAX_LIVE_SCAN_SECONDS:
+        return now_utc, now_utc, (last, now_utc)
     jumped = wall < -_JUMP_SECONDS or mono < -_JUMP_SECONDS or abs(wall - mono) > _JUMP_SECONDS
     if not jumped:
         return last, now_utc, None

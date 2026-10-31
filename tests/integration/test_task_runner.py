@@ -171,8 +171,8 @@ async def test_crash_after_dispatch_never_redispatches_unknown(tmp_path: Path) -
             False,
             saved.map_ref,
             frozenset(),
-            due - timedelta(seconds=5),
-            5.0,
+            due - timedelta(seconds=0.2),
+            9.8,
         ),
     )
     assert len(intents) == 1 and intents[0].action is IntentAction.PAUSE
@@ -356,8 +356,8 @@ async def test_invalidated_link_keeps_definition_and_blocks_dispatch(tmp_path: P
             False,
             loaded.map_ref,
             frozenset({loaded.task_id}),
-            due - timedelta(seconds=30),
-            970.0,
+            due - timedelta(seconds=0.2),
+            999.8,
         ),
     )
     assert intents == [
@@ -1015,3 +1015,158 @@ async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
             await tick
         record = await store.execution_by_id(record.execution_id)
         assert record is not None and record.status is ExecutionStatus.PAUSED
+
+
+@pytest.mark.parametrize("change", ["revision", "content", "disabled", "deleted"])
+async def test_claim_rejects_stale_or_unavailable_definition(tmp_path: Path, change: str) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, original = await saved_task(database, created)
+        requested = original
+        if change == "revision":
+            await store.update(replace(original, waypoint_ids=("new",)), original.revision)
+        elif change == "content":
+            requested = replace(original, waypoint_ids=("wrong",))
+        elif change == "disabled":
+            await store.update(replace(original, enabled=False), original.revision)
+        else:
+            await database.connection.execute(
+                "CREATE TABLE agent_deleted_task (task_id TEXT PRIMARY KEY, robot_id TEXT, "
+                "operation_id TEXT, revision INTEGER)"
+            )
+            await database.connection.execute(
+                "INSERT INTO agent_deleted_task VALUES (?, ?, ?, ?)",
+                (original.task_id, original.robot_id, "delete", original.revision),
+            )
+            await database.connection.commit()
+        navigation = RecordingNavigation()
+        with pytest.raises(DomainError) as error:
+            await TaskExecutor(database, store, navigation).persist_and_dispatch(
+                due_intent(requested, due), requested
+            )
+        assert error.value.code is ErrorCode.CONFLICT
+        assert navigation.calls == []
+        assert await store.execution_for(original.task_id, due) is None
+
+
+async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
+    tmp_path: Path,
+) -> None:
+    from senior_control.agent.journal import AgentJournal
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        execution = await store.claim(task, created + timedelta(minutes=30), generation=7)
+        await store.mark_cancel_pending(execution.execution_id)
+        await store.save_scan_cursor(created)
+        journal = AgentJournal(database, robot_id="robot-a")
+        await journal.prepare()
+        await journal.safety.mark()
+        # Emulate a pre-versioned database containing the existing continuity tables.
+        await database.connection.execute("DROP TABLE IF EXISTS core_schema_version")
+        await database.connection.execute("DROP TABLE IF EXISTS home_execution_guard")
+        await database.connection.execute("DROP TABLE IF EXISTS map_graph_guard")
+        await database.connection.commit()
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        journal = AgentJournal(database, robot_id="robot-a")
+        await journal.prepare()
+        assert await journal.safety.pending()
+        assert await store.scan_cursor() == created
+        loaded = await store.execution_by_id(execution.execution_id)
+        assert loaded is not None and loaded.status is ExecutionStatus.CANCEL_PENDING
+        async with database.connection.execute(
+            "SELECT generation FROM task_execution_generation WHERE execution_id = ?",
+            (execution.execution_id,),
+        ) as cursor:
+            assert await cursor.fetchone() == (7,)
+        async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
+            assert await cursor.fetchone() == (3,)
+        async with database.connection.execute(
+            "SELECT version FROM agent_schema_version"
+        ) as cursor:
+            assert await cursor.fetchone() == (1,)
+
+
+async def test_unknown_runtime_schema_version_refuses_open(tmp_path: Path) -> None:
+    async with Database(tmp_path / "robot.db") as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS core_schema_version "
+            "(id INTEGER PRIMARY KEY, version INTEGER NOT NULL)"
+        )
+        await database.connection.execute("DELETE FROM core_schema_version")
+        await database.connection.execute("INSERT INTO core_schema_version VALUES (1, 999)")
+        await database.connection.commit()
+        with pytest.raises(ValueError, match="unknown core schema"):
+            await TaskStore(database, robot_id="robot-a").prepare()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+async def test_domain_versions_upgrade_without_touching_agent_safety(
+    tmp_path: Path, version: int
+) -> None:
+    from senior_control.agent.journal import AgentJournal
+
+    async with Database(tmp_path / "legacy.db") as database:
+        await migrate(database, list(DOMAIN_MIGRATIONS[:version]))
+        journal = AgentJournal(database, robot_id="robot-a")
+        await journal.prepare()
+        await journal.safety.mark()
+        await TaskStore(database, robot_id="robot-a").prepare()
+        assert await journal.safety.pending()
+        async with database.connection.execute("PRAGMA user_version") as cursor:
+            assert await cursor.fetchone() == (3,)
+        async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
+            assert await cursor.fetchone() == (3,)
+
+
+async def test_core_migration_failure_rolls_back_and_preserves_safety(tmp_path: Path) -> None:
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.storage.core_schema import CORE_MIGRATIONS, migrate_core
+    from senior_control.storage.migrations import Migration
+
+    async with Database(tmp_path / "robot.db") as database:
+        await TaskStore(database, robot_id="robot-a").prepare()
+        journal = AgentJournal(database, robot_id="robot-a")
+        await journal.prepare()
+        await journal.safety.mark()
+        failing = Migration(4, ("CREATE TABLE partial_upgrade (id INTEGER)", "INVALID SQL"))
+        with pytest.raises(sqlite3.OperationalError):
+            await migrate_core(database, (*CORE_MIGRATIONS, failing))
+        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
+            assert await cursor.fetchone() == (3,)
+        async with database.connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'partial_upgrade'"
+        ) as cursor:
+            assert await cursor.fetchone() is None
+
+
+async def test_runtime_persists_long_stall_skip_and_allows_fresh_tick(tmp_path: Path) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stalled = created + timedelta(days=120)
+    async with Database(tmp_path / "robot.db") as database:
+        store, original = await saved_task(database, created)
+        task = await store.update(
+            replace(original, schedule=Schedule.interval(created, 1)), original.revision
+        )
+        navigation = RecordingNavigation()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, navigation))
+        live = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created, 0.0, live)
+        await runtime.tick(stalled, 120 * 86400.0, live)
+        assert navigation.calls == []
+        skips = await store.skips()
+        assert len(skips) == 1
+        assert (skips[0].skip_from, skips[0].skip_until) == (created, stalled)
+        await runtime.tick(stalled + timedelta(seconds=0.8), 120 * 86400.0 + 0.8, live)
+        await runtime.tick(stalled + timedelta(seconds=1), 120 * 86400.0 + 1, live)
+        assert len(navigation.calls) == 1

@@ -115,8 +115,8 @@ def test_offline_skips_no_catchup() -> None:
     offline = context(
         connected=False,
         active_map=task.map_ref,
-        last_tick_utc=due - timedelta(seconds=30),
-        last_tick_mono=970.0,
+        last_tick_utc=due - timedelta(seconds=0.2),
+        last_tick_mono=999.8,
     )
 
     skipped = runner.tick(due, 1000.0, offline)
@@ -125,8 +125,8 @@ def test_offline_skips_no_catchup() -> None:
         2800.0,
         context(
             active_map=task.map_ref,
-            last_tick_utc=due,
-            last_tick_mono=1000.0,
+            last_tick_utc=due + timedelta(minutes=30, seconds=-0.2),
+            last_tick_mono=2799.8,
         ),
     )
     running = ExecutionRecord(
@@ -143,8 +143,8 @@ def test_offline_skips_no_catchup() -> None:
         context(
             connected=False,
             active_map=task.map_ref,
-            last_tick_utc=due,
-            last_tick_mono=1000.0,
+            last_tick_utc=due + timedelta(seconds=9.8),
+            last_tick_mono=1009.8,
         ),
     )
     reconnected = TaskRunner(
@@ -164,8 +164,8 @@ def test_offline_skips_no_catchup() -> None:
         1020.0,
         context(
             active_map=task.map_ref,
-            last_tick_utc=due + timedelta(seconds=10),
-            last_tick_mono=1010.0,
+            last_tick_utc=due + timedelta(seconds=19.8),
+            last_tick_mono=1019.8,
         ),
     )
 
@@ -210,8 +210,8 @@ def test_manual_takeover_requires_resume() -> None:
         context(
             manual_driving=True,
             active_map=task.map_ref,
-            last_tick_utc=due,
-            last_tick_mono=1000.0,
+            last_tick_utc=due + timedelta(seconds=4.8),
+            last_tick_mono=1004.8,
         ),
     )
     held = TaskRunner([task]).tick(
@@ -220,8 +220,8 @@ def test_manual_takeover_requires_resume() -> None:
         context(
             manual_driving=True,
             active_map=task.map_ref,
-            last_tick_utc=due - timedelta(seconds=30),
-            last_tick_mono=970.0,
+            last_tick_utc=due - timedelta(seconds=0.2),
+            last_tick_mono=999.8,
         ),
     )
     released = TaskRunner(
@@ -241,8 +241,8 @@ def test_manual_takeover_requires_resume() -> None:
         1010.0,
         context(
             active_map=task.map_ref,
-            last_tick_utc=due + timedelta(seconds=5),
-            last_tick_mono=1005.0,
+            last_tick_utc=due + timedelta(seconds=9.8),
+            last_tick_mono=1009.8,
         ),
     )
 
@@ -278,8 +278,8 @@ def test_next_scheduled_occurrence_runs_but_interrupted_instance_does_not_resume
         5000.0,
         context(
             active_map=task.map_ref,
-            last_tick_utc=following - timedelta(seconds=20),
-            last_tick_mono=4980.0,
+            last_tick_utc=following - timedelta(seconds=0.2),
+            last_tick_mono=4999.8,
         ),
     )
 
@@ -362,8 +362,8 @@ def test_preconditions_skip_without_dispatch(
     due = created + timedelta(minutes=30)
     base = context(
         active_map=task.map_ref,
-        last_tick_utc=due - timedelta(seconds=30),
-        last_tick_mono=970.0,
+        last_tick_utc=due - timedelta(seconds=0.2),
+        last_tick_mono=999.8,
     )
 
     intents = TaskRunner([task]).tick(due, 1000.0, replace(base, **override))
@@ -390,8 +390,8 @@ def test_busy_navigation_skips_other_task() -> None:
         1000.0,
         context(
             active_map=first.map_ref,
-            last_tick_utc=due - timedelta(seconds=10),
-            last_tick_mono=990.0,
+            last_tick_utc=due - timedelta(seconds=0.2),
+            last_tick_mono=999.8,
         ),
     )
 
@@ -400,12 +400,12 @@ def test_busy_navigation_skips_other_task() -> None:
 
 def test_one_tick_dispatches_only_the_latest_occurrence() -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
-    task = interval_task(created, every_seconds=600)
-    end = created + timedelta(minutes=30)
+    task = interval_task(created, every_seconds=1)
+    end = created + timedelta(seconds=2)
 
     intents = TaskRunner([task]).tick(
         end,
-        1800.0,
+        2.0,
         context(active_map=task.map_ref, last_tick_utc=created, last_tick_mono=0.0),
     )
 
@@ -414,13 +414,7 @@ def test_one_tick_dispatches_only_the_latest_occurrence() -> None:
             task.task_id,
             IntentAction.SKIP,
             "busy",
-            occurrence_utc=created + timedelta(minutes=10),
-        ),
-        TaskIntent(
-            task.task_id,
-            IntentAction.SKIP,
-            "busy",
-            occurrence_utc=created + timedelta(minutes=20),
+            occurrence_utc=created + timedelta(seconds=1),
         ),
         TaskIntent(task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=end),
     ]
@@ -435,7 +429,11 @@ def test_one_tick_dispatches_at_most_one_navigation() -> None:
     intents = TaskRunner([beta, alpha]).tick(
         due,
         1800.0,
-        context(active_map=alpha.map_ref, last_tick_utc=created, last_tick_mono=0.0),
+        context(
+            active_map=alpha.map_ref,
+            last_tick_utc=due - timedelta(seconds=0.2),
+            last_tick_mono=1799.8,
+        ),
     )
 
     assert [item for item in intents if item.action is IntentAction.DISPATCH] == [
@@ -463,7 +461,11 @@ def test_claimed_winner_keeps_the_same_timestamp_loser_from_dispatch() -> None:
     intents = TaskRunner([alpha, beta], (winner,)).tick(
         due,
         1800.0,
-        context(active_map=alpha.map_ref, last_tick_utc=created, last_tick_mono=0.0),
+        context(
+            active_map=alpha.map_ref,
+            last_tick_utc=due - timedelta(seconds=0.2),
+            last_tick_mono=1799.8,
+        ),
     )
     assert [item for item in intents if item.action is IntentAction.DISPATCH] == []
     assert any(
@@ -474,7 +476,11 @@ def test_claimed_winner_keeps_the_same_timestamp_loser_from_dispatch() -> None:
     again = TaskRunner([alpha, beta], (winner,)).tick(
         later,
         3600.0,
-        context(active_map=alpha.map_ref, last_tick_utc=due, last_tick_mono=1800.0),
+        context(
+            active_map=alpha.map_ref,
+            last_tick_utc=later - timedelta(seconds=0.2),
+            last_tick_mono=3599.8,
+        ),
     )
     assert any(
         item.action is IntentAction.DISPATCH and item.occurrence_utc == later for item in again
@@ -543,6 +549,58 @@ def test_monotonic_lead_does_not_reopen_scanned_time() -> None:
         if item.skip_from is not None and item.skip_until is not None
     )
     assert all(item.occurrence_utc is None or item.occurrence_utc > last for item in intents)
-    assert [item for item in intents if item.action is IntentAction.DISPATCH] == [
-        TaskIntent(task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=now)
+    assert intents == [
+        TaskIntent(task.task_id, IntentAction.SKIP, "clock_jump", skip_from=last, skip_until=now)
+    ]
+
+
+@pytest.mark.parametrize("kind", ["interval", "cron"])
+def test_months_long_live_stall_bulk_skips_without_late_motion(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    schedule = (
+        Schedule.interval(created, 1)
+        if kind == "interval"
+        else Schedule.cron("* * * * *", timezone="Asia/Shanghai")
+    )
+    task = replace(interval_task(created), schedule=schedule)
+    end = created + timedelta(days=120)
+    original = Schedule.next_after
+    calls = 0
+
+    def bounded(self: Schedule, moment: datetime) -> datetime:
+        nonlocal calls
+        calls += 1
+        if calls > 50:
+            raise AssertionError("stall enumerated occurrences")
+        return original(self, moment)
+
+    monkeypatch.setattr(Schedule, "next_after", bounded)
+    intents = TaskRunner([task]).tick(
+        end, 120 * 86400.0, context(last_tick_utc=created, last_tick_mono=0.0)
+    )
+    assert intents == [
+        TaskIntent(task.task_id, IntentAction.SKIP, "clock_jump", skip_from=created, skip_until=end)
+    ]
+    assert calls <= 2
+    fresh = end + timedelta(seconds=1 if kind == "interval" else 60)
+    intents = TaskRunner([task]).tick(
+        fresh,
+        120 * 86400.0 + (fresh - end).total_seconds(),
+        context(
+            last_tick_utc=fresh - timedelta(seconds=0.2),
+            last_tick_mono=120 * 86400.0 + (fresh - end).total_seconds() - 0.2,
+        ),
+    )
+    assert intents == [TaskIntent(task.task_id, IntentAction.DISPATCH, "due", occurrence_utc=fresh)]
+
+
+def test_multi_second_live_stall_does_not_dispatch_a_missed_trigger() -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    task = interval_task(created, every_seconds=1)
+    end = created + timedelta(seconds=3)
+    intents = TaskRunner([task]).tick(end, 3.0, context(last_tick_utc=created, last_tick_mono=0.0))
+    assert intents == [
+        TaskIntent(task.task_id, IntentAction.SKIP, "clock_jump", skip_from=created, skip_until=end)
     ]
