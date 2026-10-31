@@ -1397,3 +1397,249 @@ async def test_legacy_ipc_state_does_not_claim_tasks_are_runnable(tmp_path: Path
         assert snapshot.tasks[0].task_id == task.task_id
         assert not snapshot.localized
         assert snapshot.runnable_task_ids == ()
+
+
+@pytest.mark.parametrize("loss", ["missing_receiver", "changed_reference"])
+async def test_unqualified_occurrence_is_skipped_and_never_replayed(
+    tmp_path: Path, loss: str
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "unqualified-tick.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        port = SyntheticNavigationFence(navigation, reference)
+        executor = CoreTaskExecutor(
+            database,
+            store,
+            navigation if loss == "missing_receiver" else port,
+            map_reference=reference,
+        )
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+        apply = executor.apply
+
+        async def lose_reference(*args, **kwargs):
+            if loss == "changed_reference":
+                reference.guard_reference()
+            return await apply(*args, **kwargs)
+
+        executor.apply = lose_reference
+        await runtime.tick(due, 1.2, live)
+        skipped = await store.execution_for(task.task_id, due)
+        assert skipped is not None and skipped.status is ExecutionStatus.SKIPPED
+        assert await store.scan_cursor() == due
+        assert navigation.calls == []
+
+        executor.apply = apply
+        executor._navigation = port
+        reference.release_reference()
+        fresh = replace(live, localization_generation=reference.map_generation)
+        await runtime.tick(due + timedelta(seconds=0.2), 1.4, fresh)
+        assert navigation.calls == []
+        next_due = due + timedelta(minutes=30)
+        await runtime.tick(next_due - timedelta(seconds=0.2), 1801.0, fresh)
+        await runtime.tick(next_due, 1801.2, fresh)
+        assert len(navigation.calls) == 1
+        current = await store.execution_for(task.task_id, next_due)
+        assert current is not None and current.status is ExecutionStatus.RUNNING
+
+
+async def test_unqualified_skip_preserves_concurrent_cancel_pending(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "concurrent-tick.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(database, store, navigation, map_reference=reference)
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+        apply = executor.apply
+
+        async def claimed_before_unavailable(*args, **kwargs):
+            claimed = await store.claim(task, due)
+            await store.mark_cancel_pending(claimed.execution_id)
+            return await apply(*args, **kwargs)
+
+        executor.apply = claimed_before_unavailable
+        await runtime.tick(due, 1.2, live)
+        stored = await store.execution_for(task.task_id, due)
+        assert stored is not None and stored.status is ExecutionStatus.CANCEL_PENDING
+        assert await store.scan_cursor() == due
+        assert navigation.calls == []
+
+
+@pytest.mark.parametrize("failure", ["storage", "cancelled"])
+@pytest.mark.parametrize("phase", ["runner", "executor"])
+async def test_unqualified_skip_is_retried_after_interrupted_persistence(
+    tmp_path: Path, failure: str, phase: str
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "skip-interrupted.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(database, store, navigation, map_reference=reference)
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+        skip = store.skip_occurrence
+        entered = asyncio.Event()
+
+        async def interrupted_skip(*args, **kwargs):
+            entered.set()
+            if failure == "storage":
+                raise sqlite3.OperationalError("injected storage failure")
+            await asyncio.Event().wait()
+
+        store.skip_occurrence = interrupted_skip
+        blocked = replace(live, localized=False) if phase == "runner" else live
+        tick = asyncio.create_task(runtime.tick(due, 1.2, blocked))
+        await asyncio.wait_for(entered.wait(), 1)
+        if failure == "cancelled":
+            tick.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tick
+        else:
+            with pytest.raises(sqlite3.OperationalError):
+                await tick
+        store.skip_occurrence = skip
+        executor._navigation = SyntheticNavigationFence(navigation, reference)
+        await runtime.tick(due + timedelta(seconds=0.2), 1.4, live)
+        saved = await store.execution_for(task.task_id, due)
+        assert saved is not None and saved.status is ExecutionStatus.SKIPPED
+        assert navigation.calls == []
+
+
+async def test_pending_skip_failure_does_not_delay_active_cancellation(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "skip-cancel.db") as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(database, store, navigation, map_reference=reference)
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+
+        async def failing_skip(*args, **kwargs):
+            raise sqlite3.OperationalError("injected storage failure")
+
+        store.skip_occurrence = failing_skip
+        with pytest.raises(sqlite3.OperationalError):
+            await runtime.tick(due, 1.2, live)
+        claimed = await store.claim(task, due)
+        await store.mark_running(claimed.execution_id)
+        executor._navigation = SyntheticNavigationFence(navigation, reference)
+        with pytest.raises(sqlite3.OperationalError):
+            await runtime.tick(due + timedelta(seconds=0.2), 1.4, replace(live, connected=False))
+        record = await store.execution_by_id(claimed.execution_id)
+        assert record is not None and record.status is ExecutionStatus.PAUSED
+        assert navigation.calls == [f"cancel:{claimed.execution_id}"]
+
+
+async def test_restart_after_unqualified_skip_write_failure_does_not_replay(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    path = tmp_path / "skip-restart.db"
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        executor = CoreTaskExecutor(database, store, RecordingNavigation(), map_reference=reference)
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(due - timedelta(seconds=0.2), 1.0, live)
+
+        async def failing_skip(*args, **kwargs):
+            raise sqlite3.OperationalError("injected storage failure")
+
+        store.skip_occurrence = failing_skip
+        with pytest.raises(sqlite3.OperationalError):
+            await runtime.tick(due, 1.2, live)
+
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(
+            database,
+            store,
+            SyntheticNavigationFence(navigation, reference),
+            map_reference=reference,
+        )
+        runtime = CoreTaskRuntime(store, executor)
+        fresh = replace(live, localization_generation=reference.map_generation)
+        await runtime.tick(due + timedelta(seconds=0.2), 1.0, fresh)
+        await runtime.tick(due + timedelta(seconds=0.4), 1.2, fresh)
+        assert navigation.calls == []
+        skips = await store.skips()
+        assert any(
+            item.reason == "restart" and item.skip_from < due <= item.skip_until for item in skips
+        )
+
+
+@pytest.mark.parametrize("failure", ["storage", "cancelled"])
+async def test_skip_write_failure_does_not_replay_other_due_occurrences(
+    tmp_path: Path, failure: str
+) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "skip-other-due.db") as database:
+        store, original = await saved_task(database, created)
+        task = await store.update(
+            replace(original, schedule=Schedule.interval(created, 1)), original.revision
+        )
+        reference = MapReferenceStore(task.map_ref, "odom", 0.5)
+        navigation = RecordingNavigation()
+        executor = CoreTaskExecutor(
+            database,
+            store,
+            SyntheticNavigationFence(navigation, reference),
+            map_reference=reference,
+        )
+        runtime = CoreTaskRuntime(store, executor)
+        live = ExecutionContext(
+            True, True, True, False, task.map_ref, localization_generation=reference.map_generation
+        )
+        await runtime.tick(created + timedelta(seconds=0.5), 1.0, live)
+        skip = store.skip_occurrence
+        entered = asyncio.Event()
+
+        async def failing_skip(*args, **kwargs):
+            entered.set()
+            if failure == "storage":
+                raise sqlite3.OperationalError("injected storage failure")
+            await asyncio.Event().wait()
+
+        store.skip_occurrence = failing_skip
+        tick = asyncio.create_task(runtime.tick(created + timedelta(seconds=2), 2.5, live))
+        await asyncio.wait_for(entered.wait(), 1)
+        if failure == "cancelled":
+            tick.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tick
+        else:
+            with pytest.raises(sqlite3.OperationalError):
+                await tick
+        store.skip_occurrence = skip
+        await runtime.tick(created + timedelta(seconds=2.2), 2.7, live)
+        for seconds in (1, 2):
+            saved = await store.execution_for(task.task_id, created + timedelta(seconds=seconds))
+            assert saved is not None and saved.status is ExecutionStatus.SKIPPED
+        assert navigation.calls == []

@@ -14,8 +14,13 @@ class Database:
         self.path = path
         self.busy_timeout_ms = busy_timeout_ms
         self.write_lock = asyncio.Lock()
+        self._home_target_locks: dict[str, asyncio.Lock] = {}
         self.connection: aiosqlite.Connection
         self._entered = False
+
+    def home_target_lock(self, robot_id: str) -> asyncio.Lock:
+        """Serialize one robot's Home target edits and acceptance across services."""
+        return self._home_target_locks.setdefault(robot_id, asyncio.Lock())
 
     @property
     def is_open(self) -> bool:

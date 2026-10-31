@@ -48,6 +48,13 @@ class NavigationFailure(Exception):
     """A navigation RPC failed; persisted state retains any cancellation obligation."""
 
 
+class QualificationUnavailable(DomainError):
+    """The occurrence was rejected before claiming or invoking navigation."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.UNAVAILABLE, "qualified task navigation is unavailable")
+
+
 class TaskExecutor:
     def __init__(
         self,
@@ -92,7 +99,7 @@ class TaskExecutor:
         if not self._map_qualified(
             task, map_generation, localization_generation, localized
         ) or not callable(getattr(self._navigation, "start_qualified", None)):
-            raise DomainError(ErrorCode.UNAVAILABLE, "qualified task navigation is unavailable")
+            raise QualificationUnavailable()
         record = await self._store.claim(task, intent.occurrence_utc, generation=started_generation)
         self._crash_if("committed")
         if (

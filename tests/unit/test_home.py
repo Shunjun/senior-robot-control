@@ -932,3 +932,137 @@ async def test_map_switch_during_home_save_never_binds_the_stale_pose(tmp_path: 
         with pytest.raises(DomainError):
             await service.return_home(MAP)
         assert navigation.goals == []
+
+
+@pytest.mark.parametrize("edit_kind", ["current", "other_service", "import"])
+@pytest.mark.parametrize("phase", ["guard", "navigation"])
+async def test_home_edit_waits_for_target_acceptance(
+    tmp_path: Path, edit_kind: str, phase: str
+) -> None:
+    from senior_control.mapping.archive import BundleWaypoint
+
+    events: list[tuple[str, Pose2D]] = []
+    entered, resume = asyncio.Event(), asyncio.Event()
+
+    class OrderedNavigation(RecordingNavigation):
+        async def navigate(self, goal: object) -> str:
+            events.append(("send", goal.pose))
+            if phase == "navigation":
+                entered.set()
+                await resume.wait()
+            return await super().navigate(goal)
+
+    navigation = OrderedNavigation()
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "home-edit.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        original = Pose2D(1, 2, 0.4)
+        changed = Pose2D(9, 8, 0.2)
+        await service.initialize(STILL, localized(original))
+        editor = service
+        if edit_kind == "other_service":
+            editor = SyntheticHomeService(database, reference, robot_id=ROBOT)
+            await editor.prepare()
+
+        write_guard = service._write_guard
+
+        async def paused_guard(execution_id: str | None) -> None:
+            await write_guard(execution_id)
+            if execution_id is None and phase == "guard":
+                entered.set()
+                await resume.wait()
+
+        service._write_guard = paused_guard
+        send = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(entered.wait(), 1)
+
+        async def edit() -> None:
+            if edit_kind == "import":
+                waypoint = await editor.import_home(
+                    BundleWaypoint("import", "home", changed, MAP, "node-1", ROBOT),
+                    anchor_pose=Pose2D(0, 0, 0),
+                )
+            else:
+                waypoint = await editor.set_current(localized(changed))
+            events.append(("edit", waypoint.pose))
+
+        edit_task = asyncio.create_task(edit())
+        try:
+            done, _ = await asyncio.wait({edit_task}, timeout=0.2)
+            assert not done, "home changed while the previous target was waiting to send"
+            # The wait must not retain SQLite's lock while the external operation is pending.
+            await asyncio.wait_for(database.write_lock.acquire(), 1)
+            database.write_lock.release()
+        finally:
+            resume.set()
+            await send
+            await edit_task
+        assert events == [("send", original), ("edit", changed)]
+
+
+async def test_anchor_change_invalidates_home_during_pending_acceptance(tmp_path: Path) -> None:
+    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+
+    navigation = AcceptThenWait()
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "anchor-send.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        send = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        previous = reference.map_generation
+        update = asyncio.create_task(
+            service.apply_anchor_update(
+                AnchorSnapshot(
+                    MAP,
+                    "odom",
+                    (AnchorPose("node-1", Pose2D(1, 0, 0), True),),
+                    GridExtent(8, 8, 0, 0),
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        try:
+            assert reference.map_generation != previous
+            assert not update.done()
+        finally:
+            navigation.release.set()
+            await send
+            await update
+        assert navigation.events == ["navigate", "cancel"]
+        assert navigation.active is None
+
+
+async def test_home_edit_does_not_wait_for_interrupted_goal_cancellation(tmp_path: Path) -> None:
+    class SlowCancel(AcceptThenWait):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_entered = asyncio.Event()
+            self.cancel_release = asyncio.Event()
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            self.cancel_entered.set()
+            await self.cancel_release.wait()
+            return await super().cancel(execution_id)
+
+    navigation = SlowCancel()
+    reference = MapReferenceStore(MAP, "odom", CELL)
+    async with Database(tmp_path / "home-cancel-edit.db") as database:
+        service = SyntheticHomeService(database, reference, robot_id=ROBOT, navigation=navigation)
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
+        send = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        await service.note_connection(False)
+        navigation.release.set()
+        await asyncio.wait_for(navigation.cancel_entered.wait(), 1)
+        try:
+            changed = await asyncio.wait_for(service.set_current(localized(Pose2D(9, 8, 0.2))), 0.5)
+            assert changed.pose == Pose2D(9, 8, 0.2)
+        finally:
+            navigation.cancel_release.set()
+            await send
+        assert navigation.events == ["navigate", "cancel"]
+        assert navigation.active is None
