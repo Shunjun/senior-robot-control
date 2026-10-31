@@ -65,6 +65,20 @@ def localized(
     )
 
 
+def observe_lock_attempt(lock: asyncio.Lock, monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Signal an attempt before delegating to the real lock acquisition."""
+    attempted = asyncio.Event()
+    acquire = lock.acquire
+
+    async def observed_acquire() -> bool:
+        attempted.set()
+        # A held lock suspends this task before the event wakes the test.
+        return await acquire()
+
+    monkeypatch.setattr(lock, "acquire", observed_acquire)
+    return attempted
+
+
 def navigation_module() -> object:
     path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "navigation_adapter.py"
     spec = importlib.util.spec_from_file_location("navigation_adapter_under_test", path)
@@ -560,7 +574,7 @@ class KeepingNavigation(SyntheticQualifiedNavigation):
 
 
 async def test_disconnect_before_guard_read_requires_a_new_return_request(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     navigation = KeepingNavigation()
     async with Database(tmp_path / "before-accept.db") as database:
@@ -574,21 +588,22 @@ async def test_disconnect_before_guard_read_requires_a_new_return_request(
         await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
         await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
         await database.write_lock.acquire()
+        attempted = observe_lock_attempt(database.write_lock, monkeypatch)
         task = asyncio.create_task(service.return_home(MAP))
+        barrier_complete = False
         try:
-            entered = False
-            for _ in range(50):
-                waiters = getattr(database.write_lock, "_waiters", None)
-                if waiters:
-                    entered = True
-                    break
-                await asyncio.sleep(0)
-            assert entered
+            await asyncio.wait_for(attempted.wait(), timeout=5)
+            assert database.write_lock.locked()
+            assert not task.done()
             await service.note_connection(False)
             await service.note_connection(True)
             assert navigation.events == []
+            barrier_complete = True
         finally:
             database.write_lock.release()
+            if not barrier_complete:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         with pytest.raises(DomainError) as error:
             await task
         assert error.value.code is ErrorCode.OFFLINE
@@ -1245,7 +1260,7 @@ async def test_disconnect_during_stale_terminal_still_cancels_current_goal(tmp_p
 
 
 async def test_disconnect_while_waiting_for_target_requires_a_new_return_request(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reference = MapReferenceStore(MAP, "odom", CELL)
     navigation = SharedHomeNavigation()
@@ -1258,17 +1273,21 @@ async def test_disconnect_while_waiting_for_target_requires_a_new_return_request
         await sender.initialize(STILL, localized(Pose2D(1, 2, 0.4)))
         target_lock = database.home_target_lock(ROBOT)
         await target_lock.acquire()
+        attempted = observe_lock_attempt(target_lock, monkeypatch)
         send = asyncio.create_task(sender.return_home(MAP))
+        barrier_complete = False
         try:
-            for _ in range(500):
-                if getattr(target_lock, "_waiters", None):
-                    break
-                await asyncio.sleep(0)
-            assert getattr(target_lock, "_waiters", None)
+            await asyncio.wait_for(attempted.wait(), timeout=5)
+            assert target_lock.locked()
+            assert not send.done()
             await observer.note_connection(False)
             await observer.note_connection(True)
+            barrier_complete = True
         finally:
             target_lock.release()
+            if not barrier_complete:
+                send.cancel()
+                await asyncio.gather(send, return_exceptions=True)
         with pytest.raises(DomainError) as error:
             await send
         assert error.value.code is ErrorCode.OFFLINE
