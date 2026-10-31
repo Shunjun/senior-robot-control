@@ -171,6 +171,8 @@ class MapOperations:
         from senior_control.storage.migrations import migrate
         from senior_control.storage.schema import DOMAIN_MIGRATIONS
 
+        self.store.review_required = True
+        await self._motion.stop_and_block_navigation()
         await migrate(self._database, list(DOMAIN_MIGRATIONS))
         await migrate_core(self._database)
         for name in ("history", ".staging", "active", ".active.previous"):
@@ -178,10 +180,10 @@ class MapOperations:
         recover_move_tree(self.map_root / "active")
         guard = await self._graph_guard()
         active = self.map_root / "active"
-        stopped = False
+        if guard is None and not active.exists():
+            await self._set_graph_guard("startup-" + uuid.uuid4().hex, active)
+            guard = await self._graph_guard()
         if guard is None and active.exists():
-            await self._motion.stop_and_block_navigation()
-            stopped = True
             try:
                 snapshot = SlamSnapshot.read(active)
                 await self._confirm_graph(active / "pose_graph", snapshot.map_ref)
@@ -193,8 +195,6 @@ class MapOperations:
         if guard is not None:
             self._recovery_required = True
             self.store.review_required = True
-            if not stopped:
-                await self._motion.stop_and_block_navigation()
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 await connection.execute(
@@ -879,6 +879,8 @@ class MapOperations:
                     await asyncio.wait_for(loader_quiesce(), timeout=_GRAPH_WAIT_SECONDS)
                 history = self.map_root.joinpath(*Path(guard[1]).parts)
                 _check_owned_path(self.map_root, history)
+                if not history.is_dir():
+                    raise DomainError(ErrorCode.UNAVAILABLE, "verified map snapshot is unavailable")
                 snapshot = SlamSnapshot.read(history)
                 await self._graph_step(
                     self._archive.read_pose_graph(history / "pose_graph"), bounded=True

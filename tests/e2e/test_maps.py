@@ -137,12 +137,20 @@ def operations(
     georeference: Georeference | None = None,
 ) -> tuple[MapOperations, Gate]:
     gate = Gate()
+    graph = Graph(store.map_ref)
+    active = root / "maps" / "active"
+    if not active.parent.exists():
+        store.snapshot(Path("pose_graph"), ()).write(active)
+        graph_dir = active / "pose_graph"
+        graph_dir.mkdir()
+        (graph_dir / "graph.posegraph").write_text(graph._graph, encoding="utf-8")
+        (graph_dir / "graph.data").write_text("scans", encoding="utf-8")
     return (
         MapOperations(
             database,
             store,
             MapArchive(
-                Graph(store.map_ref),
+                graph,
                 source_robot_id=robot_id,
                 georeference=georeference,
                 home_waypoint_id="home",

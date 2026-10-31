@@ -148,6 +148,20 @@ def archive_for(store: MapReferenceStore, robot_id: str) -> MapArchive:
     )
 
 
+def seed_active_for_test(root: Path, store: MapReferenceStore, graph: Graph) -> None:
+    maps = root / "maps"
+    if maps.exists():
+        return
+    active = maps / "active"
+    store.snapshot(Path("pose_graph"), ()).write(active)
+    graph_dir = active / "pose_graph"
+    graph_dir.mkdir()
+    token = getattr(graph, "token", graph.current_graph)
+    identity = getattr(graph, "graph_identity", "scans")
+    (graph_dir / "graph.posegraph").write_text(token, encoding="utf-8")
+    (graph_dir / "graph.data").write_text(identity, encoding="utf-8")
+
+
 def operations_for(
     database: Database,
     store: MapReferenceStore,
@@ -159,10 +173,12 @@ def operations_for(
     fault_after: str | None = None,
     gate: Gate | None = None,
 ) -> MapOperations:
+    archive = archive_for(store, robot_id)
+    seed_active_for_test(root, store, archive._pose_graph)  # type: ignore[arg-type]
     return MapOperations(
         database,
         store,
-        archive_for(store, robot_id),
+        archive,
         gate or Gate(),
         robot_id=robot_id,
         map_root=root / "maps",
@@ -220,8 +236,8 @@ async def test_corrupt_bundle_preserves_active_map(tmp_path: Path) -> None:
     assert caught.value.code is ErrorCode.VALIDATION
     assert ops.store.map_ref == original
     assert ops.store.occupancy().cells == cells
-    assert gate.calls == []
-    assert gate.driving is True
+    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.driving is False
 
 
 @pytest.mark.asyncio
@@ -248,10 +264,10 @@ async def test_failed_load_is_unknown_and_stays_stopped(tmp_path: Path) -> None:
     assert ops.store.map_ref == original
     assert ops.store.occupancy().cells == cells
     assert ops.store.review_required
-    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.calls == ["stop_and_block_navigation", "stop_and_block_navigation"]
     assert gate.driving is False
     assert gate.blocked is True
-    assert not (tmp_path / "maps" / "active").exists()
+    assert SlamSnapshot.read(tmp_path / "maps" / "active").map_ref == original
 
 
 @pytest.mark.asyncio
@@ -283,7 +299,7 @@ async def test_clear_invalidates_bound_tasks(tmp_path: Path) -> None:
     assert history.occupancy.cells == cells
     assert active.map_ref == ops.store.map_ref
     assert active.occupancy.cells == ()
-    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.calls == ["stop_and_block_navigation", "stop_and_block_navigation"]
     assert gate.driving is False
 
 
@@ -392,7 +408,7 @@ async def test_same_operation_different_payload_conflicts(tmp_path: Path) -> Non
     assert first.status is OperationStatus.SUCCEEDED
     assert record.result.status is OperationStatus.SUCCEEDED
     assert ops.store.map_ref == cleared
-    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.calls == ["stop_and_block_navigation", "stop_and_block_navigation"]
 
 
 @pytest.mark.asyncio
@@ -469,7 +485,7 @@ async def test_crash_between_commit_and_dispatch_needs_review(tmp_path: Path) ->
     assert again.store.occupancy().cells == cells
     assert links[0].invalidated is False
     assert links[0].definition == "keep"
-    assert gate.calls == []
+    assert gate.calls == ["stop_and_block_navigation"]
 
 
 class Session(Graph):
@@ -534,6 +550,7 @@ def session_operations(
     loader: Loader | None = None,
     gate: Gate | None = None,
 ) -> MapOperations:
+    seed_active_for_test(root, store, session)
     return MapOperations(
         database,
         store,
@@ -712,8 +729,8 @@ async def test_clear_mismatch_fails_before_stop(tmp_path: Path) -> None:
         phases = await ops.phases("bad-clear")
 
     assert caught.value.code is ErrorCode.CONFLICT
-    assert gate.calls == []
-    assert gate.driving is True
+    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.driving is False
     assert record.result.status is OperationStatus.FAILED
     assert "dispatching" not in phases
     assert ops.store.map_ref == MapRef("yard", 3)
@@ -734,13 +751,13 @@ async def test_map_lock_blocks_clear_until_export_fsync(tmp_path: Path) -> None:
         await asyncio.wait_for(graph.started.wait(), timeout=1)
         clear_task = asyncio.create_task(ops.clear_map(store.map_ref, operation_id="clear-lock"))
         await asyncio.sleep(0.05)
-        assert gate.calls == []
+        assert gate.calls == ["stop_and_block_navigation"]
         assert clear_task.done() is False
         graph.release.set()
         await export_task
         await clear_task
 
-    assert gate.calls == ["stop_and_block_navigation"]
+    assert gate.calls == ["stop_and_block_navigation", "stop_and_block_navigation"]
 
 
 class BrokenPublish(MapOperations):
@@ -760,6 +777,7 @@ def _operations(
     session: Graph | None = None,
 ) -> MapOperations:
     graph = session or Graph(store.map_ref)
+    seed_active_for_test(root, store, graph)
     return kind(
         database,
         store,
@@ -836,12 +854,12 @@ async def test_import_replace_after_identity_change_needs_review(tmp_path: Path)
         if calls["n"] == 1:
             raise RuntimeError("replace failed after identity")
 
-    store.replace = replace_then_fail  # type: ignore[method-assign]
     async with Database(tmp_path / "robot.db") as database:
         ops = session_operations(
             database, store, tmp_path, session, robot_id="robot-a", loader=Loader()
         )
         await ops.prepare()
+        store.replace = replace_then_fail  # type: ignore[method-assign]
         async with Database(tmp_path / "source.db") as source_db:
             origin = operations_for(source_db, source, tmp_path / "source", robot_id="robot-a")
             await origin.prepare()
@@ -1233,14 +1251,12 @@ async def test_switch_without_backend_identity_confirmation_never_reports_succes
     bundle = tmp_path / "source.zip"
     await archive_for(source, "source").export_bundle(source, source.map_ref, bundle)
 
-    class UnconfirmedSession(Session):
-        matches = None  # type: ignore[assignment]
-
-    graph = UnconfirmedSession(local.map_ref)
+    graph = Session(local.map_ref)
     gate = Gate()
     async with Database(tmp_path / "robot.db") as database:
         ops = session_operations(database, local, tmp_path, graph, robot_id="r", gate=gate)
         await ops.prepare()
+        graph.matches = None  # type: ignore[method-assign,assignment]
         with pytest.raises(DomainError) as error:
             if action == "clear":
                 await ops.clear_map(local.map_ref, operation_id="unconfirmed")
@@ -1280,8 +1296,10 @@ async def test_failed_backend_identity_confirmation_remains_blocked_after_restar
     tmp_path: Path,
 ) -> None:
     class Mismatch(Session):
+        reject = False
+
         async def matches(self, directory: Path, map_ref: MapRef) -> bool:
-            return False
+            return False if self.reject else await super().matches(directory, map_ref)
 
         async def quiesce(self) -> None:
             return None
@@ -1291,6 +1309,7 @@ async def test_failed_backend_identity_confirmation_remains_blocked_after_restar
     async with Database(tmp_path / "robot.db") as database:
         ops = session_operations(database, store, tmp_path, graph, robot_id="r")
         await ops.prepare()
+        graph.reject = True
         with pytest.raises(DomainError) as error:
             await ops.clear_map(store.map_ref, operation_id="mismatch")
         assert error.value.code is ErrorCode.OPERATION_UNKNOWN
@@ -1330,3 +1349,87 @@ async def test_guard_delete_failure_does_not_commit_success(tmp_path: Path, acti
         assert record.result.status is OperationStatus.NEEDS_REVIEW
         assert record.rollback_confirmed is False
         assert local.review_required
+
+
+async def test_startup_without_active_requires_verified_backend(tmp_path: Path) -> None:
+    class Unverified(Session):
+        matches = None  # type: ignore[assignment]
+
+    store = filled_store("yard", 3, (1.0, 1.0))
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = MapOperations(
+            database,
+            store,
+            MapArchive(Unverified(store.map_ref), source_robot_id="r"),
+            gate,
+            robot_id="r",
+            map_root=tmp_path / "maps",
+            config_dir=tmp_path / "config",
+        )
+        await ops.prepare()
+        assert gate.blocked
+        assert store.review_required
+        with pytest.raises(DomainError):
+            await ops.clear_map(store.map_ref, operation_id="blocked-at-startup")
+    assert not (tmp_path / "maps" / "active").exists()
+
+
+async def test_verified_bootstrap_can_reconcile_initial_missing_snapshot(tmp_path: Path) -> None:
+    class BootstrapGraph(Session):
+        async def quiesce(self) -> None:
+            return None
+
+    store = filled_store("yard", 3, (1.0, 1.0))
+    snapshot = store.snapshot(Path("pose_graph"), ())
+    graph = BootstrapGraph(store.map_ref)
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = MapOperations(
+            database,
+            store,
+            MapArchive(graph, source_robot_id="r"),
+            gate,
+            robot_id="r",
+            map_root=tmp_path / "maps",
+            config_dir=tmp_path / "config",
+        )
+        await ops.prepare()
+        with pytest.raises(DomainError) as error:
+            await ops.reconcile()
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert gate.blocked and store.review_required
+        active = tmp_path / "maps" / "active"
+        snapshot.write(active)
+        await graph.write(active / "pose_graph")
+        await ops.reconcile()
+        assert not store.review_required
+        assert store.map_ref == snapshot.map_ref
+        assert gate.blocked
+
+
+async def test_startup_blocks_motion_before_waiting_for_database(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.0, 1.0))
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = MapOperations(
+            database,
+            store,
+            MapArchive(Graph(store.map_ref), source_robot_id="r"),
+            gate,
+            robot_id="r",
+            map_root=tmp_path / "maps",
+            config_dir=tmp_path / "config",
+        )
+        await database.write_lock.acquire()
+        prepare = asyncio.create_task(ops.prepare())
+        try:
+            for _ in range(20):
+                if gate.blocked:
+                    break
+                await asyncio.sleep(0)
+            assert gate.blocked
+            assert store.review_required
+        finally:
+            database.write_lock.release()
+            await prepare
