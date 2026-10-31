@@ -1,5 +1,6 @@
 """Agent seams: the cloud link, per-robot heartbeat eligibility, and the ROS IPC motion port."""
 
+import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -52,14 +53,21 @@ class HeartbeatLedger:
             raise ValueError("heartbeat window must be positive")
         self._clock = clock
         self._window = window
-        self._seen: dict[str, float] = {}
+        self._seen: dict[str, tuple[float, float]] = {}
 
-    def note(self, robot_id: str) -> None:
-        self._seen[robot_id] = self._clock.monotonic()
+    def note(self, robot_id: str, *, deadline: float | None = None) -> None:
+        now = self._clock.monotonic()
+        # //Compatible: direct test callers without a cloud deadline retain the bounded window.
+        expires = min(now + self._window, deadline) if deadline is not None else now + self._window
+        if not math.isfinite(now) or not math.isfinite(expires) or expires <= now:
+            self.forget(robot_id)
+            return
+        self._seen[robot_id] = (now, expires)
 
     def eligible(self, robot_id: str) -> bool:
         seen = self._seen.get(robot_id)
-        return seen is not None and self._clock.monotonic() - seen <= self._window
+        now = self._clock.monotonic()
+        return seen is not None and math.isfinite(now) and seen[0] <= now <= seen[1]
 
     def forget(self, robot_id: str) -> None:
         self._seen.pop(robot_id, None)

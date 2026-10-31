@@ -951,3 +951,83 @@ async def test_velocity_fails_closed_without_verified_source_clock(rig: Rig) -> 
         assert not any(event.startswith("drive:") for event in rig.motion.events)
     finally:
         await finish(task, rig)
+
+
+async def test_overload_bounds_work_and_reserves_stop_capacity(rig: Rig) -> None:
+    from senior_control.agent.main import MAX_INFLIGHT
+
+    link = FakeLink(epoch=1)
+    release = asyncio.Event()
+
+    async def held(link: FakeLink, envelope: Any) -> None:
+        await release.wait()
+
+    rig.agent._answer = held  # type: ignore[method-assign]
+    try:
+        for seq in range(MAX_INFLIGHT):
+            rig.agent._accept(link, operation("task.create", f"op-{seq}"))
+        rig.agent._accept(link, stop())
+        assert len(rig.agent._inflight) == MAX_INFLIGHT + 1
+        for _ in range(500):
+            with pytest.raises(ConnectionError):
+                rig.agent._accept(link, operation("task.create", "overflow"))
+        assert len(rig.agent._inflight) == MAX_INFLIGHT + 1
+    finally:
+        release.set()
+        await asyncio.gather(*rig.agent._inflight, return_exceptions=True)
+
+
+async def test_late_ros_ack_cannot_restore_after_heartbeat_failure(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_ack(epoch: int, deadline: float) -> None:
+        entered.set()
+        await release.wait()
+
+    async def failed_send() -> None:
+        raise ConnectionError("lost")
+
+    rig.motion.server_heartbeat = delayed_ack  # type: ignore[method-assign]
+    try:
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+        await asyncio.wait_for(entered.wait(), 0.5)
+        link.send_heartbeat = failed_send  # type: ignore[method-assign]
+        await until(lambda: "disable:1" in rig.motion.events)
+        release.set()
+        await asyncio.sleep(0.05)
+        assert not rig.agent.eligible_for_motion
+    finally:
+        release.set()
+        await finish(task, rig)
+
+
+async def test_heartbeat_survives_full_work_slots_before_overload_closes_session(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.main import MAX_INFLIGHT
+
+    link = FakeLink(epoch=1)
+    release = asyncio.Event()
+
+    async def held(link: FakeLink, envelope: Any) -> None:
+        await release.wait()
+
+    rig.agent._answer = held  # type: ignore[method-assign]
+    task = await start(rig, link)
+    try:
+        for seq in range(MAX_INFLIGHT):
+            link.inbox.put_nowait(operation("task.create", f"load-{seq}"))
+        link.inbox.put_nowait(stop())
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: "heartbeat:1" in rig.motion.events)
+        assert len(rig.agent._inflight) <= MAX_INFLIGHT + 1
+        link.inbox.put_nowait(operation("task.create", "overload"))
+        await until(lambda: link.closed)
+        assert "disable:1" in rig.motion.events
+    finally:
+        release.set()
+        await finish(task, rig)

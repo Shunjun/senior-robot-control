@@ -13,7 +13,7 @@ from senior_control.tasks.models import (
 )
 
 _JUMP_SECONDS = 2.0
-_ACTIVE = {ExecutionStatus.RUNNING, ExecutionStatus.DISPATCHING}
+_ACTIVE = {ExecutionStatus.RUNNING, ExecutionStatus.DISPATCHING, ExecutionStatus.CANCEL_PENDING}
 
 
 class TaskRunner:
@@ -59,7 +59,11 @@ class TaskRunner:
         busy = bool(active)
         for instance in active:
             task = tasks[instance.task_id]
-            reason = _block_reason(task, context, busy=False)
+            reason = (
+                "cancel_pending"
+                if instance.status is ExecutionStatus.CANCEL_PENDING
+                else _block_reason(task, context, busy=False)
+            )
             if reason is not None:
                 intents.append(
                     TaskIntent(

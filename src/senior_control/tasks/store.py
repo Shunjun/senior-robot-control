@@ -20,6 +20,22 @@ from senior_control.tasks.models import (
 )
 from senior_control.tasks.schedule import Schedule
 
+_SCAN_COLUMNS = (
+    "SELECT e.execution_id, e.task_id, e.occurrence_utc, e.status, "
+    "e.navigation_sent, e.rollback_confirmed FROM task_definition t CROSS JOIN "
+)
+ACTIVE_SCAN_SQL = (
+    _SCAN_COLUMNS + "task_execution e INDEXED BY task_execution_scan_idx "
+    "WHERE t.robot_id = ? AND e.task_id = t.task_id AND e.status IN (?, ?, ?) LIMIT ?"
+)
+WINDOW_SCAN_SQL = (
+    _SCAN_COLUMNS + "task_execution e INDEXED BY task_execution_window_idx "
+    "WHERE t.robot_id = ? AND e.task_id = t.task_id AND e.occurrence_utc > ? "
+    "AND e.occurrence_utc <= ? AND e.status NOT IN (?, ?, ?) LIMIT ?"
+)
+_SCAN_LIMIT = 4096
+
+
 TASK_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE task_definition (
@@ -87,6 +103,14 @@ class TaskStore:
                     "CREATE TABLE IF NOT EXISTS task_scan_cursor "
                     "(robot_id TEXT PRIMARY KEY, last_tick_utc TEXT NOT NULL)"
                 )
+                await connection.execute(
+                    "CREATE INDEX IF NOT EXISTS task_execution_scan_idx "
+                    "ON task_execution(task_id, status, occurrence_utc)"
+                )
+                await connection.execute(
+                    "CREATE INDEX IF NOT EXISTS task_execution_window_idx "
+                    "ON task_execution(task_id, occurrence_utc)"
+                )
                 async with connection.execute(
                     "SELECT boot_id FROM task_runtime WHERE robot_id = ?",
                     (self._robot_id,),
@@ -146,6 +170,38 @@ class TaskStore:
             ) as cursor:
                 rows = await cursor.fetchall()
         return tuple(_task(row) for row in rows)
+
+    async def executions_for_scan(
+        self, start: datetime | None, end: datetime
+    ) -> tuple[ExecutionRecord, ...]:
+        """Bound memory while retaining active executions and deduplication in the scan window."""
+        statuses = (
+            ExecutionStatus.DISPATCHING.value,
+            ExecutionStatus.RUNNING.value,
+            ExecutionStatus.CANCEL_PENDING.value,
+        )
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                ACTIVE_SCAN_SQL, (self._robot_id, *statuses, _SCAN_LIMIT + 1)
+            ) as cursor:
+                rows = list(await cursor.fetchall())
+            if len(rows) > _SCAN_LIMIT:
+                raise RuntimeError("task scan execution limit exceeded")
+            if start is not None:
+                async with self._database.connection.execute(
+                    WINDOW_SCAN_SQL,
+                    (
+                        self._robot_id,
+                        _stamp(start),
+                        _stamp(end),
+                        *statuses,
+                        _SCAN_LIMIT + 1 - len(rows),
+                    ),
+                ) as cursor:
+                    rows.extend(await cursor.fetchall())
+        if len(rows) > _SCAN_LIMIT:
+            raise RuntimeError("task scan execution limit exceeded")
+        return tuple(_execution(row) for row in rows)
 
     async def list_executions(self) -> tuple[ExecutionRecord, ...]:
         async with self._database.write_lock:
@@ -281,6 +337,24 @@ class TaskStore:
             rollback_confirmed=False,
         )
 
+    async def mark_cancel_pending(self, execution_id: str) -> ExecutionRecord:
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                current = await self._execution_in(connection, execution_id)
+                if current is None or current.status not in {
+                    ExecutionStatus.DISPATCHING,
+                    ExecutionStatus.RUNNING,
+                    ExecutionStatus.CANCEL_PENDING,
+                }:
+                    raise DomainError(ErrorCode.CONFLICT, "execution is not in flight")
+                await connection.execute(
+                    "UPDATE task_execution SET status = ? WHERE execution_id = ?",
+                    (ExecutionStatus.CANCEL_PENDING.value, execution_id),
+                )
+                stored = await self._execution_in(connection, execution_id)
+        assert stored is not None
+        return stored
+
     async def pause(self, execution_id: str) -> ExecutionRecord:
         if not execution_id.strip():
             raise DomainError(ErrorCode.VALIDATION, "execution id is required")
@@ -290,19 +364,24 @@ class TaskStore:
                 if current is None:
                     raise DomainError(ErrorCode.CONFLICT, "execution does not exist")
                 if current.status is not ExecutionStatus.PAUSED:
-                    if current.status not in {ExecutionStatus.DISPATCHING, ExecutionStatus.RUNNING}:
+                    if current.status not in {
+                        ExecutionStatus.DISPATCHING,
+                        ExecutionStatus.RUNNING,
+                        ExecutionStatus.CANCEL_PENDING,
+                    }:
                         raise DomainError(ErrorCode.CONFLICT, "execution is not in flight")
                     await connection.execute(
                         """
                         UPDATE task_execution
                         SET status = ?
-                        WHERE execution_id = ? AND status IN (?, ?)
+                        WHERE execution_id = ? AND status IN (?, ?, ?)
                         """,
                         (
                             ExecutionStatus.PAUSED.value,
                             execution_id,
                             ExecutionStatus.DISPATCHING.value,
                             ExecutionStatus.RUNNING.value,
+                            ExecutionStatus.CANCEL_PENDING.value,
                         ),
                     )
                 stored = await self._execution_in(connection, execution_id)
@@ -514,13 +593,14 @@ class TaskStore:
             SELECT 1
             FROM task_execution AS e
             JOIN task_definition AS t ON t.task_id = e.task_id
-            WHERE t.robot_id = ? AND e.status IN (?, ?)
+            WHERE t.robot_id = ? AND e.status IN (?, ?, ?)
             LIMIT 1
             """,
             (
                 self._robot_id,
                 ExecutionStatus.DISPATCHING.value,
                 ExecutionStatus.RUNNING.value,
+                ExecutionStatus.CANCEL_PENDING.value,
             ),
         ) as cursor:
             row = await cursor.fetchone()

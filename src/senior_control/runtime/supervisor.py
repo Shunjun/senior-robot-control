@@ -7,6 +7,7 @@ behind that sink owns the topic.
 
 import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Any
@@ -31,8 +32,14 @@ class Supervisor:
         heartbeat_seconds: float = 0.2,
         retry_delay: float = 1.0,
         max_retry_delay: float | None = None,
+        shutdown_timeout: float = 1.0,
     ) -> None:
-        if heartbeat_seconds <= 0 or retry_delay < 0:
+        if (
+            heartbeat_seconds <= 0
+            or retry_delay < 0
+            or not math.isfinite(shutdown_timeout)
+            or shutdown_timeout <= 0
+        ):
             raise ValueError("heartbeat and retry delay must be positive")
         self._send_heartbeat = send_heartbeat
         self._call_ros = call_ros
@@ -42,6 +49,7 @@ class Supervisor:
         self._connect = connect
         self._background = dict(background or {})
         self._heartbeat_seconds = heartbeat_seconds
+        self._shutdown_timeout = shutdown_timeout
         self._retry_delay = retry_delay
         self._max_retry_delay = (
             max_retry_delay if max_retry_delay is not None else max(retry_delay * 30, retry_delay)
@@ -59,7 +67,7 @@ class Supervisor:
 
     @property
     def motion_allowed(self) -> bool:
-        return self.revoked_reason is None
+        return self._running and self.revoked_reason is None
 
     async def __aenter__(self) -> "Supervisor":
         if self._running or self._tasks:
@@ -82,12 +90,19 @@ class Supervisor:
     ) -> None:
         self._running = False
         self._pending = None
-        for task in self._tasks:
+        self._wake.set()
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-        if self.state != "auth_failed":
-            self.state = "stopped"
+        done, pending = await asyncio.wait(tasks, timeout=self._shutdown_timeout)
+        await asyncio.gather(*done, return_exceptions=True)
+        self._tasks = list(pending)
+        if pending:
+            self.state = "shutdown_failed"
+            for task in pending:
+                task.cancel()
+            raise RuntimeError("supervisor tasks did not stop before shutdown deadline")
+        self.state = "stopped"
 
     def _spawn(self, coroutine: Awaitable[None]) -> None:
         self._tasks.append(asyncio.ensure_future(coroutine))
@@ -118,11 +133,14 @@ class Supervisor:
         loop = asyncio.get_running_loop()
         interval = self._heartbeat_seconds
         deadline = loop.time()
-        while True:
+        while self._running:
             try:
                 await asyncio.wait_for(self._send_heartbeat(), timeout=interval * 5)
             except Exception:
                 logger.warning("heartbeat failed", exc_info=True)
+            # //Compatible: Python 3.10 wait_for can swallow cancellation at completion.
+            if not self._running:
+                return
             deadline += interval
             now = loop.time()
             if deadline < now:
@@ -130,9 +148,11 @@ class Supervisor:
             await asyncio.sleep(deadline - now)
 
     async def _drain_loop(self) -> None:
-        while True:
+        while self._running:
             await self._wake.wait()
-            while self._pending is not None and self.revoked_reason is None:
+            if not self._running:
+                return
+            while self._running and self._pending is not None and self.revoked_reason is None:
                 vx, wz = self._pending
                 self._pending = None
                 try:
@@ -147,13 +167,15 @@ class Supervisor:
             await factory()
         except Exception:
             logger.exception("background task %s failed", name)
-            self._revoke(f"background task {name} failed")
+            if self._running:
+                self._revoke(f"background task {name} failed")
         else:
-            self._revoke(f"background task {name} ended")
+            if self._running:
+                self._revoke(f"background task {name} ended")
 
     async def _uplink_loop(self, connect: Callable[[], Awaitable[None]]) -> None:
         delay = self._retry_delay
-        while True:
+        while self._running:
             self.state = "connecting"
             try:
                 await connect()
@@ -167,5 +189,7 @@ class Supervisor:
             else:
                 self.state = "reconnecting"
                 delay = self._retry_delay
+            if not self._running:
+                return
             await asyncio.sleep(delay)
             delay = min(max(delay * 2, self._retry_delay), self._max_retry_delay)

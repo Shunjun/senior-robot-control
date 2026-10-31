@@ -17,6 +17,7 @@ class IntentAction(str, Enum):
 class ExecutionStatus(str, Enum):
     DISPATCHING = "dispatching"
     RUNNING = "running"
+    CANCEL_PENDING = "cancel_pending"
     PAUSED = "paused"
     SKIPPED = "skipped"
     SUCCEEDED = "succeeded"

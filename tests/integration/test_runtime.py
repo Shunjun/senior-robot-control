@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
+import pytest
+
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 
 
@@ -212,3 +214,87 @@ async def test_auth_failure_does_not_retry_forever() -> None:
         await settle(0.3)
         assert attempts["network"] >= 3
         assert retrying.state == "reconnecting"
+
+
+async def test_shutdown_when_heartbeat_cancellation_is_swallowed(monkeypatch) -> None:
+    import senior_control.runtime.supervisor as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_wait_for = asyncio.wait_for
+
+    async def swallowed(awaitable, timeout):
+        result = await original_wait_for(awaitable, timeout)
+        entered.set()  # the inner heartbeat has completed before shutdown cancels its waiter
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            return result  # //Compatible: simulate the Python 3.10 wait_for cancellation race.
+        return result
+
+    async def beat() -> None:
+        pass
+
+    async def ros(name: str) -> None:
+        pass
+
+    async def sink(vx: float, wz: float) -> None:
+        pass
+
+    monkeypatch.setattr(module.asyncio, "wait_for", swallowed)
+    supervisor = Supervisor(
+        send_heartbeat=beat,
+        call_ros=ros,
+        drive_sink=sink,
+        publish_cmd_vel=sink,
+        heartbeat_seconds=60,
+    )
+    await supervisor.__aenter__()
+    await entered.wait()
+    close = asyncio.create_task(supervisor.__aexit__(None, None, None))
+    done, _ = await asyncio.wait({close}, timeout=0.5)
+    if close not in done:
+        for task in supervisor._tasks:
+            task.cancel()
+        await close
+    assert close in done
+
+
+async def test_shutdown_reports_stubborn_background_within_deadline() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stubborn() -> None:
+        entered.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    async def beat() -> None:
+        pass
+
+    async def ros(name: str) -> None:
+        pass
+
+    async def sink(vx: float, wz: float) -> None:
+        pass
+
+    supervisor = Supervisor(
+        send_heartbeat=beat,
+        call_ros=ros,
+        drive_sink=sink,
+        publish_cmd_vel=sink,
+        background={"stubborn": stubborn},
+        shutdown_timeout=0.05,
+    )
+    await supervisor.__aenter__()
+    await entered.wait()
+    tasks = list(supervisor._tasks)
+    try:
+        with pytest.raises(RuntimeError, match="shutdown deadline"):
+            await asyncio.wait_for(supervisor.__aexit__(None, None, None), 0.5)
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)

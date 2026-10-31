@@ -31,6 +31,10 @@ class NavigationPort(Protocol):
     async def cancel(self, execution_id: str) -> None: ...
 
 
+class NavigationFailure(Exception):
+    """A navigation RPC failed; persisted state retains any cancellation obligation."""
+
+
 class TaskExecutor:
     def __init__(
         self,
@@ -63,12 +67,17 @@ class TaskExecutor:
         try:
             await self._navigation.start(record.execution_id, task)
         except asyncio.CancelledError:
-            review = asyncio.create_task(self._store.mark_needs_review(record.execution_id))
-            await asyncio.shield(review)
+            pending = asyncio.create_task(self._store.mark_cancel_pending(record.execution_id))
+            await asyncio.shield(pending)
             raise
-        except Exception:
+        except Exception as exc:
+            await self._store.mark_cancel_pending(record.execution_id)
+            try:
+                await self._navigation.cancel(record.execution_id)
+            except Exception:
+                raise NavigationFailure("start and cancellation are unconfirmed") from exc
             await self._store.mark_needs_review(record.execution_id)
-            raise
+            raise NavigationFailure("start outcome is unknown") from exc
         return await self._store.mark_running(record.execution_id)
 
     async def apply(self, intent: TaskIntent, task: TaskDefinition) -> ExecutionRecord | SkipRecord:
@@ -79,8 +88,15 @@ class TaskExecutor:
         if intent.action is IntentAction.PAUSE:
             if intent.execution_id is None:
                 raise ValueError("pause requires an execution id")
-            if self._navigation is not None:
+            pending = await self._store.mark_cancel_pending(intent.execution_id)
+            if self._navigation is None:
+                raise NavigationFailure("navigation cancellation is unavailable")
+            try:
                 await self._navigation.cancel(intent.execution_id)
+            except Exception as exc:
+                raise NavigationFailure("navigation cancellation is unconfirmed") from exc
+            if not pending.navigation_sent:
+                return await self._store.mark_needs_review(intent.execution_id)
             return await self._store.pause(intent.execution_id)
         if intent.action is IntentAction.SKIP and intent.reason == "clock_jump":
             if intent.skip_from is None or intent.skip_until is None:

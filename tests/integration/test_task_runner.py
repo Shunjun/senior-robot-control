@@ -203,7 +203,7 @@ async def test_claim_conflicts_while_another_execution_is_in_flight(tmp_path: Pa
     assert running.status is ExecutionStatus.RUNNING
 
 
-async def test_cancel_writes_needs_review_on_a_different_task(tmp_path: Path) -> None:
+async def test_cancel_persists_pending_on_a_different_task(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
     due = created + timedelta(minutes=30)
     async with Database(tmp_path / "robot.db") as database:
@@ -211,7 +211,7 @@ async def test_cancel_writes_needs_review_on_a_different_task(tmp_path: Path) ->
         navigation = HoldNavigation(store)
         executor = TaskExecutor(database, store, navigation)
         writers: list[asyncio.Task[object]] = []
-        original = store.mark_needs_review
+        original = store.mark_cancel_pending
 
         async def watching(execution_id: str):
             current = asyncio.current_task()
@@ -219,7 +219,7 @@ async def test_cancel_writes_needs_review_on_a_different_task(tmp_path: Path) ->
             writers.append(current)
             return await original(execution_id)
 
-        store.mark_needs_review = watching  # type: ignore[method-assign]
+        store.mark_cancel_pending = watching  # type: ignore[method-assign]
         dispatch = asyncio.create_task(executor.persist_and_dispatch(due_intent(saved, due), saved))
         await asyncio.wait_for(navigation.started.wait(), timeout=1)
         dispatch.cancel()
@@ -230,7 +230,7 @@ async def test_cancel_writes_needs_review_on_a_different_task(tmp_path: Path) ->
     assert writers
     assert writers[0] is not dispatch
     assert record is not None
-    assert record.status is ExecutionStatus.NEEDS_REVIEW
+    assert record.status is ExecutionStatus.CANCEL_PENDING
     assert record.rollback_confirmed is False
 
 
@@ -275,7 +275,7 @@ async def test_dispatch_persists_execution_id_and_releases_the_database(tmp_path
     assert record.status is ExecutionStatus.RUNNING
 
 
-async def test_cancel_during_navigation_needs_review(tmp_path: Path) -> None:
+async def test_cancel_during_navigation_tracks_pending(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
     due = created + timedelta(minutes=30)
     async with Database(tmp_path / "robot.db") as database:
@@ -290,7 +290,7 @@ async def test_cancel_during_navigation_needs_review(tmp_path: Path) -> None:
         record = await store.execution_for(saved.task_id, due)
 
     assert record is not None
-    assert record.status is ExecutionStatus.NEEDS_REVIEW
+    assert record.status is ExecutionStatus.CANCEL_PENDING
     assert record.navigation_sent is False
     assert record.rollback_confirmed is False
 
@@ -618,3 +618,217 @@ async def test_runtime_restart_records_offline_gap_without_dispatch(tmp_path: Pa
         await runtime.tick(created + timedelta(hours=1), 1.0, context)
         assert navigation.calls == []
         assert len(await store.skips()) == 1
+
+
+async def test_runtime_recovers_after_navigation_start_failure(tmp_path: Path) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    class Flaky(RecordingNavigation):
+        async def start(self, execution_id: str, task: TaskDefinition) -> None:
+            if not self.calls:
+                self.calls.append("failed")
+                raise OSError("navigation unavailable")
+            await super().start(execution_id, task)
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = Flaky()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, nav))
+        context = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 1.0, context)
+        await runtime.tick(created + timedelta(seconds=1800), 2.0, context)
+        first = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+        assert first is not None and first.status is ExecutionStatus.NEEDS_REVIEW
+        await runtime.tick(created + timedelta(seconds=3599), 1801.0, context)
+        await runtime.tick(created + timedelta(seconds=3600), 1802.0, context)
+        second = await store.execution_for(task.task_id, created + timedelta(seconds=3600))
+        assert second is not None and second.status is ExecutionStatus.RUNNING
+
+
+async def test_runtime_retries_unknown_cancel_even_after_connection_returns(tmp_path: Path) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    class FlakyCancel(RecordingNavigation):
+        async def cancel(self, execution_id: str) -> None:
+            self.calls.append(f"cancel:{execution_id}")
+            if len([c for c in self.calls if c.startswith("cancel:")]) == 1:
+                raise OSError("timeout")
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = FlakyCancel()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, nav))
+        live = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 1.0, live)
+        await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
+        record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+        assert record is not None
+        await runtime.tick(created + timedelta(seconds=1801), 3.0, replace(live, connected=False))
+        pending = await store.execution_by_id(record.execution_id)
+        assert pending is not None and pending.status.value == "cancel_pending"
+        await runtime.tick(created + timedelta(seconds=1802), 4.0, live)
+        paused = await store.execution_by_id(record.execution_id)
+        assert paused is not None and paused.status is ExecutionStatus.PAUSED
+        assert nav.calls.count(f"cancel:{record.execution_id}") == 2
+
+
+async def test_scan_loads_only_active_and_window_records(tmp_path: Path) -> None:
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        rows = [
+            (
+                f"old-{i}",
+                task.task_id,
+                (created + timedelta(seconds=i)).isoformat(),
+                "skipped",
+                0,
+                0,
+            )
+            for i in range(3000)
+        ]
+        rows += [
+            (
+                "active",
+                task.task_id,
+                (created + timedelta(seconds=3001)).isoformat(),
+                "running",
+                1,
+                0,
+            ),
+            (
+                "window",
+                task.task_id,
+                (created + timedelta(seconds=4001)).isoformat(),
+                "skipped",
+                0,
+                0,
+            ),
+        ]
+        await database.connection.executemany(
+            "INSERT INTO task_execution VALUES (?, ?, ?, ?, ?, ?)", rows
+        )
+        await database.connection.commit()
+        selected = await store.executions_for_scan(
+            created + timedelta(seconds=4000), created + timedelta(seconds=4002)
+        )
+        assert {row.execution_id for row in selected} == {"active", "window"}
+
+
+async def test_pending_cancel_survives_restart_and_blocks_new_claim(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        record = await store.claim(task, created + timedelta(seconds=1800))
+        await store.mark_cancel_pending(record.execution_id)
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        pending = await store.execution_by_id(record.execution_id)
+        assert pending is not None and pending.status is ExecutionStatus.CANCEL_PENDING
+        with pytest.raises(DomainError):
+            await store.claim(task, created + timedelta(seconds=3600))
+
+
+async def test_scan_overflow_fails_closed_with_bounded_result(tmp_path: Path) -> None:
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        rows = [
+            (
+                f"r-{i}",
+                task.task_id,
+                (created + timedelta(seconds=i + 1)).isoformat(),
+                "skipped",
+                0,
+                0,
+            )
+            for i in range(4097)
+        ]
+        await database.connection.executemany(
+            "INSERT INTO task_execution VALUES (?, ?, ?, ?, ?, ?)", rows
+        )
+        await database.connection.commit()
+        with pytest.raises(RuntimeError, match="limit exceeded"):
+            await store.executions_for_scan(created, created + timedelta(seconds=5000))
+
+
+async def test_failed_start_with_unknown_cancel_remains_pending_until_confirmed(
+    tmp_path: Path,
+) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    class BrokenStart(RecordingNavigation):
+        async def start(self, execution_id: str, task: TaskDefinition) -> None:
+            self.calls.append(f"start:{execution_id}")
+            raise OSError("start outcome unknown")
+
+        async def cancel(self, execution_id: str) -> None:
+            self.calls.append(f"cancel:{execution_id}")
+            if self.calls.count(f"cancel:{execution_id}") == 1:
+                raise OSError("cancel outcome unknown")
+
+    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+        nav = BrokenStart()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, nav))
+        live = ExecutionContext(True, True, True, False, task.map_ref)
+        await runtime.tick(created + timedelta(seconds=1799), 1.0, live)
+        await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
+        record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+        assert record is not None and record.status is ExecutionStatus.CANCEL_PENDING
+        await runtime.tick(created + timedelta(seconds=1801), 3.0, live)
+        record = await store.execution_by_id(record.execution_id)
+        assert record is not None and record.status is ExecutionStatus.NEEDS_REVIEW
+        assert record.rollback_confirmed is False
+
+
+async def test_scan_queries_use_indexes_for_existing_database(tmp_path: Path) -> None:
+    from senior_control.tasks.store import ACTIVE_SCAN_SQL, WINDOW_SCAN_SQL
+
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        await database.connection.execute("DROP INDEX task_execution_scan_idx")
+        await database.connection.execute("DROP INDEX task_execution_window_idx")
+        await database.connection.commit()
+    async with Database(path) as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        queries = (
+            (ACTIVE_SCAN_SQL, ("robot-a", "dispatching", "running", "cancel_pending", 4097)),
+            (
+                WINDOW_SCAN_SQL,
+                ("robot-a", "start", "end", "dispatching", "running", "cancel_pending", 4097),
+            ),
+        )
+        for sql, params in queries:
+            async with database.connection.execute("EXPLAIN QUERY PLAN " + sql, params) as cursor:
+                plan = " ".join(str(row[3]) for row in await cursor.fetchall())
+            assert "SEARCH e USING INDEX task_execution_" in plan
+            assert "SCAN e" not in plan
+
+
+async def test_runtime_propagates_database_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from senior_control.tasks.runtime import TaskRuntime
+
+    async with Database(tmp_path / "robot.db") as database:
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        runtime = TaskRuntime(store, TaskExecutor(database, store, None))
+
+        async def fail() -> tuple[TaskDefinition, ...]:
+            raise sqlite3.OperationalError("database unavailable")
+
+        monkeypatch.setattr(store, "list_tasks", fail)
+        with pytest.raises(sqlite3.OperationalError, match="database unavailable"):
+            await runtime.tick(
+                datetime.now(timezone.utc), 0.0, ExecutionContext(False, False, False, False, None)
+            )

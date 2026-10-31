@@ -113,12 +113,14 @@ class Agent:
         self._link: Link | None = None
         self._epoch = 0
         self._last_epoch = 0
+        self._heartbeat_generation = 0
         self._latest_velocity: VelocityEnvelope | None = None
         self._supervisor: Supervisor | None = None
         self._stopping = False
         self.auth_rejected = False
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
+        self._safety_task: asyncio.Task[None] | None = None
         self._signals: list[signal.Signals] = []
         if snapshot_seconds <= 0 or state_poll_seconds <= 0:
             raise ValueError("snapshot intervals must be positive")
@@ -171,6 +173,7 @@ class Agent:
     def request_shutdown(self) -> None:
         """Synchronous and signal-safe: motion is revoked before anything else happens."""
         self._stopping = True
+        self._heartbeat_generation += 1
         if self._supervisor is not None:
             self._supervisor.revoke("shutdown requested")
         self._stop.set()
@@ -226,6 +229,7 @@ class Agent:
         except Exception:
             if self._link is not link:
                 raise
+            self._heartbeat_generation += 1
             self._ledger.forget(self.robot_id)
             epoch = link.epoch
             if epoch:
@@ -243,6 +247,7 @@ class Agent:
             self.auth_rejected = True
             self.request_shutdown()
             raise
+        self._heartbeat_generation += 1
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
@@ -258,13 +263,19 @@ class Agent:
                             or frame.deadline <= self._clock.monotonic()
                         ):
                             raise ConnectionError("invalid heartbeat")
+                        generation = self._heartbeat_generation
                         await asyncio.wait_for(
                             self._motion.server_heartbeat(link.epoch, frame.deadline),
                             timeout=self._deadlines.safety,
                         )
-                        if frame.deadline <= self._clock.monotonic() or self._link is not link:
+                        if (
+                            frame.deadline <= self._clock.monotonic()
+                            or self._link is not link
+                            or generation != self._heartbeat_generation
+                            or self._stopping
+                        ):
                             raise ConnectionError("heartbeat expired before ROS acknowledgement")
-                        self._ledger.note(frame.robot_id)
+                        self._ledger.note(frame.robot_id, deadline=frame.deadline)
                     else:
                         self._accept(link, frame)
             finally:
@@ -335,15 +346,22 @@ class Agent:
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
             return
-        if len(self._inflight) >= MAX_INFLIGHT:
-            self._spawn(self._reject(link, envelope, ErrorCode.CONFLICT))
-            return
-        self._spawn(self._answer(link, envelope))
+        safety = envelope.type in HALT_TYPES
+        safety_active = self._safety_task is not None and not self._safety_task.done()
+        if (safety and safety_active) or (
+            not safety and len(self._inflight) - int(safety_active) >= MAX_INFLIGHT
+        ):
+            # Closing the session cancels queued work and disables its motion epoch.
+            raise ConnectionError("agent command capacity exceeded")
+        task = self._spawn(self._answer(link, envelope))
+        if safety:
+            self._safety_task = task
 
-    def _spawn(self, work: Awaitable[None]) -> None:
+    def _spawn(self, work: Awaitable[None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(work)
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
+        return task
 
     async def _answer(self, link: Link, envelope: Envelope) -> None:
         try:
