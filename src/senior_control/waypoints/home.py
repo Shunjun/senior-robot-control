@@ -2,7 +2,7 @@
 
 import asyncio
 import math
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -86,6 +86,7 @@ class HomeService:
         robot_id: str,
         navigation: NavigationPort | None = None,
     ) -> None:
+        self._database = database
         self._reference = reference
         self._robot_id = robot_id
         self._navigation = navigation
@@ -96,10 +97,24 @@ class HomeService:
         self._accepted_id: str | None = None
         self._cancel_id: str | None = None
         self._in_send = False
+        self._guard_unresolved = False
         self._return_lock = asyncio.Lock()
 
     async def prepare(self) -> None:
+        from senior_control.storage.core_schema import migrate_core
+
         await self._store.prepare()
+        await migrate_core(self._database)
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT execution_id FROM home_execution_guard WHERE robot_id = ?",
+                (self._robot_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is not None:
+            self._guard_unresolved = True
+            self._execution_id = row[0]
+            self._cancel_id = row[0]
         for item in await self._store.points():
             self._bind(item.waypoint, item.anchor_pose)
 
@@ -167,6 +182,8 @@ class HomeService:
         async with self._return_lock:
             if self._execution_id is not None:
                 await self._cancel_owed_goal()
+            elif self._guard_unresolved:
+                raise DomainError(ErrorCode.CONFLICT, "navigation outcome needs review")
             waypoint = await self._ready(expected)
             navigation = self._navigation
             assert navigation is not None
@@ -174,23 +191,62 @@ class HomeService:
             self._in_send = True
             cancel_this = False
             try:
+                # Persist an unknown outcome before the external operation can accept a goal.
+                self._guard_unresolved = True
+                await self._write_guard(None)
                 try:
                     execution_id = await navigation.navigate(
                         HomeGoal(expected, waypoint.pose, self._note_accepted)
                     )
-                except Exception:
-                    self._cancel_id = None
-                    self._execution_id = None
-                    raise
-                else:
                     self._execution_id = execution_id
+                    await self._write_guard(execution_id)
                     cancel_this = self._cancel_id == execution_id
+                except asyncio.CancelledError:
+                    self._execution_id = self._accepted_id or self._execution_id
+                    self._cancel_id = self._execution_id
+                    await self._write_guard(self._execution_id)
+                    raise
+                except Exception:
+                    if self._accepted_id is not None:
+                        self._execution_id = self._accepted_id
+                        self._cancel_id = self._accepted_id
+                        await self._write_guard(self._accepted_id)
+                    else:
+                        self._cancel_id = None
+                        self._execution_id = None
+                        await self._write_guard(None)
+                    raise
             finally:
                 self._in_send = False
                 self._accepted_id = None
             if cancel_this:
                 await self._cancel_owed_goal()
             return execution_id
+
+    async def _write_guard(self, execution_id: str | None) -> None:
+        async def write() -> None:
+            async with self._database.write_lock:
+                connection = self._database.connection
+                await connection.execute(
+                    "INSERT INTO home_execution_guard (robot_id, execution_id) VALUES (?, ?) "
+                    "ON CONFLICT(robot_id) DO UPDATE SET execution_id=excluded.execution_id",
+                    (self._robot_id, execution_id),
+                )
+                await connection.commit()
+
+        await _finish_guard_write(write())
+
+    async def _clear_guard(self) -> None:
+        async def clear() -> None:
+            async with self._database.write_lock:
+                connection = self._database.connection
+                await connection.execute(
+                    "DELETE FROM home_execution_guard WHERE robot_id = ?", (self._robot_id,)
+                )
+                await connection.commit()
+
+        await _finish_guard_write(clear())
+        self._guard_unresolved = False
 
     async def home(self) -> Waypoint | None:
         stored = await self._store.home()
@@ -306,6 +362,7 @@ class HomeService:
                 result = await navigation.cancel(execution_id)
                 if result.status != OperationStatus.SUCCEEDED:
                     raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
+            await self._clear_guard()
             self._execution_id = None
             if self._cancel_id == execution_id:
                 self._cancel_id = None
@@ -316,6 +373,7 @@ class HomeService:
         result = await self._finish_execution(execution_id)
         if result.status != OperationStatus.SUCCEEDED:
             raise DomainError(ErrorCode.CONFLICT, "navigation cancel was rejected")
+        await self._clear_guard()
         self._execution_id = None
         if self._cancel_id == execution_id:
             self._cancel_id = None
@@ -366,6 +424,15 @@ def _kept(stored: StoredWaypoint | None) -> bool:
         and stored.link_status == "confirmed"
         and stored.waypoint.status == "confirmed"
     )
+
+
+async def _finish_guard_write(operation: Awaitable[None]) -> None:
+    task = asyncio.ensure_future(operation)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
 
 
 def _recoverable(start: StartupReference) -> bool:

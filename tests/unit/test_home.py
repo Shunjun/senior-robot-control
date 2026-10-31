@@ -353,7 +353,7 @@ class FailingSecondNavigation:
         return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
 
-async def test_failed_send_clears_a_finished_execution(tmp_path: Path) -> None:
+async def test_failed_send_keeps_unknown_separate_from_finished_execution(tmp_path: Path) -> None:
     navigation = FailingSecondNavigation()
     async with Database(tmp_path / "send-fail.db") as database:
         service = HomeService(
@@ -373,13 +373,10 @@ async def test_failed_send_clears_a_finished_execution(tmp_path: Path) -> None:
         except RuntimeError as exc:
             sent = str(exc) == "send failed"
         assert sent
-        again = False
-        try:
-            again = await service.return_home(MAP) == "exec-3"
-        except DomainError:
-            again = False
-        assert again
-        assert navigation.starts == 3
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.CONFLICT
+        assert navigation.starts == 2
         assert navigation.cancelled == ["exec-1"]
 
 
@@ -571,7 +568,7 @@ class FailThenAccept:
         return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
 
-async def test_failed_send_does_not_cancel_the_next_connected_return(tmp_path: Path) -> None:
+async def test_failed_send_without_acceptance_stays_unknown(tmp_path: Path) -> None:
     navigation = FailThenAccept()
     async with Database(tmp_path / "stale-debt.db") as database:
         service = HomeService(
@@ -591,6 +588,58 @@ async def test_failed_send_does_not_cancel_the_next_connected_return(tmp_path: P
         with pytest.raises(RuntimeError, match="send failed"):
             await task
         assert navigation.events == ["navigate"]
-        assert await service.return_home(MAP) == "nav-2"
-        assert navigation.events == ["navigate", "navigate"]
-        assert navigation.active == "nav-2"
+        with pytest.raises(DomainError) as error:
+            await service.return_home(MAP)
+        assert error.value.code is ErrorCode.CONFLICT
+        assert navigation.events == ["navigate"]
+        assert navigation.active is None
+
+
+async def test_cancelled_accepted_home_goal_survives_disconnect_and_restart(tmp_path: Path) -> None:
+    class AcceptedUnknown(AcceptThenWait):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_status = OperationStatus.FAILED
+
+        async def cancel(self, execution_id: str) -> OperationResult:
+            self.events.append("cancel:" + execution_id)
+            if self.cancel_status is OperationStatus.SUCCEEDED:
+                self.active = None
+            return OperationResult(execution_id, self.cancel_status)
+
+    navigation = AcceptedUnknown()
+    path = tmp_path / "accepted.db"
+    async with Database(path) as database:
+        service = HomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        task = asyncio.create_task(service.return_home(MAP))
+        await asyncio.wait_for(navigation.accepted.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        with pytest.raises(DomainError):
+            await service.note_connection(False)
+        assert navigation.events == ["navigate", "cancel:nav-1"]
+        assert navigation.active == "nav-1"
+    async with Database(path) as database:
+        service = HomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT, navigation=navigation
+        )
+        await service.prepare()
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        with pytest.raises(DomainError):
+            await service.return_home(MAP)
+        assert navigation.events == ["navigate", "cancel:nav-1", "cancel:nav-1"]
+        navigation.cancel_status = OperationStatus.SUCCEEDED
+        navigation.release.set()
+        assert await service.return_home(MAP) == "nav-1"
+        assert navigation.events == [
+            "navigate",
+            "cancel:nav-1",
+            "cancel:nav-1",
+            "cancel:nav-1",
+            "navigate",
+        ]
