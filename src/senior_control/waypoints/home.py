@@ -74,7 +74,9 @@ class NavigationPort(Protocol):
 
     async def navigate(self, goal: HomeGoal) -> str: ...
 
-    async def cancel(self, execution_id: str) -> OperationResult: ...
+    async def cancel(self, execution_id: str) -> OperationResult:
+        """Report success only when the accepted goal is confirmed terminal."""
+        ...
 
 
 class HomeService:

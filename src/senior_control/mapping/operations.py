@@ -91,7 +91,8 @@ class PoseGraphVerifier(Protocol):
     """Backend confirmation for the complete saved graph and its map identity.
 
     A true result requires the live backend generation to match both the directory
-    contents and MapRef. A mere service acknowledgement or file copy is insufficient.
+    contents and MapRef, with all earlier mutations complete or fenced so that none
+    can later change it. A service acknowledgement or file copy is insufficient.
     """
 
     async def matches(self, directory: Path, map_ref: MapRef) -> bool: ...
