@@ -1,6 +1,6 @@
 """Nav2 goal lifecycle. This process does not publish /cmd_vel.
 
-Controller and behavior output is remapped to /safety/command_in. A rejected
+Controller and recovery output go to separate arbiter inputs. A rejected
 cancel leaves the current goal in place and does not start a replacement.
 """
 
@@ -10,7 +10,7 @@ from typing import Protocol
 
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 
-SAFETY_COMMAND_TOPIC = "/safety/command_in"
+SAFETY_COMMAND_TOPIC = "/control/recovery_cmd"
 ERROR_NONE = 0
 ERROR_GOAL_TERMINATED = 3
 

@@ -583,7 +583,8 @@ def test_nav2_is_differential_without_forced_rotation():
     assert "lattice_diff.json" in nav_text or "lattice_diff.json" in launch_text
     for forbidden in ("Spin", "BackUp", "DriveOnHeading", "spin_dist"):
         assert forbidden not in tree_text
-    assert "/safety/command_in" in launch_text
+    assert "/control/navigation_cmd" in launch_text
+    assert "/safety/command_in" not in launch_text
     assert "gz_sim" not in launch_text
     import json
 

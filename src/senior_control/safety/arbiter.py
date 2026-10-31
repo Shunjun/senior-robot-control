@@ -69,6 +69,7 @@ class Arbiter:
         self._disconnect_seconds = disconnect_seconds
         self._command_ttl_seconds = command_ttl_seconds
         self._lease: _Lease | None = None
+        self._history: dict[tuple[str, int], int] = {}
         self._estop = False
         self._manual = False
         self._recovery = False
@@ -87,6 +88,8 @@ class Arbiter:
         if not isinstance(command, (VelocityEnvelope, SimpleEnvelope)):
             return _reject(ErrorCode.VALIDATION)
         lease = self._lease
+        if (lease is None or command.session_id != lease.session_id or command.connection_epoch != lease.epoch) and command.seq <= self._history.get((command.session_id, command.connection_epoch), -1):
+            return _reject(ErrorCode.CONFLICT)
         if lease is None:
             return self._accept_without_lease(command, now, received_at)
         if command.session_id != lease.session_id:
@@ -124,9 +127,31 @@ class Arbiter:
         self._expire(now)
         if self._estop or not self._connected(now):
             return _ZERO
-        if self._manual and self._deadline is not None and now <= self._deadline:
+        if (self._manual or self._navigation or self._recovery) and self._deadline is not None and now <= self._deadline:
             return self._velocity
         return _ZERO
+
+    def accept_autonomous(self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float) -> bool:
+        self._expire(now)
+        if (not self._connected(now) or self._estop or self._manual
+                or (source == "navigation" and not self._navigation)
+                or (source == "recovery" and not self._recovery)
+                or source not in ("navigation", "recovery")
+                or not math.isfinite(velocity.vx) or not math.isfinite(velocity.wz)):
+            return False
+        self._velocity = velocity
+        self._deadline = now + self._command_ttl_seconds
+        return True
+
+    def begin_recovery(self, now: float) -> bool:
+        self._expire(now)
+        if not self._connected(now) or self._estop or self._manual or not self._navigation:
+            return False
+        self._navigation = False
+        self._recovery = True
+        self._velocity = _ZERO
+        self._deadline = None
+        return True
 
     def disconnect(self, connection_epoch: int) -> None:
         lease = self._lease
@@ -176,9 +201,8 @@ class Arbiter:
             return _ok()
         if kind == "control.release":
             self._refresh(command, now)
-            self._manual = False
-            self._velocity = _ZERO
-            self._deadline = None
+            self._lease.alive = False
+            self._clear_motion()
             return _ok()
         if kind == "drive.stop":
             if self._estop:
@@ -197,12 +221,12 @@ class Arbiter:
             if self._manual:
                 return _reject(ErrorCode.CONFLICT)
             self._refresh(command, now)
+            self._clear_motion()
             self._navigation = True
-            self._recovery = False
             return _ok()
         if kind == "navigation.cancel":
             self._refresh(command, now)
-            self._navigation = False
+            self._clear_motion()
             return _ok()
         return _reject(ErrorCode.VALIDATION)
 
@@ -240,6 +264,7 @@ class Arbiter:
     ) -> CommandResult:
         """Apply estop or reset. `_now` is ignored so a dead lease stays dead."""
         lease = self._lease
+        self._history[(command.session_id, command.connection_epoch)] = command.seq
         if lease is None:
             self._lease = _Lease(
                 session_id=command.session_id,
@@ -266,6 +291,7 @@ class Arbiter:
         return _reject(ErrorCode.VALIDATION)
 
     def _open_lease(self, command: Envelope, now: float) -> CommandResult:
+        self._history[(command.session_id, command.connection_epoch)] = command.seq
         self._lease = _Lease(
             session_id=command.session_id,
             epoch=command.connection_epoch,
@@ -281,6 +307,7 @@ class Arbiter:
         if lease is None:
             raise RuntimeError("lease missing")
         lease.seq = command.seq
+        self._history[(command.session_id, command.connection_epoch)] = command.seq
         lease.refreshed_at = now
         lease.alive = True
 

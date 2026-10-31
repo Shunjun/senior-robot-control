@@ -451,3 +451,17 @@ async def test_ipc_motion_sends_validated_envelopes_and_the_epoch(
     assert drive.type == "drive.velocity" and drive.seq == 4
     assert validate_envelope(side.messages[1]["envelope"].encode(), ROBOT).type == "drive.stop"
     assert side.messages[3]["connection_epoch"] == 9
+
+
+async def test_disabled_adapter_requires_new_epoch_acquire_to_reenable() -> None:
+    from agent_fakes import simple, velocity
+
+    rig = ArbiterRig()
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=1)))["ok"]
+    assert (await rig.send("drive", velocity(seq=2, epoch=1)))["ok"]
+    await rig.send("disable_motion", connection_epoch=1)
+    assert not (await rig.send("command", simple("control.acquire", seq=3, epoch=1)))["ok"]
+    assert (await rig.send("command", simple("control.acquire", seq=1, epoch=2)))["ok"]
+    assert rig.tick() == (0.0, 0.0)
+    assert (await rig.send("drive", velocity(seq=2, epoch=2)))["ok"]
+    assert rig.tick() == (0.2, 0.0)

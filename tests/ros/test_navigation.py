@@ -10,7 +10,7 @@ def test_navigation_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
     from senior_robot.navigation_adapter import SAFETY_COMMAND_TOPIC, create_navigation_node
 
-    assert SAFETY_COMMAND_TOPIC == "/safety/command_in"
+    assert SAFETY_COMMAND_TOPIC == "/control/recovery_cmd"
     rclpy.init()
     node = None
     try:
@@ -19,7 +19,7 @@ def test_navigation_node_does_not_publish_cmd_vel():
         if publishers is None or callable(publishers):
             publishers = getattr(node, "_publishers", ())
         topics = {publisher.topic_name for publisher in publishers}
-        assert topics == {"/safety/command_in"}
+        assert topics - {"/parameter_events", "/rosout"} == {"/control/recovery_cmd"}
         assert "/cmd_vel" not in topics
     finally:
         if node is not None:

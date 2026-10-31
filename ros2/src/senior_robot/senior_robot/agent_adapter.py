@@ -72,6 +72,8 @@ class AdapterCore:
         if kind in {"stop", "estop"}:
             return self._send(message, kind, safety=True)
         if self.motion_disabled:
+            if kind == "command":
+                return self._reenable(message)
             return {"ok": False, "error": "motion_disabled"}
         if kind == "drive":
             return self._send(message, kind, safety=False)
@@ -80,6 +82,21 @@ class AdapterCore:
         if kind == "ros_call":
             return {"ok": False, "error": "unsupported"}
         return {"ok": False, "error": "unknown_type"}
+
+    def _reenable(self, message: dict[str, Any]) -> dict[str, Any]:
+        raw = message.get("envelope")
+        if not isinstance(raw, str):
+            return {"ok": False, "error": "motion_disabled"}
+        try:
+            envelope = validate_envelope(raw.encode(), self._robot_id)
+        except ValueError:
+            return {"ok": False, "error": "motion_disabled"}
+        if envelope.type != "control.acquire" or envelope.connection_epoch <= max(self._epochs, default=-1):
+            return {"ok": False, "error": "motion_disabled"}
+        result = self._send(message, None, safety=False)
+        if result.get("ok"):
+            self.motion_disabled = False
+        return result
 
     def _send(self, message: dict[str, Any], kind: str | None, *, safety: bool) -> dict[str, Any]:
         del safety

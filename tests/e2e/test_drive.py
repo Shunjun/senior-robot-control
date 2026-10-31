@@ -29,7 +29,7 @@ def test_only_safety_node_publishes_cmd_vel(
                 break
             rclpy.spin_once(node, timeout_sec=0.1)
         assert publishers, "no /cmd_vel publisher discovered"
-        assert {publisher.node_name for publisher in publishers} == {"safety_node"}
+        assert {publisher.node_name for publisher in publishers} == {"safety_gate"}
     finally:
         node.destroy_node()
         rclpy.shutdown()

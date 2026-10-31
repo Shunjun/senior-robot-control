@@ -130,3 +130,75 @@ def test_safety_gate_alone_publishes_cmd_vel():
         command.destroy_node()
         safety.destroy_node()
         rclpy.shutdown()
+
+
+def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement():
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import TransformStamped, TwistStamped
+    from rclpy.parameter import Parameter
+    from sensor_msgs.msg import LaserScan
+    from senior_robot.safety_node import SafetyGate
+
+    rclpy.init()
+    gate = SafetyGate(parameter_overrides=[
+        Parameter("observation_max_age", value=0.5),
+        Parameter("measurement_max_age", value=0.5),
+        Parameter("transform_static", value=True),
+        Parameter("self_mask_calibrated", value=True),
+    ])
+    try:
+        tf = TransformStamped()
+        tf.header.frame_id = "base_link"
+        tf.child_frame_id = "laser_link"
+        tf.transform.translation.x = 0.25
+        tf.transform.rotation.w = 1.0
+        gate._tf_buffer.set_transform_static(tf, "test")
+        scan = LaserScan()
+        scan.header.frame_id = "laser_link"
+        scan.header.stamp = gate.get_clock().now().to_msg()
+        scan.angle_increment = 0.1
+        scan.range_min, scan.range_max = 0.1, 10.0
+        scan.ranges = [1.0]
+        gate._on_scan(scan)
+        assert gate._filtered is not None
+        assert gate._filtered.rays[0].origin == (0.25, 0.0)
+        assert gate._filtered.rays[0].endpoint == (1.25, 0.0)
+        now = gate.get_clock().now().nanoseconds / 1e9
+        import time
+        assert not gate._freshness.usable(now, time.monotonic())
+        measured = TwistStamped()
+        measured.header.frame_id = "base_link"
+        measured.header.stamp = gate.get_clock().now().to_msg()
+        gate._on_measured(measured)
+        now = gate.get_clock().now().nanoseconds / 1e9
+        assert gate._freshness.usable(now, time.monotonic())
+        assert not gate._freshness.usable(now, time.monotonic() + 1.0)
+    finally:
+        gate.destroy_node()
+        rclpy.shutdown()
+
+
+def test_safety_steady_timer_publishes_zero_while_ros_time_is_frozen():
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import Twist
+    from rclpy.parameter import Parameter
+    from senior_robot.safety_node import SafetyGate
+
+    rclpy.init()
+    gate = SafetyGate(parameter_overrides=[Parameter("use_sim_time", value=True)])
+    listener = rclpy.create_node("safety_timer_listener")
+    heard = []
+    listener.create_subscription(Twist, "/cmd_vel", heard.append, 10)
+    try:
+        frozen = gate.get_clock().now().nanoseconds
+        for _ in range(40):
+            rclpy.spin_once(gate, timeout_sec=0.05)
+            rclpy.spin_once(listener, timeout_sec=0.05)
+            if heard:
+                break
+        assert heard and heard[-1].linear.x == 0.0 and heard[-1].angular.z == 0.0
+        assert gate.get_clock().now().nanoseconds == frozen
+    finally:
+        listener.destroy_node()
+        gate.destroy_node()
+        rclpy.shutdown()

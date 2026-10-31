@@ -14,7 +14,9 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistStamped
+from rclpy.clock import Clock as RosClock, ClockType
+from tf2_ros import Buffer, TransformException, TransformListener
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -23,6 +25,7 @@ from sensor_msgs.msg import LaserScan
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.guard import command_expired, evaluate_motion
+from senior_control.safety.freshness import SafetyFreshness
 from senior_control.safety.self_filter import FilteredObservation, ScanObservation, filter_self
 
 
@@ -39,8 +42,8 @@ def _nonnegative(value: float) -> float | None:
 
 
 class SafetyGate(Node):
-    def __init__(self) -> None:
-        super().__init__("safety_gate")
+    def __init__(self, *, parameter_overrides=None) -> None:
+        super().__init__("safety_gate", parameter_overrides=parameter_overrides or [])
         self.declare_parameter("simulation_rate_hz", 20.0)
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("braking_deceleration", -1.0)
@@ -57,6 +60,7 @@ class SafetyGate(Node):
         self.declare_parameter("no_return_clear", False)
         self.declare_parameter("command_topic", "/safety/command_in")
         self.declare_parameter("measured_topic", "")
+        self.declare_parameter("measurement_max_age", -1.0)
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("output_topic", "/cmd_vel")
         self.declare_parameter("command_ttl_seconds", -1.0)
@@ -68,6 +72,11 @@ class SafetyGate(Node):
         self._command_monotonic: float | None = None
         self._measured = Velocity(0.0, 0.0)
         self._filtered: FilteredObservation | None = None
+        scan_age = _positive(float(self.get_parameter("observation_max_age").value))
+        measured_age = _positive(float(self.get_parameter("measurement_max_age").value))
+        self._freshness = SafetyFreshness(min(scan_age, measured_age)) if scan_age and measured_age else None
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
         output = str(self.get_parameter("output_topic").value)
         command_topic = str(self.get_parameter("command_topic").value)
         scan_topic = str(self.get_parameter("scan_topic").value)
@@ -75,9 +84,9 @@ class SafetyGate(Node):
         self.create_subscription(Twist, command_topic, self._on_command, 10)
         measured_topic = str(self.get_parameter("measured_topic").value)
         if measured_topic:
-            self.create_subscription(Twist, measured_topic, self._on_measured, 10)
+            self.create_subscription(TwistStamped, measured_topic, self._on_measured, 10)
         self.create_subscription(LaserScan, scan_topic, self._on_scan, qos_profile_sensor_data)
-        self.create_timer(1.0 / rate, self._on_timer)
+        self.create_timer(1.0 / rate, self._on_timer, clock=RosClock(clock_type=ClockType.STEADY_TIME))
 
     def _profile(self) -> DeviceProfile:
         footprint_xy = self.get_parameter("footprint_xy").value or []
@@ -120,41 +129,52 @@ class SafetyGate(Node):
             self._command = velocity
             self._command_monotonic = time.monotonic()
 
-    def _on_measured(self, msg: Twist) -> None:
-        # Caller must supply independent body velocity. This node never subscribes
-        # to wheel odometry or /ground_truth/odom on its own.
-        velocity = self._velocity(msg)
-        if velocity is not None:
-            self._measured = velocity
+    def _on_measured(self, msg: TwistStamped) -> None:
+        # The publisher must provide independent, quality-gated body motion.
+        velocity = self._velocity(msg.twist)
+        now = self.get_clock().now().nanoseconds / 1e9
+        stamp = Time.from_msg(msg.header.stamp).nanoseconds / 1e9
+        if (velocity is None or msg.header.frame_id != self._body or self._freshness is None
+                or not self._freshness.measured(stamp, time.monotonic(), now)):
+            if self._freshness is not None:
+                self._freshness.measured_received = None
+            return
+        self._measured = velocity
 
     def _on_scan(self, msg: LaserScan) -> None:
-        if msg.header.frame_id != self._body:
-            self._filtered = None
+        self._filtered = None
+        if self._freshness is None:
             return
         try:
-            stamp = Time.from_msg(msg.header.stamp).nanoseconds / 1e9
+            stamp_time = Time.from_msg(msg.header.stamp)
+            stamp = stamp_time.nanoseconds / 1e9
+            now = self.get_clock().now().nanoseconds / 1e9
+            if not msg.header.frame_id or not self._freshness.scan(stamp, time.monotonic(), now):
+                raise ValueError("stale or out-of-order scan")
+            tf = self._tf_buffer.lookup_transform(self._body, msg.header.frame_id, stamp_time)
+            q = tf.transform.rotation
+            values = (q.x, q.y, q.z, q.w, tf.transform.translation.x, tf.transform.translation.y)
+            if (not all(math.isfinite(v) for v in values)
+                    or abs(sum(v * v for v in (q.x, q.y, q.z, q.w)) - 1) > 0.001
+                    or abs(q.x) > 0.001 or abs(q.y) > 0.001):
+                raise ValueError("invalid planar transform")
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            tf_stamp = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
             static = bool(self.get_parameter("transform_static").value)
-            gap = float(self.get_parameter("max_angular_gap").value)
+            if not static and not 0 <= stamp - tf_stamp <= self._freshness.max_age:
+                raise ValueError("stale transform")
             observation = ScanObservation(
-                tuple(msg.ranges),
-                float(msg.angle_min),
-                float(msg.angle_increment),
-                float(msg.range_min),
-                float(msg.range_max),
-                stamp,
-                "ros",
-                Pose2D(0.0, 0.0, 0.0),
-                0.0 if static else stamp,
-                self._body,
-                stamp,
+                tuple(msg.ranges), float(msg.angle_min), float(msg.angle_increment),
+                float(msg.range_min), float(msg.range_max), stamp, "ros",
+                Pose2D(tf.transform.translation.x, tf.transform.translation.y, yaw),
+                tf_stamp, self._body, stamp,
                 bool(self.get_parameter("interpolate").value),
-                gap,
-                bool(self.get_parameter("no_return_clear").value),
-                static,
+                float(self.get_parameter("max_angular_gap").value),
+                bool(self.get_parameter("no_return_clear").value), static,
             )
             self._filtered = filter_self(observation, self._profile())
-        except (ValueError, OverflowError):
-            self._filtered = None
+        except (ValueError, OverflowError, TransformException):
+            self._freshness.scan_received = None
 
     def _publish(self, velocity: Velocity) -> None:
         twist = Twist()
@@ -168,6 +188,9 @@ class SafetyGate(Node):
             self._publish(Velocity(0.0, 0.0))
             return
         now = self.get_clock().now().nanoseconds / 1e9
+        if self._freshness is None or not self._freshness.usable(now, time.monotonic()):
+            self._publish(Velocity(0.0, 0.0))
+            return
         observations = [] if self._filtered is None else [self._filtered]
         try:
             decision = evaluate_motion(

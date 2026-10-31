@@ -1,6 +1,6 @@
 """Nav2 for the differential chassis. This launch does not start a simulator.
 
-The controller output is /safety/command_in. safety_node remains the only
+The controller output is /control/navigation_cmd. safety_node remains the only
 /cmd_vel publisher. The behavior tree has no rotation before the path.
 """
 
@@ -27,7 +27,7 @@ def generate_launch_description():
         },
         convert_types=True,
     )
-    remappings = [("cmd_vel", "/safety/command_in"), ("/cmd_vel", "/safety/command_in")]
+    remappings = [("cmd_vel", "/control/navigation_cmd"), ("/cmd_vel", "/control/navigation_cmd")]
     lifecycle = [
         "controller_server",
         "planner_server",
