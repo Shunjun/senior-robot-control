@@ -3,10 +3,10 @@
 import json
 import os
 import shutil
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.evidence import CellEvidence, OccupancySnapshot
 from senior_control.models import MapRef, Pose2D
 
@@ -163,26 +163,52 @@ def durable_replace(temporary: Path, destination: Path) -> None:
     _fsync_path(destination.parent)
 
 
-def durable_move_tree(temporary: Path, destination: Path) -> None:
-    """Move a directory on the same filesystem, then fsync its files and parent."""
+def recover_move_tree(destination: Path) -> None:
+    """Recover the last complete directory after an interrupted replacement."""
+    displaced = destination.with_name(f".{destination.name}.previous")
+    if displaced.is_symlink() or destination.is_symlink():
+        raise DomainError(ErrorCode.VALIDATION, "map path contains a symlink")
+    if not displaced.exists():
+        return
+    if destination.exists():
+        shutil.rmtree(displaced)
+    else:
+        os.replace(displaced, destination)
+    _fsync_path(destination.parent)
 
-    for path in sorted(temporary.rglob("*")):
+
+def durable_move_tree(temporary: Path, destination: Path) -> None:
+    """Publish a complete tree with a recoverable previous generation."""
+    for path in sorted(temporary.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_symlink():
+            raise DomainError(ErrorCode.VALIDATION, "map tree contains a symlink")
         if path.is_file() or path.is_dir():
             _fsync_path(path)
     _fsync_path(temporary)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(destination.parent)
+    recover_move_tree(destination)
+    displaced = destination.with_name(f".{destination.name}.previous")
     if destination.exists():
-        displaced = destination.with_name(f".{destination.name}-{uuid.uuid4().hex}")
         os.replace(destination, displaced)
-        os.replace(temporary, destination)
-        shutil.rmtree(displaced)
-    else:
-        os.replace(temporary, destination)
-    for path in sorted(destination.rglob("*")):
-        if path.is_file() or path.is_dir():
-            _fsync_path(path)
-    _fsync_path(destination)
+        _fsync_path(destination.parent)
+    os.replace(temporary, destination)
     _fsync_path(destination.parent)
+    if displaced.exists():
+        shutil.rmtree(displaced)
+        _fsync_path(destination.parent)
+
+
+def durable_mkdir(directory: Path) -> None:
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for path in reversed(missing):
+        _fsync_path(path)
+        _fsync_path(path.parent)
+    _fsync_path(directory)
 
 
 def _fsync_path(path: Path) -> None:

@@ -43,6 +43,7 @@ class FixedClock:
 class Graph:
     def __init__(self, map_ref: MapRef) -> None:
         self._map_ref = map_ref
+        self._graph = map_ref.map_id
 
     def map_ref(self) -> MapRef:
         return self._map_ref
@@ -55,15 +56,24 @@ class Graph:
 
     async def write(self, directory: Path) -> tuple[str, ...]:
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "graph.posegraph").write_text(self._map_ref.map_id, encoding="utf-8")
+        (directory / "graph.posegraph").write_text(self._graph, encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
 
     async def read(self, directory: Path) -> None:
-        del directory
+        self._graph = (directory / "graph.posegraph").read_text()
 
     async def reset(self) -> None:
-        return None
+        self._graph = "reset"
+
+    async def matches(self, directory: Path, map_ref: MapRef) -> bool:
+        expected = (directory / "graph.posegraph").read_text()
+        identity_matches = (
+            map_ref.map_id.startswith("unmapped-")
+            if expected == "reset"
+            else expected == map_ref.map_id
+        )
+        return self._graph == expected and identity_matches
 
 
 class Gate:

@@ -21,6 +21,8 @@ ROS_VERSION = "humble"
 SLAM_VERSION = "2.6.10"
 COORDINATE_CONVENTION = "right_handed_xy_yaw"
 STABLE_LAYER = "occupancy/occupancy.json"
+_MAX_MEMBERS = 1024
+_READ_CHUNK = 65_536
 
 
 @dataclass(frozen=True)
@@ -218,22 +220,44 @@ class MapArchive:
         return manifest
 
     def _read_members(self, archive: zipfile.ZipFile) -> dict[str, bytes]:
+        infos = archive.infolist()
+        if len(infos) > _MAX_MEMBERS:
+            raise DomainError(ErrorCode.VALIDATION, "bundle has too many members")
+        declared = 0
+        names: set[str] = set()
+        for info in infos:
+            _reject_member(info.filename, info)
+            if info.filename in names:
+                raise DomainError(ErrorCode.VALIDATION, "bundle path is duplicated")
+            names.add(info.filename)
+            declared += info.file_size
+            if (
+                info.file_size > self._max_uncompressed_bytes
+                or declared > self._max_uncompressed_bytes
+            ):
+                raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+
         files: dict[str, bytes] = {}
         total = 0
-        for info in archive.infolist():
-            name = info.filename
-            _reject_member(name, info)
-            if name.endswith("/"):
-                continue
-            if name in files:
-                raise DomainError(ErrorCode.VALIDATION, "bundle path is duplicated")
-            payload = archive.read(info)
-            total += len(payload)
-            if total > self._max_uncompressed_bytes:
-                raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
-            files[name] = payload
-        if total > self._max_uncompressed_bytes:
-            raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+        try:
+            for info in infos:
+                if info.is_dir():
+                    continue
+                parts: list[bytes] = []
+                with archive.open(info) as member:
+                    while True:
+                        chunk = member.read(
+                            min(_READ_CHUNK, self._max_uncompressed_bytes - total + 1)
+                        )
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > self._max_uncompressed_bytes:
+                            raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+                        parts.append(chunk)
+                files[info.filename] = b"".join(parts)
+        except (zipfile.BadZipFile, EOFError, RuntimeError) as exc:
+            raise DomainError(ErrorCode.VALIDATION, "bundle member is unreadable") from exc
         return files
 
 

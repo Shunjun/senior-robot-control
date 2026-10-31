@@ -35,6 +35,7 @@ class Graph:
     def __init__(self, map_ref: MapRef, hint: Pose2D | None = _HINT) -> None:
         self._map_ref = map_ref
         self._hint = hint
+        self.current_graph = map_ref.map_id
 
     def map_ref(self) -> MapRef:
         return self._map_ref
@@ -47,15 +48,24 @@ class Graph:
 
     async def write(self, directory: Path) -> tuple[str, ...]:
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "graph.posegraph").write_text(self._map_ref.map_id, encoding="utf-8")
+        (directory / "graph.posegraph").write_text(self.current_graph, encoding="utf-8")
         (directory / "graph.data").write_text("scans", encoding="utf-8")
         return ("graph.posegraph", "graph.data")
 
     async def read(self, directory: Path) -> None:
-        del directory
+        self.current_graph = (directory / "graph.posegraph").read_text()
 
     async def reset(self) -> None:
-        return None
+        self.current_graph = "reset"
+
+    async def matches(self, directory: Path, map_ref: MapRef) -> bool:
+        expected = (directory / "graph.posegraph").read_text()
+        identity_matches = (
+            map_ref.map_id.startswith("unmapped-")
+            if expected == "reset"
+            else expected == map_ref.map_id
+        )
+        return self.current_graph == expected and identity_matches
 
 
 class Gate:
@@ -215,7 +225,7 @@ async def test_corrupt_bundle_preserves_active_map(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_load_restores_map_and_stays_stopped(tmp_path: Path) -> None:
+async def test_failed_load_is_unknown_and_stays_stopped(tmp_path: Path) -> None:
     store = filled_store("yard", 3, (1.25, 0.25))
     original = store.map_ref
     cells = store.occupancy().cells
@@ -232,16 +242,16 @@ async def test_failed_load_restores_map_and_stays_stopped(tmp_path: Path) -> Non
             await ops.import_bundle(bundle, "robot-a", operation_id="import-load")
         record = await ops.operation_record("import-load")
 
-    assert record.result.status is OperationStatus.FAILED
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
     assert record.relocalized is False
-    assert record.rollback_confirmed is True
+    assert record.rollback_confirmed is False
     assert ops.store.map_ref == original
     assert ops.store.occupancy().cells == cells
+    assert ops.store.review_required
     assert gate.calls == ["stop_and_block_navigation"]
     assert gate.driving is False
     assert gate.blocked is True
-    active = SlamSnapshot.read(tmp_path / "maps" / "active")
-    assert active.map_ref == original
+    assert not (tmp_path / "maps" / "active").exists()
 
 
 @pytest.mark.asyncio
@@ -466,6 +476,7 @@ class Session(Graph):
     def __init__(self, map_ref: MapRef) -> None:
         super().__init__(map_ref)
         self.token = "live"
+        self.graph_identity = map_ref.map_id
         self.resets = 0
         self.reads: list[Path] = []
         self.rollback_during_restore: bool | None = None
@@ -473,7 +484,7 @@ class Session(Graph):
     async def write(self, directory: Path) -> tuple[str, ...]:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "graph.posegraph").write_text(self.token, encoding="utf-8")
-        (directory / "graph.data").write_text("scans", encoding="utf-8")
+        (directory / "graph.data").write_text(self.graph_identity, encoding="utf-8")
         return ("graph.posegraph", "graph.data")
 
     async def read(self, directory: Path) -> None:
@@ -481,10 +492,24 @@ class Session(Graph):
         pose = directory / "graph.posegraph"
         if pose.is_file():
             self.token = pose.read_text(encoding="utf-8")
+            data = (directory / "graph.data").read_text(encoding="utf-8")
+            self.graph_identity = self.token if data == "scans" else data
 
     async def reset(self) -> None:
         self.resets += 1
         self.token = "reset"
+        self.graph_identity = "reset"
+
+    async def matches(self, directory: Path, map_ref: MapRef) -> bool:
+        expected = (directory / "graph.posegraph").read_text()
+        data = (directory / "graph.data").read_text()
+        identity = expected if data == "scans" else data
+        identity_matches = (
+            map_ref.map_id.startswith("unmapped-")
+            if identity == "reset"
+            else identity == map_ref.map_id
+        )
+        return self.token == expected and self.graph_identity == identity and identity_matches
 
 
 class HoldingGraph(Graph):
@@ -567,7 +592,7 @@ async def test_import_keeps_pose_graph_and_stage_log(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_load_restores_session_before_rollback_flag(tmp_path: Path) -> None:
+async def test_failed_load_does_not_claim_unconfirmed_rollback(tmp_path: Path) -> None:
     store = filled_store("yard", 3, (1.25, 0.25))
     session = Session(store.map_ref)
     gate = Gate()
@@ -604,10 +629,11 @@ async def test_failed_load_restores_session_before_rollback_flag(tmp_path: Path)
         record = await ops.operation_record("import-fail")
 
     assert session.reads
-    assert session.token == "live"
+    assert session.token == "dirty"
     assert session.rollback_during_restore is False
-    assert record.rollback_confirmed is True
-    assert record.result.status is OperationStatus.FAILED
+    assert record.rollback_confirmed is False
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert store.review_required
     assert gate.driving is False
     assert gate.blocked is True
     assert ops.store.map_ref.map_id == "yard"
@@ -800,7 +826,6 @@ async def test_import_replace_after_identity_change_needs_review(tmp_path: Path)
     store = filled_store("local", 1, (2.25, 0.25))
     source = filled_store("yard", 3, (1.25, 0.25))
     bundle = tmp_path / "yard.zip"
-    original = store.map_ref
     session = Session(store.map_ref)
     calls = {"n": 0}
     real_replace = store.replace
@@ -826,10 +851,11 @@ async def test_import_replace_after_identity_change_needs_review(tmp_path: Path)
         record = await ops.operation_record("import-replace")
         queried = await ops.query("import-replace")
 
-    assert store.map_ref == original
-    assert session.token == "live"
-    assert record.result.status is OperationStatus.FAILED
-    assert queried.status is OperationStatus.FAILED
+    assert store.map_ref == source.map_ref
+    assert store.review_required
+    assert session.token == "yard"
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
     assert record.result.status is not OperationStatus.SUCCEEDED
 
 
@@ -838,7 +864,6 @@ async def test_import_publish_failure_after_running_needs_review(tmp_path: Path)
     store = filled_store("local", 1, (2.25, 0.25))
     source = filled_store("yard", 3, (1.25, 0.25))
     bundle = tmp_path / "yard.zip"
-    original = store.map_ref
     session = Session(store.map_ref)
     async with Database(tmp_path / "robot.db") as database:
         ops = _operations(
@@ -860,10 +885,11 @@ async def test_import_publish_failure_after_running_needs_review(tmp_path: Path)
         record = await ops.operation_record("import-publish")
         queried = await ops.query("import-publish")
 
-    assert store.map_ref == original
-    assert session.token == "live"
-    assert record.result.status is OperationStatus.FAILED
-    assert queried.status is OperationStatus.FAILED
+    assert store.map_ref == source.map_ref
+    assert store.review_required
+    assert session.token == "yard"
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
 
 
 @pytest.mark.asyncio
@@ -914,7 +940,7 @@ async def test_import_cancel_during_load_needs_review(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_clear_reset_failure_is_failed(tmp_path: Path) -> None:
+async def test_clear_reset_failure_is_unknown(tmp_path: Path) -> None:
     store = filled_store("yard", 3, (1.25, 0.25))
     original = store.map_ref
 
@@ -933,9 +959,9 @@ async def test_clear_reset_failure_is_failed(tmp_path: Path) -> None:
         queried = await ops.query("clear-reset")
 
     assert store.map_ref == original
-    assert record.result.status is OperationStatus.FAILED
-    assert queried.status is OperationStatus.FAILED
-    assert record.result.status is not OperationStatus.NEEDS_REVIEW
+    assert store.review_required
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
 
 
 @pytest.mark.asyncio
@@ -958,10 +984,11 @@ async def test_clear_publish_failure_after_identity_change_needs_review(tmp_path
         record = await ops.operation_record("clear-publish")
         queried = await ops.query("clear-publish")
 
-    assert store.map_ref == original
-    assert session.token == "live"
-    assert record.result.status is OperationStatus.FAILED
-    assert queried.status is OperationStatus.FAILED
+    assert store.map_ref != original
+    assert store.review_required
+    assert session.token == "reset"
+    assert record.result.status is OperationStatus.NEEDS_REVIEW
+    assert queried.status is OperationStatus.NEEDS_REVIEW
     assert record.result.status is not OperationStatus.SUCCEEDED
 
 
@@ -995,3 +1022,311 @@ async def test_clear_cancel_after_running_needs_review(tmp_path: Path) -> None:
     assert record.result.status is OperationStatus.NEEDS_REVIEW
     assert queried.status is OperationStatus.NEEDS_REVIEW
     assert record.rollback_confirmed is False
+
+
+async def test_import_operation_id_binds_complete_bundle_content(tmp_path: Path) -> None:
+    first_source = filled_store("same", 1, (1.0, 1.0))
+    second_source = filled_store("same", 1, (3.0, 3.0))
+    local = filled_store("local", 1, (4.0, 4.0))
+    first_path, second_path = tmp_path / "first.zip", tmp_path / "second.zip"
+    await archive_for(first_source, "origin").export_bundle(
+        first_source, first_source.map_ref, first_path
+    )
+    await archive_for(second_source, "origin").export_bundle(
+        second_source, second_source.map_ref, second_path
+    )
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, local, tmp_path, robot_id="target")
+        await ops.prepare()
+        first = await ops.import_bundle(first_path, "target", operation_id="same-id")
+        retry = await ops.import_bundle(first_path, "target", operation_id="same-id")
+        with pytest.raises(DomainError) as error:
+            await ops.import_bundle(second_path, "target", operation_id="same-id")
+        assert error.value.code is ErrorCode.CONFLICT
+        assert retry == first
+        assert ops.store.occupancy().cells == first_source.occupancy().cells
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+async def test_opaque_map_id_cannot_escape_history_on_clear_and_reimport(
+    tmp_path: Path, absolute: bool
+) -> None:
+    escaped = tmp_path / "outside" if absolute else tmp_path / "owned" / "outside"
+    marker = escaped / "1" / "keep"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("unchanged")
+    identity = str(escaped) if absolute else "../../outside"
+    source = filled_store(identity, 1, (1.0, 1.0))
+    local = filled_store("local", 1, (2.0, 2.0))
+    bundle = tmp_path / "opaque.zip"
+    await archive_for(source, "source").export_bundle(source, source.map_ref, bundle)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, local, tmp_path / "owned", robot_id="target")
+        await ops.prepare()
+        await ops.import_bundle(bundle, "target", operation_id="first")
+        await ops.clear_map(source.map_ref, operation_id="clear")
+        await ops.import_bundle(bundle, "target", operation_id="again")
+    assert marker.read_text() == "unchanged"
+    assert list(marker.parent.iterdir()) == [marker]
+
+
+@pytest.mark.parametrize("part", ["history", "history/local", ".staging", "active"])
+async def test_map_symlink_parent_cannot_modify_outside_tree(tmp_path: Path, part: str) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep"
+    marker.write_text("unchanged")
+    root = tmp_path / "owned"
+    maps = root / "maps"
+    maps.mkdir(parents=True)
+    (maps / part).parent.mkdir(parents=True, exist_ok=True)
+    (maps / part).symlink_to(outside, target_is_directory=True)
+    store = filled_store("local", 1, (2.0, 2.0))
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, store, root, robot_id="target")
+        with pytest.raises(DomainError):
+            await ops.prepare()
+            await ops.clear_map(store.map_ref, operation_id="clear")
+    assert marker.read_text() == "unchanged"
+    assert list(outside.iterdir()) == [marker]
+
+
+@pytest.mark.parametrize("crash_after_install", [False, True])
+async def test_prepare_recovers_active_generation_after_rename_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, crash_after_install: bool
+) -> None:
+    import os
+
+    from senior_control.mapping.references import durable_move_tree
+
+    old = filled_store("old", 1, (1.0, 1.0))
+    new = filled_store("new", 2, (4.0, 4.0))
+    root = tmp_path / "maps"
+    active = root / "active"
+    staging = root / ".staging" / "incoming"
+    active.mkdir(parents=True)
+    (active / "pose_graph").mkdir()
+    (active / "pose_graph" / "graph.posegraph").write_text("old graph")
+    old.snapshot(Path("pose_graph"), ()).write(active)
+    staging.mkdir(parents=True)
+    (staging / "pose_graph").mkdir()
+    (staging / "pose_graph" / "graph.posegraph").write_text("new graph")
+    new.snapshot(Path("pose_graph"), ()).write(staging)
+    real_replace = os.replace
+
+    def crash_between_renames(source: object, destination: object) -> None:
+        if Path(source) == staging and Path(destination) == active:
+            if crash_after_install:
+                real_replace(source, destination)
+            raise ProcessCrash("rename gap")
+        real_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", crash_between_renames)
+        with pytest.raises(ProcessCrash):
+            durable_move_tree(staging, active)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, old, tmp_path, robot_id="target")
+        await ops.prepare()
+    recovered = SlamSnapshot.read(active)
+    expected = new if crash_after_install else old
+    assert recovered.map_ref == expected.map_ref
+    assert recovered.occupancy.cells == expected.occupancy().cells
+    assert (active / "pose_graph" / "graph.posegraph").read_text() == (
+        "new graph" if crash_after_install else "old graph"
+    )
+
+
+@pytest.mark.parametrize("action", ["clear", "import"])
+async def test_cancelled_graph_switch_waits_for_fence_before_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    import senior_control.mapping.operations as operations_module
+
+    class AfterEffect(Session):
+        def __init__(self, map_ref: MapRef) -> None:
+            super().__init__(map_ref)
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.finished = asyncio.Event()
+
+        async def reset(self) -> None:
+            self.token = "reset"
+            self.entered.set()
+            await self.release.wait()
+            self.finished.set()
+
+        async def read(self, directory: Path) -> None:
+            payload = (directory / "graph.posegraph").read_text()
+            self.token = payload
+            if payload != "live":
+                self.entered.set()
+                await self.release.wait()
+                self.finished.set()
+
+        async def quiesce(self) -> None:
+            await self.finished.wait()
+
+        async def matches(self, directory: Path, map_ref: MapRef) -> bool:
+            return (
+                map_ref == self._map_ref
+                and self.token == (directory / "graph.posegraph").read_text()
+            )
+
+    monkeypatch.setattr(operations_module, "_GRAPH_WAIT_SECONDS", 0.02, raising=False)
+    local = filled_store("local", 1, (2.0, 2.0))
+    source = filled_store("remote", 2, (1.0, 1.0))
+    bundle = tmp_path / "source.zip"
+    await archive_for(source, "source").export_bundle(source, source.map_ref, bundle)
+    graph = AfterEffect(local.map_ref)
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        gate = Gate()
+        ops = session_operations(database, local, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        if action == "clear":
+            operation = ops.clear_map(local.map_ref, operation_id="switch")
+        else:
+            operation = ops.import_bundle(bundle, "r", operation_id="switch")
+        running = asyncio.create_task(operation)
+        await asyncio.wait_for(graph.entered.wait(), 1)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, 1)
+        assert gate.blocked
+        assert local.review_required
+        assert (await ops.query("switch")).status is OperationStatus.NEEDS_REVIEW
+        assert graph.token != "live"
+        with pytest.raises(DomainError):
+            await ops.clear_map(local.map_ref, operation_id="blocked")
+    local = filled_store("local", 1, (2.0, 2.0))
+    async with Database(path) as database:
+        restarted_gate = Gate()
+        reopened = session_operations(
+            database, local, tmp_path, graph, robot_id="r", gate=restarted_gate
+        )
+        await reopened.prepare()
+        assert restarted_gate.blocked
+        with pytest.raises(DomainError):
+            await reopened.reconcile()
+        assert graph.token != "live"
+        graph.release.set()
+        await asyncio.wait_for(graph.finished.wait(), 1)
+        await reopened.reconcile()
+        assert graph.token == "live"
+        assert local.map_ref == MapRef("local", 1)
+        assert not local.review_required
+        active = SlamSnapshot.read(tmp_path / "maps" / "active")
+        assert active.map_ref == local.map_ref
+        assert active.occupancy.cells == local.occupancy().cells
+        assert (
+            tmp_path / "maps" / "active" / "pose_graph" / "graph.posegraph"
+        ).read_text() == "live"
+
+
+@pytest.mark.parametrize("action", ["clear", "import"])
+async def test_switch_without_backend_identity_confirmation_never_reports_success(
+    tmp_path: Path, action: str
+) -> None:
+    local = filled_store("local", 1, (2.0, 2.0))
+    source = filled_store("source", 2, (1.0, 1.0))
+    bundle = tmp_path / "source.zip"
+    await archive_for(source, "source").export_bundle(source, source.map_ref, bundle)
+
+    class UnconfirmedSession(Session):
+        matches = None  # type: ignore[assignment]
+
+    graph = UnconfirmedSession(local.map_ref)
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, local, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        with pytest.raises(DomainError) as error:
+            if action == "clear":
+                await ops.clear_map(local.map_ref, operation_id="unconfirmed")
+            else:
+                await ops.import_bundle(bundle, "r", operation_id="unconfirmed")
+        assert error.value.code is ErrorCode.UNAVAILABLE
+        assert (await ops.query("unconfirmed")).status is OperationStatus.NEEDS_REVIEW
+        assert local.review_required
+        assert gate.blocked
+        if action == "clear":
+            retry = await ops.clear_map(local.map_ref, operation_id="unconfirmed")
+        else:
+            retry = await ops.import_bundle(bundle, "r", operation_id="unconfirmed")
+        assert retry.status is OperationStatus.NEEDS_REVIEW
+
+
+async def test_prepare_requires_live_backend_match_for_existing_active_map(tmp_path: Path) -> None:
+    store = filled_store("yard", 3, (1.0, 1.0))
+    active = tmp_path / "maps" / "active"
+    store.snapshot(Path("pose_graph"), ()).write(active)
+    (active / "pose_graph").mkdir()
+    (active / "pose_graph" / "graph.posegraph").write_text("yard")
+    (active / "pose_graph" / "graph.data").write_text("scans")
+    graph = Graph(store.map_ref)
+    graph.current_graph = "different"
+    gate = Gate()
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r", gate=gate)
+        await ops.prepare()
+        assert gate.blocked
+        assert store.review_required
+        with pytest.raises(DomainError):
+            await ops.clear_map(store.map_ref, operation_id="must-not-clear")
+
+
+async def test_failed_backend_identity_confirmation_remains_blocked_after_restart(
+    tmp_path: Path,
+) -> None:
+    class Mismatch(Session):
+        async def matches(self, directory: Path, map_ref: MapRef) -> bool:
+            return False
+
+        async def quiesce(self) -> None:
+            return None
+
+    store = filled_store("yard", 3, (1.0, 1.0))
+    graph = Mismatch(store.map_ref)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = session_operations(database, store, tmp_path, graph, robot_id="r")
+        await ops.prepare()
+        with pytest.raises(DomainError) as error:
+            await ops.clear_map(store.map_ref, operation_id="mismatch")
+        assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+        gate = Gate()
+        restarted = session_operations(database, store, tmp_path, graph, robot_id="r", gate=gate)
+        await restarted.prepare()
+        with pytest.raises(DomainError) as error:
+            await restarted.reconcile()
+        assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+        assert store.review_required
+        assert gate.blocked
+        assert (await restarted.query("mismatch")).status is OperationStatus.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize("action", ["clear", "import"])
+async def test_guard_delete_failure_does_not_commit_success(tmp_path: Path, action: str) -> None:
+    import sqlite3
+
+    local = filled_store("local", 1, (2.0, 2.0))
+    source = filled_store("remote", 2, (1.0, 1.0))
+    bundle = tmp_path / "source.zip"
+    await archive_for(source, "source").export_bundle(source, source.map_ref, bundle)
+    async with Database(tmp_path / "robot.db") as database:
+        ops = operations_for(database, local, tmp_path, robot_id="r")
+        await ops.prepare()
+        await database.connection.execute(
+            "CREATE TRIGGER prevent_graph_guard_delete BEFORE DELETE ON map_graph_guard "
+            "BEGIN SELECT RAISE(ABORT, 'guard deletion failed'); END"
+        )
+        await database.connection.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            if action == "clear":
+                await ops.clear_map(local.map_ref, operation_id="commit-fail")
+            else:
+                await ops.import_bundle(bundle, "r", operation_id="commit-fail")
+        record = await ops.operation_record("commit-fail")
+        assert record.result.status is OperationStatus.NEEDS_REVIEW
+        assert record.rollback_confirmed is False
+        assert local.review_required

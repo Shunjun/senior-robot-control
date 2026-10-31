@@ -405,3 +405,55 @@ def _fd_path(fd: int) -> str:
     if isinstance(result, bytes):
         return result.split(b"\0", 1)[0].decode()
     return ""
+
+
+async def test_oversized_member_is_rejected_before_decompression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "large.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        out.writestr("huge", b"x" * 100_000)
+    archive = MapArchive(Graph(MAP), source_robot_id="r", max_uncompressed_bytes=1024)
+    opened = False
+    original = zipfile.ZipFile.open
+
+    def observe(self: zipfile.ZipFile, *args, **kwargs):
+        nonlocal opened
+        opened = True
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", observe)
+    with pytest.raises(DomainError):
+        await archive.validate_and_extract(path, tmp_path / "unpacked")
+    assert not opened
+    assert not (tmp_path / "unpacked").exists()
+
+
+def test_streamed_size_is_bounded_even_when_metadata_understates_it() -> None:
+    import io
+
+    class DishonestArchive:
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            info = zipfile.ZipInfo("member")
+            info.file_size = 1
+            return [info]
+
+        def open(self, info: zipfile.ZipInfo) -> io.BytesIO:
+            return io.BytesIO(b"x" * 1025)
+
+    archive = MapArchive(Graph(MAP), source_robot_id="r", max_uncompressed_bytes=1024)
+    with pytest.raises(DomainError):
+        archive._read_members(DishonestArchive())  # type: ignore[arg-type]
+
+
+def test_excessive_member_count_is_rejected_before_opening() -> None:
+    class TooMany:
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            return [zipfile.ZipInfo(str(index)) for index in range(1025)]
+
+        def open(self, info: zipfile.ZipInfo) -> None:
+            raise AssertionError("members must not be opened")
+
+    archive = MapArchive(Graph(MAP), source_robot_id="r")
+    with pytest.raises(DomainError):
+        archive._read_members(TooMany())  # type: ignore[arg-type]
