@@ -34,3 +34,5 @@
 - TDD RED 覆盖发送成功误续资格、重复进入数据库、跨重启 epoch、心跳身份/时钟、ROS heartbeat、半开、任务调度与重启扫描、多页面急停和旧 reset。实现后对应测试通过。
 - 此前全 extras 严格 warnings 一次 464 passed；一次并行执行质量门时 `test_slow_encoder_does_not_delay_stop` 以 0.101 秒超过 0.1 秒门限，测试失败时未清理导致随后视频测试出现未释放任务告警，已补 finally。另一次为 465 passed、1 error，暴露视频编码循环未关闭，已修复并补回归；最终结果以以下复验为准。
 - 仍需 Linux Humble/Python 3.10 全依赖重同步与 cv_bridge 导入、ROS 图真实节点、ROS 时钟冻结、设备撤销／重连、真实网络半开、任务终态/取消、地图事务、传感器、SLAM、Nav2、视频和受控实车联调。服务端多 worker 跨进程旧连接抢占尚未验证；数据库恢复到旧备份可能回退 epoch，需部署规定和更强代次防回退措施。
+
+复审首轮修复及后续验证见同目录 [repair-wave2-fixround1-report.md](repair-wave2-fixround1-report.md)。
