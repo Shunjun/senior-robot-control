@@ -9,6 +9,7 @@ import errno
 import math
 import multiprocessing as mp
 import pickle
+import signal
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -126,6 +127,10 @@ class _Job:
 
 
 def _run(profile: Profile, work: Any, output: Any) -> None:
+    # The parent blocks SIGINT during spawn, including Python startup/imports.
+    # Install the child policy before unblocking any pending group SIGINT.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
     estimator = IndependentMotion(profile)
     generation = 0
     while True:
@@ -257,7 +262,13 @@ class SpawnWorker:
                 target=_run, args=(self._profile, self._work, output_writer), daemon=True
             )
             self._process = process
-            process.start()
+            # Only the calling thread is masked; the parent's handler and all
+            # other threads keep their existing signal policy.
+            original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+            try:
+                process.start()
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
             output_writer.close()
             reader_thread = Thread(
                 target=self._read_results,

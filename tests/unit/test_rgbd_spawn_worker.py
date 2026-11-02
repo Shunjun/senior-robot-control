@@ -740,3 +740,124 @@ def test_reader_start_failure_on_restart_reaps_child_and_closes_admission(monkey
                 child.kill()
                 child.join(2)
         worker.close()
+
+
+def test_process_group_sigint_during_spawn_startup_keeps_child_clean(tmp_path):
+    import os
+    import select
+    import signal
+    import subprocess
+    import sys
+    import textwrap
+
+    marker = tmp_path / "child_started"
+    (tmp_path / "sitecustomize.py").write_text(
+        textwrap.dedent("""
+        import os
+        import sys
+        import time
+        if '--multiprocessing-fork' in sys.argv:
+            with open(os.environ['RGBD_SIGNAL_MARKER'], 'w') as f:
+                f.write('starting')
+            time.sleep(2)
+    """)
+    )
+    script = tmp_path / "signal_group.py"
+    script.write_text(
+        textwrap.dedent("""
+        import os
+        import signal
+        import threading
+        import time
+        from senior_control.vision.independent_motion import Profile
+        from senior_control.vision.rgbd_spawn_worker import SpawnWorker
+
+        caught = []
+        def handler(signum, frame):
+            caught.append(signum)
+
+        if __name__ == '__main__':
+            signal.signal(signal.SIGINT, handler)
+            workers, masks = [], []
+            def launch():
+                before = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                try:
+                    profile = Profile('sim', 'fixture', True, 'texture', 'cal', .1, .1, 2., .1, .1)
+                    workers.append(SpawnWorker(profile, generation=1, sequence_floor=0))
+                finally:
+                    masks.append((before, signal.pthread_sigmask(signal.SIG_BLOCK, set())))
+            coordinator = threading.Thread(target=launch)
+            coordinator.start()
+            coordinator.join()
+            worker = workers[0]
+            try:
+                deadline = time.monotonic() + 10
+                marker = os.environ['RGBD_SIGNAL_MARKER']
+                while not os.path.exists(marker) and time.monotonic() < deadline:
+                    time.sleep(.01)
+                print('READY', flush=True)
+                time.sleep(2.5)
+                print('RUNTIME', worker._process.is_alive(), flush=True)
+                deadline = time.monotonic() + 5
+                while len(caught) < 2 and time.monotonic() < deadline:
+                    time.sleep(.01)
+                same_handler = signal.getsignal(signal.SIGINT) is handler
+                same_mask = masks[0][0] == masks[0][1]
+                print('RESULT', len(caught), worker._process.is_alive(),
+                      same_handler, same_mask, flush=True)
+            finally:
+                worker.close()
+                print('CLOSED', worker._process.is_alive(), worker._process.exitcode, flush=True)
+    """)
+    )
+    environment = os.environ.copy()
+    environment["RGBD_SIGNAL_MARKER"] = str(marker)
+    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), os.path.abspath("src")))
+    process = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        assert process.stdout is not None
+        ready, _, _ = select.select([process.stdout], [], [], 10)
+        assert ready and process.stdout.readline().strip() == "READY"
+        assert marker.exists()
+        os.killpg(process.pid, signal.SIGINT)
+        ready, _, _ = select.select([process.stdout], [], [], 10)
+        assert ready and process.stdout.readline().strip() == "RUNTIME True"
+        os.killpg(process.pid, signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0
+        assert "RESULT 2 True True True" in stdout
+        assert f"CLOSED False {-signal.SIGTERM}" in stdout
+        assert "KeyboardInterrupt" not in stderr
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_spawn_error_restores_caller_signal_mask_and_propagates(monkeypatch):
+    import multiprocessing as mp
+    import signal
+
+    import pytest
+
+    process_type = type(mp.get_context("spawn").Process())
+    initial_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    initial_handler = signal.getsignal(signal.SIGINT)
+
+    def fail_start(process):
+        assert signal.SIGINT in signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(process_type, "start", fail_start)
+    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        SpawnWorker(profile, generation=1, sequence_floor=0)
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == initial_mask
+    assert signal.getsignal(signal.SIGINT) is initial_handler
