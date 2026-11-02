@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHead
   "msg/EgressHeader.msg" "msg/FencedDepthEvidence.msg" "msg/FencedSemanticEvidence.msg"
   "msg/BoundedRawLaserScan.msg" "msg/BoundedFilteredScan.msg"
   "msg/FencedSafetyScan.msg" "msg/FencedFilteredScan.msg"
+  "msg/StaticTransformEdge.msg" "msg/BoundedStaticTf.msg" "msg/RawImageLayout.msg" "msg/RgbdMotionCandidate.msg" "msg/FencedRgbdCandidate.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

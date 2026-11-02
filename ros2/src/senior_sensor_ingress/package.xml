@@ -5,7 +5,10 @@
   <maintainer email="maintainer@example.com">Senior Robot</maintainer><license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend><depend>sensor_msgs</depend><depend>std_msgs</depend>
+  <depend>tf2_msgs</depend><depend>geometry_msgs</depend>
+  <test_depend>rosgraph_msgs</test_depend>
   <depend>senior_motion_msgs</depend>
+  <depend>openssl</depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>
