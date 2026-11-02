@@ -321,7 +321,19 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<senior_scan_matcher::ScanMotionNode>());
-  rclcpp::shutdown();
+  const auto context = rclcpp::contexts::get_global_default_context();
+  struct Shutdown
+  {
+    rclcpp::Context::SharedPtr context;
+    ~Shutdown() {rclcpp::shutdown(context);}
+  } shutdown{context};
+  try {
+    rclcpp::spin(std::make_shared<senior_scan_matcher::ScanMotionNode>());
+  } catch (const rclcpp::exceptions::RCLError &) {
+    // //Compatible: a Humble graph query may race native context shutdown.
+    if (context->is_valid()) {
+      throw;
+    }
+  }
   return 0;
 }

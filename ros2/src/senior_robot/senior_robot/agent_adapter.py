@@ -163,39 +163,44 @@ def main() -> None:
 
     from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
+    from senior_robot.motion_lifecycle import run
 
-    rclpy.init()
-    node = CommandNode(require_server_heartbeat=True)
-    robot_id = str(node.get_parameter("robot_id").value)
-    path = Path(os.environ[SOCKET_ENV])
-    exiting = False
+    def spin(node, executor) -> None:
+        robot_id = str(node.get_parameter("robot_id").value)
+        path = Path(os.environ[SOCKET_ENV])
+        exiting = False
 
-    def request_exit() -> None:
-        nonlocal exiting
-        exiting = True
+        def request_exit() -> None:
+            nonlocal exiting
+            exiting = True
 
-    core = AdapterCore(
-        robot_id=robot_id,
-        submit=lambda envelope, received_at=None: node.submit(envelope, received_at),
-        disconnect=node.disconnect,
-        request_exit=request_exit,
-        server_heartbeat=node.server_heartbeat,
-    )
+        core = AdapterCore(
+            robot_id=robot_id,
+            submit=lambda envelope, received_at=None: node.submit(envelope, received_at),
+            disconnect=node.disconnect,
+            request_exit=request_exit,
+            server_heartbeat=node.server_heartbeat,
+        )
 
-    async def serve() -> None:
-        server = IpcServer(path, core.handle)
-        await server.start()
-        try:
-            while rclpy.ok() and not exiting:
-                rclpy.spin_once(node, timeout_sec=0.0)
-                await asyncio.sleep(0.01)
-        finally:
-            await server.close()
+        async def serve() -> None:
+            server = IpcServer(path, core.handle)
+            started = False
+            try:
+                await server.start()
+                started = True
+                executor.add_node(node)
+                while rclpy.ok() and not exiting:
+                    executor.spin_once(timeout_sec=0.0)
+                    await asyncio.sleep(0.01)
+            finally:
+                try:
+                    if started:
+                        await server.close()
+                finally:
+                    # End any active lease through the arbiter before node destruction.
+                    core.release()
 
-    try:
         asyncio.run(serve())
-    finally:
-        # The agent has normally ended every lease already; end them again through the arbiter.
-        core.release()
-        node.destroy_node()
-        rclpy.shutdown()
+
+    # //Compatible: use the same Humble signal lifecycle as the synchronous CLIs.
+    run(lambda: CommandNode(require_server_heartbeat=True), cli=True, spin=spin)

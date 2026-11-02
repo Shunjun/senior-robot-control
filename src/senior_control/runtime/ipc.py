@@ -8,6 +8,7 @@ A frame longer than ``MAX_FRAME`` is never read: the peer is disconnected instea
 import asyncio
 import json
 import os
+import socket
 import stat
 import struct
 from collections.abc import Awaitable, Callable
@@ -71,36 +72,116 @@ class IpcServer:
         self._text = _check_path(path)
         self._handler = handler
         self._server: asyncio.AbstractServer | None = None
+        self._start_task: asyncio.Task[asyncio.CancelledError | None] | None = None
+        self._closing = False
+        self._closed = asyncio.Event()
+        self._closed.set()
+        self._socket_identity: tuple[int, int] | None = None
         self._connections: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
-        if self._server is not None:
-            raise RuntimeError("ipc server already started")
+        if self._server is not None or self._closing or (
+            self._start_task is not None and not self._start_task.done()
+        ):
+            raise RuntimeError("ipc server already started or starting")
+        task = asyncio.create_task(self._start())
+        self._start_task = task
         try:
-            if stat.S_ISSOCK(os.stat(self._path).st_mode):
-                os.unlink(self._path)
-        except FileNotFoundError:
-            pass
-        previous = os.umask(0o177)
-        try:
-            self._server = await asyncio.start_unix_server(self._serve, path=self._text)
+            cancellation = await task
+            if cancellation is not None:
+                raise cancellation
         finally:
-            os.umask(previous)
-        os.chmod(self._path, 0o600)
+            if self._start_task is task:
+                self._start_task = None
+
+    async def _start(self) -> asyncio.CancelledError | None:
+        pending_socket: socket.socket | None = None
+        try:
+            try:
+                if stat.S_ISSOCK(os.stat(self._path).st_mode):
+                    os.unlink(self._path)
+            except FileNotFoundError:
+                pass
+            pending_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            pending_socket.setblocking(False)
+            previous = os.umask(0o177)
+            try:
+                pending_socket.bind(self._text)
+            finally:
+                os.umask(previous)
+            # //Compatible: record ownership before asyncio can switch to another starter.
+            socket_stat = os.lstat(self._path)
+            if not stat.S_ISSOCK(socket_stat.st_mode):
+                raise OSError("ipc path is not the bound socket")
+            self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
+            self._server = await asyncio.start_unix_server(self._serve, sock=pending_socket)
+            pending_socket = None  # The asyncio server now owns the socket.
+            try:
+                current = os.lstat(self._path)
+            except FileNotFoundError:
+                current = None
+            if (current is not None and stat.S_ISSOCK(current.st_mode)
+                    and (current.st_dev, current.st_ino) == self._socket_identity):
+                os.chmod(self._path, 0o600)
+        except BaseException as error:
+            if pending_socket is not None:
+                pending_socket.close()
+            try:
+                await self._cleanup()
+            except BaseException as cleanup_error:
+                if isinstance(error, asyncio.CancelledError):
+                    error.__cause__ = cleanup_error
+                    return error
+                raise error from cleanup_error
+            if isinstance(error, asyncio.CancelledError):
+                return error
+            raise
+        return None
 
     async def close(self) -> None:
+        while self._closing:
+            await self._closed.wait()
+        self._closing = True
+        self._closed.clear()
+        try:
+            task = self._start_task
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    cancellation = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    if not task.cancelled():
+                        raise
+                    cancellation = None
+                if cancellation is not None and cancellation.__cause__ is not None:
+                    raise cancellation.__cause__
+            await self._cleanup()
+        finally:
+            self._closing = False
+            self._closed.set()
+
+    async def _cleanup(self) -> None:
         server, self._server = self._server, None
+        identity = self._socket_identity
         if server is not None:
             server.close()
         for task in list(self._connections):
             task.cancel()
-        await asyncio.gather(*self._connections, return_exceptions=True)
-        if server is not None:
-            await server.wait_closed()
         try:
-            os.unlink(self._path)
-        except FileNotFoundError:
-            pass
+            await asyncio.gather(*self._connections, return_exceptions=True)
+            if server is not None:
+                await server.wait_closed()
+        finally:
+            # //Compatible: only unlink the socket created by this server instance.
+            if identity is not None:
+                try:
+                    current = os.lstat(self._path)
+                    if (stat.S_ISSOCK(current.st_mode)
+                            and (current.st_dev, current.st_ino) == identity):
+                        os.unlink(self._path)
+                except FileNotFoundError:
+                    pass
+                self._socket_identity = None
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()

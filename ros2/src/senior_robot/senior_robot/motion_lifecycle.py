@@ -27,7 +27,12 @@ def _shutdown_subscription_conversion(exc: RuntimeError) -> bool:
     return False
 
 
-def run(factory: Callable[[], Node], *, cli: bool = False) -> None:
+def run(
+    factory: Callable[[], Node],
+    *,
+    cli: bool = False,
+    spin: Callable[[Node, SingleThreadedExecutor], None] | None = None,
+) -> None:
     """Run one node; CLI mode is a single process entrypoint invocation."""
     # The factory owns partial resources until it successfully returns a Node.
     # //Compatible: library callers retain their original signal-handler policy.
@@ -86,7 +91,11 @@ def run(factory: Callable[[], Node], *, cli: bool = False) -> None:
             rclpy.signals.install_signal_handlers(rclpy.signals.SignalHandlerOptions.ALL)
             if stop_requested or not rclpy.ok():
                 return
-        rclpy.spin(node, executor=executor)
+        if spin is None:
+            rclpy.spin(node, executor=executor)
+        else:
+            # //Compatible: async IPC shares this owned executor and signal lifecycle.
+            spin(node, executor)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     except RCLError:
