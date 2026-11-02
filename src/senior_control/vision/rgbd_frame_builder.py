@@ -8,6 +8,7 @@ or qualify a source, scene, mount, or motion result.
 import hashlib
 import math
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Any
 
 from senior_control.vision.independent_motion import Calibration, Frame
@@ -59,19 +60,38 @@ class CameraInfoSnapshot:
     roi_do_rectify: bool
 
 
+def _real_tuple(values: Any) -> tuple[float, ...]:
+    # //Compatible: ROS fixed float64 arrays contain NumPy scalar values.
+    values = tuple(values)
+    if any(not isinstance(value, Real) or isinstance(value, bool) for value in values):
+        raise ValueError("invalid_camera_info")
+    return tuple(float(value) for value in values)
+
+
+def _uint32_tuple(values: Any) -> tuple[int, ...]:
+    # //Compatible: ROS fixed uint32 arrays contain NumPy integer scalars.
+    values = tuple(values)
+    if any(not isinstance(value, Integral) or isinstance(value, bool) for value in values):
+        raise ValueError("invalid_camera_info")
+    result = tuple(int(value) for value in values)
+    if any(not 0 <= value <= 0xFFFFFFFF for value in result):
+        raise ValueError("invalid_camera_info")
+    return result
+
+
 def _snapshot_info(info: Any, capture: RawCaptureHeader) -> CameraInfoSnapshot:
     return CameraInfoSnapshot(
         capture,
         info.width,
         info.height,
         info.distortion_model,
-        tuple(info.d),
-        tuple(info.k),
-        tuple(info.r),
-        tuple(info.p),
+        _real_tuple(info.d),
+        _real_tuple(info.k),
+        _real_tuple(info.r),
+        _real_tuple(info.p),
         info.binning_x,
         info.binning_y,
-        tuple(info.roi),
+        _uint32_tuple(info.roi),
         info.roi_do_rectify,
     )
 
@@ -89,7 +109,7 @@ class BuiltFrame:
 
 def _info(info: Any, width: int, height: int) -> tuple[float, float, float, float]:
     try:
-        d, k, r, p = tuple(info.d), tuple(info.k), tuple(info.r), tuple(info.p)
+        d, k, r, p = (_real_tuple(values) for values in (info.d, info.k, info.r, info.p))
         if (
             info.width != width
             or info.height != height
@@ -102,7 +122,7 @@ def _info(info: Any, width: int, height: int) -> tuple[float, float, float, floa
             or any(abs(x) > 1e-9 for x in d)
             or info.binning_x not in (0, 1)
             or info.binning_y not in (0, 1)
-            or tuple(info.roi) not in ((0, 0, 0, 0), (0, 0, width, height))
+            or _uint32_tuple(info.roi) not in ((0, 0, 0, 0), (0, 0, width, height))
             or info.roi_do_rectify
         ):
             raise ValueError("unsupported_camera_info")
@@ -197,9 +217,7 @@ def build_frame(
         rgb_body, depth_body = bytes(rgb.data), bytes(depth.data)
         if len(rgb_body) != rgb.step * height or len(depth_body) != depth.step * height:
             raise ValueError("image_layout")
-        color = np.frombuffer(rgb_body, dtype=np.uint8).reshape(height, rgb.step)[
-            :, : width * 3
-        ]
+        color = np.frombuffer(rgb_body, dtype=np.uint8).reshape(height, rgb.step)[:, : width * 3]
         color = color.reshape(height, width, 3).astype(np.uint32)
         mono = (
             (77 * color[:, :, 0] + 150 * color[:, :, 1] + 29 * color[:, :, 2] + 128) >> 8

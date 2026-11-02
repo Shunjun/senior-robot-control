@@ -266,11 +266,127 @@ def test_built_frame_and_calibration_are_snapshots_of_mutable_input():
 
 def test_original_image_hash_binds_exact_padded_native_body():
     import hashlib
+
     headers, rgb, depth, rgb_info, depth_info = inputs()
     rgb.step += 2
-    rgb.data = (bytes([255, 0, 0]) * 80 + b'xy') * 80
-    built = build_frame(headers, rgb, depth, rgb_info, depth_info, calibration_epoch='cal',
-                        registration='registered', tf_epoch='tf', dependencies=('tf',),
-                        exclusion=bytes(80*80), static_sim_declared=True)
+    rgb.data = (bytes([255, 0, 0]) * 80 + b"xy") * 80
+    built = build_frame(
+        headers,
+        rgb,
+        depth,
+        rgb_info,
+        depth_info,
+        calibration_epoch="cal",
+        registration="registered",
+        tf_epoch="tf",
+        dependencies=("tf",),
+        exclusion=bytes(80 * 80),
+        static_sim_declared=True,
+    )
     assert built.rgb_layout.sha256 == hashlib.sha256(rgb.data).digest()
     assert built.depth_layout.sha256 == hashlib.sha256(depth.data).digest()
+
+
+def test_numpy_camera_matrices_produce_native_float_calibration_snapshots():
+    headers, rgb, depth, rgb_info, depth_info = inputs()
+    for name in ("d", "k", "r", "p"):
+        setattr(rgb_info, name, np.asarray(getattr(rgb_info, name), dtype=np.float64))
+    built = build_frame(
+        headers,
+        rgb,
+        depth,
+        rgb_info,
+        depth_info,
+        calibration_epoch="cal",
+        registration="registered",
+        tf_epoch="tf",
+        dependencies=("tf",),
+        exclusion=bytes(80 * 80),
+        static_sim_declared=True,
+    )
+    assert all(
+        type(value) is float
+        for name in ("d", "k", "r", "p")
+        for value in getattr(built.rgb_info, name)
+    )
+    assert type(built.frame.calibration.fx) is float
+
+
+def test_camera_matrices_reject_non_numeric_boolean_nonfinite_and_wrong_shape():
+    import pytest
+
+    for invalid in (True, np.bool_(True), "80.0", float("nan"), float("inf")):
+        headers, rgb, depth, rgb_info, depth_info = inputs()
+        rgb_info.k = (invalid, *rgb_info.k[1:])
+        with pytest.raises(ValueError):
+            build_frame(
+                headers,
+                rgb,
+                depth,
+                rgb_info,
+                depth_info,
+                calibration_epoch="cal",
+                registration="registered",
+                tf_epoch="tf",
+                dependencies=("tf",),
+                exclusion=bytes(80 * 80),
+                static_sim_declared=True,
+            )
+    headers, rgb, depth, rgb_info, depth_info = inputs()
+    rgb_info.k = rgb_info.k[:-1]
+    with pytest.raises(ValueError):
+        build_frame(
+            headers,
+            rgb,
+            depth,
+            rgb_info,
+            depth_info,
+            calibration_epoch="cal",
+            registration="registered",
+            tf_epoch="tf",
+            dependencies=("tf",),
+            exclusion=bytes(80 * 80),
+            static_sim_declared=True,
+        )
+
+
+def test_numpy_roi_is_preserved_as_native_unsigned_integers():
+    headers, rgb, depth, rgb_info, depth_info = inputs()
+    rgb_info.roi = np.array([0, 0, 0, 0], dtype=np.uint32)
+    built = build_frame(
+        headers,
+        rgb,
+        depth,
+        rgb_info,
+        depth_info,
+        calibration_epoch="cal",
+        registration="registered",
+        tf_epoch="tf",
+        dependencies=("tf",),
+        exclusion=bytes(80 * 80),
+        static_sim_declared=True,
+    )
+    assert built.rgb_info.roi == (0, 0, 0, 0)
+    assert all(type(value) is int for value in built.rgb_info.roi)
+
+
+def test_camera_roi_rejects_boolean_float_string_and_out_of_range():
+    import pytest
+
+    for invalid in (False, np.bool_(False), 0.0, "0", -1, 2**32):
+        headers, rgb, depth, rgb_info, depth_info = inputs()
+        rgb_info.roi = (invalid, 0, 0, 0)
+        with pytest.raises(ValueError):
+            build_frame(
+                headers,
+                rgb,
+                depth,
+                rgb_info,
+                depth_info,
+                calibration_epoch="cal",
+                registration="registered",
+                tf_epoch="tf",
+                dependencies=("tf",),
+                exclusion=bytes(80 * 80),
+                static_sim_declared=True,
+            )
