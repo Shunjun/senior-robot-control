@@ -10,9 +10,12 @@ COPY --from=uv /uv /bin/uv
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra cloud --no-editable \
-    && uv pip install --no-cache "uvicorn==0.32.1"
+    && uv pip install --no-cache "uvicorn==0.32.1" "websockets==15.0.1" \
+    && python -c "import uvicorn.protocols.websockets.websockets_impl"
 
-RUN useradd --system --uid 10001 --home /nonexistent senior
+RUN useradd --system --user-group --uid 10001 --home /nonexistent senior \
+    && mkdir -p /var/lib/senior \
+    && chown 10001:10001 /var/lib/senior
 USER 10001:10001
 
 EXPOSE 8000
