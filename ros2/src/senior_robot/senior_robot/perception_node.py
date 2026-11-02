@@ -6,8 +6,6 @@ Geometry is produced for every synchronized RGB/depth pair; the detector runs on
 its own bounded worker and only adds semantics when it has fresh output.
 """
 
-import array
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +25,9 @@ from senior_control.vision import (
     load_detector,
     project_depth,
 )
+
+# //Compatible: preserve the adapter module image-decoder imports.
+from senior_control.vision.image_codec import _validate_layout, decode_depth, decode_rgb
 
 DEFAULT_RGB_TOPIC = "/camera/color/image_raw"
 DEFAULT_DEPTH_TOPIC = "/camera/aligned_depth_to_color/image_raw"
@@ -80,29 +81,6 @@ class PerceptionAdapter:
         self._worker.close()
 
 
-def decode_depth(
-    stamp: float,
-    width: int,
-    height: int,
-    step: int,
-    encoding: str,
-    data: bytes,
-    big_endian: bool,
-) -> DepthFrame:
-    """Decode 16UC1 or 32FC1 rows, honoring row padding. Other encodings are rejected."""
-    typecode, size = {"16UC1": ("H", 2), "32FC1": ("f", 4)}.get(encoding, ("", 0))
-    if not typecode:
-        raise ValueError(f"unsupported depth encoding: {encoding}")
-    if step < width * size or len(data) < step * height:
-        raise ValueError("depth message is shorter than its declared size")
-    values: list[float] = []
-    for row in range(height):
-        samples = array.array(typecode)
-        samples.frombytes(data[row * step : row * step + width * size])
-        if big_endian != (sys.byteorder == "big"):
-            samples.byteswap()
-        values.extend(float(value) for value in samples)
-    return DepthFrame(stamp, width, height, tuple(values))
 
 
 def create_perception_node() -> type:
@@ -159,17 +137,31 @@ def create_perception_node() -> type:
             self.create_subscription(Image, str(value("depth_topic")), self._on_depth, 2)
 
         def _on_rgb(self, message: Any) -> None:
-            frame = ImageFrame(
-                stamp_of(message),
-                int(message.width),
-                int(message.height),
-                str(message.encoding),
-                bytes(message.data),
-            )
-            self._accept(lambda: self.adapter.ingest_rgb(frame))
+            def ingest() -> PerceptionOutput | None:
+                size = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(str(message.encoding))
+                if size is None:
+                    raise ValueError("unsupported RGB encoding")
+                _validate_layout(
+                    int(message.width), int(message.height), int(message.step), size,
+                    len(message.data),
+                )
+                frame = decode_rgb(
+                    stamp_of(message), int(message.width), int(message.height), int(message.step),
+                    str(message.encoding), bytes(message.data),
+                )
+                return self.adapter.ingest_rgb(frame)
+
+            self._accept(ingest)
 
         def _on_depth(self, message: Any) -> None:
             def ingest() -> PerceptionOutput | None:
+                size = {"16UC1": 2, "32FC1": 4}.get(str(message.encoding))
+                if size is None:
+                    raise ValueError("unsupported depth encoding")
+                _validate_layout(
+                    int(message.width), int(message.height), int(message.step), size,
+                    len(message.data),
+                )
                 frame = decode_depth(
                     stamp_of(message),
                     int(message.width),

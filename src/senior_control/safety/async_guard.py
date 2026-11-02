@@ -12,6 +12,7 @@ from typing import Any
 
 from senior_control.config import DeviceProfile
 from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.safety.depth_geometry import evaluate_depth_candidates
 from senior_control.safety.guard import SafetyDecision, evaluate_motion, stopping_distance
 from senior_control.safety.motion_runtime import (
     StampedObservation,
@@ -105,6 +106,10 @@ class SafetyWork:
     body_frame: str = "base_link"
     interval_bounds: IntervalVelocityBounds | None = None
     physical_cap_qualified: bool = False
+    # //Compatible: existing laser-only callers do not provide depth work.
+    depth_required: bool = False
+    depth_message: Any = None
+    depth_collision_z: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +223,29 @@ def evaluate_safety_work(work: SafetyWork) -> SafetyWorkResult:
         assumed_instantaneous_yaw_cap=work.yaw_bound,
         motion_uncertainty_sweep_margin=motion_margin,
     )
+    if work.depth_required:
+        if work.depth_message is None or work.depth_collision_z is None:
+            decision = SafetyDecision(False, Velocity(0.0, 0.0), "depth_unqualified")
+            return SafetyWorkResult(decision, details, time.monotonic() - start)
+        depth = evaluate_depth_candidates(
+            work.depth_message,
+            work.history,
+            now=work.evaluation_ros_time,
+            max_age=work.profile.observation_max_age or 0.0,
+            max_reference_lag=work.max_reference_lag,
+            linear_bound=work.linear_bound,
+            yaw_bound=work.yaw_bound,
+            radius=work.radius,
+            footprint=tuple(work.profile.footprint),
+            collision_z=work.depth_collision_z,
+            extra_margin=motion_margin + (work.profile.hard_margin or 0.0),
+        )
+        details["depth_aligned_samples"] = len(depth.aligned_points)
+        details["depth_coverage_qualified"] = depth.coverage_qualified
+        # No sampled fan or missing depth is a 3-D coverage proof. Until a
+        # qualified volume producer is wired, a required-depth profile stops.
+        decision = SafetyDecision(False, Velocity(0.0, 0.0), depth.reason)
+        return SafetyWorkResult(decision, details, time.monotonic() - start)
     observations = _filtered_observations(work)
     assert work.profile.observation_max_age is not None
     prepared = select_safety_observation(

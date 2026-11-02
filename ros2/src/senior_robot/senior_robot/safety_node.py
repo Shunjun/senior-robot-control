@@ -23,7 +23,12 @@ from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from senior_motion_msgs.msg import BoundedSafetyScan, MotionEvidence
+from senior_motion_msgs.msg import (
+    BoundedDepthEvidence,
+    FencedDepthEvidence,
+    FencedSafetyScan,
+    MotionEvidence,
+)
 
 from senior_control.config import DeviceProfile
 from senior_control.models import BodyTwist, Pose2D, Velocity
@@ -53,6 +58,14 @@ from senior_control.safety.velocity_uncertainty import (
     IntervalVelocityBounds,
     interval_velocity_bounds,
 )
+from senior_control.vision.egress_receipt import (
+    EgressAdmission,
+    depth_capture_headers,
+    egress_from_message,
+    safety_scan_capture,
+)
+from senior_control.vision.raw_capture import RawCaptureAdmission
+from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_robot.motion_lifecycle import run
 
 
@@ -103,6 +116,13 @@ class SafetyGate(Node):
         self.declare_parameter("max_yaw_rate", -1.0)
         self.declare_parameter("physical_cap_context", "")
         self.declare_parameter("bounded_scan_topic", "/safety/bounded_scan")
+        self.declare_parameter("raw_scan_topic", "/safety/raw/scan")
+        self.declare_parameter("bounded_depth_topic", "/safety/bounded_depth")
+        self.declare_parameter("raw_depth_topic", "/safety/raw/depth")
+        self.declare_parameter("raw_depth_info_topic", "/safety/raw/depth_info")
+        self.declare_parameter("depth_policy", "required")
+        self.declare_parameter("depth_collision_min_z", 1e10)
+        self.declare_parameter("depth_collision_max_z", -1e10)
         self.declare_parameter("output_topic", "/cmd_vel")
         self.declare_parameter("command_ttl_seconds", -1.0)
         self._body = str(self.get_parameter("body_frame").value)
@@ -125,7 +145,8 @@ class SafetyGate(Node):
         self._motion_frontier = SourceStampFrontier()
         self._evidence_topology = ProducerTopology("motion_fusion", "/")
         self._command_topology = ProducerTopology("command_node", "/")
-        self._scan_topology = ProducerTopology("safety_scan_ingress", "/")
+        self._scan_topology = ProducerTopology("scan_receipt", "/")
+        self._depth_topology = ProducerTopology("raw_receipt", "/")
         self._command_generation = 0
         self._scan_generation = 0
         self._motion_generation = 0
@@ -143,10 +164,33 @@ class SafetyGate(Node):
         self._freshness = (
             SafetyFreshness(min(scan_age, measured_age)) if scan_age and measured_age else None
         )
+        self._depth_policy = str(self.get_parameter("depth_policy").value)
+        if self._depth_policy not in {"required", "laser_only"}:
+            raise ValueError("depth policy must be required or laser_only")
+        self._depth_admission = (
+            DepthAdmission(max_age_s=scan_age, future_wait_s=min(0.02, scan_age))
+            if scan_age else None
+        )
+        self._depth_messages = {}
+        self._scan_egress = (
+            EgressAdmission(max_age_s=scan_age, hard_limit_s=5.0)
+            if scan_age and scan_age <= 5.0 else None
+        )
+        self._scan_raw_admission = (
+            RawCaptureAdmission(max_age_s=scan_age, hard_limit_s=5.0)
+            if scan_age and scan_age <= 5.0 else None
+        )
+        self._scan_relay_gid = ""
+        self._depth_egress = EgressAdmission(max_age_s=min(scan_age, 1.0)) if scan_age else None
+        self._depth_relay_gid = ""
         output = str(self.get_parameter("output_topic").value)
         command_topic = str(self.get_parameter("command_topic").value)
         self._command_topic = command_topic
         self._bounded_scan_topic = str(self.get_parameter("bounded_scan_topic").value)
+        self._raw_scan_topic = str(self.get_parameter("raw_scan_topic").value)
+        self._bounded_depth_topic = str(self.get_parameter("bounded_depth_topic").value)
+        self._raw_depth_topic = str(self.get_parameter("raw_depth_topic").value)
+        self._raw_depth_info_topic = str(self.get_parameter("raw_depth_info_topic").value)
         self._publisher = self.create_publisher(Twist, output, 10)
         self._status_publisher = self.create_publisher(DiagnosticArray, "/safety/status", 10)
         self._status_counts: dict[str, int] = {}
@@ -158,8 +202,13 @@ class SafetyGate(Node):
         if evidence_topic:
             self.create_subscription(MotionEvidence, evidence_topic, self._on_evidence, 10)
         self.create_subscription(
-            BoundedSafetyScan, self._bounded_scan_topic, self._on_scan, qos_profile_sensor_data
+            FencedSafetyScan, self._bounded_scan_topic, self._on_scan, qos_profile_sensor_data
         )
+        if self._depth_policy == "required":
+            self.create_subscription(
+                FencedDepthEvidence, self._bounded_depth_topic, self._on_depth,
+                qos_profile_sensor_data,
+            )
         self.create_timer(
             1.0 / rate, self._on_timer, clock=RosClock(clock_type=ClockType.STEADY_TIME)
         )
@@ -230,6 +279,10 @@ class SafetyGate(Node):
             self._scan_sequence = 0
             self._scan_source = ""
             self._scans.clear()
+            if self._depth_admission is not None:
+                self._depth_admission.retire()
+            self._depth_messages.clear()
+            self._approved = None
             if self._freshness is not None:
                 self._freshness.scan_received = self._freshness.measured_received = None
             self._last_ros = now if math.isfinite(now) else None
@@ -452,6 +505,13 @@ class SafetyGate(Node):
         ready, changed = self._scan_topology.observe(
             [(item.node_name, item.node_namespace, bytes(item.endpoint_gid)) for item in endpoints]
         )
+        self._scan_relay_gid = (
+            bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+        )
+        if self._scan_egress is None:
+            ready = False
+        else:
+            ready = self._scan_egress.observe_relay(self._scan_relay_gid) and ready
         if changed or not ready:
             if changed:
                 self._scan_generation += 1
@@ -461,8 +521,45 @@ class SafetyGate(Node):
             self._clear_scan()
         return ready
 
-    def _on_scan(self, msg: BoundedSafetyScan) -> None:
-        if not self._scan_topology_ready() or self._freshness is None:
+    def _on_scan(self, envelope: FencedSafetyScan) -> None:
+        if (not self._scan_topology_ready() or self._freshness is None
+            or self._scan_egress is None or self._scan_raw_admission is None):
+            return
+        try:
+            owner = egress_from_message(envelope.owner)
+            previous = self._scan_egress.generation
+            if not self._scan_egress.offer(owner, relay_gid=self._scan_relay_gid):
+                if self._scan_egress.generation != previous:
+                    if owner.owner_lost:
+                        self._scan_fence.retire_active()
+                    self._scan_generation += 1
+                    self._clear_scan()
+                    self._approved = None
+                return
+            msg = envelope.body
+            ros_ns, steady = self.get_clock().now().nanoseconds, time.monotonic()
+            endpoints = self.get_publishers_info_by_topic(self._raw_scan_topic)
+            bridge_gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+            capture = safety_scan_capture(msg, bridge_gid=bridge_gid, now_ros_ns=ros_ns,
+                                          now_steady=steady, max_age_s=self._freshness.max_age)
+            if (owner.owner_epoch != msg.source_epoch or owner.owner_sequence != msg.sequence
+                or capture is None):
+                self._scan_generation += 1
+                self._clear_scan()
+                self._approved = None
+                return
+            before = self._scan_raw_admission.generation
+            if not self._scan_raw_admission.offer(capture, bridge_gid=bridge_gid,
+                                                  now_ros_ns=ros_ns, now_steady=steady):
+                if self._scan_raw_admission.generation != before:
+                    self._scan_generation += 1
+                    self._clear_scan()
+                    self._approved = None
+                return
+        except (ValueError, OverflowError, TypeError, AttributeError):
+            self._scan_generation += 1
+            self._clear_scan()
+            self._approved = None
             return
         if not msg.source_epoch:
             self._scan_generation += 1
@@ -514,6 +611,159 @@ class SafetyGate(Node):
             )
         except (ValueError, OverflowError):
             self._clear_scan()
+
+    def _depth_topology_ready(self) -> bool:
+        endpoints = self.get_publishers_info_by_topic(self._bounded_depth_topic)
+        ready, changed = self._depth_topology.observe(
+            [(item.node_name, item.node_namespace, bytes(item.endpoint_gid)) for item in endpoints]
+        )
+        self._depth_relay_gid = (
+            bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+        )
+        if self._depth_egress is not None:
+            ready = self._depth_egress.observe_relay(self._depth_relay_gid) and ready
+        if changed or not ready:
+            if self._depth_admission is not None:
+                self._depth_admission.retire()
+            self._depth_messages.clear()
+            self._approved = None
+        return ready
+
+    def _depth_shape_valid(self, msg: BoundedDepthEvidence, ros_ns: int, steady: float) -> bool:
+        if self._depth_admission is None:
+            return False
+        try:
+            stamp = Time.from_msg(msg.stamp).nanoseconds
+            info_stamp = Time.from_msg(msg.camera_info_stamp).nanoseconds
+            info_receipt = Time.from_msg(msg.camera_info_received_ros).nanoseconds
+            transform_stamp = Time.from_msg(msg.transform_stamp).nanoseconds
+            age = self._depth_admission.max_age_s
+            scalars = (
+                msg.fx, msg.fy, msg.cx, msg.cy, msg.min_range_m, msg.max_range_m,
+                msg.range_error_m, msg.camera_info_received_steady, *msg.sensor_origin,
+                *msg.optical_to_body_quaternion,
+            )
+            return (
+                msg.valid
+                and msg.body_frame == self._body
+                and bool(msg.frame_id)
+                and bool(msg.raw_source)
+                and bool(msg.camera_info_source)
+                and len(msg.calibration_id) == 64
+                and all(ch in "0123456789abcdef" for ch in msg.calibration_id)
+                and 1 <= msg.width <= 4096
+                and 1 <= msg.height <= 4096
+                and msg.width * msg.height <= 2_073_600
+                and msg.row_stride > 0
+                and msg.column_stride > 0
+                and 1 <= len(msg.samples) <= 8192
+                and all(math.isfinite(value) for value in scalars)
+                and msg.fx > 0 and msg.fy > 0
+                and 0 <= msg.cx <= msg.width and 0 <= msg.cy <= msg.height
+                and 0 < msg.min_range_m < msg.max_range_m <= 100
+                and msg.range_error_m > 0
+                and abs(sum(v * v for v in msg.optical_to_body_quaternion) - 1.0) <= 0.001
+                and stamp > 0 and info_stamp == stamp
+                and 0 <= ros_ns - info_receipt <= age * 1e9
+                and 0 <= steady - msg.camera_info_received_steady <= age
+                and (msg.transform_static or 0 <= stamp - transform_stamp <= age * 1e9)
+            )
+        except (ValueError, OverflowError, TypeError):
+            return False
+
+    def _prune_depth_messages(self) -> None:
+        admission = self._depth_admission
+        if admission is None:
+            self._depth_messages.clear()
+            return
+        headers = list(admission.pending_headers)
+        if admission.latest is not None:
+            headers.append(admission.latest)
+        keep = {(header.source_epoch, header.sequence) for header in headers}
+        self._depth_messages = {
+            key: value for key, value in self._depth_messages.items() if key in keep
+        }
+
+    def _on_depth(self, envelope: FencedDepthEvidence) -> None:
+        admission = self._depth_admission
+        egress = self._depth_egress
+        if admission is None or egress is None or not self._depth_topology_ready():
+            return
+        ros_ns = self.get_clock().now().nanoseconds
+        steady = time.monotonic()
+        try:
+            owner = egress_from_message(envelope.owner)
+            prior = egress.generation
+            if not egress.offer(owner, relay_gid=self._depth_relay_gid):
+                if egress.generation != prior:
+                    if owner.owner_lost:
+                        admission.retire()
+                    else:
+                        body = envelope.body
+                        admission.accept(DepthHeader(
+                            owner.owner_epoch, body.raw_source, owner.owner_sequence,
+                            Time.from_msg(body.stamp).nanoseconds,
+                            Time.from_msg(body.received_ros).nanoseconds,
+                            body.received_steady, body.frame_id, body.calibration_id, False,
+                        ), now_ros_ns=ros_ns, now_steady=steady)
+                    self._depth_messages.clear()
+                    self._approved = None
+                    self._publish(Velocity(0.0, 0.0), "depth_observation_invalid")
+                return
+            msg = envelope.body
+            def bridge_gid(topic: str) -> str:
+                endpoints = self.get_publishers_info_by_topic(topic)
+                return bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+
+            captures = depth_capture_headers(
+                msg, depth_gid=bridge_gid(self._raw_depth_topic),
+                info_gid=bridge_gid(self._raw_depth_info_topic),
+                now_ros_ns=ros_ns, now_steady=steady, max_age_s=admission.max_age_s,
+            )
+            valid = (owner.owner_epoch == msg.source_epoch
+                     and owner.owner_sequence == msg.sequence and captures is not None
+                     and self._depth_shape_valid(msg, ros_ns, steady))
+            header = DepthHeader(
+                msg.source_epoch, msg.raw_source, int(msg.sequence),
+                Time.from_msg(msg.stamp).nanoseconds,
+                Time.from_msg(msg.received_ros).nanoseconds,
+                msg.received_steady, msg.frame_id, msg.calibration_id, valid,
+            )
+            generation = admission.generation
+            admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)
+            if admission.generation != generation:
+                if valid:
+                    self._depth_messages[(header.source_epoch, header.sequence)] = msg
+                self._prune_depth_messages()
+                self._approved = None
+                self._publish(Velocity(0.0, 0.0), "depth_observation_changed")
+        except (ValueError, OverflowError, TypeError):
+            admission.retire()
+            self._depth_messages.clear()
+            self._approved = None
+            self._publish(Velocity(0.0, 0.0), "depth_observation_invalid")
+
+    def _depth_usable(self, ros_ns: int, steady: float) -> BoundedDepthEvidence | None:
+        admission = self._depth_admission
+        if admission is None or not self._depth_topology_ready():
+            return None
+        admission.release(now_ros_ns=ros_ns, now_steady=steady)
+        self._prune_depth_messages()
+        if not admission.usable(now_ros_ns=ros_ns, now_steady=steady):
+            return None
+        header = admission.latest
+        assert header is not None
+        msg = self._depth_messages.get((header.source_epoch, header.sequence))
+        return msg if msg is not None and self._depth_shape_valid(msg, ros_ns, steady) else None
+
+    def _depth_still_usable(self, generation: int, ros_ns: int, steady: float) -> bool:
+        if self._depth_policy == "laser_only":
+            return True
+        return (
+            self._depth_usable(ros_ns, steady) is not None
+            and self._depth_admission is not None
+            and self._depth_admission.generation == generation
+        )
 
     def _publish(self, velocity: Velocity, reason: str) -> None:
         twist = Twist()
@@ -596,7 +846,8 @@ class SafetyGate(Node):
             self._publish(Velocity(0.0, 0.0), "zero_requested")
             return
         time_reference = time.monotonic()
-        now = self.get_clock().now().nanoseconds / 1e9
+        now_ros_ns = self.get_clock().now().nanoseconds
+        now = now_ros_ns / 1e9
         if (
             not self._clock_ok(now)
             or self._freshness is None
@@ -605,6 +856,15 @@ class SafetyGate(Node):
             self._approved = None
             self._publish(Velocity(0.0, 0.0), "sensor_freshness_unqualified")
             return
+        depth_message = None
+        depth_generation = 0
+        if self._depth_policy == "required":
+            depth_message = self._depth_usable(now_ros_ns, time_reference)
+            if depth_message is None or self._depth_admission is None:
+                self._approved = None
+                self._publish(Velocity(0.0, 0.0), "depth_freshness_unqualified")
+                return
+            depth_generation = self._depth_admission.generation
         try:
             profile = self._profile()
             speed = _positive(float(self.get_parameter("max_linear_speed").value))
@@ -682,6 +942,10 @@ class SafetyGate(Node):
                 self.get_parameter("max_angular_gap").value,
                 self.get_parameter("transform_static").value,
                 self.get_parameter("self_mask_range_uncertainty").value,
+                self._depth_policy,
+                depth_generation,
+                self.get_parameter("depth_collision_min_z").value,
+                self.get_parameter("depth_collision_max_z").value,
             )
             steady = time.monotonic()
             reply = self._worker.poll()
@@ -695,12 +959,16 @@ class SafetyGate(Node):
                 )
             if self._approved is not None:
                 ticket, result = self._approved
-                current_ros = self.get_clock().now().nanoseconds / 1e9
+                current_ros_ns = self.get_clock().now().nanoseconds
+                current_ros = current_ros_ns / 1e9
                 current_steady = time.monotonic()
                 valid = (
                     self._command_topology_ready()
                     and self._topology_ready()
                     and self._scan_topology_ready()
+                    and self._depth_still_usable(
+                        depth_generation, current_ros_ns, current_steady
+                    )
                     and ticket.permits(
                         command_generation=self._command_generation,
                         scan_generation=self._scan_generation,
@@ -745,12 +1013,16 @@ class SafetyGate(Node):
                                 strict=True,
                             )
                         )
-                    final_ros = self.get_clock().now().nanoseconds / 1e9
+                    final_ros_ns = self.get_clock().now().nanoseconds
+                    final_ros = final_ros_ns / 1e9
                     final_steady = time.monotonic()
                     if (
                         self._command_topology_ready()
                         and self._topology_ready()
                         and self._scan_topology_ready()
+                        and self._depth_still_usable(
+                            depth_generation, final_ros_ns, final_steady
+                        )
                         and ticket.permits(
                             command_generation=self._command_generation,
                             scan_generation=self._scan_generation,
@@ -792,6 +1064,15 @@ class SafetyGate(Node):
             assert latest is not None and self._command_monotonic is not None and ttl is not None
             assert self._reference_admission is not None
             deadline_ros = math.nextafter(latest.stamp + max_lag, -math.inf)
+            if depth_message is not None and self._depth_admission is not None:
+                depth_age = self._depth_admission.max_age_s
+                deadline_ros = min(
+                    deadline_ros,
+                    Time.from_msg(depth_message.stamp).nanoseconds / 1e9 + depth_age,
+                    Time.from_msg(depth_message.received_ros).nanoseconds / 1e9 + depth_age,
+                    Time.from_msg(depth_message.camera_info_received_ros).nanoseconds / 1e9
+                    + depth_age,
+                )
             remaining = deadline_ros - now
             if remaining <= 0:
                 raise ValueError("reference window expired")
@@ -820,6 +1101,13 @@ class SafetyGate(Node):
                 time_reference + remaining,
                 fixed_deadline,
             )
+            if depth_message is not None and self._depth_admission is not None:
+                depth_age = self._depth_admission.max_age_s
+                deadline_steady = min(
+                    deadline_steady,
+                    depth_message.received_steady + depth_age,
+                    depth_message.camera_info_received_steady + depth_age,
+                )
             if deadline_steady <= steady:
                 raise ValueError("steady window expired")
             ticket = SafetyTicket(
@@ -855,6 +1143,12 @@ class SafetyGate(Node):
                 self._body,
                 self._velocity_interval,
                 True,
+                depth_required=self._depth_policy == "required",
+                depth_message=depth_message,
+                depth_collision_z=(
+                    float(self.get_parameter("depth_collision_min_z").value),
+                    float(self.get_parameter("depth_collision_max_z").value),
+                ),
             )
             self._worker.submit(ticket, work)
         except ValueError as exc:

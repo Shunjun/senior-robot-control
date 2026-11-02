@@ -2,12 +2,16 @@
 
 import copy
 import math
+import os
 import struct
 import subprocess
 import time
 
 import pytest
 
+pytestmark = pytest.mark.skipif(
+    os.environ.get("SENIOR_SIM_LIVE") != "1", reason="explicit running Fortress simulator only"
+)
 rclpy = pytest.importorskip("rclpy", reason="requires sourced ROS 2 Humble and running simulator")
 from geometry_msgs.msg import Twist  # noqa: E402
 from nav_msgs.msg import Odometry  # noqa: E402

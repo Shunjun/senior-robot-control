@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from motion_anomaly_trace import AnomalyTrace
+from motion_ingress_loss import owner_loss_observed
+from motion_low_friction_window import stopped_with_fresh_request
 from motion_stand_geometry import load_wheel_geometry, wheel_ground_clearance
 
 pytestmark = pytest.mark.skipif(
@@ -29,7 +31,7 @@ from nav_msgs.msg import Odometry  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 from rosgraph_msgs.msg import Clock  # noqa: E402
-from senior_motion_msgs.msg import MotionEvidence, ScanMotion  # noqa: E402
+from senior_motion_msgs.msg import FencedSafetyScan, MotionEvidence, ScanMotion  # noqa: E402
 from senior_robot.command_node import CommandNode  # noqa: E402
 from sensor_msgs.msg import Imu, JointState, LaserScan  # noqa: E402
 from std_msgs.msg import String  # noqa: E402
@@ -182,6 +184,7 @@ class LiveRun:
         self.last_submit = 0.0
         self.output = deque(maxlen=4000)
         self.requests = deque(maxlen=4000)
+        self.fenced_scans = deque(maxlen=4000)
         self.status = deque(maxlen=200)
         self.scans = deque(maxlen=4000)
         self.raw_scans = deque(maxlen=100)
@@ -205,6 +208,7 @@ class LiveRun:
             for kind, topic, destination, label, qos in (
                 (Twist, "/cmd_vel", self.output, "output", 10),
                 (Twist, "/safety/command_in", self.requests, "requests", 10),
+                (FencedSafetyScan, "/safety/bounded_scan", self.fenced_scans, "fenced_scans", 10),
                 (DiagnosticArray, "/safety/status", self.status, "status", 10),
                 (ScanMotion, "/motion/scan", self.scans, "scans", 10),
                 (LaserScan, "/scan", self.raw_scans, "raw", qos_profile_sensor_data),
@@ -1119,12 +1123,49 @@ def test_progress_requalification_after_real_scan_gap(live_scan_drop):
 
 def test_ingress_loss_stops_while_raw_scan_motion_and_requests_continue(live):
     _drive_and_verify(live)
+
+    def endpoints(topic):
+        return [
+            (entry.node_name, entry.node_namespace, bytes(entry.endpoint_gid).hex())
+            for entry in live.listener.get_publishers_info_by_topic(topic)
+        ]
+
+    def valid_owner_observed():
+        owners = endpoints("/safety/scan_candidate")
+        relays = endpoints("/safety/bounded_scan")
+        return any(
+            m.owner.valid
+            and owners == [("safety_scan_ingress", "/", m.owner.owner_gid)]
+            and relays == [("scan_receipt", "/", m.owner.relay_gid)]
+            for _, m in live.fenced_scans
+        )
+
+    live.pump(valid_owner_observed, vx=0.05, timeout=5, description="scan owner not observed")
+    owners = endpoints("/safety/scan_candidate")
+    relays = endpoints("/safety/bounded_scan")
+    before = next(
+        m.owner
+        for _, m in reversed(live.fenced_scans)
+        if m.owner.valid
+        and owners == [("safety_scan_ingress", "/", m.owner.owner_gid)]
+        and relays == [("scan_receipt", "/", m.owner.relay_gid)]
+    )
     fault_time = time.monotonic()
     live.kill_owned_node("safety_scan_ingress")
+
+    def loss_observed():
+        owners = endpoints("/safety/scan_candidate")
+        relays = endpoints("/safety/bounded_scan")
+        return any(
+            received >= fault_time and owner_loss_observed(before, m.owner, owners, relays)
+            for received, m in live.fenced_scans
+        )
+
+    live.pump(loss_observed, vx=0.05, timeout=8, description="scan owner loss not observed")
     _wait_for_stop_with_active_request(live, fault_time, motion_must_expire=False)
     assert sum(t >= fault_time + 2.0 for t, _ in live.raw_scans) >= 5
     assert any(
-        message.status and message.status[0].message == "scan_topology_unqualified"
+        message.status and message.status[0].message == "sensor_freshness_unqualified"
         for received, message in live.status
         if received >= fault_time
     )
@@ -1260,22 +1301,23 @@ def test_unqualified_low_friction_context_stays_stopped_with_fresh_request(live_
     reason_key = "count.physical_motion_cap_unqualified"
 
     def stopped_for_missing_cap():
-        statuses = [
-            {entry.key: entry.value for entry in message.status[0].values}
+        reason_times = [
+            received
             for received, message in live.status
-            if received >= started and message.status
+            if received >= started
+            and message.status
+            and int(
+                {entry.key: entry.value for entry in message.status[0].values}.get(reason_key, "0")
+            )
+            > 0
         ]
-        outputs = [(t, m) for t, m in live.output if t >= started]
-        requests = [(t, m) for t, m in live.requests if t >= started]
-        return (
-            time.monotonic() - started >= 2.0
-            and any(int(values.get(reason_key, "0")) > 0 for values in statuses)
-            and len(outputs) >= 5
-            and all(m.linear.x == 0.0 and m.angular.z == 0.0 for _, m in outputs)
-            and len(requests) >= 5
-            and time.monotonic() - requests[-1][0] < 0.3
-            and all(abs(m.linear.x - 0.05) < 1e-9 for _, m in requests)
-            and any(t >= started and m.valid and not m.motion_anomaly for t, m in live.motion)
+        return stopped_with_fresh_request(
+            started,
+            time.monotonic(),
+            [(t, m.linear.x, m.angular.z) for t, m in live.output],
+            [(t, m.linear.x) for t, m in live.requests],
+            reason_times,
+            [t for t, m in live.motion if m.valid and not m.motion_anomaly],
         )
 
     live.pump(

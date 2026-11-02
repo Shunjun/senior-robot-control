@@ -72,6 +72,7 @@ def test_simulated_self_and_wall_evidence():
     from nav_msgs.msg import Odometry
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
+    from senior_motion_msgs.msg import FencedFilteredScan
     from sensor_msgs.msg import LaserScan
     from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -92,9 +93,11 @@ def test_simulated_self_and_wall_evidence():
             LaserScan, "/scan", lambda m: raw.update({key(m): m}), qos_profile_sensor_data
         ),
         node.create_subscription(
-            LaserScan,
+            FencedFilteredScan,
             "/perception/scan_filtered",
-            lambda m: filtered.update({key(m): m}),
+            lambda m: filtered.update({
+                (m.body.raw_capture.stamp.sec, m.body.raw_capture.stamp.nanosec): m.body
+            }) if m.owner.valid and m.body.valid else None,
             qos_profile_sensor_data,
         ),
         node.create_subscription(

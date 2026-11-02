@@ -106,6 +106,7 @@ class MotionFusion(Node):
         self._wheel = TimedPoseBuffer(max_gap=gap, max_samples=256, max_variance=variance)
         self._imu = TimedImuBuffer(max_gap=gap, max_samples=512, max_variance=variance)
         self._commands = TimedCommandBuffer(max_gap=gap, max_samples=256)
+        self._last_applied_command: tuple[int, Velocity] | None = None
         self._estimator = MotionEstimator(
             max_skew=0.001,
             min_quality=float(self.get_parameter("min_quality").value),
@@ -187,6 +188,7 @@ class MotionFusion(Node):
                 max_gap=self._imu.max_gap, max_samples=512, max_variance=self._imu.max_variance
             )
             self._commands = TimedCommandBuffer(max_gap=self._commands.max_gap, max_samples=256)
+            self._last_applied_command = None
             self._wheel_received = self._imu_received = None
             self._last_ros_ns = now_ns
             invalidated = pending if pending is not None else self._last_valid_source
@@ -346,10 +348,13 @@ class MotionFusion(Node):
         try:
             velocity = Velocity(msg.linear.x, msg.angular.z)
             ros_ns = self.get_clock().now().nanoseconds
+            if self._last_applied_command == (ros_ns, velocity):
+                return
             steady = time.monotonic()
             self._progress_requalification.applied(velocity, steady=steady, ros_ns=ros_ns)
             prior_bounds = self._commands.diagnostic_bounds()
             if not self._commands.add(ros_ns / 1e9, velocity):
+                self._last_applied_command = None
                 self._break_progress(
                     "applied_command_timestamp_rejected",
                     details={
@@ -358,11 +363,14 @@ class MotionFusion(Node):
                         "velocity": asdict(velocity),
                     },
                 )
+            else:
+                self._last_applied_command = (ros_ns, velocity)
             self._stop_acknowledgement.applied(velocity)
         except ValueError as exc:
             self._break_progress("applied_command_invalid", details={"error": str(exc)[:120]})
             self._progress_requalification.interrupt()
             self._commands = TimedCommandBuffer(max_gap=self._commands.max_gap, max_samples=256)
+            self._last_applied_command = None
         self._try_pending()
 
     def _on_requested(self, msg: Twist) -> None:

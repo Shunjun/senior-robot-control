@@ -107,49 +107,11 @@ ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true \
 
 ### 车端 ROS 进程
 
-下面三个进程在仿真或以后的实车 ROS 图里运行，并且使用上面的 `.ros-venv` 构建结果。先启动仿真或实车驱动，再按顺序启动。雷达过滤、安全门和仲裁还没有合成一个 launch 文件。导航和建图各有自己的 launch，见下一节；那两个 launch 还没有在 Linux 上执行过。
+扫描来源由独立的 `scan_receipt_node` 进程接收 `/scan`，核对每条消息的发布者身份，并将有界原始扫描交给 `scan_adapter` 和 `safety_scan_ingress`。过滤结果与安全扫描经原生来源核验后分别提供给扫描匹配器和安全门；安全门不直接订阅原始 `/scan`。采集时间和首次接收时间贯穿这些环节，不因转发重新计时。
 
-雷达过滤读取安装后的仿真参数。这份参数打开了 `use_sim_time`，只用于仿真；实车要另写参数文件。
+安全路径要求 `/scan` 恰有一个合格发布者。出现多个发布者时立即撤销扫描资格；当前实现会退休原来源，以及歧义期间实际收到回调的来源。歧义消除后，这些已退休的发布者即使重新成为唯一来源也不会自动恢复，须消除重复发布并重建相应驱动发布者，使其获得新的来源身份。持续无效数据不会证明空间安全。来源切换、停机及恢复需在目标部署环境复验。
 
-```sh
-ros2 run senior_robot scan_adapter --ros-args \
-  --params-file "$(ros2 pkg prefix senior_robot)/share/senior_robot/config/self_filter.yaml"
-```
-
-它订阅 `/scan`，发布 `/perception/scan_filtered` 和 `/perception/scan_status`。外参或时间戳无效时，过滤结果为 NaN，状态为不可用。
-
-安全门默认把制动、反应时间、硬边界和命令有效期留空，空值时只发布零速度。下面的制动、反应时间和硬边界取自 `tests/unit/test_guard.py` 的测试夹具，外形取自 `config/simulation.yaml`，遮挡多边形取自 `self_filter.yaml`。这组数只用于让仿真节点离开“未配置即停车”；实车制动距离需要单独标定：
-
-```sh
-ros2 run senior_robot safety_node --ros-args \
-  -p use_sim_time:=true \
-  -p footprint_xy:="[-0.337,-0.27,0.337,-0.27,0.337,0.27,-0.337,0.27]" \
-  -p self_mask_xy:="[-0.33,-0.24,-0.23,-0.24,-0.23,0.24,-0.33,0.24]" \
-  -p self_mask_calibrated:=true \
-  -p transform_static:=true \
-  -p braking_deceleration:=1.0 \
-  -p yaw_braking_deceleration:=1.0 \
-  -p reaction_time:=0.2 \
-  -p hard_margin:=0.02 \
-  -p observation_max_age:=0.5 \
-  -p measurement_max_age:=0.5 \
-  -p measured_topic:=/motion/body_velocity \
-  -p command_ttl_seconds:=0.3
-```
-
-`safety_node` 订阅 `/safety/command_in`、`/scan` 和带时间戳的 `geometry_msgs/TwistStamped` 车体速度，并发布 `/cmd_vel`。它按扫描时间查询到 `base_link` 的 TF，扫描和速度缺失、过期或 ROS 时间回退时停车。上述速度话题必须由经质量门控的独立运动估计提供；本仓库尚未接入独立扫描匹配或提供该运行时数据源，因此示例默认保持停车。它是唯一允许发布 `/cmd_vel` 的节点。
-
-```sh
-ros2 run senior_robot command_node --ros-args \
-  -p use_sim_time:=true \
-  -p robot_id:=robot \
-  -p heartbeat_seconds:=0.2 \
-  -p disconnect_seconds:=1.0 \
-  -p command_ttl_seconds:=0.3 \
-  -p command_topic:=/safety/command_in
-```
-
-`command_topic` 不能是 `/cmd_vel`，节点会拒绝这个配置。心跳 0.2 秒、失联 1.0 秒、速度有效期 0.3 秒与 `AgentSettings` 的仿真默认值一致，不代表实车制动距离。当前没有传输线程调用 `submit`，所以这个进程持续发布零速度。
+仿真组合入口 `simulation_motion.launch.py` 包含扫描接收、过滤、匹配、运动融合和安全进程；它要求显式提供车端代理 socket，仿真参数只适用于测试。`safety_motion.launch.py` 要求显式提供已测量、已标定的安全参数文件；仓库目前没有经过资格化的实车制动、覆盖和相机参数。必需深度覆盖不足时安全门保持停车，不能把仿真参数用于真实底盘。
 
 ### 导航、建图与定位
 

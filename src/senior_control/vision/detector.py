@@ -84,7 +84,7 @@ def load_detector(
         return DisabledDetector("weights_unloadable")
 
 
-def _ultralytics_runtime(weights_path: Path) -> InferFn:
+def _ultralytics_runtime(weights_path: Path, *, device: str = "cpu") -> InferFn:
     """Ultralytics YOLO runtime. Not exercised by unit tests: it needs the optional
     ``vision`` runtime and a trained weight file, neither of which ships here."""
     ultralytics: Any = importlib.import_module("ultralytics")
@@ -96,9 +96,11 @@ def _ultralytics_runtime(weights_path: Path) -> InferFn:
         pixels = numpy.frombuffer(rgb.data, dtype=numpy.uint8).reshape(
             rgb.height, rgb.width, channels
         )
-        if rgb.encoding == "rgb8":
+        if rgb.encoding == "mono8":
+            pixels = numpy.repeat(pixels, 3, axis=2)
+        elif rgb.encoding == "rgb8":
             pixels = pixels[:, :, ::-1]  # ultralytics reads numpy arrays as BGR
-        result = model.predict(pixels, verbose=False)[0]
+        result = model.predict(pixels, verbose=False, device=device, max_det=256)[0]
         names = result.names
         found: list[Detection] = []
         for box, confidence, klass in zip(

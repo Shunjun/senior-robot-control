@@ -1,25 +1,13 @@
-"""Turns detections plus depth geometry into a per-ray dynamic mask.
+"""Conservative semantic candidates; geometry remains an independent obstacle.
 
-A detection box is wider than the object inside it. Columns are marked only
-when their measured range matches the object's own range, so a wall seen
-through the box stays static geometry. The mask never edits the geometry: a
-person still blocks the real-time safety layer, and what the person hides is
-reported as occluded rather than free.
-
-Detections arrive later than the depth they are applied to. A box older than the
-geometry is widened by the elapsed time times ``max_object_speed_mps``, in angle
-and in range, so a target that walked out of the old box is not confirmed static.
-The object's range comes from the nearest return in that widened band, not from the
-old box center, which may show the background after a sideways shift.
-``Tracker`` adds a geometric motion cue that works with the detector disabled: a
-column whose range changed between observations is dynamic. A column with no
-observed motion stays ``unknown_static``; motion that is missed stays missed.
+Column masks here are diagnostic candidates, not a qualified laser mask. A
+consumer must associate the 3-D source samples and both measurement identities
+before excluding any scan hit. Missing or empty detections never prove static.
 """
 
 import math
-from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from senior_control.mapping.evidence import HitKind
 from senior_control.vision.depth import GeometryObservation
@@ -90,7 +78,7 @@ def track(
     config: TrackingConfig | None = None,
     semantics_stamp: float | None = None,
 ) -> DynamicMask:
-    """``semantics_stamp`` is the inference time; it defaults to the newest detection."""
+    """Associate only the same captured frame; arrival time is never a capture time."""
     config = config or TrackingConfig()
     count = len(geometry.rays)
     stamp = semantics_stamp
@@ -100,13 +88,14 @@ def track(
         stamp is not None
         and math.isfinite(stamp)
         and math.isfinite(geometry.stamp)
-        and abs(geometry.stamp - stamp) <= config.max_detection_age_s
+        and geometry.stamp == stamp
+        and all(item.stamp == stamp for item in detections)
     )
     if not fresh:
         unknown: list[HitKind] = ["unknown_static"] * count
         return DynamicMask(False, (False,) * count, geometry.occlusion_mask, tuple(unknown))
 
-    kinds: list[HitKind] = ["static"] * count
+    kinds: list[HitKind] = ["unknown_static"] * count
     dynamic = [False] * count
     # People first so a person box wins over an overlapping moving-object box.
     ordered = sorted(detections, key=lambda item: item.label not in config.person_labels)
@@ -138,45 +127,32 @@ def _kind(detection: Detection, config: TrackingConfig) -> HitKind | None:
 def _matching_columns(
     detection: Detection, geometry: GeometryObservation, config: TrackingConfig
 ) -> list[int]:
-    x0, _y0, x1, _y1 = detection.box
-    if not all(math.isfinite(value) for value in detection.box) or x1 < x0:
+    x0, y0, x1, y1 = detection.box
+    if not all(math.isfinite(value) for value in detection.box) or x1 < x0 or y1 < y0:
         return []
-    in_box = [i for i, column in enumerate(geometry.columns) if x0 <= column <= x1]
-    if not in_box:
+    selected = {point.ray_index: (point.x, point.y, point.z) for point in geometry.points}
+    indices = {
+        sample.ray_index
+        for sample in geometry.samples
+        if x0 <= sample.u <= x1
+        and y0 <= sample.v <= y1
+        and selected.get(sample.ray_index) == (sample.x, sample.y, sample.z)
+    }
+    if not indices:
         return []
-    # An older box can only be stale, never ahead of the geometry. The object may have
-    # moved up to speed * elapsed sideways or along the ray since the detection.
-    reach = config.max_object_speed_mps * max(0.0, geometry.stamp - detection.stamp)
-    angles = [geometry.rays[i].angle for i in in_box]
-    low, high = min(angles), max(angles)
-    # A column joins the band when its own sideways gap to the old box, in meters at the
-    # column's own range, is within reach. The band does not depend on any reference range.
-    band = [
-        i
-        for i, ray in enumerate(geometry.rays)
-        if geometry.status[i] == "hit"
-        and ray.range_m * max(low - ray.angle, ray.angle - high, 0.0) <= reach
-    ]
-    if not band:
-        return []
-    # The object is the nearest return in the band. The old box center is not used: after
-    # a sideways shift it often shows the background.
-    reference = min(geometry.rays[i].range_m for i in band)
-    tolerance = config.range_tolerance_m + reach
-    return [i for i in band if geometry.rays[i].range_m - reference <= tolerance]
+    reference = min(geometry.rays[index].range_m for index in indices)
+    return sorted(
+        index
+        for index in indices
+        if geometry.rays[index].range_m - reference <= config.range_tolerance_m
+    )
 
 
 class Tracker:
-    """Detections plus a short geometry history. One instance per camera stream.
-
-    The history gives a detector-free motion cue. It cannot separate object motion
-    from robot motion without odometry, so when most columns change at once it
-    reports ``motion_available=False`` instead of guessing.
-    """
+    """Semantic candidates; motion is unavailable without independent pose history."""
 
     def __init__(self, config: TrackingConfig | None = None) -> None:
         self._config = config or TrackingConfig()
-        self._history: deque[GeometryObservation] = deque()
 
     def update(
         self,
@@ -185,51 +161,4 @@ class Tracker:
         *,
         semantics_stamp: float | None = None,
     ) -> DynamicMask:
-        mask = track(detections, geometry, config=self._config, semantics_stamp=semantics_stamp)
-        moved = self._moved_columns(geometry)
-        self._remember(geometry)
-        if moved is None:
-            return mask
-        dynamic = tuple(a or b for a, b in zip(mask.dynamic, moved, strict=True))
-        kinds: list[HitKind] = list(mask.kinds)
-        for index, flag in enumerate(moved):
-            if flag and not mask.dynamic[index]:
-                kinds[index] = "unknown_dynamic"
-        occluded = tuple(a or b for a, b in zip(mask.occluded, dynamic, strict=True))
-        return replace(
-            mask, dynamic=dynamic, occluded=occluded, kinds=tuple(kinds), motion_available=True
-        )
-
-    def _moved_columns(self, geometry: GeometryObservation) -> tuple[bool, ...] | None:
-        config = self._config
-        baseline = None
-        for earlier in reversed(self._history):
-            age = geometry.stamp - earlier.stamp
-            if age < config.motion_min_baseline_s:
-                continue
-            if age <= config.motion_max_baseline_s and earlier.columns == geometry.columns:
-                baseline = earlier
-            break
-        if baseline is None or not math.isfinite(geometry.stamp):
-            return None
-        moved: list[bool] = []
-        comparable = 0
-        for now, before, ray, old in zip(
-            geometry.status, baseline.status, geometry.rays, baseline.rays, strict=True
-        ):
-            both = now == "hit" and before == "hit"
-            comparable += both
-            moved.append(both and abs(ray.range_m - old.range_m) > config.motion_threshold_m)
-        if comparable == 0:
-            return None
-        if sum(moved) / comparable > config.motion_max_changed_fraction:
-            return None
-        return tuple(moved)
-
-    def _remember(self, geometry: GeometryObservation) -> None:
-        if self._history and geometry.stamp <= self._history[-1].stamp:
-            self._history.clear()  # time went backwards: the old baseline is meaningless
-        self._history.append(geometry)
-        horizon = geometry.stamp - self._config.motion_max_baseline_s
-        while self._history and self._history[0].stamp < horizon:
-            self._history.popleft()
+        return track(detections, geometry, config=self._config, semantics_stamp=semantics_stamp)

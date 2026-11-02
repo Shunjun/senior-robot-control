@@ -188,7 +188,9 @@ def test_motion_fusion_compares_the_safety_applied_command():
         rclpy.shutdown()
 
 
-def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(monkeypatch):
+def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(
+    monkeypatch, fenced_scan_fixture
+):
     import time
     from types import SimpleNamespace
 
@@ -196,7 +198,7 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(mo
     from geometry_msgs.msg import TransformStamped
     from rclpy.parameter import Parameter
     from rclpy.time import Time
-    from senior_motion_msgs.msg import MotionEvidence
+    from senior_motion_msgs.msg import BoundedRawLaserScan, BoundedSafetyScan, MotionEvidence
     from senior_robot.safety_node import SafetyGate
     from senior_robot.safety_scan_ingress import SafetyScanIngress
     from sensor_msgs.msg import LaserScan
@@ -235,10 +237,22 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(mo
         scan.angle_increment = 0.1
         scan.range_min, scan.range_max = 0.1, 10.0
         scan.ranges = [1.0]
-        ingress._on_scan(scan)
+        original = BoundedSafetyScan()
+        original.stamp, original.frame_id = scan.header.stamp, scan.header.frame_id
+        original.source_epoch, original.sequence = "fixture-owner", 1
+        controlled = fenced_scan_fixture(gate, original)
+        raw = BoundedRawLaserScan()
+        raw.capture = controlled.body.raw_capture
+        raw.angle_increment, raw.range_min, raw.range_max = (
+            scan.angle_increment, scan.range_min, scan.range_max
+        )
+        raw.ranges = scan.ranges
+        ingress._bridge_gid = raw.capture.bridge_gid
+        ingress._on_scan(raw)
         assert bounded and bounded[-1].valid
-        gate._on_scan(bounded[-1])
-        assert gate._scans and gate._scans[-1].message is bounded[-1]
+        wrapped = fenced_scan_fixture(gate, bounded[-1])
+        gate._on_scan(wrapped)
+        assert gate._scans and gate._scans[-1].message == wrapped.body
         # The production worker, not the Gate executor, performs this conversion/filter.
         work = SimpleNamespace(
             observations=tuple(gate._scans),
@@ -347,7 +361,9 @@ def test_safety_reports_missing_evidence_topology_reason():
 
 
 @pytest.mark.parametrize("change", ["stop", "scan_loss", "epoch_change"])
-def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, monkeypatch, change):
+def test_safety_timer_never_releases_late_result_after_input_change(
+    tmp_path, monkeypatch, change, fenced_scan_fixture
+):
     import threading
     import time
 
@@ -371,6 +387,7 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
     rclpy.init()
     gate = module.SafetyGate(
         parameter_overrides=[
+            Parameter("depth_policy", value="laser_only"),
             Parameter("command_ttl_seconds", value=5.0),
             Parameter("observation_max_age", value=10.0),
             Parameter("measurement_max_age", value=10.0),
@@ -464,10 +481,25 @@ def test_safety_timer_never_releases_late_result_after_input_change(tmp_path, mo
         if change == "stop":
             gate._on_command(Twist())
         elif change == "scan_loss":
-            invalid = BoundedSafetyScan()
-            invalid.source_epoch = "invalid-scan"
-            invalid.sequence = 1
-            gate._on_scan(invalid)
+            from senior_control.vision.egress_receipt import EgressAdmission, egress_from_message
+            from senior_control.vision.raw_capture import RawCaptureAdmission
+
+            body = BoundedSafetyScan()
+            body.stamp = gate.get_clock().now().to_msg()
+            body.frame_id, body.source_epoch, body.sequence = "laser_link", "fixture-scan", 1
+            body.valid, body.ranges = True, [2.0]
+            envelope = fenced_scan_fixture(gate, body)
+            gate._scan_egress = EgressAdmission(max_age_s=3.0, hard_limit_s=5.0)
+            gate._scan_raw_admission = RawCaptureAdmission(max_age_s=3.0, hard_limit_s=5.0)
+            assert gate._scan_egress.offer(
+                egress_from_message(envelope.owner), relay_gid=gate._scan_relay_gid
+            )
+            envelope.owner.relay_sequence += 1
+            envelope.owner.owner_generation += 1
+            envelope.owner.owner_sequence = 0
+            envelope.owner.valid, envelope.owner.owner_lost = False, True
+            gate._on_scan(envelope)
+            assert gate._freshness.scan_received is None
         else:
             gate._epoch_fence.retire_active()
             gate._epoch_fence.accept("epoch-b")
@@ -536,6 +568,7 @@ def test_frozen_ros_reference_cannot_be_renewed_by_new_work_ticket(monkeypatch):
     rclpy.init()
     gate = module.SafetyGate(
         parameter_overrides=[
+            Parameter("depth_policy", value="laser_only"),
             Parameter("command_ttl_seconds", value=0.3),
             Parameter("observation_max_age", value=0.8),
             Parameter("measurement_max_age", value=0.8),

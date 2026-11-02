@@ -103,7 +103,7 @@ def test_fusion_logs_first_latch_after_publish_with_exact_source_interval(monkey
         rclpy.shutdown()
 
 
-def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch):
+def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch, fenced_scan_fixture):
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import Twist
     from rclpy.parameter import Parameter
@@ -134,6 +134,7 @@ def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch):
     fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
     gate = SafetyGate(
         parameter_overrides=[
+            Parameter("depth_policy", value="laser_only"),
             Parameter("observation_max_age", value=2.0),
             Parameter("measurement_max_age", value=2.0),
             Parameter("motion_min_quality", value=0.3),
@@ -216,7 +217,7 @@ def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch):
         bounded.ingress_ros = gate.get_clock().now().nanoseconds / 1e9
         bounded.valid = True
         bounded.ranges = [5.0]
-        gate._on_scan(bounded)
+        gate._on_scan(fenced_scan_fixture(gate, bounded))
         assert gate._freshness.scan_received is not None
         gate._command = Velocity(0.05, 0)
         gate._command_monotonic = time.monotonic()

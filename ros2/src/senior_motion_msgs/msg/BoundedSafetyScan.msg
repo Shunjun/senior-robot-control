@@ -1,3 +1,4 @@
+senior_motion_msgs/RawCaptureHeader raw_capture
 # Bounded, process-isolated safety ingress. Monotonic time is from this host.
 builtin_interfaces/Time stamp
 string<=128 frame_id

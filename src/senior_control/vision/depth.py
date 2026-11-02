@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from senior_control.mapping.evidence import RangeRay
-from senior_control.vision.synchronizer import AlignedRgbdFrame
+from senior_control.vision.synchronizer import AlignedRgbdFrame, DepthFrame
 
 ColumnStatus = Literal["hit", "no_obstacle", "invalid"]
 
@@ -43,6 +43,42 @@ class CameraExtrinsic:
     def __post_init__(self) -> None:
         if not _finite(self.x, self.y, self.z, self.roll, self.pitch, self.yaw):
             raise CalibrationError("extrinsic values must be finite")
+
+
+def body_extrinsic_from_optical_tf(
+    translation: tuple[float, float, float], quaternion: tuple[float, float, float, float]
+) -> CameraExtrinsic:
+    """Convert base<-optical TF to base<-camera-body without applying the basis twice.
+
+    The TF quaternion is in ROS xyzw order. The fixed optical basis maps
+    optical (right, down, forward) into body (forward, left, up).
+    """
+    if not _finite(*translation, *quaternion):
+        raise CalibrationError("nonfinite optical transform")
+    norm = math.sqrt(sum(value * value for value in quaternion))
+    if abs(norm - 1.0) > 1e-3:
+        raise CalibrationError("invalid optical quaternion")
+    x, y, z, w = (value / norm for value in quaternion)
+    # base<-body = (base<-optical) * inverse(body<-optical).
+    bx, by, bz, bw = (0.5, -0.5, 0.5, 0.5)
+    qx = w * bx + x * bw + y * bz - z * by
+    qy = w * by - x * bz + y * bw + z * bx
+    qz = w * bz + x * by - y * bx + z * bw
+    qw = w * bw - x * bx - y * by - z * bz
+    r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
+    r10 = 2.0 * (qx * qy + qw * qz)
+    r01 = 2.0 * (qx * qy - qw * qz)
+    r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
+    r02 = 2.0 * (qx * qz + qw * qy)
+    r12 = 2.0 * (qy * qz - qw * qx)
+    pitch = math.atan2(2.0 * (qw * qy - qz * qx), math.hypot(r00, r10))
+    yaw = math.atan2(r10, r00)
+    # Near gimbal lock yaw alone is ill-conditioned. Recover roll from the
+    # same chosen yaw and the stable remaining matrix entries, preserving the
+    # coupled rotation instead of independently rounding two tiny quantities.
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    roll = math.atan2(sy * r02 - cy * r12, cy * r11 - sy * r01)
+    return CameraExtrinsic(*translation, roll, pitch, yaw)
 
 
 @dataclass(frozen=True)
@@ -132,7 +168,9 @@ def _number(values: Mapping[str, object], name: str) -> float:
 class GeometryConfig:
     column_stride: int = 4
     row_stride: int = 4
-    min_obstacle_z_m: float = 0.05
+    # Generic default includes low returns. A deployment must establish its
+    # own calibrated collision band and ground/robot occlusion model.
+    min_obstacle_z_m: float = -1.5
     max_obstacle_z_m: float = 1.5
     max_invalid_fraction: float = 0.5
 
@@ -156,6 +194,19 @@ class GeometryPoint:
 
 
 @dataclass(frozen=True)
+class GeometrySample:
+    """Actual sampled 3-D hit with its image coordinates, never a free ray."""
+
+    ray_index: int
+    u: int
+    v: int
+    depth_m: float
+    x: float
+    y: float
+    z: float
+
+
+@dataclass(frozen=True)
 class GeometryObservation:
     """One depth frame as per-column rays in ``base_link``.
 
@@ -172,6 +223,7 @@ class GeometryObservation:
     status: tuple[ColumnStatus, ...]
     occlusion_mask: tuple[bool, ...]
     points: tuple[GeometryPoint, ...]
+    samples: tuple[GeometrySample, ...]
     quality: float
 
 
@@ -205,17 +257,30 @@ def project_depth(
     calibration: CameraCalibration,
     config: GeometryConfig | None = None,
 ) -> GeometryObservation:
+    return project_depth_image(frame.depth, calibration, config, skew_s=frame.skew_s)
+
+
+def project_depth_image(
+    depth: DepthFrame,
+    calibration: CameraCalibration,
+    config: GeometryConfig | None = None,
+    *,
+    skew_s: float = 0.0,
+) -> GeometryObservation:
+    """Project depth independently; RGB registration is required only for semantics."""
     config = config or GeometryConfig()
-    depth = frame.depth
     if (depth.width, depth.height) != (calibration.width, calibration.height):
         raise CalibrationError("depth image size does not match the calibration size")
     rotation = _Rotation(calibration.extrinsic)
     columns = tuple(range(0, depth.width, config.column_stride))
     rows = tuple(range(0, depth.height, config.row_stride))
+    if len(columns) * len(rows) > 32_768:
+        raise ValueError("geometry sample count exceeds limit")
     rays: list[RangeRay] = []
     statuses: list[ColumnStatus] = []
     occlusion: list[bool] = []
     points: list[GeometryPoint] = []
+    samples: list[GeometrySample] = []
     valid_total = 0
     for index, u in enumerate(columns):
         best: tuple[float, float, float] | None = None
@@ -231,6 +296,7 @@ def project_depth(
             y_cam = (v - calibration.cy) / calibration.fy * z_cam
             # Optical (x right, y down, z forward) to camera body (x forward, y left, z up).
             point = rotation.to_base((z_cam, -x_cam, -y_cam))
+            samples.append(GeometrySample(index, u, v, z_cam, *point))
             if not config.min_obstacle_z_m <= point[2] <= config.max_obstacle_z_m:
                 continue
             horizontal = math.hypot(point[0], point[1])
@@ -249,12 +315,13 @@ def project_depth(
             ahead = rotation.rotate((1.0, -(u - calibration.cx) / calibration.fx, 0.0))
             rays.append(RangeRay(math.atan2(ahead[1], ahead[0]), 0.0, False, False, None))
     return GeometryObservation(
-        stamp=frame.stamp,
-        skew_s=frame.skew_s,
+        stamp=depth.stamp,
+        skew_s=skew_s,
         columns=columns,
         rays=tuple(rays),
         status=tuple(statuses),
         occlusion_mask=tuple(occlusion),
         points=tuple(points),
+        samples=tuple(samples),
         quality=valid_total / (len(columns) * len(rows)),
     )

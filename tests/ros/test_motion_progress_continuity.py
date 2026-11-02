@@ -433,3 +433,96 @@ def test_live_harness_captures_first_valid_to_progress_unqualified_transition(tm
     assert len(capture["topics"]["motion"]) == 3
     assert capture["topics"]["motion"][0]["sample"]["valid"]
     assert capture["topics"]["motion"][1]["sample"]["reason"] == "progress_history_unqualified"
+
+
+@pytest.mark.parametrize("value", [0.0, 0.05])
+def test_duplicate_applied_command_at_identical_ros_stamp_is_idempotent(monkeypatch, value):
+    import copy
+
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import Twist
+    from rclpy.parameter import Parameter
+    from senior_robot.motion_fusion import MotionFusion
+
+    from senior_control.models import BodyTwist, Pose2D, Velocity
+    from senior_control.safety.motion_estimator import MotionEstimate, WheelOdom
+
+    values = dict(sensor_max_age=2.0, alignment_max_gap=0.3, pending_wait=0.2,
+                  max_variance=0.1, min_quality=0.3, max_yaw_error=0.1,
+                  startup_window=0.6, wheel_motion_limit=0.004, stall_distance=0.04,
+                  lateral_limit=0.04, yaw_limit=0.12)
+    rclpy.init()
+    fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
+    clock = {"now": 2_312_000_000}
+    monkeypatch.setattr(fusion, "get_clock", lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=clock["now"])))
+    monkeypatch.setattr(fusion, "_try_pending", lambda: None)
+    try:
+        fusion._progress_started = True
+        fusion._progress_requalification.arm(steady=time.monotonic() - 1, ros_ns=2_000_000_000)
+        command = Twist()
+        command.linear.x = value
+        fusion._on_command(command)
+        bounds = fusion._commands.diagnostic_bounds()
+        state = copy.deepcopy(fusion._progress_requalification.__dict__)
+        estimate = MotionEstimate(
+            Pose2D(0, 0, 0), Velocity(0, 0), (0.001,) * 3, 0.8, dt=1.0,
+            source="scan_match", stamp=1.0, degenerate=False, aligned=True,
+            max_covariance=0.1, body_twist=BodyTwist(0, 0, 0),
+        )
+        assert fusion._slip.update(
+            Velocity(0.05, 0), WheelOdom(Pose2D(0.1, 0, 0), 1.0, 1.0), estimate
+        ).anomalous
+        fusion._stop_acknowledgement.trip()
+        fusion._stop_acknowledgement.requested(Velocity(0.0, 0.0))
+        fusion._on_command(command)
+        assert fusion._commands.diagnostic_bounds() == bounds
+        assert fusion._progress_requalification.__dict__ == state
+        assert not fusion._stop_acknowledgement.ready
+        assert fusion._slip.latched
+        assert not fusion._progress.unqualified
+        assert fusion._first_progress_break is None
+        # A replay cannot extend the original command history's age.
+        assert fusion._commands.integrated(2.7, 2.8) is None
+    finally:
+        fusion.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["different_value", "rollback", "float_collision"])
+def test_same_stamp_conflicting_applied_value_and_rollback_still_break_progress(
+    monkeypatch, failure
+):
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import Twist
+    from rclpy.parameter import Parameter
+    from senior_robot.motion_fusion import MotionFusion
+
+    values = dict(sensor_max_age=2.0, alignment_max_gap=0.3, pending_wait=0.2,
+                  max_variance=0.1, min_quality=0.3, max_yaw_error=0.1,
+                  startup_window=0.6, wheel_motion_limit=0.004, stall_distance=0.04,
+                  lateral_limit=0.04, yaw_limit=0.12)
+    rclpy.init()
+    fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
+    clock = {"now": 1_700_000_000_000_000_000 if failure == "float_collision"
+             else 2_312_000_000}
+    monkeypatch.setattr(fusion, "get_clock", lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=clock["now"])))
+    monkeypatch.setattr(fusion, "_try_pending", lambda: None)
+    try:
+        fusion._progress_started = True
+        fusion._on_command(Twist())
+        command = Twist()
+        if failure == "different_value":
+            command.linear.x = 0.05
+        elif failure == "rollback":
+            clock["now"] -= 1_000_000
+        else:
+            clock["now"] += 1  # Distinct integer instants can round to the same float seconds.
+        fusion._on_command(command)
+        assert fusion._progress.unqualified
+        assert fusion._first_progress_break["reason"] == "applied_command_timestamp_rejected"
+        assert fusion._commands.diagnostic_bounds() == (None, None, 0)
+    finally:
+        fusion.destroy_node()
+        rclpy.shutdown()

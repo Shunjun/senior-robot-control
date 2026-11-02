@@ -14,10 +14,8 @@ pytestmark = pytest.mark.skipif(
 rclpy = pytest.importorskip("rclpy")
 from geometry_msgs.msg import TransformStamped  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
-from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 from senior_motion_msgs.msg import ScanMotion  # noqa: E402
-from sensor_msgs.msg import LaserScan  # noqa: E402
-from test_scan_epoch_live import _room_scan  # noqa: E402
+from test_scan_epoch_live import ControlledFencedScanPublisher, _room_scan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
 
@@ -52,14 +50,12 @@ def test_native_matcher_interval_start_is_exact_original_scan_header(tmp_path, m
         producer = listener = executor = None
         try:
             rclpy.init()
-            producer = rclpy.create_node("scan_adapter")
+            producer = rclpy.create_node("scan_receipt")
             listener = rclpy.create_node("scan_exact_stamp_test")
             executor = SingleThreadedExecutor()
             executor.add_node(producer)
             executor.add_node(listener)
-            publisher = producer.create_publisher(
-                LaserScan, "/perception/scan_filtered", qos_profile_sensor_data
-            )
+            publisher = ControlledFencedScanPublisher(producer)
             received = []
             listener.create_subscription(ScanMotion, "/motion/scan", received.append, 10)
             broadcaster = StaticTransformBroadcaster(producer)

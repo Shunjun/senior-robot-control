@@ -207,10 +207,10 @@ def test_person_mask_does_not_erase_occluded_wall() -> None:
     assert mask.semantics_available is True
     assert [i for i, flag in enumerate(mask.dynamic) if flag] == [3, 4, 5]
     assert all(mask.kinds[i] == "person" for i in (3, 4, 5))
-    # The box is wider than the person: wall columns inside it stay static geometry.
+    # The wall remains geometry but a detector miss does not confirm it static.
     for column in (2, 6):
         assert not mask.dynamic[column]
-        assert mask.kinds[column] == "static"
+        assert mask.kinds[column] == "unknown_static"
         assert geometry.status[column] == "hit"
         assert geometry.rays[column].valid
         assert geometry.rays[column].range_m > 3.0
@@ -233,7 +233,7 @@ def test_stale_low_confidence_and_other_labels_do_not_mask() -> None:
     weak = track([Detection("person", 0.2, (2.0, 0.0, 6.0, 4.0), 5.0)], geometry, config=config)
     assert weak.semantics_available is True
     assert not any(weak.dynamic)
-    assert set(weak.kinds) == {"static"}
+    assert set(weak.kinds) == {"unknown_static"}
 
     dog = track([Detection("dog", 0.9, (2.0, 0.0, 6.0, 4.0), 5.0)], geometry, config=config)
     assert [i for i, flag in enumerate(dog.dynamic) if flag] == [3, 4, 5]
@@ -244,86 +244,49 @@ def test_stale_low_confidence_and_other_labels_do_not_mask() -> None:
 
 
 def test_person_who_moved_since_the_detection_is_not_confirmed_static() -> None:
-    # The detector saw the person in columns 3..5 at t=1.0. By t=1.2 (inside the 0.3 s age
-    # limit) they are in columns 4..6, so column 6 lies outside the original box.
+    original = project_depth(aligned(depth(1.0, person_scene)), calibration(), CONFIG)
+    old_box = person_box(1.0)
+    historical = track([old_box], original)
+    assert historical.dynamic[4]
+
     def moved(u: int, v: int) -> float:
         return 1500.0 if 4 <= u <= 6 else 3000.0
 
-    geometry = project_depth(aligned(depth(1.2, moved)), calibration(), CONFIG)
-    old_box = Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 1.0)
-    mask = track([old_box], geometry)
-
-    assert mask.semantics_available is True
-    for column in (4, 5, 6):
-        assert mask.kinds[column] != "static"
-        assert mask.dynamic[column]
-        assert mask.occluded[column]
-    # Wall columns beyond the range band stay static, near or far from the old box.
-    for column in (0, 1, 2, 3, 7, 8):
-        assert mask.kinds[column] == "static"
-        assert not mask.dynamic[column]
-
-    # A box that is not older than the geometry is not widened.
-    exact = track([Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 1.2)], geometry)
-    assert not exact.dynamic[6]
-    assert exact.kinds[6] == "static"
+    current = project_depth(aligned(depth(1.2, moved)), calibration(), CONFIG)
+    mask = track([old_box], current)
+    # A past box must stay bound to its original geometry; it cannot label this frame.
+    assert not mask.semantics_available
+    assert not any(mask.dynamic)
+    assert set(mask.kinds) == {"unknown_static"}
+    assert current.rays[6].valid
 
 
 def test_person_shifted_past_the_old_box_center_is_not_confirmed_static() -> None:
-    # Old box covers columns 3..5; its center column 4 now shows the 3.0 m background.
-    # The person walked to columns 5..7 (1.5 m) within the 0.3 s age limit.
     def shifted(u: int, v: int) -> float:
         return 1500.0 if 5 <= u <= 7 else 3000.0
 
     geometry = project_depth(aligned(depth(2.25, shifted)), calibration(), CONFIG)
     old_box = Detection("person", 0.9, (3.0, 0.0, 5.0, 4.0), 2.0)
-    # The person's leading edge moved 0.75 m in 0.25 s (3 m/s). A 3.2 m/s bound reaches it
-    # while its range tolerance (0.5 + 0.8 m) still stops short of the background 1.45 m behind.
-    fast = TrackingConfig(max_object_speed_mps=3.2)
-
-    mask = track([old_box], geometry, config=fast)
-    for column in (5, 6, 7):
-        assert mask.kinds[column] != "static", column
-        assert mask.dynamic[column], column
-    # The background that used to be the box center is not what the box marks.
-    for column in (3, 4):
-        assert mask.kinds[column] == "static", column
-        assert not mask.dynamic[column], column
-    # Outside the angle band the wall stays static whatever its range.
-    for column in (0, 1, 2, 8):
-        assert mask.kinds[column] == "static", column
-        assert not mask.dynamic[column], column
-
-    # At the default speed bound the person columns the bound can reach are still excluded.
-    default = track([old_box], geometry)
-    for column in (5, 6):
-        assert default.kinds[column] != "static", column
-    for column in (3, 4):
-        assert not default.dynamic[column], column
+    mask = track([old_box], geometry, config=TrackingConfig(max_object_speed_mps=3.2))
+    assert not mask.semantics_available
+    assert not any(mask.dynamic)
+    assert set(mask.kinds) == {"unknown_static"}
+    assert all(ray.valid for ray in geometry.rays)
 
 
-def test_moving_column_is_dynamic_without_a_detector() -> None:
+def test_moving_column_is_unknown_without_independent_motion() -> None:
     from senior_control.vision.tracking import Tracker
 
     tracker = Tracker()
-    first = project_depth(aligned(depth(1.0)), calibration(), CONFIG)
-    start = tracker.update([], first)
-    assert start.semantics_available is False
-    assert start.motion_available is False  # no baseline yet: a miss, not a clean bill
-
-    def one_column_closer(u: int, v: int) -> float:
-        return 2000.0 if u == 6 else 3000.0
-
-    second = project_depth(aligned(depth(1.2, one_column_closer)), calibration(), CONFIG)
+    tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
+    second = project_depth(
+        aligned(depth(1.2, lambda u, v: 2000.0 if u == 6 else 3000.0)), calibration(), CONFIG
+    )
     mask = tracker.update([], second)
-    assert mask.semantics_available is False
-    assert mask.motion_available is True
-    assert mask.dynamic[6]
-    assert mask.kinds[6] == "unknown_dynamic"
-    assert mask.occluded[6]
-    for column in (0, 1, 2, 3, 4, 5, 7, 8):
-        assert not mask.dynamic[column]
-        assert mask.kinds[column] == "unknown_static"
+    assert not mask.semantics_available
+    assert not mask.motion_available
+    assert not any(mask.dynamic)
+    assert set(mask.kinds) == {"unknown_static"}
 
 
 def test_whole_scene_change_is_not_read_as_object_motion() -> None:
@@ -377,7 +340,6 @@ def _load_node_module() -> object:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    assert "rclpy" not in sys.modules
     return module
 
 
@@ -416,8 +378,9 @@ def test_slow_detector_does_not_block_geometry() -> None:
         assert adapter.ingest_rgb(rgb(1.4)) is None
         late = adapter.ingest_depth(depth(1.4, person_scene))
         assert late is not None
-        assert late.mask.semantics_available is True
-        assert [i for i, flag in enumerate(late.mask.dynamic) if flag] == [3, 4, 5]
+        # The asynchronous batch belongs to an earlier frame and cannot label 1.4.
+        assert late.mask.semantics_available is False
+        assert not any(late.mask.dynamic)
     finally:
         blocking.release.set()
         worker.close()
@@ -453,6 +416,22 @@ def test_node_module_imports_without_ros_and_publishes_no_velocity() -> None:
     top_level = [line for line in text.splitlines() if line.startswith(("import ", "from "))]
     assert not any("rclpy" in line for line in top_level)
     assert "def main" in text
+    code = (
+        "import importlib.util,sys;"
+        "sys.path.insert(0,sys.argv[2]);"
+        "spec=importlib.util.spec_from_file_location('perception_isolated',sys.argv[1]);"
+        "module=importlib.util.module_from_spec(spec);"
+        "sys.modules[spec.name]=module;"
+        "spec.loader.exec_module(module);"
+        "bad=[name for name in ('rclpy','torch','ultralytics','onnxruntime') "
+        "if name in sys.modules];"
+        "sys.exit(1 if bad else 0)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code, str(path), str(ROOT / "src")],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_depth_message_decoding_honors_padding_and_rejects_unknown_encoding() -> None:
@@ -465,3 +444,65 @@ def test_depth_message_decoding_honors_padding_and_rejects_unknown_encoding() ->
         module.decode_depth(1.0, 3, 2, 8, "rgb8", data, False)  # type: ignore[attr-defined]
     with pytest.raises(ValueError, match="shorter"):
         module.decode_depth(1.0, 3, 2, 8, "16UC1", data[:-3], False)  # type: ignore[attr-defined]
+
+
+def test_ultralytics_runtime_expands_padded_mono_to_three_equal_channels(monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from senior_control.vision import detector
+    from senior_control.vision.image_codec import decode_rgb
+
+    received = []
+
+    class Model:
+        def predict(self, pixels, **kwargs):
+            received.append(pixels.copy())
+            empty = SimpleNamespace(tolist=lambda: [])
+            return [SimpleNamespace(
+                names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty)
+            )]
+
+    original_import = detector.importlib.import_module
+    monkeypatch.setattr(
+        detector.importlib, "import_module",
+        lambda name: SimpleNamespace(YOLO=lambda _: Model()) if name == "ultralytics"
+        else original_import(name),
+    )
+    infer = detector._ultralytics_runtime(Path("fixture.pt"))
+    frame = decode_rgb(1.0, 2, 2, 3, "mono8", bytes([1, 2, 99, 3, 4, 99]))
+    assert infer(frame) == []
+    assert received[0].shape == (2, 2, 3)
+    assert np.array_equal(received[0], np.array([[[1, 1, 1], [2, 2, 2]],
+                                                [[3, 3, 3], [4, 4, 4]]], dtype=np.uint8))
+
+
+@pytest.mark.parametrize(("encoding", "expected"), [
+    ("rgb8", [3, 2, 1]), ("bgr8", [1, 2, 3]),
+])
+def test_ultralytics_runtime_preserves_expected_bgr_channels(monkeypatch, encoding, expected):
+    from types import SimpleNamespace
+
+    from senior_control.vision import detector
+    from senior_control.vision.image_codec import decode_rgb
+
+    received = []
+
+    class Model:
+        def predict(self, pixels, **kwargs):
+            received.append(pixels.copy())
+            empty = SimpleNamespace(tolist=lambda: [])
+            return [SimpleNamespace(
+                names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty)
+            )]
+
+    original_import = detector.importlib.import_module
+    monkeypatch.setattr(
+        detector.importlib, "import_module",
+        lambda name: SimpleNamespace(YOLO=lambda _: Model()) if name == "ultralytics"
+        else original_import(name),
+    )
+    infer = detector._ultralytics_runtime(Path("fixture.pt"))
+    assert infer(decode_rgb(1.0, 1, 1, 3, encoding, bytes([1, 2, 3]))) == []
+    assert received[0][0, 0].tolist() == expected

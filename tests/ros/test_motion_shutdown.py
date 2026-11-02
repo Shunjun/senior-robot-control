@@ -18,12 +18,16 @@ _CONVERSION_ERROR = (
 
 _CHILD = r"""
 import importlib
+import faulthandler
+import signal
 import sys
 import time
 
 from senior_control.models import Velocity
 from senior_control.safety.async_guard import SafetyTicket
 
+faulthandler.enable(all_threads=True)
+faulthandler.register(signal.SIGUSR1, all_threads=True)
 name = sys.argv[1]
 sys.argv = [sys.argv[0], *sys.argv[2:]]
 module = importlib.import_module("senior_robot." + name)
@@ -33,6 +37,27 @@ original = getattr(module, class_name)
 
 def construct():
     node = original()
+    destroy = node.destroy_node
+    def delayed_destroy():
+        print("DESTROYING", flush=True)
+        time.sleep(0.25)
+        return destroy()
+    node.destroy_node = delayed_destroy
+    return node
+
+setattr(module, class_name, construct)
+from senior_robot import motion_lifecycle
+real_owned_spin = motion_lifecycle.rclpy.spin
+
+def owned_spin(node, *, executor):
+    shutdown = executor.shutdown
+    def traced_shutdown(*args, **kwargs):
+        print("EXECUTOR_SHUTDOWN_START", flush=True)
+        try:
+            return shutdown(*args, **kwargs)
+        finally:
+            print("EXECUTOR_SHUTDOWN_END", flush=True)
+    executor.shutdown = traced_shutdown
     worker_pid = 0
     if name == "safety_node":
         ticket = SafetyTicket(1, 2, 3, "test", Velocity(0.0, 0.0), 1.0, 2.0, 1.0, 2.0)
@@ -45,16 +70,10 @@ def construct():
         assert reply is not None and reply.error
         assert node._worker._process is not None and node._worker._process.is_alive()
         worker_pid = node._worker._process.pid
-    destroy = node.destroy_node
-    def delayed_destroy():
-        print("DESTROYING", flush=True)
-        time.sleep(0.25)
-        return destroy()
-    node.destroy_node = delayed_destroy
     print("READY", worker_pid, flush=True)
-    return node
+    return real_owned_spin(node, executor=executor)
 
-setattr(module, class_name, construct)
+motion_lifecycle.rclpy.spin = owned_spin
 module.main()
 """
 
@@ -65,9 +84,9 @@ import json
 from senior_robot import motion_lifecycle
 
 real_spin = motion_lifecycle.rclpy.spin
-def audited_spin(node):
+def audited_spin(node, *, executor):
     try:
-        return real_spin(node)
+        return real_spin(node, executor=executor)
     except RuntimeError as exc:
         frames = []
         tb = exc.__traceback__
@@ -138,7 +157,10 @@ def test_owned_nodes_handle_signal_and_repeated_interrupt(entry, first_signal, m
                 continue
             if line.startswith(marker):
                 return line
-        pytest.fail(f"child did not report {marker}: {''.join(lines)}")
+        if process.poll() is None:
+            process.send_signal(signal.SIGUSR1)
+            time.sleep(0.2)
+        pytest.fail(f"child did not report {marker}; exit={process.poll()}: {''.join(lines)}")
 
     try:
         ready = wait_for("READY ")
@@ -157,6 +179,7 @@ def test_owned_nodes_handle_signal_and_repeated_interrupt(entry, first_signal, m
         assert process.returncode == 0, output
         assert "Traceback (most recent call last)" not in output, output
         assert "rcl_shutdown already called" not in output, output
+        assert "leaked semaphore" not in output, output
         if worker_pid:
 
             def worker_active():
@@ -197,9 +220,11 @@ def test_context_error_is_suppressed_only_after_shutdown(monkeypatch, context_ru
         def destroy_node(self):
             calls.append("destroy")
 
-    def fail_spin(_node):
+    def fail_spin(_node, *, executor):
         raise RCLError("wait set context invalid")
 
+    monkeypatch.setattr(motion_lifecycle, "SingleThreadedExecutor",
+                        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})())
     monkeypatch.setattr(motion_lifecycle.rclpy, "init", lambda: calls.append("init"))
     monkeypatch.setattr(motion_lifecycle.rclpy, "spin", fail_spin)
     monkeypatch.setattr(motion_lifecycle.rclpy, "ok", lambda: context_running)
@@ -247,13 +272,15 @@ def test_subscription_conversion_is_only_suppressed_at_closed_context_boundary(
         def take_message(self, *_):
             raise RuntimeError(message)
 
-    def fail_spin(_node):
+    def fail_spin(_node, *, executor):
         if subscription_frame:
             # Actual Humble executor method; only its test-owned handle is injected.
             sub = SimpleNamespace(handle=FailingHandle(), msg_type=object, raw=False)
             return Executor._take_subscription(None, sub)
         raise RuntimeError(message)
 
+    monkeypatch.setattr(motion_lifecycle, "SingleThreadedExecutor",
+                        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})())
     monkeypatch.setattr(motion_lifecycle.rclpy, "init", lambda: calls.append("init"))
     monkeypatch.setattr(motion_lifecycle.rclpy, "spin", fail_spin)
     monkeypatch.setattr(motion_lifecycle.rclpy, "ok", lambda: context_running)
@@ -363,6 +390,7 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
         output = "".join(lines)
         assert process.returncode == 0, output
         assert "Traceback (most recent call last)" not in output, output
+        assert "leaked semaphore" not in output, output
     finally:
         stop.set()
         if publisher_thread is not None:

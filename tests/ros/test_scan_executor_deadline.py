@@ -41,7 +41,9 @@ def test_oversized_mask_is_rejected_before_runtime_geometry():
 
 @pytest.mark.parametrize("event", ["stop", "expiry"])
 @pytest.mark.parametrize("input_case", ["oversized", "blocked_ingress"])
-def test_nonzero_gate_returns_zero_during_blocked_or_oversized_scan(monkeypatch, event, input_case):
+def test_nonzero_gate_returns_zero_during_blocked_or_oversized_scan(
+    monkeypatch, event, input_case, native_scan_process
+):
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import TransformStamped, Twist
     from rclpy.executors import SingleThreadedExecutor
@@ -62,6 +64,7 @@ def test_nonzero_gate_returns_zero_during_blocked_or_oversized_scan(monkeypatch,
     from senior_control.safety.arbiter import Arbiter
 
     gate_values = {
+        "depth_policy": "laser_only",
         "observation_max_age": 3.0,
         "measurement_max_age": 3.0,
         "motion_min_quality": 0.3,

@@ -18,7 +18,7 @@ import pytest
         "stand_qualified_far",
     ],
 )
-def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case):
+def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case, fenced_scan_fixture):
     rclpy = pytest.importorskip("rclpy")
     from rclpy.parameter import Parameter
     from rclpy.time import Time
@@ -50,6 +50,7 @@ def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case):
             pass
 
     values = {
+        "depth_policy": "laser_only",
         "observation_max_age": 2.0,
         "measurement_max_age": 2.0,
         "motion_min_quality": 0.3,
@@ -124,7 +125,7 @@ def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case):
             else 5.0
             for angle in (-math.pi + index * 2 * math.pi / 720 for index in range(720))
         ]
-        gate._on_scan(scan)
+        gate._on_scan(fenced_scan_fixture(gate, scan))
         assert gate._freshness.scan_received is not None
         gate._command = Velocity(0.05, 0)
         gate._command_monotonic = time.monotonic()

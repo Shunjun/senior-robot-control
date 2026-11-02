@@ -1,5 +1,9 @@
 # Fortress-only no-attachment baseline. Default rear-attached launch adds its calibrated mask.
 # Values require runtime measurement and do not qualify hardware.
+scan_receipt:
+  ros__parameters:
+    use_sim_time: true
+    scan_ledger_max_age_s: 3.0
 scan_adapter:
   ros__parameters:
     use_sim_time: true
@@ -58,6 +62,8 @@ motion_fusion:
 safety_gate:
   ros__parameters:
     use_sim_time: true
+    # This earlier motion-only fixture deliberately does not qualify low obstacles.
+    depth_policy: laser_only
     body_frame: base_link
     simulation_rate_hz: 20.0
     footprint_xy: [-0.337, -0.276, 0.337, -0.276, 0.337, 0.276, -0.337, 0.276]

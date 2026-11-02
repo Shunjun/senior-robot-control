@@ -18,6 +18,7 @@ setup(
                 "config/simulation_motion.yaml",
                 "config/simulation_motion_flat_lateral.yaml",
                 "config/simulation_motion_rear_mask.yaml",
+                "config/simulation_rgbd.yaml",
             ],
         ),
         (
@@ -26,6 +27,7 @@ setup(
                 "launch/navigation.launch.py",
                 "launch/mapping.launch.py",
                 "launch/simulation_motion.launch.py",
+                "launch/simulation_rgbd.launch.py",
                 "launch/safety_motion.launch.py",
             ],
         ),
@@ -35,6 +37,8 @@ setup(
         "console_scripts": [
             "scan_adapter = senior_robot.scan_adapter:main",
             "safety_scan_ingress = senior_robot.safety_scan_ingress:main",
+            "depth_ingress = senior_robot.depth_ingress:main",
+            "semantic_ingress = senior_robot.semantic_ingress:main",
             "safety_node = senior_robot.safety_node:main",
             "motion_fusion = senior_robot.motion_fusion:main",
             "command_node = senior_robot.command_node:main",
