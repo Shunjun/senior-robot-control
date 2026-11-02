@@ -113,6 +113,8 @@ ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true \
 
 仿真组合入口 `simulation_motion.launch.py` 包含扫描接收、过滤、匹配、运动融合和安全进程；它要求显式提供车端代理 socket，仿真参数只适用于测试。`safety_motion.launch.py` 要求显式提供已测量、已标定的安全参数文件；仓库目前没有经过资格化的实车制动、覆盖和相机参数。必需深度覆盖不足时安全门保持停车，不能把仿真参数用于真实底盘。
 
+RGB-D 仿真诊断入口 `simulation_rgbd.launch.py` 默认给其子进程设置本地 Fast DDS 传输配置：UDPv4 加 16 MiB 共享内存段。该容量只针对已测的 640×480 仿真相机；实机或其他图像尺寸须重新验证，不适用于 4G 视频传输。使用 `enable_rgbd_transport:=false` 关闭自动配置，或用 `rgbd_transport_profile:=/绝对路径/profile.xml` 选择配置文件。已有非空 Fast DDS 环境变量或工作目录中的默认配置文件优先于启动参数；空环境变量不会关闭自动配置。选择非 Fast DDS RMW 或关闭开关时不加载配置。未指定 RMW 时通过 ROS 查询实际后端，查询失败则报错。所选配置文件必须可读且为格式正确的 XML；Fast DDS 仍负责校验具体配置内容。配置仅针对 Humble 的 Fast DDS 2.x。此设置只影响该启动入口的子进程。
+
 ### 导航、建图与定位
 
 这些入口已经在 `senior_robot` 包里，对应逻辑的单元测试在开发机上通过。Humble 上还没有加载 Nav2 lattice 和 `slam_toolbox`，下面的 launch 也没有执行过。
