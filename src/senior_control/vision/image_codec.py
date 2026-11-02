@@ -61,4 +61,3 @@ def decode_depth(
             samples.byteswap()
         values.extend(float(value) for value in samples)
     return DepthFrame(stamp, width, height, tuple(values))
-
