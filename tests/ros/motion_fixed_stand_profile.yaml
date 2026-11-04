@@ -1,0 +1,6 @@
+# Test fixture only. This context is valid solely while the Gazebo fixed joint
+# anchors the tested chassis; it makes no statement about free-floor braking.
+safety_gate:
+  ros__parameters:
+    lateral_braking_deceleration: 0.3
+    physical_cap_context: fortress-fixed-stand-v1

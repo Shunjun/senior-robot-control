@@ -1,0 +1,175 @@
+"""Agent seams: the cloud link, per-robot heartbeat eligibility, and the ROS IPC motion port."""
+
+import math
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from senior_control.agent.snapshots import RobotSnapshot
+from senior_control.clock import Clock
+from senior_control.errors import DomainError, ErrorCode
+from senior_control.protocol import (
+    Envelope,
+    ResponseEnvelope,
+    SimpleEnvelope,
+    VelocityEnvelope,
+    serialize_envelope,
+)
+from senior_control.runtime.ipc import IpcClient, IpcError
+
+
+@dataclass(frozen=True)
+class HeartbeatFrame:
+    """A cloud heartbeat addressed to one robot."""
+
+    robot_id: str
+    deadline: float
+
+
+class Link(Protocol):
+    """One authenticated cloud socket. ``epoch`` is the number the relay assigned to it."""
+
+    epoch: int
+
+    async def recv(self) -> Envelope | HeartbeatFrame:
+        """Next frame. A dropped socket raises ``ConnectionError``."""
+        ...
+
+    def command_clock_valid(self) -> bool: ...
+
+    async def send_response(self, envelope: ResponseEnvelope) -> None: ...
+
+    async def send_snapshot(self, snapshot: RobotSnapshot) -> None: ...
+
+    async def send_heartbeat(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class HeartbeatLedger:
+    """Remembers when each robot id last had a heartbeat; ids never borrow each other's."""
+
+    def __init__(self, clock: Clock, window: float) -> None:
+        if window <= 0:
+            raise ValueError("heartbeat window must be positive")
+        self._clock = clock
+        self._window = window
+        self._seen: dict[str, tuple[float, float]] = {}
+
+    def note(self, robot_id: str, *, deadline: float | None = None) -> None:
+        now = self._clock.monotonic()
+        # //Compatible: direct test callers without a cloud deadline retain the bounded window.
+        expires = min(now + self._window, deadline) if deadline is not None else now + self._window
+        if not math.isfinite(now) or not math.isfinite(expires) or expires <= now:
+            self.forget(robot_id)
+            return
+        self._seen[robot_id] = (now, expires)
+
+    def eligible(self, robot_id: str) -> bool:
+        seen = self._seen.get(robot_id)
+        now = self._clock.monotonic()
+        return seen is not None and math.isfinite(now) and seen[0] <= now <= seen[1]
+
+    def forget(self, robot_id: str) -> None:
+        self._seen.pop(robot_id, None)
+
+
+class MotionPort(Protocol):
+    """The only way the agent reaches motion: through the ROS-side adapter."""
+
+    async def drive(
+        self, envelope: VelocityEnvelope, *, received_at: float | None = None
+    ) -> None: ...
+
+    async def stop(self, envelope: SimpleEnvelope) -> None: ...
+
+    async def estop(self, envelope: SimpleEnvelope) -> None: ...
+
+    async def forward(self, envelope: Envelope) -> None: ...
+
+    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None: ...
+
+    async def disable(self, connection_epoch: int) -> None: ...
+
+    async def exit(self) -> None: ...
+
+    async def call(self, name: str) -> Any: ...
+
+    async def close(self) -> None: ...
+
+
+class MotionRejected(IpcError):
+    """The adapter explicitly rejected a command without executing it."""
+
+    def __init__(self, kind: str, code: ErrorCode | None) -> None:
+        super().__init__(f"ros side rejected {kind}")
+        self.code = code
+
+
+class IpcMotion:
+    """``MotionPort`` over the local socket. It never touches rclpy or ``/cmd_vel``."""
+
+    def __init__(
+        self,
+        client: IpcClient,
+        *,
+        heartbeat_client: IpcClient | None = None,
+        disable_client: IpcClient | None = None,
+    ) -> None:
+        self._client = client
+        # //Compatible: isolated callers can still supply one serialized IPC client.
+        self._heartbeat_client = heartbeat_client if heartbeat_client is not None else client
+        self._disable_client = disable_client if disable_client is not None else client
+
+    async def _ok(
+        self, kind: str, *, client: IpcClient | None = None, **fields: Any
+    ) -> dict[str, Any]:
+        reply = await (client if client is not None else self._client).request(kind, **fields)
+        if reply.get("ok") is not True and reply.get("error") in {"unsupported", "unavailable"}:
+            raise DomainError(ErrorCode.UNAVAILABLE, f"ROS {kind} is unavailable")
+        if reply.get("ok") is not True:
+            if reply.get("accepted") is False:
+                try:
+                    code = ErrorCode(reply.get("error"))
+                except (TypeError, ValueError):
+                    code = None
+                raise MotionRejected(kind, code)
+            raise IpcError(f"ros side refused {kind}")
+        return reply
+
+    async def drive(self, envelope: VelocityEnvelope, *, received_at: float | None = None) -> None:
+        fields: dict[str, Any] = {"envelope": serialize_envelope(envelope).decode()}
+        if received_at is not None:
+            fields["received_at"] = received_at
+        await self._ok("drive", **fields)
+
+    async def stop(self, envelope: SimpleEnvelope) -> None:
+        await self._ok("stop", envelope=serialize_envelope(envelope).decode())
+
+    async def estop(self, envelope: SimpleEnvelope) -> None:
+        await self._ok("estop", envelope=serialize_envelope(envelope).decode())
+
+    async def forward(self, envelope: Envelope) -> None:
+        await self._ok("command", envelope=serialize_envelope(envelope).decode())
+
+    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
+        await self._ok(
+            "server_heartbeat",
+            client=self._heartbeat_client,
+            connection_epoch=connection_epoch,
+            deadline=deadline,
+        )
+
+    async def disable(self, connection_epoch: int) -> None:
+        await self._ok(
+            "disable_motion", client=self._disable_client, connection_epoch=connection_epoch
+        )
+
+    async def exit(self) -> None:
+        await self._ok("exit", client=self._disable_client)
+
+    async def call(self, name: str) -> Any:
+        return (await self._ok("ros_call", name=name)).get("result")
+
+    async def close(self) -> None:
+        for client in {self._client, self._heartbeat_client, self._disable_client}:
+            await client.close()

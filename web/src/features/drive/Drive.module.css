@@ -1,0 +1,356 @@
+/* Driving pad and the fixed emergency stop. Tokens come from theme.css. */
+
+.drive {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: linear-gradient(165deg, var(--graphite-800), var(--graphite-900));
+  border: 1px solid var(--line);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    var(--chamfer) 100%,
+    0 calc(100% - var(--chamfer))
+  );
+}
+
+.drive[data-locked="true"] {
+  border-color: var(--amber-deep);
+}
+
+.driveHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.eyebrow {
+  margin: 0 0 var(--space-1);
+  color: var(--amber);
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.readout {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: 15px;
+  color: var(--ink-soft);
+}
+
+.leaseGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.leaseTag {
+  color: var(--teal);
+  font-family: var(--font-data);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.quiet {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+
+.lock,
+.assistNote {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--graphite-950);
+  border: 1px solid var(--amber-deep);
+  border-left-width: 4px;
+}
+
+.assistNote {
+  border-color: var(--teal);
+}
+
+.failure {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--red-wash);
+  border-left: 3px solid var(--red);
+}
+
+.primary,
+.ghost {
+  min-height: var(--touch);
+  padding: 0 var(--space-4);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 120ms;
+}
+
+.primary {
+  color: var(--graphite-950);
+  background: var(--amber);
+  border: 0;
+  clip-path: polygon(0 0, calc(100% - var(--chamfer)) 0, 100% var(--chamfer), 100% 100%, 0 100%);
+}
+
+.primary:hover:not(:disabled) {
+  background: #ffc548;
+}
+
+.ghost {
+  justify-self: start;
+  color: var(--amber);
+  background: transparent;
+  border: 1px solid var(--amber-deep);
+}
+
+.ghost:hover {
+  background: var(--amber-wash);
+}
+
+.ghost[aria-pressed="true"] {
+  color: var(--graphite-950);
+  background: var(--teal);
+  border-color: var(--teal);
+}
+
+.primary:disabled {
+  color: var(--ink-dim);
+  background: var(--graphite-850);
+  cursor: not-allowed;
+}
+
+.primary:focus-visible,
+.ghost:focus-visible,
+.stick:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 3px;
+}
+
+/* ------------------------------------------------------------ sticks */
+
+.pads {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-around;
+  gap: var(--space-4);
+  /* Room under the pads for the fixed emergency stop. */
+  padding-bottom: 128px;
+}
+
+.stickBox {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  max-width: 260px;
+}
+
+.stick {
+  position: relative;
+  flex: none;
+  background: var(--graphite-950);
+  border: 2px solid var(--line);
+  border-radius: 48px;
+  /* The stick owns its touches; the page must not scroll or zoom while a thumb is on it. */
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.stick[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.stick[data-held="true"] {
+  border-color: var(--amber);
+}
+
+.stickVertical {
+  width: 112px;
+  height: 232px;
+}
+
+.stickHorizontal {
+  width: 232px;
+  height: 112px;
+}
+
+.track {
+  position: absolute;
+  background: var(--line);
+}
+
+.stickVertical .track {
+  left: 50%;
+  top: 16px;
+  bottom: 16px;
+  width: 4px;
+  transform: translateX(-50%);
+}
+
+.stickHorizontal .track {
+  top: 50%;
+  left: 16px;
+  right: 16px;
+  height: 4px;
+  transform: translateY(-50%);
+}
+
+.thumb {
+  position: absolute;
+  width: 72px;
+  height: 72px;
+  background: radial-gradient(circle at 35% 30%, #ffd37a, var(--amber) 55%, var(--amber-deep));
+  border: 3px solid var(--graphite-950);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--amber-deep);
+  pointer-events: none;
+}
+
+.stickVertical .thumb {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.stickHorizontal .thumb {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.stickHint {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------ emergency stop */
+
+.estopDock {
+  position: fixed;
+  right: max(var(--space-4), env(safe-area-inset-right));
+  bottom: max(var(--space-4), env(safe-area-inset-bottom));
+  z-index: 50;
+  display: grid;
+  justify-items: end;
+  gap: var(--space-2);
+}
+
+.estop {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  width: 104px;
+  height: 104px;
+  color: #fff;
+  background: radial-gradient(circle at 35% 30%, #ff6a5e, var(--red) 45%, var(--red-deep));
+  border: 5px solid var(--graphite-950);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 3px var(--red),
+    0 10px 30px rgb(236 58 47 / 0.45);
+  cursor: pointer;
+  transition: transform 100ms;
+}
+
+.estop:hover {
+  transform: scale(1.04);
+}
+
+.estop:active {
+  transform: scale(0.97);
+}
+
+.estop:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.estopCap {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.estopTag {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  opacity: 0.85;
+}
+
+.estopFailure,
+.estopConfirmed {
+  max-width: min(360px, calc(100vw - 2 * var(--space-4)));
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--graphite-950);
+}
+
+.estopFailure {
+  border: 1px solid var(--red);
+  border-left-width: 4px;
+}
+
+.estopConfirmed {
+  border: 1px solid var(--teal);
+  border-left-width: 4px;
+}
+
+/* ------------------------------------------------------------ landscape phones */
+
+/* Two thumbs: the forward stick under the left thumb, the turn stick under the right, with the
+   emergency stop in the corner beside the right thumb and clear of both. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .drive {
+    padding: var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .pads {
+    justify-content: space-between;
+    padding-bottom: 0;
+    padding-right: 128px;
+  }
+
+  .stickVertical {
+    width: 96px;
+    height: 176px;
+  }
+
+  .stickHorizontal {
+    width: 176px;
+    height: 96px;
+  }
+
+  .thumb {
+    width: 64px;
+    height: 64px;
+  }
+
+  .stickHint {
+    display: none;
+  }
+
+  .estop {
+    width: 88px;
+    height: 88px;
+  }
+}

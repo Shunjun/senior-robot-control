@@ -1,0 +1,38 @@
+raw_receipt:
+  ros__parameters:
+    use_sim_time: true
+    rgb_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
+    rgb_info_topic: /camera/color/camera_info
+    depth_info_topic: /camera/depth/camera_info
+
+# Fortress-only diagnostic profile. This does not qualify 3-D swept-volume coverage.
+depth_ingress:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    depth_topic: /safety/raw/depth
+    camera_info_topic: /safety/raw/depth_info
+    min_range_m: 0.1
+    max_range_m: 10.0
+    range_error_m: 0.01
+    row_stride: 8
+    column_stride: 8
+    max_age_s: 0.8
+    pair_wait_s: 0.1
+    transform_static: true
+safety_gate:
+  ros__parameters:
+    depth_policy: required
+    depth_collision_min_z: -0.059529
+    depth_collision_max_z: 0.136425
+
+# Only the Fortress sensor's same-grid diagnostic. It does not qualify hardware
+# registration, depth coverage, foreground separation, laser masks, or motion.
+semantic_ingress:
+  ros__parameters:
+    use_sim_time: true
+    registered_profile: true
+    weights_path: ""
+    device: cpu
+    max_age_s: 0.3

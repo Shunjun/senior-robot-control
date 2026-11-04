@@ -1,0 +1,12 @@
+senior_motion_msgs/RawCaptureHeader capture
+uint32 width
+uint32 height
+string<=32 distortion_model
+float64[<=16] d
+float64[9] k
+float64[9] r
+float64[12] p
+uint32 binning_x
+uint32 binning_y
+uint32[4] roi
+bool roi_do_rectify

@@ -1,0 +1,11 @@
+scan_adapter:
+  ros__parameters:
+    use_sim_time: true
+    body_frame: base_link
+    max_age_seconds: 0.5
+    # Simulation laser-plane attachment only; hardware must calibrate separately.
+    self_mask_xy: [-0.33, -0.24, -0.23, -0.24, -0.23, 0.24, -0.33, 0.24]
+    self_mask_calibrated: true
+    # URDF robot_state_publisher chain laser_link -> base_link is fixed.
+    transform_static: true
+    no_return_clear: false

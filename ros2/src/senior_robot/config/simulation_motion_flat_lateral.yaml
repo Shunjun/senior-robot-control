@@ -1,0 +1,7 @@
+# Empirical candidate for the owned Fortress normal-friction flat qualification
+# scene only. This is not a physical-robot or low-friction braking guarantee.
+# The default profile leaves lateral braking unset; apply only with matching scene.
+safety_gate:
+  ros__parameters:
+    lateral_braking_deceleration: 0.3
+    physical_cap_context: fortress-flat-v1

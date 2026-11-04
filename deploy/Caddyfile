@@ -1,0 +1,25 @@
+{
+	email {$ACME_EMAIL:off}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	@backend path /api/* /ws/*
+	handle @backend {
+		reverse_proxy cloud:8000
+	}
+
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+}

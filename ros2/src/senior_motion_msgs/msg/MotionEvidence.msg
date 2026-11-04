@@ -1,0 +1,17 @@
+senior_motion_msgs/BoundedHeader header
+builtin_interfaces/Time interval_start
+builtin_interfaces/Time scan_received_ros
+float64 scan_received_steady
+string<=128 source_epoch
+bool valid
+string<=64 reason
+geometry_msgs/Pose2D body_delta
+geometry_msgs/Pose2D local_pose
+geometry_msgs/Twist body_velocity
+float64[9] covariance
+float64 quality
+bool imu_valid
+bool wheel_valid
+bool motion_anomaly
+bool startup_reference_valid
+builtin_interfaces/Time startup_reference_stamp

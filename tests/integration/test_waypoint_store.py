@@ -1,0 +1,562 @@
+"""Waypoint rows survive restart. Home stays one per robot."""
+
+import asyncio
+import importlib.util
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from senior_control.errors import DomainError, ErrorCode
+from senior_control.mapping.archive import BundleWaypoint
+from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+from senior_control.mapping.store import MapReferenceStore
+from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
+from senior_control.storage.database import Database
+from senior_control.storage.migrations import migrate
+from senior_control.storage.schema import DOMAIN_MIGRATIONS
+from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+
+
+class SyntheticHomeService(HomeService):
+    """A local fixture supplies a fresh generation with each synthetic observation."""
+
+    async def initialize(self, start: StartupReference, localized: LocalizedPose):
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        return await super().initialize(start, localized)
+
+    async def set_current(self, pose: LocalizedPose, *, expected_revision: int | None = None):
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        return await super().set_current(pose, expected_revision=expected_revision)
+
+    async def save_waypoint(self, pose: LocalizedPose, *, waypoint_id: str):
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        return await super().save_waypoint(pose, waypoint_id=waypoint_id)
+
+    def _remember(self, localized: LocalizedPose) -> None:
+        if localized.map_generation is None:
+            localized = replace(localized, map_generation=self._reference.map_generation)
+        super()._remember(localized)
+
+    async def note_localization(self, pose: LocalizedPose) -> None:
+        if pose.map_generation is None:
+            pose = replace(pose, map_generation=self._reference.map_generation)
+        await super().note_localization(pose)
+
+
+MAP = MapRef("yard", 3)
+ROBOT = "robot-a"
+CELL = 0.5
+STILL = StartupReference(False, True, True, None)
+
+
+def localized(
+    pose: Pose2D,
+    *,
+    healthy: bool = True,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> LocalizedPose:
+    return LocalizedPose(
+        pose,
+        MAP,
+        "node-1",
+        Pose2D(0.0, 0.0, 0.0),
+        healthy,
+        latitude,
+        longitude,
+    )
+
+
+async def test_schema_version_two_adds_waypoint_table(tmp_path: Path) -> None:
+    async with Database(tmp_path / "schema.db") as database:
+        await migrate(database, list(DOMAIN_MIGRATIONS[:2]))
+        async with database.connection.execute("PRAGMA user_version") as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == 2
+        async with database.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ) as cursor:
+            names = {table[0] for table in await cursor.fetchall()}
+        assert "waypoint" in names
+        assert "map_home_link" in names
+        async with database.connection.execute("PRAGMA table_info(map_home_link)") as cursor:
+            columns = [info[1] for info in await cursor.fetchall()]
+        assert columns == [
+            "robot_id",
+            "source_robot_id",
+            "map_id",
+            "reference_revision",
+            "waypoint_id",
+            "status",
+            "adopted",
+        ]
+
+
+async def test_home_revision_conflict_keeps_the_old_pose(tmp_path: Path) -> None:
+    async with Database(tmp_path / "revision.db") as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        assert await service.home_revision() == 0
+        await service.set_current(localized(Pose2D(1.0, 2.0, 0.0)), expected_revision=0)
+        assert await service.home_revision() == 1
+        await service.set_current(localized(Pose2D(3.0, 4.0, 0.1)), expected_revision=1)
+        with pytest.raises(DomainError) as caught:
+            await service.set_current(localized(Pose2D(9.0, 9.0, 0.2)), expected_revision=0)
+        assert caught.value.code is ErrorCode.CONFLICT
+        stored = await service._store.home()
+        assert stored is not None
+        assert stored.waypoint.pose == Pose2D(3.0, 4.0, 0.1)
+        assert await service.home_revision() == 2
+
+
+async def test_one_home_per_robot(tmp_path: Path) -> None:
+    async with Database(tmp_path / "one.db") as database:
+        left = SyntheticHomeService(database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT)
+        right = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id="robot-b"
+        )
+        await left.prepare()
+        await right.prepare()
+        first = await left.set_current(localized(Pose2D(1.0, 2.0, 0.4)))
+        second = await left.set_current(localized(Pose2D(3.0, 4.0, 0.5)))
+        assert second.pose == Pose2D(3.0, 4.0, 0.5)
+        assert second.id == first.id
+        assert second.kind == "home"
+        other = await right.set_current(localized(Pose2D(8.0, 8.0, 0.1)))
+        assert other.id != first.id
+        async with database.connection.execute(
+            "SELECT COUNT(*) FROM waypoint WHERE robot_id = ? AND kind = 'home'",
+            (ROBOT,),
+        ) as cursor:
+            count = await cursor.fetchone()
+        assert count is not None
+        assert count[0] == 1
+
+
+async def test_foreign_home_stays_pending(tmp_path: Path) -> None:
+    async with Database(tmp_path / "foreign.db") as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        imported = await service.import_home(
+            BundleWaypoint("home-b", "home", Pose2D(1.0, 1.0, 0.25), MAP, "node-1", "robot-b"),
+            anchor_pose=Pose2D(0.0, 0.0, 0.0),
+        )
+        assert imported.status == "pending_confirmation"
+        assert imported.source_robot_id == "robot-b"
+        assert imported.pose == Pose2D(1.0, 1.0, 0.25)
+        link = await service.home_link()
+        assert link is not None
+        assert link.adopted is False
+        assert link.status == "pending_confirmation"
+        assert link.waypoint_id == imported.id
+        result = await service.initialize(
+            StartupReference(True, False, False, None),
+            localized(Pose2D(9.0, 9.0, 0.0)),
+        )
+        assert result.initialized is False
+        kept = await service.home()
+        assert kept is not None
+        assert kept.pose == imported.pose
+        assert kept.status == "pending_confirmation"
+        await service.note_localization(localized(Pose2D(1.0, 1.0, 0.25)))
+        with pytest.raises(DomainError) as caught:
+            await service.return_home(MAP)
+        assert caught.value.code == ErrorCode.CONFLICT
+        assert str(caught.value) == "home is not adopted"
+
+
+async def test_gps_does_not_rewrite_map_pose(tmp_path: Path) -> None:
+    path = tmp_path / "gps.db"
+    pose = Pose2D(1.5, 2.5, 0.3)
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        waypoint = await service.set_current(
+            localized(pose, latitude=31.2, longitude=121.4),
+        )
+        assert waypoint.pose == pose
+        assert waypoint.latitude == pytest.approx(31.2)
+        assert waypoint.longitude == pytest.approx(121.4)
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        home = await service.home()
+        assert home is not None
+        assert home.pose == pose
+        assert home.latitude == pytest.approx(31.2)
+        assert home.longitude == pytest.approx(121.4)
+
+
+async def test_waypoint_pose_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "points.db"
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        saved = await service.save_waypoint(localized(Pose2D(3.0, 4.0, 0.5)), waypoint_id="gate")
+        assert saved.id == "gate"
+        assert saved.kind == "waypoint"
+        assert saved.pose == Pose2D(3.0, 4.0, 0.5)
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        found = await service.waypoint("gate")
+        assert found is not None
+        assert found.pose == Pose2D(3.0, 4.0, 0.5)
+        assert found.kind == "waypoint"
+
+
+async def test_reference_change_moves_home_and_survives_restart(tmp_path: Path) -> None:
+    path = tmp_path / "shift.db"
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        created = await service.initialize(STILL, localized(Pose2D(4.0, 5.0, 0.2)))
+        assert created.waypoint is not None
+        moved = await service.apply_anchor_update(
+            AnchorSnapshot(
+                MAP,
+                "odom",
+                (AnchorPose("node-1", Pose2D(1.0, 0.0, 0.0), True),),
+                GridExtent(0, 0, 0.0, 0.0),
+            )
+        )
+        assert moved.id == created.waypoint.id
+        assert moved.pose.x == pytest.approx(5.0)
+        assert moved.pose.y == pytest.approx(5.0)
+        assert moved.pose.yaw == pytest.approx(0.2)
+    async with Database(path) as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        home = await service.home()
+        assert home is not None
+        assert home.pose.x == pytest.approx(5.0)
+        assert home.pose.y == pytest.approx(5.0)
+        assert home.pose.yaw == pytest.approx(0.2)
+
+
+class SyntheticQualifiedNavigation:
+    """Test-only stand-in for a receiver enforcing map-generation eligibility."""
+
+    async def navigate_qualified(self, goal: object) -> str:
+        return await self.navigate(goal)  # type: ignore[attr-defined,no-any-return]
+
+
+class BlockingNavigation(SyntheticQualifiedNavigation):
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.goals: list[object] = []
+        self.release = asyncio.Event()
+
+    async def navigate(self, goal: object) -> str:
+        self.goals.append(goal)
+        self.events.append("navigate")
+        return f"exec-{len(self.goals)}"
+
+    async def cancel(self, execution_id: str) -> OperationResult:
+        self.events.append("cancel")
+        await self.release.wait()
+        self.events.append("terminated")
+        return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+
+async def test_cancel_waits_outside_write_transaction(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "lock.db") as database:
+        service = SyntheticHomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        first = await service.return_home(MAP)
+        assert first == "exec-1"
+        navigation.release.clear()
+        replacement = asyncio.create_task(service.return_home(MAP))
+        for _ in range(50):
+            if "cancel" in navigation.events:
+                break
+            await asyncio.sleep(0.01)
+        assert "cancel" in navigation.events
+        completed = False
+        try:
+            updated = await asyncio.wait_for(
+                service.set_current(localized(Pose2D(2.0, 2.0, 0.4))),
+                timeout=1,
+            )
+            completed = updated.pose == Pose2D(2.0, 2.0, 0.4)
+        except TimeoutError:
+            completed = False
+        finally:
+            navigation.release.set()
+            await replacement
+        assert completed
+        assert navigation.events == ["navigate", "cancel", "terminated", "navigate"]
+        assert navigation.goals[1].pose == Pose2D(2.0, 2.0, 0.4)
+
+
+async def test_unadopted_home_is_rejected(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "unadopted.db") as database:
+        service = SyntheticHomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        await database.connection.rollback()
+        await database.connection.execute(
+            """
+            UPDATE map_home_link
+            SET adopted = 0, status = 'unadopted'
+            WHERE robot_id = ?
+            """,
+            (ROBOT,),
+        )
+        await database.connection.commit()
+        with pytest.raises(DomainError) as caught:
+            await service.return_home(MAP)
+        assert caught.value.code == ErrorCode.CONFLICT
+        assert str(caught.value) == "home is not adopted"
+        assert navigation.events == []
+
+
+async def test_disconnect_does_not_resume_navigation(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "offline.db") as database:
+        service = SyntheticHomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        first = await service.return_home(MAP)
+        assert first == "exec-1"
+        navigation.release.set()
+        await service.note_connection(False)
+        assert navigation.events == ["navigate", "cancel", "terminated"]
+        await service.note_connection(True)
+        assert navigation.events == ["navigate", "cancel", "terminated"]
+
+
+async def test_review_required_reference_rejects_return(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "review.db") as database:
+        service = SyntheticHomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(4.0, 5.0, 0.2)))
+        await service.note_localization(localized(Pose2D(4.0, 5.0, 0.2)))
+        await service.apply_anchor_update(
+            AnchorSnapshot(
+                MAP,
+                "odom",
+                (AnchorPose("node-1", None, False),),
+                GridExtent(0, 0, 0.0, 0.0),
+            )
+        )
+        with pytest.raises(DomainError) as caught:
+            await service.return_home(MAP)
+        assert caught.value.code == ErrorCode.CONFLICT
+        assert str(caught.value) == "coordinate reference needs review"
+        assert navigation.events == []
+
+
+def _operation_helpers() -> object:
+    path = Path(__file__).resolve().parent / "test_map_operations.py"
+    spec = importlib.util.spec_from_file_location("map_operation_fixtures", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_bundle_import_home_pose_is_visible(tmp_path: Path) -> None:
+    helpers = _operation_helpers()
+    pose = Pose2D(1.25, 0.25, 0.1)
+    source = helpers.filled_store("yard", 3, (1.25, 0.25))
+    local = helpers.filled_store("local", 1, (2.25, 0.25))
+    bundle = tmp_path / "from-a.zip"
+    async with (
+        Database(tmp_path / "a.db") as database_a,
+        Database(tmp_path / "b.db") as database_b,
+    ):
+        origin = helpers.operations_for(database_a, source, tmp_path / "a", robot_id="robot-a")
+        target = helpers.operations_for(database_b, local, tmp_path / "b", robot_id="robot-b")
+        await origin.prepare()
+        await target.prepare()
+        await origin.export_bundle(source.map_ref, bundle, operation_id="export-a")
+        await target.import_bundle(bundle, "robot-b", operation_id="import-b")
+        service = SyntheticHomeService(database_b, target.store, robot_id="robot-b")
+        await service.prepare()
+        home = await service.home()
+        link = await service.home_link()
+    assert home is not None
+    assert home.pose.x == pytest.approx(pose.x)
+    assert home.pose.y == pytest.approx(pose.y)
+    assert home.pose.yaw == pytest.approx(pose.yaw)
+    assert home.kind == "home"
+    assert home.id == "home"
+    assert home.source_robot_id == "robot-a"
+    assert home.status == "pending_confirmation"
+    assert home.map_ref == source.map_ref
+    assert link is not None
+    assert link.adopted is False
+    assert link.status == "pending_confirmation"
+    assert link.waypoint_id == home.id
+
+    own = helpers.filled_store("yard", 3, (1.25, 0.25))
+    own_bundle = tmp_path / "own.zip"
+    async with Database(tmp_path / "own.db") as database:
+        ops = helpers.operations_for(database, own, tmp_path / "own", robot_id="robot-a")
+        await ops.prepare()
+        await ops.export_bundle(own.map_ref, own_bundle, operation_id="export-own")
+        await ops.import_bundle(own_bundle, "robot-a", operation_id="import-own")
+        service = SyntheticHomeService(database, ops.store, robot_id="robot-a")
+        await service.prepare()
+        home = await service.home()
+        link = await service.home_link()
+    assert home is not None
+    assert home.pose.x == pytest.approx(pose.x)
+    assert home.pose.y == pytest.approx(pose.y)
+    assert home.pose.yaw == pytest.approx(pose.yaw)
+    assert home.status == "confirmed"
+    assert home.source_robot_id == "robot-a"
+    assert link is not None
+    assert link.adopted is True
+    assert link.status == "confirmed"
+
+
+async def test_recoverable_initialize_keeps_pending_home(tmp_path: Path) -> None:
+    async with Database(tmp_path / "pending.db") as database:
+        service = SyntheticHomeService(
+            database, MapReferenceStore(MAP, "odom", CELL), robot_id=ROBOT
+        )
+        await service.prepare()
+        imported = await service.import_home(
+            BundleWaypoint("home-b", "home", Pose2D(1.0, 1.0, 0.25), MAP, "node-1", "robot-b"),
+            anchor_pose=Pose2D(0.0, 0.0, 0.0),
+        )
+        result = await service.initialize(STILL, localized(Pose2D(9.0, 9.0, 0.4)))
+        kept = await service.home()
+        link = await service.home_link()
+        assert kept is not None
+        assert kept.pose == imported.pose
+        assert kept.status == "pending_confirmation"
+        assert kept.source_robot_id == "robot-b"
+        assert result.initialized is False
+        assert link is not None
+        assert link.adopted is False
+        assert link.status == "pending_confirmation"
+        adopted = await service.set_current(localized(Pose2D(3.0, 4.0, 0.2)))
+        assert adopted.pose == Pose2D(3.0, 4.0, 0.2)
+        assert adopted.status == "confirmed"
+        confirmed = await service.home_link()
+        assert confirmed is not None
+        assert confirmed.adopted is True
+        again = await service.initialize(STILL, localized(Pose2D(8.0, 8.0, 0.1)))
+        assert again.initialized is True
+        assert again.waypoint is not None
+        assert again.waypoint.pose == adopted.pose
+        assert again.waypoint.id == adopted.id
+
+
+async def test_cancel_then_unhealthy_does_not_send_replacement(tmp_path: Path) -> None:
+    navigation = BlockingNavigation()
+    async with Database(tmp_path / "recheck.db") as database:
+        service = SyntheticHomeService(
+            database,
+            MapReferenceStore(MAP, "odom", CELL),
+            robot_id=ROBOT,
+            navigation=navigation,
+        )
+        await service.prepare()
+        await service.initialize(STILL, localized(Pose2D(1.0, 2.0, 0.4)))
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4)))
+        assert await service.return_home(MAP) == "exec-1"
+        navigation.release.clear()
+        replacement = asyncio.create_task(service.return_home(MAP))
+        for _ in range(50):
+            if "cancel" in navigation.events:
+                break
+            await asyncio.sleep(0.01)
+        await service.note_localization(localized(Pose2D(1.0, 2.0, 0.4), healthy=False))
+        navigation.release.set()
+        with pytest.raises(DomainError) as caught:
+            await replacement
+        assert caught.value.code == ErrorCode.LOCALIZATION_UNAVAILABLE
+        assert navigation.events == ["navigate", "cancel", "terminated"]
+
+
+async def test_foreign_bundle_keeps_adopted_home(tmp_path: Path) -> None:
+    helpers = _operation_helpers()
+    source = helpers.filled_store("yard", 3, (1.25, 0.25))
+    local = helpers.filled_store("local", 1, (2.25, 0.25))
+    bundle = tmp_path / "from-a.zip"
+    kept = Pose2D(8.0, 8.0, 0.2)
+    async with (
+        Database(tmp_path / "a.db") as database_a,
+        Database(tmp_path / "b.db") as database_b,
+    ):
+        origin = helpers.operations_for(database_a, source, tmp_path / "a", robot_id="robot-a")
+        target = helpers.operations_for(database_b, local, tmp_path / "b", robot_id="robot-b")
+        await origin.prepare()
+        await target.prepare()
+        service = SyntheticHomeService(database_b, local, robot_id="robot-b")
+        await service.prepare()
+        adopted = await service.set_current(
+            LocalizedPose(kept, local.map_ref, "kf-1", Pose2D(0.0, 0.0, 0.0), True)
+        )
+        await origin.export_bundle(source.map_ref, bundle, operation_id="export-a")
+        await target.import_bundle(bundle, "robot-b", operation_id="import-b")
+        home = await service.home()
+        link = await service.home_link()
+        async with database_b.connection.execute(
+            "SELECT COUNT(*) FROM waypoint WHERE robot_id = ? AND kind = 'home'",
+            ("robot-b",),
+        ) as cursor:
+            count = await cursor.fetchone()
+    assert home is not None
+    assert home.id == adopted.id
+    assert home.pose == kept
+    assert home.status == "confirmed"
+    assert home.source_robot_id == "robot-b"
+    assert link is not None
+    assert link.adopted is True
+    assert link.status == "confirmed"
+    assert link.waypoint_id == adopted.id
+    assert count is not None
+    assert count[0] == 1

@@ -1,0 +1,73 @@
+name: senior-control
+services:
+  cloud:
+    image: "${CLOUD_IMAGE:?set CLOUD_IMAGE}"
+    environment:
+      SENIOR_SECRET: "${SENIOR_SECRET:?set SENIOR_SECRET}"
+      ADMIN_PASSWORD_HASH: "${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH}"
+      ALLOWED_ORIGIN: "https://${DOMAIN:?set DOMAIN}"
+      DATABASE_PATH: /var/lib/senior/cloud.db
+      TRUSTED_PROXY: 172.29.231.2
+    networks:
+      backend:
+        ipv4_address: 172.29.231.3
+    expose: ["8000"]
+    volumes: ["cloud-data:/var/lib/senior"]
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+  caddy:
+    image: caddy:2.8.4-alpine
+    environment:
+      DOMAIN: "${DOMAIN:?set DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL:?set ACME_EMAIL}"
+    networks:
+      default: {}
+      backend:
+        ipv4_address: 172.29.231.2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - "${RELEASE_DIR:?set RELEASE_DIR}/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "${RELEASE_DIR}/web:/srv/web:ro"
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [cloud]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+  coturn:
+    profiles: [turn]
+    image: coturn/coturn:4.6.3-r3
+    environment:
+      TURN_LISTEN_IP: "${TURN_LISTEN_IP:-}"
+      TURN_EXTERNAL_IP: "${TURN_EXTERNAL_IP:-}"
+      TURN_REALM: "${TURN_REALM:-}"
+      TURN_SHARED_SECRET: "${TURN_SHARED_SECRET:-}"
+    ports: ["3478:3478/udp", "5349:5349/tcp", "5349:5349/udp", "49160-49200:49160-49200/udp"]
+    volumes:
+      - "${RELEASE_DIR}/deploy/coturn/turnserver.conf.template:/etc/coturn/turnserver.conf.template:ro"
+      - "${DEPLOY_ROOT}/turn:/certs:ro"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        test -n "$${TURN_LISTEN_IP}" && test -n "$${TURN_EXTERNAL_IP}" && test -n "$${TURN_REALM}" && test -n "$${TURN_SHARED_SECRET}"
+        test -r /certs/fullchain.pem && test -r /certs/privkey.pem
+        sed -e "s|__LISTEN_IP__|$${TURN_LISTEN_IP}|g" -e "s|__EXTERNAL_IP__|$${TURN_EXTERNAL_IP}|g" -e "s|__TURN_REALM__|$${TURN_REALM}|g" -e "s|__TURN_SHARED_SECRET__|$${TURN_SHARED_SECRET}|g" -e "s|__TLS_CERT_PATH__|/certs/fullchain.pem|g" -e "s|__TLS_KEY_PATH__|/certs/privkey.pem|g" /etc/coturn/turnserver.conf.template >/tmp/turnserver.conf
+        exec turnserver -c /tmp/turnserver.conf
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  cloud-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  default: {}
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.231.0/24
+          gateway: 172.29.231.1
