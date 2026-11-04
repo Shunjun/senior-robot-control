@@ -224,10 +224,8 @@ class Agent:
             await self._release()
             return
         if unresolved:
-            logger.error("unresolved safety intent requires controlled recovery")
-            self._safety_fault()
-            await self._release()
-            return
+            logger.warning("unresolved safety intent: status-only recovery channel")
+            self.recovery_required = True
         supervisor = Supervisor(
             send_heartbeat=self._beat,
             call_ros=self._motion.call,
@@ -347,7 +345,13 @@ class Agent:
 
     async def _beat(self) -> None:
         link = self._link
-        if link is None or not self.motion_allowed or self._safety_blocked:
+        if link is None or not self.motion_allowed:
+            return
+        if self.recovery_required:
+            # Keep the authenticated status channel alive without renewing ROS motion.
+            await link.send_heartbeat()
+            return
+        if self._safety_blocked:
             return
         self._expire_eligibility()
         if self._revoked_link is link:
@@ -444,8 +448,6 @@ class Agent:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
-            if self.recovery_required:
-                self.request_shutdown()
             await self._wait_inflight(inflight)
             await self._quietly(link.close())
 
@@ -557,8 +559,6 @@ class Agent:
             await self._acquire_safety_lock(deadline)
             try:
                 await self._safety_storage(self._journal.safety.mark(), deadline)
-                if self.recovery_required:
-                    raise ConnectionError("safety recovery is required")
                 if overflow:
                     self.recovery_required = True
                 self._accept(link, envelope)
@@ -666,7 +666,13 @@ class Agent:
         safety_active = self._safety_task is not None and not self._safety_task.done()
         if len(self._inflight) - int(safety_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
-        self._spawn(self._answer(link, envelope))
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
+            convert = getattr(link, "local_command_deadline", None)
+            deadline = convert(envelope.payload.server_deadline) if convert is not None else None
+            generation = self.continuity_generation
+            self._spawn(self._answer(link, envelope, deadline, generation))
+        else:
+            self._spawn(self._answer(link, envelope))
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
         if task.cancelled() or task.exception() is not None:
@@ -735,9 +741,17 @@ class Agent:
         task.add_done_callback(self._inflight.discard)
         return task
 
-    async def _answer(self, link: Link, envelope: Envelope) -> None:
+    async def _answer(
+        self,
+        link: Link,
+        envelope: Envelope,
+        deadline: float | None = None,
+        generation: int | None = None,
+    ) -> None:
         try:
-            result = await self.dispatch(envelope)
+            result = await self.dispatch(
+                envelope, deadline=deadline, link=link, generation=generation
+            )
         except OperationNotCommitted as exc:
             await self._reply(link, envelope, error=exc.code, status=exc.status)
             return
@@ -798,7 +812,14 @@ class Agent:
 
     # ------------------------------------------------------------------ commands
 
-    async def dispatch(self, envelope: Envelope) -> OperationResult:
+    async def dispatch(
+        self,
+        envelope: Envelope,
+        *,
+        deadline: float | None = None,
+        link: Link | None = None,
+        generation: int | None = None,
+    ) -> OperationResult:
         if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope)):
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
@@ -806,7 +827,9 @@ class Agent:
         if isinstance(envelope, OperationEnvelope):
             return await self._dispatcher.run(envelope)
         try:
-            result = await self._control(envelope)
+            result = await self._control(
+                envelope, deadline=deadline, link=link, generation=generation
+            )
         except DomainError as exc:
             self.metrics.inc(
                 "agent_operations_total", operation=envelope.type, result=exc.code.value
@@ -817,7 +840,14 @@ class Agent:
         )
         return result
 
-    async def _control(self, envelope: VelocityEnvelope | SimpleEnvelope) -> OperationResult:
+    async def _control(
+        self,
+        envelope: VelocityEnvelope | SimpleEnvelope,
+        *,
+        deadline: float | None = None,
+        link: Link | None = None,
+        generation: int | None = None,
+    ) -> OperationResult:
         request_id = envelope.request_id
         if isinstance(envelope, SimpleEnvelope) and envelope.type in HALT_TYPES:
             # A stop is honored whatever the epoch, expiry, or link state: it only removes motion.
@@ -840,25 +870,43 @@ class Agent:
                     self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
+            if (
+                deadline is None
+                or deadline <= self._clock.monotonic()
+                or self._link is not link
+                or generation != self.continuity_generation
+            ):
+                raise DomainError(ErrorCode.TIMEOUT, "motion authority expired")
         self._admit(envelope)
         if not self.eligible_for_motion:
             raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
         if isinstance(envelope, VelocityEnvelope):
-            if not self._source_clock_verified:
+            if not self._source_clock_verified and (
+                envelope.payload.server_deadline is None or not envelope.payload.challenge_id
+            ):
                 raise DomainError(ErrorCode.UNAVAILABLE, "controller clock is not verified")
             if self._link is None or not self._link.command_clock_valid():
                 raise DomainError(ErrorCode.TIMEOUT, "command clock is not synchronized")
-            implied_send = envelope.expires_at - ADMISSION_SECONDS
-            age = self._wall_clock() - implied_send
-            if (
-                age < -MAX_COMMAND_CLOCK_ERROR
-                or age + MAX_COMMAND_CLOCK_ERROR > self._command_ttl_seconds
-            ):
-                raise DomainError(ErrorCode.TIMEOUT, "command time is outside the motion window")
-            received_at = self._clock.monotonic() - max(0.0, age + MAX_COMMAND_CLOCK_ERROR)
+            if envelope.payload.server_deadline is not None:
+                received_at = None
+            else:
+                # //Compatible: isolated older tests inject a verified source clock.
+                implied_send = envelope.expires_at - ADMISSION_SECONDS
+                age = self._wall_clock() - implied_send
+                if (
+                    age < -MAX_COMMAND_CLOCK_ERROR
+                    or age + MAX_COMMAND_CLOCK_ERROR > self._command_ttl_seconds
+                ):
+                    raise DomainError(
+                        ErrorCode.TIMEOUT, "command time is outside the motion window"
+                    )
+                received_at = self._clock.monotonic() - max(0.0, age + MAX_COMMAND_CLOCK_ERROR)
             try:
                 await asyncio.wait_for(
-                    self._motion.drive(envelope, received_at=received_at),
+                    self._motion.drive(envelope, received_at=received_at, local_deadline=deadline)
+                    if envelope.payload.server_deadline is not None
+                    else self._motion.drive(envelope, received_at=received_at),
                     self._deadlines.safety,
                 )
             except Exception as exc:
@@ -888,7 +936,10 @@ class Agent:
             raise DomainError(ErrorCode.OFFLINE, "robot is not connected to the server")
         if envelope.connection_epoch != self._epoch:
             raise DomainError(ErrorCode.CONFLICT, "command belongs to an earlier connection")
-        if envelope.expires_at < self._wall_clock():
+        if (
+            envelope.type not in {"control.acquire", "control.release", "drive.velocity"}
+            and envelope.expires_at < self._wall_clock()
+        ):
             raise DomainError(ErrorCode.TIMEOUT, "command expired")
 
     # ------------------------------------------------------------------ snapshots
@@ -907,7 +958,9 @@ class Agent:
             asyncio.gather(self._state.collect(), self._home.home_revision()),
             timeout=self._deadlines.edit,
         )
-        deleted = await self._journal.deleted_task_ids()
+        deleted = live.deleted_task_ids
+        if deleted is None:
+            deleted = await self._journal.deleted_task_ids()
         home = live.home
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
@@ -919,7 +972,7 @@ class Agent:
             runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
-            tasks=live.tasks,
+            tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
         )
         return snapshot

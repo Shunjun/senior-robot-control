@@ -102,8 +102,10 @@ async def test_start_close_restart_and_cancelled_start(socket_dir, monkeypatch):
             await server.close()
             assert not path.exists()
         real_chmod = os.chmod
+
         def cancel(*_args):
             raise asyncio.CancelledError()
+
         monkeypatch.setattr(os, "chmod", cancel)
         with pytest.raises(asyncio.CancelledError):
             await server.start()

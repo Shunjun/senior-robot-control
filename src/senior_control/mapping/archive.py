@@ -1,9 +1,11 @@
 """Portable SLAM map bundle. Tasks, secrets, and vehicle config stay out."""
 
 import asyncio
+import errno
 import hashlib
 import json
 import math
+import os
 import stat
 import tempfile
 import zipfile
@@ -13,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.references import AnchorPose, SlamSnapshot, durable_replace
+from senior_control.mapping.references import AnchorPose, SlamSnapshot
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, Pose2D
 
@@ -115,6 +117,7 @@ class MapArchive:
         home_waypoint_id: str | None = None,
         sensor_summary: tuple[tuple[str, str], ...] = (),
         max_uncompressed_bytes: int = 67_108_864,
+        capture_timeout_seconds: float = 1.0,
     ) -> None:
         self._pose_graph = pose_graph
         self._source_robot_id = source_robot_id
@@ -122,6 +125,10 @@ class MapArchive:
         self._home_waypoint_id = home_waypoint_id
         self._sensor_summary = sensor_summary
         self._max_uncompressed_bytes = max_uncompressed_bytes
+        if not math.isfinite(capture_timeout_seconds) or capture_timeout_seconds <= 0:
+            raise ValueError("map capture timeout must be finite and positive")
+        self._capture_timeout_seconds = capture_timeout_seconds
+        self._capture_work: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]] | None = None
 
     async def export_bundle(
         self, store: MapReferenceStore, map_ref: MapRef, destination: Path
@@ -135,7 +142,7 @@ class MapArchive:
         georeference = self._georeference or Georeference("unreferenced")
         with tempfile.TemporaryDirectory() as raw:
             staging = Path(raw)
-            snapshot = await self.capture_snapshot(store, staging / "pose_graph")
+            snapshot, graph_files = await self._capture_snapshot(store, staging / "pose_graph")
             if snapshot.map_ref != map_ref:
                 raise DomainError(ErrorCode.CONFLICT, "pose graph and occupancy revisions differ")
             waypoints = tuple(
@@ -149,11 +156,16 @@ class MapArchive:
                 )
                 for item in snapshot.waypoint_bindings
             )
-            snapshot.write(staging / "occupancy")
+            layers = staging / "layers"
+            occupancy = layers / "occupancy"
+            snapshot.write(occupancy)
             waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
-            (staging / "waypoints.json").write_bytes(waypoint_bytes)
-            _write_grid(snapshot, staging / "grid")
-            payloads = _file_bytes(staging)
+            (layers / "waypoints.json").write_bytes(waypoint_bytes)
+            payloads = {f"pose_graph/{name}": data for name, data in graph_files.items()}
+            remaining = self._max_uncompressed_bytes - sum(map(len, graph_files.values()))
+            grid_budget = remaining - (occupancy / "occupancy.json").stat().st_size
+            _write_grid(snapshot, layers / "grid", grid_budget - len(waypoint_bytes))
+            payloads.update(_file_bytes(layers, remaining))
             digests = {
                 name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
             }
@@ -177,20 +189,37 @@ class MapArchive:
             )
             files = dict(payloads)
             files["manifest.json"] = _dumps(_manifest_json(manifest))
+            if len(files) > _MAX_MEMBERS or sum(map(len, files.values())) > (
+                self._max_uncompressed_bytes
+            ):
+                raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
         _write_zip(destination, files)
         return manifest
 
     async def capture_snapshot(
         self, store: MapReferenceStore, directory: Path, *, review_required: bool | None = None
     ) -> SlamSnapshot:
+        snapshot, _ = await self._capture_snapshot(
+            store, directory, review_required=review_required
+        )
+        return snapshot
+
+    async def _capture_snapshot(
+        self, store: MapReferenceStore, directory: Path, *, review_required: bool | None = None
+    ) -> tuple[SlamSnapshot, dict[str, bytes]]:
         capture = getattr(self._pose_graph, "capture_consistent", None)
         if not callable(capture):
             raise DomainError(ErrorCode.UNAVAILABLE, "consistent map capture is unavailable")
+        if self._capture_work is not None:
+            raise DomainError(ErrorCode.CONFLICT, "prior map capture has not settled")
         expected_ref = store.map_ref
         start_sequence = store.change_sequence
         snapshots: list[SlamSnapshot] = []
+        capture_open = True
 
         def snapshot() -> SlamSnapshot:
+            if not capture_open:
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture window is closed")
             if snapshots:
                 raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture callback repeated")
             captured = store.snapshot(Path("pose_graph"), self._pose_graph.painted_cells())
@@ -200,20 +229,49 @@ class MapArchive:
             return captured
 
         backend = cast(ConsistentCapture, self._pose_graph)
-        captured = await backend.capture_consistent(directory, snapshot)
-        if (
-            len(snapshots) != 1
-            or captured is not snapshots[0]
-            or captured.map_ref != expected_ref
-            or store.change_sequence != start_sequence
-        ):
-            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
-        await self.verify_snapshot(directory, captured)
-        return captured
+
+        async def capture_and_verify() -> tuple[SlamSnapshot, dict[str, bytes]]:
+            captured = await backend.capture_consistent(directory, snapshot)
+            if not capture_open:
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture window is closed")
+            if (
+                len(snapshots) != 1
+                or captured is not snapshots[0]
+                or captured.map_ref != expected_ref
+                or store.change_sequence != start_sequence
+            ):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
+            return captured, await self._verified_graph_files(directory, captured)
+
+        with store.freeze_for_capture():
+            task = asyncio.create_task(capture_and_verify())
+            self._capture_work = task
+            task.add_done_callback(self._finish_capture)
+            try:
+                done, _ = await asyncio.wait({task}, timeout=self._capture_timeout_seconds)
+                if not done:
+                    raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture timed out")
+                return task.result()
+            finally:
+                capture_open = False
+                if not task.done():
+                    task.cancel()
+
+    def _finish_capture(self, task: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]]) -> None:
+        if self._capture_work is task:
+            self._capture_work = None
+        if not task.cancelled():
+            task.exception()
 
     async def verify_snapshot(self, directory: Path, snapshot: SlamSnapshot) -> None:
+        await self._verified_graph_files(directory, snapshot)
+
+    async def _verified_graph_files(
+        self, directory: Path, snapshot: SlamSnapshot
+    ) -> dict[str, bytes]:
         if not callable(getattr(self._pose_graph, "verify_consistent", None)):
             raise DomainError(ErrorCode.UNAVAILABLE, "map snapshot verification is unavailable")
+        original = _file_bytes(directory, self._max_uncompressed_bytes)
         verifier = cast(ConsistentSnapshotVerifier, self._pose_graph)
         try:
             verified = await asyncio.wait_for(
@@ -223,8 +281,9 @@ class MapArchive:
             raise DomainError(
                 ErrorCode.OPERATION_UNKNOWN, "map snapshot verification timed out"
             ) from exc
-        if verified is not True:
+        if verified is not True or original != _file_bytes(directory, self._max_uncompressed_bytes):
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map snapshot generation is unconfirmed")
+        return original
 
     async def write_pose_graph(self, directory: Path) -> tuple[str, ...]:
         return await self._pose_graph.write(directory)
@@ -347,26 +406,60 @@ def _reject_member(name: str, info: zipfile.ZipInfo) -> None:
         raise DomainError(ErrorCode.VALIDATION, "bundle path is not canonical")
 
 
-def _file_bytes(root: Path) -> dict[str, bytes]:
+def _file_bytes(root: Path, limit: int) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
+    remaining = limit
+    if root.is_symlink():
+        raise DomainError(ErrorCode.VALIDATION, "bundle tree cannot be a symlink")
+    for path in root.rglob("*"):
+        try:
+            entry = path.lstat()
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed") from exc
+        mode = entry.st_mode
+        if stat.S_ISDIR(mode):
             continue
-        files[path.relative_to(root).as_posix()] = path.read_bytes()
+        if not stat.S_ISREG(mode):
+            raise DomainError(ErrorCode.VALIDATION, "bundle member is not a regular file")
+        if len(files) >= _MAX_MEMBERS:
+            raise DomainError(ErrorCode.VALIDATION, "bundle has too many members")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed") from exc
+            raise
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(entry, opened):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed")
+            payload = stream.read(remaining + 1)
+        if len(payload) > remaining:
+            raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+        remaining -= len(payload)
+        files[path.relative_to(root).as_posix()] = payload
     return files
 
 
 def _write_zip(destination: Path, files: dict[str, bytes]) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_name(destination.name + ".partial")
-    try:
-        with zipfile.ZipFile(partial, "w") as bundle:
-            for name in sorted(files):
-                bundle.writestr(name, files[name])
-        durable_replace(partial, destination)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
+    with tempfile.TemporaryDirectory(dir=destination.parent) as raw:
+        partial = Path(raw) / "bundle.zip"
+        with partial.open("wb") as stream:
+            with zipfile.ZipFile(stream, "w") as bundle:
+                for name in sorted(files):
+                    bundle.writestr(name, files[name])
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(partial, destination)
+        except FileExistsError as exc:
+            raise DomainError(ErrorCode.CONFLICT, "bundle destination already exists") from exc
+        fd = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _materialize(directory: Path, files: dict[str, bytes]) -> None:
@@ -478,12 +571,30 @@ def _canonical(body: dict[str, object]) -> bytes:
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
+def _write_grid(snapshot: SlamSnapshot, directory: Path, byte_budget: int) -> None:
     width = snapshot.grid.width
     height = snapshot.grid.height
     cell = snapshot.cell_size_m
+    if type(width) is not int or type(height) is not int or width < 0 or height < 0:
+        raise DomainError(ErrorCode.VALIDATION, "grid dimensions are invalid")
     if cell <= 0.0 or not math.isfinite(cell):
         raise DomainError(ErrorCode.VALIDATION, "grid cell size is invalid")
+    pixel_count = width * height
+    if pixel_count > byte_budget:
+        raise DomainError(ErrorCode.VALIDATION, "grid exceeds the remaining bundle size limit")
+    header = f"P5\n{width} {height}\n255\n".encode()
+    origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"
+    yaml_bytes = (
+        "image: map.pgm\n"
+        f"resolution: {cell}\n"
+        f"origin: {origin}\n"
+        "negate: 0\n"
+        "occupied_thresh: 0.65\n"
+        "free_thresh: 0.196\n"
+    ).encode()
+    if pixel_count + len(header) + len(yaml_bytes) > byte_budget:
+        raise DomainError(ErrorCode.VALIDATION, "grid exceeds the remaining bundle size limit")
+
     origin_x = math.floor(snapshot.grid.origin_x / cell)
     origin_y = math.floor(snapshot.grid.origin_y / cell)
     occupied: set[tuple[int, int]] = set()
@@ -493,22 +604,16 @@ def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
         if 0 <= px < width and 0 <= py < height:
             occupied.add((px, py))
     pixels = bytearray()
-    for row in range(height):
-        py = height - 1 - row
-        for x in range(width):
-            pixels.append(0 if (x, py) in occupied else 205)
+    if pixel_count:
+        for row in range(height):
+            py = height - 1 - row
+            for x in range(width):
+                pixels.append(0 if (x, py) in occupied else 205)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "map.pgm").write_bytes(f"P5\n{width} {height}\n255\n".encode() + bytes(pixels))
-    origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"
-    yaml_text = (
-        "image: map.pgm\n"
-        f"resolution: {snapshot.cell_size_m}\n"
-        f"origin: {origin}\n"
-        "negate: 0\n"
-        "occupied_thresh: 0.65\n"
-        "free_thresh: 0.196\n"
-    )
-    (directory / "map.yaml").write_text(yaml_text, encoding="utf-8")
+    with (directory / "map.pgm").open("wb") as stream:
+        stream.write(header)
+        stream.write(pixels)
+    (directory / "map.yaml").write_bytes(yaml_bytes)
 
 
 def _manifest_from_json(

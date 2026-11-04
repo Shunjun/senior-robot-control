@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 
 import styles from "./Drive.module.css";
 
@@ -12,6 +12,7 @@ export interface JoystickProps {
   /** Visible instruction for the keyboard and pointer. Linked with aria-describedby. */
   hint: string;
   disabled: boolean;
+  resetToken: number;
   /** Held at `value` in [-1, 1]. Positive is forward (vertical) or a left turn (horizontal). */
   onChange: (value: number) => void;
   onRelease: (reason: ReleaseReason) => void;
@@ -35,6 +36,7 @@ export function Joystick({
   axis,
   hint,
   disabled,
+  resetToken,
   onChange,
   onRelease,
 }: JoystickProps): ReactElement {
@@ -74,6 +76,12 @@ export function Joystick({
       window.removeEventListener("pagehide", onBlur);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    pointer.current = null;
+    key.current = null;
+    setValue(0);
+  }, [resetToken]);
 
   // A stick that becomes disabled while held has already been stopped by the drive view.
   useEffect(() => {

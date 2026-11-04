@@ -2,7 +2,7 @@
 <package format="3">
   <name>senior_slam_bridge</name>
   <version>0.1.0</version>
-  <description>Read-only corrected graph observations from the running SLAM backend</description>
+  <description>Corrected SLAM graph observations and isolated startup candidate loads</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -10,14 +10,18 @@
   <depend>boost</depend>
   <depend>builtin_interfaces</depend>
   <depend>libtbb-dev</depend>
+  <depend>libssl-dev</depend>
   <depend>rclcpp</depend>
+  <depend>senior_motion_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
   <depend version_eq="2.6.10">slam_toolbox</depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <test_depend>ament_cmake_test</test_depend>
+  <test_depend>ament_index_python</test_depend>
   <test_depend>geometry_msgs</test_depend>
-  <test_depend>rclpy</test_depend>
-  <test_depend>sensor_msgs</test_depend>
-  <test_depend>tf2_ros</test_depend>
+  <test_depend>senior_sensor_ingress</test_depend>
+  <exec_depend>rclpy</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
   <export><build_type>ament_cmake</build_type></export>
 </package>

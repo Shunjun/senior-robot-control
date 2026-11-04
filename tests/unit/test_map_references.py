@@ -1,8 +1,9 @@
 """Anchored map references stay stable when the grid grows and move only with their anchor."""
 
+import asyncio
 import importlib.util
 import math
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from senior_control.mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
+    CellBinding,
     GraphNodeMarker,
     GridExtent,
     SlamSnapshot,
@@ -462,3 +464,237 @@ def test_nonce_ignores_obstacle_and_new_anchor_but_tracks_old_anchor() -> None:
         )
     )
     assert store.map_generation != generation
+
+
+@pytest.mark.parametrize(
+    "mutation", ["cell", "removal", "waypoint", "anchors", "restore", "replace", "clear"]
+)
+def test_reference_capture_freeze_fences_mutations(mutation: str) -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    pose = Pose2D(0, 0, 0)
+    hit = evidence(BOX, "kf")
+    before = store.snapshot(Path("graph"), ())
+    actions = {
+        "cell": lambda: store.place(hit, world=BOX, anchor_pose=pose),
+        "removal": lambda: store.remove(hit),
+        "waypoint": lambda: store.place_waypoint(
+            AnchoredWaypoint("home", pose, "kf", False), anchor_pose=pose
+        ),
+        "anchors": lambda: store.apply_anchor_update(
+            AnchorSnapshot(MAP, "wheel_odom", (), GridExtent(5, 5, 0, 0))
+        ),
+        "restore": lambda: store.restore(before),
+        "replace": lambda: store.replace(before),
+        "clear": lambda: store.clear(MAP, odom_owner="wheel_odom", cell_size_m=CELL),
+    }
+    with pytest.raises(DomainError) as interrupted:
+        with store.freeze_for_capture():
+            with pytest.raises(DomainError) as error:
+                actions[mutation]()
+            assert error.value.code is ErrorCode.CONFLICT
+            assert store.snapshot(Path("graph"), ()) == before
+    assert interrupted.value.code is ErrorCode.OPERATION_UNKNOWN
+    actions[mutation]()
+
+
+async def test_reference_capture_freeze_releases_on_cancellation() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    entered = asyncio.Event()
+
+    async def capture() -> None:
+        with store.freeze_for_capture():
+            entered.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(capture())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    with pytest.raises(DomainError) as error:
+        with store.freeze_for_capture():
+            pytest.fail("a second capture cannot share the freeze")
+    assert error.value.code is ErrorCode.CONFLICT
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with store.freeze_for_capture():
+        assert store.is_empty()
+
+
+def test_reference_capture_freeze_allows_guard_and_rejects_preempted_capture() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    with pytest.raises(DomainError) as error:
+        with store.freeze_for_capture():
+            store.guard_reference()
+            assert store.review_required
+            store.release_reference()
+    assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+    with store.freeze_for_capture():
+        assert not store.review_required
+
+
+def test_occupancy_progress_commits_real_layers_and_fences_on_gap() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    assert store.ingest_progress is None
+    pose = Pose2D(0, 0, 0)
+    anchors = AnchorSnapshot(
+        MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), GridExtent(8, 8, 0, 0)
+    )
+    cell = CellBinding(evidence(BOX, "kf1"), *BOX, pose, False)
+    progress = store.commit_ingest(binding, 1, "kf1", anchors, (cell,))
+    assert (progress.binding, progress.sequence, progress.keyframe_id) == (binding, 1, "kf1")
+    assert store.occupancy().cells == (cell.evidence,)
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 1, "kf1", anchors, (cell,))
+    assert store.ingest_progress == progress
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 3, "kf1", anchors, ())
+    assert store.ingest_progress is None
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 2, "kf1", anchors, ())
+    assert store.occupancy().cells == (cell.evidence,)
+
+
+def test_occupancy_commit_failure_leaves_corrected_anchors_and_cells_unchanged() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    anchors = AnchorSnapshot(
+        MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), GridExtent(8, 8, 0, 0)
+    )
+    cell = CellBinding(evidence(BOX, "kf1"), *BOX, pose, False)
+    store.commit_ingest(binding, 1, "kf1", anchors, (cell,))
+    before = store.snapshot(Path("graph"), ())
+    corrected_pose = Pose2D(0.1, 0, 0)
+    correction = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        (AnchorPose("kf1", corrected_pose, True), AnchorPose("kf2", pose, True)),
+        GridExtent(9, 8, 0, 0),
+    )
+    good = CellBinding(evidence(WALL, "kf2"), *WALL, pose, False)
+    invalid = CellBinding(evidence(BOX, "kf2"), *BOX, corrected_pose, False)
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 2, "kf2", correction, (good, invalid))
+    assert store.snapshot(Path("graph"), ()) == before
+    assert store.ingest_progress is None
+
+
+def test_occupancy_progress_requires_current_binding_after_clear_and_bypass() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    old = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    anchors = AnchorSnapshot(
+        MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), GridExtent(8, 8, 0, 0)
+    )
+    store.commit_ingest(old, 1, "kf1", anchors, ())
+    store.place(evidence(BOX, "kf1"), world=BOX, anchor_pose=pose)
+    assert store.ingest_progress is None
+    with pytest.raises(DomainError):
+        store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    store.clear(MAP, odom_owner="wheel_odom", cell_size_m=CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-b", source_epoch="scanner-b")
+    with pytest.raises(DomainError):
+        store.commit_ingest(old, 1, "kf1", anchors, ())
+    progress = store.commit_ingest(binding, 1, "kf1", anchors, ())
+    assert store.ingest_progress == progress
+    store.guard_reference()
+    assert store.ingest_progress is None
+
+
+def test_occupancy_progress_commits_corrected_removal_and_revokes_during_freeze() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    grid = GridExtent(8, 8, 0, 0)
+    first = AnchorSnapshot(MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), grid)
+    hit = CellBinding(evidence(BOX, "kf1"), *BOX, pose, False)
+    store.commit_ingest(binding, 1, "kf1", first, (hit,))
+
+    corrected_pose = Pose2D(1.0, 0, 0)
+    correction = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        (AnchorPose("kf1", corrected_pose, True), AnchorPose("kf2", pose, True)),
+        grid,
+    )
+    tombstone = CellBinding(evidence(WALL, "kf1"), *WALL, corrected_pose, True)
+    progress = store.commit_ingest(binding, 2, "kf2", correction, (tombstone,))
+    assert store.ingest_progress == progress
+    assert store.occupancy().cells == ()
+    assert store.removals() == (tombstone.evidence,)
+
+    with pytest.raises(DomainError) as interrupted:
+        with store.freeze_for_capture():
+            store.revoke_ingest(binding)
+            assert store.ingest_progress is None
+    assert interrupted.value.code is ErrorCode.OPERATION_UNKNOWN
+
+
+def test_occupancy_commit_rejects_oversized_batch_before_touching_store() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    anchors = AnchorSnapshot(
+        MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), GridExtent(8, 8, 0, 0)
+    )
+    hit = CellBinding(evidence(BOX, "kf1"), *BOX, pose, False)
+    before = store.snapshot(Path("graph"), ())
+    with pytest.raises(DomainError, match="exceeds capture limits"):
+        store.commit_ingest(binding, 1, "kf1", anchors, (hit,) * 8193)
+    assert store.snapshot(Path("graph"), ()) == before
+    assert store.ingest_progress is None
+
+
+def test_first_occupancy_commit_cannot_adopt_a_preexisting_graph() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    anchors = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        (AnchorPose("skipped", pose, True), AnchorPose("latest", pose, True)),
+        GridExtent(8, 8, 0, 0),
+    )
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 1, "latest", anchors, ())
+    assert store.ingest_progress is None
+
+
+@pytest.mark.parametrize("invalid", ["origin", "dimension", "belief", "stamp", "count", "anchor"])
+def test_malformed_ingest_metadata_cannot_advance_or_change_the_layer(invalid: str) -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="graph-a", source_epoch="scanner-a")
+    pose = Pose2D(0, 0, 0)
+    grid = GridExtent(8, 8, 0, 0)
+    first = AnchorSnapshot(MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), grid)
+    original = CellBinding(evidence(BOX, "kf1"), *BOX, pose, False)
+    store.commit_ingest(binding, 1, "kf1", first, (original,))
+    before = store.snapshot(Path("graph"), ())
+    if invalid == "origin":
+        grid = replace(grid, origin_x=math.inf)
+    elif invalid == "dimension":
+        grid = replace(grid, width=-1)
+    corrected = Pose2D(0.1, 0, 0)
+    update = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        (
+            AnchorPose("kf1", corrected, True),
+            AnchorPose(" kf2 " if invalid == "anchor" else "kf2", pose, True),
+        ),
+        grid,
+    )
+    new_evidence = evidence(WALL, "kf2")
+    if invalid == "belief":
+        new_evidence = replace(new_evidence, belief=math.nan)
+    elif invalid == "stamp":
+        new_evidence = replace(new_evidence, last_valid_time=math.inf)
+    elif invalid == "count":
+        new_evidence = replace(new_evidence, hit_count=-1)
+    change = CellBinding(new_evidence, *WALL, pose, False)
+
+    with pytest.raises(DomainError) as failure:
+        store.commit_ingest(binding, 2, "kf2", update, (change,))
+    assert failure.value.code is ErrorCode.VALIDATION
+    assert store.snapshot(Path("graph"), ()) == before
+    assert store.ingest_progress is None

@@ -48,7 +48,6 @@ def _room_scan():
     return scan
 
 
-
 class ControlledFencedScanPublisher:
     """Test-owned receipt stream for matcher-only invalid/epoch regressions."""
 
@@ -78,7 +77,9 @@ class ControlledFencedScanPublisher:
         body.angle_min, body.angle_max = scan.angle_min, scan.angle_max
         body.angle_increment, body.time_increment = scan.angle_increment, scan.time_increment
         body.scan_time, body.range_min, body.range_max = (
-            scan.scan_time, scan.range_min, scan.range_max
+            scan.scan_time,
+            scan.range_min,
+            scan.range_max,
         )
         body.ranges = scan.ranges
         capture = body.raw_capture
@@ -98,9 +99,20 @@ def test_unrelated_invalid_owner_cannot_revoke_active_matcher(tmp_path, monkeypa
     params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
     with (tmp_path / "owner-invalid.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            ["ros2", "run", "senior_scan_matcher", "scan_motion_node", "--ros-args",
-             "--params-file", str(params), "-p", "use_sim_time:=false"],
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            [
+                "ros2",
+                "run",
+                "senior_scan_matcher",
+                "scan_motion_node",
+                "--ros-args",
+                "--params-file",
+                str(params),
+                "-p",
+                "use_sim_time:=false",
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         producer = listener = executor = None
         try:
@@ -129,8 +141,9 @@ def test_unrelated_invalid_owner_cannot_revoke_active_matcher(tmp_path, monkeypa
             received.clear()
             publisher.sequence += 1
             invalid = FencedFilteredScan()
-            invalid.owner.relay_gid = bytes(producer.get_publishers_info_by_topic(
-                "/perception/scan_filtered")[0].endpoint_gid).hex()
+            invalid.owner.relay_gid = bytes(
+                producer.get_publishers_info_by_topic("/perception/scan_filtered")[0].endpoint_gid
+            ).hex()
             invalid.owner.relay_boot, invalid.owner.relay_sequence = "relay", publisher.sequence
             invalid.owner.owner_gid, invalid.owner.owner_epoch = "ee" * 24, "unrelated-owner"
             invalid.owner.owner_generation, invalid.owner.owner_sequence = 1, publisher.sequence - 1
@@ -173,6 +186,7 @@ def test_unrelated_invalid_owner_cannot_revoke_active_matcher(tmp_path, monkeypa
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
+
 
 def test_invalid_stream_does_not_exhaust_epochs_and_recovers(tmp_path, monkeypatch):
     domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")

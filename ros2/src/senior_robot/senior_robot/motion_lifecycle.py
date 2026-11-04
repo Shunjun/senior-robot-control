@@ -40,6 +40,7 @@ def run(
     previous_term = signal.getsignal(signal.SIGTERM) if cli else None
     stop_requested = False
     if cli and callable(previous_handler):
+
         def first_interrupt(signum, frame):
             nonlocal stop_requested
             stop_requested = True
@@ -55,6 +56,7 @@ def run(
         # //Compatible: install before Humble chains its native signal handler.
         signal.signal(signal.SIGINT, first_interrupt)
     if cli and previous_term != signal.SIG_IGN:
+
         def first_termination(signum, frame):
             nonlocal stop_requested
             stop_requested = True

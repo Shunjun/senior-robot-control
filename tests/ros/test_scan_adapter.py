@@ -95,9 +95,13 @@ def test_simulated_self_and_wall_evidence():
         node.create_subscription(
             FencedFilteredScan,
             "/perception/scan_filtered",
-            lambda m: filtered.update({
-                (m.body.raw_capture.stamp.sec, m.body.raw_capture.stamp.nanosec): m.body
-            }) if m.owner.valid and m.body.valid else None,
+            lambda m: (
+                filtered.update(
+                    {(m.body.raw_capture.stamp.sec, m.body.raw_capture.stamp.nanosec): m.body}
+                )
+                if m.owner.valid and m.body.valid
+                else None
+            ),
             qos_profile_sensor_data,
         ),
         node.create_subscription(

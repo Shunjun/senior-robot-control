@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
+import { CommandError, MotionNotReadyError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ErrorCode, RobotSnapshot } from "../../api/protocol";
 import styles from "./Drive.module.css";
 import { Joystick, type ReleaseReason } from "./Joystick";
@@ -128,7 +128,7 @@ export class DriveController {
       },
       (error: unknown) => {
         this.inFlight -= 1;
-        if (generation !== this.generation) return;
+        if (generation !== this.generation || error instanceof MotionNotReadyError) return;
         this.onEvent({ type: "command_failed", ...describeFailure(error) });
         this.stop("rejected");
       },
@@ -171,6 +171,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   const [error, setError] = useState<string | null>(null);
   const [assist, setAssist] = useState(false);
   const [readout, setReadout] = useState<DriveInput>(STILL);
+  const [gestureReset, setGestureReset] = useState(0);
   const controller = useRef<DriveController | null>(null);
   const held = useRef<Held>(NOT_HELD);
   /** Bumped per robot, so a late answer for the previous robot cannot touch this one. */
@@ -182,7 +183,8 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   const localized = liveSnapshot?.localized === true;
   const limited = live && !localized;
   const unlocked = live && (localized || assist);
-  const canDrive = unlocked && lease === "held";
+  const supportsMotionChallenges = link.supportsMotionChallenges === true;
+  const canDrive = unlocked && lease === "held" && supportsMotionChallenges;
 
   // Layout, not passive: the stop for the old robot must leave before the shell's own cleanup
   // disconnects the link, and a parent's passive cleanup runs before a child's.
@@ -210,6 +212,28 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
       controller.current = null;
     };
   }, [link, robotId]);
+
+  useLayoutEffect(() => {
+    return link.subscribeMotionRevoked?.((authorityLost) => {
+      setGestureReset((previous) => previous + 1);
+      held.current = NOT_HELD;
+      controller.current?.stop("disabled");
+      setReadout(STILL);
+      if (authorityLost) {
+        session.current += 1;
+        setLease("none");
+      }
+    });
+  }, [link]);
+
+  useLayoutEffect(() => {
+    if (live) return;
+    session.current += 1;
+    setLease("none");
+    held.current = NOT_HELD;
+    controller.current?.stop("disabled");
+    setReadout(STILL);
+  }, [live]);
 
   useEffect(() => {
     // Localization came back: the limited mode ends and cannot be resumed by accident later.
@@ -243,6 +267,13 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   }
 
   function release(axis: keyof Held, reason: ReleaseReason): void {
+    if (reason !== "release") {
+      held.current = NOT_HELD;
+      setGestureReset((previous) => previous + 1);
+      controller.current?.stop(reason);
+      setReadout(STILL);
+      return;
+    }
     held.current = { ...held.current, [axis]: null };
     if (held.current.linear === null && held.current.angular === null) {
       controller.current?.stop(reason);
@@ -286,7 +317,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
         <div>
           <p className={styles.eyebrow}>遥控 / {robotId}</p>
           <p className={styles.readout}>
-            vx {speed(readout.vx)} m/s · wz {speed(readout.wz)} rad/s
+            请求 vx {speed(readout.vx)} m/s · wz {speed(readout.wz)} rad/s
           </p>
         </div>
         <div className={styles.leaseGroup}>
@@ -311,6 +342,9 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
       </header>
 
       {lock !== null && <p className={styles.lock}>{lock}</p>}
+      {live && !supportsMotionChallenges && (
+        <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
+      )}
       {live && !localized && !assist && (
         <p className={styles.lock}>定位未完成，遥控已锁定。进入定位辅助遥控后以低速行驶。</p>
       )}
@@ -341,6 +375,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
       <div className={styles.pads} key={robotId}>
         <Joystick
           label="前进后退摇杆"
+          resetToken={gestureReset}
           axis="vertical"
           hint="按住拖动，或用方向键 ↑ ↓ 前进 / 后退，松开即停"
           disabled={!canDrive}
@@ -349,6 +384,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
         />
         <Joystick
           label="左转右转摇杆"
+          resetToken={gestureReset}
           axis="horizontal"
           hint="按住拖动，或用方向键 ← → 左转 / 右转，松开即停"
           disabled={!canDrive}

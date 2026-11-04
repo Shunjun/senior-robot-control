@@ -81,8 +81,6 @@ class PerceptionAdapter:
         self._worker.close()
 
 
-
-
 def create_perception_node() -> type:
     """ROS node type. Imported only when rclpy is installed. Publishes no velocity."""
 
@@ -142,12 +140,19 @@ def create_perception_node() -> type:
                 if size is None:
                     raise ValueError("unsupported RGB encoding")
                 _validate_layout(
-                    int(message.width), int(message.height), int(message.step), size,
+                    int(message.width),
+                    int(message.height),
+                    int(message.step),
+                    size,
                     len(message.data),
                 )
                 frame = decode_rgb(
-                    stamp_of(message), int(message.width), int(message.height), int(message.step),
-                    str(message.encoding), bytes(message.data),
+                    stamp_of(message),
+                    int(message.width),
+                    int(message.height),
+                    int(message.step),
+                    str(message.encoding),
+                    bytes(message.data),
                 )
                 return self.adapter.ingest_rgb(frame)
 
@@ -159,7 +164,10 @@ def create_perception_node() -> type:
                 if size is None:
                     raise ValueError("unsupported depth encoding")
                 _validate_layout(
-                    int(message.width), int(message.height), int(message.step), size,
+                    int(message.width),
+                    int(message.height),
+                    int(message.step),
+                    size,
                     len(message.data),
                 )
                 frame = decode_depth(

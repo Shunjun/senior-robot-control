@@ -207,6 +207,7 @@ def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch, fenc
         monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
         monkeypatch.setattr(gate, "_topology_ready", lambda: True)
         monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+        monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
         bounded = BoundedSafetyScan()
         bounded.stamp = scan.header.stamp
         bounded.frame_id = "laser_link"
@@ -221,9 +222,12 @@ def test_real_fusion_and_gate_retain_independent_lateral_twist(monkeypatch, fenc
         assert gate._freshness.scan_received is not None
         gate._command = Velocity(0.05, 0)
         gate._command_monotonic = time.monotonic()
+        gate._command_deadline = (
+            gate._command_monotonic + gate.get_parameter("command_ttl_seconds").value
+        )
         decisions = []
         monkeypatch.setattr(
-            gate, "_publish", lambda velocity, reason: decisions.append((velocity, reason))
+            gate, "_publish", lambda velocity, reason, **_: decisions.append((velocity, reason))
         )
         gate._on_timer()
         assert decisions[-1] == (Velocity(0, 0), "measured_translational_speed_exceeded")

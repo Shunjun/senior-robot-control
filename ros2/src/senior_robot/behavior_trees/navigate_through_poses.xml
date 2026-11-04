@@ -1,0 +1,9 @@
+<!-- Humble loads this tree during activation. Fail the action if planning or following fails. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+      <FollowPath path="{path}" controller_id="FollowPath"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

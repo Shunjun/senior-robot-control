@@ -429,7 +429,9 @@ def test_node_module_imports_without_ros_and_publishes_no_velocity() -> None:
     )
     done = subprocess.run(
         [sys.executable, "-c", code, str(path), str(ROOT / "src")],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert done.returncode == 0, done.stderr
 
@@ -460,27 +462,36 @@ def test_ultralytics_runtime_expands_padded_mono_to_three_equal_channels(monkeyp
         def predict(self, pixels, **kwargs):
             received.append(pixels.copy())
             empty = SimpleNamespace(tolist=lambda: [])
-            return [SimpleNamespace(
-                names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty)
-            )]
+            return [
+                SimpleNamespace(names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty))
+            ]
 
     original_import = detector.importlib.import_module
     monkeypatch.setattr(
-        detector.importlib, "import_module",
-        lambda name: SimpleNamespace(YOLO=lambda _: Model()) if name == "ultralytics"
-        else original_import(name),
+        detector.importlib,
+        "import_module",
+        lambda name: (
+            SimpleNamespace(YOLO=lambda _: Model())
+            if name == "ultralytics"
+            else original_import(name)
+        ),
     )
     infer = detector._ultralytics_runtime(Path("fixture.pt"))
     frame = decode_rgb(1.0, 2, 2, 3, "mono8", bytes([1, 2, 99, 3, 4, 99]))
     assert infer(frame) == []
     assert received[0].shape == (2, 2, 3)
-    assert np.array_equal(received[0], np.array([[[1, 1, 1], [2, 2, 2]],
-                                                [[3, 3, 3], [4, 4, 4]]], dtype=np.uint8))
+    assert np.array_equal(
+        received[0], np.array([[[1, 1, 1], [2, 2, 2]], [[3, 3, 3], [4, 4, 4]]], dtype=np.uint8)
+    )
 
 
-@pytest.mark.parametrize(("encoding", "expected"), [
-    ("rgb8", [3, 2, 1]), ("bgr8", [1, 2, 3]),
-])
+@pytest.mark.parametrize(
+    ("encoding", "expected"),
+    [
+        ("rgb8", [3, 2, 1]),
+        ("bgr8", [1, 2, 3]),
+    ],
+)
 def test_ultralytics_runtime_preserves_expected_bgr_channels(monkeypatch, encoding, expected):
     from types import SimpleNamespace
 
@@ -493,15 +504,19 @@ def test_ultralytics_runtime_preserves_expected_bgr_channels(monkeypatch, encodi
         def predict(self, pixels, **kwargs):
             received.append(pixels.copy())
             empty = SimpleNamespace(tolist=lambda: [])
-            return [SimpleNamespace(
-                names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty)
-            )]
+            return [
+                SimpleNamespace(names={}, boxes=SimpleNamespace(xyxy=empty, conf=empty, cls=empty))
+            ]
 
     original_import = detector.importlib.import_module
     monkeypatch.setattr(
-        detector.importlib, "import_module",
-        lambda name: SimpleNamespace(YOLO=lambda _: Model()) if name == "ultralytics"
-        else original_import(name),
+        detector.importlib,
+        "import_module",
+        lambda name: (
+            SimpleNamespace(YOLO=lambda _: Model())
+            if name == "ultralytics"
+            else original_import(name)
+        ),
     )
     infer = detector._ultralytics_runtime(Path("fixture.pt"))
     assert infer(decode_rgb(1.0, 1, 1, 3, encoding, bytes([1, 2, 3]))) == []

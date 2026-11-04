@@ -3,7 +3,130 @@
 Do not treat a local skip as the Humble SLAM check. This host does not load slam_toolbox.
 """
 
+import runpy
+import sys
+from pathlib import Path
+from types import ModuleType
+
 import pytest
+
+
+@pytest.fixture
+def mapping_launch(monkeypatch):
+    class Action:
+        def __init__(self, *args, **kwargs):
+            self.args, self.kwargs = args, kwargs
+
+    class LaunchConfiguration(Action):
+        def perform(self, context):
+            return context[self.args[0]]
+
+    modules = {
+        "launch": {"LaunchDescription": Action},
+        "launch.actions": {
+            "DeclareLaunchArgument": type("DeclareLaunchArgument", (Action,), {}),
+            "OpaqueFunction": type("OpaqueFunction", (Action,), {}),
+        },
+        "launch.substitutions": {
+            "LaunchConfiguration": LaunchConfiguration,
+            "PathJoinSubstitution": Action,
+        },
+        "launch_ros": {},
+        "launch_ros.actions": {"Node": type("Node", (Action,), {})},
+        "launch_ros.substitutions": {"FindPackageShare": Action},
+    }
+    for name, members in modules.items():
+        module = ModuleType(name)
+        vars(module).update(members)
+        monkeypatch.setitem(sys.modules, name, module)
+    launch_file = (
+        Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/launch/mapping.launch.py"
+    )
+    description = runpy.run_path(str(launch_file))["generate_launch_description"]()
+    actions = description.args[0]
+    defaults = {
+        action.args[0]: action.kwargs["default_value"]
+        for action in actions
+        if isinstance(action, modules["launch.actions"]["DeclareLaunchArgument"])
+    }
+    assert defaults["capture_directory"] == ""
+    assert defaults["use_sim_time"] == "false"
+    (select,) = [
+        action.kwargs["function"]
+        for action in actions
+        if isinstance(action, modules["launch.actions"]["OpaqueFunction"])
+    ]
+    return select, defaults
+
+
+def test_default_mapping_keeps_stock_graph_and_adapter(mapping_launch):
+    select, defaults = mapping_launch
+    actions = select(defaults)
+    assert [(node.kwargs["package"], node.kwargs["executable"]) for node in actions] == [
+        ("slam_toolbox", "async_slam_toolbox_node"),
+        ("senior_robot", "slam_adapter"),
+    ]
+
+
+def test_mapping_capture_selects_single_native_graph_owner(mapping_launch, tmp_path):
+    select, defaults = mapping_launch
+    (node,) = select({**defaults, "capture_directory": str(tmp_path), "use_sim_time": "true"})
+    assert node.kwargs["package"] == "senior_slam_bridge"
+    assert node.kwargs["executable"] == "slam_graph_node"
+    assert node.kwargs["name"] == "slam_toolbox"  # Match the existing slam.yaml section.
+    config, overrides = node.kwargs["parameters"]
+    assert config.args[0][-1] == "slam.yaml"
+    assert overrides["use_sim_time"].perform({"use_sim_time": "true"}) == "true"
+    assert overrides["capture_directory"] == str(tmp_path)
+    assert overrides["use_map_saver"] is False
+    assert overrides["enable_interactive_mode"] is False
+
+
+def test_mapping_capture_requires_absolute_directory(mapping_launch):
+    select, defaults = mapping_launch
+    with pytest.raises(ValueError, match="absolute"):
+        select({**defaults, "capture_directory": "relative/capture"})
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
+    mapping_launch, tmp_path, capture
+):
+    select, defaults = mapping_launch
+    capture_directory = str(tmp_path) if capture else ""
+    relay, graph = select(
+        {**defaults, "verified_static_lidar": "true", "capture_directory": capture_directory}
+    )
+    assert relay.kwargs["package"] == "senior_sensor_ingress"
+    assert relay.kwargs["executable"] == "static_tf_receipt_node"
+    assert relay.kwargs["name"] == "slam_static_lidar_tf_receipt"
+    assert relay.kwargs["namespace"] == "/"
+    (relay_params,) = relay.kwargs["parameters"]
+    assert relay_params["input_topic"] == "/tf_static"
+    assert relay_params["output_topic"] == "/senior/slam/static_lidar_tf_receipt"
+    assert relay_params["base_frame"] == "base_link"
+    assert relay_params["camera_frame"] == "laser_link"
+    assert relay_params["expected_node_name"] == "robot_state_publisher"
+    assert relay_params["expected_namespace"] == "/"
+    assert graph.kwargs["package"] == "senior_slam_bridge"
+    assert graph.kwargs["executable"] == "slam_graph_node"
+    _, bridge = graph.kwargs["parameters"]
+    assert bridge["capture_directory"] == capture_directory
+    assert bridge["bounded_scan_topic"] == "/safety/raw/scan"
+    assert bridge["verified_static_lidar_tf_topic"] == relay_params["output_topic"]
+    assert bridge["verified_static_lidar_frame"] == relay_params["camera_frame"]
+    assert bridge["verified_static_lidar_relay_node"] == "/slam_static_lidar_tf_receipt"
+    assert bridge["verified_static_lidar_tf_source_topic"] == relay_params["input_topic"]
+    assert bridge["verified_static_lidar_tf_source_node"] == "/robot_state_publisher"
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"), [("bounded_scan_topic", "/scan"), ("lidar_frame", "base_link")]
+)
+def test_verified_static_lidar_rejects_unqualified_inputs(mapping_launch, argument, value):
+    select, defaults = mapping_launch
+    with pytest.raises(ValueError, match=argument):
+        select({**defaults, "verified_static_lidar": "true", argument: value})
 
 
 def test_mapping_node_does_not_publish_cmd_vel():

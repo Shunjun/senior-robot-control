@@ -201,20 +201,6 @@ class AgentJournal:
                     ),
                 )
 
-    async def mark_deleted(self, task_id: str, operation_id: str, revision: int) -> None:
-        """Remember that the controller deleted this task. The task row and its history stay."""
-        async with self._database.write_lock:
-            async with self._transaction() as connection:
-                await connection.execute(
-                    """
-                    INSERT INTO agent_deleted_task (task_id, robot_id, operation_id, revision)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(task_id) DO UPDATE SET
-                        operation_id = excluded.operation_id, revision = excluded.revision
-                    """,
-                    (task_id, self._robot_id, operation_id, revision),
-                )
-
     async def deleted_task_ids(self) -> frozenset[str]:
         async with self._database.write_lock:
             connection = self._database.connection

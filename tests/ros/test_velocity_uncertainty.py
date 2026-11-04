@@ -84,10 +84,11 @@ def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case, fen
     gate._worker = ImmediateWorker()
     outputs = []
     monkeypatch.setattr(
-        gate, "_publish", lambda velocity, reason: outputs.append((velocity, reason))
+        gate, "_publish", lambda velocity, reason, **_: outputs.append((velocity, reason))
     )
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+    monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     try:
         stamp_ns = gate.get_clock().now().nanoseconds - 20_000_000
@@ -129,6 +130,9 @@ def test_real_gate_uses_velocity_uncertainty_for_coverage(monkeypatch, case, fen
         assert gate._freshness.scan_received is not None
         gate._command = Velocity(0.05, 0)
         gate._command_monotonic = time.monotonic()
+        gate._command_deadline = (
+            gate._command_monotonic + gate.get_parameter("command_ttl_seconds").value
+        )
         gate._on_timer()
         gate._on_timer()
         diagnostics = (

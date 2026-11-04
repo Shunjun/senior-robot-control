@@ -227,12 +227,15 @@ bt_navigator:
     default_server_timeout: 20
     wait_for_service_timeout: 1000
     default_nav_to_pose_bt_xml: navigate.xml
+    # //Compatible: Humble initializes both navigators regardless of the plugin list.
+    default_nav_through_poses_bt_xml: navigate_through_poses.xml
     navigators: ["navigate_to_pose"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator/NavigateToPoseNavigator"
       default_nav_to_pose_bt_xml: navigate.xml
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
       - nav2_follow_path_action_bt_node
       - nav2_clear_costmap_service_bt_node
       - nav2_rate_controller_bt_node

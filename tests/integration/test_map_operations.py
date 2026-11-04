@@ -1495,14 +1495,16 @@ async def test_backup_rejects_graph_and_occupancy_change_during_capture(tmp_path
         task = asyncio.create_task(ops.clear_map(store.map_ref, operation_id="race"))
         await asyncio.wait_for(graph.entered.wait(), 1)
         graph.token = "live-generation-2"
-        store.apply_anchor_update(
-            AnchorSnapshot(
-                store.map_ref,
-                "wheel_odom",
-                (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
-                GridExtent(8, 8, 0, 0),
+        with pytest.raises(DomainError) as late_write:
+            store.apply_anchor_update(
+                AnchorSnapshot(
+                    store.map_ref,
+                    "wheel_odom",
+                    (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
+                    GridExtent(8, 8, 0, 0),
+                )
             )
-        )
+        assert late_write.value.code is ErrorCode.CONFLICT
         graph.release.set()
         try:
             await task

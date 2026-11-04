@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,7 +42,12 @@ from agent_fakes import (
 from senior_control.agent import Agent, RobotSnapshot
 from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
-from senior_control.agent.snapshots import SnapshotCache, snapshot_envelope, snapshot_from_envelope
+from senior_control.agent.snapshots import (
+    SnapshotCache,
+    TaskSummary,
+    snapshot_envelope,
+    snapshot_from_envelope,
+)
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.storage.database import Database
@@ -486,7 +491,7 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
             ROBOT,
             connector=connector,
             journal=journal,
-            tasks=StoreTaskPort(store, robot_id=ROBOT, journal=journal),
+            tasks=StoreTaskPort(store, robot_id=ROBOT),
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
@@ -566,6 +571,9 @@ class StoreRig:
     journal: AgentJournal
     state: FakeState
     runner: asyncio.Task[None]
+    database: Database
+    connector: FakeConnector
+    first: FakeLink
 
 
 @pytest.fixture
@@ -575,13 +583,14 @@ async def store_rig(tmp_path: Path) -> AsyncIterator[StoreRig]:
         await store.prepare()
         journal = AgentJournal(database, robot_id=ROBOT)
         await journal.prepare()
-        connector = FakeConnector(FakeLink(epoch=1))
+        first = FakeLink(epoch=1)
+        connector = FakeConnector(first)
         state = FakeState(runnable_task_ids=("patrol", "other"))
         agent = Agent(
             ROBOT,
             connector=connector,
             journal=journal,
-            tasks=StoreTaskPort(store, robot_id=ROBOT, journal=journal),
+            tasks=StoreTaskPort(store, robot_id=ROBOT),
             home=FakeHome(),
             maps=FakeMaps(),
             state=state,
@@ -591,7 +600,7 @@ async def store_rig(tmp_path: Path) -> AsyncIterator[StoreRig]:
         )
         runner = asyncio.ensure_future(agent.run())
         await until(lambda: agent.connected)
-        yield StoreRig(agent, store, journal, state, runner)
+        yield StoreRig(agent, store, journal, state, runner, database, connector, first)
         agent.request_shutdown()
         await asyncio.wait_for(runner, timeout=2)
 
@@ -643,29 +652,134 @@ async def test_task_delete_wrong_revision_or_missing_task_is_a_conflict(
     assert await journal.deleted_task_ids() == frozenset()
 
 
-async def test_task_delete_succeeds_only_after_both_commits(
-    store_rig: StoreRig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_task_delete_rolls_back_if_the_tombstone_fails(store_rig: StoreRig) -> None:
     agent, store, journal = store_rig.agent, store_rig.store, store_rig.journal
     await agent.dispatch(operation("task.create", "op-create", task_body()))
-    seen: list[bool] = []
-    real = journal.mark_deleted
+    async with store_rig.database.write_lock:
+        connection = store_rig.database.connection
+        await connection.execute(
+            """
+            CREATE TRIGGER reject_tombstone BEFORE INSERT ON agent_deleted_task
+            BEGIN SELECT RAISE(ABORT, 'tombstone write failed'); END
+            """
+        )
+        await connection.commit()
 
-    async def failing(task_id: str, operation_id: str, revision: int) -> None:
-        stored = await store.get(task_id)
-        seen.append(stored is not None and stored.enabled is False)
-        raise RuntimeError("disk full")
-
-    monkeypatch.setattr(journal, "mark_deleted", failing)
     with pytest.raises(DomainError) as caught:
         await agent.dispatch(
             operation("task.delete", "op-del", {"task_id": "patrol"}, expected_revision=1)
         )
     assert caught.value.code is ErrorCode.OPERATION_UNKNOWN
-    assert seen == [True]
+    kept = await store.get("patrol")
+    assert kept is not None and kept.enabled and kept.revision == 1
+    assert await journal.deleted_task_ids() == frozenset()
     entry = await journal.get("op-del")
     assert entry is not None and entry.status is OperationStatus.NEEDS_REVIEW
-    monkeypatch.setattr(journal, "mark_deleted", real)
+
+
+async def test_reconnect_hides_deleted_task_and_preserves_snapshot_revision(
+    store_rig: StoreRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent, store = store_rig.agent, store_rig.store
+    collect = store_rig.state.collect
+
+    async def collect_with_stored_tasks():
+        state = await collect()
+        tasks = await store.list_tasks()
+        return replace(
+            state,
+            task_revision=sum(task.revision for task in tasks),
+            tasks=tuple(TaskSummary(task.task_id, task.revision, task.enabled) for task in tasks),
+        )
+
+    monkeypatch.setattr(store_rig.state, "collect", collect_with_stored_tasks)
+    await agent.dispatch(operation("task.create", "op-create", task_body()))
+    await agent.dispatch(operation("task.create", "op-other", task_body("other")))
+    before = await agent.publish_snapshot(ROBOT)
+    assert {item.task_id for item in before.tasks} == {"patrol", "other"}
+    command = operation("task.delete", "op-del", {"task_id": "patrol"}, expected_revision=1)
+    assert (await agent.dispatch(command)).status is OperationStatus.SUCCEEDED
+    assert (await agent.dispatch(command)).status is OperationStatus.SUCCEEDED
+
+    store_rig.first.drop()
+    await until(lambda: not agent.connected)
+    second = FakeLink(epoch=2)
+    store_rig.connector.add(second)
+    await until(lambda: len(second.snapshots) == 1)
+    snapshot = second.snapshots[0]
+    assert snapshot.tasks == (TaskSummary("other", 1, True),)
+    assert snapshot.runnable_task_ids == ("other",)
+    assert snapshot.task_revision == before.task_revision + 1
+
+
+@pytest.mark.parametrize("available", [False, True])
+async def test_snapshot_keeps_revision_and_tombstones_from_one_task_cut(
+    store_rig: StoreRig, monkeypatch: pytest.MonkeyPatch, available: bool
+) -> None:
+    from senior_control.agent.composition import SnapshotState
+    from senior_control.agent.ports import IpcState
+    from senior_control.waypoints.store import WaypointStore
+
+    class RuntimeClient:
+        async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
+            if not available:
+                raise OSError("robot state unavailable")
+            assert kind == "state.get"
+            return {
+                "v": 1,
+                "ok": True,
+                "sampled_at": time.monotonic(),
+                "localized": False,
+                "safety_clear": True,
+                "manual_driving": False,
+                "map_id": MAP.map_id,
+                "reference_revision": MAP.reference_revision,
+                "execution_status": "idle",
+            }
+
+    agent = store_rig.agent
+    await agent.dispatch(operation("task.create", "op-create", task_body()))
+    waypoints = WaypointStore(store_rig.database, robot_id=ROBOT)
+    await waypoints.prepare()
+    production = SnapshotState(IpcState(RuntimeClient()), store_rig.store, waypoints)
+    captured = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def pause_after_collect():
+        state = await production.collect()
+        captured.set()
+        await resume.wait()
+        return state
+
+    monkeypatch.setattr(store_rig.state, "collect", pause_after_collect)
+    pending = asyncio.create_task(agent.publish_snapshot(ROBOT))
+    try:
+        await asyncio.wait_for(captured.wait(), timeout=1)
+        command = operation("task.delete", "op-del", {"task_id": "patrol"}, expected_revision=1)
+        assert (await agent.dispatch(command)).status is OperationStatus.SUCCEEDED
+    finally:
+        resume.set()
+    before = await pending
+    assert before.execution_status == ("idle" if available else "unavailable")
+    assert before.task_revision == 1
+    assert before.tasks == (TaskSummary("patrol", 1, True),)
+
+    monkeypatch.setattr(store_rig.state, "collect", production.collect)
+    after = await agent.publish_snapshot(ROBOT)
+    assert after.task_revision == 2
+    assert after.tasks == ()
+
+
+async def test_task_delete_is_robot_scoped(store_rig: StoreRig) -> None:
+    await store_rig.agent.dispatch(operation("task.create", "op-create", task_body()))
+    foreign = TaskStore(store_rig.database, robot_id="other-robot")
+    await foreign.prepare()
+    with pytest.raises(DomainError) as caught:
+        await foreign.delete("patrol", 1, operation_id="other-delete")
+    assert caught.value.code is ErrorCode.CONFLICT
+    current = await store_rig.store.get("patrol")
+    assert current is not None and current.enabled and current.revision == 1
+    assert await store_rig.journal.deleted_task_ids() == frozenset()
 
 
 class CachingLink(FakeLink):
@@ -1189,3 +1303,83 @@ async def test_background_fault_cannot_be_undone_by_late_heartbeat_ack(rig: Rig)
         if not task.done():
             rig.agent.request_shutdown()
             await asyncio.wait_for(task, 2)
+
+
+async def test_control_acquire_ignores_browser_clock(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        request = simple("control.acquire", seq=1)
+        request.expires_at = 1.0
+        rig.agent._admit(request)
+    finally:
+        await finish(task, rig)
+
+
+async def test_deadline_is_bound_at_receipt_before_async_dispatch(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        rig.agent.note_heartbeat(ROBOT)
+        original = rig.agent._clock.monotonic()
+        link.local_command_deadline = lambda deadline: original - 0.01  # type: ignore[attr-defined]
+        command = velocity()
+        command.payload.challenge_id = "issued-token"
+        command.payload.server_deadline = time.time() + 0.2
+        await rig.agent._receive_command(link, command)
+        await until(lambda: any(r.request_id == command.request_id for r in link.responses))
+        reply = next(r for r in link.responses if r.request_id == command.request_id)
+        assert not reply.payload.ok
+        assert not any(event.startswith("drive:") for event in rig.motion.events)
+    finally:
+        await finish(task, rig)
+
+
+async def test_recovery_channel_keeps_authenticated_heartbeat_without_motion(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        rig.agent.recovery_required = True
+        before = link.heartbeats
+        await rig.agent._beat()
+        assert link.heartbeats == before + 1
+        assert not rig.agent.eligible_for_motion
+    finally:
+        await finish(task, rig)
+
+
+async def test_pending_safety_intent_starts_restricted_status_channel(rig: Rig) -> None:
+    await rig.journal.safety.mark()
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        assert rig.agent.recovery_required
+        await rig.agent._beat()
+        assert link.heartbeats > 0
+        assert not rig.agent.eligible_for_motion
+        assert await rig.journal.safety.pending()
+    finally:
+        await finish(task, rig)
+
+
+async def test_production_velocity_uses_cloud_deadline_without_clock_bypass(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    rig.agent._source_clock_verified = False
+    task = await start(rig, link)
+    try:
+        rig.agent.note_heartbeat(ROBOT)
+        link.local_command_deadline = lambda deadline: time.monotonic() + 0.15  # type: ignore[attr-defined]
+        command = velocity()
+        command.payload.challenge_id = "issued-token"
+        command.payload.server_deadline = time.time() + 0.2
+        await rig.agent._receive_command(link, command)
+        await until(lambda: any(r.request_id == command.request_id for r in link.responses))
+        reply = next(r for r in link.responses if r.request_id == command.request_id)
+        assert reply.payload.ok
+        assert any(event.startswith("drive:") for event in rig.motion.events)
+        assert (
+            rig.agent.metrics.series()[("agent_operations_total", "drive.velocity", "succeeded")]
+            == 1
+        )
+    finally:
+        await finish(task, rig)

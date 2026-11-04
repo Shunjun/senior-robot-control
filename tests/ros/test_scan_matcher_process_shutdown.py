@@ -18,10 +18,17 @@ def test_scan_matcher_process_shutdown(signal_name, repeat):
         pytest.skip("set SENIOR_SCAN_MATCHER_BINARY to an isolated matcher build")
     binary = Path(executable)
     assert binary.is_file(), binary
-    config = (Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/config"
-              / "simulation_motion.yaml")
-    proc = subprocess.Popen([str(binary), "--ros-args", "--params-file", str(config)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "ros2/src/senior_robot/config"
+        / "simulation_motion.yaml"
+    )
+    proc = subprocess.Popen(
+        [str(binary), "--ros-args", "--params-file", str(config)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     rclpy.init()
     observer = rclpy.create_node("matcher_shutdown_observer")
     try:

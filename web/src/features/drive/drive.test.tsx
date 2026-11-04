@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../App";
 import {
   CommandError,
+  MotionNotReadyError,
   type ControlApi,
   type RobotLink,
 } from "../../api/client";
@@ -68,6 +69,15 @@ interface Sent {
 }
 
 class FakeLink implements RobotLink {
+  readonly supportsMotionChallenges = true;
+  private motionListeners = new Set<(authorityLost: boolean) => void>();
+  subscribeMotionRevoked(listener: (authorityLost: boolean) => void): () => void {
+    this.motionListeners.add(listener);
+    return () => this.motionListeners.delete(listener);
+  }
+  revokeMotion(authorityLost: boolean): void {
+    act(() => this.motionListeners.forEach((listener) => listener(authorityLost)));
+  }
   current: string | null = "robot-alpha";
   sent: Sent[] = [];
   requestImpl: (type: string, payload: unknown) => Promise<unknown> = async (type) => ({
@@ -647,4 +657,70 @@ describe("selected-robot route", () => {
     expect(screen.getByText(/未发送/)).toBeTruthy();
     expect(link.sent).toEqual([]);
   });
+});
+
+it("requires control authority to be acquired again after live state is lost", async () => {
+  const link = new FakeLink();
+  const view = await mountDrive(link);
+  expect(screen.getByText("已持有控制权")).toBeTruthy();
+  view.rerender(<DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha", { stale: true, connected: false })} />);
+  view.rerender(<DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha")} />);
+  expect(screen.queryByText("已持有控制权")).toBeNull();
+  expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
+});
+
+
+it("drops a sample without a challenge and samples a still-held input later", async () => {
+  vi.useFakeTimers();
+  const link = new FakeLink();
+  let attempts = 0;
+  link.requestImpl = async (type) => {
+    if (type === "drive.velocity" && attempts++ === 0) throw new MotionNotReadyError();
+    return { request_type: type, ok: true };
+  };
+  await mountDrive(link);
+  pushForward(stick(FORWARD));
+  await flush();
+  expect(link.types()).not.toContain("drive.stop");
+  await tick(110);
+  expect(link.velocities()).toHaveLength(2);
+});
+
+it("revoking authority ends the active gesture and requires a new lease", async () => {
+  const link = new FakeLink();
+  await mountDrive(link);
+  pushForward(stick(FORWARD));
+  await flush();
+  link.revokeMotion(true);
+  await flush();
+  expect(link.types()).toContain("drive.stop");
+  expect(screen.queryByText("已持有控制权")).toBeNull();
+  expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
+});
+
+it("requires a new pointer press after a remote stop invalidates the gesture", async () => {
+  const link = new FakeLink();
+  await mountDrive(link);
+  const forward = stick(FORWARD);
+  pushForward(forward);
+  await flush();
+  link.revokeMotion(false);
+  await flush();
+  const sent = link.velocities().length;
+  fireEvent.pointerMove(screen.getByRole("group", { name: FORWARD }), { pointerId: 1, clientX: 100, clientY: 0 });
+  await flush();
+  expect(link.velocities()).toHaveLength(sent);
+});
+
+it("never sends a remaining axis when the window blurs with both sticks held", async () => {
+  const link = new FakeLink();
+  await mountDrive(link);
+  fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
+  fireEvent.keyDown(stick(TURN), { key: "ArrowLeft" });
+  await flush();
+  const velocityCount = link.velocities().length;
+  fireEvent.blur(window);
+  await flush();
+  expect(link.velocities()).toHaveLength(velocityCount);
+  expect(link.types().at(-1)).toBe("drive.stop");
 });

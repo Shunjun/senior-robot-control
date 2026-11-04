@@ -7,6 +7,7 @@ A frame longer than ``MAX_FRAME`` is never read: the peer is disconnected instea
 
 import asyncio
 import json
+import math
 import os
 import socket
 import stat
@@ -46,6 +47,13 @@ def _encode(message: Message) -> bytes:
     return _HEADER.pack(len(body)) + body
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite JSON number")
+    return value
+
+
 async def _read(reader: asyncio.StreamReader) -> Message:
     try:
         header = await reader.readexactly(_HEADER.size)
@@ -56,7 +64,7 @@ async def _read(reader: asyncio.StreamReader) -> Message:
     except asyncio.IncompleteReadError as exc:
         raise IpcError("connection closed") from exc
     try:
-        message = json.loads(body)
+        message = json.loads(body, parse_float=_finite_float, parse_constant=_finite_float)
     except ValueError as exc:
         raise IpcError("frame is not json") from exc
     if not isinstance(message, dict):
@@ -80,8 +88,10 @@ class IpcServer:
         self._connections: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
-        if self._server is not None or self._closing or (
-            self._start_task is not None and not self._start_task.done()
+        if (
+            self._server is not None
+            or self._closing
+            or (self._start_task is not None and not self._start_task.done())
         ):
             raise RuntimeError("ipc server already started or starting")
         task = asyncio.create_task(self._start())
@@ -120,8 +130,11 @@ class IpcServer:
                 current = os.lstat(self._path)
             except FileNotFoundError:
                 current = None
-            if (current is not None and stat.S_ISSOCK(current.st_mode)
-                    and (current.st_dev, current.st_ino) == self._socket_identity):
+            if (
+                current is not None
+                and stat.S_ISSOCK(current.st_mode)
+                and (current.st_dev, current.st_ino) == self._socket_identity
+            ):
                 os.chmod(self._path, 0o600)
         except BaseException as error:
             if pending_socket is not None:
@@ -176,8 +189,10 @@ class IpcServer:
             if identity is not None:
                 try:
                     current = os.lstat(self._path)
-                    if (stat.S_ISSOCK(current.st_mode)
-                            and (current.st_dev, current.st_ino) == identity):
+                    if (
+                        stat.S_ISSOCK(current.st_mode)
+                        and (current.st_dev, current.st_ino) == identity
+                    ):
                         os.unlink(self._path)
                 except FileNotFoundError:
                     pass

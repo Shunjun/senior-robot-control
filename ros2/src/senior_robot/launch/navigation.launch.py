@@ -23,6 +23,10 @@ def generate_launch_description():
             "default_nav_to_pose_bt_xml": PathJoinSubstitution(
                 [share, "behavior_trees", "navigate.xml"]
             ),
+            # //Compatible: Humble activates the through-poses navigator as well.
+            "default_nav_through_poses_bt_xml": PathJoinSubstitution(
+                [share, "behavior_trees", "navigate_through_poses.xml"]
+            ),
             "use_sim_time": use_sim_time,
         },
         convert_types=True,

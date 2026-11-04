@@ -337,7 +337,9 @@ def test_authenticated_other_session_can_estop_without_taking_lease():
     arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
     assert arbiter.server_heartbeat(1, 0.0, 0.8)
     assert arbiter.accept(command("control.acquire", seq=1, session="page-a"), 0.0).accepted
-    assert arbiter.accept(command("drive.velocity", seq=2, session="page-a", vx=0.2), 0.1).accepted
+    assert arbiter.accept(
+        command("drive.velocity", seq=2, session="page-a", vx=0.2), 0.1, received_at=0.1
+    ).accepted
     assert arbiter.accept(command("safety.estop", seq=1, session="page-b"), 0.2).accepted
     assert arbiter.mode(0.2) == "estop"
     assert arbiter.tick(0.2) == Velocity(0.0, 0.0)
@@ -368,3 +370,125 @@ def test_buffered_estop_same_epoch_latches_after_heartbeat_deadline():
     assert arbiter.mode(0.81) == "estop"
     assert arbiter.server_heartbeat(2, 0.9, 1.7)
     assert not arbiter.accept(command("safety.estop", seq=2, epoch=1, session="b"), 1.0).accepted
+
+
+def test_final_command_fence_rejects_old_generation_and_deadline():
+    from senior_control.safety.arbiter import FinalCommandFence
+
+    fence = FinalCommandFence()
+    fence.set_publisher(b"a")
+    assert fence.accept(b"a", "boot-a", 1, 0, 5.0, Velocity(0.0, 0.0), 1.0)
+    assert fence.accept(b"a", "boot-a", 1, 1, 2.0, Velocity(0.1, 0.0), 1.1)
+    assert fence.usable(1.9)
+    assert not fence.usable(2.0)
+    assert not fence.accept(b"a", "boot-a", 3, 1, 5.0, Velocity(0.1, 0.0), 2.0)
+    assert fence.accept(b"a", "boot-a", 3, 0, 5.0, Velocity(0.0, 0.0), 2.0)
+    assert not fence.accept(b"a", "boot-a", 1, 2, 5.0, Velocity(0.1, 0.0), 2.1)
+    assert not fence.usable(2.1)
+    fence.set_publisher(b"b")
+    assert not fence.accept(b"a", "boot-a", 3, 0, 5.0, Velocity(0.0, 0.0), 2.1)
+    assert not fence.accept(b"b", "boot-b", 1, 1, 5.0, Velocity(0.1, 0.0), 2.1)
+    assert fence.accept(b"b", "boot-b", 1, 0, 5.0, Velocity(0.0, 0.0), 2.1)
+
+
+def test_final_fence_never_reaccepts_retired_publisher_gid():
+    from senior_control.safety.arbiter import FinalCommandFence
+
+    fence = FinalCommandFence()
+    fence.set_publisher(b"a")
+    assert fence.accept(b"a", "boot-a", 1, 0, 2.0, Velocity(0.0, 0.0), 1.0)
+    fence.set_publisher(None)
+    fence.set_publisher(b"a")
+    assert not fence.accept(b"a", "boot-a", 1, 0, 2.0, Velocity(0.0, 0.0), 1.0)
+
+
+def test_arbiter_exposes_original_deadline_and_owner_for_final_gate():
+    arbiter = gate()
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    assert arbiter.accept(command("drive.velocity", seq=2, vx=0.1), 0.1, received_at=0.0).accepted
+    final = arbiter.final_command(0.2)
+    assert final == (Velocity(0.1, 0.0), SESSION, 1, 2, 0.3)
+    assert arbiter.final_command(0.31) is None
+
+
+def test_production_velocity_requires_original_nonfuture_receipt():
+    arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 0.0, 0.8)
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    assert not arbiter.accept(command("drive.velocity", seq=2, vx=0.1), 0.1).accepted
+    assert not arbiter.accept(
+        command("drive.velocity", seq=3, vx=0.1), 0.1, received_at=0.2
+    ).accepted
+    assert arbiter.accept(command("drive.velocity", seq=4, vx=0.1), 0.1, received_at=0.0).accepted
+
+
+def test_final_fence_rejects_retired_boot_on_new_publisher():
+    from senior_control.safety.arbiter import FinalCommandFence
+
+    fence = FinalCommandFence()
+    fence.set_publisher(b"a")
+    assert fence.accept(b"a", "boot-a", 1, 0, 2.0, Velocity(0.0, 0.0), 1.0)
+    fence.set_publisher(b"b")
+    assert not fence.accept(b"b", "boot-a", 1, 0, 2.0, Velocity(0.0, 0.0), 1.0)
+
+
+def test_final_fence_cannot_relabel_session_within_generation():
+    from senior_control.safety.arbiter import FinalCommandFence
+
+    fence = FinalCommandFence()
+    fence.set_publisher(b"a")
+    assert fence.accept(b"a", "boot", 1, 0, 0.0, Velocity(0.0, 0.0), 1.0)
+    assert fence.accept(b"a", "boot", 1, 2, 2.0, Velocity(0.1, 0.0), 1.1, session="page-a", epoch=1)
+    assert not fence.accept(
+        b"a", "boot", 1, 3, 2.0, Velocity(0.1, 0.0), 1.2, session="page-b", epoch=1
+    )
+    assert not fence.accept(
+        b"a", "boot", 1, 3, 2.0, Velocity(0.1, 0.0), 1.2, session="page-a", epoch=2
+    )
+
+
+def test_estop_is_accepted_before_first_motion_heartbeat():
+    arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.accept(command("safety.estop", seq=1, epoch=1), 0.1).accepted
+    assert arbiter.mode(0.1) == "estop"
+
+
+def test_production_arbiter_preserves_absolute_source_deadline():
+    arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.8, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 0.0, 0.9)
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    assert arbiter.accept(
+        command("drive.velocity", seq=2, vx=0.1), 0.1, local_deadline=0.25
+    ).accepted
+    assert arbiter.final_command(0.15)[4] == 0.25
+    assert arbiter.tick(0.26) == Velocity(0.0, 0.0)
+
+
+def test_shorter_ros_ttl_starts_when_cloud_issues_drive_challenge():
+    from senior_control.errors import ErrorCode
+
+    arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.1, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 0.0, 0.8)
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    sample = command("drive.velocity", seq=2, vx=0.1)
+    assert isinstance(sample, VelocityEnvelope)
+    sample.payload.challenge_id = "cloud-token"
+    sample.payload.server_deadline = 100.3
+
+    assert arbiter.accept(sample, 0.05, local_deadline=0.3).accepted
+    assert arbiter.tick(0.09) == Velocity(0.1, 0.0)
+    assert arbiter.tick(0.11) == Velocity(0.0, 0.0)
+    late = sample.model_copy(update={"seq": 3})
+    assert arbiter.accept(late, 0.22, local_deadline=0.3).error is ErrorCode.TIMEOUT
+
+
+def test_same_session_reacquire_retires_old_velocity():
+    arbiter = gate()
+    assert arbiter.accept(command("control.acquire", seq=1), 0.0).accepted
+    assert arbiter.accept(command("drive.velocity", seq=2, vx=0.1), 0.01).accepted
+    assert arbiter.final_command(0.02) is not None
+
+    assert arbiter.accept(command("control.acquire", seq=3), 0.03).accepted
+    assert arbiter.final_command(0.04) is None
+    assert arbiter.accept(command("drive.velocity", seq=4, vx=0.2), 0.05).accepted
+    assert arbiter.tick(0.06) == Velocity(0.2, 0.0)

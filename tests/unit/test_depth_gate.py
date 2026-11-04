@@ -10,10 +10,21 @@ from senior_control.safety.motion_runtime import TimedPoseBuffer, TimedPoseSampl
 
 def evidence(x=0.6316, y=0.00224, z=0.0282):
     return SimpleNamespace(
-        stamp=SimpleNamespace(sec=1, nanosec=0), frame_id="camera_optical_frame",
-        body_frame="base_link", width=3, height=3, row_stride=1, column_stride=1,
-        fx=2.0, fy=4.0, cx=1.0, cy=1.0, min_range_m=0.1, max_range_m=8.0,
-        range_error_m=0.01, sensor_origin=(0.2316, 0.00224, 0.1282),
+        stamp=SimpleNamespace(sec=1, nanosec=0),
+        frame_id="camera_optical_frame",
+        body_frame="base_link",
+        width=3,
+        height=3,
+        row_stride=1,
+        column_stride=1,
+        fx=2.0,
+        fy=4.0,
+        cx=1.0,
+        cy=1.0,
+        min_range_m=0.1,
+        max_range_m=8.0,
+        range_error_m=0.01,
+        sensor_origin=(0.2316, 0.00224, 0.1282),
         optical_to_body_quaternion=(-0.5, 0.5, -0.5, 0.5),
         samples=[SimpleNamespace(u=1, v=2, depth_m=0.4, x=x, y=y, z=z)],
     )
@@ -30,10 +41,17 @@ def evaluate(message, poses=None):
     from senior_control.safety.depth_geometry import evaluate_depth_candidates
 
     return evaluate_depth_candidates(
-        message, history() if poses is None else poses, now=1.1, max_age=0.5,
-        max_reference_lag=0.3, linear_bound=0.3, yaw_bound=0.5, radius=1.0,
+        message,
+        history() if poses is None else poses,
+        now=1.1,
+        max_age=0.5,
+        max_reference_lag=0.3,
+        linear_bound=0.3,
+        yaw_bound=0.5,
+        radius=1.0,
         footprint=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)),
-        collision_z=(-0.06, 0.14), extra_margin=0.3,
+        collision_z=(-0.06, 0.14),
+        extra_margin=0.3,
     )
 
 
@@ -68,15 +86,32 @@ def test_required_depth_is_evaluated_inside_safety_worker_and_never_grants_unpro
 
     profile = DeviceProfile(
         footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
-        self_mask_calibrated=True, braking_deceleration=0.3, lateral_braking_deceleration=0.3,
-        yaw_braking_deceleration=0.5, reaction_time=0.2, hard_margin=0.02,
+        self_mask_calibrated=True,
+        braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
+        yaw_braking_deceleration=0.5,
+        reaction_time=0.2,
+        hard_margin=0.02,
         observation_max_age=0.5,
     )
     work = SafetyWork(
-        Velocity(0.05, 0.0), BodyTwist(0.0, 0.0, 0.0), profile, (), history(),
-        1.1, 10.0, 0.3, 0.3, 0.5, 1.0, False,
-        interval_bounds=IntervalVelocityBounds(0.1, 0.1), physical_cap_qualified=True,
-        depth_required=True, depth_message=evidence(), depth_collision_z=(-0.06, 0.14),
+        Velocity(0.05, 0.0),
+        BodyTwist(0.0, 0.0, 0.0),
+        profile,
+        (),
+        history(),
+        1.1,
+        10.0,
+        0.3,
+        0.3,
+        0.5,
+        1.0,
+        False,
+        interval_bounds=IntervalVelocityBounds(0.1, 0.1),
+        physical_cap_qualified=True,
+        depth_required=True,
+        depth_message=evidence(),
+        depth_collision_z=(-0.06, 0.14),
     )
     result = evaluate_safety_work(work)
     assert not result.decision.allowed and result.decision.reason == "depth_hit"

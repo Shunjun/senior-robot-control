@@ -111,7 +111,9 @@ ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true \
 
 安全路径要求 `/scan` 恰有一个合格发布者。出现多个发布者时立即撤销扫描资格；当前实现会退休原来源，以及歧义期间实际收到回调的来源。歧义消除后，这些已退休的发布者即使重新成为唯一来源也不会自动恢复，须消除重复发布并重建相应驱动发布者，使其获得新的来源身份。持续无效数据不会证明空间安全。来源切换、停机及恢复需在目标部署环境复验。
 
-仿真组合入口 `simulation_motion.launch.py` 包含扫描接收、过滤、匹配、运动融合和安全进程；它要求显式提供车端代理 socket，仿真参数只适用于测试。`safety_motion.launch.py` 要求显式提供已测量、已标定的安全参数文件；仓库目前没有经过资格化的实车制动、覆盖和相机参数。必需深度覆盖不足时安全门保持停车，不能把仿真参数用于真实底盘。
+仿真组合入口 `simulation_motion.launch.py` 包含扫描接收、过滤、匹配、运动融合和安全进程。`simulation_motion.launch.py` 和 `simulation_rgbd.launch.py` 均要求显式传入 `agent_socket`、与车端代理配对一致的 `robot_id`，以及急停状态文件的绝对路径 `safety_state_path`。首次为仿真创建状态文件可执行 `uv run python -m senior_control.safety.initialize_estop --simulation --robot-id <机器人ID> --state <状态文件绝对路径>`。已存在的急停状态会在重启后保留。
+
+`safety_motion.launch.py` 要求显式提供 `robot_id` 和已测量、已标定的 `safety_parameters` 文件。仿真参数只适用于测试。仓库目前没有经过资格化的实车制动、覆盖和相机参数。必需深度覆盖不足时安全门保持停车。
 
 RGB-D 仿真诊断入口 `simulation_rgbd.launch.py` 默认给其子进程设置本地 Fast DDS 传输配置：UDPv4 加 16 MiB 共享内存段。该容量只针对已测的 640×480 仿真相机；实机或其他图像尺寸须重新验证，不适用于 4G 视频传输。使用 `enable_rgbd_transport:=false` 关闭自动配置，或用 `rgbd_transport_profile:=/绝对路径/profile.xml` 选择配置文件。已有非空 Fast DDS 环境变量或工作目录中的默认配置文件优先于启动参数；空环境变量不会关闭自动配置。选择非 Fast DDS RMW 或关闭开关时不加载配置。未指定 RMW 时通过 ROS 查询实际后端，查询失败则报错。所选配置文件必须可读且为格式正确的 XML；Fast DDS 仍负责校验具体配置内容。配置仅针对 Humble 的 Fast DDS 2.x。此设置只影响该启动入口的子进程。
 

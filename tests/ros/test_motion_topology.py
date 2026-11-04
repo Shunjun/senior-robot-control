@@ -76,7 +76,7 @@ def test_duplicate_and_replaced_producers_cannot_restore_old_evidence():
 
 def test_safety_rejects_duplicate_command_producer_and_recovers_with_arbiter():
     rclpy = pytest.importorskip("rclpy")
-    from geometry_msgs.msg import Twist
+    from senior_motion_msgs.msg import FinalCommand
     from senior_robot.command_node import CommandNode
     from senior_robot.safety_node import SafetyGate
 
@@ -89,17 +89,29 @@ def test_safety_rejects_duplicate_command_producer_and_recovers_with_arbiter():
     from senior_control.safety.arbiter import Arbiter
 
     rclpy.init()
-    command = CommandNode(arbiter=Arbiter("robot", 0.2, 30.0, 1.0))
+
+    def new_command_owner():
+        return CommandNode(arbiter=Arbiter("robot", 0.2, 30.0, 1.0))
+
+    command = new_command_owner()
+    final_topic = "/safety/final_command"
     gate = SafetyGate()
     duplicate = None
 
     def spin_until(predicate):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
+            if command is not None:
+                rclpy.spin_once(command, timeout_sec=0.0)
             rclpy.spin_once(gate, timeout_sec=0.02)
             if predicate():
                 return
-        pytest.fail("ROS command producer graph or callback did not converge")
+        endpoints = gate.get_publishers_info_by_topic(final_topic)
+        pytest.fail(
+            "ROS command producer graph or callback did not converge "
+            f"(endpoints={[(e.node_name, bytes(e.endpoint_gid).hex()) for e in endpoints]}, "
+            f"guard_ready={gate._command_topology_ready()}, final={gate._final_identity})"
+        )
 
     def submit(kind, seq, vx=0.0):
         common = dict(
@@ -118,30 +130,66 @@ def test_safety_rejects_duplicate_command_producer_and_recovers_with_arbiter():
         assert command.submit(envelope).accepted
 
     try:
-        spin_until(lambda: len(gate.get_publishers_info_by_topic("/safety/command_in")) == 1)
+        spin_until(lambda: gate._command_topology_ready() and gate._final_identity is not None)
         submit("control.acquire", 1)
         submit("drive.velocity", 2, 0.05)
         spin_until(lambda: gate._command.vx == 0.05)
         duplicate = rclpy.create_node("unexpected_command_producer")
-        publisher = duplicate.create_publisher(Twist, "/safety/command_in", 10)
-        spin_until(lambda: len(gate.get_publishers_info_by_topic("/safety/command_in")) == 2)
-        gate._on_timer()
+        publisher = duplicate.create_publisher(FinalCommand, final_topic, 10)
+        spin_until(
+            lambda: (
+                len(gate.get_publishers_info_by_topic(final_topic)) == 2
+                and not gate._command_topology_ready()
+            )
+        )
         assert gate._command_monotonic is None and gate._command.vx == 0.0
-        injected = Twist()
-        injected.linear.x = 0.2
+        injected = FinalCommand(
+            robot_id="robot",
+            owner_boot_id=command._owner_boot,
+            generation=command._generation,
+            session_id="lease",
+            connection_epoch=1,
+            sequence=3,
+            steady_deadline=time.monotonic() + 0.3,
+            vx=0.2,
+        )
         publisher.publish(injected)
         for _ in range(10):
             rclpy.spin_once(gate, timeout_sec=0.02)
         assert gate._command_monotonic is None and gate._command.vx == 0.0
         duplicate.destroy_node()
         duplicate = None
-        spin_until(lambda: len(gate.get_publishers_info_by_topic("/safety/command_in")) == 1)
+        spin_until(lambda: gate._command_topology_ready())
         submit("drive.velocity", 3, 0.07)
+        for _ in range(10):
+            rclpy.spin_once(gate, timeout_sec=0.02)
+        assert gate._command.vx == 0.0
+
+        command.destroy_node()
+        command = None
+        spin_until(
+            lambda: (
+                not gate.get_publishers_info_by_topic(final_topic)
+                and not gate._command_topology_ready()
+                and gate._final_identity is None
+            )
+        )
+        command = new_command_owner()
+        spin_until(
+            lambda: (
+                gate._command_topology_ready()
+                and gate._final_identity is not None
+                and gate._final_identity[0] == command._owner_boot
+            )
+        )
+        submit("control.acquire", 1)
+        submit("drive.velocity", 2, 0.07)
         spin_until(lambda: gate._command.vx == 0.07)
     finally:
         if duplicate is not None:
             duplicate.destroy_node()
-        command.destroy_node()
+        if command is not None:
+            command.destroy_node()
         gate.destroy_node()
         rclpy.shutdown()
 

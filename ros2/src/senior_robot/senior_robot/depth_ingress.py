@@ -49,7 +49,8 @@ class DepthIngress(Node):
 
     def __init__(self, *, parameter_overrides=None):
         super().__init__(
-            "depth_ingress", parameter_overrides=parameter_overrides or [],
+            "depth_ingress",
+            parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
         self.declare_parameter("body_frame", "base_link")
@@ -93,7 +94,8 @@ class DepthIngress(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._publisher = self.create_publisher(
-            BoundedDepthEvidence, str(self.get_parameter("bounded_depth_topic").value),
+            BoundedDepthEvidence,
+            str(self.get_parameter("bounded_depth_topic").value),
             qos_profile_sensor_data,
         )
         self.create_subscription(
@@ -161,8 +163,9 @@ class DepthIngress(Node):
         ready = ready_depth and ready_info
         if (depth, info, ready) != (self._depth_source, self._info_source, self._ready):
             self._depth_source, self._info_source, self._ready = depth, info, ready
-            self._new_epoch("raw_source_changed", self.get_clock().now().nanoseconds,
-                            time.monotonic())
+            self._new_epoch(
+                "raw_source_changed", self.get_clock().now().nanoseconds, time.monotonic()
+            )
         return ready
 
     def _clock_ok(self, ros_ns, steady):
@@ -186,13 +189,21 @@ class DepthIngress(Node):
         )
         if not accepted:
             if self._capture_group.generation != previous:
-                self._new_epoch(capture.reason or "raw_capture_invalid", capture.received_ros_ns,
-                                capture.received_steady, (stream, message.capture))
+                self._new_epoch(
+                    capture.reason or "raw_capture_invalid",
+                    capture.received_ros_ns,
+                    capture.received_steady,
+                    (stream, message.capture),
+                )
             return None
         lineage = (capture.bridge_boot_id, capture.capture_generation)
         if self._capture_lineage is not None and lineage != self._capture_lineage:
-            self._new_epoch("raw_capture_generation_changed", capture.received_ros_ns,
-                            capture.received_steady, (stream, message.capture))
+            self._new_epoch(
+                "raw_capture_generation_changed",
+                capture.received_ros_ns,
+                capture.received_steady,
+                (stream, message.capture),
+            )
         self._capture_lineage = lineage
         values = self._captures[stream]
         values[capture.stamp_ns] = (capture, message.capture)
@@ -213,12 +224,21 @@ class DepthIngress(Node):
                 raise ValueError("camera_info_size")
             roi = message.roi
             info = CameraInfoFrame(
-                capture.stamp_ns, capture.received_ros_ns, capture.received_steady,
-                capture.frame_id, capture.raw_gid, int(message.width), int(message.height),
-                message.distortion_model, tuple(message.d), tuple(message.k), tuple(message.r),
-                tuple(message.p), int(message.binning_x), int(message.binning_y),
-                (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]),
-                 bool(message.roi_do_rectify)),
+                capture.stamp_ns,
+                capture.received_ros_ns,
+                capture.received_steady,
+                capture.frame_id,
+                capture.raw_gid,
+                int(message.width),
+                int(message.height),
+                message.distortion_model,
+                tuple(message.d),
+                tuple(message.k),
+                tuple(message.r),
+                tuple(message.p),
+                int(message.binning_x),
+                int(message.binning_y),
+                (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]), bool(message.roi_do_rectify)),
             )
             self._buffer.offer_info(info)
             self._drain()
@@ -239,14 +259,24 @@ class DepthIngress(Node):
             size = {"16UC1": 2, "32FC1": 4}.get(str(message.encoding))
             if size is None:
                 raise ValueError("depth_encoding_or_frame")
-            _validate_layout(int(message.width), int(message.height), int(message.step), size,
-                             len(message.data))
+            _validate_layout(
+                int(message.width), int(message.height), int(message.step), size, len(message.data)
+            )
             self._input_sequence += 1
             packet = DepthPacket(
-                stamp_ns, capture.received_ros_ns, capture.received_steady, self._epoch,
-                capture.raw_gid, self._input_sequence, capture.frame_id, int(message.width),
-                int(message.height), int(message.step), str(message.encoding),
-                bool(message.is_bigendian), bytes(message.data),
+                stamp_ns,
+                capture.received_ros_ns,
+                capture.received_steady,
+                self._epoch,
+                capture.raw_gid,
+                self._input_sequence,
+                capture.frame_id,
+                int(message.width),
+                int(message.height),
+                int(message.step),
+                str(message.encoding),
+                bool(message.is_bigendian),
+                bytes(message.data),
             )
             self._buffer.offer_depth(packet)
             self._drain()
@@ -272,13 +302,17 @@ class DepthIngress(Node):
             packet, info = pair
             depth_capture = self._captures["depth"].pop(packet.stamp_ns, None)
             info_capture = self._captures["info"].pop(info.stamp_ns, None)
-            if (depth_capture is None or info_capture is None
-                or not compatible_captures(depth_capture[0], info_capture[0])):
+            if (
+                depth_capture is None
+                or info_capture is None
+                or not compatible_captures(depth_capture[0], info_capture[0])
+            ):
                 self._new_epoch("raw_capture_pair_unqualified", now_ns, steady)
                 continue
             try:
                 tf = self._tf_buffer.lookup_transform(
-                    self._settings.body_frame, packet.frame_id,
+                    self._settings.body_frame,
+                    packet.frame_id,
                     Time.from_msg(_time_msg(packet.stamp_ns)),
                 )
                 t, q = tf.transform.translation, tf.transform.rotation
@@ -319,7 +353,9 @@ class DepthIngress(Node):
         value.column_stride, value.row_stride = profile.column_stride, profile.row_stride
         value.fx, value.fy, value.cx, value.cy = info.k[0], info.k[4], info.k[2], info.k[5]
         value.min_range_m, value.max_range_m, value.range_error_m = (
-            profile.min_range_m, profile.max_range_m, profile.range_error_m
+            profile.min_range_m,
+            profile.max_range_m,
+            profile.range_error_m,
         )
         value.sensor_origin = list(evidence.origin)
         value.optical_to_body_quaternion = list(tf.rotation_xyzw)

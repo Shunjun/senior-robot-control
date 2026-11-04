@@ -11,10 +11,16 @@ wheel transform to relabel a scan into the body frame.
 """
 
 import math
+import socket
+import struct
+import subprocess
 import time
 from collections import deque
+from pathlib import Path
+from types import SimpleNamespace
 
 import rclpy
+from ament_index_python.packages import get_package_prefix
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock as RosClock
@@ -32,6 +38,7 @@ from senior_motion_msgs.msg import (
 
 from senior_control.config import DeviceProfile
 from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.safety.arbiter import FinalCommandFence
 from senior_control.safety.async_guard import (
     BoundedSafetyWorker,
     RawSafetyObservation,
@@ -106,6 +113,8 @@ class SafetyGate(Node):
         self.declare_parameter("max_angular_gap", 0.0)
         self.declare_parameter("no_return_clear", False)
         self.declare_parameter("command_topic", "/safety/command_in")
+        self.declare_parameter("final_command_topic", "/safety/final_command")
+        self.declare_parameter("robot_id", "robot")
         self.declare_parameter("evidence_topic", "/motion/evidence")
         self.declare_parameter("measurement_max_age", -1.0)
         self.declare_parameter("motion_min_quality", -1.0)
@@ -131,6 +140,13 @@ class SafetyGate(Node):
             raise ValueError("simulation_rate_hz must be positive and body_frame nonempty")
         self._command = Velocity(0.0, 0.0)
         self._command_monotonic: float | None = None
+        self._command_deadline = float("-inf")
+        self._final_fence = FinalCommandFence()
+        self._final_identity = None
+        self._guard_socket = None
+        self._guard_process = None
+        self._guard_seen = float("-inf")
+        self._guard_ready = False
         self._measured: BodyTwist | None = None
         self._velocity_interval: IntervalVelocityBounds | None = None
         self._scans: deque[RawSafetyObservation] = deque(maxlen=8)
@@ -169,16 +185,19 @@ class SafetyGate(Node):
             raise ValueError("depth policy must be required or laser_only")
         self._depth_admission = (
             DepthAdmission(max_age_s=scan_age, future_wait_s=min(0.02, scan_age))
-            if scan_age else None
+            if scan_age
+            else None
         )
         self._depth_messages = {}
         self._scan_egress = (
             EgressAdmission(max_age_s=scan_age, hard_limit_s=5.0)
-            if scan_age and scan_age <= 5.0 else None
+            if scan_age and scan_age <= 5.0
+            else None
         )
         self._scan_raw_admission = (
             RawCaptureAdmission(max_age_s=scan_age, hard_limit_s=5.0)
-            if scan_age and scan_age <= 5.0 else None
+            if scan_age and scan_age <= 5.0
+            else None
         )
         self._scan_relay_gid = ""
         self._depth_egress = EgressAdmission(max_age_s=min(scan_age, 1.0)) if scan_age else None
@@ -196,7 +215,8 @@ class SafetyGate(Node):
         self._status_counts: dict[str, int] = {}
         self._last_status = float("-inf")
         self._status_geometry: dict[str, object] = {}
-        self.create_subscription(Twist, command_topic, self._on_command, 10)
+        self._command_topic = str(self.get_parameter("final_command_topic").value)
+        self._start_command_guard()
         evidence_topic = str(self.get_parameter("evidence_topic").value)
         self._evidence_topic = evidence_topic
         if evidence_topic:
@@ -206,7 +226,9 @@ class SafetyGate(Node):
         )
         if self._depth_policy == "required":
             self.create_subscription(
-                FencedDepthEvidence, self._bounded_depth_topic, self._on_depth,
+                FencedDepthEvidence,
+                self._bounded_depth_topic,
+                self._on_depth,
                 qos_profile_sensor_data,
             )
         self.create_timer(
@@ -293,32 +315,136 @@ class SafetyGate(Node):
         self._last_ros = now
         return True
 
-    def _on_command(self, msg: Twist) -> None:
-        if not self._command_topology_ready():
+    def _on_command(self, msg, gid: bytes) -> None:
+        now = time.monotonic()
+        velocity = Velocity(float(msg.vx), float(msg.wz))
+        if (
+            msg.robot_id != str(self.get_parameter("robot_id").value)
+            or (
+                velocity != Velocity(0.0, 0.0) and (not msg.session_id or msg.connection_epoch == 0)
+            )
+            or not self._final_fence.accept(
+                gid,
+                msg.owner_boot_id,
+                msg.generation,
+                msg.sequence,
+                msg.steady_deadline,
+                velocity,
+                now,
+                session=msg.session_id,
+                epoch=msg.connection_epoch,
+            )
+        ):
             return
-        velocity = self._velocity(msg)
-        if velocity is not None:
-            if velocity != self._command:
-                self._command_generation += 1
-            self._command = velocity
-            self._command_monotonic = time.monotonic()
+        identity = (
+            msg.owner_boot_id,
+            msg.generation,
+            msg.session_id,
+            msg.connection_epoch,
+            velocity,
+        )
+        # A fresh sample of the same continuous request keeps existing geometry qualified.
+        if identity != self._final_identity or self._command_deadline <= now < msg.steady_deadline:
+            self._command_generation += 1
+            self._final_identity = identity
+        self._command = velocity
+        self._command_deadline = msg.steady_deadline
+        self._command_monotonic = now
 
     def _command_topology_ready(self) -> bool:
-        endpoints = (
-            self.get_publishers_info_by_topic(self._command_topic) if self._command_topic else []
+        return (
+            self._guard_ready
+            and self._guard_process is not None
+            and self._guard_process.poll() is None
+            and time.monotonic() - self._guard_seen < 0.2
         )
-        ready, changed = self._command_topology.observe(
-            [
-                (endpoint.node_name, endpoint.node_namespace, bytes(endpoint.endpoint_gid))
-                for endpoint in endpoints
-            ]
-        )
-        if changed or not ready:
-            if changed:
-                self._command_generation += 1
+
+    def _start_command_guard(self) -> None:
+        try:
+            executable = (
+                Path(get_package_prefix("senior_motion_msgs"))
+                / "lib/senior_motion_msgs/final_command_guard"
+            )
+            parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            try:
+                process = subprocess.Popen(
+                    [
+                        str(executable),
+                        str(child.fileno()),
+                        str(self.get_parameter("robot_id").value),
+                        self._command_topic,
+                    ],
+                    pass_fds=(child.fileno(),),
+                    close_fds=True,
+                )
+            except BaseException:
+                parent.close()
+                raise
+            finally:
+                child.close()
+            parent.setblocking(False)
+            self._guard_socket, self._guard_process = parent, process
+        except (OSError, LookupError):
+            self.get_logger().error("final command guard unavailable; motion disabled")
+
+    def _poll_command_guard(self) -> None:
+        channel = self._guard_socket
+        if channel is None:
+            return
+        layout = struct.Struct("!B24s129s129s129sQQQddd")
+        try:
+            for _ in range(64):
+                try:
+                    packet = channel.recv(layout.size + 1)
+                except BlockingIOError:
+                    return
+                if len(packet) != layout.size:
+                    raise ValueError("invalid guard frame")
+                kind, gid, robot, boot, session, generation, epoch, sequence, deadline, vx, wz = (
+                    layout.unpack(packet)
+                )
+                if kind not in (0, 1, 2):
+                    raise ValueError("invalid guard frame type")
+                publisher = gid if any(gid) else None
+                self._final_fence.set_publisher(publisher)
+                self._guard_seen = time.monotonic()
+                if kind == 0:
+                    self._guard_ready = False
+                    self._command_generation += 1
+                    self._command = Velocity(0.0, 0.0)
+                    self._command_monotonic = None
+                    self._command_deadline = float("-inf")
+                    self._final_identity = None
+                elif kind == 2:
+                    self._guard_ready = publisher is not None
+                else:
+
+                    def decode(value):
+                        return value.split(b"\0", 1)[0].decode("utf-8", errors="strict")
+
+                    msg = SimpleNamespace(
+                        robot_id=decode(robot),
+                        owner_boot_id=decode(boot),
+                        session_id=decode(session),
+                        generation=generation,
+                        connection_epoch=epoch,
+                        sequence=sequence,
+                        steady_deadline=deadline,
+                        vx=vx,
+                        wz=wz,
+                    )
+                    self._on_command(msg, gid)
+            raise ValueError("guard queue overflow")
+        except (OSError, ValueError, UnicodeError):
+            self._guard_ready = False
+            self._final_fence.set_publisher(None)
             self._command = Velocity(0.0, 0.0)
             self._command_monotonic = None
-        return ready
+            self._command_deadline = float("-inf")
+            channel.close()
+            self._guard_socket = None
+            if self._guard_process is not None:
+                self._guard_process.terminate()
 
     def _topology_ready(self) -> bool:
         if not self._evidence_topic:
@@ -505,9 +631,7 @@ class SafetyGate(Node):
         ready, changed = self._scan_topology.observe(
             [(item.node_name, item.node_namespace, bytes(item.endpoint_gid)) for item in endpoints]
         )
-        self._scan_relay_gid = (
-            bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
-        )
+        self._scan_relay_gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
         if self._scan_egress is None:
             ready = False
         else:
@@ -522,8 +646,12 @@ class SafetyGate(Node):
         return ready
 
     def _on_scan(self, envelope: FencedSafetyScan) -> None:
-        if (not self._scan_topology_ready() or self._freshness is None
-            or self._scan_egress is None or self._scan_raw_admission is None):
+        if (
+            not self._scan_topology_ready()
+            or self._freshness is None
+            or self._scan_egress is None
+            or self._scan_raw_admission is None
+        ):
             return
         try:
             owner = egress_from_message(envelope.owner)
@@ -540,17 +668,26 @@ class SafetyGate(Node):
             ros_ns, steady = self.get_clock().now().nanoseconds, time.monotonic()
             endpoints = self.get_publishers_info_by_topic(self._raw_scan_topic)
             bridge_gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
-            capture = safety_scan_capture(msg, bridge_gid=bridge_gid, now_ros_ns=ros_ns,
-                                          now_steady=steady, max_age_s=self._freshness.max_age)
-            if (owner.owner_epoch != msg.source_epoch or owner.owner_sequence != msg.sequence
-                or capture is None):
+            capture = safety_scan_capture(
+                msg,
+                bridge_gid=bridge_gid,
+                now_ros_ns=ros_ns,
+                now_steady=steady,
+                max_age_s=self._freshness.max_age,
+            )
+            if (
+                owner.owner_epoch != msg.source_epoch
+                or owner.owner_sequence != msg.sequence
+                or capture is None
+            ):
                 self._scan_generation += 1
                 self._clear_scan()
                 self._approved = None
                 return
             before = self._scan_raw_admission.generation
-            if not self._scan_raw_admission.offer(capture, bridge_gid=bridge_gid,
-                                                  now_ros_ns=ros_ns, now_steady=steady):
+            if not self._scan_raw_admission.offer(
+                capture, bridge_gid=bridge_gid, now_ros_ns=ros_ns, now_steady=steady
+            ):
                 if self._scan_raw_admission.generation != before:
                     self._scan_generation += 1
                     self._clear_scan()
@@ -639,8 +776,15 @@ class SafetyGate(Node):
             transform_stamp = Time.from_msg(msg.transform_stamp).nanoseconds
             age = self._depth_admission.max_age_s
             scalars = (
-                msg.fx, msg.fy, msg.cx, msg.cy, msg.min_range_m, msg.max_range_m,
-                msg.range_error_m, msg.camera_info_received_steady, *msg.sensor_origin,
+                msg.fx,
+                msg.fy,
+                msg.cx,
+                msg.cy,
+                msg.min_range_m,
+                msg.max_range_m,
+                msg.range_error_m,
+                msg.camera_info_received_steady,
+                *msg.sensor_origin,
                 *msg.optical_to_body_quaternion,
             )
             return (
@@ -658,12 +802,15 @@ class SafetyGate(Node):
                 and msg.column_stride > 0
                 and 1 <= len(msg.samples) <= 8192
                 and all(math.isfinite(value) for value in scalars)
-                and msg.fx > 0 and msg.fy > 0
-                and 0 <= msg.cx <= msg.width and 0 <= msg.cy <= msg.height
+                and msg.fx > 0
+                and msg.fy > 0
+                and 0 <= msg.cx <= msg.width
+                and 0 <= msg.cy <= msg.height
                 and 0 < msg.min_range_m < msg.max_range_m <= 100
                 and msg.range_error_m > 0
                 and abs(sum(v * v for v in msg.optical_to_body_quaternion) - 1.0) <= 0.001
-                and stamp > 0 and info_stamp == stamp
+                and stamp > 0
+                and info_stamp == stamp
                 and 0 <= ros_ns - info_receipt <= age * 1e9
                 and 0 <= steady - msg.camera_info_received_steady <= age
                 and (msg.transform_static or 0 <= stamp - transform_stamp <= age * 1e9)
@@ -700,34 +847,55 @@ class SafetyGate(Node):
                         admission.retire()
                     else:
                         body = envelope.body
-                        admission.accept(DepthHeader(
-                            owner.owner_epoch, body.raw_source, owner.owner_sequence,
-                            Time.from_msg(body.stamp).nanoseconds,
-                            Time.from_msg(body.received_ros).nanoseconds,
-                            body.received_steady, body.frame_id, body.calibration_id, False,
-                        ), now_ros_ns=ros_ns, now_steady=steady)
+                        admission.accept(
+                            DepthHeader(
+                                owner.owner_epoch,
+                                body.raw_source,
+                                owner.owner_sequence,
+                                Time.from_msg(body.stamp).nanoseconds,
+                                Time.from_msg(body.received_ros).nanoseconds,
+                                body.received_steady,
+                                body.frame_id,
+                                body.calibration_id,
+                                False,
+                            ),
+                            now_ros_ns=ros_ns,
+                            now_steady=steady,
+                        )
                     self._depth_messages.clear()
                     self._approved = None
                     self._publish(Velocity(0.0, 0.0), "depth_observation_invalid")
                 return
             msg = envelope.body
+
             def bridge_gid(topic: str) -> str:
                 endpoints = self.get_publishers_info_by_topic(topic)
                 return bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
 
             captures = depth_capture_headers(
-                msg, depth_gid=bridge_gid(self._raw_depth_topic),
+                msg,
+                depth_gid=bridge_gid(self._raw_depth_topic),
                 info_gid=bridge_gid(self._raw_depth_info_topic),
-                now_ros_ns=ros_ns, now_steady=steady, max_age_s=admission.max_age_s,
+                now_ros_ns=ros_ns,
+                now_steady=steady,
+                max_age_s=admission.max_age_s,
             )
-            valid = (owner.owner_epoch == msg.source_epoch
-                     and owner.owner_sequence == msg.sequence and captures is not None
-                     and self._depth_shape_valid(msg, ros_ns, steady))
+            valid = (
+                owner.owner_epoch == msg.source_epoch
+                and owner.owner_sequence == msg.sequence
+                and captures is not None
+                and self._depth_shape_valid(msg, ros_ns, steady)
+            )
             header = DepthHeader(
-                msg.source_epoch, msg.raw_source, int(msg.sequence),
+                msg.source_epoch,
+                msg.raw_source,
+                int(msg.sequence),
                 Time.from_msg(msg.stamp).nanoseconds,
                 Time.from_msg(msg.received_ros).nanoseconds,
-                msg.received_steady, msg.frame_id, msg.calibration_id, valid,
+                msg.received_steady,
+                msg.frame_id,
+                msg.calibration_id,
+                valid,
             )
             generation = admission.generation
             admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)
@@ -765,7 +933,22 @@ class SafetyGate(Node):
             and self._depth_admission.generation == generation
         )
 
-    def _publish(self, velocity: Velocity, reason: str) -> None:
+    def _publish(
+        self, velocity: Velocity, reason: str, *, ticket: SafetyTicket | None = None
+    ) -> None:
+        self._poll_command_guard()
+        if velocity != Velocity(0.0, 0.0) and (
+            ticket is None
+            or ticket.command_generation != self._command_generation
+            or ticket.command != self._command
+            or ticket.command != velocity
+            or not self._command_topology_ready()
+            or not self._final_fence.usable(time.monotonic())
+            or self.get_clock().now().nanoseconds / 1e9 > ticket.ros_deadline
+            or time.monotonic() >= ticket.steady_deadline
+        ):
+            velocity = Velocity(0.0, 0.0)
+            reason = "command_fence_expired"
         twist = Twist()
         twist.linear.x = velocity.vx
         twist.angular.z = velocity.wz
@@ -826,6 +1009,7 @@ class SafetyGate(Node):
 
     def _on_timer(self) -> None:
         self._status_geometry = {}
+        self._poll_command_guard()
         command_ready = self._command_topology_ready()
         if not self._topology_ready():
             self._publish(Velocity(0.0, 0.0), "evidence_topology_unqualified")
@@ -837,7 +1021,10 @@ class SafetyGate(Node):
             self._publish(Velocity(0.0, 0.0), "scan_topology_unqualified")
             return
         ttl = _positive(float(self.get_parameter("command_ttl_seconds").value))
-        if command_expired(self._command_monotonic, time.monotonic(), ttl):
+        if (
+            command_expired(self._command_monotonic, time.monotonic(), ttl)
+            or time.monotonic() >= self._command_deadline
+        ):
             self._approved = None
             self._publish(Velocity(0.0, 0.0), "command_expired")
             return
@@ -966,9 +1153,7 @@ class SafetyGate(Node):
                     self._command_topology_ready()
                     and self._topology_ready()
                     and self._scan_topology_ready()
-                    and self._depth_still_usable(
-                        depth_generation, current_ros_ns, current_steady
-                    )
+                    and self._depth_still_usable(depth_generation, current_ros_ns, current_steady)
                     and ticket.permits(
                         command_generation=self._command_generation,
                         scan_generation=self._scan_generation,
@@ -1020,9 +1205,7 @@ class SafetyGate(Node):
                         self._command_topology_ready()
                         and self._topology_ready()
                         and self._scan_topology_ready()
-                        and self._depth_still_usable(
-                            depth_generation, final_ros_ns, final_steady
-                        )
+                        and self._depth_still_usable(depth_generation, final_ros_ns, final_steady)
                         and ticket.permits(
                             command_generation=self._command_generation,
                             scan_generation=self._scan_generation,
@@ -1045,7 +1228,9 @@ class SafetyGate(Node):
                             )
                         )
                     ):
-                        self._publish(result.decision.velocity, result.decision.reason)
+                        self._publish(
+                            result.decision.velocity, result.decision.reason, ticket=ticket
+                        )
                         return
                 self._worker_discarded += 1
                 self._worker_last_result = (
@@ -1096,6 +1281,7 @@ class SafetyGate(Node):
                     fixed_deadline = min(fixed_deadline, scan_deadline)
             deadline_steady = min(
                 self._command_monotonic + ttl,
+                self._command_deadline,
                 self._freshness.scan_received + self._freshness.max_age,
                 self._freshness.measured_received + self._freshness.max_age,
                 time_reference + remaining,
@@ -1158,6 +1344,16 @@ class SafetyGate(Node):
 
     def destroy_node(self):
         self._worker.close()
+        if self._guard_socket is not None:
+            self._guard_socket.close()
+            self._guard_socket = None
+        if self._guard_process is not None:
+            self._guard_process.terminate()
+            try:
+                self._guard_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self._guard_process.kill()
+                self._guard_process.wait(timeout=1.0)
         return super().destroy_node()
 
 

@@ -1,0 +1,211 @@
+#include "bounded_scan_ingress.hpp"
+
+#include "scan_receipt_admission.hpp"
+#include "static_lidar_tf_ingress.hpp"
+
+#include <utility>
+
+namespace senior_slam_bridge
+{
+namespace
+{
+using namespace std::chrono_literals;
+using Receipt = BoundedScanIngress::Receipt;
+using Message = senior_motion_msgs::msg::BoundedRawLaserScan;
+constexpr std::size_t pending_limit = 8;
+using scan_receipt_admission::fresh;
+using scan_receipt_admission::gid_hex;
+using scan_receipt_admission::layout_ok;
+using scan_receipt_admission::same_source;
+using scan_receipt_admission::steady_seconds;
+using scan_receipt_admission::text_ok;
+using scan_receipt_admission::time_ns;
+using scan_receipt_admission::unique_scan_owner;
+
+bool same_geometry(const Message & lhs, const Message & rhs)
+{
+  return lhs.angle_min == rhs.angle_min && lhs.angle_max == rhs.angle_max &&
+         lhs.angle_increment == rhs.angle_increment && lhs.range_min == rhs.range_min &&
+         lhs.range_max == rhs.range_max && lhs.ranges.size() == rhs.ranges.size();
+}
+}  // namespace
+
+BoundedScanIngress::BoundedScanIngress(
+  rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
+  std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
+  StaticLidarTfIngress * static_lidar_tf)
+: node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
+  raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
+  base_frame_(std::move(base_frame)), submit_(std::move(submit)),
+  static_lidar_tf_(static_lidar_tf)
+{
+  subscription_ = node_.create_subscription<Message>(
+    bounded_topic_, rclcpp::SensorDataQoS().keep_last(pending_limit),
+    [this](Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info) {
+      offer(std::move(scan), info);
+    });
+  timer_ = node_.create_wall_timer(20ms, [this] {poll();});
+}
+
+bool BoundedScanIngress::observe_clock(std::int64_t now)
+{
+  if (closed_) {
+    return false;
+  }
+  if (now < last_ros_ || (now == 0 && source_)) {
+    retire_source();
+    return false;
+  }
+  last_ros_ = now;
+  return now > 0;
+}
+
+void BoundedScanIngress::retire_source()
+{
+  closed_ = true;
+  pending_.clear();
+}
+
+bool BoundedScanIngress::current_owner(const Receipt & receipt)
+{
+  const auto owner = unique_scan_owner(node_, bounded_topic_, raw_topic_);
+  return owner && owner->matches(receipt);
+}
+
+bool BoundedScanIngress::source_active()
+{
+  if (!observe_clock(node_.now().nanoseconds()) || !source_) {
+    return false;
+  }
+  if (!current_owner(source_->capture)) {
+    retire_source();
+    return false;
+  }
+  return !static_lidar_tf_ || static_lidar_tf_->source_active();
+}
+
+void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
+{
+  const auto now_ros = node_.now().nanoseconds();
+  if (!observe_clock(now_ros)) {
+    return;
+  }
+  if (source_ && !current_owner(source_->capture)) {
+    retire_source();
+    return;
+  }
+  const auto & receipt = scan->capture;
+  const auto actual = gid_hex(info.get_rmw_message_info().publisher_gid.data);
+  if (actual.empty() || actual != receipt.bridge_gid) {
+    return;
+  }
+  if (source_) {
+    const auto & previous = source_->capture;
+    if (actual != previous.bridge_gid) {
+      // A new DDS writer can deliver a message before it appears in the graph.
+      return;
+    }
+    if (previous.bridge_boot_id == receipt.bridge_boot_id &&
+      (receipt.capture_generation < previous.capture_generation ||
+      (receipt.capture_generation == previous.capture_generation &&
+      receipt.source_epoch == previous.source_epoch && receipt.sequence <= last_sequence_)))
+    {
+      return;
+    }
+    if (!same_source(previous, receipt)) {
+      // An authoritative bridge transition cannot silently change an active map source.
+      retire_source();
+      return;
+    }
+  }
+  if (receipt.sequence <= last_sequence_ || receipt.capture_generation == 0) {
+    return;
+  }
+  if (!receipt.valid) {
+    if (source_) {
+      retire_source();
+    }
+    return;
+  }
+  if (!current_owner(receipt) || !text_ok(receipt.bridge_boot_id) ||
+    !text_ok(receipt.source_epoch) || !text_ok(receipt.frame_id) ||
+    !fresh(receipt, now_ros, steady_seconds()) || !layout_ok(*scan) ||
+    (static_lidar_tf_ && !static_lidar_tf_->admits(receipt)))
+  {
+    return;
+  }
+  const auto stamp = time_ns(receipt.stamp);
+  if (source_ && !same_geometry(*source_, *scan)) {
+    retire_source();
+    return;
+  }
+  // Sequence is the identity. The stamp is only a TF/temporal admission fence.
+  last_sequence_ = receipt.sequence;
+  if (stamp <= last_stamp_) {
+    return;
+  }
+  last_stamp_ = stamp;
+  if (!source_) {
+    source_ = scan;
+  }
+  if (pending_.size() < pending_limit) {
+    pending_.push_back(std::move(scan));
+  }
+}
+
+void BoundedScanIngress::poll()
+{
+  if (!source_active()) {
+    return;
+  }
+  const auto now_ros = node_.now().nanoseconds();
+  const auto now_steady = steady_seconds();
+  while (!pending_.empty() && !fresh(pending_.front()->capture, now_ros, now_steady)) {
+    pending_.pop_front();
+  }
+  if (pending_.empty()) {
+    return;
+  }
+  const auto input = pending_.front();
+  const auto & receipt = input->capture;
+  const auto stamp = rclcpp::Time(receipt.stamp, node_.get_clock()->get_clock_type());
+  if (!tf_.canTransform(odom_frame_, base_frame_, stamp) ||
+    !tf_.canTransform(base_frame_, receipt.frame_id, stamp))
+  {
+    return;
+  }
+  LaserTransform mount;
+  try {
+    const auto exact = tf_.lookupTransform(base_frame_, receipt.frame_id, stamp).transform;
+    mount = {
+      exact.translation.x, exact.translation.y, exact.translation.z,
+      exact.rotation.x, exact.rotation.y, exact.rotation.z, exact.rotation.w};
+  } catch (const tf2::TransformException &) {
+    return;
+  }
+  if (!source_active() ||
+    !fresh(receipt, node_.now().nanoseconds(), steady_seconds()))
+  {
+    return;
+  }
+  auto static_receipt = static_lidar_tf_ ? static_lidar_tf_->verify_mount(receipt, mount) : nullptr;
+  if (static_lidar_tf_ && !static_receipt) {
+    retire_source();
+    return;
+  }
+  pending_.pop_front();
+  auto scan = std::make_shared<Scan>();
+  scan->header.stamp = receipt.stamp;
+  scan->header.frame_id = receipt.frame_id;
+  scan->angle_min = input->angle_min;
+  scan->angle_max = input->angle_max;
+  scan->angle_increment = input->angle_increment;
+  scan->time_increment = input->time_increment;
+  scan->scan_time = input->scan_time;
+  scan->range_min = input->range_min;
+  scan->range_max = input->range_max;
+  scan->ranges.assign(input->ranges.begin(), input->ranges.end());
+  scan->intensities.assign(input->intensities.begin(), input->intensities.end());
+  submit_(std::move(scan), input, mount, std::move(static_receipt));
+}
+}  // namespace senior_slam_bridge

@@ -34,6 +34,25 @@ def test_nav2_launch_config_keeps_recovery_output_before_arbitration():
     )
 
 
+def test_nav2_humble_uses_project_through_poses_tree():
+    from xml.etree import ElementTree
+
+    package = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot"
+    config = yaml.safe_load((package / "config/nav2.yaml").read_text(encoding="utf-8"))
+    navigator = config["bt_navigator"]["ros__parameters"]
+    assert "nav2_compute_path_through_poses_action_bt_node" in navigator["plugin_lib_names"]
+    path = package / "behavior_trees" / navigator["default_nav_through_poses_bt_xml"]
+    sequence = ElementTree.parse(path).find("./BehaviorTree/Sequence")
+    assert sequence is not None
+    assert [child.tag for child in sequence] == ["ComputePathThroughPoses", "FollowPath"]
+    assert sequence[0].attrib == {
+        "goals": "{goals}",
+        "path": "{path}",
+        "planner_id": "GridBased",
+    }
+    assert sequence[1].attrib == {"path": "{path}", "controller_id": "FollowPath"}
+
+
 def test_navigation_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
     from senior_robot.navigation_adapter import SAFETY_COMMAND_TOPIC, create_navigation_node
@@ -52,4 +71,175 @@ def test_navigation_node_does_not_publish_cmd_vel():
     finally:
         if node is not None:
             node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
+    """Verify actual Humble lifecycle and loaded plugins without a simulator."""
+    import os
+    import signal
+    import subprocess
+    import time
+    from collections import deque
+    from contextlib import suppress
+
+    if os.environ.get("NAV2_TEST_INSTALLED_LAUNCH") != "1":
+        pytest.skip("installed Nav2 bringup not selected")
+    if os.environ.get("ROS_LOCALHOST_ONLY") != "1" or not os.environ.get("ROS_DOMAIN_ID"):
+        pytest.fail("set ROS_LOCALHOST_ONLY=1 and an isolated ROS_DOMAIN_ID for the probe")
+
+    import rclpy
+    from geometry_msgs.msg import TransformStamped
+    from lifecycle_msgs.msg import State
+    from lifecycle_msgs.srv import GetState
+    from nav_msgs.msg import OccupancyGrid
+    from rcl_interfaces.srv import GetParameters
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+
+    rclpy.init()
+    probe = rclpy.create_node("senior_nav2_bringup_probe")
+    qos = QoSProfile(
+        depth=1,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        reliability=ReliabilityPolicy.RELIABLE,
+    )
+    map_pub = probe.create_publisher(OccupancyGrid, "/map", qos)
+    transform_pub = StaticTransformBroadcaster(probe)
+    received = deque(maxlen=4)
+    costmap_sub = probe.create_subscription(
+        OccupancyGrid, "/global_costmap/costmap", received.append, qos
+    )
+    assert costmap_sub is not None
+
+    stamp = probe.get_clock().now().to_msg()
+    transforms = []
+    for parent, child in (("map", "odom"), ("odom", "base_link")):
+        transform = TransformStamped()
+        transform.header.frame_id, transform.child_frame_id = parent, child
+        transform.header.stamp = stamp
+        transform.transform.rotation.w = 1.0
+        transforms.append(transform)
+    transform_pub.sendTransform(transforms)
+
+    occupancy = OccupancyGrid()
+    occupancy.header.stamp = stamp
+    occupancy.header.frame_id = "map"
+    occupancy.info.resolution = 0.05
+    occupancy.info.width = occupancy.info.height = 80
+    occupancy.info.origin.position.x = occupancy.info.origin.position.y = -2.0
+    occupancy.info.origin.orientation.w = 1.0
+    occupied_cell = 60 * occupancy.info.width + 60
+    occupancy.data = [0] * (occupancy.info.width * occupancy.info.height)
+    occupancy.data[occupied_cell] = 100
+    map_pub.publish(occupancy)
+
+    managed = ("controller_server", "planner_server", "bt_navigator")
+    state_clients = {name: probe.create_client(GetState, f"/{name}/get_state") for name in managed}
+    parameters = {
+        "controller_server": {"FollowPath.plugin": "nav2_mppi_controller::MPPIController"},
+        "planner_server": {
+            "GridBased.plugin": "nav2_smac_planner/SmacPlannerLattice",
+            "GridBased.lattice_filepath": "lattice_diff.json",
+        },
+        "bt_navigator": {
+            "default_nav_to_pose_bt_xml": "navigate.xml",
+            "default_nav_through_poses_bt_xml": "navigate_through_poses.xml",
+        },
+    }
+    parameter_clients = {
+        name: probe.create_client(GetParameters, f"/{name}/get_parameters") for name in parameters
+    }
+
+    log_path = tmp_path / "nav2-launch.log"
+    try:
+        with log_path.open("w") as log:
+            process = subprocess.Popen(
+                ["ros2", "launch", "senior_robot", "navigation.launch.py", "use_sim_time:=false"],
+                start_new_session=True,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                states = {}
+                pending = {}
+                map_ready = False
+                deadline = time.monotonic() + 30.0
+                while time.monotonic() < deadline and process.poll() is None:
+                    assert not probe.get_publishers_info_by_topic("/cmd_vel"), log_path.read_text()
+                    for name, client in state_clients.items():
+                        future = pending.get(name)
+                        if future is not None and future.done():
+                            states[name] = future.result().current_state.id
+                            del pending[name]
+                        if name not in pending and client.service_is_ready():
+                            pending[name] = client.call_async(GetState.Request())
+                    map_ready = any(
+                        grid.header.frame_id == "map"
+                        and grid.info.width == occupancy.info.width
+                        and grid.info.height == occupancy.info.height
+                        and len(grid.data) > occupied_cell
+                        and grid.data[occupied_cell] == 100
+                        for grid in received
+                    )
+                    if map_ready and all(
+                        states.get(name) == State.PRIMARY_STATE_ACTIVE for name in managed
+                    ):
+                        break
+                    rclpy.spin_once(probe, timeout_sec=0.05)
+                assert process.poll() is None, log_path.read_text()
+                assert all(states.get(name) == State.PRIMARY_STATE_ACTIVE for name in managed), (
+                    states,
+                    log_path.read_text(),
+                )
+                assert map_ready, log_path.read_text()
+
+                for name, expected in parameters.items():
+                    client = parameter_clients[name]
+                    assert client.wait_for_service(timeout_sec=2.0), name
+                    request = GetParameters.Request(names=list(expected))
+                    future = client.call_async(request)
+                    rclpy.spin_until_future_complete(probe, future, timeout_sec=2.0)
+                    assert future.done(), name
+                    values = [value.string_value for value in future.result().values]
+                    assert len(values) == len(expected), name
+                    for (parameter, wanted), actual in zip(expected.items(), values, strict=True):
+                        if parameter.endswith(("filepath", "_xml")):
+                            assert Path(actual).name == wanted and Path(actual).is_file(), actual
+                        else:
+                            assert actual == wanted, (name, parameter, actual)
+
+                expected_owners = {
+                    "/control/navigation_cmd": {"controller_server"},
+                    "/control/recovery_cmd": {"navigation_adapter"},
+                }
+                publishers = {}
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline and process.poll() is None:
+                    assert not probe.get_publishers_info_by_topic("/cmd_vel"), log_path.read_text()
+                    publishers = {
+                        topic: {
+                            endpoint.node_name
+                            for endpoint in probe.get_publishers_info_by_topic(topic)
+                        }
+                        for topic in expected_owners
+                    }
+                    if publishers == expected_owners:
+                        break
+                    rclpy.spin_once(probe, timeout_sec=0.05)
+                assert process.poll() is None, log_path.read_text()
+                assert publishers == expected_owners, (publishers, log_path.read_text())
+                assert not probe.get_publishers_info_by_topic("/cmd_vel"), log_path.read_text()
+
+                os.kill(process.pid, signal.SIGINT)
+                assert process.wait(timeout=12.0) == 0, log_path.read_text()
+                assert "process has died" not in log_path.read_text(), log_path.read_text()
+                with pytest.raises(ProcessLookupError):
+                    os.killpg(process.pid, 0)
+            finally:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5.0)
+    finally:
+        probe.destroy_node()
         rclpy.shutdown()

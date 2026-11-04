@@ -121,6 +121,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
     const offStatus = link.subscribeStatus((status) => {
       if (cancelled || status.robotId !== robot.id || status.state !== "closed") return;
       setLinkState("closed");
+      setSnapshot((previous) => previous === null ? null : { ...previous, stale: true, connected: false });
       setCloseCode(status.closeCode);
       lost.current();
     });
@@ -140,6 +141,10 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
     };
   }, [link, robot.id, attempt]);
 
+  const presence = linkState !== "open" || snapshot === null || snapshot.stale
+    ? "unknown"
+    : snapshot.connected ? "online" : "offline";
+
   return (
     <>
     <article className={styles.panel}>
@@ -149,9 +154,9 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
           <h2 className={styles.panelTitle}>{robot.name}</h2>
         </div>
         <span
-          className={`${styles.presence} ${robot.online ? styles.presenceOnline : styles.presenceOffline}`}
+          className={`${styles.presence} ${presence === "unknown" ? styles.presenceUnknown : presence === "online" ? styles.presenceOnline : styles.presenceOffline}`}
         >
-          {robot.online ? "在线" : "离线"}
+          {presence === "unknown" ? "状态未知" : presence === "online" ? "在线" : "离线"}
         </span>
       </header>
 

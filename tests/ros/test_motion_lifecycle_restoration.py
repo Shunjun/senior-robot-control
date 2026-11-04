@@ -17,8 +17,9 @@ def test_library_run_restores_sigint_and_propagates_live_failures(monkeypatch, m
     monkeypatch.setattr(lifecycle.rclpy, "init", lambda: events.append("init"))
     monkeypatch.setattr(lifecycle.rclpy, "try_shutdown", lambda: events.append("shutdown"))
     monkeypatch.setattr(lifecycle.rclpy, "ok", lambda: True)
-    monkeypatch.setattr(lifecycle, "SingleThreadedExecutor",
-                        lambda: SimpleNamespace(shutdown=lambda: None))
+    monkeypatch.setattr(
+        lifecycle, "SingleThreadedExecutor", lambda: SimpleNamespace(shutdown=lambda: None)
+    )
     monkeypatch.setattr(lifecycle.rclpy.signals, "uninstall_signal_handlers", lambda: None)
 
     def spin(_node, *, executor):
@@ -54,8 +55,9 @@ def test_cli_mode_does_not_swallow_a_live_runtime_failure(monkeypatch):
     monkeypatch.setattr(lifecycle.rclpy, "init", lambda **_: None)
     monkeypatch.setattr(lifecycle.rclpy, "try_shutdown", lambda: events.append("shutdown"))
     monkeypatch.setattr(lifecycle.rclpy, "ok", lambda: True)
-    monkeypatch.setattr(lifecycle, "SingleThreadedExecutor",
-                        lambda: SimpleNamespace(shutdown=lambda: None))
+    monkeypatch.setattr(
+        lifecycle, "SingleThreadedExecutor", lambda: SimpleNamespace(shutdown=lambda: None)
+    )
     monkeypatch.setattr(lifecycle.rclpy.signals, "uninstall_signal_handlers", lambda: None)
     monkeypatch.setattr(lifecycle.rclpy.signals, "install_signal_handlers", lambda _: None)
 
@@ -79,7 +81,7 @@ def test_context_shutdown_between_factory_and_spin_cleans_up_without_global_exec
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import rclpy
 from rclpy.node import Node
 from senior_robot.motion_lifecycle import run
@@ -91,9 +93,10 @@ def factory():
 
 run(factory)
 print("SHUTDOWN_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SHUTDOWN_COMPLETE" in result.stdout
     assert "Traceback" not in result.stderr
@@ -106,8 +109,11 @@ def test_factory_cleans_partial_resources_before_reraising_interrupt(monkeypatch
     events = []
     monkeypatch.setattr(lifecycle.rclpy, "init", lambda: None)
     monkeypatch.setattr(lifecycle.rclpy, "try_shutdown", lambda: events.append("shutdown"))
-    monkeypatch.setattr(lifecycle, "SingleThreadedExecutor",
-                        lambda: SimpleNamespace(shutdown=lambda: events.append("executor_closed")))
+    monkeypatch.setattr(
+        lifecycle,
+        "SingleThreadedExecutor",
+        lambda: SimpleNamespace(shutdown=lambda: events.append("executor_closed")),
+    )
 
     def factory():
         try:
@@ -121,11 +127,17 @@ def test_factory_cleans_partial_resources_before_reraising_interrupt(monkeypatch
     assert events == ["resource_created", "factory_closed_resource", "executor_closed", "shutdown"]
 
 
-@pytest.mark.parametrize(("module", "class_name"), [
-    ("scan_adapter", "ScanAdapter"), ("safety_node", "SafetyGate"),
-    ("motion_fusion", "MotionFusion"), ("safety_scan_ingress", "SafetyScanIngress"),
-    ("depth_ingress", "DepthIngress"), ("semantic_ingress", "SemanticIngress"),
-])
+@pytest.mark.parametrize(
+    ("module", "class_name"),
+    [
+        ("scan_adapter", "ScanAdapter"),
+        ("safety_node", "SafetyGate"),
+        ("motion_fusion", "MotionFusion"),
+        ("safety_scan_ingress", "SafetyScanIngress"),
+        ("depth_ingress", "DepthIngress"),
+        ("semantic_ingress", "SemanticIngress"),
+    ],
+)
 def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkeypatch):
     import importlib
     import multiprocessing.process
@@ -135,14 +147,26 @@ def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkey
 
     values = {}
     if module == "motion_fusion":
-        values = dict(sensor_max_age=0.8, alignment_max_gap=0.25, pending_wait=0.25,
-                      max_variance=0.1, min_quality=0.3, max_yaw_error=0.1,
-                      startup_window=0.6, wheel_motion_limit=0.004, stall_distance=0.04,
-                      lateral_limit=0.04, yaw_limit=0.12)
+        values = dict(
+            sensor_max_age=0.8,
+            alignment_max_gap=0.25,
+            pending_wait=0.25,
+            max_variance=0.1,
+            min_quality=0.3,
+            max_yaw_error=0.1,
+            startup_window=0.6,
+            wheel_motion_limit=0.004,
+            stall_distance=0.04,
+            lateral_limit=0.04,
+            yaw_limit=0.12,
+        )
     elif module == "depth_ingress":
         values = dict(min_range_m=0.1, max_range_m=8.0, range_error_m=0.01, max_age_s=0.5)
-    monkeypatch.setattr(multiprocessing.process.BaseProcess, "start",
-                        lambda _: pytest.fail("constructor started a process"))
+    monkeypatch.setattr(
+        multiprocessing.process.BaseProcess,
+        "start",
+        lambda _: pytest.fail("constructor started a process"),
+    )
     rclpy.init()
     node = None
     try:
@@ -167,7 +191,7 @@ def test_second_sigint_during_first_interrupt_matching_finishes_cleanup(first_mo
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import inspect
 import faulthandler
 import signal
@@ -195,16 +219,20 @@ sys.settrace(trace)
 lifecycle.run(lambda: Node("double_signal_boundary"), cli=True)
 sys.settrace(None)
 print("SHUTDOWN_COMPLETE", flush=True)
-'''
-    first = ('''print("SIGINT_FIRST", flush=True)
+"""
+    first = (
+        """print("SIGINT_FIRST", flush=True)
     signal.raise_signal(signal.SIGINT)
     print("SIGINT_SECOND", flush=True)
     signal.raise_signal(signal.SIGINT)
-    return real_spin(node, executor=executor)''' if first_mode == "real_signal"
-             else "raise KeyboardInterrupt()")
+    return real_spin(node, executor=executor)"""
+        if first_mode == "real_signal"
+        else "raise KeyboardInterrupt()"
+    )
     script = script.replace("FIRST_INTERRUPT", first)
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SIGINT_SECOND" in result.stdout, result.stdout + result.stderr
     if first_mode == "real_signal":
@@ -218,7 +246,7 @@ def test_cli_sigint_still_chains_handler_and_wakes_native_executor():
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 import threading
@@ -242,9 +270,10 @@ run(factory, cli=True)
 assert seen == [signal.SIGINT], seen
 assert not rclpy.ok()
 print("NATIVE_WAKE_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "NATIVE_WAKE_COMPLETE" in result.stdout
 
@@ -255,12 +284,15 @@ def test_cli_initialization_failure_restores_original_signal_handler(monkeypatch
 
     previous = signal.getsignal(signal.SIGINT)
     previous_term = signal.getsignal(signal.SIGTERM)
+
     def custom(_signum, _frame):
         pass
+
     signal.signal(signal.SIGINT, custom)
     signal.signal(signal.SIGTERM, custom)
-    monkeypatch.setattr(lifecycle.rclpy, "init",
-                        lambda **_: (_ for _ in ()).throw(ValueError("init")))
+    monkeypatch.setattr(
+        lifecycle.rclpy, "init", lambda **_: (_ for _ in ()).throw(ValueError("init"))
+    )
     try:
         with pytest.raises(ValueError, match="init"):
             lifecycle.run(lambda: None, cli=True)
@@ -276,7 +308,7 @@ def test_cli_sigint_during_non_shutdown_error_still_calls_prior_handler():
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import inspect
 import signal
 import sys
@@ -308,9 +340,10 @@ else:
     raise AssertionError("live error was swallowed")
 assert seen == [signal.SIGINT], seen
 print("LIVE_ERROR_PRESERVED", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "LIVE_ERROR_PRESERVED" in result.stdout
 
@@ -325,11 +358,17 @@ def test_cli_joins_native_signal_thread_before_executor_guard_destruction(monkey
     monkeypatch.setattr(lifecycle.rclpy, "ok", lambda: True)
     monkeypatch.setattr(lifecycle.rclpy, "spin", lambda node, *, executor: None)
     monkeypatch.setattr(lifecycle.rclpy, "try_shutdown", lambda: events.append("context"))
-    monkeypatch.setattr(lifecycle.rclpy.signals, "uninstall_signal_handlers",
-                        lambda: events.append("native_signal_join"))
+    monkeypatch.setattr(
+        lifecycle.rclpy.signals,
+        "uninstall_signal_handlers",
+        lambda: events.append("native_signal_join"),
+    )
     monkeypatch.setattr(lifecycle.rclpy.signals, "install_signal_handlers", lambda _: None)
-    monkeypatch.setattr(lifecycle, "SingleThreadedExecutor",
-                        lambda: SimpleNamespace(shutdown=lambda: events.append("executor")))
+    monkeypatch.setattr(
+        lifecycle,
+        "SingleThreadedExecutor",
+        lambda: SimpleNamespace(shutdown=lambda: events.append("executor")),
+    )
     monkeypatch.setattr(lifecycle.signal, "getsignal", lambda _: signal.SIG_IGN)
     monkeypatch.setattr(lifecycle.signal, "signal", lambda *_: signal.SIG_IGN)
     lifecycle.run(lambda: SimpleNamespace(destroy_node=lambda: events.append("node")), cli=cli)
@@ -342,7 +381,7 @@ def test_real_sigint_cannot_interrupt_ros_task_before_future_initialized():
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import faulthandler
 import gc
 import inspect
@@ -376,9 +415,10 @@ lifecycle.rclpy.spin = spin
 lifecycle.run(lambda: Node("future_signal_boundary"), cli=True)
 gc.collect()
 print("SHUTDOWN_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "SIGINT_AT_FUTURE_BOUNDARY" in result.stdout, result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SHUTDOWN_COMPLETE" in result.stdout
@@ -392,7 +432,7 @@ def test_cli_sigint_before_native_init_is_remembered_and_prevents_factory():
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 import rclpy
@@ -412,9 +452,10 @@ lifecycle.rclpy.init = interrupted_init
 lifecycle.run(factory, cli=True)
 assert not rclpy.ok()
 print("EARLY_STOP_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "EARLY_SIGINT_FIRST" in result.stdout and "EARLY_SIGINT_SECOND" in result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert "EARLY_STOP_COMPLETE" in result.stdout
@@ -427,7 +468,7 @@ def test_cli_context_closed_during_init_does_not_construct_executor_or_factory()
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import rclpy
 from senior_robot import motion_lifecycle as lifecycle
 
@@ -441,9 +482,10 @@ def factory():
 lifecycle.rclpy.init = interrupted_init
 lifecycle.run(factory, cli=True)
 print("CLOSED_CONTEXT_STOP_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "CLOSED_CONTEXT_STOP_COMPLETE" in result.stdout
     assert "FACTORY_STARTED" not in result.stdout
@@ -456,7 +498,7 @@ def test_cli_signal_during_executor_construction_cannot_close_context_mid_init(s
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 import sys
@@ -484,9 +526,10 @@ sys.settrace(trace)
 lifecycle.run(factory, cli=True)
 sys.settrace(None)
 print("CONSTRUCTOR_STOP_COMPLETE", flush=True)
-'''.replace("SIGNAL_NAME", signum)
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+""".replace("SIGNAL_NAME", signum)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "CONSTRUCTOR_SIGNAL_FIRST" in result.stdout, result.stdout + result.stderr
     assert "CONSTRUCTOR_SIGNAL_SECOND" in result.stdout, result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
@@ -502,7 +545,7 @@ def test_cli_startup_preserves_ignored_and_custom_signal_policies(signum, policy
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 import rclpy
@@ -533,9 +576,10 @@ if "POLICY" == "custom":
 else:
     assert not seen
 print("TEST_COMPLETE", flush=True)
-'''.replace("SIGNAL_NAME", signum).replace("POLICY", policy)
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+""".replace("SIGNAL_NAME", signum).replace("POLICY", policy)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "EARLY_FIRST" in result.stdout and "EARLY_SECOND" in result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert "TEST_COMPLETE" in result.stdout
@@ -548,7 +592,7 @@ def test_cli_sigterm_before_native_init_requests_stop():
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 import rclpy
@@ -566,9 +610,10 @@ lifecycle.rclpy.init = interrupted_init
 lifecycle.run(factory, cli=True)
 assert not rclpy.ok()
 print("SIGTERM_STOP_COMPLETE", flush=True)
-'''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "SIGTERM_FIRST" in result.stdout and "SIGTERM_SECOND" in result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert "SIGTERM_STOP_COMPLETE" in result.stdout
@@ -581,7 +626,7 @@ def test_cli_signal_after_native_install_cleans_owned_node_before_spin(signum):
     import sys
 
     pytest.importorskip("rclpy")
-    script = '''
+    script = """
 import os
 import signal
 from rclpy.node import Node
@@ -606,9 +651,10 @@ def factory():
 lifecycle.rclpy.signals.install_signal_handlers = install_then_interrupt
 lifecycle.run(factory, cli=True)
 print("NATIVE_SIGNAL_STOP_COMPLETE", flush=True)
-'''.replace("SIGNAL_NAME", signum)
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            timeout=10, check=False)
+""".replace("SIGNAL_NAME", signum)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+    )
     assert "NATIVE_SIGNAL_FIRST" in result.stdout and "NATIVE_SIGNAL_SECOND" in result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OWNED_NODE_DESTROYED" in result.stdout

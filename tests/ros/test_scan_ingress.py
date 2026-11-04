@@ -22,10 +22,12 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
     from sensor_msgs.msg import LaserScan
 
     rclpy.init()
-    values = [Parameter("observation_max_age", value=1.0),
-              Parameter("measurement_max_age", value=1.0),
-              Parameter("transform_static", value=True),
-              Parameter("self_mask_calibrated", value=True)]
+    values = [
+        Parameter("observation_max_age", value=1.0),
+        Parameter("measurement_max_age", value=1.0),
+        Parameter("transform_static", value=True),
+        Parameter("self_mask_calibrated", value=True),
+    ]
     ingress = SafetyScanIngress(parameter_overrides=values)
     gate = SafetyGate(parameter_overrides=values)
     raw = rclpy.create_node("fixture_raw_scan")
@@ -34,8 +36,9 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
     messages = []
     raw_messages = []
     raw.create_subscription(FencedSafetyScan, "/safety/bounded_scan", messages.append, 10)
-    raw.create_subscription(BoundedRawLaserScan, "/safety/raw/scan", raw_messages.append,
-                            qos_profile_sensor_data)
+    raw.create_subscription(
+        BoundedRawLaserScan, "/safety/raw/scan", raw_messages.append, qos_profile_sensor_data
+    )
     transform = TransformStamped()
     transform.header.frame_id, transform.child_frame_id = "base_link", "laser_link"
     transform.transform.translation.x, transform.transform.rotation.w = 0.25, 1.0
@@ -62,13 +65,19 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
         assert predicate()
 
     try:
+
         def matching_observation():
-            return any(value.owner.valid and value.body.ingress_steady ==
-                       gate._freshness.scan_received for value in messages)
+            return any(
+                value.owner.valid and value.body.ingress_steady == gate._freshness.scan_received
+                for value in messages
+            )
 
         spin_until(matching_observation)
-        first = next(value for value in reversed(messages) if value.owner.valid
-                     and value.body.ingress_steady == gate._freshness.scan_received)
+        first = next(
+            value
+            for value in reversed(messages)
+            if value.owner.valid and value.body.ingress_steady == gate._freshness.scan_received
+        )
         assert gate._freshness.scan_received == first.body.ingress_steady
         assert gate._scans[-1].stamp == pytest.approx(
             first.body.stamp.sec + first.body.stamp.nanosec / 1e9
@@ -96,8 +105,10 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
             duplicate_publisher.publish(scan)
             for _ in range(5):
                 executor.spin_once(timeout_sec=0.01)
-        assert any(value.capture.reason == "raw_gid_mismatch" and
-                   value.capture.raw_gid == foreign_gid for value in raw_messages)
+        assert any(
+            value.capture.reason == "raw_gid_mismatch" and value.capture.raw_gid == foreign_gid
+            for value in raw_messages
+        )
         if survivor == "old":
             duplicate.destroy_node()
             duplicate = None
@@ -119,8 +130,11 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
             duplicate = None
         raw_publisher = raw.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
         spin_until(matching_observation)
-        second = next(value for value in reversed(messages) if value.owner.valid
-                      and value.body.ingress_steady == gate._freshness.scan_received)
+        second = next(
+            value
+            for value in reversed(messages)
+            if value.owner.valid and value.body.ingress_steady == gate._freshness.scan_received
+        )
         assert second.body.source_epoch != first.body.source_epoch
         generation = gate._scan_generation
         gate._on_scan(first)
@@ -161,8 +175,9 @@ def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_
     node = rclpy.create_node("oversized_scan_fixture")
     publisher = node.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
     captured = []
-    node.create_subscription(BoundedRawLaserScan, "/safety/raw/scan", captured.append,
-                             qos_profile_sensor_data)
+    node.create_subscription(
+        BoundedRawLaserScan, "/safety/raw/scan", captured.append, qos_profile_sensor_data
+    )
     try:
         scan = LaserScan()
         scan.header.frame_id = "f" * 129 if dimension == "frame" else "laser_link"
@@ -199,14 +214,20 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
     from senior_control.safety.motion_runtime import SourceEpochFence
 
     rclpy.init()
-    gate = SafetyGate(parameter_overrides=[Parameter("observation_max_age", value=1.0),
-                                           Parameter("measurement_max_age", value=1.0)])
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=1.0),
+            Parameter("measurement_max_age", value=1.0),
+        ]
+    )
     gate._scan_fence = SourceEpochFence(max_retired=1)
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     gate._scan_relay_gid = "aa" * 24
-    monkeypatch.setattr(gate, "get_publishers_info_by_topic", lambda _: [SimpleNamespace(
-        endpoint_gid=bytes.fromhex("bb" * 24)
-    )])
+    monkeypatch.setattr(
+        gate,
+        "get_publishers_info_by_topic",
+        lambda _: [SimpleNamespace(endpoint_gid=bytes.fromhex("bb" * 24))],
+    )
     relay_sequence = 0
     raw_sequence = 0
     generations = {}
@@ -283,10 +304,12 @@ def test_scan_consumers_require_fenced_and_original_bounded_sources():
     rclpy.init()
     ingress = SafetyScanIngress(parameter_overrides=[Parameter("observation_max_age", value=0.5)])
     adapter = ScanAdapter()
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=0.5),
-        Parameter("measurement_max_age", value=0.5),
-    ])
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=0.5),
+            Parameter("measurement_max_age", value=0.5),
+        ]
+    )
     try:
         ingress_types = {item.topic_name: item.msg_type for item in ingress._subscriptions}
         adapter_types = {item.topic_name: item.msg_type for item in adapter._subscriptions}

@@ -7,13 +7,24 @@ manual, then recovery, then navigation. Recovery has no remote command yet.
 Disconnect and lease expiry stop motion and do not resume navigation.
 """
 
+import fcntl
+import json
 import math
+import os
+import tempfile
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from senior_control.errors import ErrorCode
 from senior_control.models import Velocity
-from senior_control.protocol import Envelope, SimpleEnvelope, VelocityEnvelope
+from senior_control.protocol import (
+    DRIVE_CHALLENGE_SECONDS,
+    Envelope,
+    SimpleEnvelope,
+    VelocityEnvelope,
+)
 
 ModeName = Literal["estop", "manual", "recovery", "navigation", "idle"]
 _ZERO = Velocity(0.0, 0.0)
@@ -48,6 +59,213 @@ def _reject(error: ErrorCode) -> CommandResult:
     return CommandResult(False, error)
 
 
+class PersistentEstop:
+    """Single-owner durable latch; missing, invalid, or foreign state is latched."""
+
+    def __init__(self, path: Path, robot_id: str) -> None:
+        if not path.is_absolute() or not robot_id or len(robot_id) > 128:
+            raise ValueError("absolute state path and robot identity required")
+        self._path, self._robot_id = path, robot_id
+        self._lock = open(str(path) + ".lock", "a+b")
+        try:
+            fcntl.flock(self._lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            self._lock.close()
+            raise
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="estop-state")
+        self._pending: Future[None] | None = None
+        self._pending_request: tuple[str, int, int] | None = None
+        self.latched, self.revision = True, 0
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                value = json.load(stream)
+            if (
+                set(value) == {"version", "robot_id", "latched", "revision"}
+                and value["version"] == 1
+                and value["robot_id"] == robot_id
+                and type(value["latched"]) is bool
+                and type(value["revision"]) is int
+                and value["revision"] >= 0
+            ):
+                self.latched, self.revision = value["latched"], value["revision"]
+        except (OSError, ValueError, TypeError):
+            pass
+
+    @staticmethod
+    def initialize(path: Path, robot_id: str) -> None:
+        if not path.is_absolute() or not robot_id or len(robot_id) > 128:
+            raise ValueError("absolute state path and robot identity required")
+        with open(str(path) + ".lock", "a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            fd = os.open(path, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {"version": 1, "robot_id": robot_id, "latched": False, "revision": 0},
+                    stream,
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            PersistentEstop._sync_directory(path.parent)
+
+    @staticmethod
+    def _sync_directory(directory: Path) -> None:
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def estop(self) -> None:
+        self.latched = True
+        self.revision += 1
+        fd, name = tempfile.mkstemp(prefix=".estop-", dir=self._path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "version": 1,
+                        "robot_id": self._robot_id,
+                        "latched": True,
+                        "revision": self.revision,
+                    },
+                    stream,
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name, self._path)
+            self._sync_directory(self._path.parent)
+        finally:
+            try:
+                os.unlink(name)
+            except FileNotFoundError:
+                pass
+
+    def commit(self, command: Envelope, result: CommandResult) -> CommandResult:
+        """Acknowledge an accepted estop only after its latch is durable."""
+        if not result.accepted and (
+            result.error is not ErrorCode.CONFLICT or self._pending is None
+        ):
+            return result
+        request = (command.session_id, command.connection_epoch, command.seq)
+        retry = request == self._pending_request
+        if result.accepted:
+            self._pending_request = request
+        pending = self._pending
+        if pending is None or (pending.done() and pending.exception() is not None):
+            pending = self._pending = self._worker.submit(self.estop)
+        try:
+            pending.result(timeout=0.2)
+        except Exception:
+            # Retain the write and its identity so a replay can finish it.
+            return _reject(ErrorCode.UNAVAILABLE)
+        self._pending = None
+        self._pending_request = None
+        return _ok() if retry else result
+
+    def close(self) -> None:
+        self._worker.shutdown(wait=False, cancel_futures=True)
+        if self._pending is not None and not self._pending.done():
+            self._pending.add_done_callback(lambda _future: self._lock.close())
+        else:
+            self._lock.close()
+
+
+class FinalCommandFence:
+    """Gate authority against the actual ROS publisher and immutable steady deadline."""
+
+    def __init__(self) -> None:
+        self._publisher: bytes | None = None
+        self._retired: set[bytes] = set()
+        self._retired_boots: set[str] = set()
+        self._boot: str | None = None
+        self._generation = -1
+        self._sequence = -1
+        self._deadline = float("-inf")
+        self._velocity = _ZERO
+        self._authority: tuple[str, int] | None = None
+        self._invalid = False
+
+    def set_publisher(self, publisher: bytes | None) -> None:
+        if publisher != self._publisher:
+            if self._publisher is not None:
+                self._retired.add(self._publisher)
+            if self._boot is not None:
+                self._retired_boots.add(self._boot)
+            self._publisher = publisher
+            self._boot = None
+            self._generation = -1
+            self._sequence = -1
+            self._deadline = float("-inf")
+            self._velocity = _ZERO
+            self._authority = None
+            self._invalid = (
+                publisher in self._retired
+                or len(self._retired) > 64
+                or len(self._retired_boots) > 64
+            )
+
+    def accept(
+        self,
+        publisher: bytes,
+        boot: str,
+        generation: int,
+        sequence: int,
+        deadline: float,
+        velocity: Velocity,
+        now: float,
+        *,
+        session: str = "",
+        epoch: int = 0,
+    ) -> bool:
+        if (
+            not publisher
+            or publisher != self._publisher
+            or self._invalid
+            or not boot
+            or boot in self._retired_boots
+            or len(boot) > 128
+            or generation < 0
+            or sequence < 0
+            or not all(math.isfinite(v) for v in (deadline, now, velocity.vx, velocity.wz))
+        ):
+            return False
+        if self._boot is not None and boot != self._boot:
+            self._invalid = True
+            self._deadline = float("-inf")
+            return False
+        if self._boot is None or generation > self._generation:
+            # DDS may drop intermediate barriers; any newer zero barrier supersedes them.
+            if velocity != _ZERO or sequence != 0:
+                return False
+            self._boot, self._generation, self._sequence = boot, generation, sequence
+            self._deadline, self._velocity = deadline, velocity
+            self._authority = None
+            return True
+        if generation != self._generation or sequence < self._sequence:
+            return False
+        authority = (session, epoch)
+        if self._authority is not None and authority != self._authority:
+            return False
+        if sequence == self._sequence:
+            return deadline == self._deadline and velocity == self._velocity
+        if deadline <= now:
+            return False
+        self._authority = authority
+        self._sequence, self._deadline, self._velocity = sequence, deadline, velocity
+        return True
+
+    def usable(self, now: float) -> bool:
+        return (
+            not self._invalid
+            and self._publisher is not None
+            and self._boot is not None
+            and math.isfinite(now)
+            and now < self._deadline
+            and self._velocity != _ZERO
+        )
+
+
 class Arbiter:
     def __init__(
         self,
@@ -56,6 +274,7 @@ class Arbiter:
         disconnect_seconds: float,
         command_ttl_seconds: float,
         require_server_heartbeat: bool = False,
+        initial_estop: bool = False,
     ) -> None:
         if not (
             math.isfinite(heartbeat_seconds)
@@ -76,7 +295,7 @@ class Arbiter:
         self._command_ttl_seconds = command_ttl_seconds
         self._lease: _Lease | None = None
         self._history: dict[tuple[str, int], int] = {}
-        self._estop = False
+        self._estop = initial_estop
         self._manual = False
         self._recovery = False
         self._navigation = False
@@ -84,7 +303,12 @@ class Arbiter:
         self._deadline: float | None = None
 
     def accept(
-        self, command: Envelope, now: float, *, received_at: float | None = None
+        self,
+        command: Envelope,
+        now: float,
+        *,
+        received_at: float | None = None,
+        local_deadline: float | None = None,
     ) -> CommandResult:
         self._expire(now)
         if not math.isfinite(now):
@@ -107,10 +331,16 @@ class Arbiter:
         lease = self._lease
         if self._require_server_heartbeat and command.type in _SAFETY:
             if self._server_epoch == 0:
+                if command.type == "safety.estop" and command.connection_epoch > 0:
+                    key = (command.session_id, command.connection_epoch)
+                    if command.seq <= self._history.get(key, -1):
+                        return _reject(ErrorCode.CONFLICT)
+                    self._history[key] = command.seq
+                    return self._apply_safety(command.type)
                 return _reject(ErrorCode.OFFLINE)
             if command.connection_epoch < self._server_epoch:
                 return _reject(ErrorCode.CONFLICT)
-            if command.connection_epoch != self._server_epoch:
+            if command.connection_epoch != self._server_epoch and command.type != "safety.estop":
                 return _reject(ErrorCode.OFFLINE)
             if command.type == "safety.estop":
                 key = (command.session_id, command.connection_epoch)
@@ -159,7 +389,7 @@ class Arbiter:
             if command.type in _SAFETY:
                 return self._accept_safety(command, now, advance_epoch=False)
             return _reject(ErrorCode.OFFLINE)
-        return self._accept_live(command, now, received_at)
+        return self._accept_live(command, now, received_at, local_deadline)
 
     def server_heartbeat(self, epoch: int, now: float, deadline: float) -> bool:
         """Renew only a fresh, bounded server lease; expiry requires a new epoch."""
@@ -193,6 +423,16 @@ class Arbiter:
         ):
             return self._velocity
         return _ZERO
+
+    def final_command(self, now: float) -> tuple[Velocity, str, int, int, float] | None:
+        velocity = self.tick(now)
+        lease = self._lease
+        if velocity == _ZERO or lease is None or self._deadline is None:
+            return None
+        deadline = self._deadline
+        if self._require_server_heartbeat:
+            deadline = min(deadline, self._server_deadline)
+        return velocity, lease.session_id, lease.epoch, lease.seq, deadline
 
     def accept_autonomous(
         self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float
@@ -252,10 +492,12 @@ class Arbiter:
         command: VelocityEnvelope | SimpleEnvelope,
         now: float,
         received_at: float | None,
+        local_deadline: float | None,
     ) -> CommandResult:
         kind = command.type
         if kind == "control.acquire":
             self._refresh(command, now)
+            self._clear_motion()
             return _ok()
         if kind == "control.release":
             self._refresh(command, now)
@@ -272,7 +514,7 @@ class Arbiter:
             self._hold_manual_stop()
             return _ok()
         if kind == "drive.velocity":
-            return self._accept_velocity(command, now, received_at)
+            return self._accept_velocity(command, now, received_at, local_deadline)
         if kind in _SAFETY:
             self._refresh(command, now)
             return self._apply_safety(kind)
@@ -296,15 +538,32 @@ class Arbiter:
         command: VelocityEnvelope | SimpleEnvelope,
         now: float,
         received_at: float | None,
+        local_deadline: float | None,
     ) -> CommandResult:
         if self._estop:
             return _reject(ErrorCode.SAFETY_REJECTED)
         if not isinstance(command, VelocityEnvelope):
             return _reject(ErrorCode.VALIDATION)
-        received = now if received_at is None else received_at
-        if not math.isfinite(received):
+        if self._require_server_heartbeat and received_at is None and local_deadline is None:
             return _reject(ErrorCode.VALIDATION)
-        deadline = received + self._command_ttl_seconds
+        if local_deadline is not None:
+            source_window = (
+                DRIVE_CHALLENGE_SECONDS
+                if command.payload.server_deadline is not None
+                else self._command_ttl_seconds
+            )
+            if not math.isfinite(local_deadline) or local_deadline > now + source_window:
+                return _reject(ErrorCode.VALIDATION)
+            # Shorter local TTLs expire relative to issuance, even after transport delay.
+            deadline = local_deadline - max(0.0, source_window - self._command_ttl_seconds)
+        else:
+            # //Compatible: isolated legacy callers provide original local receipt time.
+            received = now if received_at is None else received_at
+            if not math.isfinite(received) or received > now:
+                return _reject(ErrorCode.VALIDATION)
+            deadline = received + self._command_ttl_seconds
+        if self._require_server_heartbeat:
+            deadline = min(deadline, self._server_deadline)
         # A command that already used up its TTL while queued does not start another window.
         if now > deadline:
             return _reject(ErrorCode.TIMEOUT)

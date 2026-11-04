@@ -51,8 +51,11 @@ class ScanAdapter(Node):
         self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)
         self.no_return_clear = self.get_parameter("no_return_clear").value
         if (
-            not self.body or not self._raw_topic or not math.isfinite(self.max_age)
-            or not 0 < self.max_age <= 5.0 or not math.isfinite(self.mask_range_uncertainty)
+            not self.body
+            or not self._raw_topic
+            or not math.isfinite(self.max_age)
+            or not 0 < self.max_age <= 5.0
+            or not math.isfinite(self.mask_range_uncertainty)
             or self.mask_range_uncertainty < 0
         ):
             raise ValueError("invalid body frame or max age")
@@ -66,12 +69,14 @@ class ScanAdapter(Node):
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
         self.publisher = self.create_publisher(
-            BoundedFilteredScan, str(self.get_parameter("filtered_candidate_topic").value),
+            BoundedFilteredScan,
+            str(self.get_parameter("filtered_candidate_topic").value),
             qos_profile_sensor_data,
         )
         self.status = self.create_publisher(DiagnosticArray, "/perception/scan_status", 10)
-        self.create_subscription(BoundedRawLaserScan, self._raw_topic, self.on_scan,
-                                 qos_profile_sensor_data)
+        self.create_subscription(
+            BoundedRawLaserScan, self._raw_topic, self.on_scan, qos_profile_sensor_data
+        )
         self.create_timer(0.05, self._check_source, clock=Clock(clock_type=ClockType.STEADY_TIME))
 
     def report(self, message, usable, stamp):
@@ -94,7 +99,9 @@ class ScanAdapter(Node):
         self._lineage = None
         result = BoundedFilteredScan()
         result.source_epoch, result.sequence, result.reason = (
-            self._epoch, self._sequence, reason[:64]
+            self._epoch,
+            self._sequence,
+            reason[:64],
         )
         if raw is not None:
             result.raw_capture = raw
@@ -116,8 +123,9 @@ class ScanAdapter(Node):
         try:
             capture = capture_from_message(msg.capture)
             before = self._admission.generation
-            if not self._admission.offer(capture, bridge_gid=self._bridge_gid,
-                                         now_ros_ns=ros_ns, now_steady=steady):
+            if not self._admission.offer(
+                capture, bridge_gid=self._bridge_gid, now_ros_ns=ros_ns, now_steady=steady
+            ):
                 if self._admission.generation != before:
                     self._invalid(capture.reason or "raw_scan_invalid", msg.capture)
                 return
@@ -144,9 +152,18 @@ class ScanAdapter(Node):
             if not self.transform_static and not 0 <= seconds - tf_seconds <= self.max_age:
                 raise ValueError("stale dynamic transform")
             observation = ScanObservation(
-                tuple(msg.ranges), msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max,
-                seconds, "ros", Pose2D(tf.transform.translation.x, tf.transform.translation.y, yaw),
-                tf_seconds, self.body, seconds, no_return_clear=self.no_return_clear,
+                tuple(msg.ranges),
+                msg.angle_min,
+                msg.angle_increment,
+                msg.range_min,
+                msg.range_max,
+                seconds,
+                "ros",
+                Pose2D(tf.transform.translation.x, tf.transform.translation.y, yaw),
+                tf_seconds,
+                self.body,
+                seconds,
+                no_return_clear=self.no_return_clear,
                 transform_static=self.transform_static,
             )
             filtered = filter_self(
@@ -161,7 +178,9 @@ class ScanAdapter(Node):
             result.source_epoch, result.sequence = self._epoch, self._sequence
             result.raw_capture = msg.capture
             result.angle_min, result.angle_max, result.angle_increment = (
-                msg.angle_min, msg.angle_max, msg.angle_increment
+                msg.angle_min,
+                msg.angle_max,
+                msg.angle_increment,
             )
             result.time_increment, result.scan_time = msg.time_increment, msg.scan_time
             result.range_min, result.range_max = msg.range_min, msg.range_max

@@ -447,15 +447,27 @@ def test_duplicate_applied_command_at_identical_ros_stamp_is_idempotent(monkeypa
     from senior_control.models import BodyTwist, Pose2D, Velocity
     from senior_control.safety.motion_estimator import MotionEstimate, WheelOdom
 
-    values = dict(sensor_max_age=2.0, alignment_max_gap=0.3, pending_wait=0.2,
-                  max_variance=0.1, min_quality=0.3, max_yaw_error=0.1,
-                  startup_window=0.6, wheel_motion_limit=0.004, stall_distance=0.04,
-                  lateral_limit=0.04, yaw_limit=0.12)
+    values = dict(
+        sensor_max_age=2.0,
+        alignment_max_gap=0.3,
+        pending_wait=0.2,
+        max_variance=0.1,
+        min_quality=0.3,
+        max_yaw_error=0.1,
+        startup_window=0.6,
+        wheel_motion_limit=0.004,
+        stall_distance=0.04,
+        lateral_limit=0.04,
+        yaw_limit=0.12,
+    )
     rclpy.init()
     fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
     clock = {"now": 2_312_000_000}
-    monkeypatch.setattr(fusion, "get_clock", lambda: SimpleNamespace(
-        now=lambda: SimpleNamespace(nanoseconds=clock["now"])))
+    monkeypatch.setattr(
+        fusion,
+        "get_clock",
+        lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock["now"])),
+    )
     monkeypatch.setattr(fusion, "_try_pending", lambda: None)
     try:
         fusion._progress_started = True
@@ -466,9 +478,17 @@ def test_duplicate_applied_command_at_identical_ros_stamp_is_idempotent(monkeypa
         bounds = fusion._commands.diagnostic_bounds()
         state = copy.deepcopy(fusion._progress_requalification.__dict__)
         estimate = MotionEstimate(
-            Pose2D(0, 0, 0), Velocity(0, 0), (0.001,) * 3, 0.8, dt=1.0,
-            source="scan_match", stamp=1.0, degenerate=False, aligned=True,
-            max_covariance=0.1, body_twist=BodyTwist(0, 0, 0),
+            Pose2D(0, 0, 0),
+            Velocity(0, 0),
+            (0.001,) * 3,
+            0.8,
+            dt=1.0,
+            source="scan_match",
+            stamp=1.0,
+            degenerate=False,
+            aligned=True,
+            max_covariance=0.1,
+            body_twist=BodyTwist(0, 0, 0),
         )
         assert fusion._slip.update(
             Velocity(0.05, 0), WheelOdom(Pose2D(0.1, 0, 0), 1.0, 1.0), estimate
@@ -498,16 +518,27 @@ def test_same_stamp_conflicting_applied_value_and_rollback_still_break_progress(
     from rclpy.parameter import Parameter
     from senior_robot.motion_fusion import MotionFusion
 
-    values = dict(sensor_max_age=2.0, alignment_max_gap=0.3, pending_wait=0.2,
-                  max_variance=0.1, min_quality=0.3, max_yaw_error=0.1,
-                  startup_window=0.6, wheel_motion_limit=0.004, stall_distance=0.04,
-                  lateral_limit=0.04, yaw_limit=0.12)
+    values = dict(
+        sensor_max_age=2.0,
+        alignment_max_gap=0.3,
+        pending_wait=0.2,
+        max_variance=0.1,
+        min_quality=0.3,
+        max_yaw_error=0.1,
+        startup_window=0.6,
+        wheel_motion_limit=0.004,
+        stall_distance=0.04,
+        lateral_limit=0.04,
+        yaw_limit=0.12,
+    )
     rclpy.init()
     fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
-    clock = {"now": 1_700_000_000_000_000_000 if failure == "float_collision"
-             else 2_312_000_000}
-    monkeypatch.setattr(fusion, "get_clock", lambda: SimpleNamespace(
-        now=lambda: SimpleNamespace(nanoseconds=clock["now"])))
+    clock = {"now": 1_700_000_000_000_000_000 if failure == "float_collision" else 2_312_000_000}
+    monkeypatch.setattr(
+        fusion,
+        "get_clock",
+        lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock["now"])),
+    )
     monkeypatch.setattr(fusion, "_try_pending", lambda: None)
     try:
         fusion._progress_started = True

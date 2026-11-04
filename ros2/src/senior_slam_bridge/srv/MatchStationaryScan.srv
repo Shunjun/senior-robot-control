@@ -1,0 +1,44 @@
+# One qualified diagnostic query per opted-in isolated candidate boot.
+# The seed is the laser sensor pose in the candidate map frame. Angles and
+# ranges must already use the native Karto sensor convention of the archive.
+string<=36 boot_id
+string<=64 attempt_id
+string<=64 pair_digest
+string<=128 map_frame
+float64 seed_x
+float64 seed_y
+float64 seed_yaw
+# Optional second native search on the same scan. Its full search box must be
+# disjoint from the primary box, including wrapped yaw. The boxes extend at
+# most 0.22 m in each position axis and 0.22 rad in yaw from each seed.
+bool compare_second_seed
+float64 second_seed_x
+float64 second_seed_y
+float64 second_seed_yaw
+float64 first_angle
+float64 angle_step
+float64[<=2048] ranges
+---
+uint8 UNAVAILABLE=0
+uint8 INVALID=1
+uint8 COMPLETE=2
+uint8 SPENT=3
+
+# COMPLETE denotes at least one computed score, including a low or zero score.
+# Each result is available independently. Order follows the input seeds.
+# The diagnostic confers no localization or motion authority and applies no pose.
+# Wrong identity or absence of any computed result is UNAVAILABLE.
+# Invalid or overlapping seeds do not spend the one request quota.
+uint8 status
+bool primary_result_valid
+float64 response
+float64 fitted_x
+float64 fitted_y
+float64 fitted_yaw
+int32[<=8] reference_ids
+bool second_result_valid
+float64 second_response
+float64 second_fitted_x
+float64 second_fitted_y
+float64 second_fitted_yaw
+int32[<=8] second_reference_ids

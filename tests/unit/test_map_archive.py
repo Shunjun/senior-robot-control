@@ -1,5 +1,6 @@
 """Bundle format rejects hostile archives and mixed map revisions."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from senior_control.errors import DomainError, ErrorCode
+from senior_control.mapping import archive as archive_module
 from senior_control.mapping.archive import MapArchive
 from senior_control.mapping.evidence import CellEvidence
 from senior_control.mapping.references import (
@@ -299,7 +301,7 @@ def test_exported_grid_uses_one_frame_with_the_yaml_origin(tmp_path: Path) -> No
             GridExtent(200, 200, -10.0, -10.0),
         )
     )
-    _write_grid(store.snapshot(Path("pose_graph"), ()), tmp_path)
+    _write_grid(store.snapshot(Path("pose_graph"), ()), tmp_path, byte_budget=65_536)
     payload = (tmp_path / "map.pgm").read_bytes()
     header, _, pixels = payload.partition(b"\n255\n")
     assert header == b"P5\n200 200"
@@ -333,7 +335,7 @@ def test_zero_grid_is_not_promoted_to_a_pixel(tmp_path: Path) -> None:
         (),
         False,
     )
-    _write_grid(snapshot, tmp_path)
+    _write_grid(snapshot, tmp_path, byte_budget=1_024)
     payload = (tmp_path / "map.pgm").read_bytes()
     assert payload.startswith(b"P5\n0 0\n")
     assert payload.partition(b"\n255\n")[2] == b""
@@ -398,38 +400,21 @@ def test_replace_and_clear_change_identity_together() -> None:
 async def test_export_fsyncs_bundle_file_and_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    synced: list[str] = []
+    synced: set[tuple[int, int]] = set()
     real_fsync = os.fsync
 
     def spy(fd: int) -> None:
-        synced.append(_fd_path(fd))
+        info = os.fstat(fd)
+        synced.add((info.st_dev, info.st_ino))
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", spy)
     destination = tmp_path / "yard.zip"
     await archive_for(filled_store()).export_bundle(filled_store(), MAP, destination)
-    synced_paths = {str(Path(path).resolve()) for path in synced if path}
 
-    assert str(destination.resolve()) in synced_paths
-    assert str(destination.parent.resolve()) in synced_paths
-
-
-def _fd_path(fd: int) -> str:
-    proc = f"/proc/self/fd/{fd}"
-    if os.path.exists("/proc/self/fd"):
-        try:
-            return os.readlink(proc)
-        except OSError:
-            return ""
-    try:
-        import fcntl
-
-        result = fcntl.fcntl(fd, 50, bytes(1024))
-    except (ImportError, OSError, TypeError):
-        return ""
-    if isinstance(result, bytes):
-        return result.split(b"\0", 1)[0].decode()
-    return ""
+    for path in (destination, destination.parent):
+        info = path.stat()
+        assert (info.st_dev, info.st_ino) in synced
 
 
 async def test_oversized_member_is_rejected_before_decompression(
@@ -530,14 +515,16 @@ async def test_export_rejects_snapshot_changed_during_graph_capture(tmp_path: Pa
         archive_for(store, graph).export_bundle(store, store.map_ref, path)
     )
     await asyncio.wait_for(graph.entered.wait(), 1)
-    store.apply_anchor_update(
-        AnchorSnapshot(
-            store.map_ref,
-            "wheel_odom",
-            (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
-            GridExtent(8, 8, 0, 0),
+    with pytest.raises(DomainError) as late_write:
+        store.apply_anchor_update(
+            AnchorSnapshot(
+                store.map_ref,
+                "wheel_odom",
+                (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
+                GridExtent(8, 8, 0, 0),
+            )
         )
-    )
+    assert late_write.value.code is ErrorCode.CONFLICT
     graph.release.set()
     with pytest.raises(DomainError):
         await export
@@ -598,4 +585,180 @@ async def test_export_without_authoritative_snapshot_verifier_is_unavailable(
             store, store.map_ref, destination
         )
     assert error.value.code is ErrorCode.UNAVAILABLE
+    assert not destination.exists()
+
+
+async def test_export_rejects_graph_replaced_during_verification(tmp_path: Path) -> None:
+    class ChangingVerifier(Graph):
+        async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+            verified = await super().verify_consistent(directory, snapshot)
+            (directory / "graph.data").write_text("different scans", encoding="utf-8")
+            return verified
+
+    store = filled_store()
+    destination = tmp_path / "changed.zip"
+    with pytest.raises(DomainError) as error:
+        await archive_for(store, ChangingVerifier(store.map_ref)).export_bundle(
+            store, store.map_ref, destination
+        )
+    assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+    assert not destination.exists()
+
+
+async def test_export_preserves_destination_created_during_verification(tmp_path: Path) -> None:
+    destination = tmp_path / "competing.zip"
+
+    class CompetingVerifier(Graph):
+        async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+            destination.write_bytes(b"existing export")
+            return await super().verify_consistent(directory, snapshot)
+
+    store = filled_store()
+    with pytest.raises(DomainError) as error:
+        await archive_for(store, CompetingVerifier(store.map_ref)).export_bundle(
+            store, store.map_ref, destination
+        )
+    assert error.value.code is ErrorCode.CONFLICT
+    assert destination.read_bytes() == b"existing export"
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+async def test_export_rejects_symlink_substituted_between_stat_and_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_lstat = Path.lstat
+    external = tmp_path / "external.data"
+    external.write_bytes(b"scans")
+
+    def replace_after_stat(path: Path):
+        entry = original_lstat(path)
+        if path.name == "graph.data" and stat.S_ISREG(entry.st_mode):
+            path.unlink()
+            path.symlink_to(external)
+        return entry
+
+    monkeypatch.setattr(Path, "lstat", replace_after_stat)
+    store = filled_store()
+    destination = tmp_path / "unsafe.zip"
+    with pytest.raises(DomainError) as error:
+        await archive_for(store).export_bundle(store, store.map_ref, destination)
+    assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+    assert not destination.exists()
+
+
+async def test_export_uses_checked_bytes_without_reopening_graph_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_write = SlamSnapshot.write
+
+    def change_disk_after_verification(snapshot: SlamSnapshot, output: Path) -> None:
+        if output.name == "occupancy":
+            graph_directory = graph.capture_directory
+            assert graph_directory is not None
+            (graph_directory / "graph.data").write_bytes(b"other scans")
+        original_write(snapshot, output)
+
+    class RecordedGraph(Graph):
+        capture_directory: Path | None = None
+
+        async def verify_consistent(self, directory: Path, snapshot: SlamSnapshot) -> bool:
+            self.capture_directory = directory
+            return await super().verify_consistent(directory, snapshot)
+
+    store = filled_store()
+    graph = RecordedGraph(store.map_ref)
+    monkeypatch.setattr(SlamSnapshot, "write", change_disk_after_verification)
+    destination = tmp_path / "verified.zip"
+    await archive_for(store, graph).export_bundle(store, store.map_ref, destination)
+    with zipfile.ZipFile(destination) as archive:
+        assert archive.read("pose_graph/graph.data") == b"scans"
+
+
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_capture_freeze_is_released_before_uncooperative_backend_finishes(
+    tmp_path: Path, cancel_caller: bool
+) -> None:
+    store = filled_store()
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    late_codes: list[ErrorCode] = []
+
+    class StalledGraph(Graph):
+        async def capture_consistent(
+            self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+        ) -> SlamSnapshot:
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+                try:
+                    return snapshot()
+                except DomainError as error:
+                    late_codes.append(error.code)
+                    raise
+                finally:
+                    finished.set()
+
+    archive = MapArchive(
+        StalledGraph(store.map_ref),
+        source_robot_id="robot-a",
+        capture_timeout_seconds=1.0 if cancel_caller else 0.05,
+    )
+    destination = tmp_path / "stalled.zip"
+    task = asyncio.create_task(archive.export_bundle(store, store.map_ref, destination))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        if cancel_caller:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+        else:
+            with pytest.raises(DomainError) as timeout:
+                await asyncio.wait_for(task, timeout=1)
+            assert timeout.value.code is ErrorCode.OPERATION_UNKNOWN
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        assert not finished.is_set()
+
+        assert store.occupancy().cells
+        store.remove(store.occupancy().cells[0])
+        assert not store.occupancy().cells
+        with pytest.raises(DomainError) as busy:
+            await archive.export_bundle(store, store.map_ref, destination)
+        assert busy.value.code is ErrorCode.CONFLICT
+        assert not destination.exists()
+    finally:
+        release.set()
+        if cancelled.is_set():
+            await asyncio.wait_for(finished.wait(), timeout=1)
+    assert late_codes == [ErrorCode.OPERATION_UNKNOWN]
+
+
+async def test_export_rejects_oversized_grid_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = filled_store()
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            store.map_ref,
+            store.odom_owner,
+            (AnchorPose("kf-1", Pose2D(0.0, 0.0, 0.0), True),),
+            GridExtent(100, 100, 0.0, 0.0),
+        )
+    )
+    archive = MapArchive(
+        Graph(store.map_ref), source_robot_id="robot-a", max_uncompressed_bytes=10_000
+    )
+    destination = tmp_path / "oversized-grid.zip"
+
+    def unexpected_render() -> None:
+        pytest.fail("oversized grid reached the pixel renderer")
+
+    monkeypatch.setattr(archive_module, "bytearray", unexpected_render, raising=False)
+    with pytest.raises(DomainError, match="grid exceeds") as failure:
+        await archive.export_bundle(store, store.map_ref, destination)
+    assert failure.value.code is ErrorCode.VALIDATION
     assert not destination.exists()

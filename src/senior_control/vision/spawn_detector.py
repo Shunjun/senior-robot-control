@@ -77,25 +77,38 @@ def _qualified(frame: RetainedFrame, max_skew_ns: int) -> bool:
     identity, rgb, geometry = frame.identity, frame.rgb, frame.geometry
     return (
         _bounded(identity.source_epoch, 64)
-        and all(_bounded(value) for value in (
-            identity.rgb_source, identity.depth_source, identity.rgb_frame,
-            identity.depth_frame, identity.registration_id,
-        ))
+        and all(
+            _bounded(value)
+            for value in (
+                identity.rgb_source,
+                identity.depth_source,
+                identity.rgb_frame,
+                identity.depth_frame,
+                identity.registration_id,
+            )
+        )
         and identity.rgb_frame == identity.depth_frame
-        and min(identity.rgb_stamp_ns, identity.depth_stamp_ns, identity.rgb_received_ros_ns,
-                identity.depth_received_ros_ns) > 0
+        and min(
+            identity.rgb_stamp_ns,
+            identity.depth_stamp_ns,
+            identity.rgb_received_ros_ns,
+            identity.depth_received_ros_ns,
+        )
+        > 0
         and math.isfinite(identity.rgb_received_steady)
         and math.isfinite(identity.depth_received_steady)
         and abs(identity.rgb_stamp_ns - identity.depth_stamp_ns) <= max_skew_ns
         and rgb.stamp == identity.rgb_stamp_ns / 1e9
         and geometry.stamp == identity.depth_stamp_ns / 1e9
         and rgb.encoding in {"rgb8", "bgr8", "mono8"}
-        and 0 < rgb.width <= 4096 and 0 < rgb.height <= 4096
+        and 0 < rgb.width <= 4096
+        and 0 < rgb.height <= 4096
         and rgb.width * rgb.height <= MAX_IMAGE_PIXELS
         and len(rgb.data) <= MAX_IMAGE_BYTES
         and len(geometry.samples) <= 8192
-        and all(0 <= sample.u < rgb.width and 0 <= sample.v < rgb.height
-                for sample in geometry.samples)
+        and all(
+            0 <= sample.u < rgb.width and 0 <= sample.v < rgb.height for sample in geometry.samples
+        )
     )
 
 
@@ -152,6 +165,7 @@ def _child_main(
 
             def runtime(frame: ImageFrame) -> list[DetectionValue]:
                 return [(item.label, item.confidence, item.box) for item in infer(frame)]
+
             run: Processor = runtime
         else:
             run = processor
@@ -183,11 +197,16 @@ class SpawnInferenceWorker:
         max_result_age_s: float = 0.3,
         processor: Processor | None = None,
     ) -> None:
-        if (not math.isfinite(timeout_s) or not 0.05 <= timeout_s <= 30
+        if (
+            not math.isfinite(timeout_s)
+            or not 0.05 <= timeout_s <= 30
             or not 1 <= retained_capacity <= 8
-            or not math.isfinite(max_skew_s) or not 0 <= max_skew_s <= 0.2
-            or not math.isfinite(max_result_age_s) or not 0 < max_result_age_s <= 0.3
-            or not _bounded(device, 32)):
+            or not math.isfinite(max_skew_s)
+            or not 0 <= max_skew_s <= 0.2
+            or not math.isfinite(max_result_age_s)
+            or not 0 < max_result_age_s <= 0.3
+            or not _bounded(device, 32)
+        ):
             raise ValueError("invalid inference limits")
         self._weights = weights_path
         self._device = device
@@ -262,8 +281,13 @@ class SpawnInferenceWorker:
                     self._retire_locked()
             return False
         identity = frame.identity
-        lineage = (identity.rgb_source, identity.depth_source, identity.rgb_frame,
-                   identity.depth_frame, identity.registration_id)
+        lineage = (
+            identity.rgb_source,
+            identity.depth_source,
+            identity.rgb_frame,
+            identity.depth_frame,
+            identity.registration_id,
+        )
         with self._condition:
             if (
                 self._closed
@@ -287,8 +311,11 @@ class SpawnInferenceWorker:
                 self._pending = None
                 self._generation += 1
                 return False
-            if (self._identity_failed or identity.rgb_stamp_ns <= self._last_rgb_ns
-                or identity.depth_stamp_ns <= self._last_depth_ns):
+            if (
+                self._identity_failed
+                or identity.rgb_stamp_ns <= self._last_rgb_ns
+                or identity.depth_stamp_ns <= self._last_depth_ns
+            ):
                 self._retire_locked()
                 return False
             self._identity = lineage

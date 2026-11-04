@@ -64,9 +64,10 @@ class SnapshotState:
         self._waypoints = waypoints
 
     async def collect(self) -> LiveState:
-        tasks = await self._tasks.list_tasks()
+        tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
         home = await self._waypoints.home()
         summaries = tuple(TaskSummary(task.task_id, task.revision, task.enabled) for task in tasks)
+        task_revision = sum(task.revision for task in tasks)
         try:
             state = await self._state.read()
         except DomainError:
@@ -74,9 +75,10 @@ class SnapshotState:
                 False,
                 None,
                 home.waypoint if home else None,
-                sum(task.revision for task in tasks),
+                task_revision,
                 "unavailable",
                 tasks=summaries,
+                deleted_task_ids=deleted_task_ids,
             )
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
@@ -84,10 +86,11 @@ class SnapshotState:
             False,
             state.map_ref,
             home.waypoint if home else None,
-            sum(task.revision for task in tasks),
+            task_revision,
             state.execution_status,
             runnable,
             summaries,
+            deleted_task_ids,
         )
 
 
@@ -108,6 +111,12 @@ async def run_agent(config: AgentConfig) -> int:
             heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
         )
+        try:
+            await motion.verify_robot(config.robot_id)
+        except Exception:
+            logger.exception("ROS adapter identity does not match the paired robot")
+            await motion.close()
+            return 78
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
         navigation_client = IpcClient(config.socket_path)
@@ -150,7 +159,7 @@ async def run_agent(config: AgentConfig) -> int:
             config.robot_id,
             connector=WebSocketConnector(config.cloud_url, config.device_token, config.robot_id),
             journal=journal,
-            tasks=StoreTaskPort(tasks, robot_id=config.robot_id, journal=journal),
+            tasks=StoreTaskPort(tasks, robot_id=config.robot_id),
             home=home,
             maps=IpcMapPort(map_client),
             state=SnapshotState(state, tasks, waypoints),

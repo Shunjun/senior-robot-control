@@ -1,0 +1,36 @@
+# Look up one exact committed scan by boot and graph commit sequence. Zero is invalid.
+string<=36 boot_id
+uint64 graph_commit_sequence
+---
+uint8 UNAVAILABLE=0
+uint8 OK=1
+uint8 PENDING=2
+uint8 GAP=3
+
+# GAP is terminal for this sequence: the cut was evicted or could not be retained.
+# PENDING is only a future sequence within the currently observed qualified boot.
+# Responses other than OK contain no usable graph or scan data.
+uint8 status
+string<=36 boot_id
+uint64 graph_commit_sequence
+int32 committed_keyframe_id
+builtin_interfaces/Time sample_stamp
+string map_frame
+string odom_frame
+# Diagnostic Karto sensor pose in map_frame at the same corrected graph cut.
+# A raw beam angle theta corresponds to corrected_sensor_yaw + raw_ray_angle_sign * theta.
+# Sign is +1 for upright and -1 for verified symmetric inverted scans, zero without an OK cut.
+# Numeric agreement with sampled TF is not calibrated geometry or TF/map authority.
+float64 corrected_sensor_x
+float64 corrected_sensor_y
+float64 corrected_sensor_yaw
+int8 raw_ray_angle_sign
+# Original bounded scan bytes/fields, including the source receipt. No time-based lookup.
+senior_motion_msgs/BoundedRawLaserScan scan
+# Exact historical static TF receipt used to admit this scan, when verified mode was enabled.
+# A receipt records the processed static mount witness. It confers no occupancy,
+# localization, map/odom authority, or guarantee of the upstream current generation.
+bool static_lidar_tf_receipt_valid
+senior_motion_msgs/BoundedStaticTf static_lidar_tf_receipt
+# All corrected vertices at this commit cut, sorted by ID.
+Keyframe[<=16384] keyframes

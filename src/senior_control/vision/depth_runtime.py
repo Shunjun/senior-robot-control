@@ -259,21 +259,23 @@ def produce_depth_evidence(
     ):
         raise ValueError("depth_info_identity")
     if (
-        not all(math.isfinite(v) for v in (
-            settings.min_range_m, settings.max_range_m, settings.range_error_m
-        ))
+        not all(
+            math.isfinite(v)
+            for v in (settings.min_range_m, settings.max_range_m, settings.range_error_m)
+        )
         or not 0 < settings.min_range_m < settings.max_range_m <= 100
         or settings.range_error_m <= 0
         or settings.row_stride <= 0
         or settings.column_stride <= 0
         or settings.tf_max_age_ns <= 0
-        or (not transform.is_static and not 0 <= packet.stamp_ns - transform.stamp_ns
-            <= settings.tf_max_age_ns)
+        or (
+            not transform.is_static
+            and not 0 <= packet.stamp_ns - transform.stamp_ns <= settings.tf_max_age_ns
+        )
     ):
         raise ValueError("depth_profile_or_transform")
-    count = (
-        ((packet.width + settings.column_stride - 1) // settings.column_stride)
-        * ((packet.height + settings.row_stride - 1) // settings.row_stride)
+    count = ((packet.width + settings.column_stride - 1) // settings.column_stride) * (
+        (packet.height + settings.row_stride - 1) // settings.row_stride
     )
     if not 1 <= count <= 8192:
         raise ValueError("depth_sample_limit")
@@ -283,25 +285,67 @@ def produce_depth_evidence(
     if unit is None:
         raise ValueError("unsupported depth encoding")
     calibration = CameraCalibration(
-        packet.width, packet.height, fx, fy, cx, cy, unit,
-        settings.min_range_m, settings.max_range_m, extrinsic,
+        packet.width,
+        packet.height,
+        fx,
+        fy,
+        cx,
+        cy,
+        unit,
+        settings.min_range_m,
+        settings.max_range_m,
+        extrinsic,
     )
-    frame = decode_depth(packet.stamp_ns / 1e9, packet.width, packet.height, packet.step,
-                         packet.encoding, packet.data, packet.big_endian)
-    observation = project_depth_image(frame, calibration, GeometryConfig(
-        column_stride=settings.column_stride, row_stride=settings.row_stride,
-    ))
+    frame = decode_depth(
+        packet.stamp_ns / 1e9,
+        packet.width,
+        packet.height,
+        packet.step,
+        packet.encoding,
+        packet.data,
+        packet.big_endian,
+    )
+    observation = project_depth_image(
+        frame,
+        calibration,
+        GeometryConfig(
+            column_stride=settings.column_stride,
+            row_stride=settings.row_stride,
+        ),
+    )
     if not observation.samples:
         raise ValueError("depth_no_valid_samples")
     calibration_identity = (
-        info.raw_source, info.frame_id, info.width, info.height, info.distortion_model,
-        info.d, info.k, info.r, info.p, info.binning_x, info.binning_y, info.roi,
-        transform.translation, transform.rotation_xyzw, transform.is_static,
-        settings, packet.encoding,
+        info.raw_source,
+        info.frame_id,
+        info.width,
+        info.height,
+        info.distortion_model,
+        info.d,
+        info.k,
+        info.r,
+        info.p,
+        info.binning_x,
+        info.binning_y,
+        info.roi,
+        transform.translation,
+        transform.rotation_xyzw,
+        transform.is_static,
+        settings,
+        packet.encoding,
     )
     calibration_id = hashlib.sha256(repr(calibration_identity).encode("utf-8")).hexdigest()
-    header = DepthHeader(packet.source_epoch, packet.raw_source, packet.sequence, packet.stamp_ns,
-                         packet.received_ros_ns, packet.received_steady, packet.frame_id,
-                         calibration_id, True)
-    return ProjectedDepthEvidence(header, info, transform, settings, transform.translation,
-                                  observation.samples)
+    header = DepthHeader(
+        packet.source_epoch,
+        packet.raw_source,
+        packet.sequence,
+        packet.stamp_ns,
+        packet.received_ros_ns,
+        packet.received_steady,
+        packet.frame_id,
+        calibration_id,
+        True,
+    )
+    return ProjectedDepthEvidence(
+        header, info, transform, settings, transform.translation, observation.samples
+    )

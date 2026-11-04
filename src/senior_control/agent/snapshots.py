@@ -34,6 +34,8 @@ class LiveState:
     execution_status: str
     runnable_task_ids: tuple[str, ...] = ()
     tasks: tuple[TaskSummary, ...] = ()
+    # //Compatible: custom ports without a task cut use the agent journal fallback.
+    deleted_task_ids: frozenset[str] | None = None
 
 
 class StatePort(Protocol):

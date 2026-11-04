@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import secrets
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -19,12 +20,15 @@ from senior_control.agent.snapshots import (
 from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
+    DRIVE_CHALLENGE_SECONDS,
     EmptyPayload,
     Envelope,
     HeartbeatRequest,
     ResponseEnvelope,
     ResponsePayload,
+    SimpleEnvelope,
     SnapshotEnvelope,
+    VelocityEnvelope,
     VideoCandidateEnvelope,
     VideoCloseEnvelope,
     VideoEnvelope,
@@ -36,14 +40,16 @@ from senior_control.protocol import (
 logger = logging.getLogger(__name__)
 
 SAFETY_TYPES = frozenset({"drive.stop", "safety.estop"})
+LEASE_TYPES = frozenset({"control.acquire", "control.release"})
 VELOCITY = "drive.velocity"
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
 SNAPSHOT = "snapshot"
 HEARTBEAT_WINDOW_SECONDS = 1.0
+LEASE_ACK_SECONDS = 1.0
 SNAPSHOT_TTL_SECONDS = 60.0
 VIDEO_CLOSE_TTL_SECONDS = 300.0
-PROTECTED_TYPES = SAFETY_TYPES | {VIDEO_CLOSE}
+PROTECTED_TYPES = SAFETY_TYPES | LEASE_TYPES | {VIDEO_CLOSE}
 
 CLOSE_NORMAL = 1000
 CLOSE_POLICY = 1008
@@ -81,13 +87,30 @@ class Outbox:
         """Queue a frame; False means the caller must report overload."""
         if self._close_code is not None:
             return False
+        if kind in SAFETY_TYPES or kind in LEASE_TYPES:
+            self.discard_velocity()
         if kind in (VELOCITY, SNAPSHOT):
             self._items = deque(item for item in self._items if item[0] != kind)
         if len(self._items) >= self._limit and not self._evict(kind):
             return False
-        self._items.append((kind, frame))
+        if kind in SAFETY_TYPES:
+            # Give safety frames priority without reversing their command sequence.
+            index = next(
+                (
+                    index
+                    for index, (queued, _) in enumerate(self._items)
+                    if queued not in SAFETY_TYPES
+                ),
+                len(self._items),
+            )
+            self._items.insert(index, (kind, frame))
+        else:
+            self._items.append((kind, frame))
         self._event.set()
         return True
+
+    def discard_velocity(self) -> None:
+        self._items = deque(item for item in self._items if item[0] != VELOCITY)
 
     def _evict(self, incoming: str) -> bool:
         if incoming == VIDEO:
@@ -134,7 +157,23 @@ class Connection:
     video_session_id: str | None = None
     heartbeat_at: float | None = None
     started_at: float = 0.0
+    wall_origin: float = 0.0
+    lease_session: str | None = None
+    challenges: dict[str, tuple[str, int, float, float]] = field(default_factory=dict)
+    highest_seq: int = 0
+    safety_session: str = field(default_factory=lambda: "safety-" + secrets.token_hex(16))
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
+
+    def server_time(self, monotonic_now: float) -> float:
+        return self.wall_origin + (monotonic_now - self.started_at)
+
+
+@dataclass
+class _LeaseRequest:
+    controller: Connection
+    envelope: SimpleEnvelope
+    synthetic: bool = False
+    deadline: float = field(default_factory=lambda: time.monotonic() + LEASE_ACK_SECONDS)
 
 
 @dataclass
@@ -142,6 +181,7 @@ class _Link:
     agent: Connection | None = None
     epoch: int = 0
     controllers: set[Connection] = field(default_factory=set)
+    lease_request: _LeaseRequest | None = None
 
 
 class Hub:
@@ -231,8 +271,13 @@ class Hub:
             Outbox(self._limits.outbox_frames),
             link.epoch,
             started_at=time.monotonic(),
+            wall_origin=time.time(),
         )
         previous, link.agent = link.agent, connection
+        link.lease_request = None
+        for controller in link.controllers:
+            controller.lease_session = None
+            controller.challenges.clear()
         if previous is not None:
             previous.outbox.close(CLOSE_SUPERSEDED)
         self._push_snapshot(robot_id)
@@ -247,7 +292,10 @@ class Hub:
             if connection.heartbeat_at is not None
             else connection.started_at
         )
-        if time.monotonic() - last > HEARTBEAT_WINDOW_SECONDS:
+        now = time.monotonic()
+        if now - last > HEARTBEAT_WINDOW_SECONDS or (
+            link.lease_request is not None and now >= link.lease_request.deadline
+        ):
             self.snapshots.mark_offline(connection.robot_id)
             self._push_snapshot(connection.robot_id)
             connection.outbox.close(CLOSE_NORMAL)
@@ -266,13 +314,40 @@ class Hub:
     def detach(self, connection: Connection) -> None:
         link = self._links.get(connection.robot_id)
         if link is not None:
+            link.controllers.discard(connection)
+            if connection.role == "control" and connection.lease_session and link.agent is not None:
+                link.agent.outbox.discard_velocity()
+                self._retire_lease(link, connection)
             if link.agent is connection:
                 link.agent = None
+                link.lease_request = None
+                for controller in link.controllers:
+                    controller.lease_session = None
+                    controller.challenges.clear()
                 self.snapshots.mark_offline(connection.robot_id)
                 self._push_snapshot(connection.robot_id)
-            link.controllers.discard(connection)
         self._stop_viewer_video(connection)
         connection.outbox.close(CLOSE_NORMAL)
+
+    def _retire_lease(self, link: _Link, controller: Connection) -> None:
+        agent, session = link.agent, controller.lease_session
+        if agent is None or session is None or link.lease_request is not None:
+            return
+        release = SimpleEnvelope(
+            v=1,
+            robot_id=controller.robot_id,
+            session_id=session,
+            connection_epoch=agent.epoch,
+            request_id="socket-closed-" + secrets.token_hex(8),
+            seq=controller.highest_seq + 1,
+            expires_at=time.time() + 1.0,
+            type="control.release",
+            payload=EmptyPayload(),
+        )
+        if agent.outbox.put(serialize_envelope(release), release.type):
+            link.lease_request = _LeaseRequest(controller, release, synthetic=True)
+        else:
+            agent.outbox.close(CLOSE_OVERLOAD)
 
     def revoke_robot(self, robot_id: str) -> None:
         link = self._links.get(robot_id)
@@ -301,7 +376,7 @@ class Hub:
 
     def handle_agent_frame(self, connection: Connection, raw: bytes) -> None:
         link = self._links.get(connection.robot_id)
-        if link is None or link.agent is not connection:
+        if link is None or link.agent is not connection or connection.outbox.closed:
             return
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
@@ -318,11 +393,12 @@ class Hub:
                     return
                 reply = heartbeat.model_dump()
                 reply["type"] = "heartbeat.reply"
-                reply["server_time"] = time.time()
+                now = time.monotonic()
+                reply["server_time"] = connection.server_time(now)
                 if not connection.outbox.put(json.dumps(reply).encode(), "heartbeat"):
                     connection.outbox.close(CLOSE_OVERLOAD)
                     return
-                connection.heartbeat_at = time.monotonic()
+                connection.heartbeat_at = now
                 return
             envelope = validate_frame(raw, connection.robot_id)
         except (ValueError, ValidationError):
@@ -360,16 +436,48 @@ class Hub:
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
             return
+        self._handle_lease_response(link, connection, envelope)
         for controller in list(link.controllers):
             if not controller.outbox.put(raw, "response"):
                 controller.outbox.close(CLOSE_OVERLOAD)
 
+    def _handle_lease_response(
+        self, link: _Link, agent: Connection, response: ResponseEnvelope
+    ) -> None:
+        pending = link.lease_request
+        if pending is None:
+            return
+        request = pending.envelope
+        if (
+            response.payload.request_type != request.type
+            or response.request_id != request.request_id
+            or response.session_id != request.session_id
+            or response.seq != request.seq
+        ):
+            return
+        link.lease_request = None
+        controller = pending.controller
+        if response.payload.ok:
+            controller.lease_session = (
+                request.session_id if request.type == "control.acquire" else None
+            )
+        elif pending.synthetic:
+            # The retired controller cannot retry. Revoke the agent link and its motion lease.
+            agent.outbox.close(CLOSE_NORMAL)
+            return
+        if controller not in link.controllers:
+            self._retire_lease(link, controller)
+
     def handle_control_frame(self, connection: Connection, raw: bytes) -> None:
+        link = self._links.get(connection.robot_id)
+        if link is None or connection not in link.controllers or connection.outbox.closed:
+            return
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
         try:
-            claimed = json.loads(raw)["robot_id"]
+            data = json.loads(raw)
+            claimed = data["robot_id"]
             if not isinstance(claimed, str):
                 raise ValueError("robot_id must be text")
             envelope = validate_frame(raw, claimed)
@@ -379,6 +487,10 @@ class Hub:
         if isinstance(envelope, SnapshotEnvelope):
             connection.outbox.close(CLOSE_POLICY)
             return
+        if envelope.seq == 2**63 - 1:
+            self._reject(connection, envelope, ErrorCode.VALIDATION)
+            return
+        connection.highest_seq = max(connection.highest_seq, envelope.seq)
         if (
             envelope.robot_id != connection.robot_id
             or isinstance(envelope, ResponseEnvelope)
@@ -386,14 +498,117 @@ class Hub:
         ):
             self._reject(connection, envelope, ErrorCode.VALIDATION)
             return
-        if envelope.expires_at < time.time():
+        if (
+            envelope.type
+            not in {
+                "control.acquire",
+                "control.release",
+                "drive.challenge",
+                VELOCITY,
+                *SAFETY_TYPES,
+            }
+            and envelope.expires_at < time.time()
+        ):
             self._reject(connection, envelope, ErrorCode.TIMEOUT)
             return
-        link = self._links.get(connection.robot_id)
         agent = link.agent if link is not None else None
         if agent is None:
             self._reject(connection, envelope, ErrorCode.OFFLINE)
             return
+        if isinstance(envelope, SimpleEnvelope):
+            pending = link.lease_request
+            copied_session = any(
+                controller is not connection and controller.lease_session == envelope.session_id
+                for controller in link.controllers
+            ) or (
+                pending is not None
+                and pending.controller is not connection
+                and pending.envelope.session_id == envelope.session_id
+            )
+            if copied_session:
+                if envelope.type != "safety.estop":
+                    self._reject(connection, envelope, ErrorCode.CONFLICT)
+                    return
+                # Preserve emergency stop access without advancing the lease owner's sequence.
+                envelope = envelope.model_copy(update={"session_id": connection.safety_session})
+        if envelope.type in SAFETY_TYPES:
+            # A safety-only command can target the authenticated current socket without
+            # relying on a browser snapshot; it can never grant motion authority.
+            envelope = envelope.model_copy(update={"connection_epoch": agent.epoch})
+            raw = serialize_envelope(envelope)
+        if envelope.type == "drive.challenge":
+            if (
+                connection.lease_session != envelope.session_id
+                or envelope.connection_epoch != agent.epoch
+                or link.lease_request is not None
+            ):
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+                return
+            mono = time.monotonic()
+            connection.challenges = {k: v for k, v in connection.challenges.items() if v[3] > mono}
+            if len(connection.challenges) >= 4:
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+                return
+            token = secrets.token_urlsafe(24)
+            expires = mono + DRIVE_CHALLENGE_SECONDS
+            deadline = agent.server_time(expires)
+            connection.challenges[token] = (envelope.session_id, agent.epoch, deadline, expires)
+            reply = ResponseEnvelope(
+                **envelope.model_dump(exclude={"type", "payload"}),
+                type="response",
+                payload=ResponsePayload(
+                    request_type="drive.challenge",
+                    ok=True,
+                    challenge_id=token,
+                    server_deadline=deadline,
+                ),
+            )
+            if not connection.outbox.put(serialize_envelope(reply), "response"):
+                connection.outbox.close(CLOSE_OVERLOAD)
+            return
+        if isinstance(envelope, VelocityEnvelope):
+            challenge_id = envelope.payload.challenge_id
+            grant = connection.challenges.pop(challenge_id, None) if challenge_id else None
+            if (
+                grant is None
+                or "server_deadline" in data["payload"]
+                or envelope.payload.server_deadline is not None
+                or connection.lease_session != envelope.session_id
+                or grant[0] != envelope.session_id
+                or grant[1] != agent.epoch
+                or envelope.connection_epoch != agent.epoch
+                or time.monotonic() >= grant[3]
+            ):
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+                return
+            envelope.payload.server_deadline = grant[2]
+            raw = serialize_envelope(envelope)
+        elif envelope.type in SAFETY_TYPES:
+            for controller in link.controllers:
+                controller.challenges.clear()
+        elif envelope.type in LEASE_TYPES:
+            if (
+                envelope.connection_epoch != agent.epoch
+                or link.lease_request is not None
+                or (
+                    envelope.type == "control.release"
+                    and connection.lease_session != envelope.session_id
+                )
+                or (
+                    envelope.type == "control.acquire"
+                    and any(
+                        controller.lease_session is not None
+                        and (
+                            controller is not connection
+                            or controller.lease_session != envelope.session_id
+                        )
+                        for controller in link.controllers
+                    )
+                )
+            ):
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+                return
+            connection.challenges.clear()
         kind: str = envelope.type
         if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):
             kind = VIDEO_CLOSE if envelope.type == "video.close" else VIDEO
@@ -402,6 +617,8 @@ class Hub:
                 return
         if not agent.outbox.put(raw, kind):
             self._reject(connection, envelope, ErrorCode.CONFLICT)
+        elif isinstance(envelope, SimpleEnvelope) and kind in LEASE_TYPES:
+            link.lease_request = _LeaseRequest(connection, envelope)
         elif kind == VIDEO_CLOSE:
             connection.video_session_id = None
 

@@ -38,7 +38,6 @@ def decode_rgb(
     return ImageFrame(stamp, width, height, encoding, packed)
 
 
-
 def decode_depth(
     stamp: float,
     width: int,

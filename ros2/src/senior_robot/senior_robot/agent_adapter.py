@@ -42,12 +42,14 @@ class AdapterCore:
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
         server_heartbeat: Callable[[int, float], bool] | None = None,
+        require_source_deadline: bool = False,
     ) -> None:
         self._robot_id = robot_id
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
         self._server_heartbeat = server_heartbeat
+        self._require_source_deadline = require_source_deadline
         self._active_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
@@ -63,6 +65,8 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind == "identity":
+            return {"ok": message.get("robot_id") == self._robot_id}
         if kind == "server_heartbeat":
             epoch, deadline = message.get("connection_epoch"), message.get("deadline")
             if (
@@ -146,7 +150,17 @@ class AdapterCore:
         received_at = message.get("received_at")
         if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
             received_at = None
-        result = self._submit(envelope, received_at)
+        local_deadline = message.get("local_deadline")
+        if isinstance(local_deadline, bool) or not isinstance(local_deadline, (int, float)):
+            local_deadline = None
+        if isinstance(envelope, VelocityEnvelope) and self._require_source_deadline:
+            if local_deadline is None:
+                return {"ok": False, "error": "bad_request"}
+        if local_deadline is not None:
+            result = self._submit(envelope, received_at, float(local_deadline))
+        else:
+            # //Compatible: isolated legacy adapter callers do not carry an absolute deadline.
+            result = self._submit(envelope, received_at)
         if not result.accepted:
             # The agent distinguishes stale frames from an unconfirmed safety request.
             return {"ok": False, "accepted": False, "error": result.error.value}
@@ -176,10 +190,13 @@ def main() -> None:
 
         core = AdapterCore(
             robot_id=robot_id,
-            submit=lambda envelope, received_at=None: node.submit(envelope, received_at),
+            submit=lambda envelope, received_at=None, local_deadline=None: node.submit(
+                envelope, received_at, local_deadline=local_deadline
+            ),
             disconnect=node.disconnect,
             request_exit=request_exit,
             server_heartbeat=node.server_heartbeat,
+            require_source_deadline=True,
         )
 
         async def serve() -> None:

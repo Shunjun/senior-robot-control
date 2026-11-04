@@ -15,12 +15,17 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
     from senior_robot.depth_ingress import DepthIngress
 
     rclpy.init()
-    node = DepthIngress(parameter_overrides=[
-        Parameter("min_range_m", value=0.1), Parameter("max_range_m", value=8.0),
-        Parameter("range_error_m", value=0.01), Parameter("row_stride", value=1),
-        Parameter("column_stride", value=1), Parameter("max_age_s", value=0.5),
-        Parameter("transform_static", value=True),
-    ])
+    node = DepthIngress(
+        parameter_overrides=[
+            Parameter("min_range_m", value=0.1),
+            Parameter("max_range_m", value=8.0),
+            Parameter("range_error_m", value=0.01),
+            Parameter("row_stride", value=1),
+            Parameter("column_stride", value=1),
+            Parameter("max_age_s", value=0.5),
+            Parameter("transform_static", value=True),
+        ]
+    )
     captured = []
     node._publisher = SimpleNamespace(publish=captured.append)
     gids = {node._depth_topic: "01" * 24, node._info_topic: "02" * 24}
@@ -29,7 +34,9 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
     tf.header.frame_id = "base_link"
     tf.child_frame_id = "camera_optical_frame"
     tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = (
-        0.2316, 0.00224, 0.1282
+        0.2316,
+        0.00224,
+        0.1282,
     )
     tf.transform.rotation.x, tf.transform.rotation.y = -0.5, 0.5
     tf.transform.rotation.z, tf.transform.rotation.w = -0.5, 0.5
@@ -48,11 +55,16 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
         image.capture.stamp, image.capture.frame_id = stamp, "camera_optical_frame"
         image.width = image.height = 3
         image.encoding, image.step = "32FC1", 16
-        image.data = b"".join(struct.pack("<fff", *row) + b"pad!" for row in (
-            (math.nan, 1.0, math.nan), (math.nan, 0.6, math.nan),
-            (math.nan, 0.4, math.nan),
-        ))
+        image.data = b"".join(
+            struct.pack("<fff", *row) + b"pad!"
+            for row in (
+                (math.nan, 1.0, math.nan),
+                (math.nan, 0.6, math.nan),
+                (math.nan, 0.4, math.nan),
+            )
+        )
         import time
+
         for message, bridge_gid, raw_gid in (
             (image, gids[node._depth_topic], "03" * 24),
             (info, gids[node._info_topic], "04" * 24),
@@ -119,16 +131,26 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
     from senior_robot.safety_node import SafetyGate
 
     rclpy.init()
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=0.5),
-        Parameter("measurement_max_age", value=0.5),
-        Parameter("depth_policy", value="required"),
-    ])
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=0.5),
+            Parameter("measurement_max_age", value=0.5),
+            Parameter("depth_policy", value="required"),
+        ]
+    )
     monkeypatch.setattr(gate, "_depth_topology_ready", lambda: True)
     gate._depth_relay_gid = "aa" * 24
-    monkeypatch.setattr(gate, "get_publishers_info_by_topic", lambda topic: [SimpleNamespace(
-        endpoint_gid=bytes.fromhex("11" * 24 if topic == gate._raw_depth_topic else "22" * 24)
-    )])
+    monkeypatch.setattr(
+        gate,
+        "get_publishers_info_by_topic",
+        lambda topic: [
+            SimpleNamespace(
+                endpoint_gid=bytes.fromhex(
+                    "11" * 24 if topic == gate._raw_depth_topic else "22" * 24
+                )
+            )
+        ],
+    )
     relay_sequence = 0
     stops = []
     monkeypatch.setattr(gate, "_publish", lambda velocity, reason: stops.append((velocity, reason)))
@@ -142,9 +164,9 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
         msg.raw_source, msg.camera_info_source = "33" * 24, "44" * 24
         msg.calibration_id = "a" * 64
         msg.frame_id, msg.body_frame = "camera_optical_frame", "base_link"
-        msg.stamp = msg.camera_info_stamp = msg.received_ros = msg.camera_info_received_ros = (
-            Time(nanoseconds=now.nanoseconds).to_msg()
-        )
+        msg.stamp = msg.camera_info_stamp = msg.received_ros = msg.camera_info_received_ros = Time(
+            nanoseconds=now.nanoseconds
+        ).to_msg()
         msg.received_steady = msg.camera_info_received_steady = time.monotonic()
         msg.transform_static, msg.valid = True, True
         msg.width = msg.height = 3
@@ -170,7 +192,9 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
         value.body = msg
         owner = value.owner
         owner.relay_gid, owner.relay_boot, owner.relay_sequence = (
-            gate._depth_relay_gid, "relay", relay_sequence
+            gate._depth_relay_gid,
+            "relay",
+            relay_sequence,
         )
         owner.owner_gid, owner.owner_epoch = "55" * 24, epoch
         owner.owner_generation, owner.owner_sequence = (1 if epoch == "epoch-a" else 2), sequence
@@ -238,17 +262,24 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
     from senior_robot.safety_node import SafetyGate
 
     rclpy.init()
-    ingress = DepthIngress(parameter_overrides=[
-        Parameter("min_range_m", value=0.1), Parameter("max_range_m", value=8.0),
-        Parameter("range_error_m", value=0.01), Parameter("row_stride", value=1),
-        Parameter("column_stride", value=1), Parameter("max_age_s", value=1.0),
-        Parameter("transform_static", value=True),
-    ])
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=1.0),
-        Parameter("measurement_max_age", value=1.0),
-        Parameter("depth_policy", value="required"),
-    ])
+    ingress = DepthIngress(
+        parameter_overrides=[
+            Parameter("min_range_m", value=0.1),
+            Parameter("max_range_m", value=8.0),
+            Parameter("range_error_m", value=0.01),
+            Parameter("row_stride", value=1),
+            Parameter("column_stride", value=1),
+            Parameter("max_age_s", value=1.0),
+            Parameter("transform_static", value=True),
+        ]
+    )
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=1.0),
+            Parameter("measurement_max_age", value=1.0),
+            Parameter("depth_policy", value="required"),
+        ]
+    )
     fixture = rclpy.create_node("raw_receipt")
     depth_pub = fixture.create_publisher(
         BoundedRawImage, "/safety/raw/depth", qos_profile_sensor_data
@@ -286,12 +317,15 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
         value.owner.reason = body.reason
         fenced_pub.publish(value)
 
-    fixture.create_subscription(BoundedDepthEvidence, "/safety/depth_candidate", forward_fixture,
-                                qos_profile_sensor_data)
+    fixture.create_subscription(
+        BoundedDepthEvidence, "/safety/depth_candidate", forward_fixture, qos_profile_sensor_data
+    )
     tf = TransformStamped()
     tf.header.frame_id, tf.child_frame_id = "base_link", "camera_optical_frame"
     tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = (
-        0.2316, 0.00224, 0.1282
+        0.2316,
+        0.00224,
+        0.1282,
     )
     tf.transform.rotation.x, tf.transform.rotation.y = -0.5, 0.5
     tf.transform.rotation.z, tf.transform.rotation.w = -0.5, 0.5
@@ -316,10 +350,14 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
         image.capture.stamp, image.capture.frame_id = stamp, "camera_optical_frame"
         image.width = image.height = 3
         image.encoding, image.step = "32FC1", 16
-        image.data = b"".join(struct.pack("<fff", *row) + b"pad!" for row in (
-            (math.nan, 1.0, math.nan), (math.nan, 0.6, math.nan),
-            (math.nan, 0.4, math.nan),
-        ))
+        image.data = b"".join(
+            struct.pack("<fff", *row) + b"pad!"
+            for row in (
+                (math.nan, 1.0, math.nan),
+                (math.nan, 0.6, math.nan),
+                (math.nan, 0.4, math.nan),
+            )
+        )
         for message, topic, raw in (
             (image, "/safety/raw/depth", "01" * 24),
             (info, "/safety/raw/depth_info", "02" * 24),
@@ -382,20 +420,26 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     from senior_control.models import Velocity
 
     rclpy.init()
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=0.5),
-        Parameter("measurement_max_age", value=0.5),
-        Parameter("command_ttl_seconds", value=0.5),
-    ])
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=0.5),
+            Parameter("measurement_max_age", value=0.5),
+            Parameter("command_ttl_seconds", value=0.5),
+        ]
+    )
     emitted = []
     monkeypatch.setattr(
-        gate, "_publish", lambda velocity, reason: emitted.append((velocity, reason))
+        gate, "_publish", lambda velocity, reason, **_: emitted.append((velocity, reason))
     )
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+    monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     gate._command = Velocity(0.05, 0.0)
     gate._command_monotonic = time.monotonic()
+    gate._command_deadline = (
+        gate._command_monotonic + gate.get_parameter("command_ttl_seconds").value
+    )
     now_ros = gate.get_clock().now().nanoseconds / 1e9
     assert gate._freshness.scan(now_ros, gate._command_monotonic, now_ros)
     assert gate._freshness.measured(now_ros, gate._command_monotonic, now_ros)
@@ -416,10 +460,14 @@ def test_depth_ingress_uses_only_bounded_bridge_types_and_embeds_captures():
     from senior_robot.depth_ingress import DepthIngress
 
     rclpy.init()
-    node = DepthIngress(parameter_overrides=[
-        Parameter("min_range_m", value=0.1), Parameter("max_range_m", value=8.0),
-        Parameter("range_error_m", value=0.01), Parameter("max_age_s", value=0.5),
-    ])
+    node = DepthIngress(
+        parameter_overrides=[
+            Parameter("min_range_m", value=0.1),
+            Parameter("max_range_m", value=8.0),
+            Parameter("range_error_m", value=0.01),
+            Parameter("max_age_s", value=0.5),
+        ]
+    )
     try:
         subscriptions = {item.topic_name: item.msg_type for item in node._subscriptions}
         assert subscriptions["/safety/raw/depth"] is BoundedRawImage
@@ -440,8 +488,10 @@ def native_bridge_process():
     pytest.importorskip("rclpy")
     from ament_index_python.packages import get_package_prefix
 
-    executable = Path(get_package_prefix("senior_sensor_ingress")) / "lib" / (
-        "senior_sensor_ingress/raw_receipt_node"
+    executable = (
+        Path(get_package_prefix("senior_sensor_ingress"))
+        / "lib"
+        / ("senior_sensor_ingress/raw_receipt_node")
     )
     bridge = subprocess.Popen(
         [str(executable)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -471,25 +521,35 @@ def test_native_bridge_depth_ingress_gate_end_to_end_and_raw_failure(native_brid
 
     bridge = native_bridge_process
     rclpy.init()
-    ingress = DepthIngress(parameter_overrides=[
-        Parameter("min_range_m", value=0.1), Parameter("max_range_m", value=8.0),
-        Parameter("range_error_m", value=0.01), Parameter("row_stride", value=1),
-        Parameter("column_stride", value=1), Parameter("max_age_s", value=1.0),
-        Parameter("transform_static", value=True),
-    ])
-    gate = SafetyGate(parameter_overrides=[
-        Parameter("observation_max_age", value=1.0),
-        Parameter("measurement_max_age", value=1.0),
-        Parameter("depth_policy", value="required"),
-    ])
+    ingress = DepthIngress(
+        parameter_overrides=[
+            Parameter("min_range_m", value=0.1),
+            Parameter("max_range_m", value=8.0),
+            Parameter("range_error_m", value=0.01),
+            Parameter("row_stride", value=1),
+            Parameter("column_stride", value=1),
+            Parameter("max_age_s", value=1.0),
+            Parameter("transform_static", value=True),
+        ]
+    )
+    gate = SafetyGate(
+        parameter_overrides=[
+            Parameter("observation_max_age", value=1.0),
+            Parameter("measurement_max_age", value=1.0),
+            Parameter("depth_policy", value="required"),
+        ]
+    )
     fixture = rclpy.create_node("depth_native_e2e_fixture")
     depth_pub = fixture.create_publisher(Image, "/camera/depth/image_raw", qos_profile_sensor_data)
-    info_pub = fixture.create_publisher(CameraInfo, "/camera/depth/camera_info",
-                                        qos_profile_sensor_data)
+    info_pub = fixture.create_publisher(
+        CameraInfo, "/camera/depth/camera_info", qos_profile_sensor_data
+    )
     tf = TransformStamped()
     tf.header.frame_id, tf.child_frame_id = "base_link", "camera_optical_frame"
     tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = (
-        0.2316, 0.00224, 0.1282
+        0.2316,
+        0.00224,
+        0.1282,
     )
     tf.transform.rotation.x, tf.transform.rotation.y = -0.5, 0.5
     tf.transform.rotation.z, tf.transform.rotation.w = -0.5, 0.5

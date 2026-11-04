@@ -26,6 +26,16 @@ from senior_control.runtime.ipc import IpcClient, IpcServer
 from senior_control.storage.database import Database
 
 
+async def assert_status_only_recovery(agent: Agent) -> None:
+    runner = asyncio.create_task(agent.run())
+    try:
+        await until(lambda: agent.connected)
+        assert agent.recovery_required and not agent.eligible_for_motion
+    finally:
+        agent.request_shutdown()
+        await asyncio.wait_for(runner, 3)
+
+
 @pytest.mark.parametrize("invalidate", ["expired_heartbeat", "disable"])
 async def test_received_estop_survives_epoch_invalidation(
     tmp_path: Path, socket_path: Path, invalidate: str
@@ -114,9 +124,7 @@ async def test_received_estop_survives_epoch_invalidation(
                 await control.close()
             next_link = FakeLink(2)
             restarted = ipc_agent(journal, FakeConnector(next_link), socket_path, rig)
-            await asyncio.wait_for(restarted.run(), 2)
-            assert restarted.recovery_required and restarted._last_epoch == 0
-            assert not next_link.closed
+            await assert_status_only_recovery(restarted)
     finally:
         await server.close()
 
@@ -194,15 +202,7 @@ async def test_unresolved_estop_prevents_agent_restart_after_ipc_timeout(
                 heartbeat_seconds=0.05,
                 retry_delay=0.01,
             )
-            runner = asyncio.create_task(restarted.run())
-            try:
-                await asyncio.wait_for(asyncio.shield(runner), 1)
-                assert not restarted.connected
-                assert restarted.auth_rejected or restarted.runtime_failed
-            finally:
-                restarted.request_shutdown()
-                if not runner.done():
-                    await asyncio.wait_for(runner, 2)
+            await assert_status_only_recovery(restarted)
     finally:
         release.set()
         await server.close()
@@ -371,10 +371,7 @@ async def test_burst_of_64_safety_requests_with_blocked_ipc_retains_recovery_obl
             await journal.prepare()
             next_link = FakeLink(2)
             restarted = ipc_agent(journal, FakeConnector(next_link), socket_path, rig)
-            await asyncio.wait_for(restarted.run(), 2)
-            assert restarted.recovery_required
-            assert not restarted.connected
-            assert not next_link.closed
+            await assert_status_only_recovery(restarted)
     finally:
         await server.close()
 
@@ -432,7 +429,7 @@ async def test_storage_timeout_revokes_motion_and_disables_ros(
         await server.close()
 
 
-async def test_estop_before_first_ros_heartbeat_fails_closed(
+async def test_estop_before_first_ros_heartbeat_latches_and_stays_online(
     tmp_path: Path, socket_path: Path
 ) -> None:
     from agent_fakes import simple
@@ -450,9 +447,11 @@ async def test_estop_before_first_ros_heartbeat_fails_closed(
             try:
                 await until(lambda: agent.connected)
                 first.inbox.put_nowait(simple("safety.estop", seq=1))
-                await asyncio.wait_for(runner, 2)
+                await until(lambda: agent.recovery_required)
                 assert agent.recovery_required
                 assert await journal.safety.pending()
+                assert rig.arbiter.mode(rig.now) == "estop"
+                assert agent.connected and not agent.eligible_for_motion
                 assert not second.closed and agent._last_epoch == 1
             finally:
                 agent.request_shutdown()
@@ -691,8 +690,7 @@ async def test_replay_clear_lock_counts_toward_new_estop_deadline(
                     r.request_id == "new-estop" and r.payload.ok for r in first.responses
                 )
                 restarted = ipc_agent(journal, FakeConnector(second), socket_path, rig)
-                await asyncio.wait_for(restarted.run(), 2)
-                assert restarted.recovery_required and not restarted.connected
+                await assert_status_only_recovery(restarted)
             finally:
                 release.set()
                 agent.request_shutdown()
@@ -1168,8 +1166,7 @@ async def test_estop_lock_timeout_disables_without_waiting_for_lock_owner(
                 held = False
                 await asyncio.wait_for(runner, 2)
                 restarted = ipc_agent(journal, FakeConnector(second), socket_path, rig)
-                await asyncio.wait_for(restarted.run(), 2)
-                assert restarted.recovery_required and not restarted.connected
+                await assert_status_only_recovery(restarted)
             finally:
                 if held:
                     agent._safety_lock.release()
@@ -1178,3 +1175,87 @@ async def test_estop_lock_timeout_disables_without_waiting_for_lock_owner(
                     await asyncio.wait_for(runner, 3)
     finally:
         await server.close()
+
+
+async def test_failed_latch_write_preserves_agent_intent_for_exact_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_fakes import FakeMotion, simple
+
+    from senior_control.agent.connection import MotionRejected
+    from senior_control.errors import ErrorCode
+    from senior_control.protocol import SimpleEnvelope
+    from senior_control.safety.arbiter import PersistentEstop
+
+    path = tmp_path / "estop.json"
+    PersistentEstop.initialize(path, ROBOT)
+    latch = PersistentEstop(path, ROBOT)
+    rig = heartbeat_arbiter_rig()
+    original_write = latch.estop
+
+    class LocalMotion(FakeMotion):
+        async def estop(self, envelope: SimpleEnvelope) -> None:
+            result = latch.commit(envelope, rig.arbiter.accept(envelope, rig.now))
+            if not result.accepted:
+                raise MotionRejected("estop", result.error)
+
+    def fail_write() -> None:
+        raise OSError("injected durable write failure")
+
+    async def start(journal: AgentJournal, link: FakeLink) -> tuple[Agent, asyncio.Task[None]]:
+        agent = Agent(
+            ROBOT,
+            connector=FakeConnector(link),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=LocalMotion(),
+        )
+        runner = asyncio.create_task(agent.run())
+        await until(lambda: agent.connected)
+        return agent, runner
+
+    request = simple("safety.estop", seq=1)
+    journal_path = tmp_path / "agent.db"
+    try:
+        async with Database(journal_path) as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            await journal.prepare()
+            monkeypatch.setattr(latch, "estop", fail_write)
+            link = FakeLink(1)
+            agent, runner = await start(journal, link)
+            try:
+                link.inbox.put_nowait(request)
+                await until(lambda: agent.recovery_required)
+                retry = latch.commit(request, rig.arbiter.accept(request, rig.now))
+                assert retry.error is ErrorCode.UNAVAILABLE
+                assert await journal.safety.pending()
+            finally:
+                agent.request_shutdown()
+                await asyncio.wait_for(runner, 2)
+
+        async with Database(journal_path) as database:
+            journal = AgentJournal(database, robot_id=ROBOT)
+            assert await journal.safety.pending()
+            link = FakeLink(1)
+            agent, runner = await start(journal, link)
+            try:
+                monkeypatch.setattr(latch, "estop", original_write)
+                link.inbox.put_nowait(request)
+                await until(lambda: any(reply.payload.ok for reply in link.responses))
+                assert await journal.safety.pending()
+                replay = latch.commit(request, rig.arbiter.accept(request, rig.now))
+                assert replay.error is ErrorCode.CONFLICT
+            finally:
+                agent.request_shutdown()
+                await asyncio.wait_for(runner, 2)
+    finally:
+        latch.close()
+
+    reopened = PersistentEstop(path, ROBOT)
+    try:
+        assert reopened.latched and reopened.revision == 1
+    finally:
+        reopened.close()
