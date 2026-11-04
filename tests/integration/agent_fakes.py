@@ -150,8 +150,14 @@ class FakeMotion:
     def __init__(self, events: list[str] | None = None) -> None:
         self.events: list[str] = events if events is not None else []
 
-    async def drive(self, envelope: VelocityEnvelope, *, received_at: float | None = None) -> None:
-        del received_at
+    async def drive(
+        self,
+        envelope: VelocityEnvelope,
+        *,
+        received_at: float | None = None,
+        local_deadline: float | None = None,
+    ) -> None:
+        del received_at, local_deadline
         self.events.append(f"drive:{envelope.seq}:{envelope.payload.vx}:{envelope.payload.wz}")
 
     async def stop(self, envelope: SimpleEnvelope) -> None:

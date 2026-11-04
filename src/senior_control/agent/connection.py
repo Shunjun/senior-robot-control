@@ -77,7 +77,11 @@ class MotionPort(Protocol):
     """The only way the agent reaches motion: through the ROS-side adapter."""
 
     async def drive(
-        self, envelope: VelocityEnvelope, *, received_at: float | None = None
+        self,
+        envelope: VelocityEnvelope,
+        *,
+        received_at: float | None = None,
+        local_deadline: float | None = None,
     ) -> None: ...
 
     async def stop(self, envelope: SimpleEnvelope) -> None: ...
@@ -136,11 +140,22 @@ class IpcMotion:
             raise IpcError(f"ros side refused {kind}")
         return reply
 
-    async def drive(self, envelope: VelocityEnvelope, *, received_at: float | None = None) -> None:
+    async def drive(
+        self,
+        envelope: VelocityEnvelope,
+        *,
+        received_at: float | None = None,
+        local_deadline: float | None = None,
+    ) -> None:
         fields: dict[str, Any] = {"envelope": serialize_envelope(envelope).decode()}
         if received_at is not None:
             fields["received_at"] = received_at
+        if local_deadline is not None:
+            fields["local_deadline"] = local_deadline
         await self._ok("drive", **fields)
+
+    async def verify_robot(self, robot_id: str) -> None:
+        await self._ok("identity", robot_id=robot_id)
 
     async def stop(self, envelope: SimpleEnvelope) -> None:
         await self._ok("stop", envelope=serialize_envelope(envelope).decode())

@@ -108,6 +108,12 @@ async def run_agent(config: AgentConfig) -> int:
             heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
         )
+        try:
+            await motion.verify_robot(config.robot_id)
+        except Exception:
+            logger.exception("ROS adapter identity does not match the paired robot")
+            await motion.close()
+            return 78
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
         navigation_client = IpcClient(config.socket_path)

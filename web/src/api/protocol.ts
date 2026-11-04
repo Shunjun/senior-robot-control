@@ -9,6 +9,7 @@ export const ERROR_CODES = [
   "validation",
   "conflict",
   "offline",
+  "unavailable",
   "localization_unavailable",
   "safety_rejected",
   "timeout",
@@ -18,6 +19,7 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export const SIMPLE_REQUEST_TYPES = [
   "control.acquire",
+  "drive.challenge",
   "control.release",
   "drive.stop",
   "safety.estop",
@@ -50,6 +52,7 @@ export type RequestType = (typeof REQUEST_TYPES)[number];
 export const RESPONSE_REQUEST_TYPES = [
   ...OPERATION_REQUEST_TYPES,
   "control.acquire",
+  "drive.challenge",
   "control.release",
   "drive.velocity",
   "drive.stop",
@@ -169,6 +172,8 @@ export interface ResponsePayload {
   ok: boolean;
   error?: ErrorCode | null;
   operation_id?: string | null;
+  challenge_id?: string | null;
+  server_deadline?: number | null;
   status?: ResponseStatus | null;
 }
 
@@ -309,11 +314,18 @@ function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (status !== null && !(RESPONSE_STATUSES as readonly unknown[]).includes(status)) return null;
   const operationId = value["operation_id"] ?? null;
   if (operationId !== null && typeof operationId !== "string") return null;
+  const challengeId = value["challenge_id"] ?? null;
+  const serverDeadline = value["server_deadline"] ?? null;
+  if (challengeId !== null && !isText(challengeId, 128)) return null;
+  if (serverDeadline !== null && (!isFiniteNumber(serverDeadline) || serverDeadline <= 0)) return null;
+  if (requestType === "drive.challenge" && value["ok"] && (challengeId === null || serverDeadline === null)) return null;
   return {
     request_type: requestType as ResponsePayload["request_type"],
     ok: value["ok"],
     error: error as ErrorCode | null,
     operation_id: operationId,
+    challenge_id: challengeId,
+    server_deadline: serverDeadline,
     status: status as ResponseStatus | null,
   };
 }

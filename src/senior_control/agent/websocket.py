@@ -51,6 +51,7 @@ class WebSocketLink:
         self._max_offset = max_clock_offset
         self._pending: tuple[str, float, float] | None = None
         self._clock_anchor: tuple[float, float] | None = None
+        self._server_anchor: tuple[float, float] | None = None
         self._send_lock = asyncio.Lock()
 
     async def _send(self, data: str) -> None:
@@ -126,6 +127,9 @@ class WebSocketLink:
                 ):
                     raise ValueError("heartbeat clock offset or delay outside bounds")
                 self._clock_anchor = (self._wall(), now)
+                # The server timestamp was sampled after the request was sent. Mapping it
+                # to the send instant therefore chooses the earliest possible deadline.
+                self._server_anchor = (data["server_time"], pending[1])
                 self._pending = None
                 return HeartbeatFrame(self._robot_id, pending[1] + self._timeout)
             envelope = validate_envelope(
@@ -146,6 +150,14 @@ class WebSocketLink:
             0 <= elapsed <= self._timeout
             and abs(self._wall() - (anchor[0] + elapsed)) <= self._max_offset
         )
+
+    def local_command_deadline(self, server_deadline: float) -> float | None:
+        """Conservatively map a server deadline onto this host's monotonic clock."""
+        anchor = self._server_anchor
+        if anchor is None or not math.isfinite(server_deadline) or not self.command_clock_valid():
+            return None
+        deadline = anchor[1] + server_deadline - anchor[0] - self._max_offset
+        return deadline if deadline > self._clock() else None
 
     async def send_response(self, envelope: ResponseEnvelope) -> None:
         await self._send(serialize_envelope(envelope).decode())

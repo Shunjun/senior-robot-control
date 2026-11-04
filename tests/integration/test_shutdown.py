@@ -1091,3 +1091,111 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
                 await agent._release()
     finally:
         await server.close()
+
+
+async def test_adapter_identity_must_match_paired_robot() -> None:
+    rig = ArbiterRig()
+    assert (await rig.core.handle({"type": "identity", "robot_id": ROBOT}))["ok"]
+    assert not (await rig.core.handle({"type": "identity", "robot_id": "other-car"}))["ok"]
+
+
+async def test_cloud_challenge_to_production_agent_and_real_ipc_arbiter(
+    tmp_path: Path, socket_path: Path
+) -> None:
+    import json
+
+    from agent_fakes import simple
+
+    from senior_control.agent.websocket import WebSocketLink
+    from senior_control.cloud.limits import CloudLimits
+    from senior_control.cloud.relay import Hub
+    from senior_control.protocol import serialize_envelope
+    from senior_control.safety.arbiter import Arbiter
+
+    arbiter = Arbiter(ROBOT, 0.1, 1.0, 0.3, require_server_heartbeat=True)
+    adapter = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda envelope, received_at=None, local_deadline=None: arbiter.accept(
+            envelope, time.monotonic(), received_at=received_at, local_deadline=local_deadline
+        ),
+        disconnect=arbiter.disconnect,
+        request_exit=lambda: None,
+        server_heartbeat=lambda epoch, deadline: arbiter.server_heartbeat(
+            epoch, time.monotonic(), deadline
+        ),
+        require_source_deadline=True,
+    )
+    server = IpcServer(socket_path, adapter.handle)
+    await server.start()
+    hub = Hub(CloudLimits())
+    connection = hub.attach_agent(ROBOT)
+    controller = hub.attach_controller(ROBOT, "authenticated")
+    assert controller is not None
+
+    class Wire:
+        async def send(self, data: str) -> None:
+            hub.handle_agent_frame(connection, data.encode())
+
+        async def recv(self) -> str:
+            data = await connection.outbox.get()
+            if isinstance(data, int):
+                raise ConnectionError("closed")
+            return data.decode()
+
+        async def close(self) -> None:
+            connection.outbox.close(1000)
+
+    async def response(request_id: str) -> dict[str, Any]:
+        while True:
+            frame = await asyncio.wait_for(controller.outbox.get(), 2.0)
+            assert isinstance(frame, bytes)
+            parsed = json.loads(frame)
+            if parsed["type"] == "response" and parsed["request_id"] == request_id:
+                return parsed["payload"]
+
+    link = WebSocketLink(Wire(), ROBOT, connection.epoch, heartbeat_timeout=0.4)
+    async with Database(tmp_path / "robot.db") as database:
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+
+        async def connect() -> WebSocketLink:
+            return link
+
+        agent = Agent(
+            ROBOT,
+            connector=connect,
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=IpcMotion(IpcClient(socket_path)),
+            heartbeat_seconds=0.05,
+            retry_delay=1.0,
+            source_clock_verified=False,
+        )
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: agent.eligible_for_motion)
+            acquire = simple("control.acquire", seq=1, request_id="acquire")
+            hub.handle_control_frame(controller, serialize_envelope(acquire))
+            assert (await response("acquire"))["ok"]
+            challenge = simple("drive.challenge", seq=2, request_id="challenge")
+            hub.handle_control_frame(controller, serialize_envelope(challenge))
+            grant = await response("challenge")
+            assert grant["ok"]
+            velocity = json.loads(serialize_envelope(acquire))
+            velocity.update(
+                type="drive.velocity",
+                request_id="velocity",
+                seq=3,
+                payload={"vx": 0.1, "wz": 0.0, "challenge_id": grant["challenge_id"]},
+            )
+            hub.handle_control_frame(controller, json.dumps(velocity).encode())
+            assert (await response("velocity"))["ok"]
+            assert arbiter.tick(time.monotonic()).vx == 0.1
+            await until(lambda: arbiter.tick(time.monotonic()).vx == 0.0, timeout=1.0)
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+    await server.close()

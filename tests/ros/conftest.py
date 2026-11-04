@@ -34,6 +34,7 @@ def fenced_scan_fixture(monkeypatch):
     import time
     from types import SimpleNamespace
 
+    pytest.importorskip("rclpy")
     from rclpy.time import Time
     from senior_motion_msgs.msg import FencedSafetyScan
 

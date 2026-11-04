@@ -61,11 +61,20 @@
 - 浏览器帧发给 agent 前的检查：
   - 帧不合法或超限：关闭连接（1007 / 1009）。
   - `robot_id` 与连接的机器人不同，或帧类型是 `response`：回 `ResponseEnvelope`，`ok=false`，`error=validation`，不转发。
-  - 已过期（`expires_at`）：回 `error=timeout`。
+  - 一般命令已过期（`expires_at`）：回 `error=timeout`。驾驶命令按下述云端期限验证；租约和停止类指令不依赖浏览器时钟。
   - 机器人没有在线 agent：回 `error=offline`。
   - agent 发送队列已满：回 `error=conflict`。
   - 其余帧原样转发给当前 epoch 的 agent。
 - 拒绝响应回显原帧的 `robot_id`、`session_id`、`connection_epoch`、`request_id`、`seq`。
+
+### 驾驶资格与急停
+
+- `control.acquire` 经车端确认后，同一浏览器 socket 可为该会话及当前车端代次请求 `drive.challenge`（空 `payload`）。云端响应携带 `challenge_id` 和 `server_deadline`，有效期 0.3 秒。
+- 每条 `drive.velocity` 的 `payload` 包含 `vx`、`wz` 和一次性的 `challenge_id`。浏览器不得提供 `server_deadline`（包括 `null`）。云端核对资格后才写入期限，期限与同一车端连接的心跳时间使用同一个单调时间基准。车端通过时钟校验后将期限换算到本地单调时钟。车端配置更短的驾驶时限时，仍从 challenge 的签发时刻计算，过期样本将被拒绝。
+- 车端连接换代、租约重新申请或释放、停止类指令使已有 challenge 失效。重新申请租约会清除上一租约的速度，车端确认后方可申请新的 challenge。已确认的租约绑定原控制 socket。持有租约的 socket 断开后，云端清除尚未发送的速度并发送该会话的 `control.release`。车端确认释放后，新控制 socket 可在当前车端代次申请租约。租约变更超时未收到确认时，云端关闭车端连接以撤销原代次。
+- `safety.estop` 可在浏览器还未收到状态快照时发送。云端使用已认证的当前车端代次；急停可先于该代次的 ROS 心跳到达并锁定，但不授予驾驶权限。生产车端仍不接受远程急停复位。
+
+以上描述当前实现；浏览器到 ROS 底盘的运行验收仍需在目标环境执行。
 
 ### 有界队列
 

@@ -59,10 +59,19 @@ export class CommandError extends Error {
   }
 }
 
+/** A sample has no current server challenge; it is discarded rather than queued. */
+export class MotionNotReadyError extends CommandError {
+  override name = "MotionNotReadyError";
+  constructor() {
+    super("safety_rejected", "no current motion challenge");
+  }
+}
+
 const COMMAND_ERROR_TEXT: Record<ErrorCode, string> = {
   validation: "指令不合法或不属于这台设备",
   conflict: "指令与当前状态冲突，或设备通道已满",
   offline: "车辆离线或控制通道未连接",
+  unavailable: "车端能力暂不可用",
   localization_unavailable: "定位不可用",
   safety_rejected: "安全保护拒绝了该指令",
   timeout: "指令已过期或车端未在时限内应答",
@@ -191,6 +200,9 @@ export class HttpControlApi implements ControlApi {
 // ---------------------------------------------------------------- control socket
 
 export interface RobotLink {
+  /** Whether this link implements the challenge-based motion protocol. */
+  readonly supportsMotionChallenges?: boolean;
+  subscribeMotionRevoked?(listener: (authorityLost: boolean) => void): () => void;
   connect(robotId: string): Promise<void>;
   disconnect(): void;
   /** Resolves with the robot's response only when it says ok; every failure rejects. */
@@ -204,6 +216,7 @@ export interface RobotLink {
 
 export interface SocketLike {
   readyState: number;
+  bufferedAmount: number;
   send(data: string): void;
   close(code?: number): void;
   onopen: (() => void) | null;
@@ -240,12 +253,16 @@ function openBrowserSocket(url: string): SocketLike {
 
 interface Pending {
   type: string;
+  sessionId: string;
+  epoch: number;
+  seq: number;
   resolve: (value: ResponsePayload) => void;
   reject: (error: CommandError) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
 export class RobotClient implements RobotLink {
+  readonly supportsMotionChallenges = true;
   private readonly socketFactory: (url: string) => SocketLike;
   private readonly staleAfterMs: number;
   private readonly requestTimeoutMs: number;
@@ -253,6 +270,11 @@ export class RobotClient implements RobotLink {
   private readonly statusListeners = new Set<(status: LinkStatus) => void>();
   private readonly videoListeners = new Set<(frame: VideoSignalEnvelope) => void>();
   private readonly pending = new Map<string, Pending>();
+  private readonly motionListeners = new Set<(authorityLost: boolean) => void>();
+  private motionLease = false;
+  private motionVersion = 0;
+  private challenge: { id: string; requestedAt: number } | null = null;
+  private challengePending: symbol | null = null;
 
   private generation = 0;
   private socket: SocketLike | null = null;
@@ -260,6 +282,8 @@ export class RobotClient implements RobotLink {
   private sessionId = "";
   /** The agent epoch the last snapshot frame delivered. 0 means none: no agent owns epoch 0. */
   private epoch = 0;
+  private epochFrontier = 0;
+  private retiredEpoch = 0;
   private seq = 0;
   private latest: RobotSnapshot | null = null;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -277,6 +301,8 @@ export class RobotClient implements RobotLink {
     this.robotId = robotId;
     this.sessionId = `web-${crypto.randomUUID()}`;
     this.epoch = 0;
+    this.epochFrontier = 0;
+    this.retiredEpoch = 0;
     this.seq = 0;
     this.setStatus({ state: "connecting", robotId, closeCode: null });
 
@@ -328,22 +354,48 @@ export class RobotClient implements RobotLink {
   }
 
   request<T = ResponsePayload>(type: string, payload: unknown): Promise<T> {
-    const socket = this.socket;
-    const robotId = this.robotId;
     if (!isRequestType(type)) {
       return Promise.reject(new CommandError("validation", `unsupported request type ${type}`));
     }
+    const urgent = type === "drive.stop" || type === "safety.estop";
+    const safety = urgent || type === "control.release";
+    const authorityLost = type === "safety.estop" || type === "control.release";
+    const replacingLease = type === "control.acquire" && this.motionLease;
+    if (safety || type === "control.acquire") this.invalidateMotion(authorityLost || type === "control.acquire");
+    if (replacingLease) this.notifyMotionRevoked(true);
+    const socket = this.socket;
+    const robotId = this.robotId;
     if (socket === null || robotId === null || socket.readyState !== SOCKET_OPEN) {
+      if (safety) this.notifyMotionRevoked(authorityLost);
       return Promise.reject(new CommandError("offline", "control socket is not open"));
     }
-    // Commands name the agent's epoch, which only a live snapshot frame delivers. A cached
-    // snapshot, or none yet, would mean guessing it.
-    if (this.latest === null || this.latest.stale || this.epoch < 1) {
-      return Promise.reject(
-        new CommandError("offline", "no live snapshot from the vehicle, so no agent epoch to use"),
-      );
+    if (!urgent && (this.latest === null || this.epoch < 1 || ((this.latest.stale || !this.latest.connected) && !safety))) {
+      if (safety) this.notifyMotionRevoked(authorityLost);
+      return Promise.reject(new CommandError("offline", "no live snapshot from the vehicle, so no agent epoch to use"));
+    }
+    let wirePayload = payload;
+    if (type === "drive.velocity") {
+      if (this.challenge !== null && performance.now() - this.challenge.requestedAt >= 250) {
+        this.challenge = null;
+      }
+      if (!this.motionLease || this.challenge === null || socket.bufferedAmount > 0) {
+        this.prefetchChallenge();
+        return Promise.reject(new MotionNotReadyError());
+      }
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        return Promise.reject(new CommandError("validation", "invalid velocity"));
+      }
+      const input = payload as Record<string, unknown>;
+      if (typeof input.vx !== "number" || !Number.isFinite(input.vx) ||
+          typeof input.wz !== "number" || !Number.isFinite(input.wz) ||
+          Object.keys(input).some((key) => key !== "vx" && key !== "wz")) {
+        return Promise.reject(new CommandError("validation", "invalid velocity"));
+      }
+      wirePayload = { vx: input.vx, wz: input.wz, challenge_id: this.challenge.id };
+      this.challenge = null;
     }
     const requestId = crypto.randomUUID();
+    const version = this.motionVersion;
     const envelope: EnvelopeBase & { type: string; payload: unknown } = {
       v: PROTOCOL_VERSION,
       robot_id: robotId,
@@ -353,31 +405,89 @@ export class RobotClient implements RobotLink {
       seq: ++this.seq,
       expires_at: Date.now() / 1000 + COMMAND_TTL_SECONDS,
       type,
-      payload,
+      payload: wirePayload,
     };
     const text = JSON.stringify(envelope);
     if (text.length > MAX_MESSAGE_BYTES) {
       return Promise.reject(new CommandError("validation", "request is too large"));
     }
-    return new Promise<T>((resolve, reject) => {
+    let sent = false;
+    const response = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new CommandError("timeout", "robot did not answer in time"));
       }, this.requestTimeoutMs);
       this.pending.set(requestId, {
-        type,
-        resolve: (value) => resolve(value as T),
-        reject,
-        timer,
+        type, sessionId: envelope.session_id, epoch: envelope.connection_epoch, seq: envelope.seq,
+        resolve: (value) => resolve(value as T), reject, timer,
       });
       try {
         socket.send(text);
+        sent = true;
       } catch {
         clearTimeout(timer);
         this.pending.delete(requestId);
         reject(new CommandError("offline", "control socket rejected the frame"));
       }
     });
+    if (!sent) {
+      if (safety || type === "drive.velocity") {
+        this.invalidateMotion(true);
+        this.notifyMotionRevoked(true);
+      }
+      return response;
+    }
+    if (safety) this.notifyMotionRevoked(authorityLost);
+    if (type === "drive.stop" || type === "drive.velocity") this.prefetchChallenge();
+    if (type !== "control.acquire") return response;
+    return response.then((value) => {
+      if (version !== this.motionVersion || socket !== this.socket || this.epoch !== envelope.connection_epoch) {
+        throw new CommandError("conflict", "control authority changed before acknowledgement");
+      }
+      this.motionLease = true;
+      this.prefetchChallenge();
+      return value;
+    });
+  }
+
+  private invalidateMotion(authorityLost: boolean): void {
+    this.motionVersion += 1;
+    this.challenge = null;
+    this.challengePending = null;
+    if (authorityLost) this.motionLease = false;
+    for (const [id, pending] of this.pending) {
+      if (pending.type !== "drive.challenge") continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      pending.reject(new CommandError("offline", "motion challenge revoked"));
+    }
+  }
+
+  private notifyMotionRevoked(authorityLost: boolean): void {
+    this.motionListeners.forEach((listener) => listener(authorityLost));
+  }
+
+  private prefetchChallenge(): void {
+    if (!this.motionLease || this.challenge !== null || this.challengePending !== null) return;
+    const attempt = Symbol("challenge");
+    const version = this.motionVersion;
+    const requestedAt = performance.now();
+    this.challengePending = attempt;
+    void this.request<ResponsePayload>("drive.challenge", {}).then(
+      (response) => {
+        if (this.challengePending !== attempt || version !== this.motionVersion || !this.motionLease) return;
+        this.challengePending = null;
+        if (typeof response.challenge_id === "string" && typeof response.server_deadline === "number") {
+          this.challenge = { id: response.challenge_id, requestedAt };
+        }
+      },
+      () => {
+        if (this.challengePending !== attempt || version !== this.motionVersion) return;
+        this.challengePending = null;
+        this.invalidateMotion(true);
+        this.notifyMotionRevoked(true);
+      },
+    );
   }
 
   sendVideoSignal(
@@ -412,6 +522,11 @@ export class RobotClient implements RobotLink {
     }
   }
 
+  subscribeMotionRevoked(listener: (authorityLost: boolean) => void): () => void {
+    this.motionListeners.add(listener);
+    return () => this.motionListeners.delete(listener);
+  }
+
   subscribe(listener: (snapshot: RobotSnapshot) => void): () => void {
     this.snapshotListeners.add(listener);
     return () => this.snapshotListeners.delete(listener);
@@ -432,6 +547,8 @@ export class RobotClient implements RobotLink {
   /** Drop the socket, timers, the previous robot's snapshot and every waiting request. */
   private teardown(): void {
     this.generation += 1;
+    this.invalidateMotion(true);
+    this.notifyMotionRevoked(true);
     const socket = this.socket;
     this.socket = null;
     if (socket !== null) {
@@ -454,6 +571,8 @@ export class RobotClient implements RobotLink {
   }
 
   private onClosed(code: number): void {
+    this.invalidateMotion(true);
+    this.notifyMotionRevoked(true);
     this.clearStaleTimer();
     this.failPending("control socket closed");
     this.markStale();
@@ -476,6 +595,8 @@ export class RobotClient implements RobotLink {
     }
     const entry = this.pending.get(envelope.request_id);
     if (entry === undefined || entry.type !== envelope.payload.request_type) return;
+    if ((entry.type === "control.acquire" || entry.type === "drive.challenge") &&
+        (entry.sessionId !== envelope.session_id || entry.epoch !== envelope.connection_epoch || entry.seq !== envelope.seq)) return;
     this.pending.delete(envelope.request_id);
     clearTimeout(entry.timer);
     const { payload } = envelope;
@@ -489,8 +610,21 @@ export class RobotClient implements RobotLink {
   private onSnapshot(envelope: SnapshotEnvelope): void {
     // The cloud sends its cache with the epoch of the connected agent (0 when none is), and the
     // cache's own `stale` and `last_synced_at`. Nothing here is the browser's receipt time.
+    const incomingEpoch = envelope.connection_epoch;
+    if (incomingEpoch > 0 && (incomingEpoch < this.epochFrontier || incomingEpoch <= this.retiredEpoch)) return;
+    if (incomingEpoch === 0) this.retiredEpoch = Math.max(this.retiredEpoch, this.epochFrontier);
+    else this.epochFrontier = Math.max(this.epochFrontier, incomingEpoch);
+    const payload = incomingEpoch === 0
+      ? { ...envelope.payload, stale: true, connected: false }
+      : envelope.payload;
+    const lostLiveState = (payload.stale || !payload.connected) &&
+      (this.latest === null || (!this.latest.stale && this.latest.connected));
+    if ((this.epoch > 0 && this.epoch !== envelope.connection_epoch) || lostLiveState) {
+      this.invalidateMotion(true);
+      this.notifyMotionRevoked(true);
+    }
     this.epoch = envelope.connection_epoch;
-    this.latest = { robot_id: envelope.robot_id, ...envelope.payload };
+    this.latest = { robot_id: envelope.robot_id, ...payload };
     this.clearStaleTimer();
     if (!this.latest.stale) {
       this.staleTimer = setTimeout(() => this.markStale(), this.staleAfterMs);
@@ -503,6 +637,8 @@ export class RobotClient implements RobotLink {
     this.clearStaleTimer();
     const current = this.latest;
     if (current === null || current.stale) return;
+    this.invalidateMotion(true);
+    this.notifyMotionRevoked(true);
     this.latest = { ...current, connected: false, stale: true };
     this.snapshotListeners.forEach((listener) => listener(this.latest as RobotSnapshot));
   }

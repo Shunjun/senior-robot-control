@@ -8,6 +8,12 @@ import sys
 import pytest
 
 
+def adapter_command(script, tmp_path):
+    # Missing latch state starts fail-closed, which is sufficient for IPC lifecycle tests.
+    state = tmp_path / "estop.json"
+    return [sys.executable, "-c", script, "--ros-args", "-p", f"safety_state_path:={state}"]
+
+
 @pytest.mark.parametrize("signal_name", ["SIGINT", "SIGTERM"])
 def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     pytest.importorskip("rclpy")
@@ -25,7 +31,7 @@ main()
 print("STOPPED", flush=True)
 '''
     env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path))
-    proc = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+    proc = subprocess.Popen(adapter_command(script, tmp_path), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, env=env)
     try:
         import selectors
@@ -80,7 +86,7 @@ print("STOPPED", flush=True)
 '''
     env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path), TEST_SIGNAL=signal_name,
                TEST_STAGE=stage)
-    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
                           timeout=10, env=env, check=False)
     assert "SIGNALS_SENT" in proc.stdout, proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -123,7 +129,7 @@ else:
     raise AssertionError("failure was swallowed")
 '''
     env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path), TEST_FAILURE=failure)
-    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
                           timeout=10, env=env, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FAILURE_PROPAGATED" in proc.stdout
@@ -144,7 +150,7 @@ except OSError:
 else:
     raise AssertionError("binding over a regular file succeeded")
 '''
-    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
                           timeout=10, env=dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path)),
                           check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr

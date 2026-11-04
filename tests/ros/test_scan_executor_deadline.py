@@ -197,9 +197,11 @@ def test_nonzero_gate_returns_zero_during_blocked_or_oversized_scan(
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and (
             len(gate.get_publishers_info_by_topic("/motion/evidence")) != 1
-            or len(gate.get_publishers_info_by_topic("/safety/command_in")) != 1
+            or not gate._command_topology_ready()
+            or gate._final_identity is None
             or scan_publisher.get_subscription_count() < 1
         ):
+            command.publish_command()
             rclpy.spin_once(listener, timeout_sec=0.02)
         assert gate._topology_ready() and gate._command_topology_ready()
         submit("control.acquire")

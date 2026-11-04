@@ -1189,3 +1189,83 @@ async def test_background_fault_cannot_be_undone_by_late_heartbeat_ack(rig: Rig)
         if not task.done():
             rig.agent.request_shutdown()
             await asyncio.wait_for(task, 2)
+
+
+async def test_control_acquire_ignores_browser_clock(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        request = simple("control.acquire", seq=1)
+        request.expires_at = 1.0
+        rig.agent._admit(request)
+    finally:
+        await finish(task, rig)
+
+
+async def test_deadline_is_bound_at_receipt_before_async_dispatch(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        rig.agent.note_heartbeat(ROBOT)
+        original = rig.agent._clock.monotonic()
+        link.local_command_deadline = lambda deadline: original - 0.01  # type: ignore[attr-defined]
+        command = velocity()
+        command.payload.challenge_id = "issued-token"
+        command.payload.server_deadline = time.time() + 0.2
+        await rig.agent._receive_command(link, command)
+        await until(lambda: any(r.request_id == command.request_id for r in link.responses))
+        reply = next(r for r in link.responses if r.request_id == command.request_id)
+        assert not reply.payload.ok
+        assert not any(event.startswith("drive:") for event in rig.motion.events)
+    finally:
+        await finish(task, rig)
+
+
+async def test_recovery_channel_keeps_authenticated_heartbeat_without_motion(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        rig.agent.recovery_required = True
+        before = link.heartbeats
+        await rig.agent._beat()
+        assert link.heartbeats == before + 1
+        assert not rig.agent.eligible_for_motion
+    finally:
+        await finish(task, rig)
+
+
+async def test_pending_safety_intent_starts_restricted_status_channel(rig: Rig) -> None:
+    await rig.journal.safety.mark()
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        assert rig.agent.recovery_required
+        await rig.agent._beat()
+        assert link.heartbeats > 0
+        assert not rig.agent.eligible_for_motion
+        assert await rig.journal.safety.pending()
+    finally:
+        await finish(task, rig)
+
+
+async def test_production_velocity_uses_cloud_deadline_without_clock_bypass(rig: Rig) -> None:
+    link = FakeLink(epoch=1)
+    rig.agent._source_clock_verified = False
+    task = await start(rig, link)
+    try:
+        rig.agent.note_heartbeat(ROBOT)
+        link.local_command_deadline = lambda deadline: time.monotonic() + 0.15  # type: ignore[attr-defined]
+        command = velocity()
+        command.payload.challenge_id = "issued-token"
+        command.payload.server_deadline = time.time() + 0.2
+        await rig.agent._receive_command(link, command)
+        await until(lambda: any(r.request_id == command.request_id for r in link.responses))
+        reply = next(r for r in link.responses if r.request_id == command.request_id)
+        assert reply.payload.ok
+        assert any(event.startswith("drive:") for event in rig.motion.events)
+        assert (
+            rig.agent.metrics.series()[("agent_operations_total", "drive.velocity", "succeeded")]
+            == 1
+        )
+    finally:
+        await finish(task, rig)

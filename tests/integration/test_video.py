@@ -21,6 +21,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import time
 from dataclasses import dataclass, field
 
@@ -650,10 +651,6 @@ def candidate_frame(kind: str = "video.candidate", **changes: object) -> bytes:
     return wire_frame(kind, {"candidate": "candidate:1 1 udp 1 10.0.0.1 9 typ host"}, **changes)
 
 
-def velocity_frame(vx: float = 0.2) -> bytes:
-    return wire_frame("drive.velocity", {"vx": vx, "wz": 0.0})
-
-
 def stop_frame() -> bytes:
     return wire_frame("drive.stop", {})
 
@@ -757,8 +754,37 @@ async def test_malformed_or_misdirected_video_frames_are_refused() -> None:
 async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     pytest.importorskip("fastapi")
     rig = WireRig(outbox_frames=3)
-    drive = velocity_frame(0.2)
-    rig.hub.handle_control_frame(rig.controller, drive)
+    acquire = wire_frame("control.acquire", {})
+    rig.hub.handle_control_frame(rig.controller, acquire)
+    assert await rig.agent.outbox.get() == acquire
+    rig.hub.handle_agent_frame(
+        rig.agent,
+        json.dumps(
+            {
+                **json.loads(acquire),
+                "type": "response",
+                "payload": {"request_type": "control.acquire", "ok": True},
+            }
+        ).encode(),
+    )
+    await rig.controller.outbox.get()
+
+    async def queue_velocity(vx: float, seq: int) -> None:
+        rig.hub.handle_control_frame(rig.controller, wire_frame("drive.challenge", {}, seq=seq))
+        grant = json.loads(await rig.controller.outbox.get())["payload"]
+        assert grant["ok"]
+        rig.hub.handle_control_frame(
+            rig.controller,
+            wire_frame(
+                "drive.velocity",
+                {"vx": vx, "wz": 0.0, "challenge_id": grant["challenge_id"]},
+                seq=seq + 1,
+            ),
+        )
+
+    await queue_velocity(0.2, 2)
+    (drive,) = drain_outbox(rig.agent)
+    assert json.loads(drive)["payload"]["vx"] == 0.2
     rig.hub.handle_control_frame(rig.controller, offer_frame())
     rig.hub.handle_control_frame(rig.controller, candidate_frame())
     # The outbox is full. A third video frame is refused instead of displacing the sample.
@@ -768,10 +794,15 @@ async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     assert len(drain_outbox(rig.controller)) == 1  # the refusal
 
     # A newer drive sample replaces the old one, evicting video rather than being refused.
-    newer = velocity_frame(0.4)
-    rig.hub.handle_control_frame(rig.controller, newer)
+    await rig.controller.outbox.get()  # the video refusal
+    await queue_velocity(0.4, 4)
     queue = drain_outbox(rig.agent)
-    assert queue.count(newer) == 1 and drive not in queue
+    velocities = [
+        frame["payload"]["vx"]
+        for frame in map(json.loads, queue)
+        if frame["type"] == "drive.velocity"
+    ]
+    assert velocities == [0.4] and drive not in queue
     assert not rig.controller.outbox.closed
 
     # Stop still gets through a queue full of video.
@@ -779,7 +810,7 @@ async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     flooded.hub.handle_control_frame(flooded.controller, offer_frame())
     flooded.hub.handle_control_frame(flooded.controller, candidate_frame())
     flooded.hub.handle_control_frame(flooded.controller, stop_frame())
-    assert stop_frame() in drain_outbox(flooded.agent)
+    assert json.loads(stop_frame()) in map(json.loads, drain_outbox(flooded.agent))
 
 
 async def test_video_frames_never_reach_the_supervisor_drive_slot() -> None:
@@ -876,7 +907,7 @@ async def test_the_close_frame_survives_a_stop_and_a_video_flood() -> None:
         stop_frame(),
     )
     assert len(close_frames(rig.agent)) == 1
-    assert stop_frame() in drain_outbox(rig.agent)
+    assert json.loads(stop_frame()) in map(json.loads, drain_outbox(rig.agent))
 
 
 async def test_close_is_only_sent_for_the_viewer_that_ended() -> None:
@@ -933,7 +964,7 @@ async def test_a_full_controller_queue_drops_video_and_keeps_the_socket() -> Non
 
     # Stop keeps reaching the agent, and the agent's reply still reaches the controller.
     rig.hub.handle_control_frame(rig.controller, stop_frame())
-    assert stop_frame() in drain_outbox(rig.agent)
+    assert json.loads(stop_frame()) in map(json.loads, drain_outbox(rig.agent))
     reply = wire_frame("response", {"request_type": "drive.stop", "ok": True}, connection_epoch=1)
     rig.hub.handle_agent_frame(rig.agent, reply)
     assert reply in drain_outbox(rig.controller)

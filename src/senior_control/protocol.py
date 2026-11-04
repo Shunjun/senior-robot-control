@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 
 from senior_control.errors import ErrorCode
 
+DRIVE_CHALLENGE_SECONDS = 0.3
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(
@@ -33,6 +35,8 @@ class EmptyPayload(StrictModel):
 class VelocityPayload(StrictModel):
     vx: float
     wz: float
+    challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
+    server_deadline: float | None = None
 
 
 class EnvelopeBase(StrictModel):
@@ -41,7 +45,7 @@ class EnvelopeBase(StrictModel):
     session_id: str = Field(min_length=1, max_length=128)
     connection_epoch: int = Field(ge=0)
     request_id: str = Field(min_length=1, max_length=128)
-    seq: int = Field(ge=0)
+    seq: int = Field(ge=0, le=2**63 - 1)
     expires_at: float
 
 
@@ -53,6 +57,7 @@ class VelocityEnvelope(EnvelopeBase):
 class SimpleEnvelope(EnvelopeBase):
     type: Literal[
         "control.acquire",
+        "drive.challenge",
         "control.release",
         "drive.stop",
         "safety.estop",
@@ -156,6 +161,7 @@ class ResponsePayload(StrictModel):
         "map.clear",
         "operation.query",
         "control.acquire",
+        "drive.challenge",
         "control.release",
         "drive.velocity",
         "drive.stop",
@@ -172,6 +178,8 @@ class ResponsePayload(StrictModel):
     ok: bool
     error: ErrorCode | None = None
     operation_id: str | None = None
+    challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
+    server_deadline: float | None = None
     status: (
         Literal["accepted", "dispatching", "running", "succeeded", "failed", "needs_review"] | None
     ) = None

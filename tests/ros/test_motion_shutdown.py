@@ -298,6 +298,7 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
     rclpy = pytest.importorskip("rclpy")
     from diagnostic_msgs.msg import DiagnosticArray
     from geometry_msgs.msg import Twist
+    from senior_motion_msgs.msg import FinalCommand
 
     domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
     assert domain.isdecimal() and 0 <= int(domain) <= 101, "choose an isolated ROS domain"
@@ -353,15 +354,32 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
         assert worker_pid > 0, "owned worker did not start"
         rclpy.init()
         node = rclpy.create_node("command_node")
-        publisher = node.create_publisher(Twist, "/safety/command_in", 10)
+        publisher = node.create_publisher(FinalCommand, "/safety/final_command", 10)
         statuses, outputs = [], []
         node.create_subscription(DiagnosticArray, "/safety/status", statuses.append, 10)
         node.create_subscription(Twist, "/cmd_vel", outputs.append, 10)
-        command = Twist()
-        command.linear.x = 0.05
+        barrier = FinalCommand(robot_id="robot", owner_boot_id="shutdown-test", generation=1)
+        sequence = 0
+
+        def publish_command():
+            nonlocal sequence
+            sequence += 1
+            publisher.publish(
+                FinalCommand(
+                    robot_id="robot",
+                    owner_boot_id="shutdown-test",
+                    session_id="shutdown-fixture",
+                    generation=1,
+                    connection_epoch=1,
+                    sequence=sequence,
+                    steady_deadline=time.monotonic() + 0.3,
+                    vx=0.05,
+                )
+            )
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            publisher.publish(command)
+            publisher.publish(barrier)
+            publish_command()
             rclpy.spin_once(node, timeout_sec=0.02)
             if outputs and any(
                 status.status
@@ -378,8 +396,8 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
 
         def flood():
             while not stop.is_set():
-                publisher.publish(command)
-                time.sleep(0.001)
+                publish_command()
+                time.sleep(0.002)
 
         publisher_thread = threading.Thread(target=flood, daemon=True)
         publisher_thread.start()

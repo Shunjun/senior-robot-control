@@ -106,3 +106,43 @@ async def test_link_detects_wall_clock_change_after_heartbeat() -> None:
     assert link.command_clock_valid()
     wall[0] += 1.0
     assert not link.command_clock_valid()
+
+
+async def test_server_deadline_conversion_preserves_round_trip_age_and_expires() -> None:
+    socket = Socket()
+    wall, mono = [100.0], [1.0]
+    link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: wall[0], clock=lambda: mono[0])
+    assert link.local_command_deadline(100.5) is None
+    await link.send_heartbeat()
+    request = json.loads(socket.sent[0])
+    mono[0], wall[0] = 1.02, 100.02
+    socket.inbox.append(json.dumps({**request, "type": "heartbeat.reply", "server_time": 100.01}))
+    await link.recv()
+    deadline = link.local_command_deadline(100.5)
+    assert deadline == pytest.approx(1.44)
+    mono[0], wall[0] = 1.45, 100.45
+    assert link.local_command_deadline(100.5) is None
+
+
+async def test_server_deadline_conversion_rejects_wall_clock_jump() -> None:
+    socket = Socket()
+    wall, mono = [100.0], [1.0]
+    link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: wall[0], clock=lambda: mono[0])
+    await link.send_heartbeat()
+    request = json.loads(socket.sent[0])
+    socket.inbox.append(json.dumps({**request, "type": "heartbeat.reply", "server_time": 100.0}))
+    await link.recv()
+    wall[0] += 1.0
+    assert link.local_command_deadline(100.5) is None
+
+
+async def test_server_deadline_conversion_rejects_stale_heartbeat() -> None:
+    socket = Socket()
+    wall, mono = [100.0], [1.0]
+    link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: wall[0], clock=lambda: mono[0])
+    await link.send_heartbeat()
+    request = json.loads(socket.sent[0])
+    socket.inbox.append(json.dumps({**request, "type": "heartbeat.reply", "server_time": 100.0}))
+    await link.recv()
+    wall[0], mono[0] = 100.81, 1.81
+    assert link.local_command_deadline(102.0) is None

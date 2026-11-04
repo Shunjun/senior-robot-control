@@ -389,13 +389,17 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     ])
     emitted = []
     monkeypatch.setattr(
-        gate, "_publish", lambda velocity, reason: emitted.append((velocity, reason))
+        gate, "_publish", lambda velocity, reason, **_: emitted.append((velocity, reason))
     )
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
+    monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     gate._command = Velocity(0.05, 0.0)
     gate._command_monotonic = time.monotonic()
+    gate._command_deadline = (
+        gate._command_monotonic + gate.get_parameter("command_ttl_seconds").value
+    )
     now_ros = gate.get_clock().now().nanoseconds / 1e9
     assert gate._freshness.scan(now_ros, gate._command_monotonic, now_ros)
     assert gate._freshness.measured(now_ros, gate._command_monotonic, now_ros)

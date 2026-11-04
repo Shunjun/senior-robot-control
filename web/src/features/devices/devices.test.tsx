@@ -63,6 +63,7 @@ function snapshot(robotId: string, overrides: Partial<RobotSnapshot> = {}): Robo
 }
 
 class FakeLink implements RobotLink {
+  readonly supportsMotionChallenges = true;
   connects: string[] = [];
   disconnects = 0;
   requests: Array<{ type: string; payload: unknown }> = [];
@@ -397,6 +398,7 @@ describe("HttpControlApi", () => {
 class FakeSocket implements SocketLike {
   static instances: FakeSocket[] = [];
   readyState = 0;
+  bufferedAmount = 0;
   sent: string[] = [];
   closedWith: number | undefined;
   onopen: (() => void) | null = null;
@@ -584,7 +586,7 @@ describe("RobotClient", () => {
     const { stale: _stale, last_synced_at: _synced, ...bare } = wirePayload;
     socket.receive(frame("snapshot", "robot-alpha", bare));
     expect(seen).toHaveLength(0);
-    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
+    await expect(client.request("control.acquire", {})).rejects.toMatchObject({ code: "offline" });
   });
 
   it("sends a command with the epoch the snapshot frame delivered", async () => {
@@ -598,32 +600,38 @@ describe("RobotClient", () => {
     client.disconnect();
   });
 
-  it("sends no command before any snapshot has delivered an epoch", async () => {
+  it("sends urgent commands before a snapshot and waits for a real response", async () => {
     const { client, socket } = await connected({ snapshot: false });
-    await expect(client.request("safety.estop", {})).rejects.toMatchObject({ code: "offline" });
-    expect(socket.sent).toEqual([]);
+    await expect(client.request("control.acquire", {})).rejects.toMatchObject({ code: "offline" });
+    const estop = client.request("safety.estop", {});
+    const sent = socket.lastSent();
+    expect(sent).toMatchObject({ type: "safety.estop", connection_epoch: 0 });
+    socket.receive(frame("response", "robot-alpha", { request_type: "safety.estop", ok: true }, String(sent.request_id)));
+    await expect(estop).resolves.toMatchObject({ ok: true });
+    const stop = client.request("drive.stop", {});
+    expect(socket.lastSent()).toMatchObject({ type: "drive.stop", connection_epoch: 0 });
+    client.disconnect();
+    await expect(stop).rejects.toMatchObject({ code: "offline" });
   });
 
-  it("sends no command on a stale cache or when the agent is offline", async () => {
+  it("allows an urgent stop on a stale snapshot while rejecting ordinary commands", async () => {
     const { client, socket } = await connected({ snapshot: false });
-    socket.receive(
-      frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }),
-    );
-    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
-
-    socket.receive({
-      ...frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }),
-      connection_epoch: 0,
-    });
-    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
-    expect(socket.sent).toEqual([]);
+    socket.receive(frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }));
+    await expect(client.request("navigation.start", {})).rejects.toMatchObject({ code: "offline" });
+    const stop = client.request("drive.stop", {});
+    expect(socket.lastSent()["type"]).toBe("drive.stop");
+    client.disconnect();
+    await expect(stop).rejects.toMatchObject({ code: "offline" });
   });
 
-  it("stops sending commands once the cached snapshot times out", async () => {
+  it("still permits urgent stop after the cached snapshot times out", async () => {
     const { client, socket } = await connected({ staleAfterMs: 5_000 });
     await vi.advanceTimersByTimeAsync(5_001);
-    await expect(client.request("drive.stop", {})).rejects.toMatchObject({ code: "offline" });
-    expect(socket.sent).toEqual([]);
+    await expect(client.request("navigation.start", {})).rejects.toMatchObject({ code: "offline" });
+    const stop = client.request("drive.stop", {});
+    expect(socket.lastSent()["type"]).toBe("drive.stop");
+    client.disconnect();
+    await expect(stop).rejects.toMatchObject({ code: "offline" });
   });
 
   it("marks the last snapshot stale when the socket closes", async () => {
@@ -777,4 +785,272 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
     expect([...SNAPSHOT_FIELDS]).toEqual(fieldsOf(pythonClass(protocol, "SnapshotPayload")));
     expect(MAX_MESSAGE_BYTES).toBe(Number(/MAX_MESSAGE_BYTES = (\d+)/.exec(protocol)![1]));
   });
+});
+
+describe("remote drive admission", () => {
+  it("never sends velocity without a server challenge", async () => {
+    const { client, socket } = await connected();
+    const attempt = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const rejection = attempt.catch((error: unknown) => error);
+    try {
+      expect(socket.sent).toHaveLength(0);
+      expect(await rejection).toMatchObject({ code: "safety_rejected" });
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it("does not enable the joystick before control authority is acquired", async () => {
+    FakeSocket.instances = [];
+    const link = new RobotClient({ socketFactory: (url) => new FakeSocket(url) });
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+    const socket = FakeSocket.instances[0]!;
+    act(() => socket.open());
+    act(() => socket.receive(frame("snapshot", "robot-alpha", wirePayload)));
+    expect(screen.getByRole("group", { name: "前进后退摇杆" }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("marks an existing live view stale when the control link closes", async () => {
+    const link = new FakeLink();
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+    link.emit(snapshot("robot-alpha"));
+    expect(screen.getByText("实时快照")).toBeTruthy();
+    link.emitStatus({ state: "closed", robotId: "robot-alpha", closeCode: 1006 });
+    expect(screen.queryByText("实时快照")).toBeNull();
+    expect(screen.getByText("缓存快照 · 非实时")).toBeTruthy();
+  });
+});
+
+function respondTo(socket: FakeSocket, request: Record<string, unknown>, payload: unknown): void {
+  socket.receive({
+    ...frame("response", "robot-alpha", payload, String(request["request_id"])),
+    session_id: request["session_id"],
+    connection_epoch: request["connection_epoch"],
+    seq: request["seq"],
+  });
+}
+
+describe("server motion challenges", () => {
+  it("obtains a challenge only after acquire is acknowledged and consumes it once", async () => {
+    const { client, socket } = await connected();
+    try {
+      const acquire = client.request("control.acquire", {});
+      const acquireFrame = socket.lastSent();
+      expect(socket.sent).toHaveLength(1);
+      respondTo(socket, acquireFrame, { request_type: "control.acquire", ok: true });
+      await acquire;
+      const challenge = socket.lastSent();
+      expect(challenge).toMatchObject({ type: "drive.challenge", payload: {} });
+      respondTo(socket, challenge, {
+        request_type: "drive.challenge", ok: true, challenge_id: "token-one", server_deadline: 12.5,
+      });
+      await Promise.resolve();
+      const velocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+      const sent = socket.sent.map((item) => JSON.parse(item) as Record<string, unknown>);
+      const motion = sent.find((item) => item["type"] === "drive.velocity");
+      expect(motion).toMatchObject({ payload: { vx: 0.2, wz: 0, challenge_id: "token-one" } });
+      expect(motion?.["payload"]).not.toHaveProperty("server_deadline");
+      const second = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+      await expect(second).rejects.toMatchObject({ code: "safety_rejected" });
+      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(1);
+      void velocity.catch(() => undefined);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it("cannot attach an old challenge reply after stop", async () => {
+    const { client, socket } = await connected();
+    try {
+      const acquire = client.request("control.acquire", {});
+      respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+      await acquire;
+      const oldChallenge = socket.lastSent();
+      void client.request("drive.stop", {}).catch(() => undefined);
+      respondTo(socket, oldChallenge, { request_type: "drive.challenge", ok: true, challenge_id: "stale-token", server_deadline: 12.5 });
+      await Promise.resolve();
+      await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
+      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+it("uses an acknowledged lease and server challenge for a held gesture, then stops on release", async () => {
+  FakeSocket.instances = [];
+  const link = new RobotClient({ socketFactory: (url) => new FakeSocket(url) });
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
+  const socket = FakeSocket.instances[0]!;
+  act(() => socket.open());
+  act(() => socket.receive(frame("snapshot", "robot-alpha", wirePayload)));
+  fireEvent.click(screen.getByRole("button", { name: "获取控制权" }));
+  const acquire = socket.lastSent();
+  expect(acquire.type).toBe("control.acquire");
+  act(() => respondTo(socket, acquire, { request_type: "control.acquire", ok: true }));
+  await waitFor(() => expect(socket.lastSent().type).toBe("drive.challenge"));
+  const challenge = socket.lastSent();
+  act(() => respondTo(socket, challenge, {
+    request_type: "drive.challenge", ok: true, challenge_id: "observed-token", server_deadline: 123,
+  }));
+  await act(async () => {});
+  const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+  expect(stick.getAttribute("aria-disabled")).toBe("false");
+  fireEvent.keyDown(stick, { key: "ArrowUp" });
+  const frames = socket.sent.map((item) => JSON.parse(item));
+  expect(frames.find((item) => item.type === "drive.velocity")?.payload).toEqual({
+    vx: 0.5, wz: 0, challenge_id: "observed-token",
+  });
+  fireEvent.keyUp(stick, { key: "ArrowUp" });
+  expect(socket.sent.map((item) => JSON.parse(item)).some((item) => item.type === "drive.stop")).toBe(true);
+  link.disconnect();
+});
+
+it("sends emergency stop before notifying the held gesture to stop", async () => {
+  const { client, socket } = await connected();
+  const off = client.subscribeMotionRevoked((lost) => {
+    if (lost) void client.request("drive.stop", {}).catch(() => undefined);
+  });
+  try {
+    void client.request("safety.estop", {}).catch(() => undefined);
+    expect(socket.sent.map((item) => JSON.parse(item).type)).toEqual(["safety.estop", "drive.stop"]);
+  } finally {
+    off();
+    client.disconnect();
+  }
+});
+
+it("does not prefetch another token after a velocity frame fails to send", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    respondTo(socket, socket.lastSent(), {
+      request_type: "drive.challenge", ok: true, challenge_id: "send-fail", server_deadline: 123,
+    });
+    await Promise.resolve();
+    const before = socket.sent.length;
+    const originalSend = socket.send.bind(socket);
+    socket.send = (text) => {
+      if (JSON.parse(text).type === "drive.velocity") throw new Error("send failed");
+      originalSend(text);
+    };
+    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "offline" });
+    expect(socket.sent).toHaveLength(before);
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("does not replay a dropped input when a challenge arrives later", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    const pending = socket.lastSent();
+    await expect(client.request("drive.velocity", { vx: 0.4, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
+    respondTo(socket, pending, { request_type: "drive.challenge", ok: true, challenge_id: "fresh", server_deadline: 123 });
+    await Promise.resolve();
+    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("ignores challenge replies for a different session and invalidates them on epoch change", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    const pending = socket.lastSent();
+    socket.receive({ ...frame("response", "robot-alpha", {
+      request_type: "drive.challenge", ok: true, challenge_id: "wrong-session", server_deadline: 123,
+    }, String(pending.request_id)), session_id: "other", connection_epoch: pending.connection_epoch, seq: pending.seq });
+    await Promise.resolve();
+    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
+    socket.receive({ ...frame("snapshot", "robot-alpha", wirePayload), connection_epoch: 4 });
+    respondTo(socket, pending, { request_type: "drive.challenge", ok: true, challenge_id: "old-epoch", server_deadline: 123 });
+    await Promise.resolve();
+    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
+    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("does not enqueue velocity behind a congested socket", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    respondTo(socket, socket.lastSent(), { request_type: "drive.challenge", ok: true, challenge_id: "current", server_deadline: 123 });
+    await Promise.resolve();
+    socket.bufferedAmount = 12;
+    const before = socket.sent.length;
+    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
+    expect(socket.sent).toHaveLength(before);
+    const stop = client.request("drive.stop", {});
+    void stop.catch(() => undefined);
+    expect(JSON.parse(socket.sent[before]!).type).toBe("drive.stop");
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("does not carry lease or challenge through a stale and recovered snapshot", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    respondTo(socket, socket.lastSent(), { request_type: "drive.challenge", ok: true, challenge_id: "old", server_deadline: 123 });
+    await Promise.resolve();
+    socket.receive(frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }));
+    socket.receive(frame("snapshot", "robot-alpha", wirePayload));
+    const attempted = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const rejected = attempted.catch((error: unknown) => error);
+    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
+    expect(await rejected).toMatchObject({ code: "safety_rejected" });
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("does not report a late acquire acknowledgement after stop", async () => {
+  const { client, socket } = await connected();
+  try {
+    const acquire = client.request("control.acquire", {});
+    const oldAcquire = socket.lastSent();
+    const stop = client.request("drive.stop", {});
+    void stop.catch(() => undefined);
+    respondTo(socket, oldAcquire, { request_type: "control.acquire", ok: true });
+    await expect(acquire).rejects.toMatchObject({ code: "conflict" });
+    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.challenge")).toHaveLength(0);
+  } finally {
+    client.disconnect();
+  }
+});
+
+it("does not repaint a current robot with an older agent epoch after an offline frame", async () => {
+  const { client, socket } = await connected({ snapshot: false });
+  const seen: RobotSnapshot[] = [];
+  client.subscribe((value) => seen.push(value));
+  try {
+    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "new" }), connection_epoch: 4 });
+    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old" }), connection_epoch: 3 });
+    expect(seen.map((value) => value.execution_status)).toEqual(["new"]);
+    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true, execution_status: "offline" }), connection_epoch: 0 });
+    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old" }), connection_epoch: 3 });
+    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old-again" }), connection_epoch: 4 });
+    expect(seen.map((value) => value.execution_status)).toEqual(["new", "offline"]);
+  } finally {
+    client.disconnect();
+  }
 });
