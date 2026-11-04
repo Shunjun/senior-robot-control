@@ -34,7 +34,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 rosidl_get_typesupport_target(graph_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 
 add_executable(slam_graph_node
-  src/slam_graph_node.cpp src/staged_graph.cpp src/native_capture.cpp src/bounded_scan_ingress.cpp)
+  src/slam_graph_node.cpp src/staged_graph.cpp src/native_capture.cpp src/bounded_scan_ingress.cpp
+  src/static_lidar_tf_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
 ament_target_dependencies(slam_graph_node rclcpp senior_motion_msgs sensor_msgs slam_toolbox tf2_ros)
 target_link_libraries(slam_graph_node
@@ -77,6 +78,13 @@ if(BUILD_TESTING)
   target_include_directories(test_laser_geometry PRIVATE src)
   ament_add_test(laser_geometry
     COMMAND "$<TARGET_FILE:test_laser_geometry>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
+  add_executable(test_static_lidar_tf test/test_static_lidar_tf.cpp)
+  target_compile_features(test_static_lidar_tf PRIVATE cxx_std_17)
+  target_include_directories(test_static_lidar_tf PRIVATE src)
+  ament_add_test(static_lidar_tf
+    COMMAND "$<TARGET_FILE:test_static_lidar_tf>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
   add_executable(test_native_capture test/test_native_capture.cpp src/native_capture.cpp)
@@ -127,6 +135,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:slam_graph_node>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 65
+  )
+  ament_add_test(static_lidar_tf_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_static_lidar_tf.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60
+  )
+  ament_add_test(static_lidar_tf_drift_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_static_lidar_tf.py"
+      "$<TARGET_FILE:slam_graph_node>" --drift
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60
   )
   ament_add_test(candidate_load_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"

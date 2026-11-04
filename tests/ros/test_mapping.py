@@ -88,6 +88,47 @@ def test_mapping_capture_requires_absolute_directory(mapping_launch):
         select({**defaults, "capture_directory": "relative/capture"})
 
 
+@pytest.mark.parametrize("capture", [False, True])
+def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
+    mapping_launch, tmp_path, capture
+):
+    select, defaults = mapping_launch
+    capture_directory = str(tmp_path) if capture else ""
+    relay, graph = select(
+        {**defaults, "verified_static_lidar": "true", "capture_directory": capture_directory}
+    )
+    assert relay.kwargs["package"] == "senior_sensor_ingress"
+    assert relay.kwargs["executable"] == "static_tf_receipt_node"
+    assert relay.kwargs["name"] == "slam_static_lidar_tf_receipt"
+    assert relay.kwargs["namespace"] == "/"
+    (relay_params,) = relay.kwargs["parameters"]
+    assert relay_params["input_topic"] == "/tf_static"
+    assert relay_params["output_topic"] == "/senior/slam/static_lidar_tf_receipt"
+    assert relay_params["base_frame"] == "base_link"
+    assert relay_params["camera_frame"] == "laser_link"
+    assert relay_params["expected_node_name"] == "robot_state_publisher"
+    assert relay_params["expected_namespace"] == "/"
+    assert graph.kwargs["package"] == "senior_slam_bridge"
+    assert graph.kwargs["executable"] == "slam_graph_node"
+    _, bridge = graph.kwargs["parameters"]
+    assert bridge["capture_directory"] == capture_directory
+    assert bridge["bounded_scan_topic"] == "/safety/raw/scan"
+    assert bridge["verified_static_lidar_tf_topic"] == relay_params["output_topic"]
+    assert bridge["verified_static_lidar_frame"] == relay_params["camera_frame"]
+    assert bridge["verified_static_lidar_relay_node"] == "/slam_static_lidar_tf_receipt"
+    assert bridge["verified_static_lidar_tf_source_topic"] == relay_params["input_topic"]
+    assert bridge["verified_static_lidar_tf_source_node"] == "/robot_state_publisher"
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"), [("bounded_scan_topic", "/scan"), ("lidar_frame", "base_link")]
+)
+def test_verified_static_lidar_rejects_unqualified_inputs(mapping_launch, argument, value):
+    select, defaults = mapping_launch
+    with pytest.raises(ValueError, match=argument):
+        select({**defaults, "verified_static_lidar": "true", argument: value})
+
+
 def test_mapping_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
     from senior_robot.slam_adapter import create_mapping_node

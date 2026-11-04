@@ -3,6 +3,7 @@
 #include "native_capture.hpp"
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
+#include "static_lidar_tf_ingress.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,6 +55,11 @@ public:
     const auto attempt = declare_parameter<std::string>("candidate_load_attempt", "");
     const auto capture_root = declare_parameter<std::string>("capture_directory", "");
     const auto bounded_topic = declare_parameter<std::string>("bounded_scan_topic", "");
+    const auto static_lidar_topic = declare_parameter<std::string>(
+      "verified_static_lidar_tf_topic", "");
+    if (!static_lidar_topic.empty() && bounded_topic.empty()) {
+      throw std::invalid_argument("Verified static lidar TF requires bounded scan ingress");
+    }
     if (!bounded_topic.empty() &&
       (!prefix.empty() || !digest.empty() || !attempt.empty()))
     {
@@ -71,6 +77,9 @@ public:
         disable_stock_mutations();
       }
       if (!bounded_topic.empty()) {
+        if (!static_lidar_topic.empty()) {
+          start_static_lidar_tf(static_lidar_topic);
+        }
         start_bounded_ingress(bounded_topic);
         start_graph_commit_service();
       }
@@ -139,6 +148,19 @@ private:
     ssPauseMeasurements_.reset();
   }
 
+  void start_static_lidar_tf(const std::string & topic)
+  {
+    const auto frame = declare_parameter<std::string>("verified_static_lidar_frame", "laser_link");
+    const auto relay_node = declare_parameter<std::string>(
+      "verified_static_lidar_relay_node", "/slam_static_lidar_tf_receipt");
+    const auto raw_topic = declare_parameter<std::string>(
+      "verified_static_lidar_tf_source_topic", "/tf_static");
+    const auto raw_node = declare_parameter<std::string>(
+      "verified_static_lidar_tf_source_node", "/robot_state_publisher");
+    static_lidar_tf_ = std::make_unique<StaticLidarTfIngress>(
+      *this, topic, relay_node, raw_topic, raw_node, base_frame_, frame);
+  }
+
   void start_bounded_ingress(const std::string & topic)
   {
     if (topic == scan_topic_) {
@@ -171,7 +193,7 @@ private:
           throw;
         }
         in_flight_scan_.reset();
-      });
+      }, static_lidar_tf_.get());
   }
 
   void start_owned_capture()
@@ -580,6 +602,7 @@ private:
   std::optional<double> mount_height_;
   std::optional<BoundedScanIngress::Receipt> last_committed_scan_;
   GraphCommitHistory<CommittedScanCut, 8> graph_commit_history_;
+  std::unique_ptr<StaticLidarTfIngress> static_lidar_tf_;
   std::unique_ptr<BoundedScanIngress> bounded_ingress_;
   std::unique_ptr<CaptureDirectory> capture_directory_;
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;

@@ -1,5 +1,7 @@
 #include "bounded_scan_ingress.hpp"
 
+#include "static_lidar_tf_ingress.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -97,10 +99,12 @@ bool same_geometry(const Message & lhs, const Message & rhs)
 
 BoundedScanIngress::BoundedScanIngress(
   rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
-  std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit)
+  std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
+  StaticLidarTfIngress * static_lidar_tf)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
   raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
-  base_frame_(std::move(base_frame)), submit_(std::move(submit))
+  base_frame_(std::move(base_frame)), submit_(std::move(submit)),
+  static_lidar_tf_(static_lidar_tf)
 {
   subscription_ = node_.create_subscription<Message>(
     bounded_topic_, rclcpp::SensorDataQoS().keep_last(pending_limit),
@@ -151,7 +155,7 @@ bool BoundedScanIngress::source_active()
     retire_source();
     return false;
   }
-  return true;
+  return !static_lidar_tf_ || static_lidar_tf_->source_active();
 }
 
 void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
@@ -199,7 +203,8 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   if (!current_owner(receipt) || !text_ok(receipt.bridge_boot_id) ||
     !text_ok(receipt.source_epoch) || !text_ok(receipt.frame_id) ||
-    !fresh(receipt, now_ros, steady_seconds()) || !layout_ok(*scan))
+    !fresh(receipt, now_ros, steady_seconds()) || !layout_ok(*scan) ||
+    (static_lidar_tf_ && !static_lidar_tf_->admits(receipt)))
   {
     return;
   }
@@ -255,6 +260,10 @@ void BoundedScanIngress::poll()
   if (!source_active() ||
     !fresh(receipt, node_.now().nanoseconds(), steady_seconds()))
   {
+    return;
+  }
+  if (static_lidar_tf_ && !static_lidar_tf_->verify_mount(mount)) {
+    retire_source();
     return;
   }
   pending_.pop_front();

@@ -16,6 +16,8 @@
 
 namespace senior_slam_bridge
 {
+class StaticLidarTfIngress;
+
 // All subscription and timer work runs on the owner's single-threaded executor.
 class BoundedScanIngress
 {
@@ -28,7 +30,8 @@ public:
 
   BoundedScanIngress(
     rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
-    std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit);
+    std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
+    StaticLidarTfIngress * static_lidar_tf);
 
   bool source_active();
   void retire_source();
@@ -44,6 +47,7 @@ private:
   tf2_ros::Buffer & tf_;
   const std::string bounded_topic_, raw_topic_, odom_frame_, base_frame_;
   const Submit submit_;
+  StaticLidarTfIngress * const static_lidar_tf_;
   Message::ConstSharedPtr source_;
   std::deque<Message::ConstSharedPtr> pending_;
   std::uint64_t last_sequence_{0};
