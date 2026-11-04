@@ -216,7 +216,8 @@ void CaptureDirectory::require_free_slot() const
 }
 
 CaptureArtifact CaptureDirectory::write_pair(
-  const std::vector<char> & graph, const std::vector<char> & data)
+  const std::vector<char> & graph, const std::vector<char> & data,
+  const std::function<bool()> & publication_allowed)
 {
   if (graph.empty() || data.empty() ||
     graph.size() > max_graph_file_bytes || data.size() > max_graph_file_bytes)
@@ -233,6 +234,9 @@ CaptureArtifact CaptureDirectory::write_pair(
     try {
       write_file(slot.get(), "graph.posegraph", graph);
       write_file(slot.get(), "graph.data", data);
+      if (publication_allowed && !publication_allowed()) {
+        throw std::runtime_error("Graph capture owner retired before publication");
+      }
     } catch (...) {
       unlinkat(slot.get(), "graph.posegraph", 0);
       unlinkat(slot.get(), "graph.data", 0);

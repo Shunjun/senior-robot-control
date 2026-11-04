@@ -51,9 +51,9 @@ public:
     const auto capture_root = declare_parameter<std::string>("capture_directory", "");
     const auto bounded_topic = declare_parameter<std::string>("bounded_scan_topic", "");
     if (!bounded_topic.empty() &&
-      (!prefix.empty() || !digest.empty() || !attempt.empty() || !capture_root.empty()))
+      (!prefix.empty() || !digest.empty() || !attempt.empty()))
     {
-      throw std::invalid_argument("Bounded scan ingress is separate from capture and candidate load");
+      throw std::invalid_argument("Bounded scan ingress is separate from candidate load");
     }
     if (prefix.empty() && digest.empty() && attempt.empty()) {
       if (!capture_root.empty() || !bounded_topic.empty()) {
@@ -63,10 +63,14 @@ public:
         capture_directory_ = std::make_unique<CaptureDirectory>(capture_root);
       }
       configure();
+      if (!capture_root.empty() || !bounded_topic.empty()) {
+        disable_stock_mutations();
+      }
+      if (!bounded_topic.empty()) {
+        start_bounded_ingress(bounded_topic);
+      }
       if (capture_directory_) {
         start_owned_capture();
-      } else if (!bounded_topic.empty()) {
-        start_bounded_ingress(bounded_topic);
       }
     } else {
       if (!capture_root.empty()) {
@@ -121,7 +125,6 @@ private:
 
   void start_bounded_ingress(const std::string & topic)
   {
-    disable_stock_mutations();
     if (topic == scan_topic_) {
       throw std::invalid_argument("Bounded scan topic must differ from the raw scan topic");
     }
@@ -148,7 +151,6 @@ private:
 
   void start_owned_capture()
   {
-    disable_stock_mutations();
     capture_graph_ = create_service<CaptureGraph>(
       "/senior/slam/capture_graph",
       [this](const CaptureGraph::Request::SharedPtr, CaptureGraph::Response::SharedPtr response) {
@@ -208,8 +210,12 @@ private:
     std::vector<char> graph_bytes;
     std::vector<char> dataset_bytes;
     GraphCommitWatermark watermark;
+    std::optional<BoundedScanIngress::Receipt> receipt;
     {
       const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+      if (bounded_ingress_ && last_committed_scan_ && !bounded_ingress_->source_active()) {
+        return;
+      }
       boost::mutex::scoped_lock lock(smapper_mutex_);
       response.sample_stamp = now();
       watermark = graph_commit_;
@@ -229,6 +235,12 @@ private:
         case SnapshotStatus::ok:
           break;
       }
+      if (bounded_ingress_) {
+        if (!last_committed_scan_) {
+          return;
+        }
+        receipt = last_committed_scan_;
+      }
       graph_bytes = capture_native_archive(
         [mapper](const std::string & path) {mapper->SaveToFile(path);});
       dataset_bytes = capture_native_archive(
@@ -237,11 +249,21 @@ private:
     // Build the response before reserving the single output slot.
     decltype(response.keyframes) keyframes;
     fill_keyframes(frames, keyframes);
-    auto artifact = capture_directory_->write_pair(graph_bytes, dataset_bytes);
+    const auto publication_allowed = [this]() {
+        return !bounded_ingress_ || bounded_ingress_->source_active();
+      };
+    if (!publication_allowed()) {
+      return;
+    }
+    auto artifact = capture_directory_->write_pair(graph_bytes, dataset_bytes, publication_allowed);
     response.keyframes = std::move(keyframes);
     response.relative_prefix = std::move(artifact.relative_prefix);
     response.pair_digest = std::move(artifact.pair_digest);
     fill_commit_watermark(response, watermark);
+    if (receipt) {
+      response.last_committed_scan = std::move(*receipt);
+      response.last_committed_scan_valid = true;
+    }
     response.status = CaptureGraph::Response::OK;
   }
 

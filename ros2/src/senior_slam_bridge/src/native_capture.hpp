@@ -48,7 +48,10 @@ public:
   CaptureDirectory & operator=(const CaptureDirectory &) = delete;
 
   void require_free_slot() const;
-  CaptureArtifact write_pair(const std::vector<char> & graph, const std::vector<char> & data);
+  // Recheck publication authority after the files are synced, while rollback is still possible.
+  CaptureArtifact write_pair(
+    const std::vector<char> & graph, const std::vector<char> & data,
+    const std::function<bool()> & publication_allowed = {});
 
 private:
   int directory_;

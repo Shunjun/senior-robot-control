@@ -3,11 +3,20 @@
 import os
 import secrets
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import rclpy
-from probe_candidate_load import candidate, wait_for_disappearance
-from probe_native_capture import CAPTURE_SERVICE, OWNED_NODE, owned_arguments
+from probe_candidate_load import (
+    RECEIPT,
+    candidate,
+    candidate_arguments,
+    observe,
+    request,
+    wait_for_disappearance,
+)
+from probe_native_capture import CAPTURE_SERVICE, OWNED_NODE, check_capture, owned_arguments
 from probe_read_graph import (
     BASE,
     LASER,
@@ -20,7 +29,7 @@ from probe_read_graph import (
 )
 from rclpy.qos import qos_profile_sensor_data
 from senior_motion_msgs.msg import BoundedRawLaserScan
-from senior_slam_bridge.srv import CaptureGraph, ReadGraph
+from senior_slam_bridge.srv import CaptureGraph, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -81,23 +90,28 @@ def bounded_scan(scan, received_ros, bridge_gid, raw_gid, sequence):
     return result
 
 
-def arguments(executable):
-    result = owned_arguments(executable, "")
-    index = result.index("capture_directory:=")
-    del result[index - 1 : index + 1]
+def arguments(executable, capture_directory):
+    result = owned_arguments(executable, capture_directory or "")
+    if capture_directory is None:
+        index = result.index("capture_directory:=")
+        del result[index - 1 : index + 1]
     result.extend(["-p", f"bounded_scan_topic:={BOUNDED_TOPIC}"])
     return result
 
 
-def probe(executable):
+def probe(executable, root, combined):
     os.environ["ROS_LOCALHOST_ONLY"] = "1"
-    os.environ["ROS_DOMAIN_ID"] = str(secrets.randbelow(12) + 115)
+    os.environ["ROS_DOMAIN_ID"] = str(secrets.randbelow(12) + (128 if combined else 115))
+    staging = root / "staging" if combined else None
+    if staging is not None:
+        staging.mkdir(mode=0o700)
     rclpy.init(args=[])
-    node = rclpy.create_node("bounded_scan_probe")
+    node = rclpy.create_node("slam_candidate_probe")
     bridge = rclpy.create_node("scan_receipt")
     try:
         graph = node.create_client(ReadGraph, SERVICE)
         capture = node.create_client(CaptureGraph, CAPTURE_SERVICE)
+        saved = None
         raw = node.create_publisher(LaserScan, SCAN, qos_profile_sensor_data)
         publisher = bridge.create_publisher(
             BoundedRawLaserScan, BOUNDED_TOPIC, qos_profile_sensor_data
@@ -105,9 +119,16 @@ def probe(executable):
         static_tf = StaticTransformBroadcaster(node)
         odom_tf = TransformBroadcaster(node)
         static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER))
-        with candidate(arguments(executable)) as process:
+        with candidate(arguments(executable, staging)) as process:
             assert graph.wait_for_service(timeout_sec=8)
-            assert not capture.service_is_ready()
+            if staging is None:
+                assert not capture.service_is_ready()
+            else:
+                assert capture.wait_for_service(timeout_sec=4)
+                empty_cut = request(node, capture, CaptureGraph.Request())
+                assert empty_cut.status == CaptureGraph.Response.EMPTY
+                assert not empty_cut.last_committed_scan_valid
+                assert not list(staging.iterdir())
             raw_gid, bridge_gid = endpoint_gid(node, SCAN), endpoint_gid(node, BOUNDED_TOPIC)
             end = time.monotonic() + 4
             while not publisher.get_subscription_count() and time.monotonic() < end:
@@ -152,13 +173,41 @@ def probe(executable):
             assert committed.last_committed_scan == valid.capture
             assert committed.last_committed_keyframe_id == committed.keyframes[0].id
 
+            if staging is not None:
+                # A capture is a historical graph cut, not a renewal of scan freshness.
+                spin_for(node, 0.6)
+                assert time.monotonic() - valid.capture.received_steady > 0.5
+                cut = request(node, capture, CaptureGraph.Request())
+                prefix = check_capture(cut, staging, committed.boot_id)
+                assert cut.last_committed_scan_valid and cut.last_committed_scan == valid.capture
+                assert cut.graph_commit_sequence == committed.graph_commit_sequence
+                assert cut.last_committed_keyframe_id == committed.last_committed_keyframe_id
+                assert cut.keyframes == committed.keyframes
+                prefix.parent.rename(root / "saved")
+                saved = root / "saved" / prefix.name, cut
+
             # A lost writer breaks exclusivity and revokes the lineage.
             bridge.destroy_publisher(publisher)
             retired = wait_for_graph(node, graph, lambda value: not value.last_committed_scan_valid)
             assert retired.graph_commit_sequence == 1 and retired.keyframes == committed.keyframes
+            if staging is not None:
+                refused = request(node, capture, CaptureGraph.Request())
+                assert refused.status == CaptureGraph.Response.UNAVAILABLE
+                assert not refused.last_committed_scan_valid and not refused.keyframes
+                assert not refused.pair_digest and not refused.relative_prefix
+                assert not list(staging.iterdir())
             assert process.poll() is None
         assert process.returncode == 0
         wait_for_disappearance(node, OWNED_NODE, graph, capture)
+        if saved is not None:
+            prefix, cut = saved
+            receipt = node.create_client(ReadLoadedGraph, RECEIPT)
+            attempt = "bounded-capture"
+            args = candidate_arguments(executable, prefix, cut.pair_digest, attempt)
+            with candidate(args) as reloaded:
+                observe(node, receipt, graph, prefix, attempt, {cut.boot_id}, cut)
+                assert not read_snapshot(node, graph).last_committed_scan_valid
+            assert reloaded.returncode == 0
     finally:
         bridge.destroy_node()
         node.destroy_node()
@@ -166,4 +215,5 @@ def probe(executable):
 
 
 if __name__ == "__main__":
-    probe(sys.argv[1])
+    with tempfile.TemporaryDirectory() as scratch:
+        probe(sys.argv[1], Path(scratch).resolve(), "--capture" in sys.argv[2:])

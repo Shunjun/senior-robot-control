@@ -58,6 +58,20 @@ int main(int argc, char ** argv)
   fs::permissions(root, fs::perms::owner_all);
   CaptureDirectory directory(root);
   directory.require_free_slot();
+  bool publication_checked = false;
+  try {
+    directory.write_pair(graph.bytes(), data.bytes(), [&]() {
+      publication_checked = fs::is_regular_file(root / "capture/graph.posegraph") &&
+        fs::is_regular_file(root / "capture/graph.data");
+      return false;
+    });
+    throw std::logic_error("Unexpectedly published an unqualified capture");
+  } catch (const std::runtime_error &) {
+  }
+  if (!publication_checked || !fs::is_empty(root)) {
+    throw std::runtime_error("Publication rejection did not remove the staged capture pair");
+  }
+  directory.require_free_slot();
   const auto output = directory.write_pair(graph.bytes(), data.bytes());
   const auto prefix = root / output.relative_prefix;
   std::ifstream graph_file(prefix.string() + ".posegraph");

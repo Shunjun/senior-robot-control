@@ -12,9 +12,16 @@ uint64 snapshot_sequence
 bool graph_commit_watermark_valid
 uint64 graph_commit_sequence
 int32 last_committed_keyframe_id
+# Exact historical receipt at this graph cut. Validity uses the processed bounded
+# lineage and observed topology/clock checks before success. A same-writer
+# invalidation queued on the executor may not have been processed yet.
+# This does not certify current upstream generation, occupancy, or map/odom authority.
+bool last_committed_scan_valid
+senior_motion_msgs/RawCaptureHeader last_committed_scan
 builtin_interfaces/Time sample_stamp
 string map_frame
 string odom_frame
+# Files staged in the private directory do not authorize consumption without an OK receipt.
 string<=64 relative_prefix
 # SHA-256 over the raw SHA-256 digests of .posegraph and .data in that order.
 string<=64 pair_digest
