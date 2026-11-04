@@ -1,9 +1,8 @@
 pipeline {
-    agent { label params.DOCKER_AGENT }
+    agent any
     options { disableConcurrentBuilds(); timestamps() }
     triggers { pollSCM('H/5 * * * *') }
     parameters {
-        string(name: 'DOCKER_AGENT', defaultValue: 'linux-docker', description: 'Linux node with local Docker, Compose v2 and Node.js')
         string(name: 'ENV_CREDENTIAL_ID', defaultValue: 'senior-control-env', description: 'Jenkins Secret file credential ID')
         string(name: 'DEPLOY_ROOT', defaultValue: '/opt/senior-robot-control', description: 'Persistent absolute deployment directory on this node')
         string(name: 'ACME_EMAIL', defaultValue: '', description: 'Email for TLS certificate notices')
