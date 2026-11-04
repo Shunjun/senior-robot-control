@@ -21,6 +21,7 @@ from candidate_preflight import (
     run_candidate,
     validate_proof,
     validate_stationary_diagnostic,
+    validate_stationary_hypotheses,
 )
 
 BOOT = "d417ec41-c421-4d6d-a997-1af64c263fab"
@@ -102,6 +103,8 @@ class PreflightTests(unittest.TestCase):
             COMPLETE=2,
             SPENT=3,
             status=2,
+            primary_result_valid=True,
+            second_result_valid=False,
             response=0.0,
             fitted_x=0.08,
             fitted_y=-0.04,
@@ -119,6 +122,49 @@ class PreflightTests(unittest.TestCase):
         ):
             with self.subTest(patch=patch), self.assertRaises(PreflightError):
                 validate_stationary_diagnostic(SimpleNamespace(**(values | patch)), proof)
+
+    def test_comparison_preserves_order_and_reports_one_unavailable_hypothesis(self):
+        proof = {"keyframes": [{"id": 4}]}
+        primary, second = (0.0, 0.0, 0.0), (20.0, 0.0, 0.0)
+        values = dict(
+            COMPLETE=2,
+            status=2,
+            primary_result_valid=False,
+            response=0.0,
+            fitted_x=0.0,
+            fitted_y=0.0,
+            fitted_yaw=0.0,
+            reference_ids=[],
+            second_result_valid=True,
+            second_response=0.0,
+            second_fitted_x=20.0,
+            second_fitted_y=0.0,
+            second_fitted_yaw=0.0,
+            second_reference_ids=[4],
+        )
+        result = validate_stationary_hypotheses(SimpleNamespace(**values), proof, primary, second)
+        self.assertEqual([item["status"] for item in result], ["unavailable", "complete"])
+        self.assertEqual([item["seed_sensor_pose"]["x"] for item in result], [0.0, 20.0])
+        self.assertNotIn("response", result[0])
+        self.assertEqual(result[1]["response"], 0.0)
+        self.assertEqual(result[1]["reference_ids"], [4])
+        for patch in ({"second_result_valid": False}, {"reference_ids": [4]}):
+            with self.subTest(patch=patch), self.assertRaises(PreflightError):
+                validate_stationary_hypotheses(
+                    SimpleNamespace(**(values | patch)), proof, primary, second
+                )
+
+    def test_comparison_requires_a_scan_and_finite_seed(self):
+        base = ["/private/map", DIGEST]
+        file_scan = ["--stationary-scan", "/private/scan.json"]
+        flag = ["--compare-seed", "20", "0", "0"]
+        _, args = parse_args(base + file_scan + flag)
+        self.assertEqual(args.compare_seed, [20.0, 0.0, 0.0])
+        for options in (flag, [*file_scan, "--compare-seed", "nan", "0", "0"]):
+            with self.subTest(options=options), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    parse_args(base + options)
+                self.assertEqual(result.exception.code, 2)
 
     def test_live_mode_requires_explicit_domain_clock_mount_and_seed(self):
         base = ["/private/map", DIGEST]

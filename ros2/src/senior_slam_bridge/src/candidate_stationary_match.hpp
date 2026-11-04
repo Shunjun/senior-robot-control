@@ -16,8 +16,7 @@ namespace senior_slam_bridge
 {
 struct StationaryMatchQuery
 {
-  // Pose and beam layout are in native Karto sensor convention.
-  karto::Pose2 map_sensor_seed;
+  // Beam layout is in native Karto sensor convention.
   double first_angle, angle_step;
   karto::RangeReadingsVector ranges;
 };
@@ -34,14 +33,37 @@ constexpr double stationary_match_range_limit = 8.0;
 constexpr double stationary_match_full_turn = 6.28318530717958647692;
 constexpr double stationary_match_layout_tolerance = 1e-5;
 
-inline bool valid_stationary_match_query(const StationaryMatchQuery & query)
+constexpr double stationary_match_coarse_extent = 0.2;
+constexpr double stationary_match_fine_extent = 0.02;
+
+struct StationaryMatchSeed
+{
+  double x, y, yaw;
+};
+
+inline bool valid_stationary_match_seed(const StationaryMatchSeed & seed)
 {
   constexpr double max_coordinate = 1000000.0;
-  const auto seed = query.map_sensor_seed;
+  return std::abs(seed.x) <= max_coordinate && std::abs(seed.y) <= max_coordinate &&
+         std::abs(seed.yaw) <= stationary_match_full_turn;
+}
+
+inline bool disjoint_stationary_match_seeds(
+  const StationaryMatchSeed & first, const StationaryMatchSeed & second)
+{
+  // Touching boxes overlap. Include a small margin for the boundary arithmetic.
+  constexpr double width = 2 * (stationary_match_coarse_extent + stationary_match_fine_extent);
+  constexpr double boundary_margin = 1e-9;
+  return std::abs(first.x - second.x) > width + boundary_margin ||
+         std::abs(first.y - second.y) > width + boundary_margin ||
+         std::abs(std::remainder(first.yaw - second.yaw, stationary_match_full_turn)) >
+         width + boundary_margin;
+}
+
+inline bool valid_stationary_match_query(const StationaryMatchQuery & query)
+{
   const auto count = query.ranges.size();
   if (count < stationary_match_min_beams || count > 2048 ||
-    !(std::abs(seed.GetX()) <= max_coordinate && std::abs(seed.GetY()) <= max_coordinate) ||
-    !(std::abs(seed.GetHeading()) <= stationary_match_full_turn) ||
     !(std::abs(query.first_angle) <= stationary_match_full_turn) ||
     !(query.angle_step > 0 && (count - 1) * query.angle_step <=
     stationary_match_full_turn + stationary_match_layout_tolerance))
@@ -62,13 +84,12 @@ inline bool valid_stationary_match_query(const StationaryMatchQuery & query)
 
 inline std::optional<StationaryMatchDiagnostic> stationary_match(
   const karto::Mapper & loaded, const StationaryMatchQuery & query,
-  const std::string & private_query_name)
+  const StationaryMatchSeed & seed, const std::string & private_query_name)
 {
   constexpr std::size_t max_vertices = 16384;
   constexpr std::size_t max_references = 8;
   constexpr double reference_radius = 4.0;
-  constexpr double resolution = 0.02;
-  const auto seed = query.map_sensor_seed;
+  constexpr double resolution = stationary_match_fine_extent;
   const auto count = query.ranges.size();
   const auto * graph = loaded.GetGraph();
   if (!graph || private_query_name.empty() || private_query_name.size() > 128) {
@@ -105,7 +126,7 @@ inline std::optional<StationaryMatchDiagnostic> stationary_match(
       }
       archived = model;
       const auto pose = scan->GetSensorPose();
-      const double distance = std::hypot(pose.GetX() - seed.GetX(), pose.GetY() - seed.GetY());
+      const double distance = std::hypot(pose.GetX() - seed.x, pose.GetY() - seed.y);
       if (!std::isfinite(distance) || !std::isfinite(pose.GetHeading())) {
         return std::nullopt;
       }
@@ -205,8 +226,8 @@ inline std::optional<StationaryMatchDiagnostic> stationary_match(
       }
       const double theta = ref.sensor.GetHeading() + archived->GetMinimumAngle() +
         ray * archived->GetAngularResolution();
-      const double x = ref.sensor.GetX() - seed.GetX() + readings[ray] * std::cos(theta);
-      const double y = ref.sensor.GetY() - seed.GetY() + readings[ray] * std::sin(theta);
+      const double x = ref.sensor.GetX() - seed.x + readings[ray] * std::cos(theta);
+      const double y = ref.sensor.GetY() - seed.y + readings[ray] * std::sin(theta);
       if (std::abs(x) > half_x || std::abs(y) > half_y) {
         continue;
       }
@@ -233,15 +254,16 @@ inline std::optional<StationaryMatchDiagnostic> stationary_match(
   karto::Pose2 coarse, fitted;
   karto::Matrix3 covariance;
   matcher->CorrelateScan(
-    &scan, karto::Pose2(0, 0, std::remainder(seed.GetHeading(), stationary_match_full_turn)),
-    karto::Vector2<double>(0.2, 0.2), karto::Vector2<double>(0.04, 0.04),
-    0.2, 0.02, false, coarse, covariance, false);
+    &scan, karto::Pose2(0, 0, std::remainder(seed.yaw, stationary_match_full_turn)),
+    karto::Vector2<double>(stationary_match_coarse_extent, stationary_match_coarse_extent),
+    karto::Vector2<double>(0.04, 0.04),
+    stationary_match_coarse_extent, 0.02, false, coarse, covariance, false);
   result.response = matcher->CorrelateScan(
-    &scan, coarse, karto::Vector2<double>(resolution, resolution),
-    karto::Vector2<double>(resolution, resolution), 0.02, 0.005, false,
+    &scan, coarse, karto::Vector2<double>(stationary_match_fine_extent, stationary_match_fine_extent),
+    karto::Vector2<double>(resolution, resolution), stationary_match_fine_extent, 0.005, false,
     fitted, covariance, true);
   result.map_sensor_pose = karto::Pose2(
-    seed.GetX() + fitted.GetX(), seed.GetY() + fitted.GetY(), fitted.GetHeading());
+    seed.x + fitted.GetX(), seed.y + fitted.GetY(), fitted.GetHeading());
   if (!std::isfinite(result.response) || !std::isfinite(result.map_sensor_pose.GetX()) ||
     !std::isfinite(result.map_sensor_pose.GetY()) || !std::isfinite(fitted.GetHeading()))
   {

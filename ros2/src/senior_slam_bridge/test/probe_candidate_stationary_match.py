@@ -70,10 +70,18 @@ def probe(executable, preflight, root):
         scan = scan_in_room(node.get_clock().now().to_msg(), query_x, query_yaw)
         scores = {}
         cli_scores = {}
-        for scene in ("positive", "wrong"):
-            ranges = list(scan.ranges) if scene == "positive" else [0.5] * len(scan.ranges)
+        hypotheses = {
+            "positive": (0.05, None),
+            "wrong": (0.05, None),
+            "dual": (0.05, 0.65),
+            "missing-primary": (20.0, 0.05),
+            "missing-second": (0.05, 20.0),
+            "both-missing": (20.0, 21.0),
+        }
+        for scene, (seed_x, second_seed_x) in hypotheses.items():
+            ranges = [0.5] * len(scan.ranges) if scene == "wrong" else list(scan.ranges)
             scan_input = {
-                "seed_x": 0.05,
+                "seed_x": seed_x,
                 "seed_y": -0.02,
                 "seed_yaw": 0.39,
                 "first_angle": scan.angle_min,
@@ -110,23 +118,67 @@ def probe(executable, preflight, root):
                 assert invalid.status == MatchStationaryScan.Response.INVALID
                 assert not invalid.reference_ids
                 query.angle_step = scan.angle_increment
+                if second_seed_x is not None:
+                    query.compare_second_seed = True
+                    query.second_seed_x = query.seed_x
+                    query.second_seed_y = query.seed_y
+                    query.seed_yaw = math.pi - 0.05
+                    query.second_seed_yaw = -math.pi + 0.05
+                    overlap = request(node, match, query)
+                    assert overlap.status == MatchStationaryScan.Response.INVALID
+                    assert not overlap.primary_result_valid and not overlap.second_result_valid
+                    query.seed_yaw = 0.39
+                    query.second_seed_yaw = query.seed_yaw
+                    query.second_seed_x = query.seed_x + 0.44
+                    touching = request(node, match, query)
+                    assert touching.status == MatchStationaryScan.Response.INVALID
+                    assert not touching.primary_result_valid and not touching.second_result_valid
+                    query.second_seed_x = second_seed_x
                 result = request(node, match, query)
-                assert result.status == MatchStationaryScan.Response.COMPLETE
-                assert math.isfinite(result.response)
-                assert list(result.reference_ids) == [prior.keyframes[0].id]
-                scores[scene] = result.response
+                expected_status = (
+                    MatchStationaryScan.Response.UNAVAILABLE
+                    if scene == "both-missing"
+                    else MatchStationaryScan.Response.COMPLETE
+                )
+                assert result.status == expected_status
+                assert result.primary_result_valid == (
+                    scene not in ("missing-primary", "both-missing")
+                )
+                assert result.second_result_valid == (scene in ("dual", "missing-primary"))
+                reference = [prior.keyframes[0].id]
+                if result.primary_result_valid:
+                    assert math.isfinite(result.response)
+                    assert list(result.reference_ids) == reference
+                    assert abs(result.fitted_x - seed_x) <= 0.22 + 1e-8
+                    scores[scene] = result.response
+                else:
+                    assert not result.reference_ids
+                if result.second_result_valid:
+                    assert math.isfinite(result.second_response)
+                    assert list(result.second_reference_ids) == reference
+                    assert abs(result.second_fitted_x - second_seed_x) <= 0.22 + 1e-8
+                else:
+                    assert not result.second_reference_ids
                 if scene == "positive":
                     assert abs(result.fitted_x - query_x) <= 0.06
                     assert abs(result.fitted_y) <= 0.06
                     assert abs(math.remainder(result.fitted_yaw - query_yaw, math.tau)) <= 0.04
                 spent = request(node, match, query)
                 assert spent.status == MatchStationaryScan.Response.SPENT
-                assert not spent.reference_ids
+                assert not spent.primary_result_valid and not spent.second_result_valid
+                assert not spent.reference_ids and not spent.second_reference_ids
                 assert read_snapshot(node, graph).keyframes == prior.keyframes
                 assert pair_digest(prefix) == digest
                 assert process.poll() is None
             assert process.returncode == 0
             wait_for_disappearance(node, CANDIDATE_NODE, receipt, graph, match)
+            if scene not in ("positive", "wrong", "dual"):
+                continue
+            comparison_args = (
+                ["--compare-seed", str(second_seed_x), "-0.02", "0.39"]
+                if second_seed_x is not None
+                else []
+            )
             scan_path = root / f"{scene}.json"
             scan_input["ranges"] = [value if math.isfinite(value) else None for value in ranges]
             scan_path.write_text(json.dumps(scan_input, allow_nan=False), encoding="utf-8")
@@ -142,6 +194,7 @@ def probe(executable, preflight, root):
                     ODOM,
                     "--stationary-scan",
                     str(scan_path),
+                    *comparison_args,
                 ],
                 check=True,
                 stdout=subprocess.PIPE,
@@ -156,6 +209,14 @@ def probe(executable, preflight, root):
                 {"id": frame.id, "x": frame.x, "y": frame.y, "yaw": frame.yaw}
                 for frame in prior.keyframes
             ]
+            if scene == "dual":
+                assert "stationary_match_diagnostic" not in proof
+                results = proof["stationary_match_hypotheses"]
+                assert [row["status"] for row in results] == ["complete", "complete"]
+                assert [row["seed_sensor_pose"]["x"] for row in results] == [seed_x, second_seed_x]
+                assert all(row["reference_ids"] == [prior.keyframes[0].id] for row in results)
+                assert pair_digest(prefix) == digest
+                continue
             diagnostic = proof["stationary_match_diagnostic"]
             assert diagnostic["reference_ids"] == [prior.keyframes[0].id]
             cli_scores[scene] = diagnostic["response"]

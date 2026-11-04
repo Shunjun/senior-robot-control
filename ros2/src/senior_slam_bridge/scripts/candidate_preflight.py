@@ -125,7 +125,7 @@ def read_stationary_scan(path):
         raise PreflightError(f"Invalid stationary scan file: {error}") from error
 
 
-def validate_stationary_diagnostic(result, proof):
+def validate_match_status(result):
     if result.status != result.COMPLETE:
         status = {
             result.UNAVAILABLE: "unavailable",
@@ -133,28 +133,80 @@ def validate_stationary_diagnostic(result, proof):
             result.SPENT: "already spent",
         }.get(result.status, "unknown")
         raise PreflightError(f"Stationary match diagnostic {status}")
-    ids = list(result.reference_ids)
+
+
+def validate_match_values(response, x, y, yaw, ids, proof):
+    ids = list(ids)
     keyframe_ids = {frame["id"] for frame in proof["keyframes"]}
     if (
-        not all(
-            math.isfinite(value)
-            for value in (result.response, result.fitted_x, result.fitted_y, result.fitted_yaw)
-        )
-        or result.response < 0
+        not all(math.isfinite(value) for value in (response, x, y, yaw))
+        or response < 0
         or not 1 <= len(ids) <= 8
         or len(set(ids)) != len(ids)
         or not set(ids) <= keyframe_ids
     ):
         raise PreflightError("Invalid stationary match diagnostic result")
     return {
-        "response": result.response,
-        "fitted_sensor_pose": {
-            "x": result.fitted_x,
-            "y": result.fitted_y,
-            "yaw": result.fitted_yaw,
-        },
+        "response": response,
+        "fitted_sensor_pose": {"x": x, "y": y, "yaw": yaw},
         "reference_ids": ids,
     }
+
+
+def validate_stationary_diagnostic(result, proof):
+    validate_match_status(result)
+    if not result.primary_result_valid or result.second_result_valid:
+        raise PreflightError("Invalid single-seed stationary match result")
+    return validate_match_values(
+        result.response,
+        result.fitted_x,
+        result.fitted_y,
+        result.fitted_yaw,
+        result.reference_ids,
+        proof,
+    )
+
+
+def validate_stationary_hypotheses(result, proof, primary_seed, second_seed):
+    validate_match_status(result)
+    if not (result.primary_result_valid or result.second_result_valid):
+        raise PreflightError("Complete stationary comparison has no available hypotheses")
+    hypotheses = []
+    for seed, valid, values in (
+        (
+            primary_seed,
+            result.primary_result_valid,
+            (
+                result.response,
+                result.fitted_x,
+                result.fitted_y,
+                result.fitted_yaw,
+                result.reference_ids,
+            ),
+        ),
+        (
+            second_seed,
+            result.second_result_valid,
+            (
+                result.second_response,
+                result.second_fitted_x,
+                result.second_fitted_y,
+                result.second_fitted_yaw,
+                result.second_reference_ids,
+            ),
+        ),
+    ):
+        x, y, yaw = seed
+        hypothesis = {
+            "seed_sensor_pose": {"x": x, "y": y, "yaw": yaw},
+            "status": "complete" if valid else "unavailable",
+        }
+        if valid:
+            hypothesis.update(validate_match_values(*values, proof))
+        elif values[-1]:
+            raise PreflightError("Unavailable stationary hypothesis has reference IDs")
+        hypotheses.append(hypothesis)
+    return hypotheses
 
 
 _MAX_RECEIPT_BYTES = 32 * 1024
@@ -357,7 +409,20 @@ def parse_args(argv=None):
     )
     parser.add_argument("--live-raw-topic")
     parser.add_argument("--live-bounded-topic")
+    parser.add_argument(
+        "--compare-seed",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "YAW"),
+        help="Compare one additional map-frame sensor-pose seed using the same scan",
+    )
     args = parser.parse_args(argv)
+    if args.compare_seed is not None:
+        if not (args.live_scan or args.stationary_scan is not None):
+            parser.error("--compare-seed requires --stationary-scan or --live-scan")
+        x, y, yaw = args.compare_seed
+        if not (abs(x) <= 1_000_000 and abs(y) <= 1_000_000 and abs(yaw) <= math.tau):
+            parser.error("comparison seed is outside native matching bounds")
     live_options = (
         args.live_domain,
         args.live_clock,
@@ -509,17 +574,33 @@ def main():
                     proof["live_scan_receipt"] = provenance
                 if query is not None:
                     match = node.create_client(MatchStationaryScan, match_service)
+                    alternate = {}
+                    if args.compare_seed is not None:
+                        x, y, yaw = args.compare_seed
+                        alternate = {
+                            "compare_second_seed": True,
+                            "second_seed_x": x,
+                            "second_seed_y": y,
+                            "second_seed_yaw": yaw,
+                        }
                     request = MatchStationaryScan.Request(
                         boot_id=proof["boot_id"],
                         attempt_id=attempt,
                         pair_digest=args.digest,
                         map_frame=args.map_frame,
                         **query,
+                        **alternate,
                     )
                     result = read_service(node, match, request, check, before_call=before_call)
-                    proof["stationary_match_diagnostic"] = validate_stationary_diagnostic(
-                        result, proof
-                    )
+                    if args.compare_seed is None:
+                        proof["stationary_match_diagnostic"] = validate_stationary_diagnostic(
+                            result, proof
+                        )
+                    else:
+                        primary_seed = (query["seed_x"], query["seed_y"], query["seed_yaw"])
+                        proof["stationary_match_hypotheses"] = validate_stationary_hypotheses(
+                            result, proof, primary_seed, args.compare_seed
+                        )
                 return proof
 
             proof = run_candidate(

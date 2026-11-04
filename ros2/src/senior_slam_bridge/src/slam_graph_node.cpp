@@ -551,11 +551,16 @@ private:
           response->status = MatchStationaryScan::Response::SPENT;
           return;
         }
+        const StationaryMatchSeed primary{request->seed_x, request->seed_y, request->seed_yaw};
+        const StationaryMatchSeed second{
+          request->second_seed_x, request->second_seed_y, request->second_seed_yaw};
         const StationaryMatchQuery query{
-          karto::Pose2(request->seed_x, request->seed_y, request->seed_yaw),
           request->first_angle, request->angle_step,
           {request->ranges.begin(), request->ranges.end()}};
-        if (!valid_stationary_match_query(query)) {
+        if (!valid_stationary_match_seed(primary) || !valid_stationary_match_query(query) ||
+          (request->compare_second_seed &&
+          (!valid_stationary_match_seed(second) || !disjoint_stationary_match_seeds(primary, second))))
+        {
           response->status = MatchStationaryScan::Response::INVALID;
           return;
         }
@@ -575,16 +580,43 @@ private:
               return;
             }
           }
-          const auto result = stationary_match(*mapper, query, private_name);
-          if (!result) {
+          const auto match = [&](const StationaryMatchSeed & seed)
+            -> std::optional<StationaryMatchDiagnostic>
+            {
+              try {
+                return stationary_match(*mapper, query, seed, private_name);
+              } catch (const std::exception & error) {
+                RCLCPP_WARN(get_logger(), "Candidate stationary hypothesis failed: %s", error.what());
+              } catch (...) {
+                RCLCPP_WARN(get_logger(), "Candidate stationary hypothesis failed");
+              }
+              return std::nullopt;
+            };
+          const auto first_result = match(primary);
+          const auto second_result = request->compare_second_seed ? match(second) : std::nullopt;
+          if (!first_result && !second_result) {
             return;
           }
+
           MatchStationaryScan::Response diagnostic;
-          diagnostic.response = result->response;
-          diagnostic.fitted_x = result->map_sensor_pose.GetX();
-          diagnostic.fitted_y = result->map_sensor_pose.GetY();
-          diagnostic.fitted_yaw = result->map_sensor_pose.GetHeading();
-          diagnostic.reference_ids.assign(result->reference_ids.begin(), result->reference_ids.end());
+          if (first_result) {
+            diagnostic.primary_result_valid = true;
+            diagnostic.response = first_result->response;
+            diagnostic.fitted_x = first_result->map_sensor_pose.GetX();
+            diagnostic.fitted_y = first_result->map_sensor_pose.GetY();
+            diagnostic.fitted_yaw = first_result->map_sensor_pose.GetHeading();
+            diagnostic.reference_ids.assign(
+              first_result->reference_ids.begin(), first_result->reference_ids.end());
+          }
+          if (second_result) {
+            diagnostic.second_result_valid = true;
+            diagnostic.second_response = second_result->response;
+            diagnostic.second_fitted_x = second_result->map_sensor_pose.GetX();
+            diagnostic.second_fitted_y = second_result->map_sensor_pose.GetY();
+            diagnostic.second_fitted_yaw = second_result->map_sensor_pose.GetHeading();
+            diagnostic.second_reference_ids.assign(
+              second_result->reference_ids.begin(), second_result->reference_ids.end());
+          }
           diagnostic.status = MatchStationaryScan::Response::COMPLETE;
           *response = std::move(diagnostic);
         } catch (const std::exception & error) {
