@@ -289,15 +289,16 @@ bool StaticLidarTfIngress::admits(const senior_motion_msgs::msg::RawCaptureHeade
          std::isfinite(scan.received_steady) && scan.received_steady >= active_->admitted_from_steady;
 }
 
-bool StaticLidarTfIngress::verify_mount(LaserTransform actual)
+StaticLidarTfIngress::Receipt::ConstSharedPtr StaticLidarTfIngress::verify_mount(
+  const senior_motion_msgs::msg::RawCaptureHeader & scan, LaserTransform actual)
 {
-  if (!source_active()) {
-    return false;
+  if (!admits(scan)) {
+    return nullptr;
   }
   if (!matches_static_lidar_mount(mount_, actual)) {
     retire();
-    return false;
+    return nullptr;
   }
-  return true;
+  return active_;
 }
 }  // namespace senior_slam_bridge

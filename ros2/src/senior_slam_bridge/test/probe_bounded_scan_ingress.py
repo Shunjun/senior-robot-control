@@ -180,6 +180,8 @@ def probe(executable, root, combined):
                 cut = request(node, capture, CaptureGraph.Request())
                 prefix = check_capture(cut, staging, committed.boot_id)
                 assert cut.last_committed_scan_valid and cut.last_committed_scan == valid.capture
+                assert not cut.static_lidar_tf_receipt_valid
+                assert not cut.static_lidar_tf_receipt.edges
                 assert cut.graph_commit_sequence == committed.graph_commit_sequence
                 assert cut.last_committed_keyframe_id == committed.last_committed_keyframe_id
                 assert cut.keyframes == committed.keyframes

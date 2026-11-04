@@ -27,5 +27,10 @@ float64 corrected_sensor_yaw
 int8 raw_ray_angle_sign
 # Original bounded scan bytes/fields, including the source receipt. No time-based lookup.
 senior_motion_msgs/BoundedRawLaserScan scan
+# Exact historical static TF receipt used to admit this scan, when verified mode was enabled.
+# A receipt records the processed static mount witness. It confers no occupancy,
+# localization, map/odom authority, or guarantee of the upstream current generation.
+bool static_lidar_tf_receipt_valid
+senior_motion_msgs/BoundedStaticTf static_lidar_tf_receipt
 # All corrected vertices at this commit cut, sorted by ID.
 Keyframe[<=16384] keyframes

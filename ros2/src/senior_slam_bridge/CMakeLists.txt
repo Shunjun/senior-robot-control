@@ -80,6 +80,15 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:test_laser_geometry>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
+  add_executable(test_stationary_match_quality test/test_stationary_match_quality.cpp)
+  target_compile_features(test_stationary_match_quality PRIVATE cxx_std_17)
+  ament_target_dependencies(test_stationary_match_quality slam_toolbox)
+  target_link_libraries(test_stationary_match_quality
+    "${SLAM_TOOLBOX_KARTO_LIBRARY}" Boost::serialization Boost::thread TBB::tbb)
+  ament_add_test(stationary_match_quality
+    COMMAND "$<TARGET_FILE:test_stationary_match_quality>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   add_executable(test_static_lidar_tf test/test_static_lidar_tf.cpp)
   target_compile_features(test_static_lidar_tf PRIVATE cxx_std_17)
   target_include_directories(test_static_lidar_tf PRIVATE src)

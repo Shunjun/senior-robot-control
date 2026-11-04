@@ -16,16 +16,18 @@ namespace senior_slam_bridge
 class StaticLidarTfIngress
 {
 public:
+  using Receipt = senior_motion_msgs::msg::BoundedStaticTf;
+
   StaticLidarTfIngress(
     rclcpp::Node & node, std::string topic, std::string relay_node,
     std::string raw_topic, std::string raw_node, std::string base, std::string lidar);
 
   bool source_active();
   bool admits(const senior_motion_msgs::msg::RawCaptureHeader & scan);
-  bool verify_mount(LaserTransform actual);
+  Receipt::ConstSharedPtr verify_mount(
+    const senior_motion_msgs::msg::RawCaptureHeader & scan, LaserTransform actual);
 
 private:
-  using Receipt = senior_motion_msgs::msg::BoundedStaticTf;
   bool current_owners(const Receipt & receipt) const;
   void offer(Receipt::ConstSharedPtr receipt, const rclcpp::MessageInfo & info);
   void poll();

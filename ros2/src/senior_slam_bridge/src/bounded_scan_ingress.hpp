@@ -11,6 +11,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "senior_motion_msgs/msg/bounded_raw_laser_scan.hpp"
+#include "senior_motion_msgs/msg/bounded_static_tf.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "tf2_ros/buffer.h"
 
@@ -25,8 +26,10 @@ public:
   using Receipt = senior_motion_msgs::msg::RawCaptureHeader;
   using Scan = sensor_msgs::msg::LaserScan;
   using BoundedScan = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using StaticReceipt = senior_motion_msgs::msg::BoundedStaticTf;
   using Submit = std::function<void(
-    Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr, LaserTransform)>;
+    Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr, LaserTransform,
+    StaticReceipt::ConstSharedPtr)>;
 
   BoundedScanIngress(
     rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,

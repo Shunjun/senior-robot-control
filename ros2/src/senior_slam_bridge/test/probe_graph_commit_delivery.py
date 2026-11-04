@@ -44,6 +44,8 @@ def check_unavailable_data(response):
     assert not response.scan.capture.valid
     assert not response.scan.ranges and not response.keyframes
     assert response.raw_ray_angle_sign == 0
+    assert not response.static_lidar_tf_receipt_valid
+    assert not response.static_lidar_tf_receipt.edges
 
 
 def check_sensor_pose(cut):
@@ -122,6 +124,8 @@ def probe(executable):
                         assert cut.sample_stamp.sec > 0
                         assert serialize_message(cut.scan) == offered[cut.scan.capture.sequence]
                         assert len(cut.keyframes) == sequence
+                        assert not cut.static_lidar_tf_receipt_valid
+                        assert not cut.static_lidar_tf_receipt.edges
                         check_sensor_pose(cut)
                         return cut
                     # The source can be undiscovered only before the first admitted scan.

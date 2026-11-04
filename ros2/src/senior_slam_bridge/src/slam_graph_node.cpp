@@ -107,6 +107,21 @@ private:
     std::int32_t last_keyframe_id{0};
   };
 
+  using StaticReceipt = BoundedScanIngress::StaticReceipt;
+
+  struct InFlightScan
+  {
+    BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
+    LaserTransform mount;
+    StaticReceipt::ConstSharedPtr static_receipt;
+  };
+
+  struct CommittedIngressReceipt
+  {
+    BoundedScanIngress::Receipt scan;
+    StaticReceipt::ConstSharedPtr static_receipt;
+  };
+
   struct CommittedScanCut
   {
     std::int32_t keyframe_id;
@@ -114,6 +129,7 @@ private:
     NativeLaserOffset corrected_sensor;
     std::int8_t raw_ray_angle_sign;
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
+    StaticReceipt::ConstSharedPtr static_receipt;
     std::vector<Keyframe> keyframes;
   };
 
@@ -173,7 +189,8 @@ private:
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
       *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
-        BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount)
+        BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount,
+        StaticReceipt::ConstSharedPtr static_receipt)
       {
         const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
         // Check the cached mount even if the vendor later throttles this scan.
@@ -184,15 +201,14 @@ private:
           retire_geometry();
           return;
         }
-        in_flight_mount_ = mount;
-        in_flight_scan_ = std::move(original);
+        in_flight_ = InFlightScan{std::move(original), mount, std::move(static_receipt)};
         try {
           AsynchronousSlamToolbox::laserCallback(std::move(scan));
         } catch (...) {
-          in_flight_scan_.reset();
+          in_flight_.reset();
           throw;
         }
-        in_flight_scan_.reset();
+        in_flight_.reset();
       }, static_lidar_tf_.get());
   }
 
@@ -269,23 +285,24 @@ private:
     //Compatible: Humble's async laser callback invokes this virtual while the
     // owned ingress lock is held. The base returns null for an uncommitted scan.
     std::int8_t ray_angle_sign{0};
-    if (in_flight_scan_) {
-      const auto matched = match_native_mount(laser, *scan, in_flight_mount_);
+    if (in_flight_) {
+      const auto matched = match_native_mount(laser, *scan, in_flight_->mount);
       if (!matched) {
         retire_geometry();
         return nullptr;
       }
       if (!mount_height_) {
-        mount_height_ = in_flight_mount_.z;
+        mount_height_ = in_flight_->mount.z;
       }
       ray_angle_sign = *matched;
     }
     auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
-    if ((capture_directory_ || in_flight_scan_) && committed) {
+    if ((capture_directory_ || in_flight_) && committed) {
       ++graph_commit_.sequence;
       graph_commit_.last_keyframe_id = committed->GetUniqueId();
-      if (in_flight_scan_) {
-        last_committed_scan_ = in_flight_scan_->capture;
+      if (in_flight_) {
+        last_committed_ingress_ =
+          CommittedIngressReceipt{in_flight_->scan->capture, in_flight_->static_receipt};
         record_graph_commit(*committed, laser, ray_angle_sign);
       }
     }
@@ -322,7 +339,7 @@ private:
       CommittedScanCut{
         graph_commit_.last_keyframe_id, now(),
         {sensor.GetX(), sensor.GetY(), sensor.GetHeading()}, ray_angle_sign,
-        in_flight_scan_, std::move(*frames)});
+        in_flight_->scan, in_flight_->static_receipt, std::move(*frames)});
   }
 
   void start_graph_commit_service()
@@ -361,6 +378,10 @@ private:
         result.corrected_sensor_yaw = cut->corrected_sensor.yaw;
         result.raw_ray_angle_sign = cut->raw_ray_angle_sign;
         result.scan = *cut->scan;
+        if (cut->static_receipt) {
+          result.static_lidar_tf_receipt = *cut->static_receipt;
+          result.static_lidar_tf_receipt_valid = true;
+        }
         fill_keyframes(cut->keyframes, result.keyframes);
         if (bounded_ingress_->source_active()) {
           result.status = ReadGraphCommit::Response::OK;
@@ -377,10 +398,10 @@ private:
     std::vector<char> graph_bytes;
     std::vector<char> dataset_bytes;
     GraphCommitWatermark watermark;
-    std::optional<BoundedScanIngress::Receipt> receipt;
+    std::optional<CommittedIngressReceipt> receipt;
     {
       const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
-      if (bounded_ingress_ && last_committed_scan_ && !bounded_ingress_->source_active()) {
+      if (bounded_ingress_ && last_committed_ingress_ && !bounded_ingress_->source_active()) {
         return;
       }
       boost::mutex::scoped_lock lock(smapper_mutex_);
@@ -403,10 +424,10 @@ private:
           break;
       }
       if (bounded_ingress_) {
-        if (!last_committed_scan_) {
+        if (!last_committed_ingress_) {
           return;
         }
-        receipt = last_committed_scan_;
+        receipt = last_committed_ingress_;
       }
       graph_bytes = capture_native_archive(
         [mapper](const std::string & path) {mapper->SaveToFile(path);});
@@ -416,6 +437,10 @@ private:
     // Build the response before reserving the single output slot.
     decltype(response.keyframes) keyframes;
     fill_keyframes(frames, keyframes);
+    StaticReceipt static_receipt;
+    if (receipt && receipt->static_receipt) {
+      static_receipt = *receipt->static_receipt;
+    }
     const auto publication_allowed = [this]() {
         return !bounded_ingress_ || bounded_ingress_->source_active();
       };
@@ -428,8 +453,12 @@ private:
     response.pair_digest = std::move(artifact.pair_digest);
     fill_commit_watermark(response, watermark);
     if (receipt) {
-      response.last_committed_scan = std::move(*receipt);
+      response.last_committed_scan = std::move(receipt->scan);
       response.last_committed_scan_valid = true;
+      if (receipt->static_receipt) {
+        response.static_lidar_tf_receipt = std::move(static_receipt);
+        response.static_lidar_tf_receipt_valid = true;
+      }
     }
     response.status = CaptureGraph::Response::OK;
   }
@@ -533,9 +562,9 @@ private:
         if (capture_directory_ || bounded_ingress_) {
           fill_commit_watermark(*response, watermark);
         }
-        if (bounded_ingress_ && last_committed_scan_ && bounded_ingress_->source_active()) {
+        if (bounded_ingress_ && last_committed_ingress_ && bounded_ingress_->source_active()) {
           response->last_committed_scan_valid = true;
-          response->last_committed_scan = *last_committed_scan_;
+          response->last_committed_scan = last_committed_ingress_->scan;
         }
       });
   }
@@ -597,10 +626,9 @@ private:
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
   GraphCommitWatermark graph_commit_;
-  BoundedScanIngress::BoundedScan::ConstSharedPtr in_flight_scan_;
-  LaserTransform in_flight_mount_{};
+  std::optional<InFlightScan> in_flight_;
   std::optional<double> mount_height_;
-  std::optional<BoundedScanIngress::Receipt> last_committed_scan_;
+  std::optional<CommittedIngressReceipt> last_committed_ingress_;
   GraphCommitHistory<CommittedScanCut, 8> graph_commit_history_;
   std::unique_ptr<StaticLidarTfIngress> static_lidar_tf_;
   std::unique_ptr<BoundedScanIngress> bounded_ingress_;

@@ -262,7 +262,8 @@ void BoundedScanIngress::poll()
   {
     return;
   }
-  if (static_lidar_tf_ && !static_lidar_tf_->verify_mount(mount)) {
+  auto static_receipt = static_lidar_tf_ ? static_lidar_tf_->verify_mount(receipt, mount) : nullptr;
+  if (static_lidar_tf_ && !static_receipt) {
     retire_source();
     return;
   }
@@ -279,6 +280,6 @@ void BoundedScanIngress::poll()
   scan->range_max = input->range_max;
   scan->ranges.assign(input->ranges.begin(), input->ranges.end());
   scan->intensities.assign(input->intensities.begin(), input->intensities.end());
-  submit_(std::move(scan), input, mount);
+  submit_(std::move(scan), input, mount, std::move(static_receipt));
 }
 }  // namespace senior_slam_bridge

@@ -18,6 +18,11 @@ int32 last_committed_keyframe_id
 # This does not certify current upstream generation, occupancy, or map/odom authority.
 bool last_committed_scan_valid
 senior_motion_msgs/RawCaptureHeader last_committed_scan
+# Exact historical static TF receipt used to admit last_committed_scan, in verified mode.
+# The receipt applies to that scan and shares the topology/clock and upstream
+# limitations above. It confers no occupancy, localization, or map/odom authority.
+bool static_lidar_tf_receipt_valid
+senior_motion_msgs/BoundedStaticTf static_lidar_tf_receipt
 builtin_interfaces/Time sample_stamp
 string map_frame
 string odom_frame
