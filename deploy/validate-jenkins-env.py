@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 ALLOWED = {
+    "ACME_EMAIL",
+    "ENABLE_TURN",
     "SENIOR_SECRET",
     "ADMIN_PASSWORD_HASH",
     "TURN_LISTEN_IP",
@@ -14,7 +16,8 @@ ALLOWED = {
     "TURN_SHARED_SECRET",
 }
 REQUIRED = {"SENIOR_SECRET", "ADMIN_PASSWORD_HASH"}
-LINE = re.compile(r"([A-Z_]+)='([A-Za-z0-9._~:@/+=$-]+)'")
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+LINE = re.compile(r"([A-Z_]+)='([A-Za-z0-9._~:@/+=$%-]+)'")
 HASH = re.compile(r"scrypt\$16384\$8\$1\$[0-9a-f]{32}\$[0-9a-f]{64}")
 
 
@@ -37,9 +40,17 @@ def main() -> int:
             raise ValueError("invalid secret length or scrypt hash format")
         if "TURN_SHARED_SECRET" in values and len(values["TURN_SHARED_SECRET"].encode()) < 32:
             raise ValueError("invalid TURN secret length")
+        if not EMAIL.fullmatch(values.get("ACME_EMAIL", "")):
+            print("Credential file requires a valid ACME_EMAIL", file=sys.stderr)
+            return 1
+        enable_turn = values.get("ENABLE_TURN", "false")
+        if enable_turn not in {"true", "false"}:
+            print("Credential file ENABLE_TURN must be true or false", file=sys.stderr)
+            return 1
     except (OSError, UnicodeError, ValueError, IndexError) as exc:
         print(f"Credential file rejected: {exc.__class__.__name__}", file=sys.stderr)
         return 1
+    print(enable_turn)
     return 0
 
 

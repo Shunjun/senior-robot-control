@@ -67,16 +67,15 @@ GitHub 可访问的 `https://<Jenkins 地址>/github-webhook/`（保留末尾斜
 
 1. 确保 Jenkins 部署目标机符合上述要求、有可用执行器，并设置
    `DEPLOY_ROOT`（默认 `/opt/senior-robot-control`）。
-2. 创建 Jenkins **Secret file** 凭据，内容至少包含 `SENIOR_SECRET` 与
-   `ADMIN_PASSWORD_HASH` 两行，使用 `deploy/jenkins.env.example` 中的格式；每个值必须完整
+2. 创建 Jenkins **Secret file** 凭据，内容至少包含 `ACME_EMAIL`、`SENIOR_SECRET` 与
+   `ADMIN_PASSWORD_HASH` 三行，使用 `deploy/jenkins.env.example` 中的格式；每个值必须完整
    用单引号包裹，保留哈希中的 `$` 原样。仅允许该示例列出的变量，不允许重复项、
    占位符或多行值。将凭据 ID 填入
    `ENV_CREDENTIAL_ID`。不要将文件或密钥提交到仓库，且应限制任务及节点访问权限。
-3. 将 `ACME_EMAIL` 设置为有效邮箱，并确认域名 DNS、端口和部署目录。执行任务将部署
+3. 确认 Secret file 中的 `ACME_EMAIL` 是有效邮箱，并检查域名 DNS、端口和部署目录。执行任务将部署
    当前检出的提交。
 
-默认只启动 cloud 和 Caddy。如需 TURN，勾选 `ENABLE_TURN`，在 Secret file 中另外
-设置 `TURN_LISTEN_IP`、`TURN_EXTERNAL_IP`、`TURN_REALM` 和 `TURN_SHARED_SECRET`，
+默认只启动 cloud 和 Caddy。如需 TURN，在 Secret file 中设置 `ENABLE_TURN='true'`，并另外设置 `TURN_LISTEN_IP`、`TURN_EXTERNAL_IP`、`TURN_REALM` 和 `TURN_SHARED_SECRET`，
 并将 TURN 证书放入部署目录下的 `turn/fullchain.pem` 和 `turn/privkey.pem`；按需
 开放前述 TURN 端口。TURN 的配置不影响默认云服务部署。
 

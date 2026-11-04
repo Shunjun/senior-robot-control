@@ -10,8 +10,8 @@ if [[ "$1 $2 $3" == 'context inspect --format' ]]; then echo 'tcp://other-host:2
 exit 0
 MOCK
 chmod +x "$tmp/bin/docker"
-printf "SENIOR_SECRET='%s'\nADMIN_PASSWORD_HASH='scrypt\$16384\$8\$1\$%s\$%s'\n" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "abababababababababababababababab" "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" > "$tmp/env"
-if PATH="$tmp/bin:$PATH" DEPLOY_ROOT="$tmp/deploy" RELEASE_ID=0123456789abcdef0123456789abcdef01234567-1 ENV_FILE="$tmp/env" ACME_EMAIL=ops@example.com bash "$root/deploy/jenkins-deploy.sh" >"$tmp/out" 2>&1; then
+printf "ACME_EMAIL='ops@example.com'\nSENIOR_SECRET='%s'\nADMIN_PASSWORD_HASH='scrypt\$16384\$8\$1\$%s\$%s'\n" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "abababababababababababababababab" "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" > "$tmp/env"
+if PATH="$tmp/bin:$PATH" DEPLOY_ROOT="$tmp/deploy" RELEASE_ID=0123456789abcdef0123456789abcdef01234567-1 ENV_FILE="$tmp/env" bash "$root/deploy/jenkins-deploy.sh" >"$tmp/out" 2>&1; then
   echo 'remote Docker daemon was accepted' >&2; exit 1
 fi
 if ! grep -qi 'local docker' "$tmp/out"; then cat "$tmp/out"; exit 1; fi
@@ -44,7 +44,7 @@ os.replace(sys.argv[1], sys.argv[2])
 PYMOVE
 MOCK
 chmod +x "$tmp/bin/"*
-export PATH="$tmp/bin:$PATH" DEPLOY_ROOT="$tmp/deploy" ENV_FILE="$tmp/env" ACME_EMAIL=ops@example.com
+export PATH="$tmp/bin:$PATH" DEPLOY_ROOT="$tmp/deploy" ENV_FILE="$tmp/env"
 export RELEASE_ID=0123456789abcdef0123456789abcdef01234567-1
 cd "$root"
 bash deploy/jenkins-deploy.sh >/dev/null
