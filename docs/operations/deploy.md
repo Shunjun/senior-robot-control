@@ -50,8 +50,8 @@ Compose 只运行一个云进程（其中包含中继与登录限流器）、Cad
 ## Jenkins 本机部署
 
 仓库根目录的 `Jenkinsfile` 在所选 Linux 节点上构建网页和云镜像，并在同一台机器的
-本地 Docker daemon 上部署；不会通过 SSH 部署到其他主机。默认节点标签为
-`linux-docker`，默认持久目录为 `/opt/senior-robot-control`，域名固定为
+本地 Docker daemon 上部署；不会通过 SSH 部署到其他主机。Jenkins 会从可用执行节点中选取一台。
+仅启用部署目标机上的执行器时，任务会在该机器上运行。默认持久目录为 `/opt/senior-robot-control`，域名固定为
 `rosrouter.doomain.cn`。节点需要 Node.js/npm、Docker Compose v2、curl、flock、
 Git、Python 3 和可以访问本地 Docker 的权限；部署目录须由 Jenkins 用户持久读写。确保 DNS 指向
 该节点，并开放 TCP 80/443，让 Caddy 完成证书申请。部署前先备份数据库。
@@ -61,8 +61,8 @@ Git、Python 3 和可以访问本地 Docker 的权限；部署目录须由 Jenki
 如果已有 Git webhook 触发构建，可移除 Jenkinsfile 中的 `pollSCM` 触发器，改用 webhook。
 配置以下三项：
 
-1. 准备符合上述要求的 Linux 节点，并设置 `DOCKER_AGENT` 标签（默认 `linux-docker`）
-   与 `DEPLOY_ROOT`（默认 `/opt/senior-robot-control`）。
+1. 确保 Jenkins 部署目标机符合上述要求、有可用执行器，并设置
+   `DEPLOY_ROOT`（默认 `/opt/senior-robot-control`）。
 2. 创建 Jenkins **Secret file** 凭据，内容至少包含 `SENIOR_SECRET` 与
    `ADMIN_PASSWORD_HASH` 两行，使用 `deploy/jenkins.env.example` 中的格式；每个值必须完整
    用单引号包裹，保留哈希中的 `$` 原样。仅允许该示例列出的变量，不允许重复项、
