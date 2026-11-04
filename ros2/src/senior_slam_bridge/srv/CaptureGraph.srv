@@ -7,6 +7,11 @@ uint8 UNAVAILABLE=2
 uint8 status
 string<=36 boot_id
 uint64 snapshot_sequence
+# Diagnostic graph commit watermark from the same locked observation as keyframes.
+# The last ID is meaningful only when valid and sequence is nonzero.
+bool graph_commit_watermark_valid
+uint64 graph_commit_sequence
+int32 last_committed_keyframe_id
 builtin_interfaces/Time sample_stamp
 string map_frame
 string odom_frame

@@ -24,6 +24,7 @@ from probe_read_graph import (
     ODOM,
     SCAN,
     SERVICE,
+    read_snapshot,
     scan_in_room,
     transform,
     wait_for_scan,
@@ -71,6 +72,13 @@ def check_capture(result, root, boot):
     return prefix
 
 
+def check_watermark(result, sequence, keyframe_id=None):
+    assert result.graph_commit_watermark_valid
+    assert result.graph_commit_sequence == sequence
+    if keyframe_id is not None:
+        assert result.last_committed_keyframe_id == keyframe_id
+
+
 def probe(executable):
     os.environ["ROS_LOCALHOST_ONLY"] = "1"
     os.environ["ROS_DOMAIN_ID"] = str(secrets.randbelow(12) + 102)
@@ -94,6 +102,7 @@ def probe(executable):
                 empty = request(node, capture, CaptureGraph.Request())
                 assert empty.status == CaptureGraph.Response.EMPTY
                 assert not empty.keyframes and not empty.relative_prefix and not empty.pair_digest
+                check_watermark(empty, 0)
                 assert not list(staging.iterdir())
                 services = dict(node.get_service_names_and_types_by_node(OWNED_NODE, "/"))
                 assert (
@@ -106,12 +115,30 @@ def probe(executable):
                 ), services
 
                 before = wait_for_scan(node, graph, publisher, odom_tf, 0.0, 0.37, count=1)
+                check_watermark(before, 1, before.keyframes[0].id)
+                # Repeated reads and stationary scans with duplicate headers do not commit.
+                stamp = node.get_clock().now().to_msg()
+                stationary = scan_in_room(stamp, 0.0, 0.37)
+                stationary_odom = transform(stamp, ODOM, BASE, 0.0, 0.37)
+                repeated = before
+                for _ in range(6):
+                    odom_tf.sendTransform(stationary_odom)
+                    publisher.publish(stationary)
+                    rclpy.spin_once(node, timeout_sec=0.05)
+                    observed = read_snapshot(node, graph)
+                    assert repeated.snapshot_sequence < observed.snapshot_sequence
+                    assert observed.keyframes == before.keyframes
+                    check_watermark(observed, 1, before.keyframes[0].id)
+                    repeated = observed
+
                 first = request(node, capture, CaptureGraph.Request())
                 first_prefix = check_capture(first, staging, before.boot_id)
                 assert first.keyframes == before.keyframes
+                check_watermark(first, 1, before.keyframes[0].id)
                 full = request(node, capture, CaptureGraph.Request())
                 assert full.status == CaptureGraph.Response.UNAVAILABLE
                 assert not full.keyframes and not full.relative_prefix and not full.pair_digest
+                assert not full.graph_commit_watermark_valid
                 # An occupied slot is rejected before sampling or serializing the mapper.
                 assert (full.sample_stamp.sec, full.sample_stamp.nanosec) == (0, 0)
                 assert pair_digest(first_prefix) == first.pair_digest
@@ -127,6 +154,12 @@ def probe(executable):
                 raced_prefix = check_capture(raced, staging, before.boot_id)
                 after = wait_for_scan(node, graph, publisher, odom_tf, 0.6, 0.55, count=2)
                 assert raced.keyframes in (before.keyframes, after.keyframes)
+                (new_keyframe,) = set(frame.id for frame in after.keyframes) - {
+                    frame.id for frame in before.keyframes
+                }
+                check_watermark(after, 2, new_keyframe)
+                cut = before if raced.keyframes == before.keyframes else after
+                check_watermark(raced, cut.graph_commit_sequence, cut.last_committed_keyframe_id)
                 assert empty.snapshot_sequence < first.snapshot_sequence < raced.snapshot_sequence
                 assert process.poll() is None
             assert process.returncode == 0
@@ -140,8 +173,20 @@ def probe(executable):
                 args = candidate_arguments(executable, prefix, snapshot.pair_digest, attempt)
                 with candidate(args) as process:
                     boots.add(observe(node, receipt, graph, prefix, attempt, boots, snapshot))
+                    assert not read_snapshot(node, graph).graph_commit_watermark_valid
                 assert process.returncode == 0
                 wait_for_disappearance(node, "slam_graph_candidate", graph, receipt)
+
+            # Owned capture must start a fresh graph. A loaded graph has no local commit history.
+            preload_root = root / "preload"
+            preload_root.mkdir(mode=0o700)
+            rejected = owned_arguments(executable, preload_root)
+            rejected.extend(
+                ["-p", f"map_file_name:={first_prefix}", "-p", "map_start_at_dock:=true"]
+            )
+            with candidate(rejected) as process:
+                assert process.wait(timeout=4) != 0
+            assert not capture.service_is_ready()
     finally:
         node.destroy_node()
         rclpy.shutdown()

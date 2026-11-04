@@ -70,15 +70,33 @@ private:
   using ReadGraph = srv::ReadGraph;
   using ReadLoadedGraph = srv::ReadLoadedGraph;
 
+  struct GraphCommitWatermark
+  {
+    std::uint64_t sequence{0};
+    std::int32_t last_keyframe_id{0};
+  };
+
+  template<typename Response>
+  static void fill_commit_watermark(Response & response, const GraphCommitWatermark & watermark)
+  {
+    response.graph_commit_watermark_valid = true;
+    response.graph_commit_sequence = watermark.sequence;
+    response.last_committed_keyframe_id = watermark.last_keyframe_id;
+  }
+
   void prepare_owned_capture(const std::string & root)
   {
     const auto & overrides = get_node_parameters_interface()->get_parameter_overrides();
     const auto saver = overrides.find("use_map_saver");
     const auto interactive = overrides.find("enable_interactive_mode");
+    const auto initial_graph = overrides.find("map_file_name");
     if (saver == overrides.end() || saver->second.get<bool>() ||
       (interactive != overrides.end() && interactive->second.get<bool>()))
     {
       throw std::invalid_argument("Owned capture requires use_map_saver=false and interactive off");
+    }
+    if (initial_graph != overrides.end() && !initial_graph->second.get<std::string>().empty()) {
+      throw std::invalid_argument("Owned capture must start a fresh graph");
     }
     capture_directory_ = std::make_unique<CaptureDirectory>(root);
   }
@@ -118,6 +136,21 @@ private:
     AsynchronousSlamToolbox::laserCallback(std::move(scan));
   }
 
+  karto::LocalizedRangeScan * addScan(
+    karto::LaserRangeFinder * laser,
+    const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan,
+    karto::Pose2 & odom_pose) override
+  {
+    //Compatible: Humble's async laser callback invokes this virtual while the
+    // owned ingress lock is held. The base returns null for an uncommitted scan.
+    auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
+    if (capture_directory_ && committed) {
+      ++graph_commit_.sequence;
+      graph_commit_.last_keyframe_id = committed->GetUniqueId();
+    }
+    return committed;
+  }
+
   void capture_locked_observation(CaptureGraph::Response & response)
   {
     capture_directory_->require_free_slot();
@@ -125,10 +158,12 @@ private:
     std::vector<Keyframe> frames;
     std::vector<char> graph_bytes;
     std::vector<char> dataset_bytes;
+    GraphCommitWatermark watermark;
     {
       const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
       boost::mutex::scoped_lock lock(smapper_mutex_);
       response.sample_stamp = now();
+      watermark = graph_commit_;
       auto * mapper = smapper_ ? smapper_->getMapper() : nullptr;
       auto copied = copy_keyframes(mapper, limit);
       if (!copied) {
@@ -138,6 +173,7 @@ private:
       switch (validate_snapshot(frames, limit)) {
         case SnapshotStatus::empty:
           response.status = CaptureGraph::Response::EMPTY;
+          fill_commit_watermark(response, watermark);
           return;
         case SnapshotStatus::unavailable:
           return;
@@ -156,6 +192,7 @@ private:
     response.keyframes = std::move(keyframes);
     response.relative_prefix = std::move(artifact.relative_prefix);
     response.pair_digest = std::move(artifact.pair_digest);
+    fill_commit_watermark(response, watermark);
     response.status = CaptureGraph::Response::OK;
   }
 
@@ -231,7 +268,8 @@ private:
 
         const auto limit = response->keyframes.max_size();
         rclcpp::Time sample_stamp;
-        auto frames = copy_graph(limit, sample_stamp);
+        GraphCommitWatermark watermark;
+        auto frames = copy_graph(limit, sample_stamp, &watermark);
         response->sample_stamp = sample_stamp;
         if (!frames) {
           response->status = ReadGraph::Response::UNAVAILABLE;
@@ -241,6 +279,9 @@ private:
         switch (status) {
           case SnapshotStatus::empty:
             response->status = ReadGraph::Response::EMPTY;
+            if (capture_directory_) {
+              fill_commit_watermark(*response, watermark);
+            }
             return;
           case SnapshotStatus::unavailable:
             response->status = ReadGraph::Response::UNAVAILABLE;
@@ -251,13 +292,21 @@ private:
         }
 
         fill_keyframes(*frames, response->keyframes);
+        if (capture_directory_) {
+          fill_commit_watermark(*response, watermark);
+        }
       });
   }
 
-  std::optional<std::vector<Keyframe>> copy_graph(std::size_t limit, rclcpp::Time & sample_stamp)
+  std::optional<std::vector<Keyframe>> copy_graph(
+    std::size_t limit, rclcpp::Time & sample_stamp, GraphCommitWatermark * watermark = nullptr)
   {
+    const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
     boost::mutex::scoped_lock lock(smapper_mutex_);
     sample_stamp = now();
+    if (watermark) {
+      *watermark = graph_commit_;
+    }
     return copy_keyframes(smapper_ ? smapper_->getMapper() : nullptr, limit);
   }
 
@@ -305,6 +354,7 @@ private:
   const std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
+  GraphCommitWatermark graph_commit_;
   std::unique_ptr<CaptureDirectory> capture_directory_;
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;
   rclcpp::Service<ReadGraph>::SharedPtr read_graph_;

@@ -7,6 +7,12 @@ uint8 status
 string<=36 boot_id
 # Observation number within this boot.
 uint64 snapshot_sequence
+# Diagnostic counter of accepted graph commits in this owned capture boot.
+# Sequence zero is an empty live history. The last ID is meaningful after the first commit.
+# Not an occupancy watermark or a revision of the complete dataset.
+bool graph_commit_watermark_valid
+uint64 graph_commit_sequence
+int32 last_committed_keyframe_id
 string map_frame
 string odom_frame
 builtin_interfaces/Time sample_stamp
