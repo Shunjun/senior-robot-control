@@ -1,0 +1,23 @@
+# Look up one exact committed scan by boot and graph commit sequence. Zero is invalid.
+string<=36 boot_id
+uint64 graph_commit_sequence
+---
+uint8 UNAVAILABLE=0
+uint8 OK=1
+uint8 PENDING=2
+uint8 GAP=3
+
+# GAP is terminal for this sequence: the cut was evicted or could not be retained.
+# PENDING is only a future sequence within the currently observed qualified boot.
+# Responses other than OK contain no usable graph or scan data.
+uint8 status
+string<=36 boot_id
+uint64 graph_commit_sequence
+int32 committed_keyframe_id
+builtin_interfaces/Time sample_stamp
+string map_frame
+string odom_frame
+# Original bounded scan bytes/fields, including the source receipt. No time-based lookup.
+senior_motion_msgs/BoundedRawLaserScan scan
+# All corrected vertices at this commit cut, sorted by ID.
+Keyframe[<=16384] keyframes

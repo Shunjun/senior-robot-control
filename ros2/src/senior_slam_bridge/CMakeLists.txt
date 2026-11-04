@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Keyframe.msg"
   "srv/CaptureGraph.srv"
   "srv/ReadGraph.srv"
+  "srv/ReadGraphCommit.srv"
   "srv/ReadLoadedGraph.srv"
   DEPENDENCIES builtin_interfaces senior_motion_msgs
 )
@@ -62,6 +63,13 @@ if(BUILD_TESTING)
   target_include_directories(test_snapshot PRIVATE src)
   ament_add_test(snapshot
     COMMAND "$<TARGET_FILE:test_snapshot>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
+  add_executable(test_graph_commit_history test/test_graph_commit_history.cpp)
+  target_compile_features(test_graph_commit_history PRIVATE cxx_std_17)
+  target_include_directories(test_graph_commit_history PRIVATE src)
+  ament_add_test(graph_commit_history
+    COMMAND "$<TARGET_FILE:test_graph_commit_history>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
   add_executable(test_native_capture test/test_native_capture.cpp src/native_capture.cpp)
@@ -105,6 +113,13 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:slam_graph_node>" --capture
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
+  )
+  ament_add_test(graph_commit_delivery_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_graph_commit_delivery.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 65
   )
   ament_add_test(candidate_load_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"

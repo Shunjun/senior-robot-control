@@ -1,8 +1,10 @@
 #include "bounded_scan_ingress.hpp"
+#include "graph_commit_history.hpp"
 #include "native_capture.hpp"
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -20,6 +22,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "senior_slam_bridge/srv/capture_graph.hpp"
 #include "senior_slam_bridge/srv/read_graph.hpp"
+#include "senior_slam_bridge/srv/read_graph_commit.hpp"
 #include "senior_slam_bridge/srv/read_loaded_graph.hpp"
 //Compatible: the Humble slam_toolbox 2.6.10 subclass exposes the mapper and its mutex.
 #include "slam_toolbox/slam_toolbox_async.hpp"
@@ -68,6 +71,7 @@ public:
       }
       if (!bounded_topic.empty()) {
         start_bounded_ingress(bounded_topic);
+        start_graph_commit_service();
       }
       if (capture_directory_) {
         start_owned_capture();
@@ -84,12 +88,21 @@ public:
 private:
   using CaptureGraph = srv::CaptureGraph;
   using ReadGraph = srv::ReadGraph;
+  using ReadGraphCommit = srv::ReadGraphCommit;
   using ReadLoadedGraph = srv::ReadLoadedGraph;
 
   struct GraphCommitWatermark
   {
     std::uint64_t sequence{0};
     std::int32_t last_keyframe_id{0};
+  };
+
+  struct CommittedScanCut
+  {
+    std::int32_t keyframe_id;
+    builtin_interfaces::msg::Time sample_stamp;
+    BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
+    std::vector<Keyframe> keyframes;
   };
 
   template<typename Response>
@@ -135,17 +148,17 @@ private:
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
       *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
-        const BoundedScanIngress::Receipt & receipt)
+        BoundedScanIngress::BoundedScan::ConstSharedPtr original)
       {
         const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
-        in_flight_scan_ = &receipt;
+        in_flight_scan_ = std::move(original);
         try {
           AsynchronousSlamToolbox::laserCallback(std::move(scan));
         } catch (...) {
-          in_flight_scan_ = nullptr;
+          in_flight_scan_.reset();
           throw;
         }
-        in_flight_scan_ = nullptr;
+        in_flight_scan_.reset();
       });
   }
 
@@ -196,10 +209,71 @@ private:
       ++graph_commit_.sequence;
       graph_commit_.last_keyframe_id = committed->GetUniqueId();
       if (in_flight_scan_) {
-        last_committed_scan_ = *in_flight_scan_;
+        last_committed_scan_ = in_flight_scan_->capture;
+        record_graph_commit();
       }
     }
     return committed;
+  }
+
+  void record_graph_commit()
+  {
+    // The bounded ingress already owns the outer lock. The vendor released its
+    // mapper lock after applying the scan and any loop correction.
+    boost::mutex::scoped_lock lock(smapper_mutex_);
+    const auto limit = ReadGraphCommit::Response{}.keyframes.max_size();
+    auto frames = copy_keyframes(smapper_ ? smapper_->getMapper() : nullptr, limit);
+    if (!frames || validate_snapshot(*frames, limit) != SnapshotStatus::ok ||
+      std::none_of(frames->begin(), frames->end(), [this](const Keyframe & frame) {
+        return frame.id == graph_commit_.last_keyframe_id;
+      }))
+    {
+      graph_commit_history_.append(graph_commit_.sequence, std::nullopt);
+      return;
+    }
+    graph_commit_history_.append(
+      graph_commit_.sequence,
+      CommittedScanCut{graph_commit_.last_keyframe_id, now(), in_flight_scan_, std::move(*frames)});
+  }
+
+  void start_graph_commit_service()
+  {
+    read_graph_commit_ = create_service<ReadGraphCommit>(
+      "/senior/slam/read_graph_commit",
+      [this](const ReadGraphCommit::Request::SharedPtr request,
+        ReadGraphCommit::Response::SharedPtr response)
+      {
+        if (request->boot_id != boot_id_ || !bounded_ingress_->source_active()) {
+          return;
+        }
+        // Delivery and lookup share the bounded ingress executor.
+        const auto [state, cut] = graph_commit_history_.lookup(request->graph_commit_sequence);
+        switch (state) {
+          case CommitLookup::invalid:
+            return;
+          case CommitLookup::pending:
+            response->status = ReadGraphCommit::Response::PENDING;
+            return;
+          case CommitLookup::gap:
+            response->status = ReadGraphCommit::Response::GAP;
+            return;
+          case CommitLookup::found:
+            break;
+        }
+        ReadGraphCommit::Response result;
+        result.boot_id = boot_id_;
+        result.graph_commit_sequence = request->graph_commit_sequence;
+        result.committed_keyframe_id = cut->keyframe_id;
+        result.sample_stamp = cut->sample_stamp;
+        result.map_frame = map_frame_;
+        result.odom_frame = odom_frame_;
+        result.scan = *cut->scan;
+        fill_keyframes(cut->keyframes, result.keyframes);
+        if (bounded_ingress_->source_active()) {
+          result.status = ReadGraphCommit::Response::OK;
+          *response = std::move(result);
+        }
+      });
   }
 
   void capture_locked_observation(CaptureGraph::Response & response)
@@ -430,12 +504,14 @@ private:
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
   GraphCommitWatermark graph_commit_;
-  const BoundedScanIngress::Receipt * in_flight_scan_{nullptr};
+  BoundedScanIngress::BoundedScan::ConstSharedPtr in_flight_scan_;
   std::optional<BoundedScanIngress::Receipt> last_committed_scan_;
+  GraphCommitHistory<CommittedScanCut, 8> graph_commit_history_;
   std::unique_ptr<BoundedScanIngress> bounded_ingress_;
   std::unique_ptr<CaptureDirectory> capture_directory_;
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;
   rclcpp::Service<ReadGraph>::SharedPtr read_graph_;
+  rclcpp::Service<ReadGraphCommit>::SharedPtr read_graph_commit_;
   rclcpp::Service<ReadLoadedGraph>::SharedPtr candidate_receipt_;
 };
 }  // namespace senior_slam_bridge

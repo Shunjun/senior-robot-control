@@ -20,7 +20,8 @@ class BoundedScanIngress
 public:
   using Receipt = senior_motion_msgs::msg::RawCaptureHeader;
   using Scan = sensor_msgs::msg::LaserScan;
-  using Submit = std::function<void(Scan::ConstSharedPtr, const Receipt &)>;
+  using BoundedScan = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using Submit = std::function<void(Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr)>;
 
   BoundedScanIngress(
     rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
@@ -29,7 +30,7 @@ public:
   bool source_active();
 
 private:
-  using Message = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using Message = BoundedScan;
   void offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info);
   void poll();
   void close();

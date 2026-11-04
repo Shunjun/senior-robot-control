@@ -261,6 +261,6 @@ void BoundedScanIngress::poll()
   scan->range_max = input->range_max;
   scan->ranges.assign(input->ranges.begin(), input->ranges.end());
   scan->intensities.assign(input->intensities.begin(), input->intensities.end());
-  submit_(std::move(scan), receipt);
+  submit_(std::move(scan), input);
 }
 }  // namespace senior_slam_bridge
