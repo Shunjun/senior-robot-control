@@ -7,7 +7,10 @@ find_package(builtin_interfaces REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(senior_motion_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -25,14 +28,14 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CaptureGraph.srv"
   "srv/ReadGraph.srv"
   "srv/ReadLoadedGraph.srv"
-  DEPENDENCIES builtin_interfaces
+  DEPENDENCIES builtin_interfaces senior_motion_msgs
 )
 rosidl_get_typesupport_target(graph_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 
 add_executable(slam_graph_node
-  src/slam_graph_node.cpp src/staged_graph.cpp src/native_capture.cpp)
+  src/slam_graph_node.cpp src/staged_graph.cpp src/native_capture.cpp src/bounded_scan_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
-ament_target_dependencies(slam_graph_node rclcpp slam_toolbox)
+ament_target_dependencies(slam_graph_node rclcpp senior_motion_msgs sensor_msgs slam_toolbox tf2_ros)
 target_link_libraries(slam_graph_node
   "${graph_typesupport}"
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
@@ -88,6 +91,13 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:slam_graph_node>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 100
+  )
+  ament_add_test(bounded_scan_ingress_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_bounded_scan_ingress.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60
   )
   ament_add_test(candidate_load_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"

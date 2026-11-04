@@ -13,6 +13,10 @@ uint64 snapshot_sequence
 bool graph_commit_watermark_valid
 uint64 graph_commit_sequence
 int32 last_committed_keyframe_id
+# The original exact receipt paired with the last committed keyframe in bounded mode.
+# Valid only while that input owner remains qualified. This is not map/odom authority.
+bool last_committed_scan_valid
+senior_motion_msgs/RawCaptureHeader last_committed_scan
 string map_frame
 string odom_frame
 builtin_interfaces/Time sample_stamp

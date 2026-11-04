@@ -1,3 +1,4 @@
+#include "bounded_scan_ingress.hpp"
 #include "native_capture.hpp"
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
@@ -34,7 +35,7 @@ public:
 
   ~SlamGraphNode() override
   {
-    if (capture_directory_) {
+    if (capture_directory_ || bounded_ingress_) {
       //Compatible: join Humble's dedicated TF listener before retiring the ingress lock.
       tfL_.reset();
       scan_filter_.reset();
@@ -48,13 +49,24 @@ public:
     const auto digest = declare_parameter<std::string>("candidate_graph_digest", "");
     const auto attempt = declare_parameter<std::string>("candidate_load_attempt", "");
     const auto capture_root = declare_parameter<std::string>("capture_directory", "");
+    const auto bounded_topic = declare_parameter<std::string>("bounded_scan_topic", "");
+    if (!bounded_topic.empty() &&
+      (!prefix.empty() || !digest.empty() || !attempt.empty() || !capture_root.empty()))
+    {
+      throw std::invalid_argument("Bounded scan ingress is separate from capture and candidate load");
+    }
     if (prefix.empty() && digest.empty() && attempt.empty()) {
+      if (!capture_root.empty() || !bounded_topic.empty()) {
+        prepare_owned_graph();
+      }
       if (!capture_root.empty()) {
-        prepare_owned_capture(capture_root);
+        capture_directory_ = std::make_unique<CaptureDirectory>(capture_root);
       }
       configure();
       if (capture_directory_) {
         start_owned_capture();
+      } else if (!bounded_topic.empty()) {
+        start_bounded_ingress(bounded_topic);
       }
     } else {
       if (!capture_root.empty()) {
@@ -84,7 +96,7 @@ private:
     response.last_committed_keyframe_id = watermark.last_keyframe_id;
   }
 
-  void prepare_owned_capture(const std::string & root)
+  void prepare_owned_graph()
   {
     const auto & overrides = get_node_parameters_interface()->get_parameter_overrides();
     const auto saver = overrides.find("use_map_saver");
@@ -93,19 +105,50 @@ private:
     if (saver == overrides.end() || saver->second.get<bool>() ||
       (interactive != overrides.end() && interactive->second.get<bool>()))
     {
-      throw std::invalid_argument("Owned capture requires use_map_saver=false and interactive off");
+      throw std::invalid_argument("Owned graph requires use_map_saver=false and interactive off");
     }
     if (initial_graph != overrides.end() && !initial_graph->second.get<std::string>().empty()) {
-      throw std::invalid_argument("Owned capture must start a fresh graph");
+      throw std::invalid_argument("Owned graph must start a fresh graph");
     }
-    capture_directory_ = std::make_unique<CaptureDirectory>(root);
   }
 
-  void start_owned_capture()
+  void disable_stock_mutations()
   {
     ssDesserialize_.reset();
     ssSerialize_.reset();
     ssPauseMeasurements_.reset();
+  }
+
+  void start_bounded_ingress(const std::string & topic)
+  {
+    disable_stock_mutations();
+    if (topic == scan_topic_) {
+      throw std::invalid_argument("Bounded scan topic must differ from the raw scan topic");
+    }
+    //Compatible: the Humble base configure() installs a LaserScan MessageFilter.
+    // No node callbacks have spun yet, so discard it before it can create TF futures.
+    scan_filter_.reset();
+    scan_filter_sub_.reset();
+    bounded_ingress_ = std::make_unique<BoundedScanIngress>(
+      *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
+      [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
+        const BoundedScanIngress::Receipt & receipt)
+      {
+        const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+        in_flight_scan_ = &receipt;
+        try {
+          AsynchronousSlamToolbox::laserCallback(std::move(scan));
+        } catch (...) {
+          in_flight_scan_ = nullptr;
+          throw;
+        }
+        in_flight_scan_ = nullptr;
+      });
+  }
+
+  void start_owned_capture()
+  {
+    disable_stock_mutations();
     capture_graph_ = create_service<CaptureGraph>(
       "/senior/slam/capture_graph",
       [this](const CaptureGraph::Request::SharedPtr, CaptureGraph::Response::SharedPtr response) {
@@ -126,6 +169,9 @@ private:
 
   void laserCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr scan) override
   {
+    if (bounded_ingress_) {
+      return;
+    }
     if (!capture_directory_) {
       AsynchronousSlamToolbox::laserCallback(std::move(scan));
       return;
@@ -144,9 +190,12 @@ private:
     //Compatible: Humble's async laser callback invokes this virtual while the
     // owned ingress lock is held. The base returns null for an uncommitted scan.
     auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
-    if (capture_directory_ && committed) {
+    if ((capture_directory_ || in_flight_scan_) && committed) {
       ++graph_commit_.sequence;
       graph_commit_.last_keyframe_id = committed->GetUniqueId();
+      if (in_flight_scan_) {
+        last_committed_scan_ = *in_flight_scan_;
+      }
     }
     return committed;
   }
@@ -279,7 +328,7 @@ private:
         switch (status) {
           case SnapshotStatus::empty:
             response->status = ReadGraph::Response::EMPTY;
-            if (capture_directory_) {
+            if (capture_directory_ || bounded_ingress_) {
               fill_commit_watermark(*response, watermark);
             }
             return;
@@ -292,8 +341,12 @@ private:
         }
 
         fill_keyframes(*frames, response->keyframes);
-        if (capture_directory_) {
+        if (capture_directory_ || bounded_ingress_) {
           fill_commit_watermark(*response, watermark);
+        }
+        if (bounded_ingress_ && last_committed_scan_ && bounded_ingress_->source_active()) {
+          response->last_committed_scan_valid = true;
+          response->last_committed_scan = *last_committed_scan_;
         }
       });
   }
@@ -355,6 +408,9 @@ private:
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
   GraphCommitWatermark graph_commit_;
+  const BoundedScanIngress::Receipt * in_flight_scan_{nullptr};
+  std::optional<BoundedScanIngress::Receipt> last_committed_scan_;
+  std::unique_ptr<BoundedScanIngress> bounded_ingress_;
   std::unique_ptr<CaptureDirectory> capture_directory_;
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;
   rclcpp::Service<ReadGraph>::SharedPtr read_graph_;
