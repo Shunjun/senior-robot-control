@@ -1,0 +1,6 @@
+# Advertised only after an isolated startup load has committed.
+---
+string<=36 boot_id
+string<=64 attempt_id
+# SHA-256 over the raw SHA-256 digests of .posegraph and .data in that order.
+string<=64 pair_digest

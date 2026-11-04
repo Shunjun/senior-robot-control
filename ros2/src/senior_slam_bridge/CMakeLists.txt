@@ -4,6 +4,7 @@ project(senior_slam_bridge)
 find_package(ament_cmake REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization thread)
 find_package(builtin_interfaces REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
@@ -21,11 +22,12 @@ find_library(SLAM_TOOLBOX_KARTO_LIBRARY NAMES kartoSlamToolbox
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Keyframe.msg"
   "srv/ReadGraph.srv"
+  "srv/ReadLoadedGraph.srv"
   DEPENDENCIES builtin_interfaces
 )
 rosidl_get_typesupport_target(graph_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 
-add_executable(slam_graph_node src/slam_graph_node.cpp)
+add_executable(slam_graph_node src/slam_graph_node.cpp src/staged_graph.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
 ament_target_dependencies(slam_graph_node rclcpp slam_toolbox)
 target_link_libraries(slam_graph_node
@@ -33,13 +35,22 @@ target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
   "${SLAM_TOOLBOX_KARTO_LIBRARY}"
-  Boost::serialization Boost::thread TBB::tbb
+  Boost::serialization Boost::thread OpenSSL::Crypto TBB::tbb
 )
 install(TARGETS slam_graph_node DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/candidate_preflight.py DESTINATION lib/${PROJECT_NAME}
+  RENAME candidate_preflight)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  configure_file(scripts/candidate_preflight.py candidate_preflight.py COPYONLY)
+  ament_add_test(candidate_preflight
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/scripts"
+      "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test/test_candidate_preflight.py"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   add_executable(test_snapshot test/test_snapshot.cpp)
   target_compile_features(test_snapshot PRIVATE cxx_std_17)
   target_include_directories(test_snapshot PRIVATE src)
@@ -47,11 +58,25 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:test_snapshot>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
+  add_executable(test_staged_graph test/test_staged_graph.cpp src/staged_graph.cpp)
+  target_compile_features(test_staged_graph PRIVATE cxx_std_17)
+  target_include_directories(test_staged_graph PRIVATE src)
+  target_link_libraries(test_staged_graph OpenSSL::Crypto)
+  ament_add_test(staged_graph
+    COMMAND "$<TARGET_FILE:test_staged_graph>" "${CMAKE_CURRENT_BINARY_DIR}"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   ament_add_test(read_graph_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_read_graph.py"
       "$<TARGET_FILE:slam_graph_node>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
+  )
+  ament_add_test(candidate_load_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"
+      "$<TARGET_FILE:slam_graph_node>" "${CMAKE_CURRENT_BINARY_DIR}/candidate_preflight.py"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120
   )
 endif()
 
