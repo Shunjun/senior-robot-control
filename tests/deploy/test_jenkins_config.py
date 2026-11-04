@@ -41,14 +41,32 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     fake_hash = "scrypt$16384$8$1$" + "ab" * 16 + "$" + "cd" * 32
     credential = tmp_path / "env"
     credential.write_text(
-        "SENIOR_SECRET='" + "x" * 32 + "'\nADMIN_PASSWORD_HASH='" + fake_hash + "'\n"
+        "ACME_EMAIL='ops@example.com'\nSENIOR_SECRET='"
+        + "x" * 32
+        + "'\nADMIN_PASSWORD_HASH='"
+        + fake_hash
+        + "'\n"
     )
     validator = ROOT / "deploy/validate-jenkins-env.py"
-    subprocess.run([sys.executable, str(validator), str(credential)], check=True)
+    result = subprocess.run(
+        [sys.executable, str(validator), str(credential)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "false\n"
+    enabled = tmp_path / "enabled"
+    enabled.write_text(credential.read_text() + "ENABLE_TURN='true'\n")
+    result = subprocess.run(
+        [sys.executable, str(validator), str(enabled)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "true\n"
     env = dict(
         PATH=os.environ["PATH"],
         DOMAIN="rosrouter.doomain.cn",
-        ACME_EMAIL="ops@example.com",
         CLOUD_IMAGE="senior-control-cloud:test",
         RELEASE_DIR="/tmp/release",
         DEPLOY_ROOT="/tmp/deploy",
@@ -75,6 +93,9 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         "ADMIN_PASSWORD_HASH"
     ]
     assert rendered.replace("$$", "$") == fake_hash
+    assert yaml.safe_load(result.stdout)["services"]["caddy"]["environment"]["ACME_EMAIL"] == (
+        "ops@example.com"
+    )
     parsed = subprocess.run(
         [
             "docker",
@@ -93,6 +114,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     )
     assert "ADMIN_PASSWORD_HASH=" + fake_hash in parsed.stdout.splitlines()
     for extra in (
+        "ENABLE_TURN='yes'\n",
         "COMPOSE_FILE='bad'\n",
         "SENIOR_SECRET='duplicate'\n",
         "OTHER='bad'\n",
@@ -133,3 +155,9 @@ def test_pipeline_uses_github_push_webhook():
     pipeline = (ROOT / "Jenkinsfile").read_text()
     assert "githubPush()" in pipeline
     assert "pollSCM" not in pipeline
+
+
+def test_pipeline_leaves_deployment_settings_in_credential():
+    pipeline = (ROOT / "Jenkinsfile").read_text()
+    assert "ACME_EMAIL" not in pipeline
+    assert "ENABLE_TURN" not in pipeline

@@ -2,12 +2,11 @@
 set -Eeuo pipefail
 set +x
 umask 077
-: "${DEPLOY_ROOT:?}" "${RELEASE_ID:?}" "${ENV_FILE:?}" "${ACME_EMAIL:?}"
+: "${DEPLOY_ROOT:?}" "${RELEASE_ID:?}" "${ENV_FILE:?}"
 [[ "$DEPLOY_ROOT" =~ ^/[a-zA-Z0-9_./-]+$ && "$DEPLOY_ROOT" != *..* && "$DEPLOY_ROOT" != / ]] || { echo 'Invalid deployment directory' >&2; exit 1; }
 [[ "$RELEASE_ID" =~ ^[a-f0-9]{40}-[0-9]+$ ]] || { echo 'Invalid release ID' >&2; exit 1; }
-[[ "$ACME_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ && "$ACME_EMAIL" != off ]] || { echo 'Invalid ACME email' >&2; exit 1; }
 [[ -r "$ENV_FILE" ]] || { echo 'Secret file is not readable' >&2; exit 1; }
-python3 deploy/validate-jenkins-env.py "$ENV_FILE"
+enable_turn=$(python3 deploy/validate-jenkins-env.py "$ENV_FILE")
 [[ -z "${DOCKER_HOST:-}" || "$DOCKER_HOST" == unix:///var/run/docker.sock ]] || { echo 'A local Docker daemon is required' >&2; exit 1; }
 endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
 [[ "$endpoint" == unix:///var/run/docker.sock ]] || { echo 'A local Docker daemon is required' >&2; exit 1; }
@@ -16,8 +15,8 @@ command -v flock >/dev/null
 mkdir -p "$DEPLOY_ROOT/releases"
 exec 9>"$DEPLOY_ROOT/deploy.lock"
 flock -n 9 || { echo 'Another deployment is running' >&2; exit 1; }
-unset SENIOR_SECRET ADMIN_PASSWORD_HASH TURN_LISTEN_IP TURN_EXTERNAL_IP TURN_REALM TURN_SHARED_SECRET
-export DOMAIN=rosrouter.doomain.cn ACME_EMAIL DEPLOY_ROOT
+unset COMPOSE_PROFILES ACME_EMAIL SENIOR_SECRET ADMIN_PASSWORD_HASH TURN_LISTEN_IP TURN_EXTERNAL_IP TURN_REALM TURN_SHARED_SECRET
+export DOMAIN=rosrouter.doomain.cn DEPLOY_ROOT
 export RELEASE_DIR="$DEPLOY_ROOT/releases/$RELEASE_ID"
 export CLOUD_IMAGE="senior-control-cloud:$RELEASE_ID"
 mkdir "$RELEASE_DIR"
@@ -27,14 +26,12 @@ cp deploy/coturn/turnserver.conf.template "$RELEASE_DIR/deploy/coturn/"
 mkdir "$RELEASE_DIR/web"
 cp -R web/dist/. "$RELEASE_DIR/web/"
 compose=(docker compose --project-name senior-control --env-file "$ENV_FILE" -f "$RELEASE_DIR/deploy/compose.jenkins.yaml")
-if [[ "${ENABLE_TURN:-false}" == true ]]; then
+if [[ "$enable_turn" == true ]]; then
   [[ -r "$DEPLOY_ROOT/turn/fullchain.pem" && -r "$DEPLOY_ROOT/turn/privkey.pem" ]] || { echo 'TURN certificates are missing' >&2; exit 1; }
   compose+=(--profile turn)
-elif [[ "${ENABLE_TURN:-false}" != false ]]; then
-  echo 'Invalid TURN selection' >&2; exit 1
 fi
 "${compose[@]}" config --quiet
-if [[ "${ENABLE_TURN:-false}" == true ]]; then
+if [[ "$enable_turn" == true ]]; then
   "${compose[@]}" run --rm --no-deps --entrypoint /bin/sh coturn -ec \
     'test -n "$TURN_LISTEN_IP" && test -n "$TURN_EXTERNAL_IP" && test -n "$TURN_REALM" && test -n "$TURN_SHARED_SECRET"' || { echo 'TURN settings are missing' >&2; exit 1; }
 fi
