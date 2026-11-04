@@ -165,6 +165,13 @@ if(BUILD_TESTING)
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 120
   )
+  ament_add_test(candidate_match_ambiguity_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_match_ambiguity.py"
+      "$<TARGET_FILE:slam_graph_node>" "${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}/candidate_preflight"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120
+  )
   ament_add_test(candidate_load_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"
       "$<TARGET_FILE:slam_graph_node>" "${CMAKE_CURRENT_BINARY_DIR}/candidate_preflight.py"
