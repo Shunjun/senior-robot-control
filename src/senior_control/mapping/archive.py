@@ -157,12 +157,14 @@ class MapArchive:
                 for item in snapshot.waypoint_bindings
             )
             layers = staging / "layers"
-            snapshot.write(layers / "occupancy")
+            occupancy = layers / "occupancy"
+            snapshot.write(occupancy)
             waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
             (layers / "waypoints.json").write_bytes(waypoint_bytes)
-            _write_grid(snapshot, layers / "grid")
             payloads = {f"pose_graph/{name}": data for name, data in graph_files.items()}
             remaining = self._max_uncompressed_bytes - sum(map(len, graph_files.values()))
+            grid_budget = remaining - (occupancy / "occupancy.json").stat().st_size
+            _write_grid(snapshot, layers / "grid", grid_budget - len(waypoint_bytes))
             payloads.update(_file_bytes(layers, remaining))
             digests = {
                 name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
@@ -569,12 +571,30 @@ def _canonical(body: dict[str, object]) -> bytes:
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
+def _write_grid(snapshot: SlamSnapshot, directory: Path, byte_budget: int) -> None:
     width = snapshot.grid.width
     height = snapshot.grid.height
     cell = snapshot.cell_size_m
+    if type(width) is not int or type(height) is not int or width < 0 or height < 0:
+        raise DomainError(ErrorCode.VALIDATION, "grid dimensions are invalid")
     if cell <= 0.0 or not math.isfinite(cell):
         raise DomainError(ErrorCode.VALIDATION, "grid cell size is invalid")
+    pixel_count = width * height
+    if pixel_count > byte_budget:
+        raise DomainError(ErrorCode.VALIDATION, "grid exceeds the remaining bundle size limit")
+    header = f"P5\n{width} {height}\n255\n".encode()
+    origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"
+    yaml_bytes = (
+        "image: map.pgm\n"
+        f"resolution: {cell}\n"
+        f"origin: {origin}\n"
+        "negate: 0\n"
+        "occupied_thresh: 0.65\n"
+        "free_thresh: 0.196\n"
+    ).encode()
+    if pixel_count + len(header) + len(yaml_bytes) > byte_budget:
+        raise DomainError(ErrorCode.VALIDATION, "grid exceeds the remaining bundle size limit")
+
     origin_x = math.floor(snapshot.grid.origin_x / cell)
     origin_y = math.floor(snapshot.grid.origin_y / cell)
     occupied: set[tuple[int, int]] = set()
@@ -584,22 +604,16 @@ def _write_grid(snapshot: SlamSnapshot, directory: Path) -> None:
         if 0 <= px < width and 0 <= py < height:
             occupied.add((px, py))
     pixels = bytearray()
-    for row in range(height):
-        py = height - 1 - row
-        for x in range(width):
-            pixels.append(0 if (x, py) in occupied else 205)
+    if pixel_count:
+        for row in range(height):
+            py = height - 1 - row
+            for x in range(width):
+                pixels.append(0 if (x, py) in occupied else 205)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "map.pgm").write_bytes(f"P5\n{width} {height}\n255\n".encode() + bytes(pixels))
-    origin = f"[{snapshot.grid.origin_x}, {snapshot.grid.origin_y}, 0.0]"
-    yaml_text = (
-        "image: map.pgm\n"
-        f"resolution: {snapshot.cell_size_m}\n"
-        f"origin: {origin}\n"
-        "negate: 0\n"
-        "occupied_thresh: 0.65\n"
-        "free_thresh: 0.196\n"
-    )
-    (directory / "map.yaml").write_text(yaml_text, encoding="utf-8")
+    with (directory / "map.pgm").open("wb") as stream:
+        stream.write(header)
+        stream.write(pixels)
+    (directory / "map.yaml").write_bytes(yaml_bytes)
 
 
 def _manifest_from_json(

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from senior_control.errors import DomainError, ErrorCode
+from senior_control.mapping import archive as archive_module
 from senior_control.mapping.archive import MapArchive
 from senior_control.mapping.evidence import CellEvidence
 from senior_control.mapping.references import (
@@ -300,7 +301,7 @@ def test_exported_grid_uses_one_frame_with_the_yaml_origin(tmp_path: Path) -> No
             GridExtent(200, 200, -10.0, -10.0),
         )
     )
-    _write_grid(store.snapshot(Path("pose_graph"), ()), tmp_path)
+    _write_grid(store.snapshot(Path("pose_graph"), ()), tmp_path, byte_budget=65_536)
     payload = (tmp_path / "map.pgm").read_bytes()
     header, _, pixels = payload.partition(b"\n255\n")
     assert header == b"P5\n200 200"
@@ -334,7 +335,7 @@ def test_zero_grid_is_not_promoted_to_a_pixel(tmp_path: Path) -> None:
         (),
         False,
     )
-    _write_grid(snapshot, tmp_path)
+    _write_grid(snapshot, tmp_path, byte_budget=1_024)
     payload = (tmp_path / "map.pgm").read_bytes()
     assert payload.startswith(b"P5\n0 0\n")
     assert payload.partition(b"\n255\n")[2] == b""
@@ -734,3 +735,30 @@ async def test_capture_freeze_is_released_before_uncooperative_backend_finishes(
         if cancelled.is_set():
             await asyncio.wait_for(finished.wait(), timeout=1)
     assert late_codes == [ErrorCode.OPERATION_UNKNOWN]
+
+
+async def test_export_rejects_oversized_grid_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = filled_store()
+    store.apply_anchor_update(
+        AnchorSnapshot(
+            store.map_ref,
+            store.odom_owner,
+            (AnchorPose("kf-1", Pose2D(0.0, 0.0, 0.0), True),),
+            GridExtent(100, 100, 0.0, 0.0),
+        )
+    )
+    archive = MapArchive(
+        Graph(store.map_ref), source_robot_id="robot-a", max_uncompressed_bytes=10_000
+    )
+    destination = tmp_path / "oversized-grid.zip"
+
+    def unexpected_render() -> None:
+        pytest.fail("oversized grid reached the pixel renderer")
+
+    monkeypatch.setattr(archive_module, "bytearray", unexpected_render, raising=False)
+    with pytest.raises(DomainError, match="grid exceeds") as failure:
+        await archive.export_bundle(store, store.map_ref, destination)
+    assert failure.value.code is ErrorCode.VALIDATION
+    assert not destination.exists()
