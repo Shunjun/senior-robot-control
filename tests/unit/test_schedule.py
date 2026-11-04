@@ -109,6 +109,46 @@ def test_dst_gap_skips_and_fold_runs_once() -> None:
     assert fold.next_after(between_folds) == next_day
 
 
+def test_sparse_cron_skips_nonmatching_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from senior_control.tasks import schedule as schedule_module
+
+    schedule = Schedule.cron("17 4 29 2 *", timezone="UTC")
+    calls = 0
+
+    class BoundedDateTime(datetime):
+        def __add__(self, delta):
+            nonlocal calls
+            calls += 1
+            if calls > 3_000:
+                raise AssertionError("sparse cron search advanced through individual minutes")
+            return super().__add__(delta)
+
+    monkeypatch.setattr(schedule_module, "datetime", BoundedDateTime)
+    after_leap_day = datetime(2096, 2, 29, 4, 17, tzinfo=timezone.utc)
+    assert schedule.next_after(after_leap_day) == datetime(2104, 2, 29, 4, 17, tzinfo=timezone.utc)
+
+
+def test_sparse_cron_keeps_weekday_match_when_selected_month_day_does_not_exist() -> None:
+    schedule = Schedule.cron("15 10 31 2 1", timezone="UTC")
+    assert schedule.next_after(datetime(2026, 1, 31, 23, 59, tzinfo=timezone.utc)) == datetime(
+        2026, 2, 2, 10, 15, tzinfo=timezone.utc
+    )
+
+
+def test_sparse_cron_skips_gap_and_chooses_first_fold_within_day() -> None:
+    gap = Schedule.cron("5,30 2,3 8 3 *", timezone="America/New_York")
+    fold = Schedule.cron("5,30 1,2 1 11 *", timezone="America/New_York")
+    assert gap.next_after(datetime(2026, 3, 8, 6, 59, tzinfo=timezone.utc)) == datetime(
+        2026, 3, 8, 7, 5, tzinfo=timezone.utc
+    )
+    assert fold.next_after(datetime(2026, 11, 1, 5, 4, tzinfo=timezone.utc)) == datetime(
+        2026, 11, 1, 5, 5, tzinfo=timezone.utc
+    )
+    assert fold.next_after(datetime(2026, 11, 1, 6, 4, tzinfo=timezone.utc)) == datetime(
+        2026, 11, 1, 7, 5, tzinfo=timezone.utc
+    )
+
+
 def test_offline_skips_no_catchup() -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
     task = interval_task(created)

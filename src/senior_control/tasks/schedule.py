@@ -7,6 +7,7 @@ A wall time that does not exist is skipped. A repeated wall time runs once,
 at the earlier offset.
 """
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -30,9 +31,7 @@ class _Cron:
     month: _Field
     dow: _Field
 
-    def matches(self, wall: datetime) -> bool:
-        if wall.minute not in self.minute.values or wall.hour not in self.hour.values:
-            return False
+    def matches_day(self, wall: datetime) -> bool:
         if wall.month not in self.month.values:
             return False
         dom_ok = wall.day in self.dom.values
@@ -133,13 +132,30 @@ def _cron_after(schedule: Schedule, moment: datetime) -> datetime:
         wall += timedelta(minutes=1)
     if _impossible_date(cron):
         raise ValueError("no upcoming occurrence")
-    limit = 366 * 24 * 60 * 8
-    for _ in range(limit):
-        if cron.matches(wall):
-            fired = _wall_utc(wall, zone)
-            if fired is not None and fired > moment:
-                return fired
-        wall += timedelta(minutes=1)
+    hours = sorted(cron.hour.values)
+    minutes = sorted(cron.minute.values)
+    day = wall.replace(hour=0, minute=0)
+    first = wall.hour * 60 + wall.minute
+    minutes_per_day = 24 * 60
+    remaining = 366 * minutes_per_day * 8
+    one_day = timedelta(days=1)
+    while remaining:
+        end = min(minutes_per_day, first + remaining)
+        if cron.matches_day(day):
+            for hour in hours[bisect_left(hours, first // 60) :]:
+                hour_start = hour * 60
+                if hour_start >= end:
+                    break
+                for minute in minutes[bisect_left(minutes, first - hour_start) :]:
+                    if hour_start + minute >= end:
+                        break
+                    fired = _wall_utc(day.replace(hour=hour, minute=minute), zone)
+                    if fired is not None and fired > moment:
+                        return fired
+        remaining -= end - first
+        if remaining:
+            day += one_day
+        first = 0
     raise ValueError("no upcoming occurrence")
 
 
