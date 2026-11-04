@@ -5,6 +5,7 @@
 #include "staged_graph.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -101,6 +102,8 @@ private:
   {
     std::int32_t keyframe_id;
     builtin_interfaces::msg::Time sample_stamp;
+    NativeLaserOffset corrected_sensor;
+    std::int8_t raw_ray_angle_sign;
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
     std::vector<Keyframe> keyframes;
   };
@@ -148,9 +151,18 @@ private:
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
       *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
-        BoundedScanIngress::BoundedScan::ConstSharedPtr original)
+        BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount)
       {
         const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+        // Check the cached mount even if the vendor later throttles this scan.
+        const auto cached = lasers_.find(scan->header.frame_id);
+        if (cached != lasers_.end() &&
+          !match_native_mount(cached->second.getLaser(), *scan, mount))
+        {
+          retire_geometry();
+          return;
+        }
+        in_flight_mount_ = mount;
         in_flight_scan_ = std::move(original);
         try {
           AsynchronousSlamToolbox::laserCallback(std::move(scan));
@@ -197,6 +209,36 @@ private:
     AsynchronousSlamToolbox::laserCallback(std::move(scan));
   }
 
+  std::optional<std::int8_t> match_native_mount(
+    karto::LaserRangeFinder * laser, const sensor_msgs::msg::LaserScan & scan,
+    LaserTransform mount)
+  {
+    const auto cached = lasers_.find(scan.header.frame_id);
+    if (!laser || cached == lasers_.end() || cached->second.getLaser() != laser ||
+      laser->GetMinimumAngle() != scan.angle_min || laser->GetMaximumAngle() != scan.angle_max ||
+      laser->GetAngularResolution() != scan.angle_increment ||
+      laser->GetNumberOfRangeReadings() != scan.ranges.size() ||
+      (mount_height_ && std::abs(mount.z - *mount_height_) > 1e-5))
+    {
+      return std::nullopt;
+    }
+    const auto offset = laser->GetOffsetPose();
+    const bool inverted = cached->second.isInverted();
+    if (!matches_native_laser_geometry(
+        mount, {offset.GetX(), offset.GetY(), offset.GetHeading()},
+        {scan.angle_min, scan.angle_increment, scan.ranges.size(), inverted}))
+    {
+      return std::nullopt;
+    }
+    return inverted ? -1 : 1;
+  }
+
+  void retire_geometry()
+  {
+    bounded_ingress_->retire_source();
+    RCLCPP_WARN(get_logger(), "Bounded scan mount disagrees with native laser geometry");
+  }
+
   karto::LocalizedRangeScan * addScan(
     karto::LaserRangeFinder * laser,
     const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan,
@@ -204,26 +246,48 @@ private:
   {
     //Compatible: Humble's async laser callback invokes this virtual while the
     // owned ingress lock is held. The base returns null for an uncommitted scan.
+    std::int8_t ray_angle_sign{0};
+    if (in_flight_scan_) {
+      const auto matched = match_native_mount(laser, *scan, in_flight_mount_);
+      if (!matched) {
+        retire_geometry();
+        return nullptr;
+      }
+      if (!mount_height_) {
+        mount_height_ = in_flight_mount_.z;
+      }
+      ray_angle_sign = *matched;
+    }
     auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
     if ((capture_directory_ || in_flight_scan_) && committed) {
       ++graph_commit_.sequence;
       graph_commit_.last_keyframe_id = committed->GetUniqueId();
       if (in_flight_scan_) {
         last_committed_scan_ = in_flight_scan_->capture;
-        record_graph_commit();
+        record_graph_commit(*committed, laser, ray_angle_sign);
       }
     }
     return committed;
   }
 
-  void record_graph_commit()
+  void record_graph_commit(
+    const karto::LocalizedRangeScan & committed, karto::LaserRangeFinder * laser,
+    std::int8_t ray_angle_sign)
   {
     // The bounded ingress already owns the outer lock. The vendor released its
     // mapper lock after applying the scan and any loop correction.
     boost::mutex::scoped_lock lock(smapper_mutex_);
+    if (committed.GetLaserRangeFinder() != laser) {
+      graph_commit_history_.append(graph_commit_.sequence, std::nullopt);
+      retire_geometry();
+      return;
+    }
+    const auto sensor = committed.GetSensorPose();
     const auto limit = ReadGraphCommit::Response{}.keyframes.max_size();
     auto frames = copy_keyframes(smapper_ ? smapper_->getMapper() : nullptr, limit);
-    if (!frames || validate_snapshot(*frames, limit) != SnapshotStatus::ok ||
+    if (!std::isfinite(sensor.GetX()) || !std::isfinite(sensor.GetY()) ||
+      !std::isfinite(sensor.GetHeading()) ||
+      !frames || validate_snapshot(*frames, limit) != SnapshotStatus::ok ||
       std::none_of(frames->begin(), frames->end(), [this](const Keyframe & frame) {
         return frame.id == graph_commit_.last_keyframe_id;
       }))
@@ -233,7 +297,10 @@ private:
     }
     graph_commit_history_.append(
       graph_commit_.sequence,
-      CommittedScanCut{graph_commit_.last_keyframe_id, now(), in_flight_scan_, std::move(*frames)});
+      CommittedScanCut{
+        graph_commit_.last_keyframe_id, now(),
+        {sensor.GetX(), sensor.GetY(), sensor.GetHeading()}, ray_angle_sign,
+        in_flight_scan_, std::move(*frames)});
   }
 
   void start_graph_commit_service()
@@ -267,6 +334,10 @@ private:
         result.sample_stamp = cut->sample_stamp;
         result.map_frame = map_frame_;
         result.odom_frame = odom_frame_;
+        result.corrected_sensor_x = cut->corrected_sensor.x;
+        result.corrected_sensor_y = cut->corrected_sensor.y;
+        result.corrected_sensor_yaw = cut->corrected_sensor.yaw;
+        result.raw_ray_angle_sign = cut->raw_ray_angle_sign;
         result.scan = *cut->scan;
         fill_keyframes(cut->keyframes, result.keyframes);
         if (bounded_ingress_->source_active()) {
@@ -505,6 +576,8 @@ private:
   std::mutex scan_ingress_mutex_;
   GraphCommitWatermark graph_commit_;
   BoundedScanIngress::BoundedScan::ConstSharedPtr in_flight_scan_;
+  LaserTransform in_flight_mount_{};
+  std::optional<double> mount_height_;
   std::optional<BoundedScanIngress::Receipt> last_committed_scan_;
   GraphCommitHistory<CommittedScanCut, 8> graph_commit_history_;
   std::unique_ptr<BoundedScanIngress> bounded_ingress_;

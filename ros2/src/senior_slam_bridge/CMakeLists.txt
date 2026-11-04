@@ -72,6 +72,13 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:test_graph_commit_history>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
+  add_executable(test_laser_geometry test/test_laser_geometry.cpp)
+  target_compile_features(test_laser_geometry PRIVATE cxx_std_17)
+  target_include_directories(test_laser_geometry PRIVATE src)
+  ament_add_test(laser_geometry
+    COMMAND "$<TARGET_FILE:test_laser_geometry>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   add_executable(test_native_capture test/test_native_capture.cpp src/native_capture.cpp)
   target_compile_features(test_native_capture PRIVATE cxx_std_17)
   target_include_directories(test_native_capture PRIVATE src)

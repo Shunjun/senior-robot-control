@@ -1,5 +1,6 @@
 """Humble probe for exact native per-commit lookup, eviction, and owner revocation."""
 
+import math
 import os
 import secrets
 import sys
@@ -31,14 +32,32 @@ from rclpy.serialization import serialize_message
 from senior_motion_msgs.msg import BoundedRawLaserScan
 from senior_slam_bridge.srv import ReadGraph, ReadGraphCommit
 from sensor_msgs.msg import LaserScan
-from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+from tf2_ros import TransformBroadcaster
 
 COMMIT_SERVICE = "/senior/slam/read_graph_commit"
+MOUNT_X = 0.24
+MOUNT_Y = -0.08
+MOUNT_YAW = 0.21
 
 
 def check_unavailable_data(response):
     assert not response.scan.capture.valid
     assert not response.scan.ranges and not response.keyframes
+    assert response.raw_ray_angle_sign == 0
+
+
+def check_sensor_pose(cut):
+    (base,) = [frame for frame in cut.keyframes if frame.id == cut.committed_keyframe_id]
+    cos_yaw, sin_yaw = math.cos(base.yaw), math.sin(base.yaw)
+    assert math.isclose(
+        cut.corrected_sensor_x, base.x + MOUNT_X * cos_yaw - MOUNT_Y * sin_yaw, abs_tol=1e-8
+    )
+    assert math.isclose(
+        cut.corrected_sensor_y, base.y + MOUNT_X * sin_yaw + MOUNT_Y * cos_yaw, abs_tol=1e-8
+    )
+    difference = math.remainder(cut.corrected_sensor_yaw - base.yaw - MOUNT_YAW, math.tau)
+    assert abs(difference) < 1e-8
+    assert cut.raw_ray_angle_sign == 1
 
 
 def probe(executable):
@@ -54,9 +73,7 @@ def probe(executable):
         publisher = bridge.create_publisher(
             BoundedRawLaserScan, BOUNDED_TOPIC, qos_profile_sensor_data
         )
-        static_tf = StaticTransformBroadcaster(node)
-        odom_tf = TransformBroadcaster(node)
-        static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER))
+        tf = TransformBroadcaster(node)
 
         with candidate(arguments(executable, None)) as process:
             assert graph.wait_for_service(timeout_sec=8)
@@ -78,11 +95,14 @@ def probe(executable):
                     ReadGraphCommit.Request(boot_id=owner, graph_commit_sequence=sequence),
                 )
 
-            def publish_scan(x, yaw):
+            def publish_scan(x, yaw, mount_x=MOUNT_X):
                 nonlocal raw_sequence
                 raw_sequence += 1
                 stamp = node.get_clock().now().to_msg()
-                odom_tf.sendTransform(transform(stamp, ODOM, BASE, x, yaw))
+                mount = transform(stamp, BASE, LASER, mount_x, MOUNT_YAW)
+                mount.transform.translation.y = MOUNT_Y
+                mount.transform.translation.z = 0.16
+                tf.sendTransform([transform(stamp, ODOM, BASE, x, yaw), mount])
                 scan = scan_in_room(stamp, x, yaw)
                 original = bounded_scan(scan, stamp, bridge_gid, raw_gid, raw_sequence)
                 # Python keeps scalar assignments as doubles until the ROS float32
@@ -102,7 +122,7 @@ def probe(executable):
                         assert cut.sample_stamp.sec > 0
                         assert serialize_message(cut.scan) == offered[cut.scan.capture.sequence]
                         assert len(cut.keyframes) == sequence
-                        assert cut.committed_keyframe_id in {frame.id for frame in cut.keyframes}
+                        check_sensor_pose(cut)
                         return cut
                     # The source can be undiscovered only before the first admitted scan.
                     assert cut.status == ReadGraphCommit.Response.PENDING or (
@@ -139,8 +159,13 @@ def probe(executable):
             check_unavailable_data(gap)
             assert lookup(2).status == ReadGraphCommit.Response.OK
 
-            bridge.destroy_publisher(publisher)
+            # The DDS owner is unchanged, but the exact-time mount moved.
+            publish_scan(3.15, 0.57, mount_x=MOUNT_X + 0.12)
             wait_for_graph(node, graph, lambda value: not value.last_committed_scan_valid)
+            assert endpoint_gid(node, BOUNDED_TOPIC) == bridge_gid
+            assert read_snapshot(node, graph).graph_commit_sequence == ninth.graph_commit_sequence
+            publish_scan(3.2, 0.59)
+            spin_for(node, 0.1)
             refused = lookup(ninth.graph_commit_sequence)
             assert refused.status == ReadGraphCommit.Response.UNAVAILABLE
             check_unavailable_data(refused)

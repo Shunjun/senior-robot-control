@@ -17,6 +17,14 @@ int32 committed_keyframe_id
 builtin_interfaces/Time sample_stamp
 string map_frame
 string odom_frame
+# Diagnostic Karto sensor pose in map_frame at the same corrected graph cut.
+# A raw beam angle theta corresponds to corrected_sensor_yaw + raw_ray_angle_sign * theta.
+# Sign is +1 for upright and -1 for verified symmetric inverted scans, zero without an OK cut.
+# Numeric agreement with sampled TF is not calibrated geometry or TF/map authority.
+float64 corrected_sensor_x
+float64 corrected_sensor_y
+float64 corrected_sensor_yaw
+int8 raw_ray_angle_sign
 # Original bounded scan bytes/fields, including the source receipt. No time-based lookup.
 senior_motion_msgs/BoundedRawLaserScan scan
 # All corrected vertices at this commit cut, sorted by ID.

@@ -116,14 +116,14 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
     return false;
   }
   if (now < last_ros_ || (now == 0 && source_)) {
-    close();
+    retire_source();
     return false;
   }
   last_ros_ = now;
   return now > 0;
 }
 
-void BoundedScanIngress::close()
+void BoundedScanIngress::retire_source()
 {
   closed_ = true;
   pending_.clear();
@@ -148,7 +148,7 @@ bool BoundedScanIngress::source_active()
     return false;
   }
   if (!current_owner(source_->capture)) {
-    close();
+    retire_source();
     return false;
   }
   return true;
@@ -161,7 +161,7 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
     return;
   }
   if (source_ && !current_owner(source_->capture)) {
-    close();
+    retire_source();
     return;
   }
   const auto & receipt = scan->capture;
@@ -184,7 +184,7 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
     }
     if (!same_source(previous, receipt)) {
       // An authoritative bridge transition cannot silently change an active map source.
-      close();
+      retire_source();
       return;
     }
   }
@@ -193,7 +193,7 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   if (!receipt.valid) {
     if (source_) {
-      close();
+      retire_source();
     }
     return;
   }
@@ -205,7 +205,7 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   const auto stamp = time_ns(receipt.stamp);
   if (source_ && !same_geometry(*source_, *scan)) {
-    close();
+    retire_source();
     return;
   }
   // Sequence is the identity. The stamp is only a TF/temporal admission fence.
@@ -243,6 +243,15 @@ void BoundedScanIngress::poll()
   {
     return;
   }
+  LaserTransform mount;
+  try {
+    const auto exact = tf_.lookupTransform(base_frame_, receipt.frame_id, stamp).transform;
+    mount = {
+      exact.translation.x, exact.translation.y, exact.translation.z,
+      exact.rotation.x, exact.rotation.y, exact.rotation.z, exact.rotation.w};
+  } catch (const tf2::TransformException &) {
+    return;
+  }
   if (!source_active() ||
     !fresh(receipt, node_.now().nanoseconds(), steady_seconds()))
   {
@@ -261,6 +270,6 @@ void BoundedScanIngress::poll()
   scan->range_max = input->range_max;
   scan->ranges.assign(input->ranges.begin(), input->ranges.end());
   scan->intensities.assign(input->intensities.begin(), input->intensities.end());
-  submit_(std::move(scan), input);
+  submit_(std::move(scan), input, mount);
 }
 }  // namespace senior_slam_bridge

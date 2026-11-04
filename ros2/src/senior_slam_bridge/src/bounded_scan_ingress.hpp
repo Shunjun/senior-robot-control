@@ -1,6 +1,8 @@
 #ifndef SENIOR_SLAM_BRIDGE__BOUNDED_SCAN_INGRESS_HPP_
 #define SENIOR_SLAM_BRIDGE__BOUNDED_SCAN_INGRESS_HPP_
 
+#include "laser_geometry.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -21,19 +23,20 @@ public:
   using Receipt = senior_motion_msgs::msg::RawCaptureHeader;
   using Scan = sensor_msgs::msg::LaserScan;
   using BoundedScan = senior_motion_msgs::msg::BoundedRawLaserScan;
-  using Submit = std::function<void(Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr)>;
+  using Submit = std::function<void(
+    Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr, LaserTransform)>;
 
   BoundedScanIngress(
     rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
     std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit);
 
   bool source_active();
+  void retire_source();
 
 private:
   using Message = BoundedScan;
   void offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info);
   void poll();
-  void close();
   bool observe_clock(std::int64_t now);
   bool current_owner(const Receipt & receipt);
 
