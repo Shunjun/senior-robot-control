@@ -958,7 +958,9 @@ class Agent:
             asyncio.gather(self._state.collect(), self._home.home_revision()),
             timeout=self._deadlines.edit,
         )
-        deleted = await self._journal.deleted_task_ids()
+        deleted = live.deleted_task_ids
+        if deleted is None:
+            deleted = await self._journal.deleted_task_ids()
         home = live.home
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
@@ -970,7 +972,7 @@ class Agent:
             runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
-            tasks=live.tasks,
+            tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
         )
         return snapshot

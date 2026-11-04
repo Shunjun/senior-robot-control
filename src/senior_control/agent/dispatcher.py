@@ -295,10 +295,9 @@ def _map_ref(body: Mapping[str, Any]) -> MapRef:
 class StoreTaskPort:
     """Task edits through ``TaskStore``; the store keeps its own SQL and revision check."""
 
-    def __init__(self, store: TaskStore, *, robot_id: str, journal: AgentJournal) -> None:
+    def __init__(self, store: TaskStore, *, robot_id: str) -> None:
         self._store = store
         self._robot_id = robot_id
-        self._journal = journal
 
     async def create(self, body: Mapping[str, Any]) -> int:
         stored = await self._store.create(self._definition(body))
@@ -306,30 +305,18 @@ class StoreTaskPort:
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
         definition = self._definition(body)
-        await self._require_live(definition.task_id)
         stored = await self._store.update(definition, expected_revision)
         return stored.revision
 
     async def delete(self, task_id: str, expected_revision: int, *, operation_id: str) -> int:
-        """Disable through the store, then record the delete. Row and history are kept."""
-        current = await self._store.get(task_id)
-        if current is None:
-            raise DomainError(ErrorCode.CONFLICT, "task does not exist")
-        stored = await self._store.update(replace(current, enabled=False), expected_revision)
-        await self._journal.mark_deleted(task_id, operation_id, stored.revision)
-        return stored.revision
+        return await self._store.delete(task_id, expected_revision, operation_id=operation_id)
 
     async def set_enabled(self, task_id: str, enabled: bool, expected_revision: int) -> int:
-        await self._require_live(task_id)
         current = await self._store.get(task_id)
         if current is None:
             raise DomainError(ErrorCode.CONFLICT, "task does not exist")
         stored = await self._store.update(replace(current, enabled=enabled), expected_revision)
         return stored.revision
-
-    async def _require_live(self, task_id: str) -> None:
-        if task_id in await self._journal.deleted_task_ids():
-            raise DomainError(ErrorCode.CONFLICT, "task was deleted")
 
     def _definition(self, body: Mapping[str, Any]) -> TaskDefinition:
         try:

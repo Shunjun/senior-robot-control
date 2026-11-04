@@ -174,6 +174,33 @@ class TaskStore:
                 rows = await cursor.fetchall()
         return tuple(_task(row) for row in rows)
 
+    async def snapshot_tasks(self) -> tuple[tuple[TaskDefinition, ...], frozenset[str]]:
+        """Read task revisions and their deletion markers in one SQLite statement."""
+        try:
+            async with self._database.write_lock:
+                async with self._database.connection.execute(
+                    """
+                    SELECT t.task_id, t.robot_id, t.map_id, t.reference_revision, t.waypoint_ids,
+                           t.schedule_kind, t.every_seconds, t.cron_expression, t.timezone,
+                           t.enabled, t.revision, t.created_at, d.task_id
+                    FROM task_definition AS t
+                    LEFT JOIN agent_deleted_task AS d
+                        ON d.task_id = t.task_id AND d.robot_id = t.robot_id
+                    WHERE t.robot_id = ?
+                    ORDER BY t.task_id
+                    """,
+                    (self._robot_id,),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+        except sqlite3.OperationalError as exc:
+            # //Compatible: standalone TaskStore users may not have an agent journal.
+            if str(exc) != "no such table: agent_deleted_task":
+                raise
+            return await self.list_tasks(), frozenset()
+        return tuple(_task(row) for row in rows), frozenset(
+            _text(row[12]) for row in rows if row[12] is not None
+        )
+
     async def executions_for_scan(
         self, start: datetime | None, end: datetime
     ) -> tuple[ExecutionRecord, ...]:
@@ -246,6 +273,8 @@ class TaskStore:
                 current = await self._task_in(connection, task.task_id)
                 if current is None:
                     raise DomainError(ErrorCode.CONFLICT, "task does not exist")
+                if await self._deleted(connection, task.task_id):
+                    raise DomainError(ErrorCode.CONFLICT, "task was deleted")
                 if current.revision != expected_revision:
                     raise DomainError(ErrorCode.CONFLICT, "revision conflict")
                 if current.created_at != task.created_at:
@@ -291,6 +320,35 @@ class TaskStore:
         if stored is None or stored.revision != revision:
             raise DomainError(ErrorCode.CONFLICT, "revision conflict")
         return stored
+
+    async def delete(self, task_id: str, expected_revision: int, *, operation_id: str) -> int:
+        """Disable a task and write the agent tombstone in the same transaction."""
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+            raise DomainError(ErrorCode.VALIDATION, "revision must be an integer")
+        revision = expected_revision + 1
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                if await self._deleted(connection, task_id):
+                    raise DomainError(ErrorCode.CONFLICT, "task was deleted")
+                async with connection.execute(
+                    """
+                    UPDATE task_definition SET enabled = 0, revision = ?
+                    WHERE task_id = ? AND robot_id = ? AND revision = ?
+                    """,
+                    (revision, task_id, self._robot_id, expected_revision),
+                ) as cursor:
+                    if cursor.rowcount != 1:
+                        raise DomainError(
+                            ErrorCode.CONFLICT, "task is missing or revision conflicts"
+                        )
+                await connection.execute(
+                    """
+                    INSERT INTO agent_deleted_task (task_id, robot_id, operation_id, revision)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (task_id, self._robot_id, operation_id, revision),
+                )
+        return revision
 
     async def claim(
         self, task: TaskDefinition, occurrence_utc: datetime, *, generation: int = 0
@@ -669,7 +727,10 @@ class TaskStore:
                 (task_id, self._robot_id),
             ) as cursor:
                 row = await cursor.fetchone()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            # //Compatible: standalone TaskStore users may not have an agent journal.
+            if str(exc) != "no such table: agent_deleted_task":
+                raise
             return False
         return row is not None
 
