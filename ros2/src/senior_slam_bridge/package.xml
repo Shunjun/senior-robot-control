@@ -18,7 +18,9 @@
   <depend version_eq="2.6.10">slam_toolbox</depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <test_depend>ament_cmake_test</test_depend>
+  <test_depend>ament_index_python</test_depend>
   <test_depend>geometry_msgs</test_depend>
+  <test_depend>senior_sensor_ingress</test_depend>
   <exec_depend>rclpy</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
   <export><build_type>ament_cmake</build_type></export>

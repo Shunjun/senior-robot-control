@@ -1,11 +1,8 @@
 #include "bounded_scan_ingress.hpp"
 
+#include "scan_receipt_admission.hpp"
 #include "static_lidar_tf_ingress.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <iterator>
 #include <utility>
 
 namespace senior_slam_bridge
@@ -16,78 +13,14 @@ using namespace std::chrono_literals;
 using Receipt = BoundedScanIngress::Receipt;
 using Message = senior_motion_msgs::msg::BoundedRawLaserScan;
 constexpr std::size_t pending_limit = 8;
-constexpr double max_age_seconds = 0.5;
-constexpr std::int64_t max_age_ns = 500000000;
-
-template<typename Bytes>
-std::string gid_hex(const Bytes & bytes)
-{
-  constexpr char hex[] = "0123456789abcdef";
-  if (std::all_of(std::begin(bytes), std::end(bytes), [](auto byte) {return byte == 0;})) {
-    return {};
-  }
-  std::string value;
-  for (const auto byte : bytes) {
-    value += hex[byte >> 4];
-    value += hex[byte & 0x0f];
-  }
-  return value;
-}
-
-std::int64_t time_ns(const builtin_interfaces::msg::Time & stamp)
-{
-  if (stamp.sec < 0 || stamp.nanosec >= 1000000000) {
-    return 0;
-  }
-  return static_cast<std::int64_t>(stamp.sec) * 1000000000 + stamp.nanosec;
-}
-
-bool fresh(const Receipt & receipt, std::int64_t now_ros, double now_steady)
-{
-  const auto stamp = time_ns(receipt.stamp);
-  const auto received = time_ns(receipt.received_ros);
-  return stamp > 0 && received >= stamp && now_ros >= received &&
-         now_ros - stamp <= max_age_ns && std::isfinite(receipt.received_steady) &&
-         receipt.received_steady > 0 && receipt.received_steady <= now_steady &&
-         now_steady - receipt.received_steady <= max_age_seconds;
-}
-
-double steady_seconds()
-{
-  return std::chrono::duration<double>(
-    std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-bool same_source(const Receipt & lhs, const Receipt & rhs)
-{
-  return lhs.bridge_gid == rhs.bridge_gid && lhs.raw_gid == rhs.raw_gid &&
-         lhs.bridge_boot_id == rhs.bridge_boot_id && lhs.source_epoch == rhs.source_epoch &&
-         lhs.capture_generation == rhs.capture_generation && lhs.frame_id == rhs.frame_id;
-}
-
-bool text_ok(const std::string & value)
-{
-  return !value.empty() &&
-         std::all_of(value.begin(), value.end(), [](unsigned char byte) {
-           return byte >= 33 && byte <= 126;
-         });
-}
-
-bool layout_ok(const Message & scan)
-{
-  // Reject layouts that disagree with the fixed-angle Karto sensor metadata.
-  return scan.ranges.size() >= 2 && std::isfinite(scan.angle_min) &&
-         std::isfinite(scan.angle_max) && std::isfinite(scan.angle_increment) &&
-         scan.angle_increment > 0 && scan.angle_max > scan.angle_min &&
-         std::abs((scan.angle_max - scan.angle_min) / scan.angle_increment -
-         static_cast<double>(scan.ranges.size() - 1)) <= 0.01 &&
-         scan.time_increment == 0 && std::isfinite(scan.scan_time) && scan.scan_time >= 0 &&
-         std::isfinite(scan.range_min) && scan.range_min >= 0 &&
-         std::isfinite(scan.range_max) && scan.range_max > scan.range_min &&
-         std::none_of(scan.ranges.begin(), scan.ranges.end(), [](float range) {
-           return std::isnan(range) || range < 0;
-         });
-}
+using scan_receipt_admission::fresh;
+using scan_receipt_admission::gid_hex;
+using scan_receipt_admission::layout_ok;
+using scan_receipt_admission::same_source;
+using scan_receipt_admission::steady_seconds;
+using scan_receipt_admission::text_ok;
+using scan_receipt_admission::time_ns;
+using scan_receipt_admission::unique_scan_owner;
 
 bool same_geometry(const Message & lhs, const Message & rhs)
 {
@@ -135,15 +68,8 @@ void BoundedScanIngress::retire_source()
 
 bool BoundedScanIngress::current_owner(const Receipt & receipt)
 {
-  const auto bridge = node_.get_publishers_info_by_topic(bounded_topic_);
-  const auto raw = node_.get_publishers_info_by_topic(raw_topic_);
-  return bridge.size() == 1 && raw.size() == 1 &&
-         bridge.front().node_name() == "scan_receipt" &&
-         bridge.front().node_namespace() == "/" &&
-         bridge.front().topic_type() == "senior_motion_msgs/msg/BoundedRawLaserScan" &&
-         raw.front().topic_type() == "sensor_msgs/msg/LaserScan" &&
-         gid_hex(bridge.front().endpoint_gid()) == receipt.bridge_gid &&
-         gid_hex(raw.front().endpoint_gid()) == receipt.raw_gid;
+  const auto owner = unique_scan_owner(node_, bounded_topic_, raw_topic_);
+  return owner && owner->matches(receipt);
 }
 
 bool BoundedScanIngress::source_active()

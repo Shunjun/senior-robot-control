@@ -46,7 +46,10 @@ target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_KARTO_LIBRARY}"
   Boost::serialization Boost::thread OpenSSL::Crypto TBB::tbb Threads::Threads
 )
-install(TARGETS slam_graph_node DESTINATION lib/${PROJECT_NAME})
+add_executable(acquire_scan_receipt src/acquire_scan_receipt.cpp)
+target_compile_features(acquire_scan_receipt PRIVATE cxx_std_17)
+ament_target_dependencies(acquire_scan_receipt rclcpp senior_motion_msgs)
+install(TARGETS slam_graph_node acquire_scan_receipt DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/candidate_preflight.py DESTINATION lib/${PROJECT_NAME}
   RENAME candidate_preflight)
 
@@ -164,6 +167,13 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:slam_graph_node>" "${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}/candidate_preflight"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 120
+  )
+  ament_add_test(acquire_scan_receipt_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_acquire_scan_receipt.py"
+      "$<TARGET_FILE:acquire_scan_receipt>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30
   )
   ament_add_test(candidate_match_ambiguity_runtime
     COMMAND "${Python3_EXECUTABLE}"
