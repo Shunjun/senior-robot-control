@@ -3,6 +3,8 @@
 import time
 from pathlib import Path
 
+from detector_test_helpers import slow_detector, wait_until
+
 from senior_control.vision import (
     CameraCalibration,
     CameraExtrinsic,
@@ -12,11 +14,6 @@ from senior_control.vision import (
     align,
     project_depth,
 )
-
-
-def slow_detector(frame):
-    time.sleep(0.15)
-    return [("person", 0.9, (0.0, 0.0, 1.0, 1.0))]
 
 
 def hung_detector(frame):
@@ -34,31 +31,39 @@ def capture(epoch, stamp_ns, marker=0):
     from senior_control.vision.spawn_detector import CaptureIdentity, RetainedFrame
 
     identity = CaptureIdentity(
-        source_epoch=epoch, rgb_source="rgb-gid", depth_source="depth-gid",
-        rgb_frame="optical", depth_frame="optical", registration_id="registered-calibration",
-        rgb_stamp_ns=stamp_ns, depth_stamp_ns=stamp_ns + 1,
-        rgb_received_ros_ns=stamp_ns + 2, depth_received_ros_ns=stamp_ns + 3,
-        rgb_received_steady=10.0, depth_received_steady=10.01,
+        source_epoch=epoch,
+        rgb_source="rgb-gid",
+        depth_source="depth-gid",
+        rgb_frame="optical",
+        depth_frame="optical",
+        registration_id="registered-calibration",
+        rgb_stamp_ns=stamp_ns,
+        depth_stamp_ns=stamp_ns + 1,
+        rgb_received_ros_ns=stamp_ns + 2,
+        depth_received_ros_ns=stamp_ns + 3,
+        rgb_received_steady=10.0,
+        depth_received_steady=10.01,
     )
     frame = ImageFrame(stamp_ns / 1e9, 2, 2, "rgb8", bytes([marker]) * 12)
     depth = DepthFrame((stamp_ns + 1) / 1e9, 2, 2, (0.4,) * 4)
     calibration = CameraCalibration(
-        2, 2, 2.0, 2.0, 1.0, 1.0, 1.0, 0.1, 8.0,
+        2,
+        2,
+        2.0,
+        2.0,
+        1.0,
+        1.0,
+        1.0,
+        0.1,
+        8.0,
         CameraExtrinsic(0.2, 0.0, 0.1, 0.0, 0.0, 0.0),
     )
-    geometry = project_depth(align(frame, depth, max_skew_s=0.03), calibration,
-                             GeometryConfig(row_stride=1, column_stride=1))
+    geometry = project_depth(
+        align(frame, depth, max_skew_s=0.03),
+        calibration,
+        GeometryConfig(row_stride=1, column_stride=1),
+    )
     return RetainedFrame(identity=identity, rgb=frame, geometry=geometry)
-
-
-def wait_until(predicate, timeout=5.0):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.01)
-    raise AssertionError("timed out waiting for inference")
 
 
 def test_missing_weights_disabled_without_loading_or_downloading(tmp_path: Path):
@@ -235,15 +240,19 @@ def test_bound_result_requires_original_fresh_receipts_and_current_epoch(tmp_pat
     try:
         assert worker.submit(frame)
         result = wait_until(worker.take_result)
-        assert worker.result_qualified(result, now_ros_ns=1_100_000_000, now_steady=10.2,
-                                       max_age_s=0.3)
-        assert not worker.result_qualified(result, now_ros_ns=1_000_000_000, now_steady=10.2,
-                                           max_age_s=0.3)
-        assert not worker.result_qualified(result, now_ros_ns=1_100_000_000, now_steady=10.4,
-                                           max_age_s=1.0)
+        assert worker.result_qualified(
+            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+        )
+        assert not worker.result_qualified(
+            result, now_ros_ns=1_000_000_000, now_steady=10.2, max_age_s=0.3
+        )
+        assert not worker.result_qualified(
+            result, now_ros_ns=1_100_000_000, now_steady=10.4, max_age_s=1.0
+        )
         worker.invalidate()
-        assert not worker.result_qualified(result, now_ros_ns=1_100_000_000, now_steady=10.2,
-                                           max_age_s=0.3)
+        assert not worker.result_qualified(
+            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+        )
     finally:
         worker.close()
 
@@ -262,8 +271,9 @@ def test_fabricated_result_cannot_borrow_an_active_epoch(tmp_path: Path):
         assert worker.submit(capture("epoch-a", 1_000_000_000))
         result = wait_until(worker.take_result)
         forged = replace(result, frame=capture("epoch-a", 1_050_000_000))
-        assert not worker.result_qualified(forged, now_ros_ns=1_100_000_000,
-                                           now_steady=10.2, max_age_s=0.3)
+        assert not worker.result_qualified(
+            forged, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+        )
     finally:
         worker.close()
 

@@ -464,7 +464,6 @@ def test_production_arbiter_preserves_absolute_source_deadline():
     assert arbiter.tick(0.26) == Velocity(0.0, 0.0)
 
 
-
 def test_shorter_ros_ttl_starts_when_cloud_issues_drive_challenge():
     from senior_control.errors import ErrorCode
 
@@ -481,7 +480,6 @@ def test_shorter_ros_ttl_starts_when_cloud_issues_drive_challenge():
     assert arbiter.tick(0.11) == Velocity(0.0, 0.0)
     late = sample.model_copy(update={"seq": 3})
     assert arbiter.accept(late, 0.22, local_deadline=0.3).error is ErrorCode.TIMEOUT
-
 
 
 def test_same_session_reacquire_retires_old_velocity():

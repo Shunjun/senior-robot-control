@@ -82,8 +82,9 @@ def generate_launch_description():
             ),
             Node(package="senior_scan_matcher", executable="scan_motion_node", parameters=[params]),
             Node(package="senior_robot", executable="motion_fusion", parameters=[params]),
-            Node(package="senior_sensor_ingress", executable="scan_receipt_node",
-                 parameters=[params]),
+            Node(
+                package="senior_sensor_ingress", executable="scan_receipt_node", parameters=[params]
+            ),
             Node(package="senior_robot", executable="safety_scan_ingress", parameters=[params]),
             Node(
                 package="senior_robot",

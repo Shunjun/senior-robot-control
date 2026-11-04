@@ -23,6 +23,7 @@ class RawCaptureHeader:
 
 def capture_from_message(message: Any) -> RawCaptureHeader:
     """Copy a typed bridge header without changing either original receipt."""
+
     def nanoseconds(stamp: Any) -> int:
         seconds, nanos = int(stamp.sec), int(stamp.nanosec)
         if seconds < 0 or not 0 <= nanos < 1_000_000_000:
@@ -33,11 +34,15 @@ def capture_from_message(message: Any) -> RawCaptureHeader:
         stamp_ns=nanoseconds(message.stamp),
         received_ros_ns=nanoseconds(message.received_ros),
         received_steady=float(message.received_steady),
-        frame_id=str(message.frame_id), raw_gid=str(message.raw_gid),
-        bridge_gid=str(message.bridge_gid), source_epoch=str(message.source_epoch),
+        frame_id=str(message.frame_id),
+        raw_gid=str(message.raw_gid),
+        bridge_gid=str(message.bridge_gid),
+        source_epoch=str(message.source_epoch),
         bridge_boot_id=str(message.bridge_boot_id),
-        capture_generation=int(message.capture_generation), sequence=int(message.sequence),
-        valid=bool(message.valid), reason=str(message.reason),
+        capture_generation=int(message.capture_generation),
+        sequence=int(message.sequence),
+        valid=bool(message.valid),
+        reason=str(message.reason),
     )
 
 
@@ -65,8 +70,12 @@ class RawCaptureAdmission:
     """
 
     def __init__(self, *, max_age_s: float, hard_limit_s: float = 1.0) -> None:
-        if (not math.isfinite(max_age_s) or not math.isfinite(hard_limit_s)
-            or not 0 < hard_limit_s <= 5.0 or not 0 < max_age_s <= hard_limit_s):
+        if (
+            not math.isfinite(max_age_s)
+            or not math.isfinite(hard_limit_s)
+            or not 0 < hard_limit_s <= 5.0
+            or not 0 < max_age_s <= hard_limit_s
+        ):
             raise ValueError("invalid_raw_age")
         self.max_age_s = max_age_s
         self.latest: RawCaptureHeader | None = None
@@ -152,9 +161,12 @@ class RawCaptureAdmission:
             self._retire()
             return False
         if (
-            not _gid(header.raw_gid) or not _text(header.frame_id, 128)
-            or header.stamp_ns <= 0 or header.received_ros_ns <= 0
-            or not math.isfinite(header.received_steady) or not math.isfinite(now_steady)
+            not _gid(header.raw_gid)
+            or not _text(header.frame_id, 128)
+            or header.stamp_ns <= 0
+            or header.received_ros_ns <= 0
+            or not math.isfinite(header.received_steady)
+            or not math.isfinite(now_steady)
             or not 0 <= now_ros_ns - header.received_ros_ns <= self.max_age_s * 1e9
             or not 0 <= now_steady - header.received_steady <= self.max_age_s
         ):
@@ -173,10 +185,16 @@ def compatible_captures(*headers: RawCaptureHeader) -> bool:
         return False
     first = headers[0]
     return (
-        first.stamp_ns > 0 and _text(first.bridge_boot_id, 64) and first.capture_generation > 0
-        and all(header.valid and header.stamp_ns == first.stamp_ns
-                and header.bridge_boot_id == first.bridge_boot_id
-                and header.capture_generation == first.capture_generation for header in headers)
+        first.stamp_ns > 0
+        and _text(first.bridge_boot_id, 64)
+        and first.capture_generation > 0
+        and all(
+            header.valid
+            and header.stamp_ns == first.stamp_ns
+            and header.bridge_boot_id == first.bridge_boot_id
+            and header.capture_generation == first.capture_generation
+            for header in headers
+        )
     )
 
 
@@ -195,16 +213,26 @@ class RawCaptureGroup:
         self.generation = 0
 
     def offer(
-        self, stream: str, header: RawCaptureHeader, *, bridge_gid: str,
-        now_ros_ns: int, now_steady: float,
+        self,
+        stream: str,
+        header: RawCaptureHeader,
+        *,
+        bridge_gid: str,
+        now_ros_ns: int,
+        now_steady: float,
     ) -> bool:
         admission = self._admissions[stream]
         if self._boot and header.bridge_boot_id != self._boot:
             previous_gid = self._bridge_gids.get(stream, "")
-            if (header.bridge_boot_id in self._retired_boots or not previous_gid
-                or not _gid(bridge_gid) or header.bridge_gid != bridge_gid
-                or bridge_gid == previous_gid or not _text(header.bridge_boot_id, 64)
-                or len(self._retired_boots) >= 255):
+            if (
+                header.bridge_boot_id in self._retired_boots
+                or not previous_gid
+                or not _gid(bridge_gid)
+                or header.bridge_gid != bridge_gid
+                or bridge_gid == previous_gid
+                or not _text(header.bridge_boot_id, 64)
+                or len(self._retired_boots) >= 255
+            ):
                 return False
             self._retired_boots.add(self._boot)
             self._boot = header.bridge_boot_id
@@ -214,8 +242,9 @@ class RawCaptureGroup:
         if header.capture_generation < self._capture_generation:
             return False
         prior = admission.generation
-        accepted = admission.offer(header, bridge_gid=bridge_gid, now_ros_ns=now_ros_ns,
-                                   now_steady=now_steady)
+        accepted = admission.offer(
+            header, bridge_gid=bridge_gid, now_ros_ns=now_ros_ns, now_steady=now_steady
+        )
         if admission.generation == prior:
             return False
         if header.bridge_gid != bridge_gid or not _text(header.bridge_boot_id, 64):

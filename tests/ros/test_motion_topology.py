@@ -137,8 +137,10 @@ def test_safety_rejects_duplicate_command_producer_and_recovers_with_arbiter():
         duplicate = rclpy.create_node("unexpected_command_producer")
         publisher = duplicate.create_publisher(FinalCommand, final_topic, 10)
         spin_until(
-            lambda: len(gate.get_publishers_info_by_topic(final_topic)) == 2
-            and not gate._command_topology_ready()
+            lambda: (
+                len(gate.get_publishers_info_by_topic(final_topic)) == 2
+                and not gate._command_topology_ready()
+            )
         )
         assert gate._command_monotonic is None and gate._command.vx == 0.0
         injected = FinalCommand(
@@ -166,15 +168,19 @@ def test_safety_rejects_duplicate_command_producer_and_recovers_with_arbiter():
         command.destroy_node()
         command = None
         spin_until(
-            lambda: not gate.get_publishers_info_by_topic(final_topic)
-            and not gate._command_topology_ready()
-            and gate._final_identity is None
+            lambda: (
+                not gate.get_publishers_info_by_topic(final_topic)
+                and not gate._command_topology_ready()
+                and gate._final_identity is None
+            )
         )
         command = new_command_owner()
         spin_until(
-            lambda: gate._command_topology_ready()
-            and gate._final_identity is not None
-            and gate._final_identity[0] == command._owner_boot
+            lambda: (
+                gate._command_topology_ready()
+                and gate._final_identity is not None
+                and gate._final_identity[0] == command._owner_boot
+            )
         )
         submit("control.acquire", 1)
         submit("drive.velocity", 2, 0.07)

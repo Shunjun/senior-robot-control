@@ -246,7 +246,9 @@ def test_safety_scan_uses_timestamped_tf_and_fails_closed_without_measurement(
         raw = BoundedRawLaserScan()
         raw.capture = controlled.body.raw_capture
         raw.angle_increment, raw.range_min, raw.range_max = (
-            scan.angle_increment, scan.range_min, scan.range_max
+            scan.angle_increment,
+            scan.range_min,
+            scan.range_max,
         )
         raw.ranges = scan.ranges
         ingress._bridge_gid = raw.capture.bridge_gid
@@ -413,9 +415,9 @@ def test_safety_timer_never_releases_late_result_after_input_change(
     monkeypatch.setattr(worker, "submit", submit_once)
     outputs = []
     monkeypatch.setattr(
-        gate, "_publish", lambda velocity, reason, *, ticket=None: outputs.append(
-            (velocity, reason, ticket)
-        )
+        gate,
+        "_publish",
+        lambda velocity, reason, *, ticket=None: outputs.append((velocity, reason, ticket)),
     )
     monkeypatch.setattr(gate, "_topology_ready", lambda: True)
     monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)

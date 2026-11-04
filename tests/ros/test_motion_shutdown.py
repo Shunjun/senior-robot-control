@@ -223,8 +223,11 @@ def test_context_error_is_suppressed_only_after_shutdown(monkeypatch, context_ru
     def fail_spin(_node, *, executor):
         raise RCLError("wait set context invalid")
 
-    monkeypatch.setattr(motion_lifecycle, "SingleThreadedExecutor",
-                        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})())
+    monkeypatch.setattr(
+        motion_lifecycle,
+        "SingleThreadedExecutor",
+        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})(),
+    )
     monkeypatch.setattr(motion_lifecycle.rclpy, "init", lambda: calls.append("init"))
     monkeypatch.setattr(motion_lifecycle.rclpy, "spin", fail_spin)
     monkeypatch.setattr(motion_lifecycle.rclpy, "ok", lambda: context_running)
@@ -279,8 +282,11 @@ def test_subscription_conversion_is_only_suppressed_at_closed_context_boundary(
             return Executor._take_subscription(None, sub)
         raise RuntimeError(message)
 
-    monkeypatch.setattr(motion_lifecycle, "SingleThreadedExecutor",
-                        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})())
+    monkeypatch.setattr(
+        motion_lifecycle,
+        "SingleThreadedExecutor",
+        lambda: type("TestExecutor", (), {"shutdown": lambda self: None})(),
+    )
     monkeypatch.setattr(motion_lifecycle.rclpy, "init", lambda: calls.append("init"))
     monkeypatch.setattr(motion_lifecycle.rclpy, "spin", fail_spin)
     monkeypatch.setattr(motion_lifecycle.rclpy, "ok", lambda: context_running)
@@ -376,6 +382,7 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
                     vx=0.05,
                 )
             )
+
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             publisher.publish(barrier)

@@ -18,7 +18,7 @@ def adapter_command(script, tmp_path):
 def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     pytest.importorskip("rclpy")
     socket_path = tmp_path / "adapter.sock"
-    script = '''
+    script = """
 from senior_control.runtime.ipc import IpcServer
 from senior_robot.agent_adapter import main
 
@@ -29,12 +29,18 @@ async def ready(self):
 IpcServer.start = ready
 main()
 print("STOPPED", flush=True)
-'''
+"""
     env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path))
-    proc = subprocess.Popen(adapter_command(script, tmp_path), stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, env=env)
+    proc = subprocess.Popen(
+        adapter_command(script, tmp_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
     try:
         import selectors
+
         selector = selectors.DefaultSelector()
         selector.register(proc.stdout, selectors.EVENT_READ)
         assert selector.select(timeout=10), "adapter did not start"
@@ -57,7 +63,7 @@ print("STOPPED", flush=True)
 def test_adapter_repeated_signals_close_owned_resources(tmp_path, signal_name, stage):
     pytest.importorskip("rclpy")
     socket_path = tmp_path / "adapter.sock"
-    script = '''
+    script = """
 import os
 import signal
 import rclpy
@@ -83,11 +89,18 @@ else:
     IpcServer.start = interrupted_start
 main()
 print("STOPPED", flush=True)
-'''
-    env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path), TEST_SIGNAL=signal_name,
-               TEST_STAGE=stage)
-    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
-                          timeout=10, env=env, check=False)
+"""
+    env = dict(
+        os.environ, SENIOR_AGENT_SOCKET=str(socket_path), TEST_SIGNAL=signal_name, TEST_STAGE=stage
+    )
+    proc = subprocess.run(
+        adapter_command(script, tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+        check=False,
+    )
     assert "SIGNALS_SENT" in proc.stdout, proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "STOPPED" in proc.stdout
@@ -99,7 +112,7 @@ print("STOPPED", flush=True)
 def test_adapter_live_failure_propagates_and_removes_socket(tmp_path, failure):
     pytest.importorskip("rclpy")
     socket_path = tmp_path / "adapter.sock"
-    script = '''
+    script = """
 import os
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -127,10 +140,16 @@ except ValueError as exc:
     print("FAILURE_PROPAGATED", flush=True)
 else:
     raise AssertionError("failure was swallowed")
-'''
+"""
     env = dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path), TEST_FAILURE=failure)
-    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
-                          timeout=10, env=env, check=False)
+    proc = subprocess.run(
+        adapter_command(script, tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+        check=False,
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FAILURE_PROPAGATED" in proc.stdout
     assert "Traceback" not in proc.stderr and "Exception ignored" not in proc.stderr
@@ -141,7 +160,7 @@ def test_adapter_failed_ipc_start_preserves_existing_file(tmp_path):
     pytest.importorskip("rclpy")
     socket_path = tmp_path / "occupied"
     socket_path.write_text("keep")
-    script = '''
+    script = """
 from senior_robot.agent_adapter import main
 try:
     main()
@@ -149,10 +168,15 @@ except OSError:
     print("BIND_FAILED", flush=True)
 else:
     raise AssertionError("binding over a regular file succeeded")
-'''
-    proc = subprocess.run(adapter_command(script, tmp_path), capture_output=True, text=True,
-                          timeout=10, env=dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path)),
-                          check=False)
+"""
+    proc = subprocess.run(
+        adapter_command(script, tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=dict(os.environ, SENIOR_AGENT_SOCKET=str(socket_path)),
+        check=False,
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "BIND_FAILED" in proc.stdout
     assert socket_path.read_text() == "keep"

@@ -60,40 +60,68 @@ def qualify_registration(
         or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) <= 0
         or len({rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns}) != 1
         or not _text(rgb_frame, 128)
-        or info.frame_id != rgb_frame or depth.frame_id != rgb_frame
-        or not _text(info.raw_source, 128) or not _text(depth.raw_source, 128)
-        or not _text(depth.info_source, 128) or not _text(depth.source_epoch, 64)
+        or info.frame_id != rgb_frame
+        or depth.frame_id != rgb_frame
+        or not _text(info.raw_source, 128)
+        or not _text(depth.raw_source, 128)
+        or not _text(depth.info_source, 128)
+        or not _text(depth.source_epoch, 64)
         or not _text(depth.calibration_id, 64)
-        or info.width != depth.width or info.height != depth.height
-        or not 1 <= info.width <= 4096 or not 1 <= info.height <= 4096
+        or info.width != depth.width
+        or info.height != depth.height
+        or not 1 <= info.width <= 4096
+        or not 1 <= info.height <= 4096
         or info.width * info.height > 2_073_600
     ):
         raise ValueError("registration_identity_unqualified")
     age_ns = max_age_s * 1e9
     if (
         not 0 <= now_ros_ns - rgb_stamp_ns <= age_ns
-        or any(not 0 <= now_ros_ns - receipt <= age_ns for receipt in (
-            info.received_ros_ns, depth.received_ros_ns, depth.info_received_ros_ns,
-        ))
-        or any(not math.isfinite(receipt) or not 0 <= now_steady - receipt <= max_age_s
-               for receipt in (
-                   info.received_steady, depth.received_steady, depth.info_received_steady,
-               ))
+        or any(
+            not 0 <= now_ros_ns - receipt <= age_ns
+            for receipt in (
+                info.received_ros_ns,
+                depth.received_ros_ns,
+                depth.info_received_ros_ns,
+            )
+        )
+        or any(
+            not math.isfinite(receipt) or not 0 <= now_steady - receipt <= max_age_s
+            for receipt in (
+                info.received_steady,
+                depth.received_steady,
+                depth.info_received_steady,
+            )
+        )
     ):
         raise ValueError("registration_expired")
     intrinsics = _intrinsics(info)
     other = (depth.fx, depth.fy, depth.cx, depth.cy)
     if (
         not all(math.isfinite(value) for value in other)
-        or intrinsics[0] <= 0 or intrinsics[1] <= 0
-        or not 0 <= intrinsics[2] <= info.width or not 0 <= intrinsics[3] <= info.height
+        or intrinsics[0] <= 0
+        or intrinsics[1] <= 0
+        or not 0 <= intrinsics[2] <= info.width
+        or not 0 <= intrinsics[3] <= info.height
         or any(abs(a - b) > 1e-8 for a, b in zip(intrinsics, other, strict=True))
     ):
         raise ValueError("registration_calibration_mismatch")
     identity = (
-        info.frame_id, info.raw_source, depth.raw_source, depth.info_source,
-        depth.calibration_id, info.width, info.height, info.distortion_model, info.d,
-        info.k, info.r, info.p, info.binning_x, info.binning_y, info.roi,
+        info.frame_id,
+        info.raw_source,
+        depth.raw_source,
+        depth.info_source,
+        depth.calibration_id,
+        info.width,
+        info.height,
+        info.distortion_model,
+        info.d,
+        info.k,
+        info.r,
+        info.p,
+        info.binning_x,
+        info.binning_y,
+        info.roi,
     )
     return hashlib.sha256(repr(identity).encode("utf-8")).hexdigest()
 
@@ -111,7 +139,8 @@ def associate_samples(
             or not 0 <= detection.confidence <= 1
             or len(detection.box) != 4
             or not all(math.isfinite(value) for value in detection.box)
-            or detection.box[0] > detection.box[2] or detection.box[1] > detection.box[3]
+            or detection.box[0] > detection.box[2]
+            or detection.box[1] > detection.box[3]
         ):
             raise ValueError("semantic_detection_invalid")
     matches = []
@@ -190,8 +219,9 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
 
     wire = cast(Any, message)
     stamp, info_stamp = _nanoseconds(wire.stamp), _nanoseconds(wire.camera_info_stamp)
-    received, info_received = _nanoseconds(wire.received_ros), _nanoseconds(
-        wire.camera_info_received_ros
+    received, info_received = (
+        _nanoseconds(wire.received_ros),
+        _nanoseconds(wire.camera_info_received_ros),
     )
     tf_stamp = _nanoseconds(wire.transform_stamp)
     width, height = int(wire.width), int(wire.height)
@@ -202,19 +232,48 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
     quaternion = tuple(float(x) for x in wire.optical_to_body_quaternion)
     steady, info_steady = float(wire.received_steady), float(wire.camera_info_received_steady)
     if (
-        not wire.valid or stamp <= 0 or info_stamp != stamp
-        or received <= 0 or info_received <= 0 or int(wire.sequence) <= 0
-        or not _text(wire.frame_id, 128) or not _text(wire.body_frame, 128)
-        or not _text(wire.raw_source, 128) or not _text(wire.camera_info_source, 128)
-        or not _text(wire.source_epoch, 64) or not _text(wire.calibration_id, 64)
-        or not 1 <= width <= 4096 or not 1 <= height <= 4096 or width * height > 2_073_600
-        or rows <= 0 or cols <= 0 or not 1 <= len(wire.samples) <= 8192
-        or len(origin) != 3 or len(quaternion) != 4
-        or not all(math.isfinite(x) for x in (
-            fx, fy, cx, cy, minimum, maximum, error, steady, info_steady, *origin, *quaternion
-        ))
-        or fx <= 0 or fy <= 0 or not 0 <= cx <= width or not 0 <= cy <= height
-        or not 0 < minimum < maximum <= 100 or error <= 0
+        not wire.valid
+        or stamp <= 0
+        or info_stamp != stamp
+        or received <= 0
+        or info_received <= 0
+        or int(wire.sequence) <= 0
+        or not _text(wire.frame_id, 128)
+        or not _text(wire.body_frame, 128)
+        or not _text(wire.raw_source, 128)
+        or not _text(wire.camera_info_source, 128)
+        or not _text(wire.source_epoch, 64)
+        or not _text(wire.calibration_id, 64)
+        or not 1 <= width <= 4096
+        or not 1 <= height <= 4096
+        or width * height > 2_073_600
+        or rows <= 0
+        or cols <= 0
+        or not 1 <= len(wire.samples) <= 8192
+        or len(origin) != 3
+        or len(quaternion) != 4
+        or not all(
+            math.isfinite(x)
+            for x in (
+                fx,
+                fy,
+                cx,
+                cy,
+                minimum,
+                maximum,
+                error,
+                steady,
+                info_steady,
+                *origin,
+                *quaternion,
+            )
+        )
+        or fx <= 0
+        or fy <= 0
+        or not 0 <= cx <= width
+        or not 0 <= cy <= height
+        or not 0 < minimum < maximum <= 100
+        or error <= 0
         or abs(sum(x * x for x in quaternion) - 1) > 0.001
         or (not wire.transform_static and not 0 <= stamp - tf_stamp <= 200_000_000)
     ):
@@ -227,28 +286,58 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
         u, v, distance = int(sample.u), int(sample.v), float(sample.depth_m)
         actual = tuple(float(x) for x in (sample.x, sample.y, sample.z))
         if (
-            not 0 <= u < width or not 0 <= v < height or u % cols or v % rows
-            or (u, v) <= previous or not minimum <= distance <= maximum
+            not 0 <= u < width
+            or not 0 <= v < height
+            or u % cols
+            or v % rows
+            or (u, v) <= previous
+            or not minimum <= distance <= maximum
             or not all(math.isfinite(x) for x in (distance, *actual))
         ):
             raise ValueError("depth_sample_invalid")
         previous = (u, v)
         px, py, pz = (u - cx) * distance / fx, (v - cy) * distance / fy, distance
         tx, ty, tz = 2 * (qy * pz - qz * py), 2 * (qz * px - qx * pz), 2 * (qx * py - qy * px)
-        expected = (px + qw * tx + qy * tz - qz * ty + origin[0],
-                    py + qw * ty + qz * tx - qx * tz + origin[1],
-                    pz + qw * tz + qx * ty - qy * tx + origin[2])
-        if any(abs(a - b) > 1e-4 * max(1.0, distance)
-               for a, b in zip(actual, expected, strict=True)):
+        expected = (
+            px + qw * tx + qy * tz - qz * ty + origin[0],
+            py + qw * ty + qz * tx - qx * tz + origin[1],
+            pz + qw * tz + qx * ty - qy * tx + origin[2],
+        )
+        if any(
+            abs(a - b) > 1e-4 * max(1.0, distance) for a, b in zip(actual, expected, strict=True)
+        ):
             raise ValueError("depth_sample_transform_mismatch")
         samples.append(GeometrySample(u // cols, u, v, distance, *actual))
     return DepthSnapshot(
-        stamp, info_stamp, received, info_received, tf_stamp, bool(wire.transform_static),
-        steady, info_steady, str(wire.frame_id), str(wire.body_frame), str(wire.raw_source),
-        str(wire.camera_info_source), str(wire.source_epoch), str(wire.calibration_id),
-        int(wire.sequence), width, height, cols, rows, fx, fy, cx, cy, minimum, maximum, error,
+        stamp,
+        info_stamp,
+        received,
+        info_received,
+        tf_stamp,
+        bool(wire.transform_static),
+        steady,
+        info_steady,
+        str(wire.frame_id),
+        str(wire.body_frame),
+        str(wire.raw_source),
+        str(wire.camera_info_source),
+        str(wire.source_epoch),
+        str(wire.calibration_id),
+        int(wire.sequence),
+        width,
+        height,
+        cols,
+        rows,
+        fx,
+        fy,
+        cx,
+        cy,
+        minimum,
+        maximum,
+        error,
         (origin[0], origin[1], origin[2]),
-        (quaternion[0], quaternion[1], quaternion[2], quaternion[3]), tuple(samples),
+        (quaternion[0], quaternion[1], quaternion[2], quaternion[3]),
+        tuple(samples),
     )
 
 
@@ -296,8 +385,11 @@ class SemanticSynchronizer:
     def take_ready(
         self, *, now_ros_ns: int, now_steady: float
     ) -> tuple[tuple[ColorCapture, CameraInfoFrame, DepthSnapshot] | None, str | None]:
-        if (now_ros_ns <= 0 or not math.isfinite(now_steady)
-            or (self._last_ros is not None and now_ros_ns < self._last_ros)):
+        if (
+            now_ros_ns <= 0
+            or not math.isfinite(now_steady)
+            or (self._last_ros is not None and now_ros_ns < self._last_ros)
+        ):
             self.clear()
             self._last_ros = now_ros_ns
             return None, "clock_unqualified"
@@ -307,8 +399,12 @@ class SemanticSynchronizer:
             return None, None
         stamp = min(common)
         rgb, info, depth = self._rgb[stamp], self._info[stamp], self._depth[stamp]
-        receipts = (rgb.received_steady, info.received_steady, depth.received_steady,
-                    depth.info_received_steady)
+        receipts = (
+            rgb.received_steady,
+            info.received_steady,
+            depth.received_steady,
+            depth.info_received_steady,
+        )
         age = now_steady - min(receipts)
         if stamp > now_ros_ns and 0 <= age <= min(0.02, self._age):
             return None, None

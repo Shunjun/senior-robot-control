@@ -28,26 +28,43 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
     params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
     with (tmp_path / "native-matcher.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            ["ros2", "run", "senior_scan_matcher", "scan_motion_node", "--ros-args",
-             "--params-file", str(params), "-p", "use_sim_time:=false"],
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            [
+                "ros2",
+                "run",
+                "senior_scan_matcher",
+                "scan_motion_node",
+                "--ros-args",
+                "--params-file",
+                str(params),
+                "-p",
+                "use_sim_time:=false",
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         adapter = producer = executor = None
         try:
             rclpy.init()
             producer = rclpy.create_node("actual_raw_fixture")
-            adapter = ScanAdapter(parameter_overrides=[
-                Parameter("transform_static", value=True),
-                Parameter("self_mask_calibrated", value=True),
-                Parameter("max_age_seconds", value=0.8),
-            ])
+            adapter = ScanAdapter(
+                parameter_overrides=[
+                    Parameter("transform_static", value=True),
+                    Parameter("self_mask_calibrated", value=True),
+                    Parameter("max_age_seconds", value=0.8),
+                ]
+            )
             executor = SingleThreadedExecutor()
             executor.add_node(producer)
             executor.add_node(adapter)
             publisher = producer.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
             filtered, motions = [], []
-            producer.create_subscription(FencedFilteredScan, "/perception/scan_filtered",
-                                         filtered.append, qos_profile_sensor_data)
+            producer.create_subscription(
+                FencedFilteredScan,
+                "/perception/scan_filtered",
+                filtered.append,
+                qos_profile_sensor_data,
+            )
             producer.create_subscription(ScanMotion, "/motion/scan", motions.append, 10)
             broadcaster = StaticTransformBroadcaster(producer)
             transform = TransformStamped()

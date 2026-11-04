@@ -48,8 +48,16 @@ def evaluate_depth_candidates(
     never the ROS output executor.
     """
     invalid = DepthCandidateResult("depth_geometry_invalid")
-    values = (now, max_age, max_reference_lag, linear_bound, yaw_bound, radius, extra_margin,
-              *collision_z)
+    values = (
+        now,
+        max_age,
+        max_reference_lag,
+        linear_bound,
+        yaw_bound,
+        radius,
+        extra_margin,
+        *collision_z,
+    )
     if (
         not all(math.isfinite(value) for value in values)
         or min(max_age, max_reference_lag, linear_bound, yaw_bound, radius) <= 0
@@ -63,24 +71,39 @@ def evaluate_depth_candidates(
         stamp = (int(message.stamp.sec) * 1_000_000_000 + int(message.stamp.nanosec)) / 1e9
         width, height = int(message.width), int(message.height)
         fx, fy, cx, cy = (
-            float(message.fx), float(message.fy), float(message.cx), float(message.cy)
+            float(message.fx),
+            float(message.fy),
+            float(message.cx),
+            float(message.cy),
         )
-        minimum, maximum, error = (float(message.min_range_m), float(message.max_range_m),
-                                    float(message.range_error_m))
+        minimum, maximum, error = (
+            float(message.min_range_m),
+            float(message.max_range_m),
+            float(message.range_error_m),
+        )
         origin = tuple(float(v) for v in message.sensor_origin)
         q = tuple(float(v) for v in message.optical_to_body_quaternion)
         rows, cols = int(message.row_stride), int(message.column_stride)
         if (
-            not message.frame_id or not message.body_frame
-            or not 1 <= width <= 4096 or not 1 <= height <= 4096
+            not message.frame_id
+            or not message.body_frame
+            or not 1 <= width <= 4096
+            or not 1 <= height <= 4096
             or width * height > 2_073_600
-            or rows <= 0 or cols <= 0
+            or rows <= 0
+            or cols <= 0
             or not 1 <= len(message.samples) <= 8192
-            or len(origin) != 3 or len(q) != 4
-            or not all(math.isfinite(v) for v in (fx, fy, cx, cy, minimum, maximum, error,
-                                                   *origin, *q))
-            or fx <= 0 or fy <= 0 or not 0 <= cx <= width or not 0 <= cy <= height
-            or not 0 < minimum < maximum <= 100 or error <= 0
+            or len(origin) != 3
+            or len(q) != 4
+            or not all(
+                math.isfinite(v) for v in (fx, fy, cx, cy, minimum, maximum, error, *origin, *q)
+            )
+            or fx <= 0
+            or fy <= 0
+            or not 0 <= cx <= width
+            or not 0 <= cy <= height
+            or not 0 < minimum < maximum <= 100
+            or error <= 0
             or abs(sum(v * v for v in q) - 1.0) > 0.001
             or not 0 <= now - stamp <= max_age
         ):
@@ -95,9 +118,13 @@ def evaluate_depth_candidates(
             u, v, depth = int(sample.u), int(sample.v), float(sample.depth_m)
             actual = (float(sample.x), float(sample.y), float(sample.z))
             if (
-                not 0 <= u < width or not 0 <= v < height
-                or u % cols or v % rows or (u, v) <= previous
-                or not math.isfinite(depth) or not minimum <= depth <= maximum
+                not 0 <= u < width
+                or not 0 <= v < height
+                or u % cols
+                or v % rows
+                or (u, v) <= previous
+                or not math.isfinite(depth)
+                or not minimum <= depth <= maximum
                 or not all(math.isfinite(x) for x in actual)
             ):
                 return invalid
@@ -117,7 +144,9 @@ def evaluate_depth_candidates(
     reference = history.latest
     measured = history.at(stamp)
     if (
-        reference is None or measured is None or measured.epoch != reference.epoch
+        reference is None
+        or measured is None
+        or measured.epoch != reference.epoch
         or not 0 <= now - reference.stamp <= max_reference_lag
         or stamp > reference.stamp
     ):
@@ -132,7 +161,9 @@ def evaluate_depth_candidates(
         point = compose_pose(transform, Pose2D(x, y, 0.0))
         aligned.append((point.x, point.y, z))
     margin = (
-        extra_margin + error + 3 * (uncertainty[0] + radius * uncertainty[1])
+        extra_margin
+        + error
+        + 3 * (uncertainty[0] + radius * uncertainty[1])
         + (linear_bound + radius * yaw_bound) * (now - reference.stamp + interpolation)
     )
     xmin = min(p[0] for p in footprint) - margin
@@ -140,7 +171,8 @@ def evaluate_depth_candidates(
     ymin = min(p[1] for p in footprint) - margin
     ymax = max(p[1] for p in footprint) + margin
     hit = any(
-        xmin <= x <= xmax and ymin <= y <= ymax
+        xmin <= x <= xmax
+        and ymin <= y <= ymax
         and collision_z[0] - error <= z <= collision_z[1] + error
         for x, y, z in aligned
     )

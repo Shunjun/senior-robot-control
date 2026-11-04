@@ -23,7 +23,8 @@ class SafetyScanIngress(Node):
 
     def __init__(self, *, parameter_overrides=None):
         super().__init__(
-            "safety_scan_ingress", parameter_overrides=parameter_overrides or [],
+            "safety_scan_ingress",
+            parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
         self.declare_parameter("body_frame", "base_link")
@@ -39,7 +40,8 @@ class SafetyScanIngress(Node):
             raise ValueError("invalid safety ingress frame or raw topic")
         self._admission = (
             RawCaptureAdmission(max_age_s=self._max_age, hard_limit_s=5.0)
-            if math.isfinite(self._max_age) and 0 < self._max_age <= 5.0 else None
+            if math.isfinite(self._max_age) and 0 < self._max_age <= 5.0
+            else None
         )
         self._epoch = uuid.uuid4().hex
         self._source = ""
@@ -91,8 +93,12 @@ class SafetyScanIngress(Node):
         if ready != self._ready or (ready and gid != self._bridge_gid):
             self._bridge_gid, self._ready = gid, ready
             self._source = ""
-            self._new_epoch("raw_source_changed", time.monotonic(),
-                            self.get_clock().now().nanoseconds / 1e9, force=True)
+            self._new_epoch(
+                "raw_source_changed",
+                time.monotonic(),
+                self.get_clock().now().nanoseconds / 1e9,
+                force=True,
+            )
         return ready
 
     def _on_scan(self, scan: BoundedRawLaserScan) -> None:
@@ -102,32 +108,49 @@ class SafetyScanIngress(Node):
         try:
             capture = capture_from_message(scan.capture)
             previous = self._admission.generation
-            if not self._admission.offer(capture, bridge_gid=self._bridge_gid,
-                                         now_ros_ns=now_ns, now_steady=now_steady):
+            if not self._admission.offer(
+                capture, bridge_gid=self._bridge_gid, now_ros_ns=now_ns, now_steady=now_steady
+            ):
                 if self._admission.generation != previous:
-                    self._new_epoch(capture.reason or "raw_scan_invalid", capture.received_steady,
-                                    capture.received_ros_ns / 1e9, scan.capture)
+                    self._new_epoch(
+                        capture.reason or "raw_scan_invalid",
+                        capture.received_steady,
+                        capture.received_ros_ns / 1e9,
+                        scan.capture,
+                    )
                 return
             lineage = (capture.bridge_boot_id, capture.capture_generation, capture.source_epoch)
             if self._lineage is not None and lineage != self._lineage:
-                self._new_epoch("raw_source_changed", capture.received_steady,
-                                capture.received_ros_ns / 1e9, scan.capture, force=True)
+                self._new_epoch(
+                    "raw_source_changed",
+                    capture.received_steady,
+                    capture.received_ros_ns / 1e9,
+                    scan.capture,
+                    force=True,
+                )
             self._lineage = lineage
             self._source = capture.raw_gid
             value = self._message("", capture.received_steady, capture.received_ros_ns / 1e9)
             value.raw_capture, value.stamp = scan.capture, scan.capture.stamp
             frame = capture.frame_id
             if (
-                not frame or len(frame.encode()) > MAX_FRAME_BYTES
-                or not 1 <= len(scan.ranges) <= MAX_RAYS or len(scan.intensities) > MAX_RAYS
-                or not math.isfinite(scan.time_increment) or scan.time_increment != 0.0
+                not frame
+                or len(frame.encode()) > MAX_FRAME_BYTES
+                or not 1 <= len(scan.ranges) <= MAX_RAYS
+                or len(scan.intensities) > MAX_RAYS
+                or not math.isfinite(scan.time_increment)
+                or scan.time_increment != 0.0
             ):
                 raise ValueError("raw_scan_dimensions")
             now = now_ns / 1e9
             if self._last_ros is not None and now < self._last_ros:
                 self._last_ros = now
-                self._new_epoch("raw_clock_rollback", capture.received_steady,
-                                capture.received_ros_ns / 1e9, scan.capture)
+                self._new_epoch(
+                    "raw_clock_rollback",
+                    capture.received_steady,
+                    capture.received_ros_ns / 1e9,
+                    scan.capture,
+                )
                 return
             self._last_ros = now
             stamp_time = Time.from_msg(scan.capture.stamp)
@@ -140,7 +163,8 @@ class SafetyScanIngress(Node):
             if (
                 not all(math.isfinite(v) for v in (q.x, q.y, q.z, q.w, t.x, t.y))
                 or abs(sum(v * v for v in (q.x, q.y, q.z, q.w)) - 1) > 0.001
-                or abs(q.x) > 0.001 or abs(q.y) > 0.001
+                or abs(q.x) > 0.001
+                or abs(q.y) > 0.001
             ):
                 raise ValueError("raw_transform_invalid")
             tf_stamp = Time.from_msg(tf.header.stamp).nanoseconds / 1e9

@@ -80,8 +80,10 @@ class IpcServer:
         self._connections: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
-        if self._server is not None or self._closing or (
-            self._start_task is not None and not self._start_task.done()
+        if (
+            self._server is not None
+            or self._closing
+            or (self._start_task is not None and not self._start_task.done())
         ):
             raise RuntimeError("ipc server already started or starting")
         task = asyncio.create_task(self._start())
@@ -120,8 +122,11 @@ class IpcServer:
                 current = os.lstat(self._path)
             except FileNotFoundError:
                 current = None
-            if (current is not None and stat.S_ISSOCK(current.st_mode)
-                    and (current.st_dev, current.st_ino) == self._socket_identity):
+            if (
+                current is not None
+                and stat.S_ISSOCK(current.st_mode)
+                and (current.st_dev, current.st_ino) == self._socket_identity
+            ):
                 os.chmod(self._path, 0o600)
         except BaseException as error:
             if pending_socket is not None:
@@ -176,8 +181,10 @@ class IpcServer:
             if identity is not None:
                 try:
                     current = os.lstat(self._path)
-                    if (stat.S_ISSOCK(current.st_mode)
-                            and (current.st_dev, current.st_ino) == identity):
+                    if (
+                        stat.S_ISSOCK(current.st_mode)
+                        and (current.st_dev, current.st_ino) == identity
+                    ):
                         os.unlink(self._path)
                 except FileNotFoundError:
                     pass

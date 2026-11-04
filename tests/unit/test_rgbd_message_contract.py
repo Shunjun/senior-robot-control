@@ -40,5 +40,5 @@ def test_candidate_retains_all_original_image_layouts():
 
 
 def test_image_layout_carries_fixed_full_body_digest():
-    layout = (MESSAGES / 'RawImageLayout.msg').read_text()
-    assert 'uint8[32] sha256' in layout
+    layout = (MESSAGES / "RawImageLayout.msg").read_text()
+    assert "uint8[32] sha256" in layout

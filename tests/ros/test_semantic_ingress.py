@@ -48,9 +48,13 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
     worker = SpawnInferenceWorker(weights_path=weights, processor=fixture_detector, timeout_s=2)
-    node = SemanticIngress(parameter_overrides=[
-        Parameter("registered_profile", value=True), Parameter("max_age_s", value=0.3),
-    ], _worker=worker)
+    node = SemanticIngress(
+        parameter_overrides=[
+            Parameter("registered_profile", value=True),
+            Parameter("max_age_s", value=0.3),
+        ],
+        _worker=worker,
+    )
     fixture = rclpy.create_node("semantic_fixture")
     rgb_pub = fixture.create_publisher(BoundedRawImage, "/safety/raw/rgb", qos_profile_sensor_data)
     info_pub = fixture.create_publisher(
@@ -67,8 +71,12 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         FencedDepthEvidence, "/safety/bounded_depth", qos_profile_sensor_data
     )
     received = []
-    fixture.create_subscription(BoundedSemanticEvidence, "/safety/semantic_candidate_unfenced",
-                                received.append, qos_profile_sensor_data)
+    fixture.create_subscription(
+        BoundedSemanticEvidence,
+        "/safety/semantic_candidate_unfenced",
+        received.append,
+        qos_profile_sensor_data,
+    )
     executor = SingleThreadedExecutor()
     executor.add_node(fixture)
     executor.add_node(node)
@@ -151,8 +159,12 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         assert result.depth.camera_info_stamp == result.rgb_stamp
         assert result.depth.source_epoch == "depth-epoch"
         assert result.rgb_source and result.rgb_camera_info_source
-        captures = (result.rgb_capture, result.rgb_camera_info_capture,
-                    result.depth.depth_capture, result.depth.camera_info_capture)
+        captures = (
+            result.rgb_capture,
+            result.rgb_camera_info_capture,
+            result.depth.depth_capture,
+            result.depth.camera_info_capture,
+        )
         assert [capture.raw_gid for capture in captures] == [f"{i:02x}" * 24 for i in range(1, 5)]
         assert all(capture.bridge_boot_id == "bridge-boot" for capture in captures)
         assert all(capture.capture_generation == 1 for capture in captures)
@@ -170,8 +182,9 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         while time.monotonic() < end:
             executor.spin_once(timeout_sec=0.01)
         assert not any(item.valid and item.rgb_stamp == mixed.stamp for item in received)
-        assert any(not item.valid and item.reason == "raw_capture_generation_changed"
-                   for item in received)
+        assert any(
+            not item.valid and item.reason == "raw_capture_generation_changed" for item in received
+        )
         invalid = FencedDepthEvidence()
         invalid.owner.relay_gid = bytes(
             fixture.get_publishers_info_by_topic("/safety/bounded_depth")[0].endpoint_gid
@@ -187,8 +200,10 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
             for item in received
         ):
             executor.spin_once(timeout_sec=0.01)
-        assert any(not item.valid and item.source_epoch != prior_epoch
-                   and item.reason == "depth_invalid" for item in received)
+        assert any(
+            not item.valid and item.source_epoch != prior_epoch and item.reason == "depth_invalid"
+            for item in received
+        )
     finally:
         executor.shutdown()
         node.destroy_node()
@@ -266,8 +281,10 @@ def semantic_native_bridge():
     pytest.importorskip("rclpy")
     from ament_index_python.packages import get_package_prefix
 
-    executable = Path(get_package_prefix("senior_sensor_ingress")) / "lib" / (
-        "senior_sensor_ingress/raw_receipt_node"
+    executable = (
+        Path(get_package_prefix("senior_sensor_ingress"))
+        / "lib"
+        / ("senior_sensor_ingress/raw_receipt_node")
     )
     bridge = subprocess.Popen(
         [str(executable)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -308,15 +325,24 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
     worker = SpawnInferenceWorker(weights_path=weights, processor=fixture_detector, timeout_s=2)
-    semantic = SemanticIngress(parameter_overrides=[
-        Parameter("registered_profile", value=True), Parameter("max_age_s", value=0.3),
-    ], _worker=worker)
-    depth = DepthIngress(parameter_overrides=[
-        Parameter("min_range_m", value=0.1), Parameter("max_range_m", value=8.0),
-        Parameter("range_error_m", value=0.01), Parameter("row_stride", value=1),
-        Parameter("column_stride", value=1), Parameter("max_age_s", value=0.3),
-        Parameter("transform_static", value=True),
-    ])
+    semantic = SemanticIngress(
+        parameter_overrides=[
+            Parameter("registered_profile", value=True),
+            Parameter("max_age_s", value=0.3),
+        ],
+        _worker=worker,
+    )
+    depth = DepthIngress(
+        parameter_overrides=[
+            Parameter("min_range_m", value=0.1),
+            Parameter("max_range_m", value=8.0),
+            Parameter("range_error_m", value=0.01),
+            Parameter("row_stride", value=1),
+            Parameter("column_stride", value=1),
+            Parameter("max_age_s", value=0.3),
+            Parameter("transform_static", value=True),
+        ]
+    )
     fixture = rclpy.create_node("semantic_native_e2e_fixture")
     rgb_pub = fixture.create_publisher(Image, "/camera/color/image_raw", qos_profile_sensor_data)
     depth_pub = fixture.create_publisher(Image, "/camera/depth/image_raw", qos_profile_sensor_data)
@@ -329,12 +355,21 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
     received = []
     depth_seen = []
     candidate_seen = []
-    fixture.create_subscription(FencedDepthEvidence, "/safety/bounded_depth", depth_seen.append,
-                                qos_profile_sensor_data)
-    fixture.create_subscription(BoundedSemanticEvidence, "/safety/semantic_candidate_unfenced",
-                                candidate_seen.append, qos_profile_sensor_data)
-    fixture.create_subscription(FencedSemanticEvidence, "/safety/semantic_candidates",
-                                received.append, qos_profile_sensor_data)
+    fixture.create_subscription(
+        FencedDepthEvidence, "/safety/bounded_depth", depth_seen.append, qos_profile_sensor_data
+    )
+    fixture.create_subscription(
+        BoundedSemanticEvidence,
+        "/safety/semantic_candidate_unfenced",
+        candidate_seen.append,
+        qos_profile_sensor_data,
+    )
+    fixture.create_subscription(
+        FencedSemanticEvidence,
+        "/safety/semantic_candidates",
+        received.append,
+        qos_profile_sensor_data,
+    )
     tf = TransformStamped()
     tf.header.frame_id, tf.child_frame_id = "base_link", "optical"
     tf.transform.rotation.w = 1.0
@@ -384,8 +419,11 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
             "reasons": [item.owner.reason for item in received[-20:]],
             "sources": semantic._sources,
             "worker": semantic._coordinator.status,
-            "sync_sizes": (len(semantic._sync._rgb), len(semantic._sync._info),
-                           len(semantic._sync._depth)),
+            "sync_sizes": (
+                len(semantic._sync._rgb),
+                len(semantic._sync._info),
+                len(semantic._sync._depth),
+            ),
             "depth_epoch": semantic._depth_epoch,
             "bridge_alive": semantic_native_bridge.poll() is None,
             "depth_status": [(item.owner.valid, item.owner.reason) for item in depth_seen[-10:]],
@@ -397,8 +435,9 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
         result = valid[-1]
         assert result.body.depth_owner.valid
         assert result.body.rgb_capture.stamp == result.body.depth.depth_capture.stamp
-        assert (result.body.rgb_capture.bridge_boot_id
-                == result.body.depth.depth_capture.bridge_boot_id)
+        assert (
+            result.body.rgb_capture.bridge_boot_id == result.body.depth.depth_capture.bridge_boot_id
+        )
         assert len(result.body.objects) == 1
         previous_sequence = result.owner.relay_sequence
         depth_image.header.stamp = fixture.get_clock().now().to_msg()
@@ -410,8 +449,10 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
             for item in received
         ):
             executor.spin_once(timeout_sec=0.01)
-        assert any(not item.owner.valid and item.owner.relay_sequence > previous_sequence
-                   for item in received)
+        assert any(
+            not item.owner.valid and item.owner.relay_sequence > previous_sequence
+            for item in received
+        )
     finally:
         executor.shutdown()
         for node in (fixture, depth, semantic):

@@ -11,8 +11,10 @@ def native_scan_process():
     pytest.importorskip("rclpy")
     from ament_index_python.packages import get_package_prefix
 
-    executable = Path(get_package_prefix("senior_sensor_ingress")) / "lib" / (
-        "senior_sensor_ingress/scan_receipt_node"
+    executable = (
+        Path(get_package_prefix("senior_sensor_ingress"))
+        / "lib"
+        / ("senior_sensor_ingress/scan_receipt_node")
     )
     process = subprocess.Popen(
         [str(executable)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -41,9 +43,11 @@ def fenced_scan_fixture(monkeypatch):
     def wrap(gate, body):
         monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
         gate._scan_relay_gid = "aa" * 24
-        monkeypatch.setattr(gate, "get_publishers_info_by_topic", lambda _: [
-            SimpleNamespace(endpoint_gid=bytes.fromhex("bb" * 24))
-        ])
+        monkeypatch.setattr(
+            gate,
+            "get_publishers_info_by_topic",
+            lambda _: [SimpleNamespace(endpoint_gid=bytes.fromhex("bb" * 24))],
+        )
         body.raw_source = "cc" * 24
         body.ingress_steady = time.monotonic()
         receipt = gate.get_clock().now().nanoseconds
