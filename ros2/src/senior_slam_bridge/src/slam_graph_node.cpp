@@ -1,4 +1,5 @@
 #include "bounded_scan_ingress.hpp"
+#include "candidate_stationary_match.hpp"
 #include "graph_commit_history.hpp"
 #include "native_capture.hpp"
 #include "snapshot.hpp"
@@ -23,6 +24,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "senior_slam_bridge/srv/capture_graph.hpp"
+#include "senior_slam_bridge/srv/match_stationary_scan.hpp"
 #include "senior_slam_bridge/srv/read_graph.hpp"
 #include "senior_slam_bridge/srv/read_graph_commit.hpp"
 #include "senior_slam_bridge/srv/read_loaded_graph.hpp"
@@ -53,6 +55,7 @@ public:
     const auto prefix = declare_parameter<std::string>("candidate_graph_prefix", "");
     const auto digest = declare_parameter<std::string>("candidate_graph_digest", "");
     const auto attempt = declare_parameter<std::string>("candidate_load_attempt", "");
+    const bool stationary_diagnostic = declare_parameter<bool>("candidate_stationary_match", false);
     const auto capture_root = declare_parameter<std::string>("capture_directory", "");
     const auto bounded_topic = declare_parameter<std::string>("bounded_scan_topic", "");
     const auto static_lidar_topic = declare_parameter<std::string>(
@@ -66,6 +69,9 @@ public:
       throw std::invalid_argument("Bounded scan ingress is separate from candidate load");
     }
     if (prefix.empty() && digest.empty() && attempt.empty()) {
+      if (stationary_diagnostic) {
+        throw std::invalid_argument("Stationary matching requires an isolated candidate load");
+      }
       if (!capture_root.empty() || !bounded_topic.empty()) {
         prepare_owned_graph();
       }
@@ -90,7 +96,7 @@ public:
       if (!capture_root.empty()) {
         throw std::invalid_argument("Candidate load and owned capture are separate modes");
       }
-      load_candidate(prefix, digest, attempt);
+      load_candidate(prefix, digest, attempt, stationary_diagnostic);
     }
     start_graph_service();
   }
@@ -100,6 +106,7 @@ private:
   using ReadGraph = srv::ReadGraph;
   using ReadGraphCommit = srv::ReadGraphCommit;
   using ReadLoadedGraph = srv::ReadLoadedGraph;
+  using MatchStationaryScan = srv::MatchStationaryScan;
 
   struct GraphCommitWatermark
   {
@@ -464,7 +471,8 @@ private:
   }
 
   void load_candidate(
-    const std::string & prefix, const std::string & digest, const std::string & attempt)
+    const std::string & prefix, const std::string & digest, const std::string & attempt,
+    bool stationary_diagnostic)
   {
     if (attempt.empty() || attempt.size() > 64 ||
       attempt.find_first_not_of(
@@ -520,6 +528,70 @@ private:
         response->boot_id = boot_id_;
         response->attempt_id = attempt;
         response->pair_digest = loaded_digest;
+      });
+    if (stationary_diagnostic) {
+      start_stationary_diagnostic(attempt, staged.digest());
+    }
+  }
+
+  void start_stationary_diagnostic(const std::string & attempt, const std::string & digest)
+  {
+    stationary_match_service_ = create_service<MatchStationaryScan>(
+      "/senior/slam/match_stationary_scan",
+      [this, attempt, digest](
+        const MatchStationaryScan::Request::SharedPtr request,
+        MatchStationaryScan::Response::SharedPtr response)
+      {
+        if (request->boot_id != boot_id_ || request->attempt_id != attempt ||
+          request->pair_digest != digest || request->map_frame != map_frame_)
+        {
+          return;
+        }
+        if (stationary_match_spent_) {
+          response->status = MatchStationaryScan::Response::SPENT;
+          return;
+        }
+        const StationaryMatchQuery query{
+          karto::Pose2(request->seed_x, request->seed_y, request->seed_yaw),
+          request->first_angle, request->angle_step,
+          {request->ranges.begin(), request->ranges.end()}};
+        if (!valid_stationary_match_query(query)) {
+          response->status = MatchStationaryScan::Response::INVALID;
+          return;
+        }
+
+        stationary_match_spent_ = true;
+        try {
+          const auto private_name = "stationary_match_" + boot_id_;
+          boost::mutex::scoped_lock lock(smapper_mutex_);
+          const auto * mapper = smapper_ ? smapper_->getMapper() : nullptr;
+          if (!mapper) {
+            return;
+          }
+          for (const auto * object : dataset_->GetLasers()) {
+            if (const auto * sensor = dynamic_cast<const karto::Sensor *>(object);
+              sensor && sensor->GetName().ToString() == private_name)
+            {
+              return;
+            }
+          }
+          const auto result = stationary_match(*mapper, query, private_name);
+          if (!result) {
+            return;
+          }
+          MatchStationaryScan::Response diagnostic;
+          diagnostic.response = result->response;
+          diagnostic.fitted_x = result->map_sensor_pose.GetX();
+          diagnostic.fitted_y = result->map_sensor_pose.GetY();
+          diagnostic.fitted_yaw = result->map_sensor_pose.GetHeading();
+          diagnostic.reference_ids.assign(result->reference_ids.begin(), result->reference_ids.end());
+          diagnostic.status = MatchStationaryScan::Response::COMPLETE;
+          *response = std::move(diagnostic);
+        } catch (const std::exception & error) {
+          RCLCPP_WARN(get_logger(), "Candidate stationary matching failed: %s", error.what());
+        } catch (...) {
+          RCLCPP_WARN(get_logger(), "Candidate stationary matching failed");
+        }
       });
   }
 
@@ -637,6 +709,8 @@ private:
   rclcpp::Service<ReadGraph>::SharedPtr read_graph_;
   rclcpp::Service<ReadGraphCommit>::SharedPtr read_graph_commit_;
   rclcpp::Service<ReadLoadedGraph>::SharedPtr candidate_receipt_;
+  rclcpp::Service<MatchStationaryScan>::SharedPtr stationary_match_service_;
+  bool stationary_match_spent_{false};
 };
 }  // namespace senior_slam_bridge
 

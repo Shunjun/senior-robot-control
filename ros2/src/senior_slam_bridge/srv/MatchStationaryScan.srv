@@ -1,0 +1,29 @@
+# One qualified diagnostic query per opted-in isolated candidate boot.
+# The seed is the laser sensor pose in the candidate map frame. Angles and
+# ranges must already use the native Karto sensor convention of the archive.
+string<=36 boot_id
+string<=64 attempt_id
+string<=64 pair_digest
+string<=128 map_frame
+float64 seed_x
+float64 seed_y
+float64 seed_yaw
+float64 first_angle
+float64 angle_step
+float64[<=2048] ranges
+---
+uint8 UNAVAILABLE=0
+uint8 INVALID=1
+uint8 COMPLETE=2
+uint8 SPENT=3
+
+# COMPLETE denotes a computed score, including a low or zero score. This
+# diagnostic neither applies a pose nor establishes localization or motion authority.
+# Wrong identity, unsupported archive geometry, or failed computation is UNAVAILABLE.
+# A structurally valid request matching the candidate identity spends the quota before matching.
+uint8 status
+float64 response
+float64 fitted_x
+float64 fitted_y
+float64 fitted_yaw
+int32[<=8] reference_ids
