@@ -275,3 +275,77 @@ def test_transform_rejects_bool_strings_and_nonfinite_values():
         value.edges[0].translation = (invalid, 0.0, 0.0)
         assert not observe_verified_tf(binding, value, current_relay_gid="02"), repr(invalid)
         assert binding.current is None
+
+
+def test_local_suspension_reconfirms_exact_original_lifetime_without_new_measurement():
+    binding = StaticBinding("base_link", "camera")
+    original = message(1, admitted=True)
+    assert observe_verified_tf(binding, original, current_relay_gid="02")
+    first, admitted = binding.first_receipt, binding.admitted_from
+    old_generation = binding.generation
+    binding.suspend()
+    assert binding.current is None
+    assert observe_verified_tf(
+        binding, original, current_relay_gid="02", allow_suspended_reconfirm=True
+    )
+    assert binding.first_receipt == first and binding.admitted_from == admitted
+    assert binding.generation > old_generation
+
+
+def test_suspended_lifetime_cannot_cross_native_invalid_or_clock_revoke():
+    for clock_loss in (False, True):
+        binding = StaticBinding("base_link", "camera")
+        original = message(1, admitted=True)
+        assert observe_verified_tf(binding, original, current_relay_gid="02")
+        binding.suspend()
+        if clock_loss:
+            binding.revoke()
+        else:
+            invalid = message(1)
+            invalid.valid = False
+            invalid.generation = 2
+            assert not observe_verified_tf(binding, invalid, current_relay_gid="02")
+        assert not observe_verified_tf(
+            binding, original, current_relay_gid="02", allow_suspended_reconfirm=True
+        )
+        assert binding.current is None
+
+
+def test_suspended_lifetime_rejects_changed_original_and_admission():
+    for field in ("first_received_ros", "admitted_from_ros"):
+        binding = StaticBinding("base_link", "camera")
+        original = message(1, admitted=True)
+        assert observe_verified_tf(binding, original, current_relay_gid="02")
+        binding.suspend()
+        changed = message(1, admitted=True)
+        setattr(changed, field, ns(1))
+        assert not observe_verified_tf(
+            binding, changed, current_relay_gid="02", allow_suspended_reconfirm=True
+        )
+        assert binding.current is None
+
+
+def test_suspension_reconfirms_admitted_first_without_splicing_later_capture():
+    binding = StaticBinding("base_link", "camera")
+    assert observe_verified_tf(binding, message(2, admitted=True), current_relay_gid="02")
+    first, latest, admitted = binding.first_receipt, binding.current, binding.admitted_from
+    binding.suspend()
+    assert observe_verified_tf(
+        binding, message(1, admitted=True), current_relay_gid="02", allow_suspended_reconfirm=True
+    )
+    assert binding.first_receipt == first
+    assert binding.current == latest
+    assert binding.admitted_from == admitted
+
+
+def test_suspended_same_generation_changed_raw_source_cannot_requalify():
+    binding = StaticBinding("base_link", "camera")
+    original = message(1, admitted=True)
+    assert observe_verified_tf(binding, original, current_relay_gid="02")
+    binding.suspend()
+    changed = message(1, admitted=True)
+    changed.raw_gid = "03"
+    assert not observe_verified_tf(
+        binding, changed, current_relay_gid="02", allow_suspended_reconfirm=True
+    )
+    assert binding.current is None

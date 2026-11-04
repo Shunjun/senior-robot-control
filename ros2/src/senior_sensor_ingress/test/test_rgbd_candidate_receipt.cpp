@@ -19,6 +19,18 @@
 namespace senior_sensor_ingress {
 class RgbdCandidateReceiptTestPeer {
 public:
+  static bool pending_tf(RgbdCandidateReceipt & node, const std::string & gid) {
+    std::lock_guard<std::mutex> lock(node.mutex_);
+    return std::any_of(node.pending_tf_.begin(), node.pending_tf_.end(),
+      [&](const auto & entry) {return entry.first == gid;});
+  }
+  static bool admitted_tf(RgbdCandidateReceipt & node, const std::string & gid) {
+    std::lock_guard<std::mutex> lock(node.mutex_);
+    return node.tf_ready_ && node.tf_gid_ == gid;
+  }
+  static bool accept_clock(RgbdCandidateReceipt & node, int64_t ros, double steady) {
+    return node.clocks_ok(ros, steady);
+  }
   static void fill_producer_retirement(RgbdCandidateReceipt & node) {
     std::lock_guard<std::mutex> lock(node.mutex_);
     for (int i = 0; i < 64; ++i) node.retired_producer_gids_.insert("retired-" + std::to_string(i));
@@ -528,4 +540,72 @@ TEST(RgbdCandidateReceipt, RetirementExhaustionRevokesActualProducerOnGraphLoss)
       return !item.owner.valid && item.owner.owner_lost && item.owner.reason == "retirement_exhausted";
     });
   }, 1s));
+}
+
+
+TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUnique)
+{
+  using Static = senior_motion_msgs::msg::BoundedStaticTf;
+  using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
+  rclcpp::init(0, nullptr);
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_pending")});
+  auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
+  auto source = std::make_shared<rclcpp::Node>("static_tf_receipt");
+  const std::string topic = "/d2a_tf_pending/tf";
+  auto qos = rclcpp::QoS(1).reliable().transient_local();
+  auto old = source->create_publisher<Static>(topic, qos);
+  auto replacement = source->create_publisher<Static>(topic, qos);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  std::thread spin;
+  auto cleanup = [&](int *) {
+    executor.cancel();
+    if (spin.joinable()) spin.join();
+    rclcpp::shutdown();
+  };
+  int sentinel = 0;
+  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
+  executor.add_node(receipt);
+  executor.add_node(source);
+  spin = std::thread([&] {executor.spin();});
+  ASSERT_TRUE(wait_for([&] {
+    return old->get_subscription_count() > 0 && replacement->get_subscription_count() > 0 &&
+      receipt->get_publishers_info_by_topic(topic).size() == 2;
+  }));
+
+  Static sample;
+  sample.valid = sample.admitted = true;
+  sample.bridge_boot_id = "new-relay";
+  sample.bridge_gid = gid(replacement->get_gid());
+  sample.raw_gid = "01";
+  sample.generation = sample.sequence = sample.first_sequence = 1;
+  sample.received_ros = sample.first_received_ros = sample.admitted_from_ros =
+    static_cast<builtin_interfaces::msg::Time>(source->now());
+  sample.received_steady = sample.first_received_steady = sample.admitted_from_steady = steady_now();
+  senior_motion_msgs::msg::StaticTransformEdge edge;
+  edge.parent_frame = "base_link";
+  edge.child_frame = "camera_color_optical_frame";
+  edge.rotation_xyzw[3] = 1;
+  sample.edges.push_back(edge);
+  // Publish only once; the real callback must capture the actual DDS writer GID.
+  replacement->publish(sample);
+  ASSERT_TRUE(wait_for([&] {return Peer::pending_tf(*receipt, sample.bridge_gid);}));
+  EXPECT_FALSE(Peer::admitted_tf(*receipt, sample.bridge_gid));
+
+  old.reset();
+  EXPECT_TRUE(wait_for([&] {return Peer::admitted_tf(*receipt, sample.bridge_gid);}));
+}
+
+TEST(RgbdCandidateReceipt, ClockRollbackRequiresRestart)
+{
+  using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
+  rclcpp::init(0, nullptr);
+  auto cleanup = [](int *) {rclcpp::shutdown();};
+  int sentinel = 0;
+  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
+  senior_sensor_ingress::RgbdCandidateReceipt receipt;
+  EXPECT_FALSE(Peer::accept_clock(receipt, 0, 1.0));
+  EXPECT_TRUE(Peer::accept_clock(receipt, 100, 2.0));
+  EXPECT_FALSE(Peer::accept_clock(receipt, 99, 3.0));
+  EXPECT_FALSE(Peer::accept_clock(receipt, 101, 4.0));
 }

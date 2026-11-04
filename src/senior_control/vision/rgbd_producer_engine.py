@@ -4,14 +4,25 @@ Call only on one dedicated coordinator thread. A native receiver independently
 checks MessageInfo, source bodies, original times and TF before fenced egress.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from senior_control.vision.independent_motion import Profile
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_coordinator import RgbdCoordinator
 from senior_control.vision.rgbd_joiner import CaptureJoiner
+from senior_control.vision.rgbd_parent_ledger import CaptureLedger
 from senior_control.vision.rgbd_spawn_worker import CompactResult
 from senior_control.vision.static_tf_binding import StaticBinding
+
+
+@dataclass
+class RetainedFrontiers:
+    joiner: CaptureJoiner
+    ledger: CaptureLedger
+    worker_generation: int
+    sequence_frontier: int
+    claimed: bool = False
 
 
 class RgbdProducerEngine:
@@ -25,8 +36,18 @@ class RgbdProducerEngine:
         fresh_after_steady: float,
         generation: int,
         sequence_floor: int,
+        retained: RetainedFrontiers | None = None,
     ) -> None:
-        self.joiner = CaptureJoiner(capacity=4)
+        if retained is not None:
+            if (
+                retained.claimed
+                or generation <= retained.worker_generation
+                or sequence_floor < retained.sequence_frontier
+            ):
+                raise ValueError("invalid_recovery_frontier")
+            retained.ledger.advance_fresh_floor(fresh_after_ros_ns, fresh_after_steady)
+            retained.claimed = True
+        self.joiner = retained.joiner if retained is not None else CaptureJoiner(capacity=4)
         self.coordinator = RgbdCoordinator(
             profile,
             binding,
@@ -36,7 +57,23 @@ class RgbdProducerEngine:
             generation=generation,
             sequence_floor=sequence_floor,
         )
+        if retained is not None:
+            self.coordinator.ledger = retained.ledger
         self._pending_invalid = ""
+        self._closed = False
+
+    def close_for_recovery(self) -> RetainedFrontiers:
+        """Close the worker while preserving parent-owned capture frontiers."""
+        if self._closed:
+            raise RuntimeError("engine_closed")
+        worker = self.coordinator.worker
+        retained = RetainedFrontiers(
+            self.joiner, self.coordinator.ledger, worker.generation, worker.sequence_frontier
+        )
+        self.joiner.invalidate()
+        self.coordinator.ledger.invalidate()
+        self.close()
+        return retained
 
     def revoke(self, reason: str) -> None:
         self.joiner.invalidate()
@@ -105,4 +142,9 @@ class RgbdProducerEngine:
         return self.coordinator.poll(now_ros_ns=now_ros_ns, now_steady=now_steady)
 
     def close(self) -> None:
-        self.coordinator.close()
+        if not self._closed:
+            self.coordinator.close()
+            worker = self.coordinator.worker
+            if not worker.shutdown_complete:
+                raise RuntimeError("worker_shutdown_incomplete")
+            self._closed = True

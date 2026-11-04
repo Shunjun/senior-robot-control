@@ -232,6 +232,7 @@ class SpawnWorker:
             raise ValueError("invalid_parent_frontier")
         self._context = mp.get_context("spawn")
         self._profile = profile
+        self._shutdown_complete = False
         self._start_process()
         self.generation = generation
         self._sequence = sequence_floor
@@ -244,6 +245,7 @@ class SpawnWorker:
         self._fresh_after: tuple[int, float] | None = None
 
     def _start_process(self) -> None:
+        self._shutdown_complete = False
         self._work = self._context.Queue(maxsize=1)
         self._queue_cleanup = (_QueueCleanup(self._work),)
         try:
@@ -340,6 +342,7 @@ class SpawnWorker:
             for cleanup in self._queue_cleanup:
                 if not cleanup.close():
                     return False
+        self._shutdown_complete = stopped
         return stopped
 
     def _restart(self, now_ros_ns: int, now_steady: float) -> None:
@@ -363,6 +366,11 @@ class SpawnWorker:
                 self._timed_out = False
         else:
             self._unavailable = True
+
+    @property
+    def shutdown_complete(self) -> bool:
+        """True only after process, reader and queue resources all stopped."""
+        return self._shutdown_complete
 
     @property
     def sequence_frontier(self) -> int:

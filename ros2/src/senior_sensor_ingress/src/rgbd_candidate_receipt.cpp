@@ -96,7 +96,7 @@ RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
       [this, i](Info::ConstSharedPtr body, const rclcpp::MessageInfo & info) {camera_info(i, *body, info);});
   }
   tf_sub_ = create_subscription<Static>(tf_topic_, rclcpp::QoS(1).reliable().transient_local(),
-    [this](Static::ConstSharedPtr body, const rclcpp::MessageInfo & info) {tf(*body, info);});
+    [this](Static::ConstSharedPtr body, const rclcpp::MessageInfo & info) {tf(*body, actual_gid(info));});
   candidate_sub_ = create_subscription<Candidate>(candidate_topic_, qos,
     [this](Candidate::ConstSharedPtr body, const rclcpp::MessageInfo & info) {candidate(*body, info);});
   timer_ = create_wall_timer(20ms, [this] {inspect();});
@@ -132,15 +132,17 @@ void RgbdCandidateReceipt::invalidate(const std::string & reason, bool owner_los
 }
 bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns, double steady)
 {
-  if (ros_ns <= 0 || !std::isfinite(steady) || steady <= 0 ||
-      (last_ros_ > 0 && (ros_ns < last_ros_ || steady < last_steady_))) {
-    ledger_.clear(); tf_ready_ = false; producer_ready_ = false;
-    invalidate("clock_invalid");
-    last_ros_ = ros_ns; last_steady_ = steady;
+  if (failed_) return false;
+  if (last_ros_ > 0 && (ros_ns < last_ros_ || steady < last_steady_)) {
+    // A new time epoch requires restarting the diagnostic chain and its ledgers.
+    failed_ = true;
+    ledger_.clear(); pending_tf_.clear(); tf_ready_ = false; producer_ready_ = false;
+    invalidate("clock_invalid", true);
     return false;
   }
+  if (ros_ns <= 0 || !std::isfinite(steady) || steady <= 0) return false;
   last_ros_ = ros_ns; last_steady_ = steady;
-  return !failed_;
+  return true;
 }
 
 bool RgbdCandidateReceipt::accept_raw(size_t stream, const Header & h, const std::string & actual)
@@ -238,14 +240,46 @@ void RgbdCandidateReceipt::camera_info(size_t stream, const Info & body, const r
   }
 }
 
-void RgbdCandidateReceipt::tf(const Static & body, const rclcpp::MessageInfo & info)
+void RgbdCandidateReceipt::tf(const Static & body, const std::string & actual)
 {
-  const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady_now()) || retired_tf_gids_.count(actual)) return;
-  if (!valid_gid(actual) || body.bridge_gid != actual || !graph_matches(tf_topic_, "static_tf_receipt", actual)) {
-    tf_ready_ = false; ledger_.clear(); invalidate("tf_owner_invalid", true); return;
+  const bool clock_ready = clocks_ok(get_clock()->now().nanoseconds(), steady_now());
+  if (failed_ || retired_tf_gids_.count(actual) || !valid_gid(actual) ||
+      body.bridge_gid != actual) return;
+  // A transient-local status can arrive before graph discovery catches up.
+  auto prior = std::find_if(pending_tf_.begin(), pending_tf_.end(),
+    [&](const auto & entry) {return entry.first == actual;});
+  if (prior != pending_tf_.end()) {
+    const auto & previous = prior->second;
+    if (body.generation < previous.generation ||
+        (body.generation == previous.generation &&
+        (body.sequence < previous.sequence ||
+        (body.sequence == previous.sequence && !previous.valid && body.valid)))) return;
+    pending_tf_.erase(prior);
   }
+  if (pending_tf_.size() == 4) pending_tf_.pop_front();
+  pending_tf_.emplace_back(actual, body);
+  if (clock_ready) retry_tf();
+}
+
+void RgbdCandidateReceipt::retry_tf()
+{
+  for (auto pending = pending_tf_.begin(); pending != pending_tf_.end();) {
+    if (retired_tf_gids_.count(pending->first)) {
+      pending = pending_tf_.erase(pending);
+      continue;
+    }
+    if (graph_matches(tf_topic_, "static_tf_receipt", pending->first)) {
+      accept_tf(pending->second, pending->first);
+      pending_tf_.erase(pending);
+      return;
+    }
+    ++pending;
+  }
+}
+
+void RgbdCandidateReceipt::accept_tf(const Static & body, const std::string & actual)
+{
   if (!tf_gid_.empty() && tf_gid_ != actual) {
     if (retired_tf_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
     retired_tf_gids_.insert(tf_gid_); tf_ready_ = false; ledger_.clear(); invalidate("tf_owner_changed");
@@ -293,7 +327,7 @@ void RgbdCandidateReceipt::tf(const Static & body, const rclcpp::MessageInfo & i
     value.transform.rotation.z = edge.rotation_xyzw[2]; value.transform.rotation.w = edge.rotation_xyzw[3];
     tree.transforms.push_back(value);
   }
-  if (!validate_static_tf(tree, base_, camera_) || !graph_matches(tf_topic_, "static_tf_receipt", actual)) {
+  if (!validate_static_tf(tree, base_, camera_)) {
     tf_ready_ = false; ledger_.clear(); invalidate("tf_invalid"); return;
   }
   Static first = body;
@@ -359,9 +393,9 @@ bool RgbdCandidateReceipt::originals_current(const Candidate & body, int64_t ros
 void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::MessageInfo & info)
 {
   const auto actual = actual_gid(info);
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto ros_ns = get_clock()->now().nanoseconds();
   const auto steady = steady_now();
-  std::lock_guard<std::mutex> lock(mutex_);
   if (!clocks_ok(ros_ns, steady) || retired_producer_gids_.count(actual)) return;
   if (!producer_ready_ || actual != producer_gid_ || body.producer_gid != actual ||
       !graph_matches(candidate_topic_, "rgbd_candidate_producer", actual)) return;
@@ -398,26 +432,51 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
       body.matched > 500 || body.inliers > body.matched || !rigid(body.camera_transform) ||
       !std::isfinite(body.median_reprojection_px) || body.median_reprojection_px < 0 ||
       !std::isfinite(body.median_depth_residual_m) || body.median_depth_residual_m < 0 ||
-      !originals_current(body, ros_ns, steady) ||
-      !graph_matches(candidate_topic_, "rgbd_candidate_producer", actual) ||
-      !graph_matches(tf_topic_, "static_tf_receipt", tf_gid_)) {
+      !originals_current(body, ros_ns, steady)) {
     invalidate("candidate_invalid");
     return;
   }
   Fenced output;
   output.owner.relay_gid = output_gid(); output.owner.relay_boot = relay_boot_;
-  output.owner.relay_sequence = ++relay_sequence_; output.owner.owner_gid = actual;
+  output.owner.owner_gid = actual;
   output.owner.owner_epoch = producer_boot_; output.owner.owner_generation = producer_generation_;
   output.owner.owner_sequence = producer_sequence_; output.owner.valid = true;
   output.body = body;
+
+  // Body matching and copying can outlive the capture deadline or graph owners.
+  for (size_t stream = 0; stream < sources_.size(); ++stream) {
+    if (!graph_matches(raw_topics_[stream], "raw_receipt", sources_[stream].bridge_gid)) {
+      invalidate("raw_owner_lost", true);
+      return;
+    }
+  }
+  if (!graph_matches(candidate_topic_, "rgbd_candidate_producer", actual) ||
+      !graph_matches(tf_topic_, "static_tf_receipt", tf_gid_)) {
+    invalidate("candidate_owner_lost", true);
+    return;
+  }
+  const auto final_ros = get_clock()->now().nanoseconds();
+  const auto final_steady = steady_now();
+  if (!clocks_ok(final_ros, final_steady)) return;
+  for (const auto * header : {&body.first_rgb, &body.first_depth, &body.first_rgb_info,
+      &body.first_depth_info, &body.second_rgb, &body.second_depth, &body.second_rgb_info,
+      &body.second_depth_info}) {
+    if (final_ros - nanos(header->stamp) > 300000000LL ||
+        final_ros - nanos(header->received_ros) > 300000000LL ||
+        final_steady - header->received_steady > .3) {
+      invalidate("candidate_expired");
+      return;
+    }
+  }
+  output.owner.relay_sequence = ++relay_sequence_;
   publisher_->publish(output);
 }
 
 void RgbdCandidateReceipt::inspect()
 {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto ros_ns = get_clock()->now().nanoseconds();
   const auto steady = steady_now();
-  std::lock_guard<std::mutex> lock(mutex_);
   if (!clocks_ok(ros_ns, steady)) return;
   for (size_t i=0; i<4; ++i) {
     auto & source = sources_[i];
@@ -436,6 +495,7 @@ void RgbdCandidateReceipt::inspect()
     tf_ready_ = false; ledger_.clear(); invalidate("tf_owner_lost", true); tf_gid_.clear();
     tf_generation_ = 0; tf_boot_.clear(); tf_raw_gid_.clear(); tf_needs_new_generation_ = false;
   }
+  retry_tf();
   const auto graph = get_publishers_info_by_topic(candidate_topic_);
   const bool unique = graph.size() == 1 && graph[0].node_name() == "rgbd_candidate_producer" &&
                       graph[0].node_namespace() == "/";

@@ -68,6 +68,29 @@ class CaptureLedger:
         self.generation += 1
         self._tickets.clear()
 
+    def advance_fresh_floor(self, ros_ns: int, steady: float) -> None:
+        """Retire live tickets without discarding source history after local loss."""
+        if (
+            self._closed
+            or type(ros_ns) is not int
+            or ros_ns <= 0
+            or type(steady) not in (int, float)
+            or not math.isfinite(steady)
+            or steady <= 0
+            or ros_ns < self._fresh_after_ros_ns
+            or steady < self._fresh_after_steady
+            or (
+                self._last_clock is not None
+                and (ros_ns < self._last_clock[0] or steady < self._last_clock[1])
+            )
+        ):
+            self.invalidate()
+            self._closed = True
+            raise ValueError("invalid_fresh_floor")
+        self._fresh_after_ros_ns = ros_ns
+        self._fresh_after_steady = steady
+        self.invalidate()
+
     def observe_binding(self, generation: int) -> bool:
         if type(generation) is not int or generation <= 0:
             self.invalidate()

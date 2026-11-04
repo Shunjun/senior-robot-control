@@ -115,23 +115,86 @@ class StaticBinding:
         self._retired_relays: set[str] = set()
         self._retired_boots: set[str] = set()
         self._closed = False
+        self._suspended: tuple[Receipt, Receipt, tuple[int, float]] | None = None
 
     @property
     def admitted_from(self) -> tuple[int, float] | None:
         return self._admitted
 
     def is_retired_source(self, *, boot: str, source_gid: str, relay_gid: str) -> bool:
-        return (source_gid in self._retired_raw or relay_gid in self._retired_relays
-                or boot in self._retired_boots)
+        return (
+            source_gid in self._retired_raw
+            or relay_gid in self._retired_relays
+            or boot in self._retired_boots
+        )
 
     def revoke(self) -> None:
         """Revoke a lifetime on topology or clock loss; new native capture required."""
+        self._suspended = None
         if self.current is not None:
             self._last = self.current
         self.current = None
         self.first_receipt = None
         self._admitted = None
         self.generation += 1
+
+    def suspend(self) -> None:
+        """Suspend on local input loss while retaining only the exact admitted lifetime."""
+        saved = None
+        if (
+            self.first_receipt is not None
+            and self.current is not None
+            and self._admitted is not None
+        ):
+            saved = (self.first_receipt, self.current, self._admitted)
+        self.revoke()
+        self._suspended = saved
+
+    def reconfirm_suspended(
+        self, first: Receipt, latest: Receipt, admission: tuple[int, float], *, relay_gid: str
+    ) -> bool:
+        """Reconfirm the same original lifetime after a newly authenticated status read."""
+        saved = self._suspended
+        if saved is None or self._closed or self.current is not None:
+            return False
+        prior_first, prior_latest, prior_admission = saved
+        # A clock-admission replay can carry the complete original first capture.
+        # Keep the independently retained latest capture intact in that case.
+        effective_latest = prior_latest if latest == first else latest
+        if (
+            self._last != prior_latest
+            or first != prior_first
+            or admission != prior_admission
+            or relay_gid != first.relay_gid
+            or self.is_retired_source(
+                boot=first.boot, source_gid=first.source_gid, relay_gid=relay_gid
+            )
+            or not _valid(first, self.base, self.camera)
+            or not _valid(effective_latest, self.base, self.camera)
+            or (
+                effective_latest.boot,
+                effective_latest.relay_gid,
+                effective_latest.source_gid,
+                effective_latest.generation,
+                effective_latest.edges,
+            )
+            != (first.boot, first.relay_gid, first.source_gid, first.generation, first.edges)
+            or effective_latest.sequence < prior_latest.sequence
+            or effective_latest.received_ros_ns < prior_latest.received_ros_ns
+            or effective_latest.received_steady < prior_latest.received_steady
+            or (
+                effective_latest.sequence == prior_latest.sequence
+                and effective_latest != prior_latest
+            )
+        ):
+            self.revoke()
+            return False
+        self.current = self._last = effective_latest
+        self.first_receipt = first
+        self._admitted = admission
+        self._suspended = None
+        self.generation += 1
+        return True
 
     def observe(self, receipt: Receipt, *, current_gid: str, current_relay_gid: str) -> bool:
         if self._closed:
@@ -167,6 +230,12 @@ class StaticBinding:
             elif receipt.boot != old.boot:
                 self.revoke()
                 return False
+            if raw_changed and not relay_changed:
+                if receipt.generation < old.generation:
+                    return False
+                if receipt.generation == old.generation:
+                    self.revoke()
+                    return False
             if raw_changed:
                 if len(self._retired_raw) >= 64:
                     self._closed = True

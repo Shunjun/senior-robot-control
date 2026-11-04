@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <deque>
+#include <utility>
 #include <mutex>
 #include <set>
 #include <string>
@@ -36,7 +38,9 @@ private:
   bool accept_raw(size_t stream, const Header & header, const std::string & actual);
   void image(size_t stream, const Image & body, const rclcpp::MessageInfo & info);
   void camera_info(size_t stream, const Info & body, const rclcpp::MessageInfo & info);
-  void tf(const Static & body, const rclcpp::MessageInfo & info);
+  void tf(const Static & body, const std::string & actual);
+  void accept_tf(const Static & body, const std::string & actual);
+  void retry_tf();
   void candidate(const Candidate & body, const rclcpp::MessageInfo & info);
   void inspect();
   void invalidate(const std::string & reason, bool owner_lost = false);
@@ -55,6 +59,7 @@ private:
   double producer_floor_steady_ = 0.0, last_steady_ = 0.0;
   bool failed_ = false, tf_ready_ = false, tf_needs_new_generation_ = false, producer_ready_ = false;
   Static tf_first_;
+  std::deque<std::pair<std::string, Static>> pending_tf_;
   RgbdCandidateLedger ledger_;
   Candidate last_candidate_;
   rclcpp::Publisher<Fenced>::SharedPtr publisher_;

@@ -334,3 +334,75 @@ def test_bridge_restart_can_keep_same_raw_source_with_new_boot_and_capture():
         is None
     )
     assert ledger.current(successor, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
+
+
+def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets():
+    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    old = ledger.offer(
+        bundle(1),
+        bridges=("02",) * 4,
+        binding_generation=4,
+        now_ros_ns=1_200_000_000,
+        now_steady=1.2,
+    )
+    new = tuple(
+        replace(h, raw_gid="03", source_epoch="new", capture_generation=2) for h in bundle(2)
+    )
+    successor = ledger.offer(
+        new, bridges=("02",) * 4, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2
+    )
+    assert old is not None and successor is not None
+    for index in range(1000):
+        ledger.advance_fresh_floor(1_200_000_000 + index, 1.2 + index * 0.000001)
+    assert not ledger.current(
+        successor, binding_generation=4, now_ros_ns=1_300_000_000, now_steady=1.3
+    )
+    replay = tuple(
+        replace(
+            h,
+            stamp_ns=1_300_000_000,
+            received_ros_ns=1_300_000_000,
+            received_steady=1.3,
+            sequence=3,
+        )
+        for h in bundle(1)
+    )
+    assert (
+        ledger.offer(
+            replay,
+            bridges=("02",) * 4,
+            binding_generation=4,
+            now_ros_ns=1_300_000_000,
+            now_steady=1.3,
+        )
+        is None
+    )
+    fresh = tuple(
+        replace(
+            h,
+            stamp_ns=1_300_000_000,
+            received_ros_ns=1_300_000_000,
+            received_steady=1.3,
+            sequence=3,
+        )
+        for h in new
+    )
+    assert (
+        ledger.offer(
+            fresh,
+            bridges=("02",) * 4,
+            binding_generation=4,
+            now_ros_ns=1_300_000_000,
+            now_steady=1.3,
+        )
+        is not None
+    )
+
+
+def test_recovery_floor_rejects_either_clock_rollback():
+    import pytest
+
+    for ros, steady in ((99, 2.0), (100, 0.9)):
+        ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=100, fresh_after_steady=1.0)
+        with pytest.raises(ValueError):
+            ledger.advance_fresh_floor(ros, steady)

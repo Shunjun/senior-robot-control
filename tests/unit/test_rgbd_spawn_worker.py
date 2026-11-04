@@ -861,3 +861,36 @@ def test_spawn_error_restores_caller_signal_mask_and_propagates(monkeypatch):
         SpawnWorker(profile, generation=1, sequence_floor=0)
     assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == initial_mask
     assert signal.getsignal(signal.SIGINT) is initial_handler
+
+
+def test_shutdown_complete_requires_full_worker_and_ipc_cleanup(monkeypatch):
+    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
+    worker = SpawnWorker(profile, generation=1, sequence_floor=0)
+    real_stop = worker._stop_process
+    monkeypatch.setattr(worker, "_stop_process", lambda: False)
+    try:
+        assert not worker.shutdown_complete
+        worker.close()
+        assert not worker.shutdown_complete
+    finally:
+        monkeypatch.setattr(worker, "_stop_process", real_stop)
+        worker.close()
+    assert worker.shutdown_complete
+
+
+def test_shutdown_complete_stays_false_if_reader_or_feeder_did_not_stop(monkeypatch):
+    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
+    for blocked in ("reader", "feeder"):
+        worker = SpawnWorker(profile, generation=1, sequence_floor=0)
+        target = worker._reader_thread if blocked == "reader" else worker._queue_cleanup[0]
+        name = "is_alive" if blocked == "reader" else "close"
+        original = getattr(target, name)
+        monkeypatch.setattr(target, name, lambda value=blocked: value == "reader")
+        try:
+            worker.close()
+            assert not worker._process.is_alive()
+            assert not worker.shutdown_complete
+        finally:
+            monkeypatch.setattr(target, name, original)
+            worker.close()
+        assert worker.shutdown_complete

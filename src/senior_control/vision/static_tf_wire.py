@@ -34,7 +34,13 @@ def _real_tuple(values: Any) -> tuple[float, ...]:
     return tuple(float(value) for value in values)
 
 
-def observe_verified_tf(binding: StaticBinding, message: Any, *, current_relay_gid: str) -> bool:
+def observe_verified_tf(
+    binding: StaticBinding,
+    message: Any,
+    *,
+    current_relay_gid: str,
+    allow_suspended_reconfirm: bool = False,
+) -> bool:
     """Apply original receipt and separate admission without relabeling either."""
     try:
         if message.bridge_gid != current_relay_gid:
@@ -74,10 +80,11 @@ def observe_verified_tf(binding: StaticBinding, message: Any, *, current_relay_g
                 floor = frontier[2]
             if current is not None and relay == (current.relay_gid, current.boot):
                 floor = max(floor, current.generation)
+            if last is not None and relay == (last.relay_gid, last.boot):
+                floor = max(floor, last.generation)
             if message.generation >= floor:
                 cast(_WireFrontier, binding)._wire_invalid_frontier = (*relay, message.generation)
-                if current is not None:
-                    binding.revoke()
+                binding.revoke()
             return False
         if message.valid is not True:
             raise ValueError("invalid_status")
@@ -133,6 +140,10 @@ def observe_verified_tf(binding: StaticBinding, message: Any, *, current_relay_g
         ):
             binding.revoke()
             return False
+        if allow_suspended_reconfirm and binding.current is None and message.admitted:
+            admission = (_time(message.admitted_from_ros), float(message.admitted_from_steady))
+            if binding.reconfirm_suspended(first, latest, admission, relay_gid=current_relay_gid):
+                return True
         old_first = binding.first_receipt
         old_current = binding.current
         same_lifetime = (
