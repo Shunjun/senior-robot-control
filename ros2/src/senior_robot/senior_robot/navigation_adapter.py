@@ -111,6 +111,7 @@ def main() -> None:
     from geometry_msgs.msg import PoseStamped
     from nav2_msgs.action import NavigateToPose
     from rclpy.action import ActionClient
+    from rclpy.executors import ExternalShutdownException
 
     class Nav2Executor:
         def __init__(self, node: rclpy.node.Node) -> None:
@@ -170,11 +171,17 @@ def main() -> None:
             return OperationResult(execution_id, status)
 
     rclpy.init()
-    node_type = create_navigation_node()
-    node = node_type()
-    node.goal_adapter = NavigationAdapter(Nav2Executor(node))
+    node = None
     try:
+        node = create_navigation_node()()
+        node.goal_adapter = NavigationAdapter(Nav2Executor(node))
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            if node is not None:
+                node.destroy_node()
+        finally:
+            # //Compatible: Humble's signal handler can shut down the context before spin exits.
+            rclpy.try_shutdown()

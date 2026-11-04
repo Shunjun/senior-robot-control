@@ -33,7 +33,10 @@ setup(
                 "launch/safety_motion.launch.py",
             ],
         ),
-        ("share/senior_robot/behavior_trees", ["behavior_trees/navigate.xml"]),
+        (
+            "share/senior_robot/behavior_trees",
+            ["behavior_trees/navigate.xml", "behavior_trees/navigate_through_poses.xml"],
+        ),
     ],
     entry_points={
         "console_scripts": [
