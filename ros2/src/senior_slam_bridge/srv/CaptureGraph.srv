@@ -1,0 +1,16 @@
+# Capture mode writes one pair in its configured private directory.
+---
+uint8 OK=0
+uint8 EMPTY=1
+uint8 UNAVAILABLE=2
+
+uint8 status
+string<=36 boot_id
+uint64 snapshot_sequence
+builtin_interfaces/Time sample_stamp
+string map_frame
+string odom_frame
+string<=64 relative_prefix
+# SHA-256 over the raw SHA-256 digests of .posegraph and .data in that order.
+string<=64 pair_digest
+Keyframe[<=16384] keyframes

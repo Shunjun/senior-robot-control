@@ -9,6 +9,7 @@ find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
 find_package(TBB REQUIRED)
+find_package(Threads REQUIRED)
 
 # //Compatible: Humble ament uses the exported RViz target and skips the legacy library exports.
 set(slam_toolbox_library_dir "${slam_toolbox_DIR}/../../../lib")
@@ -21,13 +22,15 @@ find_library(SLAM_TOOLBOX_KARTO_LIBRARY NAMES kartoSlamToolbox
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Keyframe.msg"
+  "srv/CaptureGraph.srv"
   "srv/ReadGraph.srv"
   "srv/ReadLoadedGraph.srv"
   DEPENDENCIES builtin_interfaces
 )
 rosidl_get_typesupport_target(graph_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 
-add_executable(slam_graph_node src/slam_graph_node.cpp src/staged_graph.cpp)
+add_executable(slam_graph_node
+  src/slam_graph_node.cpp src/staged_graph.cpp src/native_capture.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
 ament_target_dependencies(slam_graph_node rclcpp slam_toolbox)
 target_link_libraries(slam_graph_node
@@ -35,7 +38,7 @@ target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
   "${SLAM_TOOLBOX_KARTO_LIBRARY}"
-  Boost::serialization Boost::thread OpenSSL::Crypto TBB::tbb
+  Boost::serialization Boost::thread OpenSSL::Crypto TBB::tbb Threads::Threads
 )
 install(TARGETS slam_graph_node DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/candidate_preflight.py DESTINATION lib/${PROJECT_NAME}
@@ -58,6 +61,14 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:test_snapshot>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
+  add_executable(test_native_capture test/test_native_capture.cpp src/native_capture.cpp)
+  target_compile_features(test_native_capture PRIVATE cxx_std_17)
+  target_include_directories(test_native_capture PRIVATE src)
+  target_link_libraries(test_native_capture OpenSSL::Crypto Threads::Threads)
+  ament_add_test(native_capture
+    COMMAND "$<TARGET_FILE:test_native_capture>" "${CMAKE_CURRENT_BINARY_DIR}"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
   add_executable(test_staged_graph test/test_staged_graph.cpp src/staged_graph.cpp)
   target_compile_features(test_staged_graph PRIVATE cxx_std_17)
   target_include_directories(test_staged_graph PRIVATE src)
@@ -71,6 +82,12 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:slam_graph_node>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
+  )
+  ament_add_test(native_capture_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_native_capture.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 100
   )
   ament_add_test(candidate_load_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_load.py"
