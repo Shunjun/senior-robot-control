@@ -56,9 +56,13 @@ Compose 只运行一个云进程（其中包含中继与登录限流器）、Cad
 Git、Python 3 和可以访问本地 Docker 的权限；部署目录须由 Jenkins 用户持久读写。确保 DNS 指向
 该节点，并开放 TCP 80/443，让 Caddy 完成证书申请。部署前先备份数据库。
 
-在 Jenkins 中创建 Pipeline from SCM 任务，选择此仓库和要部署的分支（如 `main`），
-首次运行以建立任务参数。之后 Jenkins 每约 5 分钟检查该分支的提交变化并自动部署。
-如果已有 Git webhook 触发构建，可移除 Jenkinsfile 中的 `pollSCM` 触发器，改用 webhook。
+在 Jenkins 中安装 GitHub 插件，创建 Pipeline from SCM 任务，选择此仓库和要部署的分支
+（如 `main`）。在 GitHub 仓库的 **Settings → Webhooks** 添加 webhook，Payload URL 填
+GitHub 可访问的 `https://<Jenkins 地址>/github-webhook/`（保留末尾斜杠），Content type
+选 `application/json`，事件选 **Just the push event**。如果任务界面还单独启用了
+**Poll SCM**，请关闭。完成下方配置后，手动运行一次以加载 Jenkinsfile 里的触发器。
+之后 GitHub 推送事件会通知 Jenkins 检查部署分支，有新提交时构建并部署。
+
 配置以下三项：
 
 1. 确保 Jenkins 部署目标机符合上述要求、有可用执行器，并设置

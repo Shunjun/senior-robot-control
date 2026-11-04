@@ -129,6 +129,7 @@ def test_proxy_address_is_caddy_address_in_isolated_backend():
     assert "default" in caddy["networks"]
 
 
-def test_pipeline_polls_for_scm_changes():
+def test_pipeline_uses_github_push_webhook():
     pipeline = (ROOT / "Jenkinsfile").read_text()
-    assert "pollSCM('H/5 * * * *')" in pipeline
+    assert "githubPush()" in pipeline
+    assert "pollSCM" not in pipeline

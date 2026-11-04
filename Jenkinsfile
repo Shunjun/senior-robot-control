@@ -1,7 +1,7 @@
 pipeline {
     agent any
     options { disableConcurrentBuilds(); timestamps() }
-    triggers { pollSCM('H/5 * * * *') }
+    triggers { githubPush() }
     parameters {
         string(name: 'ENV_CREDENTIAL_ID', defaultValue: 'senior-control-env', description: 'Jenkins Secret file credential ID')
         string(name: 'DEPLOY_ROOT', defaultValue: '/opt/senior-robot-control', description: 'Persistent absolute deployment directory on this node')
