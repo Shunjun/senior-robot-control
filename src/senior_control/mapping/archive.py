@@ -1,9 +1,11 @@
 """Portable SLAM map bundle. Tasks, secrets, and vehicle config stay out."""
 
 import asyncio
+import errno
 import hashlib
 import json
 import math
+import os
 import stat
 import tempfile
 import zipfile
@@ -13,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.references import AnchorPose, SlamSnapshot, durable_replace
+from senior_control.mapping.references import AnchorPose, SlamSnapshot
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, Pose2D
 
@@ -135,7 +137,7 @@ class MapArchive:
         georeference = self._georeference or Georeference("unreferenced")
         with tempfile.TemporaryDirectory() as raw:
             staging = Path(raw)
-            snapshot = await self.capture_snapshot(store, staging / "pose_graph")
+            snapshot, graph_files = await self._capture_snapshot(store, staging / "pose_graph")
             if snapshot.map_ref != map_ref:
                 raise DomainError(ErrorCode.CONFLICT, "pose graph and occupancy revisions differ")
             waypoints = tuple(
@@ -149,11 +151,14 @@ class MapArchive:
                 )
                 for item in snapshot.waypoint_bindings
             )
-            snapshot.write(staging / "occupancy")
+            layers = staging / "layers"
+            snapshot.write(layers / "occupancy")
             waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
-            (staging / "waypoints.json").write_bytes(waypoint_bytes)
-            _write_grid(snapshot, staging / "grid")
-            payloads = _file_bytes(staging)
+            (layers / "waypoints.json").write_bytes(waypoint_bytes)
+            _write_grid(snapshot, layers / "grid")
+            payloads = {f"pose_graph/{name}": data for name, data in graph_files.items()}
+            remaining = self._max_uncompressed_bytes - sum(map(len, graph_files.values()))
+            payloads.update(_file_bytes(layers, remaining))
             digests = {
                 name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
             }
@@ -177,12 +182,24 @@ class MapArchive:
             )
             files = dict(payloads)
             files["manifest.json"] = _dumps(_manifest_json(manifest))
+            if len(files) > _MAX_MEMBERS or sum(map(len, files.values())) > (
+                self._max_uncompressed_bytes
+            ):
+                raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
         _write_zip(destination, files)
         return manifest
 
     async def capture_snapshot(
         self, store: MapReferenceStore, directory: Path, *, review_required: bool | None = None
     ) -> SlamSnapshot:
+        snapshot, _ = await self._capture_snapshot(
+            store, directory, review_required=review_required
+        )
+        return snapshot
+
+    async def _capture_snapshot(
+        self, store: MapReferenceStore, directory: Path, *, review_required: bool | None = None
+    ) -> tuple[SlamSnapshot, dict[str, bytes]]:
         capture = getattr(self._pose_graph, "capture_consistent", None)
         if not callable(capture):
             raise DomainError(ErrorCode.UNAVAILABLE, "consistent map capture is unavailable")
@@ -208,12 +225,18 @@ class MapArchive:
             or store.change_sequence != start_sequence
         ):
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
-        await self.verify_snapshot(directory, captured)
-        return captured
+        files = await self._verified_graph_files(directory, captured)
+        return captured, files
 
     async def verify_snapshot(self, directory: Path, snapshot: SlamSnapshot) -> None:
+        await self._verified_graph_files(directory, snapshot)
+
+    async def _verified_graph_files(
+        self, directory: Path, snapshot: SlamSnapshot
+    ) -> dict[str, bytes]:
         if not callable(getattr(self._pose_graph, "verify_consistent", None)):
             raise DomainError(ErrorCode.UNAVAILABLE, "map snapshot verification is unavailable")
+        original = _file_bytes(directory, self._max_uncompressed_bytes)
         verifier = cast(ConsistentSnapshotVerifier, self._pose_graph)
         try:
             verified = await asyncio.wait_for(
@@ -223,8 +246,9 @@ class MapArchive:
             raise DomainError(
                 ErrorCode.OPERATION_UNKNOWN, "map snapshot verification timed out"
             ) from exc
-        if verified is not True:
+        if verified is not True or original != _file_bytes(directory, self._max_uncompressed_bytes):
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map snapshot generation is unconfirmed")
+        return original
 
     async def write_pose_graph(self, directory: Path) -> tuple[str, ...]:
         return await self._pose_graph.write(directory)
@@ -347,26 +371,60 @@ def _reject_member(name: str, info: zipfile.ZipInfo) -> None:
         raise DomainError(ErrorCode.VALIDATION, "bundle path is not canonical")
 
 
-def _file_bytes(root: Path) -> dict[str, bytes]:
+def _file_bytes(root: Path, limit: int) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
+    remaining = limit
+    if root.is_symlink():
+        raise DomainError(ErrorCode.VALIDATION, "bundle tree cannot be a symlink")
+    for path in root.rglob("*"):
+        try:
+            entry = path.lstat()
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed") from exc
+        mode = entry.st_mode
+        if stat.S_ISDIR(mode):
             continue
-        files[path.relative_to(root).as_posix()] = path.read_bytes()
+        if not stat.S_ISREG(mode):
+            raise DomainError(ErrorCode.VALIDATION, "bundle member is not a regular file")
+        if len(files) >= _MAX_MEMBERS:
+            raise DomainError(ErrorCode.VALIDATION, "bundle has too many members")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed") from exc
+            raise
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(entry, opened):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "bundle member changed")
+            payload = stream.read(remaining + 1)
+        if len(payload) > remaining:
+            raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+        remaining -= len(payload)
+        files[path.relative_to(root).as_posix()] = payload
     return files
 
 
 def _write_zip(destination: Path, files: dict[str, bytes]) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_name(destination.name + ".partial")
-    try:
-        with zipfile.ZipFile(partial, "w") as bundle:
-            for name in sorted(files):
-                bundle.writestr(name, files[name])
-        durable_replace(partial, destination)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
+    with tempfile.TemporaryDirectory(dir=destination.parent) as raw:
+        partial = Path(raw) / "bundle.zip"
+        with partial.open("wb") as stream:
+            with zipfile.ZipFile(stream, "w") as bundle:
+                for name in sorted(files):
+                    bundle.writestr(name, files[name])
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(partial, destination)
+        except FileExistsError as exc:
+            raise DomainError(ErrorCode.CONFLICT, "bundle destination already exists") from exc
+        fd = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _materialize(directory: Path, files: dict[str, bytes]) -> None:
