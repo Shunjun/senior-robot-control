@@ -1,8 +1,10 @@
 """Reload a real Humble graph and run one isolated stationary diagnostic per boot."""
 
+import json
 import math
 import os
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,7 +22,17 @@ from probe_candidate_load import (
     request,
     wait_for_disappearance,
 )
-from probe_read_graph import BASE, LASER, MAP, SCAN, SERVICE, read_snapshot, scan_in_room, transform
+from probe_read_graph import (
+    BASE,
+    LASER,
+    MAP,
+    ODOM,
+    SCAN,
+    SERVICE,
+    read_snapshot,
+    scan_in_room,
+    transform,
+)
 from rclpy.qos import qos_profile_sensor_data
 from senior_slam_bridge.srv import MatchStationaryScan, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
@@ -30,7 +42,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 MATCH = "/senior/slam/match_stationary_scan"
 
 
-def probe(executable, root):
+def probe(executable, preflight, root):
     os.environ["ROS_LOCALHOST_ONLY"] = "1"
     os.environ["ROS_DOMAIN_ID"] = str(secrets.randbelow(8) + 175)
     rclpy.init(args=[])
@@ -57,25 +69,29 @@ def probe(executable, root):
         query_x, query_yaw = 0.08, 0.41
         scan = scan_in_room(node.get_clock().now().to_msg(), query_x, query_yaw)
         scores = {}
+        cli_scores = {}
         for scene in ("positive", "wrong"):
+            ranges = list(scan.ranges) if scene == "positive" else [0.5] * len(scan.ranges)
+            scan_input = {
+                "seed_x": 0.05,
+                "seed_y": -0.02,
+                "seed_yaw": 0.39,
+                "first_angle": scan.angle_min,
+                "angle_step": scan.angle_increment,
+                "ranges": ranges,
+            }
             args = candidate_arguments(executable, prefix, digest, scene)
             args.extend(["-p", "candidate_stationary_match:=true"])
             with candidate(args) as process:
                 boot = observe(node, receipt, graph, prefix, scene, boots, prior)
                 boots.add(boot)
                 assert match.wait_for_service(timeout_sec=4)
-                ranges = list(scan.ranges) if scene == "positive" else [0.5] * len(scan.ranges)
                 query = MatchStationaryScan.Request(
                     boot_id=boot,
                     attempt_id=scene,
                     pair_digest=digest,
                     map_frame=MAP,
-                    seed_x=0.05,
-                    seed_y=-0.02,
-                    seed_yaw=0.39,
-                    first_angle=scan.angle_min,
-                    angle_step=scan.angle_increment,
-                    ranges=ranges,
+                    **scan_input,
                 )
                 for field, incorrect in (
                     ("boot_id", prior.boot_id),
@@ -111,7 +127,47 @@ def probe(executable, root):
                 assert process.poll() is None
             assert process.returncode == 0
             wait_for_disappearance(node, CANDIDATE_NODE, receipt, graph, match)
+            scan_path = root / f"{scene}.json"
+            scan_input["ranges"] = [value if math.isfinite(value) else None for value in ranges]
+            scan_path.write_text(json.dumps(scan_input, allow_nan=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    preflight,
+                    str(prefix),
+                    digest,
+                    "--map-frame",
+                    MAP,
+                    "--odom-frame",
+                    ODOM,
+                    "--stationary-scan",
+                    str(scan_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                timeout=20,
+            )
+            proof = json.loads(completed.stdout)
+            assert proof["pair_digest"] == digest
+            assert (proof["map_frame"], proof["odom_frame"]) == (MAP, ODOM)
+            assert proof["boot_id"] not in boots
+            boots.add(proof["boot_id"])
+            assert proof["keyframes"] == [
+                {"id": frame.id, "x": frame.x, "y": frame.y, "yaw": frame.yaw}
+                for frame in prior.keyframes
+            ]
+            diagnostic = proof["stationary_match_diagnostic"]
+            assert diagnostic["reference_ids"] == [prior.keyframes[0].id]
+            cli_scores[scene] = diagnostic["response"]
+            if scene == "positive":
+                fitted = diagnostic["fitted_sensor_pose"]
+                assert abs(fitted["x"] - query_x) <= 0.06
+                assert abs(fitted["y"]) <= 0.06
+                assert abs(math.remainder(fitted["yaw"] - query_yaw, math.tau)) <= 0.04
+            assert pair_digest(prefix) == digest
+
         assert scores["positive"] > scores["wrong"] and scores["positive"] > 0
+        assert cli_scores["positive"] > cli_scores["wrong"] and cli_scores["positive"] > 0
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -119,4 +175,4 @@ def probe(executable, root):
 
 if __name__ == "__main__":
     with TemporaryDirectory(prefix="candidate-stationary-match-") as directory:
-        probe(sys.argv[1], Path(directory))
+        probe(sys.argv[1], sys.argv[2], Path(directory))

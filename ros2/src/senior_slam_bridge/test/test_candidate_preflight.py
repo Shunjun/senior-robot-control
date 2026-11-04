@@ -1,5 +1,8 @@
 """Local regressions for preflight proof and exact subprocess cleanup."""
 
+import json
+import math
+import os
 import signal
 import sys
 import tempfile
@@ -8,7 +11,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from candidate_preflight import PreflightError, run_candidate, validate_proof
+from candidate_preflight import (
+    PreflightError,
+    read_stationary_scan,
+    run_candidate,
+    validate_proof,
+    validate_stationary_diagnostic,
+)
 
 BOOT = "d417ec41-c421-4d6d-a997-1af64c263fab"
 DIGEST = "a" * 64
@@ -45,6 +54,67 @@ class PreflightTests(unittest.TestCase):
                         validate_proof(*args)
                 finally:
                     setattr(obj, key, previous)
+
+    def test_scan_json_checks_layout_and_local_file_bounds(self):
+        scan = {
+            "seed_x": 0.08,
+            "seed_y": -0.04,
+            "seed_yaw": 0.06,
+            "first_angle": -math.pi,
+            "angle_step": 0.05,
+            "ranges": [2.0] * 32 + [None],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scan.json"
+            path.write_text(json.dumps(scan))
+            self.assertEqual(read_stationary_scan(path)["ranges"], [2.0] * 32 + [math.inf])
+            link = path.with_name("linked-scan.json")
+            link.symlink_to(path)
+            with self.assertRaisesRegex(PreflightError, "Invalid stationary scan file"):
+                read_stationary_scan(link)
+            for invalid in (
+                json.dumps({**scan, "seed_yaw": True}),
+                json.dumps({**scan, "ranges": [2.0] * 31 + [None]}),
+                json.dumps({**scan, "ranges": [2.0] * 2049}),
+                json.dumps({**scan, "angle_step": 0.5}),
+                json.dumps({**scan, "ranges": [2.0] * 32 + [float("inf")]}),
+                json.dumps(scan)[:-1] + ', "seed_x": 0}',
+                " " * (64 * 1024 + 1),
+            ):
+                with self.subTest(example=invalid[:80]):
+                    path.write_text(invalid)
+                    with self.assertRaisesRegex(PreflightError, "Invalid stationary scan"):
+                        read_stationary_scan(path)
+            path.unlink()
+            os.mkfifo(path)
+            with self.assertRaisesRegex(PreflightError, "regular scan file"):
+                read_stationary_scan(path)
+
+    def test_stationary_result_requires_complete_finite_values_and_known_refs(self):
+        proof = {"keyframes": [{"id": 2}, {"id": 4}]}
+        values = dict(
+            UNAVAILABLE=0,
+            INVALID=1,
+            COMPLETE=2,
+            SPENT=3,
+            status=2,
+            response=0.0,
+            fitted_x=0.08,
+            fitted_y=-0.04,
+            fitted_yaw=0.06,
+            reference_ids=[4, 2],
+        )
+        result = validate_stationary_diagnostic(SimpleNamespace(**values), proof)
+        self.assertEqual(result["response"], 0.0)
+        self.assertEqual(result["reference_ids"], [4, 2])
+        for patch in (
+            {"status": 3},
+            {"response": float("nan")},
+            {"reference_ids": [2, 5]},
+            {"reference_ids": [2, 2]},
+        ):
+            with self.subTest(patch=patch), self.assertRaises(PreflightError):
+                validate_stationary_diagnostic(SimpleNamespace(**(values | patch)), proof)
 
     def test_cancel_escalates_and_reaps_exact_child(self):
         with tempfile.TemporaryDirectory() as directory:
