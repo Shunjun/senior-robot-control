@@ -2,11 +2,13 @@
 """Verify a trusted local SLAM pair in a disposable, isolated Humble candidate."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
 import secrets
+import selectors
 import signal
 import stat
 import subprocess
@@ -155,6 +157,137 @@ def validate_stationary_diagnostic(result, proof):
     }
 
 
+_MAX_RECEIPT_BYTES = 32 * 1024
+
+
+def reap_child(process, cleanup_seconds, label):
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=cleanup_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=cleanup_seconds)
+        except subprocess.TimeoutExpired as error:
+            raise PreflightError(f"{label} cleanup unconfirmed after SIGKILL") from error
+
+
+def acquire_receipt(command, env, check, *, timeout=9.0, cleanup_seconds=2.0):
+    check()
+    started = time.monotonic()
+    deadline = started + timeout
+    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, start_new_session=True)
+    output = bytearray()
+    try:
+        with process.stdout as pipe, selectors.DefaultSelector() as selector:
+            os.set_blocking(pipe.fileno(), False)
+            selector.register(pipe, selectors.EVENT_READ)
+            while True:
+                check()
+                if time.monotonic() >= deadline:
+                    raise PreflightError("Live scan acquisition timed out")
+                if not selector.select(0.05):
+                    continue
+                try:
+                    chunk = os.read(pipe.fileno(), _MAX_RECEIPT_BYTES + 1 - len(output))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > _MAX_RECEIPT_BYTES:
+                    raise PreflightError("Live scan acquisition exceeded its receipt byte limit")
+        while process.poll() is None:
+            check()
+            if time.monotonic() >= deadline:
+                raise PreflightError("Live scan acquisition timed out")
+            time.sleep(0.01)
+        check()
+        if process.returncode != 0 or not output:
+            raise PreflightError(
+                f"Live scan acquisition returned no usable receipt ({process.returncode})"
+            )
+        return bytes(output), started
+    finally:
+        reap_child(process, cleanup_seconds, "Scan acquisition")
+
+
+def live_receipt_query(payload, started, frame, seed):
+    from rclpy.serialization import deserialize_message
+    from senior_motion_msgs.msg import BoundedRawLaserScan
+
+    try:
+        scan = deserialize_message(payload, BoundedRawLaserScan)
+    except (TypeError, ValueError, RuntimeError) as error:
+        raise PreflightError("Could not decode the live scan receipt") from error
+    capture = scan.capture
+    if (
+        not capture.valid
+        or capture.frame_id != frame
+        or not capture.sequence
+        or not capture.capture_generation
+        or not capture.source_epoch
+        or not capture.bridge_boot_id
+        or any(
+            not re.fullmatch("[0-9a-f]{2,128}", gid)
+            for gid in (capture.raw_gid, capture.bridge_gid)
+        )
+    ):
+        raise PreflightError("Live scan receipt has invalid identity")
+
+    def timestamp(stamp):
+        if stamp.sec < 0 or not 0 <= stamp.nanosec < 1_000_000_000:
+            raise PreflightError("Live scan receipt has an invalid ROS timestamp")
+        return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+    stamp, received = timestamp(capture.stamp), timestamp(capture.received_ros)
+    if not 0 < stamp <= received or received - stamp > 500_000_000:
+        raise PreflightError("Live scan receipt has invalid ROS timing")
+
+    def check_fresh():
+        now = time.monotonic()
+        if not started < capture.received_steady <= now or now - capture.received_steady > 0.5:
+            raise PreflightError("Live scan receipt is stale or predates this acquisition")
+
+    check_fresh()
+    ranges = list(scan.ranges)
+    span = scan.angle_increment * (len(ranges) - 1)
+    if (
+        not 32 <= len(ranges) <= 2048
+        or not abs(scan.angle_min) <= math.tau
+        or not 0 < span <= math.tau + 1e-5
+        or not abs(scan.angle_max - scan.angle_min - span) <= 0.01 * scan.angle_increment
+        or scan.time_increment != 0
+        or any(math.isnan(sample) or sample < 0 for sample in ranges)
+        or sum(0 < sample < 8 for sample in ranges) < 32
+    ):
+        raise PreflightError("Live scan is outside native matching bounds")
+    query = {
+        "seed_x": seed[0],
+        "seed_y": seed[1],
+        "seed_yaw": seed[2],
+        "first_angle": scan.angle_min,
+        "angle_step": scan.angle_increment,
+        "ranges": ranges,
+    }
+    provenance = {
+        "cdr_sha256": hashlib.sha256(payload).hexdigest(),
+        "frame_id": frame,
+        "stamp_ns": stamp,
+        "received_ros_ns": received,
+        "received_steady": capture.received_steady,
+        "raw_gid": capture.raw_gid,
+        "bridge_gid": capture.bridge_gid,
+        "bridge_boot_id": capture.bridge_boot_id,
+        "source_epoch": capture.source_epoch,
+        "capture_generation": capture.capture_generation,
+        "sequence": capture.sequence,
+        "beam_order": "operator_declared_upright",
+    }
+    return query, provenance, check_fresh
+
+
 def run_candidate(command, observe, canceled, *, startup_seconds=8.0, cleanup_seconds=2.0):
     if canceled():
         raise PreflightError("Preflight canceled")
@@ -173,16 +306,7 @@ def run_candidate(command, observe, canceled, *, startup_seconds=8.0, cleanup_se
         proof = observe(process, check)
         check()
     finally:
-        if process.poll() is None:
-            process.terminate()
-        try:
-            process.wait(timeout=cleanup_seconds)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            try:
-                process.wait(timeout=cleanup_seconds)
-            except subprocess.TimeoutExpired as error:
-                raise PreflightError("Candidate cleanup unconfirmed after SIGKILL") from error
+        reap_child(process, cleanup_seconds, "Candidate")
     if process.returncode != 0:
         raise PreflightError(f"Candidate did not shut down cleanly ({process.returncode})")
     if canceled():
@@ -190,13 +314,15 @@ def run_candidate(command, observe, canceled, *, startup_seconds=8.0, cleanup_se
     return proof
 
 
-def read_service(node, client, request, check):
+def read_service(node, client, request, check, *, before_call=None):
     import rclpy
 
     while not client.service_is_ready():
         check()
         rclpy.spin_once(node, timeout_sec=0.05)
     check()
+    if before_call is not None:
+        before_call()
     response = client.call_async(request)
     while not response.done():
         check()
@@ -205,7 +331,7 @@ def read_service(node, client, request, check):
     return response.result()
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prefix", type=Path, help="Absolute local native file prefix")
     parser.add_argument(
@@ -213,12 +339,59 @@ def main():
     )
     parser.add_argument("--map-frame", default="map")
     parser.add_argument("--odom-frame", default="odom")
-    parser.add_argument(
+    scans = parser.add_mutually_exclusive_group()
+    scans.add_argument(
         "--stationary-scan",
         type=Path,
         help="One JSON scan with a map-frame sensor-pose seed and native Karto angles/ranges",
     )
-    args = parser.parse_args()
+    scans.add_argument(
+        "--live-scan", action="store_true", help="Acquire one local ROS scan diagnostic"
+    )
+    parser.add_argument("--live-domain", type=int)
+    parser.add_argument("--live-clock", choices=("wall", "sim"))
+    parser.add_argument("--live-lidar-frame")
+    parser.add_argument("--live-seed", type=float, nargs=3, metavar=("X", "Y", "YAW"))
+    parser.add_argument(
+        "--live-upright", action="store_true", help="Confirm native upright beam order"
+    )
+    parser.add_argument("--live-raw-topic")
+    parser.add_argument("--live-bounded-topic")
+    args = parser.parse_args(argv)
+    live_options = (
+        args.live_domain,
+        args.live_clock,
+        args.live_lidar_frame,
+        args.live_seed,
+        args.live_raw_topic,
+        args.live_bounded_topic,
+    )
+    if not args.live_scan and (
+        args.live_upright or any(value is not None for value in live_options)
+    ):
+        parser.error("live scan arguments require --live-scan")
+    if args.live_scan:
+        if (
+            args.live_domain is None
+            or not 0 <= args.live_domain <= 232
+            or args.live_clock is None
+            or not re.fullmatch("[!-~]{1,128}", args.live_lidar_frame or "")
+            or args.live_seed is None
+            or not args.live_upright
+        ):
+            parser.error("--live-scan requires domain, clock, lidar frame, seed and --live-upright")
+        x, y, yaw = args.live_seed
+        if not (abs(x) <= 1_000_000 and abs(y) <= 1_000_000 and abs(yaw) <= math.tau):
+            parser.error("live seed is outside native matching bounds")
+        args.live_raw_topic = args.live_raw_topic or "/scan"
+        args.live_bounded_topic = args.live_bounded_topic or "/safety/raw/scan"
+        if args.live_raw_topic == args.live_bounded_topic or any(
+            not re.fullmatch(r"/[A-Za-z_][A-Za-z0-9_/]{0,126}", topic)
+            or topic.endswith("/")
+            or "//" in topic
+            for topic in (args.live_raw_topic, args.live_bounded_topic)
+        ):
+            parser.error("live scan topics must be distinct, absolute ROS topic names")
     if not args.prefix.is_absolute() or not re.fullmatch("[0-9a-f]{64}", args.digest):
         parser.error("expected an absolute staged prefix and a lowercase SHA-256 digest")
     if (
@@ -229,6 +402,11 @@ def main():
     ):
         parser.error("expected distinct nonempty map and odom frames of at most 128 characters")
 
+    return parser, args
+
+
+def main():
+    parser, args = parse_args()
     stationary_scan = None
     if args.stationary_scan is not None:
         try:
@@ -265,7 +443,7 @@ def main():
     ):
         command.extend(["-p", f"{name}:={json.dumps(value, ensure_ascii=False)}"])
 
-    if stationary_scan is not None:
+    if stationary_scan is not None or args.live_scan:
         from senior_slam_bridge.srv import MatchStationaryScan
 
         command.extend(
@@ -279,7 +457,8 @@ def main():
 
     # Both processes use the same isolated loopback domain and per-attempt names.
     os.environ["ROS_LOCALHOST_ONLY"] = "1"
-    os.environ["ROS_DOMAIN_ID"] = str(215 + secrets.randbelow(15))
+    isolated_domains = [domain for domain in range(215, 230) if domain != args.live_domain]
+    os.environ["ROS_DOMAIN_ID"] = str(secrets.choice(isolated_domains))
     interrupted = False
 
     def cancel(_signal, _frame):
@@ -296,27 +475,59 @@ def main():
             graph = node.create_client(ReadGraph, graph_service)
 
             def observe(_process, check):
-                loaded = read_service(node, receipt, ReadLoadedGraph.Request(), check)
-                observed = read_service(node, graph, ReadGraph.Request(), check)
+                proof_deadline = time.monotonic() + 8.0
+
+                def check_proof():
+                    check()
+                    if time.monotonic() >= proof_deadline:
+                        raise PreflightError("Candidate proof timed out")
+
+                loaded = read_service(node, receipt, ReadLoadedGraph.Request(), check_proof)
+                observed = read_service(node, graph, ReadGraph.Request(), check_proof)
                 proof = validate_proof(
                     loaded, observed, attempt, args.digest, args.map_frame, args.odom_frame
                 )
-                if stationary_scan is not None:
+                query, before_call = stationary_scan, None
+                if args.live_scan:
+                    collector = [
+                        str(executable.with_name("acquire_scan_receipt")),
+                        "--ros-args",
+                        "-p",
+                        f"use_sim_time:={str(args.live_clock == 'sim').lower()}",
+                    ]
+                    for name, value in (
+                        ("raw_topic", args.live_raw_topic),
+                        ("bounded_topic", args.live_bounded_topic),
+                        ("expected_frame", args.live_lidar_frame),
+                    ):
+                        collector.extend(["-p", f"{name}:={json.dumps(value)}"])
+                    env = {**os.environ, "ROS_DOMAIN_ID": str(args.live_domain)}
+                    payload, started = acquire_receipt(collector, env, check)
+                    query, provenance, before_call = live_receipt_query(
+                        payload, started, args.live_lidar_frame, args.live_seed
+                    )
+                    proof["live_scan_receipt"] = provenance
+                if query is not None:
                     match = node.create_client(MatchStationaryScan, match_service)
                     request = MatchStationaryScan.Request(
                         boot_id=proof["boot_id"],
                         attempt_id=attempt,
                         pair_digest=args.digest,
                         map_frame=args.map_frame,
-                        **stationary_scan,
+                        **query,
                     )
-                    result = read_service(node, match, request, check)
+                    result = read_service(node, match, request, check, before_call=before_call)
                     proof["stationary_match_diagnostic"] = validate_stationary_diagnostic(
                         result, proof
                     )
                 return proof
 
-            proof = run_candidate(command, observe, lambda: interrupted)
+            proof = run_candidate(
+                command,
+                observe,
+                lambda: interrupted,
+                startup_seconds=18.0 if args.live_scan else 8.0,
+            )
         finally:
             node.destroy_node()
     except (OSError, RuntimeError) as error:

@@ -1,5 +1,6 @@
 """Local regressions for preflight proof and exact subprocess cleanup."""
 
+import io
 import json
 import math
 import os
@@ -8,11 +9,14 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 
 from candidate_preflight import (
     PreflightError,
+    acquire_receipt,
+    parse_args,
     read_stationary_scan,
     run_candidate,
     validate_proof,
@@ -115,6 +119,67 @@ class PreflightTests(unittest.TestCase):
         ):
             with self.subTest(patch=patch), self.assertRaises(PreflightError):
                 validate_stationary_diagnostic(SimpleNamespace(**(values | patch)), proof)
+
+    def test_live_mode_requires_explicit_domain_clock_mount_and_seed(self):
+        base = ["/private/map", DIGEST]
+        valid = [
+            "--live-scan",
+            "--live-domain",
+            "5",
+            "--live-clock",
+            "sim",
+            "--live-lidar-frame",
+            "laser_link",
+            "--live-seed",
+            "0",
+            "0",
+            "0",
+            "--live-upright",
+        ]
+        _, parsed = parse_args(base + valid)
+        self.assertEqual(
+            (parsed.live_raw_topic, parsed.live_bounded_topic), ("/scan", "/safety/raw/scan")
+        )
+        for options in (
+            valid[:-1],
+            valid[1:],
+            [*valid, "--stationary-scan", "/private/scan.json"],
+            [*valid, "--live-domain", "233"],
+            [*valid, "--live-seed", "nan", "0", "0"],
+            [*valid, "--live-raw-topic", "/safety/raw/scan"],
+        ):
+            with self.subTest(options=options), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    parse_args(base + options)
+                self.assertEqual(result.exception.code, 2)
+
+    def test_live_acquisition_bounds_stdout_and_reaps(self):
+        command = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'receipt')"]
+        payload, started = acquire_receipt(command, os.environ, lambda: None)
+        self.assertEqual(payload, b"receipt")
+        self.assertLessEqual(started, time.monotonic())
+
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "pid"
+            setup = (
+                "import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
+            )
+            for tail, timeout, error in (
+                ("os.write(1,b'x'*65536);time.sleep(30)", 2.0, "byte limit"),
+                ("time.sleep(30)", 0.4, "timed out"),
+            ):
+                with self.subTest(error=error):
+                    with self.assertRaisesRegex(PreflightError, error):
+                        acquire_receipt(
+                            [sys.executable, "-c", setup + tail, str(pid_path)],
+                            os.environ,
+                            lambda: None,
+                            timeout=timeout,
+                        )
+                    pid = int(pid_path.read_text())
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(pid, 0)
+                    pid_path.unlink()
 
     def test_cancel_escalates_and_reaps_exact_child(self):
         with tempfile.TemporaryDirectory() as directory:

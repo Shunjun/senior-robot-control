@@ -161,6 +161,13 @@ if(BUILD_TESTING)
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
   )
+  ament_add_test(candidate_live_scan_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_live_scan.py"
+      "$<TARGET_FILE:slam_graph_node>" "${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}/candidate_preflight"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 75
+  )
   ament_add_test(candidate_stationary_match_runtime
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/test/probe_candidate_stationary_match.py"
