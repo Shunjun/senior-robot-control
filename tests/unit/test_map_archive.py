@@ -1,5 +1,6 @@
 """Bundle format rejects hostile archives and mixed map revisions."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -513,14 +514,16 @@ async def test_export_rejects_snapshot_changed_during_graph_capture(tmp_path: Pa
         archive_for(store, graph).export_bundle(store, store.map_ref, path)
     )
     await asyncio.wait_for(graph.entered.wait(), 1)
-    store.apply_anchor_update(
-        AnchorSnapshot(
-            store.map_ref,
-            "wheel_odom",
-            (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
-            GridExtent(8, 8, 0, 0),
+    with pytest.raises(DomainError) as late_write:
+        store.apply_anchor_update(
+            AnchorSnapshot(
+                store.map_ref,
+                "wheel_odom",
+                (AnchorPose("kf-1", Pose2D(1, 0, 0), True),),
+                GridExtent(8, 8, 0, 0),
+            )
         )
-    )
+    assert late_write.value.code is ErrorCode.CONFLICT
     graph.release.set()
     with pytest.raises(DomainError):
         await export
@@ -668,3 +671,66 @@ async def test_export_uses_checked_bytes_without_reopening_graph_after_verificat
     await archive_for(store, graph).export_bundle(store, store.map_ref, destination)
     with zipfile.ZipFile(destination) as archive:
         assert archive.read("pose_graph/graph.data") == b"scans"
+
+
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_capture_freeze_is_released_before_uncooperative_backend_finishes(
+    tmp_path: Path, cancel_caller: bool
+) -> None:
+    store = filled_store()
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    late_codes: list[ErrorCode] = []
+
+    class StalledGraph(Graph):
+        async def capture_consistent(
+            self, directory: Path, snapshot: Callable[[], SlamSnapshot]
+        ) -> SlamSnapshot:
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+                try:
+                    return snapshot()
+                except DomainError as error:
+                    late_codes.append(error.code)
+                    raise
+                finally:
+                    finished.set()
+
+    archive = MapArchive(
+        StalledGraph(store.map_ref),
+        source_robot_id="robot-a",
+        capture_timeout_seconds=1.0 if cancel_caller else 0.05,
+    )
+    destination = tmp_path / "stalled.zip"
+    task = asyncio.create_task(archive.export_bundle(store, store.map_ref, destination))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        if cancel_caller:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+        else:
+            with pytest.raises(DomainError) as timeout:
+                await asyncio.wait_for(task, timeout=1)
+            assert timeout.value.code is ErrorCode.OPERATION_UNKNOWN
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        assert not finished.is_set()
+
+        assert store.occupancy().cells
+        store.remove(store.occupancy().cells[0])
+        assert not store.occupancy().cells
+        with pytest.raises(DomainError) as busy:
+            await archive.export_bundle(store, store.map_ref, destination)
+        assert busy.value.code is ErrorCode.CONFLICT
+        assert not destination.exists()
+    finally:
+        release.set()
+        if cancelled.is_set():
+            await asyncio.wait_for(finished.wait(), timeout=1)
+    assert late_codes == [ErrorCode.OPERATION_UNKNOWN]

@@ -2,6 +2,8 @@
 
 import math
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -68,14 +70,16 @@ class MapReferenceStore:
             raise ValueError("odometry owner is required")
         if not math.isfinite(cell_size_m) or cell_size_m <= 0.0:
             raise ValueError("cell size must be positive")
-        self.map_ref = map_ref
-        self.odom_owner = owner
-        self.cell_size_m = float(cell_size_m)
-        self.grid = GridExtent(0, 0, 0.0, 0.0)
+        self._map_ref = map_ref
+        self._odom_owner = owner
+        self._cell_size_m = float(cell_size_m)
+        self._grid = GridExtent(0, 0, 0.0, 0.0)
         self._review_required = False
         self._guarded = False
         self._map_generation = uuid.uuid4().hex
         self._change_sequence = 0
+        self._capture_frozen = False
+        self._capture_interrupted = False
         self._known_anchors: dict[str, Pose2D] = {}
         self._live: dict[int, _Record] = {}
         self._removed: dict[int, _Record] = {}
@@ -83,11 +87,59 @@ class MapReferenceStore:
         self._seq = 0
 
     @property
+    def map_ref(self) -> MapRef:
+        return self._map_ref
+
+    @property
+    def odom_owner(self) -> str:
+        return self._odom_owner
+
+    @property
+    def cell_size_m(self) -> float:
+        return self._cell_size_m
+
+    @property
+    def grid(self) -> GridExtent:
+        return self._grid
+
+    @contextmanager
+    def freeze_for_capture(self) -> Iterator[None]:
+        """Hold the reference layer stable on its owning event loop.
+
+        A graph owner must acquire its own freeze and reconcile its graph with
+        this reference layer before using a snapshot as archive evidence.
+        """
+        if self._capture_frozen:
+            raise DomainError(ErrorCode.CONFLICT, "map reference is frozen for capture")
+        self._capture_frozen = True
+        self._capture_interrupted = False
+        try:
+            yield
+            if self._capture_interrupted:
+                raise DomainError(
+                    ErrorCode.OPERATION_UNKNOWN, "map reference capture was interrupted"
+                )
+        finally:
+            self._capture_frozen = False
+            self._capture_interrupted = False
+
+    def _require_capture_writable(self) -> None:
+        if self._capture_frozen:
+            self._capture_interrupted = True
+            raise DomainError(ErrorCode.CONFLICT, "map reference is frozen for capture")
+
+    def _interrupt_capture(self) -> None:
+        if self._capture_frozen:
+            self._capture_interrupted = True
+
+    @property
     def review_required(self) -> bool:
         return self._guarded or self._review_required
 
     @review_required.setter
     def review_required(self, value: bool) -> None:
+        if value != self._review_required:
+            self._interrupt_capture()
         self._review_required = value
 
     @property
@@ -106,10 +158,13 @@ class MapReferenceStore:
         self._map_generation = uuid.uuid4().hex
 
     def guard_reference(self) -> None:
+        self._interrupt_capture()
         self._advance_generation()
         self._guarded = True
 
     def release_reference(self) -> None:
+        if self._guarded:
+            self._interrupt_capture()
         self._guarded = False
 
     def place(
@@ -119,6 +174,7 @@ class MapReferenceStore:
         world: tuple[float, float],
         anchor_pose: Pose2D,
     ) -> None:
+        self._require_capture_writable()
         anchor_id = evidence.anchor_id.strip()
         if not anchor_id or self._index(*world) != evidence.cell:
             raise ValueError("cell is not bound to its anchor point")
@@ -136,6 +192,7 @@ class MapReferenceStore:
             del self._removed[removed[0]]
 
     def place_waypoint(self, waypoint: AnchoredWaypoint, *, anchor_pose: Pose2D) -> None:
+        self._require_capture_writable()
         anchor_id = waypoint.anchor_id.strip()
         if not waypoint.waypoint_id.strip() or not anchor_id:
             raise ValueError("waypoint anchor is required")
@@ -149,6 +206,7 @@ class MapReferenceStore:
         self._waypoints.append(_Waypoint(stored, anchor_pose))
 
     def remove(self, evidence: CellEvidence) -> None:
+        self._require_capture_writable()
         found = self._find(self._live, evidence.cell)
         if found is None:
             return
@@ -161,6 +219,7 @@ class MapReferenceStore:
         del self._live[key]
 
     def apply_anchor_update(self, update: AnchorSnapshot) -> ReferenceChange:
+        self._require_capture_writable()
         owner = update.odom_owner.strip()
         if update.map_ref.map_id != self.map_ref.map_id or owner != self.odom_owner:
             raise DomainError(ErrorCode.CONFLICT, "one map has one odometry owner")
@@ -169,7 +228,7 @@ class MapReferenceStore:
             self._advance_generation()
         self._known_anchors = dict(poses)
         self._change_sequence += 1
-        self.grid = update.grid
+        self._grid = update.grid
         self._move_records(self._live, poses)
         self._move_records(self._removed, poses)
         if self._move_waypoints(poses) or self._unresolved(poses) or self._cells_collide():
@@ -227,6 +286,7 @@ class MapReferenceStore:
         )
 
     def restore(self, snapshot: SlamSnapshot) -> None:
+        self._require_capture_writable()
         if not self.is_empty():
             raise DomainError(ErrorCode.CONFLICT, "occupancy store already has records")
         if snapshot.map_ref != self.map_ref or snapshot.odom_owner != self.odom_owner:
@@ -235,27 +295,29 @@ class MapReferenceStore:
             raise DomainError(ErrorCode.CONFLICT, "cell size does not match the store")
         self._advance_generation()
         self._change_sequence += 1
-        self.grid = snapshot.grid
+        self._grid = snapshot.grid
         self.review_required = snapshot.review_required
         self._install(snapshot)
 
     def replace(self, snapshot: SlamSnapshot) -> None:
         """Switch identity, resolution, odometry owner, and sequence together."""
+        self._require_capture_writable()
 
         self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         self._advance_generation()
         self._change_sequence += 1
-        self.grid = snapshot.grid
+        self._grid = snapshot.grid
         self.review_required = snapshot.review_required
         self._install(snapshot)
 
     def clear(self, map_ref: MapRef, *, odom_owner: str, cell_size_m: float) -> None:
         """Empty the layer and publish a new identity in the same update."""
+        self._require_capture_writable()
 
         self._reset_identity(map_ref, odom_owner, cell_size_m)
         self._advance_generation()
         self._change_sequence += 1
-        self.grid = GridExtent(0, 0, 0.0, 0.0)
+        self._grid = GridExtent(0, 0, 0.0, 0.0)
         self.review_required = False
 
     def _reset_identity(self, map_ref: MapRef, odom_owner: str, cell_size_m: float) -> None:
@@ -264,9 +326,9 @@ class MapReferenceStore:
             raise ValueError("odometry owner is required")
         if not math.isfinite(cell_size_m) or cell_size_m <= 0.0:
             raise ValueError("cell size must be positive")
-        self.map_ref = map_ref
-        self.odom_owner = owner
-        self.cell_size_m = float(cell_size_m)
+        self._map_ref = map_ref
+        self._odom_owner = owner
+        self._cell_size_m = float(cell_size_m)
         self._seq = 0
         self._known_anchors.clear()
         self._live.clear()

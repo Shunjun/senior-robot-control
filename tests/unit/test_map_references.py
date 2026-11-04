@@ -1,5 +1,6 @@
 """Anchored map references stay stable when the grid grows and move only with their anchor."""
 
+import asyncio
 import importlib.util
 import math
 from dataclasses import fields
@@ -462,3 +463,68 @@ def test_nonce_ignores_obstacle_and_new_anchor_but_tracks_old_anchor() -> None:
         )
     )
     assert store.map_generation != generation
+
+
+@pytest.mark.parametrize(
+    "mutation", ["cell", "removal", "waypoint", "anchors", "restore", "replace", "clear"]
+)
+def test_reference_capture_freeze_fences_mutations(mutation: str) -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    pose = Pose2D(0, 0, 0)
+    hit = evidence(BOX, "kf")
+    before = store.snapshot(Path("graph"), ())
+    actions = {
+        "cell": lambda: store.place(hit, world=BOX, anchor_pose=pose),
+        "removal": lambda: store.remove(hit),
+        "waypoint": lambda: store.place_waypoint(
+            AnchoredWaypoint("home", pose, "kf", False), anchor_pose=pose
+        ),
+        "anchors": lambda: store.apply_anchor_update(
+            AnchorSnapshot(MAP, "wheel_odom", (), GridExtent(5, 5, 0, 0))
+        ),
+        "restore": lambda: store.restore(before),
+        "replace": lambda: store.replace(before),
+        "clear": lambda: store.clear(MAP, odom_owner="wheel_odom", cell_size_m=CELL),
+    }
+    with pytest.raises(DomainError) as interrupted:
+        with store.freeze_for_capture():
+            with pytest.raises(DomainError) as error:
+                actions[mutation]()
+            assert error.value.code is ErrorCode.CONFLICT
+            assert store.snapshot(Path("graph"), ()) == before
+    assert interrupted.value.code is ErrorCode.OPERATION_UNKNOWN
+    actions[mutation]()
+
+
+async def test_reference_capture_freeze_releases_on_cancellation() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    entered = asyncio.Event()
+
+    async def capture() -> None:
+        with store.freeze_for_capture():
+            entered.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(capture())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    with pytest.raises(DomainError) as error:
+        with store.freeze_for_capture():
+            pytest.fail("a second capture cannot share the freeze")
+    assert error.value.code is ErrorCode.CONFLICT
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with store.freeze_for_capture():
+        assert store.is_empty()
+
+
+def test_reference_capture_freeze_allows_guard_and_rejects_preempted_capture() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    with pytest.raises(DomainError) as error:
+        with store.freeze_for_capture():
+            store.guard_reference()
+            assert store.review_required
+            store.release_reference()
+    assert error.value.code is ErrorCode.OPERATION_UNKNOWN
+    with store.freeze_for_capture():
+        assert not store.review_required

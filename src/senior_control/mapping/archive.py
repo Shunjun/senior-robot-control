@@ -117,6 +117,7 @@ class MapArchive:
         home_waypoint_id: str | None = None,
         sensor_summary: tuple[tuple[str, str], ...] = (),
         max_uncompressed_bytes: int = 67_108_864,
+        capture_timeout_seconds: float = 1.0,
     ) -> None:
         self._pose_graph = pose_graph
         self._source_robot_id = source_robot_id
@@ -124,6 +125,10 @@ class MapArchive:
         self._home_waypoint_id = home_waypoint_id
         self._sensor_summary = sensor_summary
         self._max_uncompressed_bytes = max_uncompressed_bytes
+        if not math.isfinite(capture_timeout_seconds) or capture_timeout_seconds <= 0:
+            raise ValueError("map capture timeout must be finite and positive")
+        self._capture_timeout_seconds = capture_timeout_seconds
+        self._capture_work: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]] | None = None
 
     async def export_bundle(
         self, store: MapReferenceStore, map_ref: MapRef, destination: Path
@@ -203,11 +208,16 @@ class MapArchive:
         capture = getattr(self._pose_graph, "capture_consistent", None)
         if not callable(capture):
             raise DomainError(ErrorCode.UNAVAILABLE, "consistent map capture is unavailable")
+        if self._capture_work is not None:
+            raise DomainError(ErrorCode.CONFLICT, "prior map capture has not settled")
         expected_ref = store.map_ref
         start_sequence = store.change_sequence
         snapshots: list[SlamSnapshot] = []
+        capture_open = True
 
         def snapshot() -> SlamSnapshot:
+            if not capture_open:
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture window is closed")
             if snapshots:
                 raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture callback repeated")
             captured = store.snapshot(Path("pose_graph"), self._pose_graph.painted_cells())
@@ -217,16 +227,39 @@ class MapArchive:
             return captured
 
         backend = cast(ConsistentCapture, self._pose_graph)
-        captured = await backend.capture_consistent(directory, snapshot)
-        if (
-            len(snapshots) != 1
-            or captured is not snapshots[0]
-            or captured.map_ref != expected_ref
-            or store.change_sequence != start_sequence
-        ):
-            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
-        files = await self._verified_graph_files(directory, captured)
-        return captured, files
+
+        async def capture_and_verify() -> tuple[SlamSnapshot, dict[str, bytes]]:
+            captured = await backend.capture_consistent(directory, snapshot)
+            if not capture_open:
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture window is closed")
+            if (
+                len(snapshots) != 1
+                or captured is not snapshots[0]
+                or captured.map_ref != expected_ref
+                or store.change_sequence != start_sequence
+            ):
+                raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map changed during capture")
+            return captured, await self._verified_graph_files(directory, captured)
+
+        with store.freeze_for_capture():
+            task = asyncio.create_task(capture_and_verify())
+            self._capture_work = task
+            task.add_done_callback(self._finish_capture)
+            try:
+                done, _ = await asyncio.wait({task}, timeout=self._capture_timeout_seconds)
+                if not done:
+                    raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map capture timed out")
+                return task.result()
+            finally:
+                capture_open = False
+                if not task.done():
+                    task.cancel()
+
+    def _finish_capture(self, task: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]]) -> None:
+        if self._capture_work is task:
+            self._capture_work = None
+        if not task.cancelled():
+            task.exception()
 
     async def verify_snapshot(self, directory: Path, snapshot: SlamSnapshot) -> None:
         await self._verified_graph_files(directory, snapshot)
