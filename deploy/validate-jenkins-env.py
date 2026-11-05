@@ -7,6 +7,8 @@ from pathlib import Path
 
 ALLOWED = {
     "DOMAIN",
+    "HTTP_PORT",
+    "HTTPS_PORT",
     "ACME_EMAIL",
     "ENABLE_TURN",
     "SENIOR_SECRET",
@@ -16,7 +18,14 @@ ALLOWED = {
     "TURN_REALM",
     "TURN_SHARED_SECRET",
 }
-REQUIRED = {"DOMAIN", "ACME_EMAIL", "SENIOR_SECRET", "ADMIN_PASSWORD_HASH"}
+REQUIRED = {
+    "DOMAIN",
+    "ACME_EMAIL",
+    "SENIOR_SECRET",
+    "ADMIN_PASSWORD_HASH",
+    "HTTP_PORT",
+    "HTTPS_PORT",
+}
 TURN_REQUIRED = {"TURN_REALM", "TURN_LISTEN_IP", "TURN_EXTERNAL_IP", "TURN_SHARED_SECRET"}
 DOMAIN = re.compile(
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
@@ -54,6 +63,12 @@ def main() -> int:
             raise CredentialFormatError(f"missing required settings: {', '.join(sorted(missing))}")
         if not DOMAIN.fullmatch(values["DOMAIN"]):
             raise CredentialFormatError("DOMAIN must be a DNS hostname without a scheme or port")
+        for key in ("HTTP_PORT", "HTTPS_PORT"):
+            port = values[key]
+            if not re.fullmatch(r"[1-9][0-9]{0,4}", port) or int(port) > 65535:
+                raise CredentialFormatError(f"{key} must be a port number from 1 to 65535")
+        if values["HTTP_PORT"] == values["HTTPS_PORT"]:
+            raise CredentialFormatError("HTTP_PORT and HTTPS_PORT must be different")
         if len(values["SENIOR_SECRET"].encode()) < 32:
             raise CredentialFormatError("SENIOR_SECRET must be at least 32 bytes")
         if not HASH.fullmatch(values["ADMIN_PASSWORD_HASH"]):
@@ -76,7 +91,7 @@ def main() -> int:
     except (OSError, UnicodeError, ValueError, IndexError) as exc:
         print(f"Credential file rejected: {exc.__class__.__name__}", file=sys.stderr)
         return 1
-    print(values["DOMAIN"], enable_turn)
+    print(values["DOMAIN"], enable_turn, values["HTTPS_PORT"])
     return 0
 
 

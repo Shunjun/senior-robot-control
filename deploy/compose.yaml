@@ -28,8 +28,8 @@ services:
       DOMAIN: "${DOMAIN:?set DOMAIN}"
       ACME_EMAIL: "${ACME_EMAIL:?set ACME_EMAIL}"
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:?set HTTP_PORT}:80"
+      - "${HTTPS_PORT:?set HTTPS_PORT}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ../web/dist:/srv/web:ro

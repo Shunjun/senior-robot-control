@@ -41,7 +41,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     fake_hash = "scrypt$16384$8$1$" + "ab" * 16 + "$" + "cd" * 32
     credential = tmp_path / "env"
     credential.write_text(
-        "DOMAIN='robot.example.com'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='"
+        "DOMAIN='robot.example.com'\nHTTP_PORT='8098'\nHTTPS_PORT='8449'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='"
         + "x" * 32
         + "'\nADMIN_PASSWORD_HASH='"
         + fake_hash
@@ -54,7 +54,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         text=True,
         check=True,
     )
-    assert result.stdout == "robot.example.com false\n"
+    assert result.stdout == "robot.example.com false 8449\n"
     enabled = tmp_path / "enabled"
     enabled.write_text(
         credential.read_text()
@@ -68,7 +68,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         text=True,
         check=True,
     )
-    assert result.stdout == "robot.example.com true\n"
+    assert result.stdout == "robot.example.com true 8449\n"
     env = dict(
         PATH=os.environ["PATH"],
         CLOUD_IMAGE="senior-control-cloud:test",
@@ -100,6 +100,12 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     assert yaml.safe_load(result.stdout)["services"]["caddy"]["environment"]["ACME_EMAIL"] == (
         "ops@example.com"
     )
+    caddy = yaml.safe_load(result.stdout)["services"]["caddy"]
+    assert {port["target"]: port["published"] for port in caddy["ports"]} == {
+        80: "8098",
+        443: "8449",
+    }
+
     import shutil
 
     manual = tmp_path / "manual"
@@ -119,6 +125,15 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
             check=True,
         )
         assert set(result.stdout.splitlines()) == expected
+    manual_config = subprocess.run(
+        ["bash", str(manual / "compose.sh"), "config"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    manual_ports = yaml.safe_load(manual_config.stdout)["services"]["caddy"]["ports"]
+    assert manual_ports == caddy["ports"]
 
     parsed = subprocess.run(
         [
@@ -154,10 +169,10 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         assert result.returncode != 0
         assert fake_hash not in result.stderr
         if extra.startswith("COMPOSE_FILE="):
-            assert "unsupported setting on line 5" in result.stderr
+            assert "unsupported setting on line 7" in result.stderr
             assert extra.strip() not in result.stderr
         if extra.startswith("TURN_REALM=unquoted"):
-            assert "line 5 must use" in result.stderr
+            assert "line 7 must use" in result.stderr
             assert "unquoted" not in result.stderr
 
 
@@ -168,7 +183,8 @@ def test_credential_rejects_truncated_scrypt_hash_without_logging_it(tmp_path):
     truncated = "scrypt$" + "ab" * 32
     credential = tmp_path / "env"
     credential.write_text(
-        f"DOMAIN='robot.example.com'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='{'x' * 32}'\n"
+        "DOMAIN='robot.example.com'\nHTTP_PORT='8098'\nHTTPS_PORT='8449'\n"
+        f"ACME_EMAIL='ops@example.com'\nSENIOR_SECRET='{'x' * 32}'\n"
         f"ADMIN_PASSWORD_HASH='{truncated}'\n"
     )
     result = subprocess.run(
