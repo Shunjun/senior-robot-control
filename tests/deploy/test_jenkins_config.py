@@ -41,7 +41,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     fake_hash = "scrypt$16384$8$1$" + "ab" * 16 + "$" + "cd" * 32
     credential = tmp_path / "env"
     credential.write_text(
-        "ACME_EMAIL='ops@example.com'\nSENIOR_SECRET='"
+        "DOMAIN='robot.example.com'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='"
         + "x" * 32
         + "'\nADMIN_PASSWORD_HASH='"
         + fake_hash
@@ -54,19 +54,23 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         text=True,
         check=True,
     )
-    assert result.stdout == "false\n"
+    assert result.stdout == "robot.example.com false\n"
     enabled = tmp_path / "enabled"
-    enabled.write_text(credential.read_text() + "ENABLE_TURN='true'\n")
+    enabled.write_text(
+        credential.read_text()
+        + "ENABLE_TURN='true'\nTURN_REALM='turn.example.com'\n"
+        + "TURN_LISTEN_IP='0.0.0.0'\nTURN_EXTERNAL_IP='192.0.2.1'\n"
+        + f"TURN_SHARED_SECRET='{'y' * 32}'\n"
+    )
     result = subprocess.run(
         [sys.executable, str(validator), str(enabled)],
         capture_output=True,
         text=True,
         check=True,
     )
-    assert result.stdout == "true\n"
+    assert result.stdout == "robot.example.com true\n"
     env = dict(
         PATH=os.environ["PATH"],
-        DOMAIN="rosrouter.doomain.cn",
         CLOUD_IMAGE="senior-control-cloud:test",
         RELEASE_DIR="/tmp/release",
         DEPLOY_ROOT="/tmp/deploy",
@@ -96,6 +100,26 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
     assert yaml.safe_load(result.stdout)["services"]["caddy"]["environment"]["ACME_EMAIL"] == (
         "ops@example.com"
     )
+    import shutil
+
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    for name in ("compose.sh", "compose.yaml", "validate-jenkins-env.py"):
+        shutil.copyfile(ROOT / "deploy" / name, manual / name)
+    for settings, expected in (
+        (credential, {"cloud", "caddy"}),
+        (enabled, {"cloud", "caddy", "coturn"}),
+    ):
+        shutil.copyfile(settings, manual / ".env")
+        result = subprocess.run(
+            ["bash", str(manual / "compose.sh"), "config", "--services"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert set(result.stdout.splitlines()) == expected
+
     parsed = subprocess.run(
         [
             "docker",
@@ -117,6 +141,7 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         "ENABLE_TURN='yes'\n",
         "COMPOSE_FILE='bad'\n",
         "SENIOR_SECRET='duplicate'\n",
+        "DOMAIN='duplicate.example.com'\n",
         "OTHER='bad'\n",
         "TURN_REALM='<placeholder>'\n",
         "TURN_REALM=unquoted\n",
@@ -128,6 +153,32 @@ def test_credential_validation_and_compose_preserve_scrypt(tmp_path):
         )
         assert result.returncode != 0
         assert fake_hash not in result.stderr
+        if extra.startswith("COMPOSE_FILE="):
+            assert "unsupported setting on line 5" in result.stderr
+            assert extra.strip() not in result.stderr
+        if extra.startswith("TURN_REALM=unquoted"):
+            assert "line 5 must use" in result.stderr
+            assert "unquoted" not in result.stderr
+
+
+def test_credential_rejects_truncated_scrypt_hash_without_logging_it(tmp_path):
+    import subprocess
+    import sys
+
+    truncated = "scrypt$" + "ab" * 32
+    credential = tmp_path / "env"
+    credential.write_text(
+        f"DOMAIN='robot.example.com'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='{'x' * 32}'\n"
+        f"ADMIN_PASSWORD_HASH='{truncated}'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "deploy/validate-jenkins-env.py"), str(credential)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "ADMIN_PASSWORD_HASH must be a complete scrypt hash" in result.stderr
+    assert truncated not in result.stderr
 
 
 def test_proxy_address_is_caddy_address_in_isolated_backend():

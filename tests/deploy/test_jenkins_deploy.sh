@@ -10,7 +10,7 @@ if [[ "$1 $2 $3" == 'context inspect --format' ]]; then echo 'tcp://other-host:2
 exit 0
 MOCK
 chmod +x "$tmp/bin/docker"
-printf "ACME_EMAIL='ops@example.com'\nSENIOR_SECRET='%s'\nADMIN_PASSWORD_HASH='scrypt\$16384\$8\$1\$%s\$%s'\n" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "abababababababababababababababab" "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" > "$tmp/env"
+printf "DOMAIN='robot.example.com'\nACME_EMAIL='ops@example.com'\nSENIOR_SECRET='%s'\nADMIN_PASSWORD_HASH='scrypt\$16384\$8\$1\$%s\$%s'\n" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "abababababababababababababababab" "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" > "$tmp/env"
 if PATH="$tmp/bin:$PATH" DEPLOY_ROOT="$tmp/deploy" RELEASE_ID=0123456789abcdef0123456789abcdef01234567-1 ENV_FILE="$tmp/env" bash "$root/deploy/jenkins-deploy.sh" >"$tmp/out" 2>&1; then
   echo 'remote Docker daemon was accepted' >&2; exit 1
 fi
@@ -22,6 +22,7 @@ exit 0
 MOCK
 cat > "$tmp/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
+[[ "${*: -1}" == https://robot.example.com/* ]] || exit 1
 case "${*: -1}" in
   */api/robots) printf '%s' "${MOCK_API:-401}" ;;
   *) echo '<!doctype html><html></html>' ;;
