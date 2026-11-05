@@ -17,7 +17,7 @@ Compose 只运行一个云进程（其中包含中继与登录限流器）、Cad
 ## 准备和 TLS
 
 1. 将 `deploy/env.example` 复制为 `deploy/.env`，填写 `DOMAIN`、`ACME_EMAIL`、
-   `SENIOR_SECRET` 和 `ADMIN_PASSWORD_HASH`。保留单引号和哈希中的 `$`。
+   `SENIOR_SECRET`、`ADMIN_PASSWORD_HASH`、`HTTP_PORT` 和 `HTTPS_PORT`。保留单引号和哈希中的 `$`。
    云端密钥至少 32 字节，管理员密码使用项目生成的 scrypt 哈希。
 2. 将云域名的 A/AAAA 记录指向云主机。Caddy 为 HTTPS 自动申请和续期证书。
 3. 默认关闭 TURN。如需启用，设置 `ENABLE_TURN='true'`，填好模板中的四项 TURN 配置，
@@ -26,6 +26,10 @@ Compose 只运行一个云进程（其中包含中继与登录限流器）、Cad
 4. 运行 `bash deploy/compose.sh config --quiet` 检查配置，再由运维人员在变更窗口运行
    `bash deploy/compose.sh up -d --build`。脚本根据同一份配置启用 TURN profile。
    构建镜像不会下载模型权重。
+
+使用 FRP 时，将公网 TCP 80 和 443 分别转发到部署主机的 `HTTP_PORT` 和
+`HTTPS_PORT`。HTTPS 使用 TCP 透传，由 Caddy 终止 TLS。直连公网且没有 FRP 时，
+可将这两项设为 80 和 443。
 
 公网防火墙仅开放 TCP 80/443/5349、UDP 3478/5349 和 UDP 49160–49200。不要开放 DDS
 端口。HTTP 80 仅用于 ACME 与跳转；业务经 TLS 443，TURN TLS 经 5349。
@@ -71,7 +75,7 @@ GitHub 可访问的 `https://<Jenkins 地址>/github-webhook/`（保留末尾斜
 1. 确保 Jenkins 部署目标机符合上述要求、有可用执行器，并设置
    `DEPLOY_ROOT`（默认 `/opt/senior-robot-control`）。
 2. 使用同一份 `deploy/env.example` 填写部署配置，并上传为 Jenkins **Secret file**。
-   将凭据 ID 填入 `ENV_CREDENTIAL_ID`。已有 Jenkins 凭据需补上 `DOMAIN`，并保留原有密钥和密码哈希。
+   将凭据 ID 填入 `ENV_CREDENTIAL_ID`。已有 Jenkins 凭据需补上缺少的 `DOMAIN`、`HTTP_PORT` 和 `HTTPS_PORT`，并保留原有密钥和密码哈希。
    不要将实际配置文件提交到仓库。
 3. 确认域名 DNS、端口和部署目录。执行任务将部署当前检出的提交。
 
