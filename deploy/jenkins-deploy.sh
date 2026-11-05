@@ -6,7 +6,8 @@ umask 077
 [[ "$DEPLOY_ROOT" =~ ^/[a-zA-Z0-9_./-]+$ && "$DEPLOY_ROOT" != *..* && "$DEPLOY_ROOT" != / ]] || { echo 'Invalid deployment directory' >&2; exit 1; }
 [[ "$RELEASE_ID" =~ ^[a-f0-9]{40}-[0-9]+$ ]] || { echo 'Invalid release ID' >&2; exit 1; }
 [[ -r "$ENV_FILE" ]] || { echo 'Secret file is not readable' >&2; exit 1; }
-enable_turn=$(python3 deploy/validate-jenkins-env.py "$ENV_FILE")
+settings=$(python3 deploy/validate-jenkins-env.py "$ENV_FILE")
+read -r domain enable_turn <<< "$settings"
 [[ -z "${DOCKER_HOST:-}" || "$DOCKER_HOST" == unix:///var/run/docker.sock ]] || { echo 'A local Docker daemon is required' >&2; exit 1; }
 endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
 [[ "$endpoint" == unix:///var/run/docker.sock ]] || { echo 'A local Docker daemon is required' >&2; exit 1; }
@@ -16,7 +17,8 @@ mkdir -p "$DEPLOY_ROOT/releases"
 exec 9>"$DEPLOY_ROOT/deploy.lock"
 flock -n 9 || { echo 'Another deployment is running' >&2; exit 1; }
 unset COMPOSE_PROFILES ACME_EMAIL SENIOR_SECRET ADMIN_PASSWORD_HASH TURN_LISTEN_IP TURN_EXTERNAL_IP TURN_REALM TURN_SHARED_SECRET
-export DOMAIN=rosrouter.doomain.cn DEPLOY_ROOT
+unset DOMAIN
+export DEPLOY_ROOT
 export RELEASE_DIR="$DEPLOY_ROOT/releases/$RELEASE_ID"
 export CLOUD_IMAGE="senior-control-cloud:$RELEASE_ID"
 mkdir "$RELEASE_DIR"
@@ -31,16 +33,12 @@ if [[ "$enable_turn" == true ]]; then
   compose+=(--profile turn)
 fi
 "${compose[@]}" config --quiet
-if [[ "$enable_turn" == true ]]; then
-  "${compose[@]}" run --rm --no-deps --entrypoint /bin/sh coturn -ec \
-    'test -n "$TURN_LISTEN_IP" && test -n "$TURN_EXTERNAL_IP" && test -n "$TURN_REALM" && test -n "$TURN_SHARED_SECRET"' || { echo 'TURN settings are missing' >&2; exit 1; }
-fi
 docker build -f deploy/Dockerfile.cloud -t "$CLOUD_IMAGE" .
 "${compose[@]}" up -d --force-recreate --remove-orphans
 ok=false
 for attempt in {1..36}; do
-  api=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/robots" || true)
-  if [[ "$api" == 401 ]] && curl --fail --silent --show-error --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" | grep -qi '<!doctype html'; then ok=true; break; fi
+  api=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 --resolve "$domain:443:127.0.0.1" "https://$domain/api/robots" || true)
+  if [[ "$api" == 401 ]] && curl --fail --silent --show-error --max-time 5 --resolve "$domain:443:127.0.0.1" "https://$domain/" | grep -qi '<!doctype html'; then ok=true; break; fi
   sleep 5
 done
 if [[ "$ok" != true ]]; then

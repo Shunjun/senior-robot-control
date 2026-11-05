@@ -16,13 +16,16 @@ Compose 只运行一个云进程（其中包含中继与登录限流器）、Cad
 
 ## 准备和 TLS
 
-1. 将 `deploy/env.example` 复制为 `deploy/.env`，替换所有占位符。两个共享密钥分别生成
-   至少 32 字节随机值；管理员密码使用项目生成的 scrypt 哈希。缺少变量时 Compose 会直接失败。
+1. 将 `deploy/env.example` 复制为 `deploy/.env`，填写 `DOMAIN`、`ACME_EMAIL`、
+   `SENIOR_SECRET` 和 `ADMIN_PASSWORD_HASH`。保留单引号和哈希中的 `$`。
+   云端密钥至少 32 字节，管理员密码使用项目生成的 scrypt 哈希。
 2. 将云域名的 A/AAAA 记录指向云主机。Caddy 为 HTTPS 自动申请和续期证书。
-3. 为 TURN 域名准备证书，将 `fullchain.pem` 与 `privkey.pem` 只读放在
-   `deploy/secrets/turn/`。TURN 保持 REST 临时凭据方案，禁止配置长期用户名密码。
-4. 先运行 `docker compose -f deploy/compose.yaml config --quiet` 检查配置，再由运维人员
-   在变更窗口启动。构建镜像不会下载模型权重。
+3. 默认关闭 TURN。如需启用，设置 `ENABLE_TURN='true'`，填好模板中的四项 TURN 配置，
+   并将 TURN 域名的 `fullchain.pem` 与 `privkey.pem` 只读放在 `deploy/secrets/turn/`。
+   TURN 保持 REST 临时凭据方案，禁止配置长期用户名密码。
+4. 运行 `bash deploy/compose.sh config --quiet` 检查配置，再由运维人员在变更窗口运行
+   `bash deploy/compose.sh up -d --build`。脚本根据同一份配置启用 TURN profile。
+   构建镜像不会下载模型权重。
 
 公网防火墙仅开放 TCP 80/443/5349、UDP 3478/5349 和 UDP 49160–49200。不要开放 DDS
 端口。HTTP 80 仅用于 ACME 与跳转；业务经 TLS 443，TURN TLS 经 5349。
@@ -67,13 +70,10 @@ GitHub 可访问的 `https://<Jenkins 地址>/github-webhook/`（保留末尾斜
 
 1. 确保 Jenkins 部署目标机符合上述要求、有可用执行器，并设置
    `DEPLOY_ROOT`（默认 `/opt/senior-robot-control`）。
-2. 创建 Jenkins **Secret file** 凭据，内容至少包含 `ACME_EMAIL`、`SENIOR_SECRET` 与
-   `ADMIN_PASSWORD_HASH` 三行，使用 `deploy/jenkins.env.example` 中的格式；每个值必须完整
-   用单引号包裹，保留哈希中的 `$` 原样。仅允许该示例列出的变量，不允许重复项、
-   占位符或多行值。将凭据 ID 填入
-   `ENV_CREDENTIAL_ID`。不要将文件或密钥提交到仓库，且应限制任务及节点访问权限。
-3. 确认 Secret file 中的 `ACME_EMAIL` 是有效邮箱，并检查域名 DNS、端口和部署目录。执行任务将部署
-   当前检出的提交。
+2. 使用同一份 `deploy/env.example` 填写部署配置，并上传为 Jenkins **Secret file**。
+   将凭据 ID 填入 `ENV_CREDENTIAL_ID`。已有 Jenkins 凭据需补上 `DOMAIN`，并保留原有密钥和密码哈希。
+   不要将实际配置文件提交到仓库。
+3. 确认域名 DNS、端口和部署目录。执行任务将部署当前检出的提交。
 
 默认只启动 cloud 和 Caddy。如需 TURN，在 Secret file 中设置 `ENABLE_TURN='true'`，并另外设置 `TURN_LISTEN_IP`、`TURN_EXTERNAL_IP`、`TURN_REALM` 和 `TURN_SHARED_SECRET`，
 并将 TURN 证书放入部署目录下的 `turn/fullchain.pem` 和 `turn/privkey.pem`；按需

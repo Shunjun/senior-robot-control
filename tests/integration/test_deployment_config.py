@@ -28,8 +28,9 @@ def _doctor_module() -> ModuleType:
 def test_missing_secrets_fail_closed() -> None:
     assert COMPOSE.is_file(), "deploy/compose.yaml must require deployment secrets"
     text = COMPOSE.read_text(encoding="utf-8")
-    for secret in ("SENIOR_SECRET", "ADMIN_PASSWORD_HASH", "TURN_SHARED_SECRET"):
+    for secret in ("SENIOR_SECRET", "ADMIN_PASSWORD_HASH"):
         assert f"${{{secret}:?" in text
+    assert 'test -n "$${TURN_SHARED_SECRET}"' in text
 
 
 def test_deploy_never_exposes_dds() -> None:
@@ -49,12 +50,13 @@ def test_example_has_no_real_credentials() -> None:
     values = {
         key: value
         for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
-        if line and not line.startswith("#")
-        for key, value in [line.split("=", 1)]
+        for entry in [line.removeprefix("# ")]
+        if "=" in entry
+        for key, value in [entry.split("=", 1)]
     }
     sensitive = ("SENIOR_SECRET", "ADMIN_PASSWORD_HASH", "TURN_SHARED_SECRET")
     assert all(
-        values.get(key, "").startswith("<") and values[key].endswith(">") for key in sensitive
+        values.get(key, "").startswith("'<") and values[key].endswith(">'") for key in sensitive
     )
     assert not re.search(
         r"\b(?:10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)\b",
