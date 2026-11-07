@@ -527,6 +527,7 @@ describe("EmergencyStop", () => {
 
   it("is the only emergency stop in the app shell", async () => {
     const api: ControlApi = {
+      createPairingCode: async () => ({ code: "example", expires_in: 30 }),
       login: async () => undefined,
       logout: async () => undefined,
       listRobots: async (): Promise<RobotSummary[]> => [
@@ -590,6 +591,7 @@ describe("test_landscape_controls_accessible", () => {
 
 describe("selected-robot route", () => {
   const api: ControlApi = {
+    createPairingCode: async () => ({ code: "example", expires_in: 30 }),
     login: async () => undefined,
     logout: async () => undefined,
     listRobots: async (): Promise<RobotSummary[]> => [

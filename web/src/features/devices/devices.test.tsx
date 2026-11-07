@@ -11,6 +11,7 @@ import {
   HttpControlApi,
   InvalidCredentialsError,
   RobotClient,
+  RateLimitedError,
   UnauthorizedError,
   type ControlApi,
   type RobotLink,
@@ -112,6 +113,7 @@ class FakeApi implements ControlApi {
   async logout(): Promise<void> {
     this.loggedOut += 1;
   }
+  async createPairingCode() { return { code: "example", expires_in: 30 }; }
   async listRobots(): Promise<RobotSummary[]> {
     if (this.failure !== null) throw this.failure;
     return this.robots;
@@ -1053,4 +1055,155 @@ it("does not repaint a current robot with an older agent epoch after an offline 
   } finally {
     client.disconnect();
   }
+});
+
+
+describe("device pairing", () => {
+  it("posts a pairing code request with the authenticated session and CSRF", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf_token: "csrf" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "pair-once", expires_in: 30 }), { status: 201 }));
+    const api = new HttpControlApi(fetchImpl, null);
+    await api.login("password");
+    await expect(api.createPairingCode()).resolves.toEqual({ code: "pair-once", expires_in: 30 });
+    expect(fetchImpl).toHaveBeenLastCalledWith("/api/pairing-codes", expect.objectContaining({
+      method: "POST", credentials: "same-origin", headers: { "X-CSRF-Token": "csrf" },
+    }));
+  });
+
+  it.each([401, 403, 429, 201])("handles HTTP %i without accepting invalid data", async (status) => {
+    const api = new HttpControlApi(vi.fn().mockResolvedValue(new Response(
+      status === 201 ? JSON.stringify({ code: "example", expires_in: 0.5 }) : "",
+      { status, headers: { "Retry-After": "12" } },
+    )), null);
+    const result = api.createPairingCode();
+    if (status === 401) await expect(result).rejects.toBeInstanceOf(UnauthorizedError);
+    else if (status === 429) await expect(result).rejects.toMatchObject({ name: "RateLimitedError", retryAfterSeconds: 12 });
+    else await expect(result).rejects.toMatchObject({ name: "ApiError", status });
+  });
+
+  it("keeps a new login's CSRF token when an older list refresh answers 401", async () => {
+    let resolveRefresh!: (response: Response) => void;
+    const staleRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf_token: "old-csrf" })))
+      .mockReturnValueOnce(staleRefresh)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf_token: "new-csrf" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "pair-once", expires_in: 30 }), { status: 201 }));
+    const api = new HttpControlApi(fetchImpl, null);
+    await api.login("password");
+    const outdated = api.listRobots();
+    await api.login("password");
+    resolveRefresh(new Response("", { status: 401 }));
+    await expect(outdated).rejects.toBeInstanceOf(UnauthorizedError);
+    await api.createPairingCode();
+    expect(fetchImpl).toHaveBeenLastCalledWith("/api/pairing-codes", expect.objectContaining({
+      headers: { "X-CSRF-Token": "new-csrf" },
+    }));
+  });
+
+  it("offers pairing on an empty list and ignores repeated and closed requests", async () => {
+    const api = new FakeApi();
+    api.robots = [];
+    let finish!: (value: { code: string; expires_in: number }) => void;
+    const createPairingCode = vi.fn(() => new Promise<{ code: string; expires_in: number }>((resolve) => { finish = resolve; }));
+    mount("/robots", Object.assign(api, { createPairingCode }), new FakeLink());
+    await screen.findByText("尚未配对任何设备");
+    fireEvent.click(screen.getByRole("button", { name: "添加设备" }));
+    const generate = screen.getByRole("button", { name: "生成配对码" });
+    fireEvent.click(generate);
+    fireEvent.click(generate);
+    expect(createPairingCode).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "关闭配对" }));
+    await act(async () => finish({ code: "hidden-code", expires_in: 30 }));
+    fireEvent.click(screen.getByRole("button", { name: "添加设备" }));
+    expect(screen.queryByText("hidden-code")).toBeNull();
+  });
+
+  it("clears expired and logged-out codes", async () => {
+    const createPairingCode = vi.fn().mockResolvedValueOnce({ code: "first-code", expires_in: 1 })
+      .mockResolvedValueOnce({ code: "second-code", expires_in: 60 });
+    mount("/robots", Object.assign(new FakeApi(), { createPairingCode }), new FakeLink());
+    fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
+    vi.useFakeTimers();
+    try {
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "生成配对码" })));
+      expect(screen.getByText("first-code")).toBeTruthy();
+      const command = screen.getByText(/python -m senior_control.agent.main --pair/).textContent;
+      expect(command).toBe(
+        `python -m senior_control.agent.main --pair --cloud-url 'wss://${window.location.host}/ws/agent' --device-name '巡检车' --credentials-file "$PWD/device-credentials.json"`,
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(screen.queryByText("first-code")).toBeNull();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "重新生成配对码" })));
+      expect(screen.getByText("second-code")).toBeTruthy();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "退出登录" })));
+      expect(screen.queryByText("second-code")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the code while logout is pending and submits logout only once", async () => {
+    const createPairingCode = vi.fn().mockResolvedValue({ code: "pending-code", expires_in: 30 });
+    let finishLogout!: () => void;
+    const logout = vi.fn(() => new Promise<void>((resolve) => { finishLogout = resolve; }));
+    mount("/robots", Object.assign(new FakeApi(), { createPairingCode, logout }), new FakeLink());
+    fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
+    await screen.findByText("pending-code");
+    const button = screen.getByRole("button", { name: "退出登录" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("pending-code")).toBeNull();
+    await act(async () => finishLogout());
+    expect(await screen.findByLabelText(/密码/)).toBeTruthy();
+  });
+
+  it("clears a pairing code on return from a suspended page", async () => {
+    const createPairingCode = vi.fn().mockResolvedValue({ code: "sleep-code", expires_in: 30 });
+    mount("/robots", Object.assign(new FakeApi(), { createPairingCode }), new FakeLink());
+    fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
+    vi.useFakeTimers();
+    try {
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "生成配对码" })));
+      expect(screen.getByText("sleep-code")).toBeTruthy();
+      vi.setSystemTime(Date.now() + 31_000);
+      fireEvent(document, new Event("visibilitychange"));
+      expect(screen.queryByText("sleep-code")).toBeNull();
+      expect(screen.getByRole("button", { name: "重新生成配对码" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows retry after a rate limit and redirects on expired auth", async () => {
+    const createPairingCode = vi.fn().mockRejectedValueOnce(new RateLimitedError("limited", 12))
+      .mockRejectedValueOnce(new UnauthorizedError("login required"));
+    mount("/robots", Object.assign(new FakeApi(), { createPairingCode }), new FakeLink());
+    fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
+    expect(await screen.findByText(/12 秒/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
+    expect(await screen.findByLabelText(/密码/)).toBeTruthy();
+  });
+
+  it("offers reauthentication when the session cookie is present but CSRF is unavailable", async () => {
+    const createPairingCode = vi.fn().mockRejectedValue(new ApiError("csrf token required", 403));
+    const api = Object.assign(new FakeApi(), { createPairingCode });
+    mount("/robots", api, new FakeLink());
+    fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新登录" }));
+    expect(await screen.findByLabelText(/密码/)).toBeTruthy();
+    expect(api.loggedOut).toBe(0);
+  });
+
+  it("hides real pairing in demo mode", async () => {
+    const demo = createDemoBackend();
+    mount("/robots", demo.api, demo.link, true);
+    await screen.findByText("演示 · 仓库车 A");
+    expect(screen.queryByRole("button", { name: "添加设备" })).toBeNull();
+  });
 });

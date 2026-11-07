@@ -1,5 +1,7 @@
 # 自托管部署
 
+FRP、Nginx、Caddy 与证书续期的实际排障记录见[部署复盘与排障手册](deployment-retrospective.md)。
+
 ## 地址与边界
 
 - **云主机地址**：公网 DNS 指向运行 Compose 的云主机。浏览器和机器人都使用

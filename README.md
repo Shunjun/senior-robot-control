@@ -145,7 +145,7 @@ ros2 run senior_robot localization_node
 
 ### 云端与车端代理
 
-云端认证、配对、多车中转和车端代理已有实现。先配置 HTTPS 云服务、管理员密码、允许的 Origin 和 TURN；生产网络与硬件参数仍需现场核对。管理员登录后，以返回的 CSRF token 和会话 cookie 调用 `POST /api/pairing-codes`，在车端用一次性配对码兑换身份：
+云端认证、配对、多车中转和车端代理已有实现。先配置 HTTPS 云服务、管理员密码和允许的 Origin，按 WebRTC 网络环境选择 TURN。管理员登录后，在设备列表选择「添加设备」并生成一次性配对码。随后在车端用这个配对码兑换身份：
 
 ```sh
 python -m senior_control.agent.main --pair \
@@ -170,6 +170,8 @@ python -m senior_control.agent.main --credentials-file /etc/senior-control/devic
 验收范围、Linux 复现命令和故障注入入口见 `docs/testing/matrix.md`，本次结果见 `docs/testing/results.md`。`pytest --simulation-profile` 使用临时数据库、互异保留端口和固定 seed。Linux、Gazebo 和浏览器检查在不具备对应环境时保持“未执行”，不能写成通过。实车验收使用 `docs/testing/real-robot-checklist.md`，所有项目默认未勾选。
 
 ## 任务路线图
+
+当前待办以 [2026-11-07 剩余工作清单](docs/testing/2026-11-07-remaining-work.md) 为准。网页配对单独跟踪为 [Task 22](docs/superpowers/plans/2026-11-07-web-device-pairing.md)。下表保留原计划的模块范围和历史状态。
 
 状态按代码和复审记录。Linux 运行栏只把已经在 Ubuntu 上执行并通过的检查标成已验证。
 
@@ -197,4 +199,4 @@ python -m senior_control.agent.main --credentials-file /etc/senior-control/devic
 | 20 | 自托管部署与硬件检查 | 已完成 | systemd 未启用 |
 | 21 | Linux 全链路仿真验收 | 验收资产已添加 | Linux、Gazebo 与浏览器未执行 |
 
-阶段一至阶段四的代码和复审已经完成。阶段退出条件写在实施计划对应章节。下面这些 Linux 检查还没有执行，不能记成通过：`safety_node` 进程、整条 ROS 速度链、Nav2 launch 与 lattice、`slam_toolbox`、返航的 ROS 结果等待、`tests/ros/test_relocalization.py` 和任务 21 端到端套件。任务 5 的 ROS 测试在第一次上 Linux 前，还要先补上订阅发现完成后再发命令的等待；当前测试可能在发现完成前丢消息。
+阶段一至阶段四已有分模块实现和历史复审记录。阶段退出条件写在实施计划对应章节。下面这些 Linux 检查还没有执行，不能记成通过：`safety_node` 进程、整条 ROS 速度链、Nav2 launch 与 lattice、`slam_toolbox`、返航的 ROS 结果等待、`tests/ros/test_relocalization.py` 和任务 21 端到端套件。任务 5 的 ROS 测试在第一次上 Linux 前，还要先补上订阅发现完成后再发命令的等待；当前测试可能在发现完成前丢消息。

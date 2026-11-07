@@ -84,10 +84,16 @@ export function describeCommandError(code: ErrorCode): string {
 
 // ---------------------------------------------------------------- HTTP
 
+export interface PairingCode {
+  code: string;
+  expires_in: number;
+}
+
 export interface ControlApi {
   login(password: string): Promise<void>;
   logout(): Promise<void>;
   listRobots(): Promise<RobotSummary[]>;
+  createPairingCode(signal?: AbortSignal): Promise<PairingCode>;
 }
 
 const CSRF_HEADER = "X-CSRF-Token";
@@ -181,13 +187,50 @@ export class HttpControlApi implements ControlApi {
   }
 
   async listRobots(): Promise<RobotSummary[]> {
+    const csrf = this.csrf;
     const response = await this.fetchImpl("/api/robots", { credentials: "same-origin" });
     if (response.status === 401) {
-      this.setCsrf(null);
+      if (this.csrf === csrf) this.setCsrf(null);
       throw new UnauthorizedError("login required");
     }
     if (!response.ok) throw new ApiError(await detail(response), response.status);
     return parseRobots(await response.json());
+  }
+
+  async createPairingCode(signal?: AbortSignal): Promise<PairingCode> {
+    const csrf = this.csrf;
+    const response = await this.fetchImpl("/api/pairing-codes", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: csrf === null ? {} : { [CSRF_HEADER]: csrf },
+      signal: signal ?? null,
+    });
+    if (response.status === 401) {
+      if (!signal?.aborted && this.csrf === csrf) this.setCsrf(null);
+      throw new UnauthorizedError("login required");
+    }
+    if (response.status === 429) {
+      const wait = Number(response.headers.get("Retry-After"));
+      throw new RateLimitedError("too many pairing codes", Number.isFinite(wait) && wait > 0 ? wait : null);
+    }
+    if (!response.ok) throw new ApiError("pairing request failed", response.status);
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new ApiError("unexpected pairing response", response.status);
+    }
+    const item = body as Partial<PairingCode> | null;
+    if (
+      item === null || typeof item !== "object" ||
+      typeof item.code !== "string" || item.code.trim() === "" ||
+      typeof item.expires_in !== "number" || !Number.isSafeInteger(item.expires_in) ||
+      item.expires_in <= 0
+    ) {
+      throw new ApiError("unexpected pairing response", response.status);
+    }
+    return { code: item.code, expires_in: item.expires_in };
   }
 
   private setCsrf(value: string | null): void {
