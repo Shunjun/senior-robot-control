@@ -2,6 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 import { NavLink } from "react-router-dom";
 
 import type { RobotSummary } from "../../api/protocol";
+import { PairingPanel, type PairingPanelProps } from "./PairingPanel";
 import styles from "./Devices.module.css";
 
 export interface RobotListState {
@@ -15,6 +16,7 @@ export interface DeviceListProps {
   list: RobotListState;
   selectedId: string | null;
   onRefresh: () => void;
+  pairing: PairingPanelProps | null;
 }
 
 function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean }): ReactElement {
@@ -28,7 +30,7 @@ function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean })
   );
 }
 
-export function DeviceList({ list, selectedId, onRefresh }: DeviceListProps): ReactElement {
+export function DeviceList({ list, selectedId, onRefresh, pairing }: DeviceListProps): ReactElement {
   const empty = list.status === "ready" && !list.failed && list.robots.length === 0;
   return (
     <nav className={styles.deviceList} aria-label="设备列表">
@@ -40,6 +42,7 @@ export function DeviceList({ list, selectedId, onRefresh }: DeviceListProps): Re
           刷新设备
         </button>
       </div>
+      {pairing !== null && <PairingPanel {...pairing} />}
       {list.failed && (
         <p className={styles.failure} role="alert">
           设备列表加载失败，显示的是上一次的列表，在线状态未经核实。

@@ -5,6 +5,7 @@ import styles from "./App.module.css";
 import { UnauthorizedError, type ControlApi, type RobotLink } from "./api/client";
 import type { RobotSummary } from "./api/protocol";
 import { DeviceList, type RobotListState } from "./features/devices/DeviceList";
+import type { PairingPanelProps } from "./features/devices/PairingPanel";
 import { Login } from "./features/devices/Login";
 import { RobotPanel } from "./features/devices/RobotPanel";
 
@@ -34,10 +35,12 @@ interface ShellProps {
   onRefresh: () => void;
   onLinkLost: () => void;
   onLogout: () => void;
+  loggingOut: boolean;
   notice: string | null;
+  pairing: PairingPanelProps | null;
 }
 
-function Shell({ list, link, onRefresh, onLinkLost, onLogout, notice }: ShellProps): ReactElement {
+function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice, pairing }: ShellProps): ReactElement {
   const { robotId } = useParams();
   const selected: RobotSummary | undefined = list.robots.find((robot) => robot.id === robotId);
 
@@ -75,7 +78,7 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, notice }: ShellPro
           <span className={styles.brandName}>车辆控制台</span>
           <span className={styles.brandTag}>SENIOR · CTRL</span>
         </div>
-        <button type="button" className={styles.logout} onClick={onLogout}>
+        <button type="button" className={styles.logout} disabled={loggingOut} onClick={onLogout}>
           退出登录
         </button>
       </header>
@@ -85,7 +88,7 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, notice }: ShellPro
         </p>
       )}
       <aside className={styles.side}>
-        <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} />
+        <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} pairing={pairing} />
       </aside>
       <main className={styles.main}>{main}</main>
     </div>
@@ -95,12 +98,15 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, notice }: ShellPro
 export function App({ api, link, demo = false }: AppProps): ReactElement {
   const [auth, setAuth] = useState<Auth>("checking");
   const [list, setList] = useState<RobotListState>({ status: "loading", robots: [], failed: false });
+  const [loggingOut, setLoggingOut] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const latestLoad = useRef(0);
+  const logoutActive = useRef(false);
   const location = useLocation();
 
   /** Every call that can learn the session is gone goes through here: a 401 means login. */
   const refresh = useCallback(async (): Promise<void> => {
+    if (logoutActive.current) return;
     const ticket = ++latestLoad.current;
     try {
       const robots = await api.listRobots();
@@ -129,7 +135,17 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
     return () => clearInterval(timer);
   }, [auth, refresh]);
 
+  const expireSession = useCallback(() => {
+    latestLoad.current += 1;
+    setList({ status: "loading", robots: [], failed: false });
+    setAuth("out");
+  }, []);
+
   const logout = useCallback(async () => {
+    if (logoutActive.current) return;
+    logoutActive.current = true;
+    latestLoad.current += 1;
+    setLoggingOut(true);
     try {
       await api.logout();
     } catch (error) {
@@ -138,12 +154,13 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
         setNotice("退出登录失败，会话仍然有效。请重试。");
         return;
       }
+    } finally {
+      logoutActive.current = false;
+      setLoggingOut(false);
     }
     setNotice(null);
-    latestLoad.current += 1;
-    setList({ status: "loading", robots: [], failed: false });
-    setAuth("out");
-  }, [api]);
+    expireSession();
+  }, [api, expireSession]);
 
   const from = (location.state as { from?: unknown } | null)?.from;
   const returnTo = typeof from === "string" && from.startsWith("/robots") ? from : "/robots";
@@ -162,7 +179,12 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
       onRefresh={() => void refresh()}
       onLinkLost={() => void refresh()}
       onLogout={() => void logout()}
+      loggingOut={loggingOut}
       notice={notice}
+      pairing={demo || loggingOut ? null : {
+        createCode: (signal) => api.createPairingCode(signal),
+        onReauthenticate: expireSession,
+      }}
     />
   );
 

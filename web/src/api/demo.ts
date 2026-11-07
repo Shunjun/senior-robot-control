@@ -1,4 +1,4 @@
-import { CommandError, type ControlApi, type RobotLink } from "./client";
+import { ApiError, CommandError, type ControlApi, type PairingCode, type RobotLink } from "./client";
 import type { LinkStatus, RobotSnapshot, RobotSummary } from "./protocol";
 
 // Demo data for looking at the console without a cloud or a robot. Every name carries the demo
@@ -30,6 +30,9 @@ function demoSnapshot(robot: RobotSummary): RobotSnapshot {
 class DemoApi implements ControlApi {
   async login(): Promise<void> {}
   async logout(): Promise<void> {}
+  async createPairingCode(): Promise<PairingCode> {
+    throw new ApiError("演示模式无法配对", 403);
+  }
   async listRobots(): Promise<RobotSummary[]> {
     return DEMO_ROBOTS.map((robot) => ({ ...robot }));
   }
