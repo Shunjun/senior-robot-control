@@ -243,3 +243,48 @@ def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
     finally:
         probe.destroy_node()
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize("end", ["succeeded", "failed", "map_changed", "canceled"])
+async def test_qualified_route_runs_in_order(end):
+    import asyncio
+
+    from senior_control.models import MapRef, Pose2D
+    from senior_control.tasks.route import QualifiedRoute
+
+    goals = []
+    generation = "map-a"
+    arrived = asyncio.Event()
+    release = asyncio.Event()
+
+    async def navigate(pose):
+        goals.append(pose.x)
+        if pose.x == 2:
+            arrived.set()
+            await release.wait()
+        return end != "failed" or pose.x != 2
+
+    route = QualifiedRoute(navigate, lambda ref, nonce: nonce == generation)
+    run = asyncio.create_task(
+        route.run(
+            MapRef("map", 1),
+            "map-a",
+            (
+                Pose2D(1, 0, 0),
+                Pose2D(2, 0, 0),
+                Pose2D(3, 0, 0),
+            ),
+        )
+    )
+    await asyncio.wait_for(arrived.wait(), 1)
+    if end == "map_changed":
+        generation = "map-b"
+    elif end == "canceled":
+        run.cancel()
+    release.set()
+    if end == "canceled":
+        with pytest.raises(asyncio.CancelledError):
+            await run
+    else:
+        assert await run is (end == "succeeded")
+    assert goals == ([1, 2, 3] if end == "succeeded" else [1, 2])
