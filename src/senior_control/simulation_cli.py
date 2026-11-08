@@ -118,7 +118,7 @@ async def _probe(profile: VehicleProfile) -> bool:
         return False
 
 
-def _validate(profile: VehicleProfile) -> None:
+def validate_simulation_profile(profile: VehicleProfile) -> None:
     root = profile.credentials.parent
     info = root.stat()
     paths = (profile.credentials, profile.database, profile.socket, profile.estop_state)
@@ -281,7 +281,7 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
 def main(path: Path) -> int:
     try:
         profile = VehicleProfile.model_validate_json(path.read_bytes())
-        _validate(profile)
+        validate_simulation_profile(profile)
         credentials = read_credentials(profile.credentials)
         assert profile.estop_state is not None and profile.socket is not None
         from contextlib import ExitStack

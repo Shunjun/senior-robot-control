@@ -69,6 +69,14 @@ def _doctor(profile: VehicleProfile) -> int:
     ):
         problems.append("IPC: provide a short absolute socket path in an existing directory.")
     if profile.kind == "simulation":
+        from senior_control.simulation_cli import validate_simulation_profile
+
+        try:
+            validate_simulation_profile(profile)
+        except (OSError, ValueError):
+            problems.append(
+                "Simulation: check private paths, TLS, emergency stop file and ROS domain."
+            )
         if not (shutil.which("gz") or shutil.which("ign")):
             problems.append("Gazebo: source the simulator environment and run doctor again.")
         if shutil.which("xvfb-run") is None:
