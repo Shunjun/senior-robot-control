@@ -10,6 +10,10 @@ export interface HomeControlsProps {
   link: RobotLink;
   homeMapAvailable?: boolean;
   navigationUnavailable?: string;
+  directNavigation?: {
+    onReturnHome: () => void;
+    pending: boolean;
+  };
 }
 
 type Outcome = { kind: "ok"; text: string } | { kind: "error"; text: string };
@@ -56,7 +60,7 @@ function navigationBlocks(snapshot: RobotSnapshot | null): string[] {
   return reasons;
 }
 
-export function HomeControls({ snapshot, link, homeMapAvailable = true, navigationUnavailable }: HomeControlsProps): ReactElement {
+export function HomeControls({ snapshot, link, homeMapAvailable = true, navigationUnavailable, directNavigation }: HomeControlsProps): ReactElement {
   const [pending, setPending] = useState<ActionName | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
@@ -136,22 +140,30 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
       )}
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.primary}
-          disabled={!canNavigate || pending === "start"}
-          onClick={() => void run("start", "navigation.start", {})}
-        >
-          开始导航
-        </button>
-        <button
-          type="button"
-          className={styles.tool}
-          disabled={!canNavigate || pending === "resume"}
-          onClick={() => void run("resume", "navigation.resume", {})}
-        >
-          继续导航
-        </button>
+        {directNavigation === undefined ? (
+          <>
+            <button
+              type="button"
+              className={styles.primary}
+              disabled={!canNavigate || pending === "start"}
+              onClick={() => void run("start", "navigation.start", {})}
+            >
+              开始导航
+            </button>
+            <button
+              type="button"
+              className={styles.tool}
+              disabled={!canNavigate || pending === "resume"}
+              onClick={() => void run("resume", "navigation.resume", {})}
+            >
+              继续导航
+            </button>
+          </>
+        ) : (
+          <button type="button" className={styles.primary}
+            disabled={!canNavigate || directNavigation.pending}
+            onClick={directNavigation.onReturnHome}>返航</button>
+        )}
         <button
           type="button"
           className={styles.tool}
@@ -187,7 +199,9 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
         )}
       </div>
       {homeWaiting && <p className={styles.quiet}>该 Home 正在等待确认，控制台不会发送替换指令。</p>}
-      {live && !canSetHome && <p className={styles.quiet}>设置 Home 需要车辆已定位并具有实时地图。</p>}
+      {live && !canSetHome && <p className={styles.quiet}>
+        {homeMapAvailable ? "设置 Home 需要车辆已定位并具有实时地图。" : "车端未开放当前地图的 Home 写入。"}
+      </p>}
 
       {outcome?.kind === "error" && (
         <p className={styles.failure} role="alert">

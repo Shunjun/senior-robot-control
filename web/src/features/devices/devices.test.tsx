@@ -1330,3 +1330,39 @@ it("test_latency_ignores_old_or_unapplied_ack", async () => {
     client.disconnect();
   }
 });
+
+it("sends an eligible goal and return with the current map fence", async () => {
+  const link = new FakeLink();
+  const base = snapshot("robot-alpha");
+  const current = { ...base, home: { waypoint_id: "home", status: "confirmed", map_ref: base.map_ref! } };
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "live-grid" };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, navigation_ready: true, waypoint_writes: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
+  await screen.findByText(/车端已受理目标/);
+  fireEvent.click(screen.getByRole("button", { name: "返航" }));
+  await screen.findByText(/车端已受理返航/);
+  expect(link.requests).toEqual(expect.arrayContaining([
+    { type: "navigation.goal", payload: expect.objectContaining({
+      body: { ...current.map_ref, grid_id: "live-grid", x: 0.5, y: 0.5, yaw: 0 },
+    }) },
+    { type: "navigation.return_home", payload: expect.objectContaining({
+      body: { ...current.map_ref, grid_id: "live-grid" },
+    }) },
+  ]));
+});

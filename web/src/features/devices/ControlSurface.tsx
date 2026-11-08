@@ -1,7 +1,7 @@
-import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-import type { RobotLink } from "../../api/client";
-import type { RobotSnapshot } from "../../api/protocol";
+import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
+import type { ResponsePayload, RobotSnapshot } from "../../api/protocol";
 import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
@@ -36,11 +36,7 @@ function describePose(pose: Pose | null): string {
   return `X ${pose.x.toFixed(2)} m, Y ${pose.y.toFixed(2)} m, 朝向 ${((pose.yaw * 180) / Math.PI).toFixed(1)}°`;
 }
 
-/**
- * Drive and map controls of the selected robot, on the snapshot and link the panel already has.
- * No protocol message carries a goal or a relocalization hint, so the picker's output is kept
- * on screen and never sent.
- */
+/** Drive and map controls for the selected vehicle and its current map reference. */
 export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
@@ -48,16 +44,16 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const [navigationView, setNavigationView] = useState<PrimaryView>("map");
   const view = mode === "manual" ? manualView : mode === "navigation" ? navigationView : "map";
   const setView = mode === "manual" ? setManualView : setNavigationView;
-  const refKey = JSON.stringify(snapshot.map_ref);
+  const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites, navigationReady } =
+    useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
+  const refKey = JSON.stringify([snapshot.map_ref, gridId]);
   const [selection, setSelection] = useState<{ refKey: string; pose: Pose | null }>({ refKey, pose: null });
   const [feedback, setFeedback] = useState<{ refKey: string; note: string } | null>(null);
   useLayoutEffect(() => {
     setSelection({ refKey, pose: null });
-    setFeedback(null);
   }, [refKey]);
   const draft = selection.refKey === refKey ? selection.pose : null;
   const note = feedback?.refKey === refKey ? feedback.note : null;
-  const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites } = useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
   const workspace = occupancy !== undefined && gridId !== undefined && waypoints !== undefined
     ? { map: occupancy, grid_id: gridId, waypoints, waypointWrites: waypointWrites === true }
     : undefined;
@@ -82,12 +78,51 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const pickMap = activeMap ? map : { ...map, map_ref: null };
 
+  const directNavigation = activeMap && navigationReady === true;
+  const [navigationBusy, setNavigationBusy] = useState(false);
+  const navigationScope = useRef(0);
+  useLayoutEffect(() => {
+    navigationScope.current += 1;
+    setNavigationBusy(false);
+    setFeedback(null);
+    return () => { navigationScope.current += 1; };
+  }, [robotId, link, refKey, gridId, directNavigation, snapshot.connected, snapshot.stale, mode]);
+
+  async function runNavigation(action: "goal" | "return_home", pose?: Pose): Promise<void> {
+    if (!directNavigation || gridId === undefined || !snapshot.localized || snapshot.map_ref === null || navigationBusy) return;
+    const scope = navigationScope.current;
+    const label = action === "goal" ? "目标" : "返航";
+    setNavigationBusy(true);
+    setFeedback({ refKey, note: `等待车端确认${label}…` });
+    try {
+      const response = await link.request<ResponsePayload>(`navigation.${action}`, {
+        operation_id: crypto.randomUUID(),
+        body: { ...snapshot.map_ref, grid_id: gridId, ...pose },
+      });
+      if (scope === navigationScope.current) {
+        setFeedback({ refKey, note: response.ok ? `车端已受理${label}。` : `车端未确认${label}。` });
+      }
+    } catch (error) {
+      if (scope === navigationScope.current) {
+        const reason = error instanceof CommandError ? describeCommandError(error.code) : "无法发送";
+        setFeedback({ refKey, note: `${label}未确认：${reason}。` });
+      }
+    } finally {
+      if (scope === navigationScope.current) setNavigationBusy(false);
+    }
+  }
+
   function onGoal(goal: MapGoal): void {
-    setFeedback({ refKey, note: `目标已设定（${describePose(goal.pose)}），未发送：协议还没有目标指令。` });
+    if (directNavigation) {
+      void runNavigation("goal", goal.pose);
+    } else {
+      //Compatible: older vehicles only support a local goal preview.
+      setFeedback({ refKey, note: `目标已设定（${describePose(goal.pose)}），未发送：车端未开放目标指令。` });
+    }
   }
 
   function onHint(hint: PoseHint): void {
-    setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：协议还没有定位提示指令。` });
+    setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：车端未开放定位提示指令。` });
   }
 
   return (
@@ -140,17 +175,25 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
           {mode === "navigation" && (
             <>
               <HomeControls
+                key={`home:${refKey}`}
                 snapshot={snapshot}
                 link={link}
                 homeMapAvailable={activeMap && waypointWrites === true}
-                navigationUnavailable="车端未报告已验证的导航能力，无法开始、继续或返航。"
+                {...(directNavigation
+                  ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy } }
+                  : { navigationUnavailable: "车端未报告已验证的导航能力，无法开始、继续或返航。" })}
               />
-              <p className={styles.quiet}>目标与定位提示为本地预览，车端尚不接收。</p>
+              <p className={styles.quiet}>
+                {directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
+                  : "目标与定位提示为本地预览，车端尚不接收。"}
+              </p>
               <PosePicker
+                key={`pose:${refKey}`}
                 snapshot={snapshot}
                 map={pickMap}
                 draft={activeMap ? draft : null}
                 onDraftChange={setDraft}
+                pending={navigationBusy}
                 onGoal={onGoal}
                 onHint={onHint}
               />

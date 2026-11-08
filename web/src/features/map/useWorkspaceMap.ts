@@ -10,6 +10,7 @@ interface MapResult {
   gridId?: string;
   displayOnly?: boolean;
   waypointWrites?: boolean;
+  navigationReady?: boolean;
   waypoints?: WorkspaceWaypoint[];
   message?: string;
 }
@@ -86,11 +87,12 @@ export function useWorkspaceMap(link: RobotLink, snapshot: RobotSnapshot, { enab
           return;
         }
         const waypointWrites = "waypoint_writes" in manifest && manifest.waypoint_writes === true;
-        publish({ map, gridId, waypointWrites });
+        const navigationReady = "navigation_ready" in manifest && manifest.navigation_ready === true;
+        publish({ map, gridId, waypointWrites, navigationReady });
         if (!catalog) return;
 
         const waypoints = await listCurrentWaypoints(link, robotId, mapRef, gridId, reads.signal);
-        publish({ map, gridId, waypointWrites, waypoints });
+        publish({ map, gridId, waypointWrites, navigationReady, waypoints });
       } catch {
         if (map === undefined) publish({ message: "地图不可用 · 车端未提供当前引用的栅格" });
         else publish({ map, message: "航点目录不可用 · 请重新打开任务场景" });
