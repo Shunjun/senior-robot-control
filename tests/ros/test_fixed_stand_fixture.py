@@ -36,7 +36,7 @@ def _normalized(element):
 
 
 def test_fixed_stand_preserves_the_qualified_world_and_has_no_fake_sensor_or_tf():
-    base = ET.parse(ROOT / "tests/ros/motion_qualification.sdf").getroot()
+    base = ET.parse(ROOT / "ros2/src/senior_sim/worlds/motion_qualification.sdf").getroot()
     fixed = ET.parse(ROOT / "tests/ros/motion_fixed_stand.sdf").getroot()
     world = fixed.find("world")
     assert world is not None

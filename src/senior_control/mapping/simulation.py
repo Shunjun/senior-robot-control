@@ -9,6 +9,7 @@ from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
 
 _BASELINE_HASH = "528523ece69d7eaf1eeb2d9fd2930a024ac56a151f62ffa939bd63c338db1c44"
+_QUALIFICATION_HASH = "dc9869da0f8328cfac25cae53e18e7cb5ccb56b317f3da840f07e0f572569759"
 _RESOLUTION = 0.05
 _SIDE = 160
 _ORIGIN = Pose2D(-4.0, -4.0, 0.0)
@@ -19,24 +20,27 @@ def baseline_grid(path: Path, generation: str) -> WorkspaceGrid:
     with path.open("rb") as stream:
         data = stream.read(65_537)
     digest = hashlib.sha256(data).hexdigest()
-    if digest != _BASELINE_HASH:
+    if digest not in {_BASELINE_HASH, _QUALIFICATION_HASH}:
         raise ValueError("unsupported Gazebo baseline world")
     world = ET.fromstring(data)
-    model = world.find(".//model[@name='test_obstacle']")
-    assert model is not None
-    x, y, *_ = map(float, (model.findtext("pose") or "").split())
-    width, height, _ = map(
-        float, (model.findtext("link/collision/geometry/box/size") or "").split()
-    )
     cells = bytearray(_SIDE**2)
-    for row in range(_SIDE):
-        lo_y = _ORIGIN.y + row * _RESOLUTION
-        if lo_y + _RESOLUTION <= y - height / 2 or lo_y >= y + height / 2:
+    for model in world.findall(".//model"):
+        collision = model.findtext("link/collision/geometry/box/size")
+        if collision is None:
             continue
-        for column in range(_SIDE):
-            lo_x = _ORIGIN.x + column * _RESOLUTION
-            if lo_x + _RESOLUTION > x - width / 2 and lo_x < x + width / 2:
-                cells[row * _SIDE + column] = 100
+        x, y, _, _, _, yaw = map(float, (model.findtext("pose") or "").split())
+        width, height, _ = map(float, collision.split())
+        # Cover every occupied cell conservatively for the rotated feature.
+        c, s = abs(math.cos(yaw)), abs(math.sin(yaw))
+        extent_x, extent_y = (c * width + s * height) / 2, (s * width + c * height) / 2
+        for row in range(_SIDE):
+            lo_y = _ORIGIN.y + row * _RESOLUTION
+            if lo_y + _RESOLUTION <= y - extent_y or lo_y >= y + extent_y:
+                continue
+            for column in range(_SIDE):
+                lo_x = _ORIGIN.x + column * _RESOLUTION
+                if lo_x + _RESOLUTION > x - extent_x and lo_x < x + extent_x:
+                    cells[row * _SIDE + column] = 100
     return WorkspaceGrid(
         MapRef(f"sim-baseline-{digest[:24]}", 1),
         generation,

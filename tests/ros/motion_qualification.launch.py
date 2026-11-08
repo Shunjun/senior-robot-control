@@ -45,7 +45,11 @@ def generate_launch_description():
             DeclareLaunchArgument("fixed_stand", default_value="false"),
             DeclareLaunchArgument("safety_overlay", default_value=params),
             DeclareLaunchArgument(
-                "world", default_value=str(Path(__file__).with_name("motion_qualification.sdf"))
+                "world",
+                default_value=str(
+                    Path(__file__).resolve().parents[2]
+                    / "ros2/src/senior_sim/worlds/motion_qualification.sdf"
+                ),
             ),
             GroupAction(condition=UnlessCondition(relay), actions=[simulator()]),
             Node(

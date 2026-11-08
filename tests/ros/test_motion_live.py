@@ -142,7 +142,10 @@ class LiveRun:
                 f"safety_overlay:={Path(__file__).with_name('motion_fixed_stand_profile.yaml')}"
             )
         elif low_friction:
-            source_world = Path(__file__).with_name("motion_qualification.sdf")
+            source_world = (
+                Path(__file__).resolve().parents[2]
+                / "ros2/src/senior_sim/worlds/motion_qualification.sdf"
+            )
             model = ET.parse(source_world)
             ground = model.find("./world/model[@name='ground']/link/collision")
             assert ground is not None
