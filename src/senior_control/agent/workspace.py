@@ -16,7 +16,7 @@ from senior_control.mapping.workspace import (
 from senior_control.models import MapRef
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel, WorkspaceEnvelope
 from senior_control.runtime.ipc import IpcError
-from senior_control.tasks import TaskStore
+from senior_control.tasks import TaskDefinition, TaskStore
 from senior_control.waypoints.store import WaypointStore
 
 _PAGE_SIZE = 32
@@ -77,6 +77,33 @@ class WorkspaceReader:
         except (IpcError, OSError, ValidationError):
             return self._exported_grid.map_ref if self._exported_grid is not None else None
 
+    async def verify_task_edit(self, task: TaskDefinition, grid_id: str) -> None:
+        try:
+            ref = MapRefPayload(
+                map_id=task.map_ref.map_id, reference_revision=task.map_ref.reference_revision
+            )
+        except ValidationError as exc:
+            raise DomainError(ErrorCode.VALIDATION, "invalid workspace map reference") from exc
+        await self._require_grid(ref, grid_id)
+        for waypoint_id in dict.fromkeys(task.waypoint_ids):
+            point = await self._waypoints.waypoint(waypoint_id)
+            if point is not None and point.waypoint.kind == "home":
+                point = await self._waypoints.home()
+                if point is not None and (not point.adopted or point.link_status != "confirmed"):
+                    point = None
+            if (
+                point is None
+                or point.waypoint.id != waypoint_id
+                or point.waypoint.map_ref != task.map_ref
+                or point.waypoint.status != "confirmed"
+            ):
+                raise DomainError(ErrorCode.CONFLICT, "task contains an unavailable waypoint")
+        await self._require_grid(ref, grid_id)
+
+    async def _require_grid(self, ref: MapRefPayload, grid_id: str) -> None:
+        if (await self._manifest(ref)).grid_id != grid_id:
+            raise DomainError(ErrorCode.CONFLICT, "map changed during task editing")
+
     async def read(self, envelope: WorkspaceEnvelope) -> dict[str, Any]:
         if envelope.robot_id != self._robot_id:
             raise DomainError(ErrorCode.VALIDATION, "workspace belongs to another robot")
@@ -107,6 +134,7 @@ class WorkspaceReader:
             manifest = await self._manifest(ref, allow_export=True)
             return {**base, **manifest.model_dump(exclude={"v", "ok"}, exclude_defaults=True)}
         active = await self._manifest(ref)
+        data: dict[str, Any]
         if envelope.type == "task.get":
             assert payload.task_id is not None
             task = await self._tasks.get(payload.task_id)

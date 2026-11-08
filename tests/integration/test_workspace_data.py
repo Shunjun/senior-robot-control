@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from senior_control.agent.dispatcher import StoreTaskPort
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
@@ -209,3 +210,52 @@ async def test_relay_prioritizes_control_and_correlates_workspace_replies() -> N
     hub.handle_agent_frame(agent, serialize_envelope(answer))
     assert await viewer.outbox.get() == serialize_envelope(answer)
     assert other_viewer.outbox.pending == 0
+
+
+async def test_workspace_edit_requires_current_grid_and_saved_waypoint(tmp_path: Path) -> None:
+    pose = Pose2D(1, 2, 0)
+    grid = WorkspaceGrid(REF, "fresh", 1, 1, 0.1, pose, (0,))
+    async with Database(tmp_path / "robot.db") as database:
+        tasks = TaskStore(database, robot_id="r1")
+        points = WaypointStore(database, robot_id="r1")
+        await tasks.prepare()
+        await points.prepare()
+        reader = WorkspaceReader("r1", tasks, points, LoopbackMap(WorkspaceMap(lambda: grid)))
+        port = StoreTaskPort(tasks, robot_id="r1", verify_workspace=reader.verify_task_edit)
+        body = {
+            "task_id": "route",
+            "map_id": REF.map_id,
+            "reference_revision": REF.reference_revision,
+            "waypoint_ids": ["saved"],
+            "schedule": {"kind": "interval", "every_seconds": 120},
+            "timezone": "UTC",
+            "enabled": True,
+            "created_at": "2026-11-08T00:00:00+00:00",
+        }
+
+        with pytest.raises(DomainError) as old_grid:
+            await port.create({**body, "grid_id": "old"})
+        assert old_grid.value.code is ErrorCode.CONFLICT
+        with pytest.raises(DomainError) as missing_point:
+            await port.create({**body, "grid_id": "fresh"})
+        assert missing_point.value.code is ErrorCode.CONFLICT
+        assert await tasks.get("route") is None
+
+        await points.save_waypoint(
+            waypoint_id="saved",
+            pose=pose,
+            map_ref=REF,
+            anchor_id="anchor",
+            anchor_pose=pose,
+            source_robot_id="r1",
+            status="confirmed",
+            latitude=None,
+            longitude=None,
+        )
+        revision = await port.create({**body, "grid_id": "fresh"})
+        grid = replace(grid, grid_id="new")
+        with pytest.raises(DomainError) as stale_update:
+            await port.update({**body, "grid_id": "fresh", "enabled": False}, revision)
+        assert stale_update.value.code is ErrorCode.CONFLICT
+        # //Compatible: the original task edit body has no grid_id.
+        assert await port.update({**body, "enabled": False}, revision) == revision + 1

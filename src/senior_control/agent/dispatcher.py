@@ -295,16 +295,26 @@ def _map_ref(body: Mapping[str, Any]) -> MapRef:
 class StoreTaskPort:
     """Task edits through ``TaskStore``; the store keeps its own SQL and revision check."""
 
-    def __init__(self, store: TaskStore, *, robot_id: str) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        *,
+        robot_id: str,
+        verify_workspace: Callable[[TaskDefinition, str], Awaitable[None]] | None = None,
+    ) -> None:
         self._store = store
         self._robot_id = robot_id
+        self._verify_workspace = verify_workspace
 
     async def create(self, body: Mapping[str, Any]) -> int:
-        stored = await self._store.create(self._definition(body))
+        definition = self._definition(body)
+        await self._qualify_workspace(body, definition)
+        stored = await self._store.create(definition)
         return stored.revision
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
         definition = self._definition(body)
+        await self._qualify_workspace(body, definition)
         stored = await self._store.update(definition, expected_revision)
         return stored.revision
 
@@ -317,6 +327,21 @@ class StoreTaskPort:
             raise DomainError(ErrorCode.CONFLICT, "task does not exist")
         stored = await self._store.update(replace(current, enabled=enabled), expected_revision)
         return stored.revision
+
+    async def _qualify_workspace(
+        self, body: Mapping[str, Any], definition: TaskDefinition
+    ) -> None:
+        # //Compatible: older clients submit without a workspace raster id.
+        if "grid_id" not in body:
+            return
+        grid_id = body["grid_id"]
+        if not isinstance(grid_id, str) or not grid_id.strip() or len(grid_id) > 128:
+            raise DomainError(ErrorCode.VALIDATION, "invalid workspace grid id")
+        if any(not isinstance(point, str) for point in body["waypoint_ids"]):
+            raise DomainError(ErrorCode.VALIDATION, "invalid waypoint id")
+        if self._verify_workspace is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "workspace editing is unavailable")
+        await self._verify_workspace(definition, grid_id)
 
     def _definition(self, body: Mapping[str, Any]) -> TaskDefinition:
         try:

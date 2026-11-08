@@ -225,7 +225,9 @@ async def run_agent(config: AgentConfig) -> int:
             config.robot_id,
             connector=WebSocketConnector(config.cloud_url, config.device_token, config.robot_id),
             journal=journal,
-            tasks=StoreTaskPort(tasks, robot_id=config.robot_id),
+            tasks=StoreTaskPort(
+                tasks, robot_id=config.robot_id, verify_workspace=workspace.verify_task_edit
+            ),
             home=home,
             maps=IpcMapPort(map_client),
             state=SnapshotState(state, tasks, waypoints, display),

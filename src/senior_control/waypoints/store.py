@@ -162,7 +162,8 @@ class WaypointStore:
                        anchor_x, anchor_y, anchor_yaw
                 FROM waypoint
                 WHERE robot_id = ? AND map_id = ? AND reference_revision = ?
-                    AND waypoint_id > ? AND (kind = 'waypoint' OR EXISTS (
+                    AND waypoint_id > ? AND status = 'confirmed'
+                    AND (kind = 'waypoint' OR EXISTS (
                         SELECT 1 FROM map_home_link AS link
                         WHERE link.robot_id = waypoint.robot_id
                           AND link.waypoint_id = waypoint.waypoint_id
