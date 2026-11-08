@@ -23,6 +23,8 @@ def generate_launch_description():
             LaunchConfiguration("controllers_file"),
             " rear_attachment:=",
             LaunchConfiguration("rear_attachment"),
+            " lidar_rate:=",
+            LaunchConfiguration("lidar_rate"),
         ]
     )
     gz_launch = PathJoinSubstitution([FindPackageShare("ros_gz_sim"), "launch", "gz_sim.launch.py"])
@@ -37,6 +39,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("rear_attachment", default_value="true"),
+            DeclareLaunchArgument("lidar_rate", default_value="10"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(gz_launch),

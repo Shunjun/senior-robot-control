@@ -2,6 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="senior">
   <xacro:arg name="controllers_file" default=""/>
   <xacro:arg name="rear_attachment" default="true"/>
+  <xacro:arg name="lidar_rate" default="10"/>
   <link name="base_link">
     <inertial><mass value="30"/><origin xyz="0 0 0.0593"/><inertia ixx="0.8" iyy="1.2" izz="1.7" ixy="0" ixz="0" iyz="0"/></inertial>
     <!-- Camera aperture is visual only; conservative collision envelope remains intact. -->
@@ -28,7 +29,7 @@
   <link name="camera_link"/><joint name="camera_joint" type="fixed"><parent link="base_link"/><child link="camera_link"/><origin xyz="0.2316 0.00224 0.1282"/></joint>
   <link name="camera_optical_frame"/><joint name="camera_optical_joint" type="fixed"><parent link="camera_link"/><child link="camera_optical_frame"/><origin rpy="-1.57079632679 0 -1.57079632679"/></joint>
   <link name="imu_link"/><joint name="imu_joint" type="fixed"><parent link="base_link"/><child link="imu_link"/></joint>
-  <gazebo reference="laser_link"><sensor name="laser" type="gpu_lidar"><topic>/scan</topic><update_rate>10</update_rate><ignition_frame_id>laser_link</ignition_frame_id><lidar><scan><horizontal><samples>720</samples><min_angle>-3.14159265</min_angle><max_angle>3.14159265</max_angle></horizontal></scan><range><min>0.08</min><max>20</max><resolution>0.01</resolution></range></lidar></sensor></gazebo>
+  <gazebo reference="laser_link"><sensor name="laser" type="gpu_lidar"><topic>/scan</topic><update_rate>$(arg lidar_rate)</update_rate><ignition_frame_id>laser_link</ignition_frame_id><lidar><scan><horizontal><samples>720</samples><min_angle>-3.14159265</min_angle><max_angle>3.14159265</max_angle></horizontal></scan><range><min>0.08</min><max>20</max><resolution>0.01</resolution></range></lidar></sensor></gazebo>
   <gazebo reference="camera_link"><sensor name="rgbd" type="rgbd_camera"><topic>/camera</topic><update_rate>10</update_rate><ignition_frame_id>camera_optical_frame</ignition_frame_id><camera><horizontal_fov>1.047</horizontal_fov><image><width>640</width><height>480</height><format>R8G8B8</format></image><clip><near>0.1</near><far>10</far></clip></camera></sensor></gazebo>
   <gazebo reference="imu_link"><sensor name="imu" type="imu"><topic>/imu/data</topic><update_rate>50</update_rate><ignition_frame_id>imu_link</ignition_frame_id><always_on>true</always_on></sensor></gazebo>
   <ros2_control name="GazeboSimSystem" type="system"><hardware><plugin>gz_ros2_control/GazeboSimSystem</plugin></hardware>

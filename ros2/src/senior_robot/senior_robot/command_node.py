@@ -7,6 +7,7 @@ monotonic clock and keeps running when ROS time is frozen. The timer period is
 simulation configuration, not a physical braking guarantee.
 """
 
+import math
 import re
 import secrets
 import time
@@ -244,13 +245,15 @@ class CommandNode(Node):
         gid = info.get("publisher_gid")
         if gid is not None and tuple(gid) != tuple(endpoints[0].endpoint_gid):
             return
-        try:
-            velocity = Velocity(msg.linear.x, msg.angular.z)
-        except ValueError:
+        if not (math.isfinite(msg.linear.x) and math.isfinite(msg.angular.z)):
             return
+        # Keep insignificant controller jitter from superseding identical
+        # safety checks. Truncation never increases either velocity component.
+        velocity = Velocity(math.trunc(msg.linear.x * 100) / 100,
+                            math.trunc(msg.angular.z * 100) / 100)
         # The safety worker must finish checking a sample before a different
         # Nav2 output replaces it. A producer zero always takes precedence.
-        if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.2:
+        if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.16:
             return
         sampled = stamp / 1e9 - source.offset - 0.01
         if self._arbiter.accept_navigation_sample(
