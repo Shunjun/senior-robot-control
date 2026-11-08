@@ -212,6 +212,7 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
     env.pop("NOTIFY_SOCKET", None)
     env.update(
         ROS_DOMAIN_ID=str(profile.ros_domain),
+        ROS_LOCALHOST_ONLY="1",
         IGN_PARTITION=_unit(root),
         ROS_HOME=str(root / "ros-home"),
         ROS_LOG_DIR=str(root / "ros-home" / "log"),
@@ -283,10 +284,17 @@ def main(path: Path) -> int:
         _validate(profile)
         credentials = read_credentials(profile.credentials)
         assert profile.estop_state is not None and profile.socket is not None
-        lock_path = profile.credentials.parent / ".senior-simulator.lock"
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "wb") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        from contextlib import ExitStack
+
+        lock_paths = (
+            Path(f"/tmp/senior-simulator-ros-{profile.ros_domain}.lock"),
+            profile.credentials.parent / ".senior-simulator.lock",
+        )
+        with ExitStack() as stack:
+            for lock_path in lock_paths:
+                fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                lock = stack.enter_context(os.fdopen(fd, "wb"))
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             if os.path.lexists(profile.socket):
                 raise ValueError("socket path is already occupied")
             _initialize_estop(profile.estop_state, credentials.robot_id)
