@@ -245,12 +245,14 @@ class CommandNode(Node):
         gid = info.get("publisher_gid")
         if gid is not None and tuple(gid) != tuple(endpoints[0].endpoint_gid):
             return
-        if not (math.isfinite(msg.linear.x) and math.isfinite(msg.angular.z)):
+        if not (abs(msg.linear.x) <= 0.3 and abs(msg.angular.z) <= 0.5):
             return
         # Keep insignificant controller jitter from superseding identical
         # safety checks. Truncation never increases either velocity component.
-        velocity = Velocity(math.trunc(msg.linear.x * 100) / 100,
-                            math.trunc(msg.angular.z * 100) / 100)
+        velocity = Velocity(
+            math.trunc(msg.linear.x * 100) / 100,
+            math.trunc(msg.angular.z * 100) / 100,
+        )
         # The safety worker must finish checking a sample before a different
         # Nav2 output replaces it. A producer zero always takes precedence.
         if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.16:

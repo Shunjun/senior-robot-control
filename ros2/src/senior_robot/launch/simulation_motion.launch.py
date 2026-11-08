@@ -35,9 +35,7 @@ def generate_launch_description():
                 ),
             ),
             SetLaunchConfiguration("motion_rear_attachment", "false" if use_reference else "true"),
-            # A new scan invalidates the previous worker ticket. Leave a full
-            # evidence evaluation interval on this VM without extending freshness.
-            SetLaunchConfiguration("motion_lidar_rate", "5" if use_reference else "10"),
+            # Poll the worker result before another sensor observation invalidates it.
             SetLaunchConfiguration("motion_gate_rate", "40.0" if use_reference else "20.0"),
             SetLaunchConfiguration(
                 "motion_attachment_profile",
@@ -107,7 +105,6 @@ def generate_launch_description():
                     "headless": LaunchConfiguration("headless"),
                     "world": world,
                     "rear_attachment": LaunchConfiguration("motion_rear_attachment"),
-                    "lidar_rate": LaunchConfiguration("motion_lidar_rate"),
                     "use_sim_time": "true",
                 }.items(),
             ),
