@@ -555,3 +555,45 @@ def test_bound_navigation_expires_and_old_run_cannot_restart_motion() -> None:
     arbiter.disconnect(1)
     assert not arbiter.accept_navigation_sample("route-b", 2, Velocity(0.1, 0), 1.7, 1.7)
     assert arbiter.final_command(1.75) is None
+
+
+
+def test_timed_dropped_stop_and_duplicate_cannot_extend_execution():
+    arbiter = gate(require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 2.0)
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.4
+    )
+    motion = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+    assert arbiter.accept(motion, 1.3, received_at=1.0, local_deadline=1.4).accepted
+    # The operator released the stick, but the stop packet never arrived. Replaying the
+    # last speed within its original admission window must not refresh its hold floor.
+    replay = arbiter.accept(motion, 1.39, received_at=1.0, local_deadline=1.4)
+    assert not replay.accepted
+    final = arbiter.final_command(1.49)
+    assert final is not None and final[-1] == 1.5
+    assert arbiter.tick(1.49) == Velocity(0.2, 0.0)
+    assert arbiter.tick(1.5) == Velocity(0.0, 0.0)
+    assert arbiter.final_command(1.5) is None
+
+
+def test_timed_half_open_heartbeat_revokes_motion_before_sample_deadline():
+    arbiter = gate(require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 1.6)
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.6
+    )
+    motion = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+    assert arbiter.accept(motion, 1.45, received_at=1.1, local_deadline=1.7).accepted
+    assert arbiter.tick(1.59) == Velocity(0.2, 0.0)
+    # Cloud heartbeats stopped while the socket stayed open. The speed's own
+    # compensated cutoff (1.7) cannot outlive the independent heartbeat lease.
+    assert arbiter.tick(1.6) == Velocity(0.0, 0.0)
+    assert not arbiter.server_heartbeat(1, 1.61, 2.0)
+    assert arbiter.server_heartbeat(2, 1.62, 2.0)
+    assert arbiter.accept(command("control.acquire", seq=1, epoch=2), 1.62).accepted
+    delayed = motion.model_copy(update={"seq": 3})
+    assert not arbiter.accept(delayed, 1.63, received_at=1.1, local_deadline=1.7).accepted
+    assert arbiter.tick(1.63) == Velocity(0.0, 0.0)

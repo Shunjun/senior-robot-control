@@ -1319,12 +1319,25 @@ it("test_latency_ignores_old_or_unapplied_ack", async () => {
       status: "applied", vx: 0.1, wz: 0, limited: true,
     };
     socket.receive({ ...feedback, connection_epoch: AGENT_EPOCH - 1 });
+    socket.receive({ ...feedback, seq: Number(sample["seq"]) - 1 });
+    socket.receive({ ...feedback, gesture: feedback.gesture + 1 });
     expect(onFeedback).not.toHaveBeenCalled();
     socket.receive(feedback);
     expect(onFeedback).toHaveBeenCalledOnce();
     expect(onFeedback).toHaveBeenCalledWith(expect.objectContaining({
       status: "applied", vx: 0.1, limited: true, latencyMs: expect.any(Number),
     }));
+
+    const lastVelocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const stoppedSample = socket.lastSent();
+    const stop = client.request("drive.stop", {});
+    respondTo(socket, socket.lastSent(), { request_type: "drive.stop", ok: true });
+    await stop;
+    respondTo(socket, stoppedSample, { request_type: "drive.velocity", ok: true });
+    await lastVelocity;
+    socket.receive({ ...stoppedSample, type: "drive.feedback", gesture: feedback.gesture,
+      status: "applied", vx: 0.2, wz: 0, limited: false });
+    expect(onFeedback).toHaveBeenCalledOnce();
   } finally {
     unsubscribe();
     client.disconnect();

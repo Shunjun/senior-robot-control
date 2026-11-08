@@ -38,8 +38,17 @@ def test_delay_budget_requires_recent_samples_and_uses_ceiling_p90():
     assert budget.compensation(11.01) is None
 
 
+@pytest.mark.parametrize(
+    ("delays", "compensation_range"),
+    [
+        pytest.param((0.4,) * 4, (0.4, 0.435), id="sustained-high-delay"),
+        pytest.param((0.4, 0.06, 0.55, 0.12), (0.5, 0.5), id="jitter-with-over-cap-spike"),
+    ],
+)
 async def test_measured_asymmetric_transport_bounds_reach_final_admission(
     monkeypatch: pytest.MonkeyPatch,
+    delays: tuple[float, ...],
+    compensation_range: tuple[float, float],
 ) -> None:
     from types import SimpleNamespace
 
@@ -93,14 +102,15 @@ async def test_measured_asymmetric_transport_bounds_reach_final_admission(
 
     # Calibration remains valid as the reverse link slows, so the larger recent
     # one-way observations enter the cloud's compensation without relaxing the age cap.
-    reverse_delay = 0.4
-    for _ in range(4):
+    for delay in delays:
+        reverse_delay = delay
         await link.send_heartbeat()
         await link.recv()
         now += 0.1
     compensation = agent.drive_budget.compensation(now)
     assert compensation is not None
-    assert 0.4 <= compensation <= 0.435
+    lower, upper = compensation_range
+    assert lower <= compensation <= upper
 
     issued = now
     deadline = issued + 0.3 + compensation
@@ -118,7 +128,7 @@ async def test_measured_asymmetric_transport_bounds_reach_final_admission(
         type="control.acquire", seq=1, payload=EmptyPayload(),
     )
     assert arbiter.accept(acquire, now - offset).accepted
-    now += reverse_delay
+    now += 0.4
     timing = link.local_drive_timing(issued, deadline)
     assert timing is not None
     earliest_issue, earliest_deadline = timing
