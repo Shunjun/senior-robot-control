@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from senior_control.agent.connection import IpcMotion
+from senior_control.agent.direct_navigation import DirectNavigation
 from senior_control.agent.dispatcher import StoreTaskPort
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.main import Agent
@@ -249,6 +250,7 @@ async def run_agent(config: AgentConfig) -> int:
             maps=IpcMapPort(map_client),
             state=SnapshotState(state, tasks, waypoints, display),
             workspace=workspace,
+            navigation=DirectNavigation(state, workspace, waypoints, navigation),
             motion=motion,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
