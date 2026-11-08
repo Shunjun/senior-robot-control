@@ -5,6 +5,7 @@ cancel leaves the current goal in place and does not start a replacement.
 """
 
 import asyncio
+import logging
 import math
 import time
 from collections.abc import Callable, Sequence
@@ -260,7 +261,7 @@ class RouteService:
                 )
         except Exception:
             # Unknown terminality is retained when the adapter still owns a goal.
-            pass
+            logging.getLogger(__name__).exception("qualified Nav2 route failed")
         finally:
             changed(None)
             if not route.started.done():
