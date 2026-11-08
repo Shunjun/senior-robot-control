@@ -11,6 +11,7 @@ import re
 import secrets
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ class _NavigationSource:
     offset: float
     subscription: Subscription
     bound_at_ns: int
+    qualified: Callable[[], bool]
     sequence: int = 0
     last_stamp: int = 0
 
@@ -163,10 +165,13 @@ class CommandNode(Node):
     def navigation_qualified(self) -> bool:
         return self._arbiter.navigation_qualified(self._monotonic_clock.monotonic())
 
-    def bind_navigation_source(self, execution_id: str, topic: str) -> bool:
+    def bind_navigation_source(
+        self, execution_id: str, topic: str, *, qualified: Callable[[], bool]
+    ) -> bool:
         # An execution-specific topic must be configured at the Nav2 publisher.
         if (
             self._navigation_source is not None
+            or not qualified()
             or not re.fullmatch(r"/control/navigation/run_[0-9a-f]{32}/cmd_vel", topic)
             or not self._arbiter.begin_navigation(execution_id, self._monotonic_clock.monotonic())
         ):
@@ -188,6 +193,7 @@ class CommandNode(Node):
             bound_at / 1e9 - self._monotonic_clock.monotonic(),
             subscription,
             bound_at,
+            qualified,
         )
         return True
 
@@ -206,7 +212,7 @@ class CommandNode(Node):
             return
         now = self._monotonic_clock.monotonic()
         stamp = info.get("source_timestamp")
-        if abs((time.time() - now) - source.offset) > 0.01:
+        if not source.qualified() or abs((time.time() - now) - source.offset) > 0.01:
             self.clear_navigation_source(source.execution_id)
             return
         if not isinstance(stamp, int) or stamp <= max(source.bound_at_ns, source.last_stamp):
@@ -233,8 +239,11 @@ class CommandNode(Node):
 
     def publish_command(self) -> None:
         source = self._navigation_source
-        if source is not None and not self._arbiter.navigation_source_active(
-            source.execution_id, self._monotonic_clock.monotonic()
+        if source is not None and (
+            not source.qualified()
+            or not self._arbiter.navigation_source_active(
+                source.execution_id, self._monotonic_clock.monotonic()
+            )
         ):
             self.clear_navigation_source(source.execution_id)
             return
