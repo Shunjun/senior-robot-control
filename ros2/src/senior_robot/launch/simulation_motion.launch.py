@@ -24,6 +24,8 @@ def generate_launch_description():
         root_key="",
         param_rewrites={
             "use_sim_time": "true",
+            # Leave VM CPU for the scan and motion workers while MPPI is active.
+            "controller_server.ros__parameters.FollowPath.batch_size": "400",
             "default_nav_to_pose_bt_xml": PathJoinSubstitution(
                 [robot, "behavior_trees", "navigate.xml"]
             ),

@@ -51,6 +51,7 @@ class SimulationReference:
         self._pose_at = float("-inf")
         self._safety_at = float("-inf")
         self.safety_reason = "no_status"
+        self.safety_ages = ""
         self._safety_gid: bytes | None = None
         self._localization_live = False
         self._ready = False
@@ -207,9 +208,14 @@ class SimulationReference:
     @with_dds_info
     def _on_safety(self, msg: Any, info: dict[str, Any]) -> None:
         self._safety_gid = self._source("/safety/status", "safety_gate", info)
-        self.safety_reason = next(
-            (status.message for status in msg.status if status.name == "safety_gate"),
-            "no_status",
+        status = next((status for status in msg.status if status.name == "safety_gate"), None)
+        self.safety_reason = status.message if status is not None else "no_status"
+        self.safety_ages = (
+            ", ".join(
+                f"{item.key}={item.value}" for item in status.values
+                if item.key in {"scan_ros_age", "scan_steady_age", "motion_ros_age", "motion_steady_age"}
+            )
+            if status is not None else ""
         )
         self._safety_at = (
             time.monotonic()

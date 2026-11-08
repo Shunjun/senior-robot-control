@@ -313,7 +313,10 @@ def main() -> None:
                 elif not planner_active():
                     failure = "planner state unavailable"
                 elif not reference.safety_ready():
-                    failure = f"safety status unavailable ({reference.safety_reason})"
+                    failure = (
+                        f"safety status unavailable ({reference.safety_reason} "
+                        f"{reference.safety_ages})"
+                    )
                 elif not node.navigation_qualified():
                     failure = "heartbeat or control authority unavailable"
                 if failure != previous_failure:
