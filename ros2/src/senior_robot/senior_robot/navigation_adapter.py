@@ -356,41 +356,45 @@ def _yaw_quaternion(yaw: float) -> tuple[float, float]:
 
 
 def create_planner_readiness(node) -> Callable[[], bool]:
-    """Check a fresh ACTIVE lifecycle response, without waiting inside ROS callbacks."""
+    """Maintain a fresh ACTIVE lifecycle observation throughout route setup."""
     from lifecycle_msgs.msg import State
     from lifecycle_msgs.srv import GetState
+    from rclpy.clock import Clock, ClockType
 
     client = node.create_client(GetState, "/planner_server/get_state")
     request = None
     requested_at = float("-inf")
     active_until = float("-inf")
 
-    def ready() -> bool:
+    def refresh() -> None:
         nonlocal request, requested_at, active_until
         now = time.monotonic()
         if not client.service_is_ready():
             active_until = float("-inf")
-            return False
+            if request is not None:
+                request.cancel()
+                request = None
+            return
         if request is not None:
             if request.done():
                 response = request.result()
                 active_until = (
-                    now + 0.75
+                    now + 1.5
                     if response is not None
                     and response.current_state.id == State.PRIMARY_STATE_ACTIVE
                     else float("-inf")
                 )
                 request = None
-            elif now - requested_at >= 0.75:
+            elif now - requested_at >= 0.6:
+                # A missing reply does not erase an independent, still-fresh observation.
                 request.cancel()
                 request = None
-                active_until = float("-inf")
-        if request is None and now - requested_at >= 0.25:
+        if request is None:
             request = client.call_async(GetState.Request())
             requested_at = now
-        return now < active_until
 
-    return ready
+    node.create_timer(0.2, refresh, clock=Clock(clock_type=ClockType.STEADY_TIME))
+    return lambda: client.service_is_ready() and time.monotonic() < active_until
 
 
 def create_nav2_adapter(node) -> NavigationAdapter:
