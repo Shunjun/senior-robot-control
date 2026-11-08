@@ -49,6 +49,7 @@ class _NavigationSource:
     qualified: Callable[[], bool]
     sequence: int = 0
     last_stamp: int = 0
+    last_forwarded: float = float("-inf")
 
 
 class CommandNode(Node):
@@ -247,11 +248,16 @@ class CommandNode(Node):
             velocity = Velocity(msg.linear.x, msg.angular.z)
         except ValueError:
             return
+        # The safety worker must finish checking a sample before a different
+        # Nav2 output replaces it. A producer zero always takes precedence.
+        if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.2:
+            return
         sampled = stamp / 1e9 - source.offset - 0.01
         if self._arbiter.accept_navigation_sample(
             source.execution_id, source.sequence + 1, velocity, sampled, now
         ):
             source.last_stamp = stamp
+            source.last_forwarded = now
             source.sequence += 1
             self.publish_command()
 
