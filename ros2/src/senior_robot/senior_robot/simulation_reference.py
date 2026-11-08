@@ -212,10 +212,13 @@ class SimulationReference:
         self.safety_reason = status.message if status is not None else "no_status"
         self.safety_ages = (
             ", ".join(
-                f"{item.key}={item.value}" for item in status.values
-                if item.key in {"scan_ros_age", "scan_steady_age", "motion_ros_age", "motion_steady_age"}
+                f"{item.key}={item.value}"
+                for item in status.values
+                if item.key
+                in {"scan_ros_age", "scan_steady_age", "motion_ros_age", "motion_steady_age"}
             )
-            if status is not None else ""
+            if status is not None
+            else ""
         )
         self._safety_at = (
             time.monotonic()
