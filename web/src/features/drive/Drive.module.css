@@ -355,17 +355,32 @@
   }
 }
 
+.driveNotes {
+  display: grid;
+  gap: inherit;
+}
+
+.drive:not([data-compact="true"]) .pads { order: 1; }
+
 .drive[data-compact="true"] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  max-height: 100%;
   gap: 6px;
   padding: 6px;
   clip-path: none;
 }
 .drive[data-compact="true"] .driveHead,
-.drive[data-compact="true"] .leaseGroup { gap: 6px; }
+.drive[data-compact="true"] .leaseGroup { flex-wrap: wrap; gap: 6px; }
 .drive[data-compact="true"] .primary,
 .drive[data-compact="true"] .ghost { min-height: 36px; padding-inline: 8px; }
-.drive[data-compact="true"] .pads { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
-.drive[data-compact="true"] .stick { height: clamp(64px, 18dvh, 160px); width: 100%; }
+.drive[data-compact="true"] .pads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0;
+}
+.drive[data-compact="true"] .driveNotes { min-height: 0; overflow: auto; }
+.drive[data-compact="true"] .stick { height: clamp(64px, 15dvh, 144px); width: 100%; }
 .drive[data-compact="true"] .thumb { width: 36px; height: 36px; }
 .drive[data-compact="true"] .stickHint { font-size: 12px; margin: 0; }
 
@@ -385,4 +400,6 @@
 @media (max-height: 520px) {
   .drive[data-compact="true"] .eyebrow,
   .drive[data-compact="true"] .leaseTag { display: none; }
+  .drive[data-compact="true"] .telemetry { max-height: 54px; min-width: 0; overflow: auto; }
+  .drive[data-compact="true"] .readout { font-size: 13px; }
 }

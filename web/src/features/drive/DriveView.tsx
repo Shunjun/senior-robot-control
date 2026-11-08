@@ -427,7 +427,7 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
   return (
     <section className={styles.drive} aria-label="遥控" data-compact={compact} data-locked={!unlocked}>
       <header className={styles.driveHead}>
-        <div>
+        <div className={styles.telemetry}>
           <p className={styles.eyebrow}>遥控 / {robotId}</p>
           <p className={styles.readout}>
             请求 vx {speed(readout.vx)} m/s · wz {speed(readout.wz)} rad/s
@@ -464,35 +464,18 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
               获取控制权
             </button>
           )}
+          {limited && (
+            <button
+              type="button"
+              className={styles.ghost}
+              aria-pressed={assist}
+              onClick={() => setAssist(!assist)}
+            >
+              {assist ? "退出定位辅助遥控" : "进入定位辅助遥控"}
+            </button>
+          )}
         </div>
       </header>
-
-      {lock !== null && <p className={styles.lock}>{lock}</p>}
-      {live && !supportsMotionChallenges && (
-        <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
-      )}
-      {live && !localized && !assist && (
-        <p className={styles.lock}>定位未完成，遥控已锁定。进入定位辅助遥控后以低速行驶。</p>
-      )}
-      {limited && assist && (
-        <p className={styles.assistNote}>
-          定位辅助遥控已开启，限速 {Math.round(ASSIST_SCALE * 100)}%：只用于把车移到能重新定位的位置。
-        </p>
-      )}
-      {limited && (
-        <button
-          type="button"
-          className={styles.ghost}
-          aria-pressed={assist}
-          onClick={() => setAssist(!assist)}
-        >
-          {assist ? "退出定位辅助遥控" : "进入定位辅助遥控"}
-        </button>
-      )}
-      {unlocked && lease !== "held" && (
-        <p className={styles.quiet}>先获取控制权，再按住摇杆。松手、切走页面或失去焦点都会停车。</p>
-      )}
-      {status}
 
       <div className={styles.pads} key={robotId}>
         <Joystick
@@ -513,6 +496,24 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
           onChange={(value) => hold("angular", value)}
           onRelease={(reason) => release("angular", reason)}
         />
+      </div>
+      <div className={styles.driveNotes}>
+        {lock !== null && <p className={styles.lock}>{lock}</p>}
+        {live && !supportsMotionChallenges && (
+          <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
+        )}
+        {live && !localized && !assist && (
+          <p className={styles.lock}>定位未完成，遥控已锁定。进入定位辅助遥控后以低速行驶。</p>
+        )}
+        {limited && assist && (
+          <p className={styles.assistNote}>
+            定位辅助遥控已开启，限速 {Math.round(ASSIST_SCALE * 100)}%：只用于把车移到能重新定位的位置。
+          </p>
+        )}
+        {unlocked && lease !== "held" && (
+          <p className={styles.quiet}>先获取控制权，再按住摇杆。松手、切走页面或失去焦点都会停车。</p>
+        )}
+        {status}
       </div>
     </section>
   );

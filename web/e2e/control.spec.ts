@@ -52,6 +52,8 @@ for (const viewport of [
     for (const control of controls) {
       await expect(control).toBeInViewport({ ratio: 0.99 });
     }
+    const video = await controls[0]!.boundingBox();
+    expect(video?.height).toBeGreaterThanOrEqual(Math.min(viewport.height / 4, 210));
     expect(await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       height: document.documentElement.scrollHeight,
