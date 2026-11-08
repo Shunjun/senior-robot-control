@@ -172,9 +172,10 @@ def main() -> None:
             self._handles: dict[str, object] = {}
             self._counter = 0
             self._last_finished: str | None = None
+            self._start_unconfirmed = False
 
         async def start(self, goal: MapGoal) -> str:
-            if not self._client.wait_for_server(timeout_sec=1.0):
+            if self._start_unconfirmed or not self._client.wait_for_server(timeout_sec=1.0):
                 raise NavigationRejected("")
             message = NavigateToPose.Goal()
             pose = PoseStamped()
@@ -187,6 +188,19 @@ def main() -> None:
             send_future = self._client.send_goal_async(message)
             rclpy.spin_until_future_complete(self._node, send_future, timeout_sec=2.0)
             if not send_future.done():
+                # Acceptance may arrive after the deadline. Hold the adapter closed
+                # and cancel that specific handle if Nav2 eventually accepted it.
+                self._start_unconfirmed = True
+
+                def cancel_late_acceptance(future) -> None:
+                    try:
+                        late = future.result()
+                        if late is not None and late.accepted:
+                            late.cancel_goal_async()
+                    except Exception:
+                        self._node.get_logger().error("Late Nav2 acceptance could not be canceled")
+
+                send_future.add_done_callback(cancel_late_acceptance)
                 raise NavigationRejected("")
             handle = send_future.result()
             if handle is None or not handle.accepted:
