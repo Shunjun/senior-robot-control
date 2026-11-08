@@ -6,10 +6,12 @@ cancel leaves the current goal in place and does not start a replacement.
 
 import asyncio
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
+from senior_control.tasks.route import QualifiedRoute
 
 SAFETY_COMMAND_TOPIC = "/control/recovery_cmd"
 ERROR_NONE = 0
@@ -65,6 +67,51 @@ class NavigationAdapter:
             self._active = execution_id
             return execution_id
 
+    async def run_route(
+        self,
+        ref: MapRef,
+        generation: str,
+        poses: Sequence[Pose2D],
+        *,
+        qualified: Callable[[MapRef, str], bool],
+    ) -> bool:
+        get_result = getattr(self._executor, "result", None)
+        if not callable(get_result):
+            return False
+
+        async def go(pose: Pose2D) -> bool:
+            async with self._goal_lock:
+                if self._active is not None or self._cancel_rejected:
+                    return False
+                if not qualified(ref, generation):
+                    return False
+                self._active = execution_id = await self._executor.start(MapGoal(ref, pose))
+            result = asyncio.create_task(get_result(execution_id))
+            try:
+                while qualified(ref, generation):
+                    done, _ = await asyncio.wait({result}, timeout=0.05)
+                    if done:
+                        succeeded = result.result()
+                        async with self._goal_lock:
+                            if self._active != execution_id or self._cancel_rejected:
+                                return False
+                            self._active = None
+                        return succeeded
+                await self.cancel(execution_id)
+                return False
+            except asyncio.CancelledError:
+                await self.cancel(execution_id)
+                raise
+            except Exception:
+                await self.cancel(execution_id)
+                raise
+            finally:
+                if not result.done():
+                    result.cancel()
+                    await asyncio.gather(result, return_exceptions=True)
+
+        return await QualifiedRoute(go, qualified).run(ref, generation, poses)
+
     async def cancel(self, execution_id: str) -> OperationResult:
         async with self._goal_lock:
             if not execution_id.strip():
@@ -112,6 +159,7 @@ def _yaw_quaternion(yaw: float) -> tuple[float, float]:
 
 def main() -> None:
     import rclpy
+    from action_msgs.msg import GoalStatus
     from geometry_msgs.msg import PoseStamped
     from nav2_msgs.action import NavigateToPose
     from rclpy.action import ActionClient
@@ -123,6 +171,7 @@ def main() -> None:
             self._client: ActionClient = ActionClient(node, NavigateToPose, "navigate_to_pose")
             self._handles: dict[str, object] = {}
             self._counter = 0
+            self._last_finished: str | None = None
 
         async def start(self, goal: MapGoal) -> str:
             if not self._client.wait_for_server(timeout_sec=1.0):
@@ -147,10 +196,26 @@ def main() -> None:
             self._handles[execution_id] = handle
             return execution_id
 
+        async def result(self, execution_id: str) -> bool:
+            handle = self._handles[execution_id]
+            result_future = handle.get_result_async()
+            while not result_future.done():
+                await asyncio.sleep(0.01)
+            response = result_future.result()
+            succeeded = response is not None and response.status == GoalStatus.STATUS_SUCCEEDED
+            self._handles.pop(execution_id, None)
+            self._last_finished = execution_id
+            return succeeded
+
         async def cancel(self, execution_id: str) -> OperationResult:
             handle = self._handles.get(execution_id)
             if handle is None:
-                return OperationResult(execution_id, OperationStatus.FAILED)
+                status = (
+                    OperationStatus.SUCCEEDED
+                    if execution_id == self._last_finished
+                    else OperationStatus.FAILED
+                )
+                return OperationResult(execution_id, status)
             cancel_goal = getattr(handle, "cancel_goal_async", None)
             if cancel_goal is None:
                 return OperationResult(execution_id, OperationStatus.FAILED)
