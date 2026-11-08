@@ -1225,3 +1225,37 @@ describe("device pairing", () => {
     expect(screen.queryByRole("button", { name: "添加设备" })).toBeNull();
   });
 });
+
+describe("operator workspace", () => {
+  async function openWorkspace() {
+    const link = new FakeLink();
+    link.requestImpl = async () => ({ ok: true });
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+    link.emit(snapshot("robot-alpha"));
+    return link;
+  }
+
+  it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
+    await openWorkspace();
+    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    const stop = screen.getByRole("button", { name: "停车" });
+    fireEvent.click(screen.getByRole("button", { name: "地图" }));
+    expect(screen.getByRole("group", { name: "前进后退摇杆" })).toBe(stick);
+    expect(screen.getByRole("button", { name: "停车" })).toBe(stop);
+  });
+
+  it("test_leaving_manual_revokes_gesture_without_rearm", async () => {
+    const link = await openWorkspace();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "获取控制权" })));
+    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    fireEvent.keyDown(stick, { key: "ArrowUp" });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "导航与定位" })));
+    expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(1);
+    expect(link.requests.filter(({ type }) => type === "control.release")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "手动驾驶" }));
+    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
+    fireEvent.keyDown(stick, { key: "ArrowUp" });
+    expect(link.requests.filter(({ type }) => type === "drive.velocity")).toHaveLength(1);
+  });
+});

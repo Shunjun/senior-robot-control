@@ -577,3 +577,32 @@
   color: var(--ink);
   font-size: 12px;
 }
+
+.panel[data-workspace="true"] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100%;
+  max-width: none;
+  padding: 6px;
+  clip-path: none;
+  animation: none;
+}
+
+.panel[data-workspace="true"] .panelHead {
+  align-items: center;
+  justify-content: start;
+  margin: 0;
+}
+.panel[data-workspace="true"] .panelHead .eyebrow,
+.panel[data-workspace="true"] .facts,
+.panel[data-workspace="true"] .staleWarning { display: none; }
+.panel[data-workspace="true"] .panelTitle { font-size: 17px; }
+.panel[data-workspace="true"] .readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.panel[data-workspace="true"] .freshness { margin: 0; gap: 5px; }
+.panel[data-workspace="true"] .bigStatus { font-size: 13px; margin: 0; }

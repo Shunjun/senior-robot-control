@@ -188,18 +188,19 @@ describe("hold-to-drive stops", () => {
     await flush();
     fireEvent.blur(window);
     await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
+    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
     const afterBlur = link.sent.length;
     await tick(1_000);
     expect(link.sent).toHaveLength(afterBlur);
 
-    // The page is hidden while held.
+    // The page is hidden while held, after an explicit reacquire.
+    await acquire();
     pushForward(forward);
     await flush();
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     fireEvent(document, new Event("visibilitychange"));
     await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
+    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
     const afterHide = link.sent.length;
     await tick(1_000);
     expect(link.sent).toHaveLength(afterHide);
@@ -231,7 +232,7 @@ describe("hold-to-drive stops", () => {
     pushForward(stick(FORWARD));
     await flush();
     unmount();
-    expect(link.types().at(-1)).toBe("drive.stop");
+    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
     const after = link.sent.length;
     await tick(1_000);
     expect(link.sent).toHaveLength(after);
@@ -620,6 +621,7 @@ describe("selected-robot route", () => {
 
     expect(screen.getByRole("group", { name: FORWARD })).toBeTruthy();
     expect(screen.getByRole("group", { name: TURN })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
     expect(screen.getByRole("application", { name: "地图" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "确认目标" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "开始导航" })).toBeTruthy();
@@ -642,17 +644,19 @@ describe("selected-robot route", () => {
     await openRoute(link);
     link.emit(snapshot("robot-alpha", { stale: true, connected: false }));
 
+    expect((screen.getByRole("button", { name: "获取控制权" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
     expect(screen.getByText(/缓存地图 · 非实时/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
     fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
     expect((screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "获取控制权" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not claim a goal was sent, since the protocol has no goal command", async () => {
     const link = new FakeLink();
     await openRoute(link);
     link.emit(snapshot("robot-alpha"));
+    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
     fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
     fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
@@ -724,5 +728,5 @@ it("never sends a remaining axis when the window blurs with both sticks held", a
   fireEvent.blur(window);
   await flush();
   expect(link.velocities()).toHaveLength(velocityCount);
-  expect(link.types().at(-1)).toBe("drive.stop");
+  expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
 });

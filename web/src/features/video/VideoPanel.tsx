@@ -8,6 +8,7 @@ const MAX_PENDING_CANDIDATES = 64;
 interface VideoPanelProps {
   link?: Pick<RobotLink, "sendVideoSignal" | "subscribeVideo">;
   live?: boolean;
+  compact?: boolean;
   stream?: MediaStream | null;
   frameTimestamp?: number | null;
   detections?: Detection[];
@@ -15,7 +16,7 @@ interface VideoPanelProps {
 
 export function VideoPanel({
   link,
-  live = true,
+  compact = false, live = true,
   stream: suppliedStream = null,
   frameTimestamp = null,
   detections = [],
@@ -104,7 +105,7 @@ export function VideoPanel({
   }, [link, live]);
 
   return (
-    <section className={styles.panel} aria-label="实时视频">
+    <section className={styles.panel} data-compact={compact} aria-label="实时视频">
       <header><p className={styles.kicker}>VIDEO / WEBRTC</p><h3>实时视频</h3></header>
       <div className={styles.viewport}>
         {stream === null ? (

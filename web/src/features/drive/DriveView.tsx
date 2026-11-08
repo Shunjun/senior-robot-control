@@ -143,9 +143,11 @@ export interface DriveViewProps {
   link: RobotLink;
   /** The robot's snapshot. Null until the first one arrives. */
   snapshot: RobotSnapshot | null;
+  active?: boolean;
+  compact?: boolean;
 }
 
-type Lease = "none" | "pending" | "held";
+type Lease = "none" | "pending" | "held" | "releasing";
 
 interface Held {
   linear: number | null;
@@ -166,8 +168,13 @@ function speed(value: number): string {
   return value.toFixed(2);
 }
 
-export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactElement {
+export function DriveView({ robotId, link, snapshot, active = true, compact = false }: DriveViewProps): ReactElement {
   const [lease, setLease] = useState<Lease>("none");
+  const leaseRef = useRef<Lease>("none");
+  function setAuthority(value: Lease): void {
+    leaseRef.current = value;
+    setLease(value);
+  }
   const [error, setError] = useState<string | null>(null);
   const [assist, setAssist] = useState(false);
   const [readout, setReadout] = useState<DriveInput>(STILL);
@@ -184,14 +191,14 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   const limited = live && !localized;
   const unlocked = live && (localized || assist);
   const supportsMotionChallenges = link.supportsMotionChallenges === true;
-  const canDrive = unlocked && lease === "held" && supportsMotionChallenges;
+  const canDrive = active && unlocked && lease === "held" && supportsMotionChallenges;
 
   // Layout, not passive: the stop for the old robot must leave before the shell's own cleanup
   // disconnects the link, and a parent's passive cleanup runs before a child's.
   useLayoutEffect(() => {
     session.current += 1;
     held.current = NOT_HELD;
-    setLease("none");
+    setAuthority("none");
     setError(null);
     setAssist(false);
     setReadout(STILL);
@@ -200,7 +207,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
         if (event.type === "command_failed") {
           // The lease is not taken back. The operator acquires it again on purpose.
           setError(`车端没有接受遥控指令：${event.message}。`);
-          setLease("none");
+          setAuthority("none");
         } else if (event.type === "stop_unconfirmed") {
           setError(`停止未确认：${event.message}。请立即按下急停。`);
         }
@@ -208,7 +215,11 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
     });
     controller.current = next;
     return () => {
+      session.current += 1;
       next.stop("unmount");
+      if (leaseRef.current === "held" || leaseRef.current === "pending") {
+        void link.request("control.release", {}).catch(() => undefined);
+      }
       controller.current = null;
     };
   }, [link, robotId]);
@@ -219,9 +230,9 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
       held.current = NOT_HELD;
       controller.current?.stop("disabled");
       setReadout(STILL);
-      if (authorityLost) {
+      if (authorityLost && leaseRef.current !== "releasing") {
         session.current += 1;
-        setLease("none");
+        setAuthority("none");
       }
     });
   }, [link]);
@@ -229,11 +240,35 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   useLayoutEffect(() => {
     if (live) return;
     session.current += 1;
-    setLease("none");
+    setAuthority("none");
     held.current = NOT_HELD;
     controller.current?.stop("disabled");
     setReadout(STILL);
   }, [live]);
+
+  useLayoutEffect(() => {
+    if (!active) revoke.current();
+  }, [active]);
+
+  const revoke = useRef<() => void>(() => undefined);
+  revoke.current = () => {
+    if (leaseRef.current === "held" || leaseRef.current === "pending") void giveUp();
+  };
+
+  useEffect(() => {
+    const onBlur = () => revoke.current();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") revoke.current();
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("pagehide", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("pagehide", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     // Localization came back: the limited mode ends and cannot be resumed by accident later.
@@ -285,34 +320,55 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
 
   async function acquire(): Promise<void> {
     const mine = session.current;
-    setLease("pending");
+    setAuthority("pending");
     setError(null);
     try {
       await link.request("control.acquire", {});
-      if (mine === session.current) setLease("held");
+      if (mine === session.current) setAuthority("held");
     } catch (failure) {
       if (mine !== session.current) return;
-      setLease("none");
+      setAuthority("none");
       setError(`没有拿到控制权：${describeFailure(failure).message}。`);
     }
   }
 
   async function giveUp(): Promise<void> {
-    const mine = session.current;
+    const mine = ++session.current;
     controller.current?.stop("release_lease");
     held.current = NOT_HELD;
-    setLease("none");
+    setGestureReset((previous) => previous + 1);
+    setAuthority("releasing");
     try {
       await link.request("control.release", {});
     } catch (failure) {
       if (mine === session.current) {
         setError(`释放控制权未确认：${describeFailure(failure).message}。`);
       }
+    } finally {
+      if (mine === session.current) setAuthority("none");
     }
   }
 
+  function park(): void {
+    held.current = NOT_HELD;
+    setGestureReset((previous) => previous + 1);
+    setReadout(STILL);
+    if (controller.current?.holding) {
+      controller.current.stop("release");
+    } else {
+      const mine = session.current;
+      void link.request("drive.stop", {}).catch((failure: unknown) => {
+        if (mine === session.current) setError(`停止未确认：${describeFailure(failure).message}。`);
+      });
+    }
+  }
+
+  if (!active) {
+    return error === null ? <></> : <p className={styles.failure} role="alert">{error}</p>;
+  }
+
   return (
-    <section className={styles.drive} aria-label="遥控" data-locked={!unlocked}>
+    <section className={styles.drive} aria-label="遥控" data-compact={compact} data-locked={!unlocked}>
       <header className={styles.driveHead}>
         <div>
           <p className={styles.eyebrow}>遥控 / {robotId}</p>
@@ -321,6 +377,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
           </p>
         </div>
         <div className={styles.leaseGroup}>
+          <button type="button" className={styles.ghost} onClick={park}>停车</button>
           {lease === "held" ? (
             <>
               <span className={styles.leaseTag}>已持有控制权</span>
@@ -332,7 +389,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
             <button
               type="button"
               className={styles.primary}
-              disabled={!live || lease === "pending"}
+              disabled={!live || lease === "pending" || lease === "releasing"}
               onClick={() => void acquire()}
             >
               获取控制权
@@ -341,6 +398,7 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
         </div>
       </header>
 
+      {lease === "releasing" && <p className={styles.quiet} role="status">正在释放控制权…</p>}
       {lock !== null && <p className={styles.lock}>{lock}</p>}
       {live && !supportsMotionChallenges && (
         <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
