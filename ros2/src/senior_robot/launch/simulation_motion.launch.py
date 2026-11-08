@@ -2,11 +2,13 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
@@ -16,6 +18,13 @@ def generate_launch_description():
     world = PathJoinSubstitution([sim, "worlds", "baseline.sdf"])
     params = PathJoinSubstitution([robot, "config", "simulation_motion.yaml"])
     rear_mask = PathJoinSubstitution([robot, "config", "simulation_motion_rear_mask.yaml"])
+    qualified = LaunchConfiguration("qualified_reference")
+    controller_params = RewrittenYaml(
+        source_file=PathJoinSubstitution([robot, "config", "nav2.yaml"]),
+        root_key="",
+        param_rewrites={"use_sim_time": "true"},
+        convert_types=True,
+    )
     return LaunchDescription(
         [
             DeclareLaunchArgument("agent_socket"),
@@ -33,6 +42,13 @@ def generate_launch_description():
                     "world": world,
                     "use_sim_time": "true",
                 }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([robot, "launch", "navigation.launch.py"])
+                ),
+                condition=IfCondition(qualified),
+                launch_arguments={"external_controller": "true", "use_sim_time": "true"}.items(),
             ),
             Node(package="senior_robot", executable="scan_adapter", parameters=[params, rear_mask]),
             Node(package="senior_scan_matcher", executable="scan_motion_node", parameters=[params]),
@@ -62,6 +78,9 @@ def generate_launch_description():
                         "safety_state_path": LaunchConfiguration("safety_state_path"),
                         "use_sim_time": True,
                         "simulation_baseline_world": ParameterValue(world, value_type=str),
+                        "navigation_controller_params": ParameterValue(
+                            controller_params, value_type=str
+                        ),
                         "simulation_qualified_reference": ParameterValue(
                             LaunchConfiguration("qualified_reference"), value_type=bool
                         ),

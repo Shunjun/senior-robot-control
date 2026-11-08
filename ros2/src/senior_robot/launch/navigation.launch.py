@@ -97,6 +97,7 @@ def generate_launch_description():
                 ],
             ),
             Node(
+                condition=UnlessCondition(external_controller),
                 package="senior_robot",
                 executable="navigation_adapter",
                 name="navigation_adapter",
