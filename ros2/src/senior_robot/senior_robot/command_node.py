@@ -144,6 +144,9 @@ class CommandNode(Node):
             return self._estop_store.commit(envelope, result)
         return result
 
+    def motion_mode(self) -> str:
+        return self._arbiter.mode(self._monotonic_clock.monotonic())
+
     def server_heartbeat(self, connection_epoch: int, deadline: float) -> bool:
         accepted = self._arbiter.server_heartbeat(
             connection_epoch, self._monotonic_clock.monotonic(), deadline

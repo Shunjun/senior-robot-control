@@ -49,3 +49,12 @@ senior-robot stop --profile simulation.json
 `start` 需要可用的 systemd 用户会话。仿真启动后，命令先核对 ROS 适配器身份，再启动
 Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服务的仿真进程。复用同一档的
 急停文件。状态分别显示进程、IPC 身份核验和该次运行最新的云端连接事件。
+
+### 工作台实时地图
+
+`senior-robot start` 的仿真档为 Gazebo 的 baseline 场景启用带引用的地图。
+栅格由启动使用的 SDF 碰撞几何生成，网页图块和 Nav2 的 `/map` 来自同一份栅格。
+定位参考使用该隔离实例的 Gazebo 真值里程计和轮式里程计，任一来源过期、重复或切换时
+停止提供定位资格。手动调试此链路时，应在同一隔离域的
+`simulation_motion.launch.py` 上显式传入 `qualified_reference:=true`。
+其他场景及实车配置继续依赖各自可验证的地图和定位来源。

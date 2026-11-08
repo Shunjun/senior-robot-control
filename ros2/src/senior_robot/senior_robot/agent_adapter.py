@@ -45,6 +45,8 @@ class AdapterCore:
         server_heartbeat: Callable[[int, float], bool] | None = None,
         require_source_deadline: bool = False,
         workspace_map: WorkspaceMap | None = None,
+        state_provider: Callable[[], dict[str, Any]] | None = None,
+        pose_provider: Callable[[], dict[str, Any]] | None = None,
         take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._robot_id = robot_id
@@ -54,6 +56,8 @@ class AdapterCore:
         self._server_heartbeat = server_heartbeat
         self._require_source_deadline = require_source_deadline
         self._workspace_map = workspace_map
+        self._state_provider = state_provider
+        self._pose_provider = pose_provider
         self._take_drive_feedback = take_drive_feedback
         self._active_epoch: int | None = None
         self._highest_epoch = -1
@@ -90,6 +94,11 @@ class AdapterCore:
                 return {"ok": False, "error": "bad_request"}
             accepted = self._server_heartbeat(epoch, float(deadline))
             return {"ok": accepted}
+        if kind in {"state.get", "pose.get"}:
+            provider = self._state_provider if kind == "state.get" else self._pose_provider
+            if provider is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            return provider()
         if kind in {"map.active", "map.manifest", "map.tile"}:
             if self._workspace_map is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
@@ -191,11 +200,27 @@ def main() -> None:
     from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import run
+    from senior_robot.simulation_reference import SimulationReference
 
     def spin(node, executor) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
         path = Path(os.environ[SOCKET_ENV])
+        node.declare_parameter("simulation_qualified_reference", False)
+        node.declare_parameter("simulation_baseline_world", "")
+        reference = None
+        if node.get_parameter("simulation_qualified_reference").value:
+            world = Path(str(node.get_parameter("simulation_baseline_world").value))
+            reference = SimulationReference(node, world)
+            node.simulation_reference = reference
         exiting = False
+
+        def state() -> dict[str, Any]:
+            assert reference is not None
+            return reference.state(
+                node.motion_mode(),
+                getattr(node, "navigation_status", lambda: "idle")(),
+                navigation_ready=bool(getattr(node, "navigation_qualified", lambda: False)()),
+            )
 
         def request_exit() -> None:
             nonlocal exiting
@@ -211,6 +236,9 @@ def main() -> None:
             server_heartbeat=node.server_heartbeat,
             require_source_deadline=True,
             take_drive_feedback=node.take_drive_feedback,
+            workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
+            state_provider=state if reference is not None else None,
+            pose_provider=reference.pose_reply if reference is not None else None,
         )
 
         async def serve() -> None:

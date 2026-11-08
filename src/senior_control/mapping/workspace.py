@@ -25,6 +25,7 @@ class WorkspaceGrid:
     # Dense archives use bytes (255 encodes unknown) to bound memory use.
     cells: tuple[int, ...] | bytes
     display_only: bool = False
+    waypoint_writes: bool = False
 
     def __post_init__(self) -> None:
         size = self.width * self.height
@@ -74,6 +75,7 @@ class WorkspaceMap:
                 "origin": asdict(grid.origin),
                 "tile_size": TILE_SIZE,
                 **({"display_only": True} if grid.display_only else {}),
+                **({"waypoint_writes": True} if grid.waypoint_writes else {}),
             }
         if kind != "map.tile":
             return {"ok": False, "error": "validation"}

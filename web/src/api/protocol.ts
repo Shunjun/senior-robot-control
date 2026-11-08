@@ -37,6 +37,7 @@ export const OPERATION_REQUEST_TYPES = [
   "home.set",
   "navigation.goal",
   "navigation.return_home",
+  "waypoint.create",
   "map.export",
   "map.import",
   "map.clear",

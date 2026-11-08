@@ -242,6 +242,7 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
             "senior_robot",
             "simulation_motion.launch.py",
             "headless:=true",
+            "qualified_reference:=true",
             f"agent_socket:={profile.socket}",
             f"robot_id:={credentials.robot_id}",
             f"safety_state_path:={profile.estop_state}",

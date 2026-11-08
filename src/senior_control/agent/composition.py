@@ -106,7 +106,8 @@ class SnapshotState:
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
         return LiveState(
-            False,
+            state.localized and state.map_generation is not None
+            and state.map_generation == state.localization_generation,
             state.map_ref,
             home.waypoint if home else None,
             task_revision,

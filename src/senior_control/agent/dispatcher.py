@@ -90,6 +90,7 @@ class Dispatcher:
         map_root: Path,
         admit: Callable[[OperationEnvelope], None],
         navigation: NavigationAction | None = None,
+        waypoint_create: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._journal = journal
@@ -101,6 +102,7 @@ class Dispatcher:
         self._map_root = map_root
         self._admit = admit
         self._navigation = navigation
+        self._waypoint_create = waypoint_create
         self._lanes = {"edit": asyncio.Lock(), "map": asyncio.Lock()}
 
     async def run(self, envelope: OperationEnvelope) -> OperationResult:
@@ -226,6 +228,13 @@ class Dispatcher:
                     raise ValueError("enabled must be a boolean")
                 task_id = _text(body, "task_id")
                 return "edit", lambda: self._tasks.set_enabled(task_id, enabled, revision)
+            if kind == "waypoint.create":
+                if expected is not None:
+                    raise ValueError("create takes no expected revision")
+                waypoint_create = self._waypoint_create
+                if waypoint_create is None:
+                    raise DomainError(ErrorCode.UNAVAILABLE, "waypoint editing is unavailable")
+                return "edit", lambda: self._none(waypoint_create(body))
             if kind == "home.set":
                 revision = _required(expected)
                 return "edit", lambda: self._set_home(revision)

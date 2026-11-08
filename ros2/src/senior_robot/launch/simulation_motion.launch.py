@@ -13,6 +13,7 @@ def generate_launch_description():
     robot_id = ParameterValue(LaunchConfiguration("robot_id"), value_type=str)
     sim = FindPackageShare("senior_sim")
     robot = FindPackageShare("senior_robot")
+    world = PathJoinSubstitution([sim, "worlds", "baseline.sdf"])
     params = PathJoinSubstitution([robot, "config", "simulation_motion.yaml"])
     rear_mask = PathJoinSubstitution([robot, "config", "simulation_motion_rear_mask.yaml"])
     return LaunchDescription(
@@ -21,6 +22,7 @@ def generate_launch_description():
             DeclareLaunchArgument("robot_id"),
             DeclareLaunchArgument("safety_state_path"),
             DeclareLaunchArgument("headless", default_value="true"),
+            DeclareLaunchArgument("qualified_reference", default_value="false"),
             DeclareLaunchArgument("safety_overlay", default_value=params),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -28,6 +30,7 @@ def generate_launch_description():
                 ),
                 launch_arguments={
                     "headless": LaunchConfiguration("headless"),
+                    "world": world,
                     "use_sim_time": "true",
                 }.items(),
             ),
@@ -57,6 +60,11 @@ def generate_launch_description():
                     {
                         "robot_id": robot_id,
                         "safety_state_path": LaunchConfiguration("safety_state_path"),
+                        "use_sim_time": True,
+                        "simulation_baseline_world": ParameterValue(world, value_type=str),
+                        "simulation_qualified_reference": ParameterValue(
+                            LaunchConfiguration("qualified_reference"), value_type=bool
+                        ),
                     },
                 ],
                 additional_env={"SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket")},

@@ -24,6 +24,8 @@ export interface MapManifest extends WorkspaceIdentity {
   origin: MapPose;
   tile_size: 32;
   display_only?: boolean;
+  waypoint_writes?: boolean;
+  navigation_ready?: boolean;
 }
 
 export interface MapTile extends WorkspaceIdentity {
@@ -113,12 +115,17 @@ export async function getMapManifest(
   link: RobotLink, robotId: string, mapRef: MapRef,
 ): Promise<MapManifest> {
   const data = await read(link, robotId, mapRef, "map.manifest");
-  const { width, height, resolution, origin, tile_size, display_only } = data;
+  const { width, height, resolution, origin, tile_size, display_only, waypoint_writes, navigation_ready } = data;
   valid(isInteger(width, 1, MAX_GRID_SIDE) && isInteger(height, 1, MAX_GRID_SIDE) &&
     width * height <= MAX_GRID_CELLS && isNumber(resolution) && resolution > 0 &&
     isPose(origin) && tile_size === TILE_SIZE &&
-    (display_only === undefined || typeof display_only === "boolean"));
-  return { ...data, width, height, resolution, origin, tile_size, display_only: display_only ?? false };
+    (display_only === undefined || typeof display_only === "boolean") &&
+    (waypoint_writes === undefined || typeof waypoint_writes === "boolean") &&
+    (navigation_ready === undefined || typeof navigation_ready === "boolean"));
+  return {
+    ...data, width, height, resolution, origin, tile_size, display_only: display_only ?? false,
+    waypoint_writes: waypoint_writes ?? false, navigation_ready: navigation_ready ?? false,
+  };
 }
 
 export async function getMapTile(

@@ -139,6 +139,7 @@ class Agent:
             map_root=map_root,
             admit=self._admit,
             navigation=navigation,
+            waypoint_create=workspace.create_waypoint if workspace is not None else None,
         )
         self._link: Link | None = None
         self._revoked_link: Link | None = None

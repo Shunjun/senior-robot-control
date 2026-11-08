@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef
+from senior_control.models import MapRef, Pose2D
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import TaskDefinition
 from senior_control.waypoints.store import WaypointStore
@@ -82,6 +82,9 @@ class RuntimeState:
     manual_driving: bool
     map_ref: MapRef | None
     execution_status: str
+    map_generation: str | None = None
+    localization_generation: str | None = None
+    navigation_ready: bool = False
 
 
 class StateReply(BaseModel):
@@ -95,6 +98,10 @@ class StateReply(BaseModel):
     map_id: str | None
     reference_revision: int | None
     execution_status: str
+    # //Compatible: older state replies have no qualified reference or navigation fields.
+    map_generation: str | None = None
+    localization_generation: str | None = None
+    navigation_ready: bool = False
 
 
 class IpcState:
@@ -122,6 +129,9 @@ class IpcState:
                 state.manual_driving,
                 map_ref,
                 state.execution_status,
+                state.map_generation,
+                state.localization_generation,
+                state.navigation_ready,
             )
         except (IpcError, OSError, ValueError, ValidationError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS state unavailable") from exc
@@ -142,6 +152,9 @@ class PoseReply(BaseModel):
     anchor_x: float
     anchor_y: float
     anchor_yaw: float
+    # //Compatible: legacy pose IPC remains readable but cannot authorize Home.
+    map_generation: str | None = None
+    simulation: bool = False
 
 
 class IpcHomePort:
@@ -149,11 +162,41 @@ class IpcHomePort:
         self._client = client
         self._store = store
         self._robot_id = robot_id
+        self._state = IpcState(client)
 
     async def home_revision(self) -> int:
         return await self._store.home_revision()
 
     async def set_current(self, expected_revision: int) -> int:
-        # //Compatible: legacy pose IPC lacks a reference nonce, so it cannot qualify Home.
-        del expected_revision
-        raise DomainError(ErrorCode.UNAVAILABLE, "qualified ROS localization unavailable")
+        try:
+            pose = PoseReply.model_validate(await self._client.request("pose.get"))
+            map_ref = MapRef(pose.map_id, pose.reference_revision)
+            state = await self._state.read()
+        except (IpcError, OSError, ValueError, ValidationError) as exc:
+            raise DomainError(
+                ErrorCode.UNAVAILABLE, "qualified ROS localization unavailable"
+            ) from exc
+        if (
+            not pose.simulation
+            or not 0 <= time.monotonic() - pose.sampled_at <= 0.5
+            or not state.localized
+            or state.map_ref != map_ref
+            or not pose.map_generation
+            or pose.map_generation != state.map_generation
+            or pose.map_generation != state.localization_generation
+        ):
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "qualified pose unavailable")
+        await self._store.save_home(
+            waypoint_id=None,
+            pose=Pose2D(pose.x, pose.y, pose.yaw),
+            map_ref=map_ref,
+            anchor_id=pose.anchor_id,
+            anchor_pose=Pose2D(pose.anchor_x, pose.anchor_y, pose.anchor_yaw),
+            source_robot_id=self._robot_id,
+            status="confirmed",
+            adopted=True,
+            latitude=None,
+            longitude=None,
+            expected_revision=expected_revision,
+        )
+        return expected_revision + 1

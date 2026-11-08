@@ -1,5 +1,7 @@
 """Read the vehicle's workspace without putting reads in its durable edit journal."""
 
+import math
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, ValidationError
@@ -13,7 +15,7 @@ from senior_control.mapping.workspace import (
     WorkspaceGrid,
     WorkspaceMap,
 )
-from senior_control.models import MapRef
+from senior_control.models import MapRef, Pose2D
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel, WorkspaceEnvelope
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks import TaskDefinition, TaskStore
@@ -42,6 +44,8 @@ class _Manifest(_MapReply):
     origin: _Origin
     tile_size: Literal[32]
     display_only: bool = False
+    waypoint_writes: bool = False
+    navigation_ready: bool = False
 
 
 class _Tile(_MapReply):
@@ -50,6 +54,14 @@ class _Tile(_MapReply):
     width: int = Field(gt=0, le=TILE_SIZE)
     height: int = Field(gt=0, le=TILE_SIZE)
     cells: list[Annotated[int, Field(ge=-1, le=100)]] = Field(max_length=TILE_SIZE**2)
+
+
+class _WaypointCreate(MapRefPayload):
+    waypoint_id: ShortText
+    grid_id: ShortText
+    x: float
+    y: float
+    yaw: float
 
 
 class WorkspaceReader:
@@ -76,6 +88,55 @@ class WorkspaceReader:
             return MapRef(reply.map_ref.map_id, reply.map_ref.reference_revision)
         except (IpcError, OSError, ValidationError):
             return self._exported_grid.map_ref if self._exported_grid is not None else None
+
+    async def create_waypoint(self, body: Mapping[str, Any]) -> None:
+        try:
+            point = _WaypointCreate.model_validate(body)
+            if not point.waypoint_id.strip():
+                raise ValueError("empty waypoint id")
+            pose = Pose2D(point.x, point.y, point.yaw)
+            ref = MapRefPayload(map_id=point.map_id, reference_revision=point.reference_revision)
+        except (ValidationError, ValueError) as exc:
+            raise DomainError(ErrorCode.VALIDATION, "invalid waypoint") from exc
+
+        manifest = await self._manifest(ref)
+        if not manifest.waypoint_writes:
+            raise DomainError(ErrorCode.UNAVAILABLE, "this map cannot create waypoints")
+        if manifest.grid_id != point.grid_id:
+            raise DomainError(ErrorCode.CONFLICT, "map changed during waypoint editing")
+        dx, dy = pose.x - manifest.origin.x, pose.y - manifest.origin.y
+        c, s = math.cos(manifest.origin.yaw), math.sin(manifest.origin.yaw)
+        gx = (c * dx + s * dy) / manifest.resolution
+        gy = (-s * dx + c * dy) / manifest.resolution
+        if not (0 <= gx < manifest.width and 0 <= gy < manifest.height):
+            raise DomainError(ErrorCode.VALIDATION, "waypoint is outside the map")
+        column, row = math.floor(gx), math.floor(gy)
+        tx, ix = divmod(column, TILE_SIZE)
+        ty, iy = divmod(row, TILE_SIZE)
+        tile = await self._map(
+            _Tile, "map.tile", ref, grid_id=point.grid_id, tile_x=tx, tile_y=ty
+        )
+        assert isinstance(tile, _Tile)
+        if (
+            (tile.grid_id, tile.tile_x, tile.tile_y) != (point.grid_id, tx, ty)
+            or len(tile.cells) != tile.width * tile.height
+            or not (ix < tile.width and iy < tile.height)
+            or tile.cells[iy * tile.width + ix] != 0
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "waypoint must be on current free space")
+        await self._require_grid(ref, point.grid_id)
+        await self._waypoints.save_waypoint(
+            waypoint_id=point.waypoint_id,
+            pose=pose,
+            map_ref=MapRef(ref.map_id, ref.reference_revision),
+            anchor_id="sim-world-origin",
+            anchor_pose=Pose2D(0.0, 0.0, 0.0),
+            source_robot_id=self._robot_id,
+            status="confirmed",
+            latitude=None,
+            longitude=None,
+            create_only=True,
+        )
 
     async def verify_task_edit(self, task: TaskDefinition, grid_id: str) -> None:
         try:

@@ -219,6 +219,7 @@ class WaypointStore:
         status: str,
         latitude: float | None,
         longitude: float | None,
+        create_only: bool = False,
     ) -> Waypoint:
         return await self._save(
             waypoint_id=waypoint_id,
@@ -232,6 +233,7 @@ class WaypointStore:
             adopted=None,
             latitude=latitude,
             longitude=longitude,
+            create_only=create_only,
         )
 
     async def sync_poses(self, bindings: tuple[WaypointBinding, ...]) -> None:
@@ -273,12 +275,19 @@ class WaypointStore:
         latitude: float | None,
         longitude: float | None,
         expected_revision: int | None = None,
+        create_only: bool = False,
     ) -> Waypoint:
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 if kind == "home":
                     await self._bump_home_revision(connection, expected_revision)
                 target = await self._target_id(connection, kind, waypoint_id)
+                if create_only:
+                    async with connection.execute(
+                        "SELECT 1 FROM waypoint WHERE waypoint_id = ?", (target,)
+                    ) as cursor:
+                        if await cursor.fetchone() is not None:
+                            raise DomainError(ErrorCode.CONFLICT, "waypoint id already exists")
                 await _write_waypoint(
                     connection,
                     waypoint_id=target,

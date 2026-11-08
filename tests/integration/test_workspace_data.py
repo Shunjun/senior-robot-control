@@ -259,3 +259,34 @@ async def test_workspace_edit_requires_current_grid_and_saved_waypoint(tmp_path:
         assert stale_update.value.code is ErrorCode.CONFLICT
         # //Compatible: the original task edit body has no grid_id.
         assert await port.update({**body, "enabled": False}, revision) == revision + 1
+
+
+async def test_simulation_waypoint_create_fences_grid_and_never_overwrites(tmp_path: Path) -> None:
+    grid = WorkspaceGrid(REF, "boot", 2, 1, 1.0, Pose2D(0, 0, 0), (0, 100), waypoint_writes=True)
+    async with Database(tmp_path / "robot.db") as database:
+        tasks = TaskStore(database, robot_id="r1")
+        waypoints = WaypointStore(database, robot_id="r1")
+        await tasks.prepare()
+        await waypoints.prepare()
+        workspace = WorkspaceReader("r1", tasks, waypoints, LoopbackMap(WorkspaceMap(lambda: grid)))
+        body = {
+            "waypoint_id": "new",
+            "map_id": REF.map_id,
+            "reference_revision": REF.reference_revision,
+            "grid_id": grid.grid_id,
+            "x": 0.25,
+            "y": 0.25,
+            "yaw": 0.0,
+        }
+        with pytest.raises(DomainError) as stale:
+            await workspace.create_waypoint({**body, "grid_id": "old"})
+        assert stale.value.code is ErrorCode.CONFLICT
+        with pytest.raises(DomainError) as occupied:
+            await workspace.create_waypoint({**body, "x": 1.5})
+        assert occupied.value.code is ErrorCode.CONFLICT
+        await workspace.create_waypoint(body)
+        with pytest.raises(DomainError) as duplicate:
+            await workspace.create_waypoint({**body, "x": 0.5})
+        assert duplicate.value.code is ErrorCode.CONFLICT
+        saved = await waypoints.waypoint("new")
+        assert saved is not None and saved.waypoint.pose.x == 0.25
