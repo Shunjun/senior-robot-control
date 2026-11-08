@@ -43,6 +43,7 @@ class _NavigationSource:
     topic: str
     offset: float
     subscription: Subscription
+    bound_at_ns: int
     sequence: int = 0
     last_stamp: int = 0
 
@@ -180,8 +181,13 @@ class CommandNode(Node):
         except Exception:
             self._arbiter.end_navigation(execution_id)
             raise
+        bound_at = time.time_ns()
         self._navigation_source = _NavigationSource(
-            execution_id, topic, time.time() - self._monotonic_clock.monotonic(), subscription
+            execution_id,
+            topic,
+            bound_at / 1e9 - self._monotonic_clock.monotonic(),
+            subscription,
+            bound_at,
         )
         return True
 
@@ -203,7 +209,7 @@ class CommandNode(Node):
         if abs((time.time() - now) - source.offset) > 0.01:
             self.clear_navigation_source(source.execution_id)
             return
-        if not isinstance(stamp, int) or stamp <= source.last_stamp:
+        if not isinstance(stamp, int) or stamp <= max(source.bound_at_ns, source.last_stamp):
             return
         endpoints = self.get_publishers_info_by_topic(source.topic)
         if len(endpoints) != 1 or endpoints[0].node_name != "controller_server":
