@@ -57,7 +57,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   }, [refKey]);
   const draft = selection.refKey === refKey ? selection.pose : null;
   const note = feedback?.refKey === refKey ? feedback.note : null;
-  const { map: occupancy, gridId, waypoints, message } = useWorkspaceMap(link, snapshot, { enabled: view === "map", catalog: mode === "tasks", refresh: mapLoad });
+  const { map: occupancy, gridId, waypoints, message, displayOnly } = useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
   const workspace = occupancy !== undefined && gridId !== undefined && waypoints !== undefined
     ? { map: occupancy, grid_id: gridId, waypoints }
     : undefined;
@@ -79,6 +79,8 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   );
 
   const map = occupancy ?? placeholder;
+  const activeMap = occupancy !== undefined && displayOnly !== true;
+  const pickMap = activeMap ? map : { ...map, map_ref: null };
 
   function onGoal(goal: MapGoal): void {
     setFeedback({ refKey, note: `目标已设定（${describePose(goal.pose)}），未发送：协议还没有目标指令。` });
@@ -118,14 +120,14 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
             <VideoPanel link={link} live={snapshot.connected && !snapshot.stale} compact />
           ) : (
             <>
-              {occupancy === undefined && <p className={styles.quiet}>{message}</p>}
+              {message !== undefined && <p className={styles.quiet}>{message}</p>}
               {(occupancy !== undefined || mode === "navigation") && (
                 <MapCanvas
                   key={gridId ?? "unavailable"}
                   map={map}
                   compact={occupancy !== undefined}
                   stale={snapshot.stale || !snapshot.connected}
-                  pickEnabled={mode === "navigation"}
+                  pickEnabled={mode === "navigation" && activeMap}
                   draft={mode === "navigation" ? draft : null}
                   onPick={setDraft}
                 />
@@ -137,11 +139,17 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
           <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
           {mode === "navigation" && (
             <>
-              <HomeControls snapshot={snapshot} link={link} />
+              <HomeControls
+                snapshot={snapshot}
+                link={link}
+                homeMapAvailable={activeMap}
+                navigationUnavailable="车端未报告已验证的导航能力，无法开始、继续或返航。"
+              />
+              <p className={styles.quiet}>目标与定位提示为本地预览，车端尚不接收。</p>
               <PosePicker
                 snapshot={snapshot}
-                map={map}
-                draft={draft}
+                map={pickMap}
+                draft={activeMap ? draft : null}
                 onDraftChange={setDraft}
                 onGoal={onGoal}
                 onHint={onHint}

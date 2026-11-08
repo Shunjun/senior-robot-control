@@ -1262,3 +1262,33 @@ describe("operator workspace", () => {
     expect(link.requests.filter(({ type }) => type === "drive.velocity")).toHaveLength(1);
   });
 });
+
+it("keeps an exported map read-only and leaves live navigation cancellation available", async () => {
+  const link = new FakeLink();
+  const current = snapshot("robot-alpha");
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "export-1" };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, display_only: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await screen.findByText("地图导出副本 · 仅供查看");
+  expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("false");
+  for (const name of ["开始导航", "设为 Home", "返航", "确认目标"]) {
+    expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  }
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "任务管理" }));
+  await screen.findByText("地图导出副本 · 仅供查看");
+  expect((screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(link.requests.some(({ type }) => type === "waypoint.list")).toBe(false);
+});

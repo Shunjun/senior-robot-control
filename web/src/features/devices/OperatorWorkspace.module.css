@@ -50,6 +50,8 @@
 }
 
 .primary {
+  display: flex;
+  flex-direction: column;
   background: var(--graphite-950);
   border: 1px solid var(--line);
 }
@@ -59,7 +61,7 @@
   flex-direction: column;
 }
 
-.quiet { color: var(--ink-dim); padding-inline: 8px; }
+.quiet { margin: 4px 0; color: var(--ink-dim); padding-inline: 8px; }
 
 @media (orientation: portrait), (max-width: 590px) {
   .stage { grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }

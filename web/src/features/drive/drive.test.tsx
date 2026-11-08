@@ -654,14 +654,23 @@ describe("selected-robot route", () => {
 
   it("does not claim a goal was sent, since the protocol has no goal command", async () => {
     const link = new FakeLink();
+    const current = snapshot("robot-alpha");
+    const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "active-grid" };
+    link.requestImpl = async (type) => ({
+      ok: true,
+      data: type === "map.manifest"
+        ? { ...identity, width: 1, height: 1, origin: { x: 0, y: 0, yaw: 0 }, resolution: 1, tile_size: 32 }
+        : { ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0] },
+    });
     await openRoute(link);
-    link.emit(snapshot("robot-alpha"));
+    link.emit(current);
     fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+    await waitFor(() => expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("true"));
     fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
     fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
     expect(screen.getByText(/未发送/)).toBeTruthy();
-    expect(link.sent).toEqual([]);
+    expect(link.types()).toEqual(["map.manifest", "map.tile"]);
   });
 });
 

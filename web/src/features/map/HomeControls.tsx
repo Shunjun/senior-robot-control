@@ -8,6 +8,8 @@ export interface HomeControlsProps {
   /** Null until the robot's first snapshot arrives. Nothing is enabled without a live one. */
   snapshot: RobotSnapshot | null;
   link: RobotLink;
+  homeMapAvailable?: boolean;
+  navigationUnavailable?: string;
 }
 
 type Outcome = { kind: "ok"; text: string } | { kind: "error"; text: string };
@@ -54,16 +56,17 @@ function navigationBlocks(snapshot: RobotSnapshot | null): string[] {
   return reasons;
 }
 
-export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElement {
+export function HomeControls({ snapshot, link, homeMapAvailable = true, navigationUnavailable }: HomeControlsProps): ReactElement {
   const [pending, setPending] = useState<ActionName | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
 
   const live = isLive(snapshot);
   const blocks = navigationBlocks(snapshot);
+  if (navigationUnavailable !== undefined) blocks.push(navigationUnavailable);
   const canNavigate = blocks.length === 0;
   const homeWaiting = snapshot?.home?.status === "pending_confirmation";
-  const canSetHome = live && snapshot.localized && snapshot.map_ref !== null && !homeWaiting;
+  const canSetHome = homeMapAvailable && live && snapshot.localized && snapshot.map_ref !== null && !homeWaiting;
 
   async function run(action: ActionName, type: string, payload: unknown): Promise<void> {
     setPending(action);
@@ -82,7 +85,7 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
   }
 
   function setHome(): void {
-    if (!isLive(snapshot)) return;
+    if (!canSetHome || !isLive(snapshot)) return;
     if (snapshot.home != null && !confirmReplace) {
       setConfirmReplace(true);
       return;
@@ -160,9 +163,12 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
       </div>
 
       <div className={styles.actions}>
+        {navigationUnavailable !== undefined && (
+          <button type="button" className={styles.tool} disabled>返航</button>
+        )}
         {confirmReplace ? (
           <>
-            <button type="button" className={styles.primary} onClick={setHome}>
+            <button type="button" className={styles.primary} disabled={!canSetHome} onClick={setHome}>
               确认替换 Home
             </button>
             <button type="button" className={styles.tool} onClick={() => setConfirmReplace(false)}>
@@ -181,7 +187,7 @@ export function HomeControls({ snapshot, link }: HomeControlsProps): ReactElemen
         )}
       </div>
       {homeWaiting && <p className={styles.quiet}>该 Home 正在等待确认，控制台不会发送替换指令。</p>}
-      {live && !canSetHome && <p className={styles.quiet}>设置 Home 需要车辆已定位并在地图上。</p>}
+      {live && !canSetHome && <p className={styles.quiet}>设置 Home 需要车辆已定位并具有实时地图。</p>}
 
       {outcome?.kind === "error" && (
         <p className={styles.failure} role="alert">

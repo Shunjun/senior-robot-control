@@ -8,6 +8,7 @@ import type { OccupancySnapshot } from "./MapCanvas";
 interface MapResult {
   map?: OccupancySnapshot;
   gridId?: string;
+  displayOnly?: boolean;
   waypoints?: WorkspaceWaypoint[];
   message?: string;
 }
@@ -59,6 +60,10 @@ export function useWorkspaceMap(link: RobotLink, snapshot: RobotSnapshot, { enab
         }
 
         map = { map_ref: mapRef, resolution, origin, cells: [], grid: { width, height, values } };
+        if (manifest.display_only === true) {
+          publish({ map, gridId, displayOnly: true, message: "地图导出副本 · 仅供查看" });
+          return;
+        }
         publish({ map, gridId });
         if (!catalog) return;
 
