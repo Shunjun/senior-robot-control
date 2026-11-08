@@ -301,14 +301,26 @@ def main() -> None:
 
             planner_active = create_planner_readiness(node)
 
+            previous_failure = None
+
             def qualified(ref, generation):
-                return (
-                    planner_active()
-                    and not exiting and reference is not None
-                    and reference.qualified(ref, generation)
-                    and reference.safety_ready()
-                    and node.navigation_qualified()
-                )
+                nonlocal previous_failure
+                failure = None
+                if exiting:
+                    failure = "adapter exiting"
+                elif reference is None or not reference.qualified(ref, generation):
+                    failure = "map or localization generation changed"
+                elif not planner_active():
+                    failure = "planner state unavailable"
+                elif not reference.safety_ready():
+                    failure = f"safety status unavailable ({reference.safety_reason})"
+                elif not node.navigation_qualified():
+                    failure = "heartbeat or control authority unavailable"
+                if failure != previous_failure:
+                    if failure is not None and routes is not None and routes.current is not None:
+                        node.get_logger().warning(f"Route qualification lost: {failure}")
+                    previous_failure = failure
+                return failure is None
 
             def can_navigate() -> bool:
                 grid = reference.grid() if reference is not None else None

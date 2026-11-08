@@ -39,6 +39,7 @@ class SimulationReference:
         from geometry_msgs.msg import TransformStamped
         from nav_msgs.msg import OccupancyGrid, Odometry
         from rclpy.clock import Clock, ClockType
+        from rclpy.duration import Duration
         from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
         from tf2_ros import TransformBroadcaster
 
@@ -49,11 +50,13 @@ class SimulationReference:
         self._pose: Pose2D | None = None
         self._pose_at = float("-inf")
         self._safety_at = float("-inf")
+        self.safety_reason = "no_status"
         self._safety_gid: bytes | None = None
         self._localization_live = False
         self._ready = False
         self._last_ros = None
         self._transform_type = TransformStamped
+        self._transform_tolerance = Duration(seconds=0.15)
         self._tf = TransformBroadcaster(node)
         self._publisher = node.create_publisher(
             OccupancyGrid, "/map", QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -204,6 +207,10 @@ class SimulationReference:
     @with_dds_info
     def _on_safety(self, msg: Any, info: dict[str, Any]) -> None:
         self._safety_gid = self._source("/safety/status", "safety_gate", info)
+        self.safety_reason = next(
+            (status.message for status in msg.status if status.name == "safety_gate"),
+            "no_status",
+        )
         self._safety_at = (
             time.monotonic()
             if self._safety_gid is not None
@@ -251,7 +258,9 @@ class SimulationReference:
         transform = map_to_odom(truth.pose, wheel.pose)
         message = self._transform_type()
         message.header.frame_id = "map"
-        message.header.stamp = now.to_msg()
+        # Nav2 plans at its current simulation time, slightly ahead of our TF timer.
+        # The bounded TF tolerance does not extend the measurement's qualification.
+        message.header.stamp = (now + self._transform_tolerance).to_msg()
         message.child_frame_id = "odom"
         message.transform.translation.x = transform.x
         message.transform.translation.y = transform.y
