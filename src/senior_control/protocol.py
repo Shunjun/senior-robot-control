@@ -90,6 +90,49 @@ class EnvelopeBase(StrictModel):
     expires_at: float
 
 
+class DriveFeedbackKey(StrictModel):
+    robot_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    connection_epoch: int = Field(ge=1)
+    request_id: str = Field(min_length=1, max_length=128)
+    seq: int = Field(ge=1, le=2**53 - 1)
+    gesture: int = Field(ge=1, le=2**53 - 1)
+
+
+class DriveExecutionFeedback(DriveFeedbackKey):
+    type: Literal["drive.feedback"] = "drive.feedback"
+    status: Literal["applied", "blocked", "superseded", "expired"]
+    vx: float | None = None
+    wz: float | None = None
+    limited: bool | None = None
+    reason: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @classmethod
+    def superseded(cls, envelope: "VelocityEnvelope") -> "DriveExecutionFeedback":
+        gesture = envelope.payload.gesture
+        if gesture is None:
+            raise ValueError("legacy samples do not carry feedback correlation")
+        return cls(
+            robot_id=envelope.robot_id,
+            session_id=envelope.session_id,
+            connection_epoch=envelope.connection_epoch,
+            request_id=envelope.request_id,
+            seq=envelope.seq,
+            gesture=gesture,
+            status="superseded",
+        )
+
+    @model_validator(mode="after")
+    def validate_output(self) -> "DriveExecutionFeedback":
+        fields = self.vx, self.wz, self.limited
+        if self.status == "applied":
+            if any(value is None for value in fields) or self.reason is not None:
+                raise ValueError("applied feedback requires actual output")
+        elif any(value is not None for value in fields):
+            raise ValueError("only applied feedback may include actual output")
+        return self
+
+
 class VelocityEnvelope(EnvelopeBase):
     type: Literal["drive.velocity"]
     payload: VelocityPayload

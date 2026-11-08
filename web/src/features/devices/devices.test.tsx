@@ -1293,3 +1293,40 @@ it("keeps an exported map read-only and leaves live navigation cancellation avai
   expect((screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement).disabled).toBe(true);
   expect(link.requests.some(({ type }) => type === "waypoint.list")).toBe(false);
 });
+
+it("test_latency_ignores_old_or_unapplied_ack", async () => {
+  const { client, socket } = await connected();
+  const onFeedback = vi.fn();
+  const unsubscribe = client.subscribeDriveFeedback(onFeedback);
+  try {
+    socket.receive({ type: "drive.timing", robot_id: "robot-alpha", connection_epoch: AGENT_EPOCH });
+    const probe = socket.lastSent();
+    socket.receive({
+      type: "drive.clock.reply", nonce: probe["nonce"], t2: 1, t3: 1,
+      connection_epoch: AGENT_EPOCH, ready: true,
+    });
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    const velocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const sample = socket.lastSent();
+    respondTo(socket, sample, { request_type: "drive.velocity", ok: true });
+    await velocity;
+    expect(onFeedback).not.toHaveBeenCalled();
+    const feedback = {
+      ...sample, type: "drive.feedback",
+      gesture: (sample["payload"] as { gesture: number }).gesture,
+      status: "applied", vx: 0.1, wz: 0, limited: true,
+    };
+    socket.receive({ ...feedback, connection_epoch: AGENT_EPOCH - 1 });
+    expect(onFeedback).not.toHaveBeenCalled();
+    socket.receive(feedback);
+    expect(onFeedback).toHaveBeenCalledOnce();
+    expect(onFeedback).toHaveBeenCalledWith(expect.objectContaining({
+      status: "applied", vx: 0.1, limited: true, latencyMs: expect.any(Number),
+    }));
+  } finally {
+    unsubscribe();
+    client.disconnect();
+  }
+});

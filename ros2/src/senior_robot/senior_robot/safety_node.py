@@ -35,9 +35,13 @@ from senior_motion_msgs.msg import (
     FencedSafetyScan,
     MotionEvidence,
 )
+from senior_motion_msgs.msg import (
+    DriveExecutionFeedback as DriveFeedbackMessage,
+)
 
 from senior_control.config import DeviceProfile
 from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.protocol import DriveExecutionFeedback, DriveFeedbackKey
 from senior_control.safety.arbiter import FinalCommandFence
 from senior_control.safety.async_guard import (
     BoundedSafetyWorker,
@@ -46,6 +50,7 @@ from senior_control.safety.async_guard import (
     SafetyWork,
     SafetyWorkResult,
 )
+from senior_control.safety.drive_feedback import OutputFeedback
 from senior_control.safety.freshness import SafetyFreshness
 from senior_control.safety.guard import command_expired
 from senior_control.safety.motion_estimator import body_twist_delta
@@ -143,6 +148,9 @@ class SafetyGate(Node):
         self._command_deadline = float("-inf")
         self._final_fence = FinalCommandFence()
         self._final_identity = None
+        self._feedback = OutputFeedback()
+        self._feedback_boot = ""
+        self._timed_command = False
         self._guard_socket = None
         self._guard_process = None
         self._guard_seen = float("-inf")
@@ -211,6 +219,9 @@ class SafetyGate(Node):
         self._raw_depth_topic = str(self.get_parameter("raw_depth_topic").value)
         self._raw_depth_info_topic = str(self.get_parameter("raw_depth_info_topic").value)
         self._publisher = self.create_publisher(Twist, output, 10)
+        self._drive_feedback_publisher = self.create_publisher(
+            DriveFeedbackMessage, "/safety/drive_feedback", 10
+        )
         self._status_publisher = self.create_publisher(DiagnosticArray, "/safety/status", 10)
         self._status_counts: dict[str, int] = {}
         self._last_status = float("-inf")
@@ -348,6 +359,19 @@ class SafetyGate(Node):
             self._command_generation += 1
             self._final_identity = identity
         self._command = velocity
+        # //Compatible: isolated older callers lack timing correlation fields.
+        self._timed_command = bool(getattr(msg, "gesture", 0))
+        key = None
+        if self._timed_command:
+            try:
+                key = DriveFeedbackKey(
+                    robot_id=msg.robot_id, session_id=msg.session_id,
+                    connection_epoch=msg.connection_epoch, request_id=msg.request_id,
+                    seq=msg.sequence, gesture=msg.gesture,
+                )
+            except ValueError:
+                pass
+        self._replace_drive_feedback(key, msg.owner_boot_id, velocity, msg.steady_deadline)
         self._command_deadline = msg.steady_deadline
         self._command_monotonic = now
 
@@ -391,7 +415,7 @@ class SafetyGate(Node):
         channel = self._guard_socket
         if channel is None:
             return
-        layout = struct.Struct("!B24s129s129s129sQQQddd")
+        layout = struct.Struct("!B24s129s129s129s129sQQQQddd")
         try:
             for _ in range(64):
                 try:
@@ -400,9 +424,10 @@ class SafetyGate(Node):
                     return
                 if len(packet) != layout.size:
                     raise ValueError("invalid guard frame")
-                kind, gid, robot, boot, session, generation, epoch, sequence, deadline, vx, wz = (
-                    layout.unpack(packet)
-                )
+                (
+                    kind, gid, robot, boot, session, request, generation, epoch,
+                    sequence, gesture, deadline, vx, wz,
+                ) = layout.unpack(packet)
                 if kind not in (0, 1, 2):
                     raise ValueError("invalid guard frame type")
                 publisher = gid if any(gid) else None
@@ -415,6 +440,8 @@ class SafetyGate(Node):
                     self._command_monotonic = None
                     self._command_deadline = float("-inf")
                     self._final_identity = None
+                    self._timed_command = False
+                    self._replace_drive_feedback(None, "", self._command, self._command_deadline)
                 elif kind == 2:
                     self._guard_ready = publisher is not None
                 else:
@@ -426,6 +453,8 @@ class SafetyGate(Node):
                         robot_id=decode(robot),
                         owner_boot_id=decode(boot),
                         session_id=decode(session),
+                        request_id=decode(request),
+                        gesture=gesture,
                         generation=generation,
                         connection_epoch=epoch,
                         sequence=sequence,
@@ -936,6 +965,7 @@ class SafetyGate(Node):
     def _publish(
         self, velocity: Velocity, reason: str, *, ticket: SafetyTicket | None = None
     ) -> None:
+        feedback_key = self._feedback.current
         self._poll_command_guard()
         if velocity != Velocity(0.0, 0.0) and (
             ticket is None
@@ -952,8 +982,30 @@ class SafetyGate(Node):
         twist = Twist()
         twist.linear.x = velocity.vx
         twist.angular.z = velocity.wz
+        output_at = time.monotonic()
         self._publisher.publish(twist)
+        if self._feedback.current == feedback_key:
+            self._publish_drive_feedback(self._feedback.published(velocity, output_at, reason))
         self._report(reason)
+
+    def _replace_drive_feedback(
+        self, key: DriveFeedbackKey | None, boot: str, velocity: Velocity, deadline: float
+    ) -> None:
+        self._publish_drive_feedback(self._feedback.note(key, velocity, deadline))
+        self._feedback_boot = boot
+
+    def _publish_drive_feedback(self, feedback: DriveExecutionFeedback | None) -> None:
+        if feedback is None:
+            return
+        msg = DriveFeedbackMessage()
+        msg.owner_boot_id = self._feedback_boot
+        msg.robot_id, msg.session_id = feedback.robot_id, feedback.session_id
+        msg.connection_epoch, msg.sequence = feedback.connection_epoch, feedback.seq
+        msg.request_id, msg.gesture = feedback.request_id, feedback.gesture
+        msg.status, msg.reason = feedback.status, feedback.reason or ""
+        msg.vx, msg.wz = feedback.vx or 0.0, feedback.wz or 0.0
+        msg.limited = feedback.limited is True
+        self._drive_feedback_publisher.publish(msg)
 
     def _report(self, reason: str) -> None:
         """Publish bounded rate/counters; diagnostics never grant motion."""
@@ -1022,7 +1074,12 @@ class SafetyGate(Node):
             return
         ttl = _positive(float(self.get_parameter("command_ttl_seconds").value))
         if (
-            command_expired(self._command_monotonic, time.monotonic(), ttl)
+            # //Compatible: untimed commands retain the receipt-based secondary watchdog.
+            ttl is None
+            or (
+                not self._timed_command
+                and command_expired(self._command_monotonic, time.monotonic(), ttl)
+            )
             or time.monotonic() >= self._command_deadline
         ):
             self._approved = None

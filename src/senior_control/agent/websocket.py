@@ -16,6 +16,7 @@ from senior_control.protocol import (
     DRIVE_CHALLENGE_SECONDS,
     DRIVE_TRANSPORT_SECONDS,
     MAX_MESSAGE_BYTES,
+    DriveExecutionFeedback,
     Envelope,
     ResponseEnvelope,
     VideoEnvelope,
@@ -229,6 +230,10 @@ class WebSocketLink:
         if issued - lower + margin < now - DRIVE_TRANSPORT_SECONDS:
             return None
         return earliest_issue, earliest_deadline
+
+    async def send_drive_feedback(self, feedback: DriveExecutionFeedback) -> None:
+        if self._drive_timing and feedback.connection_epoch == self.epoch:
+            await self._send(feedback.model_dump_json(exclude_none=True))
 
     async def send_response(self, envelope: ResponseEnvelope) -> None:
         await self._send(serialize_envelope(envelope).decode())

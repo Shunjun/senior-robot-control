@@ -45,6 +45,7 @@ class AdapterCore:
         server_heartbeat: Callable[[int, float], bool] | None = None,
         require_source_deadline: bool = False,
         workspace_map: WorkspaceMap | None = None,
+        take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._submit = submit
@@ -53,6 +54,7 @@ class AdapterCore:
         self._server_heartbeat = server_heartbeat
         self._require_source_deadline = require_source_deadline
         self._workspace_map = workspace_map
+        self._take_drive_feedback = take_drive_feedback
         self._active_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
@@ -68,6 +70,10 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind == "drive_feedback":
+            if self._take_drive_feedback is None:
+                return {"ok": False, "error": "unsupported"}
+            return {"ok": True, "feedback": self._take_drive_feedback()}
         if kind == "identity":
             return {"ok": message.get("robot_id") == self._robot_id}
         if kind == "server_heartbeat":
@@ -204,6 +210,7 @@ def main() -> None:
             request_exit=request_exit,
             server_heartbeat=node.server_heartbeat,
             require_source_deadline=True,
+            take_drive_feedback=node.take_drive_feedback,
         )
 
         async def serve() -> None:

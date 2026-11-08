@@ -8,7 +8,9 @@ simulation configuration, not a physical braking guarantee.
 """
 
 import secrets
+from collections import deque
 from pathlib import Path
+from typing import Any
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -16,11 +18,17 @@ from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from senior_motion_msgs.msg import FinalCommand
+from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
 
 from senior_control.clock import Clock, SystemClock
 from senior_control.models import Velocity
-from senior_control.protocol import Envelope
+from senior_control.protocol import (
+    DriveExecutionFeedback as ExecutionFeedback,
+)
+from senior_control.protocol import (
+    Envelope,
+    VelocityEnvelope,
+)
 from senior_control.safety.arbiter import Arbiter, CommandResult, PersistentEstop
 
 
@@ -69,6 +77,13 @@ class CommandNode(Node):
             FinalCommand, str(self.get_parameter("final_command_topic").value), 10
         )
         self._owner_boot = secrets.token_hex(16)
+        self._drive_sample: VelocityEnvelope | None = None
+        self._feedback: deque[ExecutionFeedback] = deque(maxlen=24)
+        self._awaiting_feedback: dict[str, VelocityEnvelope] = {}
+        if require_server_heartbeat:
+            self.create_subscription(
+                DriveExecutionFeedback, "/safety/drive_feedback", self._on_drive_feedback, 10
+            )
         self._generation = 1
         self._last_server_epoch = 0
         self._active = False
@@ -93,7 +108,14 @@ class CommandNode(Node):
             received_at=received_at,
             local_deadline=local_deadline,
         )
+        if result.accepted and isinstance(envelope, VelocityEnvelope):
+            self._drive_sample = envelope if envelope.payload.gesture is not None else None
+            if self._drive_sample is not None:
+                self._awaiting_feedback[envelope.request_id] = envelope
+                if len(self._awaiting_feedback) > 32:
+                    self._awaiting_feedback.pop(next(iter(self._awaiting_feedback)))
         if result.accepted and envelope.type != "drive.velocity":
+            self._drive_sample = None
             self._generation += 1
             self._active = False
             self._publish_barrier()
@@ -140,9 +162,56 @@ class CommandNode(Node):
         msg.sequence = sequence
         msg.steady_deadline = deadline
         msg.vx, msg.wz = velocity.vx, velocity.wz
+        sample = self._drive_sample
+        if sample is not None and (session, epoch, sequence) == (
+            sample.session_id, sample.connection_epoch, sample.seq
+        ):
+            msg.request_id = sample.request_id
+            msg.gesture = sample.payload.gesture or 0
         self._final_publisher.publish(msg)
         self._active = True
         self._publish(velocity)
+
+    def _on_drive_feedback(self, msg: DriveExecutionFeedback, info: dict[str, Any]) -> None:
+        endpoints = self.get_publishers_info_by_topic("/safety/drive_feedback")
+        if len(endpoints) != 1:
+            return
+        endpoint = endpoints[0]
+        sample = self._awaiting_feedback.get(msg.request_id)
+        # //Compatible: Humble's Python subscription metadata omits publisher_gid.
+        # Require sole expected topology, the command owner boot, and the exact admitted sample.
+        gid = info.get("publisher_gid")
+        if (
+            endpoint.node_name != "safety_gate"
+            or endpoint.node_namespace != "/"
+            or (gid is not None and bytes(endpoint.endpoint_gid) != bytes(gid))
+            or sample is None
+            or (sample.session_id, sample.connection_epoch, sample.seq, sample.payload.gesture) != (
+                msg.session_id, msg.connection_epoch, msg.sequence, msg.gesture
+            )
+            or msg.owner_boot_id != self._owner_boot
+            or msg.robot_id != str(self.get_parameter("robot_id").value)
+            or msg.connection_epoch != self._last_server_epoch
+        ):
+            return
+        output = (
+            {"vx": msg.vx, "wz": msg.wz, "limited": msg.limited} if msg.status == "applied" else {}
+        )
+        try:
+            feedback = ExecutionFeedback(
+                robot_id=msg.robot_id, session_id=msg.session_id,
+                connection_epoch=msg.connection_epoch, request_id=msg.request_id,
+                seq=msg.sequence, gesture=msg.gesture, status=msg.status,
+                reason=msg.reason or None, **output,
+            )
+        except ValueError:
+            return
+        self._awaiting_feedback.pop(msg.request_id)
+        self._feedback.append(feedback)
+
+    def take_drive_feedback(self) -> list[dict[str, Any]]:
+        return [self._feedback.popleft().model_dump(exclude_none=True)
+                for _ in range(min(len(self._feedback), 8))]
 
     def _publish_barrier(self) -> None:
         msg = FinalCommand()

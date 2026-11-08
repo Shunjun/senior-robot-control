@@ -18,8 +18,8 @@
 using Command = senior_motion_msgs::msg::FinalCommand;
 using namespace std::chrono_literals;
 
-// Private seqpacket framing: type, actual GID, three bounded UTF-8 strings,
-// generation/epoch/sequence and source steady deadline/vx/wz, all network byte order.
+// Private seqpacket framing: type, actual GID, four bounded UTF-8 strings,
+// generation/epoch/sequence/gesture and source steady deadline/vx/wz, all network byte order.
 class Guard : public rclcpp::Node {
  public:
   Guard(int fd, const std::string &robot, const std::string &topic)
@@ -31,10 +31,10 @@ class Guard : public rclcpp::Node {
  private:
   using Gid = std::array<uint8_t, RMW_GID_STORAGE_SIZE>;
   int fd_;
-  std::string robot_, topic_, boot_, session_;
+  std::string robot_, topic_, boot_, session_, request_;
   Gid gid_{};
   bool valid_gid_ = false, invalid_boot_ = false;
-  uint64_t generation_ = 0, sequence_ = 0, epoch_ = 0;
+  uint64_t generation_ = 0, sequence_ = 0, epoch_ = 0, gesture_ = 0;
   double deadline_ = 0, vx_ = 0, wz_ = 0;
   rclcpp::Subscription<Command>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -53,11 +53,12 @@ class Guard : public rclcpp::Node {
   }
   void send(uint8_t type, const Command *m = nullptr) {
     std::vector<uint8_t> data;
-    data.reserve(460); data.push_back(type); data.insert(data.end(), gid_.begin(), gid_.end());
+    data.reserve(600); data.push_back(type); data.insert(data.end(), gid_.begin(), gid_.end());
     const Command empty;
     const auto &x = m ? *m : empty;
     putstring(data, x.robot_id); putstring(data, x.owner_boot_id); putstring(data, x.session_id);
-    put64(data, x.generation); put64(data, x.connection_epoch); put64(data, x.sequence);
+    putstring(data, x.request_id);
+    put64(data, x.generation); put64(data, x.connection_epoch); put64(data, x.sequence); put64(data, x.gesture);
     putdouble(data, x.steady_deadline); putdouble(data, x.vx); putdouble(data, x.wz);
     if (::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL) != static_cast<ssize_t>(data.size())) {
       _exit(2);  // Overflow or broken private channel revokes the parent immediately.
@@ -83,26 +84,29 @@ class Guard : public rclcpp::Node {
     const auto &source = info.get_rmw_message_info().publisher_gid;
     if (!std::equal(gid_.begin(), gid_.end(), source.data)) return;
     if (m.robot_id != robot_ || m.owner_boot_id.empty() || m.owner_boot_id.size() > 128 ||
-        m.session_id.size() > 128 || !std::isfinite(m.steady_deadline) ||
+        m.session_id.size() > 128 || m.request_id.size() > 128 ||
+        (m.gesture == 0) != m.request_id.empty() || !std::isfinite(m.steady_deadline) ||
         !std::isfinite(m.vx) || !std::isfinite(m.wz) || invalid_boot_) return;
     if (!boot_.empty() && boot_ != m.owner_boot_id) { invalid_boot_ = true; send(0); return; }
     const bool zero = m.vx == 0 && m.wz == 0;
     if (boot_.empty() || m.generation > generation_) {
       // A newer zero barrier supersedes any intermediate barriers missed by DDS.
-      if (!zero || m.sequence != 0) return;
+      if (!zero || m.sequence != 0 || m.gesture != 0) return;
       boot_ = m.owner_boot_id; generation_ = m.generation; sequence_ = 0;
-      session_.clear(); epoch_ = 0;
+      session_.clear(); request_.clear(); epoch_ = gesture_ = 0;
       deadline_ = m.steady_deadline; vx_ = m.vx; wz_ = m.wz; send(1, &m); return;
     }
     if (m.generation != generation_ || m.sequence < sequence_) return;
     if (!session_.empty() && (session_ != m.session_id || epoch_ != m.connection_epoch)) return;
     if (m.sequence == sequence_) {
-      if (m.steady_deadline == deadline_ && m.vx == vx_ && m.wz == wz_) send(1, &m);
+      if (m.steady_deadline == deadline_ && m.vx == vx_ && m.wz == wz_ &&
+          m.request_id == request_ && m.gesture == gesture_) send(1, &m);
       return;
     }
     if (m.steady_deadline <= steady() || (!zero && (m.session_id.empty() || m.connection_epoch == 0))) return;
     sequence_ = m.sequence; deadline_ = m.steady_deadline; vx_ = m.vx; wz_ = m.wz;
     session_ = m.session_id; epoch_ = m.connection_epoch;
+    request_ = m.request_id; gesture_ = m.gesture;
     send(1, &m);
   }
 };

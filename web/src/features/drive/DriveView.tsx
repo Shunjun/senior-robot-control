@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
-import { CommandError, MotionNotReadyError, describeCommandError, type RobotLink } from "../../api/client";
+import { CommandError, MotionNotReadyError, describeCommandError, type DriveFeedback, type RobotLink } from "../../api/client";
 import type { ErrorCode, RobotSnapshot } from "../../api/protocol";
 import styles from "./Drive.module.css";
 import { Joystick, type ReleaseReason } from "./Joystick";
@@ -181,6 +181,9 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
   const [error, setError] = useState<string | null>(null);
   const [assist, setAssist] = useState(false);
   const [readout, setReadout] = useState<DriveInput>(STILL);
+  const [feedback, setFeedback] = useState<DriveFeedback | null>(null);
+  const [lastOutput, setLastOutput] = useState<Extract<DriveFeedback, { status: "applied" }> | null>(null);
+  const [feedbackStale, setFeedbackStale] = useState(false);
   const [gestureReset, setGestureReset] = useState(0);
   const controller = useRef<DriveController | null>(null);
   const held = useRef<Held>(NOT_HELD);
@@ -242,6 +245,8 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
       if (authorityLost && leaseRef.current !== "releasing") {
         session.current += 1;
         setAuthority("none");
+        setFeedback(null);
+        setLastOutput(null);
       }
     });
   }, [link]);
@@ -278,6 +283,25 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
+
+  useEffect(() => {
+    setFeedback(null);
+    setLastOutput(null);
+    setFeedbackStale(false);
+    return link.subscribeDriveFeedback?.((result) => {
+      setFeedback(result);
+      if (result.status === "applied") {
+        setLastOutput(result);
+        setFeedbackStale(false);
+      }
+    });
+  }, [link, robotId, live]);
+
+  useEffect(() => {
+    if (lastOutput === null) return;
+    const staleTimer = setTimeout(() => setFeedbackStale(true), 2_000);
+    return () => clearTimeout(staleTimer);
+  }, [lastOutput]);
 
   useEffect(() => {
     // Localization came back: the limited mode ends and cannot be resumed by accident later.
@@ -407,6 +431,16 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
           <p className={styles.eyebrow}>遥控 / {robotId}</p>
           <p className={styles.readout}>
             请求 vx {speed(readout.vx)} m/s · wz {speed(readout.wz)} rad/s
+          </p>
+          <p className={styles.readout}>
+            控制反馈延迟 {lastOutput === null ? "无样本" : `${Math.round(lastOutput.latencyMs)} ms`}
+            {lastOutput !== null && feedbackStale && " · 样本已过期"}
+            {lastOutput !== null && (
+              <> · 输出 {speed(lastOutput.vx)} m/s / {speed(lastOutput.wz)} rad/s{lastOutput.limited && " · 已限幅"}</>
+            )}
+            {feedback?.status === "blocked" && ` · 安全门拦截${feedback.reason ? `（${feedback.reason}）` : ""}`}
+            {feedback?.status === "superseded" && " · 指令已替换"}
+            {feedback?.status === "expired" && " · 指令超时"}
           </p>
         </div>
         <div className={styles.leaseGroup}>

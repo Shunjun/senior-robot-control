@@ -8,6 +8,7 @@ from senior_control.agent.snapshots import RobotSnapshot
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
+    DriveExecutionFeedback,
     Envelope,
     ResponseEnvelope,
     SimpleEnvelope,
@@ -121,11 +122,13 @@ class IpcMotion:
         *,
         heartbeat_client: IpcClient | None = None,
         disable_client: IpcClient | None = None,
+        feedback_client: IpcClient | None = None,
     ) -> None:
         self._client = client
         # //Compatible: isolated callers can still supply one serialized IPC client.
         self._heartbeat_client = heartbeat_client if heartbeat_client is not None else client
         self._disable_client = disable_client if disable_client is not None else client
+        self._feedback_client = feedback_client
 
     async def _ok(
         self, kind: str, *, client: IpcClient | None = None, **fields: Any
@@ -188,6 +191,17 @@ class IpcMotion:
     async def call(self, name: str) -> Any:
         return (await self._ok("ros_call", name=name)).get("result")
 
+    async def take_drive_feedback(self) -> list[DriveExecutionFeedback]:
+        if self._feedback_client is None:
+            return []
+        reply = await self._ok("drive_feedback", client=self._feedback_client)
+        raw = reply.get("feedback")
+        if not isinstance(raw, list) or len(raw) > 8:
+            raise ValueError("invalid drive feedback batch")
+        return [DriveExecutionFeedback.model_validate(item) for item in raw]
+
     async def close(self) -> None:
-        for client in {self._client, self._heartbeat_client, self._disable_client}:
-            await client.close()
+        for client in {self._client, self._heartbeat_client, self._disable_client,
+                       self._feedback_client}:
+            if client is not None:
+                await client.close()

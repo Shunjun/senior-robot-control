@@ -10,6 +10,7 @@ import {
   CommandError,
   MotionNotReadyError,
   type ControlApi,
+  type DriveFeedback,
   type RobotLink,
 } from "../../api/client";
 import type { LinkStatus, ResponsePayload, RobotSnapshot, RobotSummary } from "../../api/protocol";
@@ -753,4 +754,27 @@ it("samples negotiated motion every 100 ms without waiting for acknowledgements"
     { vx: 0.1, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 },
   ]);
   controller.stop("unmount");
+});
+
+it("marks the last applied latency stale two seconds after actual output", async () => {
+  vi.useFakeTimers();
+  let feedbackListener: ((feedback: DriveFeedback) => void) | null = null;
+  const link = Object.assign(new FakeLink(), {
+    subscribeDriveFeedback(listener: (feedback: DriveFeedback) => void) {
+      feedbackListener = listener;
+      return () => { feedbackListener = null; };
+    },
+  });
+  await mountDrive(link);
+  expect(screen.getByText(/控制反馈延迟 无样本/)).toBeTruthy();
+  act(() => feedbackListener?.({
+    status: "applied", latencyMs: 120, vx: 0.1, wz: 0, limited: true,
+  }));
+  expect(screen.getByText(/控制反馈延迟 120 ms/)).toBeTruthy();
+  act(() => feedbackListener?.({ status: "blocked", reason: "test" }));
+  expect(screen.getByText(/120 ms.*安全门拦截/)).toBeTruthy();
+  await tick(1_999);
+  expect(screen.queryByText(/样本已过期/)).toBeNull();
+  await tick(1);
+  expect(screen.getByText(/样本已过期/)).toBeTruthy();
 });

@@ -25,6 +25,7 @@ from senior_control.protocol import (
     DRIVE_CHALLENGE_SECONDS,
     WORKSPACE_REQUEST_TYPES,
     DriveClockProbe,
+    DriveExecutionFeedback,
     EmptyPayload,
     Envelope,
     HeartbeatRequest,
@@ -124,8 +125,12 @@ class Outbox:
         self._event.set()
         return True
 
-    def discard_velocity(self) -> None:
-        self._items = deque(item for item in self._items if item[0] != VELOCITY)
+    def discard_velocity(self) -> bytes | None:
+        for index, (kind, frame) in enumerate(self._items):
+            if kind == VELOCITY:
+                del self._items[index]
+                return frame
+        return None
 
     def _evict(self, incoming: str) -> bool:
         if incoming in {VIDEO, WORKSPACE}:
@@ -439,6 +444,19 @@ class Hub:
         received_at = time.monotonic()
         try:
             data = json.loads(raw)
+            if isinstance(data, dict) and data.get("type") == "drive.feedback":
+                feedback = DriveExecutionFeedback.model_validate(data)
+                if (
+                    feedback.robot_id == connection.robot_id
+                    and feedback.connection_epoch == connection.epoch
+                    and connection.drive_timing
+                ):
+                    for controller in link.controllers:
+                        if controller.lease_session == feedback.session_id:
+                            # Best effort, like video; never evict command or heartbeat frames.
+                            controller.outbox.put(raw, VIDEO)
+                            break
+                return
             if isinstance(data, dict) and data.get("type") == "heartbeat.request":
                 heartbeat = HeartbeatRequest.model_validate(data)
                 if (
@@ -745,6 +763,18 @@ class Hub:
             envelope.payload.server_issued_at = now
             envelope.payload.server_deadline = now + DRIVE_CHALLENGE_SECONDS + compensation
             raw = serialize_envelope(envelope)
+            replaced = agent.outbox.discard_velocity()
+            if replaced is not None:
+                previous = validate_frame(replaced, connection.robot_id)
+                if (
+                    isinstance(previous, VelocityEnvelope)
+                    and previous.payload.gesture is not None
+                    and previous.session_id == envelope.session_id
+                ):
+                    feedback = DriveExecutionFeedback.superseded(previous)
+                    connection.outbox.put(
+                        feedback.model_dump_json(exclude_none=True).encode(), VIDEO
+                    )
         elif isinstance(envelope, VelocityEnvelope):
             # //Compatible: older controllers must use the one-time challenge.
             challenge_id = envelope.payload.challenge_id

@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.observability import Metrics
 from senior_control.protocol import (
+    DriveExecutionFeedback,
     Envelope,
     OperationEnvelope,
     ResponseEnvelope,
@@ -44,6 +46,7 @@ from senior_control.protocol import (
     VideoEnvelope,
     WorkspaceEnvelope,
 )
+from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
@@ -150,6 +153,7 @@ class Agent:
         self._safety_task: asyncio.Task[None] | None = None
         self._velocity_task: asyncio.Task[None] | None = None
         self._queued_velocity: tuple[Link, VelocityEnvelope, int] | None = None
+        self._replaced_velocity: deque[DriveExecutionFeedback] = deque(maxlen=16)
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
         self._safety_cleanups: set[asyncio.Task[None]] = set()
         self._safety_lock = asyncio.Lock()
@@ -389,6 +393,8 @@ class Agent:
             self.request_shutdown()
             raise
         self._heartbeat_generation += 1
+        self._queued_velocity = None
+        self._replaced_velocity.clear()
         self._revoked_link = None
         self._clock_revoked = False
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
@@ -397,6 +403,7 @@ class Agent:
         received_heartbeat = False
         # Snapshot collection is independent of heartbeat and control reception.
         keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
+        feedback = asyncio.ensure_future(self._forward_drive_feedback(link))
         video: VideoSignaling | None = None
         try:
             while True:
@@ -467,16 +474,36 @@ class Agent:
             if video is not None:
                 video.retire()
             keepalive.cancel()
+            feedback.cancel()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
-            await self._wait_inflight([keepalive, *inflight])
+            await self._wait_inflight([keepalive, feedback, *inflight])
             if video is not None:
                 await self._quietly(video.close())
             await self._quietly(link.close())
+
+    async def _forward_drive_feedback(self, link: Link) -> None:
+        take = getattr(self._motion, "take_drive_feedback", None)
+        send = getattr(link, "send_drive_feedback", None)
+        if take is None or send is None:
+            return
+        while self._link is link:
+            await asyncio.sleep(0.05)
+            try:
+                results = list(self._replaced_velocity)
+                self._replaced_velocity.clear()
+                for result in (*results, *(await take())):
+                    if self._link is link and result.robot_id == self.robot_id:
+                        await send(result)
+            except (ConnectionError, OSError):
+                return
+            except (DomainError, IpcError, ValueError):
+                # //Compatible: feedback is optional when the local adapter is older.
+                await asyncio.sleep(0.5)
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
         """Push on a state change, and at least every ``snapshot_seconds``.
@@ -698,6 +725,9 @@ class Agent:
                 self._safety_task.add_done_callback(self._safety_finished)
             return
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            if self._queued_velocity is not None:
+                previous = self._queued_velocity[1]
+                self._replaced_velocity.append(DriveExecutionFeedback.superseded(previous))
             self._queued_velocity = (link, envelope, self.continuity_generation)
             if self._velocity_task is None or self._velocity_task.done():
                 self._velocity_task = self._spawn(self._drain_velocity())

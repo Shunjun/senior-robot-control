@@ -432,10 +432,19 @@ class Arbiter:
     def final_command(self, now: float) -> tuple[Velocity, str, int, int, float] | None:
         velocity = self.tick(now)
         lease = self._lease
-        if velocity == _ZERO or lease is None or self._deadline is None:
+        if lease is None or self._deadline is None:
             return None
         deadline = self._deadline
-        if self._require_server_heartbeat:
+        if velocity == _ZERO and not (
+            self._strict_deadline
+            and self._manual
+            and not self._estop
+            and self._connected(now)
+            and now < deadline
+        ):
+            return None
+        if self._require_server_heartbeat and not self._strict_deadline:
+            # //Compatible: legacy commands retain the original heartbeat cap on publication.
             deadline = min(deadline, self._server_deadline)
         return velocity, lease.session_id, lease.epoch, lease.seq, deadline
 
