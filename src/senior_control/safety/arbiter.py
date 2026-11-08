@@ -441,7 +441,7 @@ class Arbiter:
                 self._navigation_run,
                 self._server_epoch,
                 self._navigation_seq,
-                min(self._deadline, self._server_deadline),
+                self._deadline,
             )
         lease = self._lease
         if lease is None or self._deadline is None:
@@ -500,7 +500,7 @@ class Arbiter:
             return False
         self._navigation_seq = sequence
         self._velocity = velocity
-        self._deadline = sampled + self._command_ttl_seconds
+        self._deadline = min(sampled + self._command_ttl_seconds, self._server_deadline)
         return True
 
     def end_navigation(self, execution_id: str) -> None:
