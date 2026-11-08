@@ -71,6 +71,7 @@ class MapPort(Protocol):
 
 
 Action = Callable[[], Awaitable[int | None]]
+NavigationAction = Callable[[str, str, Mapping[str, Any]], Awaitable[None]]
 
 
 class Dispatcher:
@@ -88,6 +89,7 @@ class Dispatcher:
         metrics: Metrics,
         map_root: Path,
         admit: Callable[[OperationEnvelope], None],
+        navigation: NavigationAction | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._journal = journal
@@ -98,6 +100,7 @@ class Dispatcher:
         self._metrics = metrics
         self._map_root = map_root
         self._admit = admit
+        self._navigation = navigation
         self._lanes = {"edit": asyncio.Lock(), "map": asyncio.Lock()}
 
     async def run(self, envelope: OperationEnvelope) -> OperationResult:
@@ -226,6 +229,13 @@ class Dispatcher:
             if kind == "home.set":
                 revision = _required(expected)
                 return "edit", lambda: self._set_home(revision)
+            if kind in {"navigation.goal", "navigation.return_home"}:
+                navigation = self._navigation
+                if navigation is None:
+                    raise DomainError(ErrorCode.UNAVAILABLE, "qualified navigation is unavailable")
+                if expected is not None:
+                    raise ValueError("navigation takes no expected revision")
+                return "edit", lambda: self._none(navigation(kind, operation_id, body))
             if kind == "map.export":
                 map_ref = _map_ref(body)
                 destination = self._transfer_path(body)

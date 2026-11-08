@@ -24,6 +24,7 @@ from senior_control.agent.dispatcher import (
     Dispatcher,
     HomePort,
     MapPort,
+    NavigationAction,
     OperationNotCommitted,
     TaskPort,
 )
@@ -79,6 +80,7 @@ class Agent:
         state: StatePort,
         motion: MotionPort,
         workspace: WorkspaceReader | None = None,
+        navigation: NavigationAction | None = None,
         video_session: Callable[[], VideoSession | None] | None = None,
         deadlines: Deadlines | None = None,
         map_root: Path = Path("map-transfer"),
@@ -104,6 +106,7 @@ class Agent:
         self._journal = journal
         self._state = state
         self._workspace = workspace
+        self._navigation = navigation
         self._workspace_request: asyncio.Task[None] | None = None
         self._motion = motion
         self._video_session = video_session or (lambda: None)
@@ -135,6 +138,7 @@ class Agent:
             metrics=self.metrics,
             map_root=map_root,
             admit=self._admit,
+            navigation=navigation,
         )
         self._link: Link | None = None
         self._revoked_link: Link | None = None
@@ -972,6 +976,11 @@ class Agent:
                     self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
+        if isinstance(envelope, SimpleEnvelope) and envelope.type == "navigation.cancel":
+            if self._navigation is not None:
+                self._admit(envelope)
+                await self._navigation("navigation.cancel", request_id, {})
+                return OperationResult(request_id, OperationStatus.SUCCEEDED)
         received_at = None
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
             convert_timing = getattr(link, "local_drive_timing", None)

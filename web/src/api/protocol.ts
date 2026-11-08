@@ -35,6 +35,8 @@ export const OPERATION_REQUEST_TYPES = [
   "task.delete",
   "task.enable",
   "home.set",
+  "navigation.goal",
+  "navigation.return_home",
   "map.export",
   "map.import",
   "map.clear",
