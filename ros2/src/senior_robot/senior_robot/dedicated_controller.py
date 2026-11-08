@@ -114,6 +114,8 @@ class DedicatedController:
                 f"cmd_vel:={topic}",
                 "-r",
                 f"/cmd_vel:={topic}",
+                "-r",
+                "odom:=/wheel/odom",
             )
             await self._start(stack, "nav2_bt_navigator", "bt_navigator")
             yield topic
