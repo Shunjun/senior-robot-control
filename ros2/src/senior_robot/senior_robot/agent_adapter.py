@@ -13,15 +13,19 @@ import asyncio
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from senior_control.mapping.workspace import WorkspaceMap
+from senior_control.navigation import RoutePlan
 from senior_control.protocol import (
     SimpleEnvelope,
     VelocityEnvelope,
     validate_envelope,
 )
 from senior_control.safety.arbiter import CommandResult
+
+if TYPE_CHECKING:
+    from senior_robot.navigation_adapter import RouteService
 
 SOCKET_ENV = "SENIOR_AGENT_SOCKET"
 
@@ -48,6 +52,8 @@ class AdapterCore:
         state_provider: Callable[[], dict[str, Any]] | None = None,
         pose_provider: Callable[[], dict[str, Any]] | None = None,
         take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
+        routes: "RouteService | None" = None,
+        navigation_ready: Callable[[], bool] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._submit = submit
@@ -59,6 +65,8 @@ class AdapterCore:
         self._state_provider = state_provider
         self._pose_provider = pose_provider
         self._take_drive_feedback = take_drive_feedback
+        self._routes = routes
+        self._navigation_ready = navigation_ready
         self._active_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
@@ -74,6 +82,11 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind in {
+            "navigation.task_start", "navigation.task_status", "navigation.task_cancel",
+            "navigation.current",
+        }:
+            return await self._route_request(kind, message)
         if kind == "drive_feedback":
             if self._take_drive_feedback is None:
                 return {"ok": False, "error": "unsupported"}
@@ -102,7 +115,13 @@ class AdapterCore:
         if kind in {"map.active", "map.manifest", "map.tile"}:
             if self._workspace_map is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
-            return self._workspace_map.read(kind, message)
+            result = self._workspace_map.read(kind, message)
+            if (
+                kind == "map.manifest" and result.get("ok") is True
+                and self._navigation_ready is not None and self._navigation_ready()
+            ):
+                result["navigation_ready"] = True
+            return result
         if kind == "ping":
             return {"ok": True}
         if kind == "disable_motion":
@@ -134,6 +153,38 @@ class AdapterCore:
         if kind == "ros_call":
             return {"ok": False, "error": "unsupported"}
         return {"ok": False, "error": "unknown_type"}
+
+    async def _route_request(self, kind: str, message: dict[str, Any]) -> dict[str, Any]:
+        routes = self._routes
+        if routes is None:
+            return {"ok": False, "error": "unavailable"}
+        if kind == "navigation.current":
+            current = routes.current
+            return {"ok": True, "progress": current.model_dump() if current is not None else None}
+        execution_id = message.get("execution_id")
+        if not isinstance(execution_id, str) or not 1 <= len(execution_id) <= 128:
+            return {"ok": False, "error": "bad_request"}
+        if kind == "navigation.task_start":
+            if self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            try:
+                plan = RoutePlan.model_validate(message.get("plan"))
+            except ValueError:
+                return {"ok": False, "error": "bad_request"}
+            if plan.execution_id != execution_id:
+                return {"ok": False, "error": "bad_request"}
+            if not await routes.start(plan, wait_for_goal=False):
+                return {"ok": False, "error": "unavailable"}
+            return {
+                "ok": True, "execution_id": execution_id, "map_generation": plan.map_generation,
+            }
+        if kind == "navigation.task_cancel":
+            return {"ok": await routes.cancel(execution_id), "execution_id": execution_id}
+        progress = routes.status(execution_id)
+        return {
+            "ok": True, "execution_id": execution_id,
+            "progress": progress.model_dump() if progress is not None else None,
+        }
 
     def _reenable(self, message: dict[str, Any]) -> dict[str, Any]:
         raw = message.get("envelope")
@@ -216,15 +267,58 @@ def main() -> None:
 
         def state() -> dict[str, Any]:
             assert reference is not None
-            return reference.state(
+            current = routes.current if routes is not None else None
+            result = reference.state(
                 node.motion_mode(),
-                getattr(node, "navigation_status", lambda: "idle")(),
-                navigation_ready=bool(getattr(node, "navigation_qualified", lambda: False)()),
+                current.status if current is not None else "idle",
+                navigation_ready=navigation_ready is not None and navigation_ready(),
             )
+            if current is not None and current.map_generation == result["map_generation"]:
+                result["route_progress"] = current.model_dump()
+            return result
 
         def request_exit() -> None:
             nonlocal exiting
             exiting = True
+
+        routes = None
+        navigation_ready: Callable[[], bool] | None = None
+        node.declare_parameter("navigation_controller_params", "")
+        nav_params = str(node.get_parameter("navigation_controller_params").value)
+        if reference is not None and nav_params and Path(nav_params).is_file():
+            from senior_robot.dedicated_controller import DedicatedController
+            from senior_robot.navigation_adapter import (
+                RouteService,
+                create_nav2_adapter,
+                create_planner_readiness,
+            )
+
+            planner_active = create_planner_readiness(node)
+
+            def qualified(ref, generation):
+                return (
+                    planner_active()
+                    and not exiting and reference is not None
+                    and reference.qualified(ref, generation)
+                    and reference.state(node.motion_mode())["safety_clear"]
+                    and node.navigation_qualified()
+                )
+
+            def can_navigate() -> bool:
+                grid = reference.grid() if reference is not None else None
+                return grid is not None and qualified(grid.map_ref, grid.grid_id)
+
+            navigation_ready = can_navigate
+            routes = RouteService(
+                create_nav2_adapter(node),
+                qualified=qualified,
+                prepare=DedicatedController(node, Path(nav_params)).open,
+                bind_source=lambda execution_id, topic, guard: node.bind_navigation_source(
+                    execution_id, topic, qualified=guard
+                ),
+                clear_source=node.clear_navigation_source,
+                source_active=node.navigation_source_matches,
+            )
 
         core = AdapterCore(
             robot_id=robot_id,
@@ -239,6 +333,8 @@ def main() -> None:
             workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
             state_provider=state if reference is not None else None,
             pose_provider=reference.pose_reply if reference is not None else None,
+            routes=routes,
+            navigation_ready=navigation_ready,
         )
 
         async def serve() -> None:
@@ -251,6 +347,15 @@ def main() -> None:
                 while rclpy.ok() and not exiting:
                     executor.spin_once(timeout_sec=0.0)
                     await asyncio.sleep(0.01)
+                if routes is not None and routes.current is not None:
+                    cancellation = asyncio.create_task(routes.cancel(routes.current.execution_id))
+                    deadline = asyncio.get_running_loop().time() + 3.0
+                    while not cancellation.done() and asyncio.get_running_loop().time() < deadline:
+                        if rclpy.ok():
+                            executor.spin_once(timeout_sec=0.0)
+                        await asyncio.sleep(0.01)
+                    cancellation.cancel()
+                    await asyncio.gather(cancellation, return_exceptions=True)
             finally:
                 try:
                     if started:

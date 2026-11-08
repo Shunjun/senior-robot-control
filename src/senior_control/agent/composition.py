@@ -20,6 +20,7 @@ from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError
 from senior_control.mapping.workspace_export import load_exported_grid
+from senior_control.models import MapRef
 from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
@@ -165,7 +166,7 @@ async def run_agent(config: AgentConfig) -> int:
             return 78
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
-        navigation_client = IpcClient(config.socket_path)
+        navigation_client = IpcClient(config.socket_path, timeout=3.0)
         workspace_client = IpcClient(config.socket_path)
         display_client = IpcClient(config.socket_path)
         state = IpcState(state_client)
@@ -187,18 +188,28 @@ async def run_agent(config: AgentConfig) -> int:
             config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
         )
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
-        navigation = IpcNavigation(navigation_client)
+        navigation = IpcNavigation(navigation_client, waypoints)
         agent: Agent
+        context = ExecutionContext(False, False, False, False, None)
+
+        def qualified_reference(ref: MapRef, generation: str) -> bool:
+            return (
+                context.localized and context.safety_clear and not context.manual_driving
+                and context.active_map == ref
+                and context.map_generation == context.localization_generation == generation
+            )
         executor = TaskExecutor(
             database,
             tasks,
             navigation,
             link_up=lambda: agent.eligible_for_motion,
             generation=lambda: agent.continuity_generation,
+            qualified_reference=qualified_reference,
         )
         runtime = TaskRuntime(tasks, executor, generation=lambda: agent.continuity_generation)
 
         async def task_loop() -> None:
+            nonlocal context
             while True:
                 try:
                     live = await state.read()
@@ -211,6 +222,8 @@ async def run_agent(config: AgentConfig) -> int:
                         live.safety_clear,
                         live.manual_driving,
                         live.map_ref,
+                        map_generation=live.map_generation if live.navigation_ready else None,
+                        localization_generation=live.localization_generation,
                     )
                 await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)

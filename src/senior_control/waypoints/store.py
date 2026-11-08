@@ -13,6 +13,7 @@ import aiosqlite
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.references import WaypointBinding
 from senior_control.models import MapRef, Pose2D
+from senior_control.navigation import MAX_ROUTE_WAYPOINTS
 from senior_control.storage.database import Database
 
 WAYPOINT_STATEMENTS: tuple[str, ...] = (
@@ -149,6 +150,36 @@ class WaypointStore:
                 rows = await cursor.fetchall()
             await connection.rollback()
         return tuple(_stored(row, adopted=None, link_status=None) for row in rows)
+
+    async def route_poses(
+        self, map_ref: MapRef, waypoint_ids: tuple[str, ...]
+    ) -> tuple[Pose2D, ...]:
+        if not 1 <= len(waypoint_ids) <= MAX_ROUTE_WAYPOINTS:
+            raise DomainError(ErrorCode.VALIDATION, "route waypoint count is invalid")
+        placeholders = ", ".join("?" for _ in waypoint_ids)
+        async with self._database.write_lock:
+            connection = self._database.connection
+            async with connection.execute(
+                f"""
+                SELECT waypoint_id, x, y, yaw FROM waypoint
+                WHERE robot_id = ? AND map_id = ? AND reference_revision = ?
+                    AND waypoint_id IN ({placeholders}) AND status = 'confirmed'
+                    AND (kind = 'waypoint' OR EXISTS (
+                        SELECT 1 FROM map_home_link AS link
+                        WHERE link.robot_id = waypoint.robot_id
+                          AND link.waypoint_id = waypoint.waypoint_id
+                          AND link.adopted = 1 AND link.status = 'confirmed'
+                    ))
+                """,
+                (self._robot_id, map_ref.map_id, map_ref.reference_revision, *waypoint_ids),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            await connection.rollback()
+        poses = {_text(row[0]): Pose2D(float(row[1]), float(row[2]), float(row[3])) for row in rows}
+        try:
+            return tuple(poses[waypoint_id] for waypoint_id in waypoint_ids)
+        except KeyError as exc:
+            raise DomainError(ErrorCode.CONFLICT, "route waypoint is unavailable") from exc
 
     async def page(
         self, map_ref: MapRef, after: str, limit: int

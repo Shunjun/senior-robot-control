@@ -1959,3 +1959,46 @@ async def test_cancelling_prior_execution_does_not_dispatch_same_tick(tmp_path: 
         assert first is not None and first.status is ExecutionStatus.PAUSED
         assert second is not None and second.status is ExecutionStatus.SKIPPED
         assert navigation.calls == [f"cancel:{running.execution_id}"]
+
+
+async def test_runtime_persists_confirmed_route_completion(tmp_path: Path) -> None:
+    from senior_control.navigation import RouteProgress
+
+    created = datetime(2026, 10, 27, 10, 17, 42, tzinfo=timezone.utc)
+    occurrence = created + timedelta(minutes=30)
+    async with Database(tmp_path / "robot.db") as database:
+        store, task = await saved_task(database, created)
+
+        class Navigation:
+            progress = None
+
+            async def start_qualified(self, execution_id, task, generation):
+                self.progress = RouteProgress(
+                    execution_id=execution_id, map_generation=generation, status="succeeded"
+                )
+
+            async def cancel(self, execution_id):
+                raise AssertionError("completed route should not be canceled")
+
+            async def status(self, execution_id):
+                assert self.progress.execution_id == execution_id
+                return self.progress
+
+        navigation = Navigation()
+        executor = CoreTaskExecutor(
+            database, store, navigation,
+            qualified_reference=lambda ref, gen: ref == MAP and gen == "g"
+        )
+        running = await executor.persist_and_dispatch(
+            due_intent(task, occurrence), task, map_generation="g",
+            localization_generation="g", localized=True,
+        )
+        assert running.status is ExecutionStatus.RUNNING
+        runtime = CoreTaskRuntime(store, executor)
+        context = ExecutionContext(
+            True, True, True, False, MAP, map_generation="g", localization_generation="g"
+        )
+        await runtime.tick(occurrence, 1.0, context)
+        persisted = await store.execution_by_id(running.execution_id)
+        assert persisted.status is ExecutionStatus.SUCCEEDED
+        assert persisted.navigation_sent

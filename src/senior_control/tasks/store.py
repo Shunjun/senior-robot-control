@@ -421,6 +421,17 @@ class TaskStore:
             raise DomainError(ErrorCode.CONFLICT, "execution cannot be marked running")
         return stored
 
+    async def finish(self, execution_id: str, *, succeeded: bool) -> None:
+        status = ExecutionStatus.SUCCEEDED if succeeded else ExecutionStatus.FAILED
+        async with self._database.write_lock:
+            async with self._transaction() as connection:
+                await connection.execute(
+                    "UPDATE task_execution SET status = ? "
+                    "WHERE execution_id = ? AND status = ? AND navigation_sent = 1 "
+                    "AND task_id IN (SELECT task_id FROM task_definition WHERE robot_id = ?)",
+                    (status.value, execution_id, ExecutionStatus.RUNNING.value, self._robot_id),
+                )
+
     async def mark_active_cancel_pending(self, generation: int) -> None:
         async with self._database.write_lock:
             async with self._transaction() as connection:

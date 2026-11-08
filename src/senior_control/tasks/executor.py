@@ -12,6 +12,7 @@ from typing import Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.store import MapReferenceStore
+from senior_control.models import MapRef
 from senior_control.storage.database import Database
 from senior_control.tasks.models import (
     ExecutionRecord,
@@ -67,6 +68,7 @@ class TaskExecutor:
         generation: Callable[[], int] | None = None,
         # //Compatible: legacy callers without a shared reference remain unavailable.
         map_reference: MapReferenceStore | None = None,
+        qualified_reference: Callable[[MapRef, str], bool] | None = None,
     ) -> None:
         if store._database is not database:
             raise ValueError("executor store must use the given database")
@@ -74,6 +76,7 @@ class TaskExecutor:
         self._store = store
         self._navigation = navigation
         self.map_reference = map_reference
+        self._qualified_reference = qualified_reference
         self._fault_after = fault_after
         self._link_up = link_up if link_up is not None else (lambda: True)
         # //Compatible: injected legacy callers without a connection use one fixed generation.
@@ -204,15 +207,34 @@ class TaskExecutor:
         localization_generation: str | None,
         localized: bool,
     ) -> bool:
+        if not localized or map_generation is None or localization_generation != map_generation:
+            return False
+        if self._qualified_reference is not None:
+            return self._qualified_reference(task.map_ref, map_generation)
         reference = self.map_reference
         return (
-            localized
-            and reference is not None
+            reference is not None
             and not reference.review_required
             and reference.map_ref == task.map_ref
-            and map_generation is not None
-            and localization_generation == map_generation == reference.map_generation
+            and map_generation == reference.map_generation
         )
+
+    async def reconcile(self, record: ExecutionRecord, map_generation: str | None) -> None:
+        status = getattr(self._navigation, "status", None)
+        if record.status is not ExecutionStatus.RUNNING or not callable(status):
+            return
+        try:
+            progress = await status(record.execution_id)
+        except DomainError:
+            return
+        if progress is None or progress.execution_id != record.execution_id:
+            return
+        if progress.map_generation != map_generation or progress.status == "cancel_pending":
+            await self._store.mark_cancel_pending(record.execution_id)
+        elif progress.status == "canceled":
+            await self._store.pause(record.execution_id)
+        elif progress.status in {"succeeded", "failed"}:
+            await self._store.finish(record.execution_id, succeeded=progress.status == "succeeded")
 
     def _crash_if(self, phase: str) -> None:
         if self._fault_after == phase:

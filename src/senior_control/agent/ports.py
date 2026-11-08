@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, Pose2D
+from senior_control.navigation import RoutePlan, RouteProgress
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import TaskDefinition
 from senior_control.waypoints.store import WaypointStore
@@ -55,24 +56,79 @@ class IpcMapPort:
 class IpcNavigation:
     """Only a matching explicit acknowledgement counts as an accepted action."""
 
-    def __init__(self, client: Requester) -> None:
+    def __init__(self, client: Requester, waypoints: WaypointStore | None = None) -> None:
         self._client = client
+        self._waypoints = waypoints
 
-    async def _call(self, kind: str, execution_id: str, **fields: Any) -> None:
+    async def _call(self, kind: str, execution_id: str, **fields: Any) -> dict[str, Any]:
         try:
             reply = await self._client.request(kind, execution_id=execution_id, **fields)
         except (IpcError, OSError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable") from exc
         if reply.get("ok") is not True or reply.get("execution_id") != execution_id:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable")
+        return reply
 
     async def start(self, execution_id: str, task: TaskDefinition) -> None:
         # //Compatible: legacy task IPC cannot fence an accepted reference generation.
         del execution_id, task
         raise DomainError(ErrorCode.UNAVAILABLE, "qualified ROS navigation unavailable")
 
+    async def start_qualified(
+        self, execution_id: str, task: TaskDefinition, map_generation: str
+    ) -> None:
+        if self._waypoints is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "route waypoints unavailable")
+        poses = await self._waypoints.route_poses(task.map_ref, task.waypoint_ids)
+        await self.start_poses(
+            execution_id, task.map_ref, map_generation, poses, task_id=task.task_id
+        )
+
+    async def start_poses(
+        self, execution_id: str, map_ref: MapRef, map_generation: str, poses: tuple[Pose2D, ...],
+        *, task_id: str | None = None,
+    ) -> None:
+        plan = RoutePlan(
+            execution_id=execution_id, map_id=map_ref.map_id, task_id=task_id,
+            reference_revision=map_ref.reference_revision, map_generation=map_generation,
+            poses=[[pose.x, pose.y, pose.yaw] for pose in poses],
+        )
+        reply = await self._call(
+            "navigation.task_start", execution_id, plan=plan.model_dump()
+        )
+        if reply.get("map_generation") != map_generation:
+            raise DomainError(ErrorCode.CONFLICT, "ROS accepted a different reference generation")
+
     async def cancel(self, execution_id: str) -> None:
         await self._call("navigation.task_cancel", execution_id)
+
+    async def status(self, execution_id: str) -> RouteProgress | None:
+        reply = await self._call("navigation.task_status", execution_id)
+        return self._progress(reply)
+
+    async def current(self) -> RouteProgress | None:
+        try:
+            reply = await self._client.request("navigation.current")
+        except (IpcError, OSError) as exc:
+            raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable") from exc
+        if reply.get("ok") is not True:
+            raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable")
+        return self._progress(reply)
+
+    async def cancel_current(self) -> None:
+        current = await self.current()
+        if current is not None:
+            await self.cancel(current.execution_id)
+
+    @staticmethod
+    def _progress(reply: dict[str, Any]) -> RouteProgress | None:
+        data = reply.get("progress")
+        if data is None:
+            return None
+        try:
+            return RouteProgress.model_validate(data)
+        except ValidationError as exc:
+            raise DomainError(ErrorCode.UNAVAILABLE, "invalid ROS navigation status") from exc
 
 
 @dataclass(frozen=True)
@@ -85,6 +141,7 @@ class RuntimeState:
     map_generation: str | None = None
     localization_generation: str | None = None
     navigation_ready: bool = False
+    route_progress: RouteProgress | None = None
 
 
 class StateReply(BaseModel):
@@ -102,6 +159,7 @@ class StateReply(BaseModel):
     map_generation: str | None = None
     localization_generation: str | None = None
     navigation_ready: bool = False
+    route_progress: RouteProgress | None = None
 
 
 class IpcState:
@@ -132,6 +190,7 @@ class IpcState:
                 state.map_generation,
                 state.localization_generation,
                 state.navigation_ready,
+                state.route_progress,
             )
         except (IpcError, OSError, ValueError, ValidationError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS state unavailable") from exc

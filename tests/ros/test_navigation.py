@@ -288,3 +288,55 @@ async def test_qualified_route_runs_in_order(end):
     else:
         assert await run is (end == "succeeded")
     assert goals == ([1, 2, 3] if end == "succeeded" else [1, 2])
+
+
+async def test_route_service_reports_actual_index_and_blocks_next_on_lost_reference():
+    import asyncio
+
+    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+
+    from senior_control.models import MapRef, OperationResult, OperationStatus
+    from senior_control.navigation import RoutePlan
+
+    class GoalExecutor:
+        def __init__(self):
+            self.started = []
+            self.results = {}
+            self.canceled = []
+
+        async def start(self, goal):
+            self.started.append(goal.pose.x)
+            key = str(len(self.started))
+            self.results[key] = asyncio.get_running_loop().create_future()
+            return key
+
+        async def result(self, key):
+            return await self.results[key]
+
+        async def cancel(self, key):
+            self.canceled.append(key)
+            return OperationResult(key, OperationStatus.SUCCEEDED)
+
+    ref = MapRef("yard", 3)
+    generation = "gen-a"
+    executor = GoalExecutor()
+    service = RouteService(
+        NavigationAdapter(executor), qualified=lambda r, token: (r, token) == (ref, generation)
+    )
+    plan = RoutePlan(
+        execution_id="patrol-1", map_id="yard", reference_revision=3, map_generation=generation,
+        poses=[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+    )
+    assert await service.start(plan)
+    assert service.status("patrol-1").active_waypoint_index == 0
+    executor.results["1"].set_result(True)
+    for _ in range(20):
+        if len(executor.started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert service.status("patrol-1").active_waypoint_index == 1
+    generation = "gen-b"
+    assert await service.cancel("patrol-1")
+    assert service.status("patrol-1").status == "canceled"
+    assert executor.started == [1, 2]
+    assert executor.canceled == ["2"]
