@@ -18,6 +18,7 @@ DRIVE_CHALLENGE_SECONDS = 0.3
 DRIVE_TRANSPORT_SECONDS = 0.5
 DRIVE_HOLD_FLOOR_SECONDS = 0.2
 DEVICE_REVOKED_CLOSE_CODE = 4403
+_MAX_SAFE_WEB_INTEGER = 2**53 - 1
 
 
 class StrictModel(BaseModel):
@@ -54,7 +55,7 @@ class HeartbeatRequest(StrictModel):
 
 
 class EmptyPayload(StrictModel):
-    gesture: int | None = Field(default=None, ge=1, le=2**53 - 1)
+    gesture: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
 
 
 class VelocityPayload(StrictModel):
@@ -62,7 +63,7 @@ class VelocityPayload(StrictModel):
     wz: float
     challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
     server_deadline: float | None = None
-    gesture: int | None = Field(default=None, ge=1, le=2**53 - 1)
+    gesture: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
     sampled_at: float | None = None
     server_issued_at: float | None = None
 
@@ -95,8 +96,8 @@ class DriveFeedbackKey(StrictModel):
     session_id: str = Field(min_length=1, max_length=128)
     connection_epoch: int = Field(ge=1)
     request_id: str = Field(min_length=1, max_length=128)
-    seq: int = Field(ge=1, le=2**53 - 1)
-    gesture: int = Field(ge=1, le=2**53 - 1)
+    seq: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
+    gesture: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
 
 
 class DriveExecutionFeedback(DriveFeedbackKey):
@@ -136,6 +137,12 @@ class DriveExecutionFeedback(DriveFeedbackKey):
 class VelocityEnvelope(EnvelopeBase):
     type: Literal["drive.velocity"]
     payload: VelocityPayload
+
+    @model_validator(mode="after")
+    def validate_timed_sequence(self) -> "VelocityEnvelope":
+        if self.payload.gesture is not None and not 1 <= self.seq <= _MAX_SAFE_WEB_INTEGER:
+            raise ValueError("timed sample sequence must be a positive browser-safe integer")
+        return self
 
 
 class SimpleEnvelope(EnvelopeBase):

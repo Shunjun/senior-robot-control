@@ -65,3 +65,16 @@ async def test_relay_routes_output_only_to_active_lease() -> None:
     hub.handle_agent_frame(agent, result.model_dump_json(exclude_none=True).encode())
     assert json.loads(await owner.outbox.get())["status"] == "applied"
     assert observer.outbox.pending == 0
+
+
+def test_timed_sample_sequence_can_round_trip_through_browser_feedback() -> None:
+    import pytest
+
+    from senior_control.protocol import VelocityEnvelope, VelocityPayload
+
+    with pytest.raises(ValueError, match="sequence"):
+        VelocityEnvelope(
+            v=1, type="drive.velocity", robot_id="car-a", session_id="page-a",
+            connection_epoch=2, request_id="sample", seq=2**53, expires_at=0.0,
+            payload=VelocityPayload(vx=0.0, wz=0.0, gesture=1, sampled_at=100.0),
+        )
