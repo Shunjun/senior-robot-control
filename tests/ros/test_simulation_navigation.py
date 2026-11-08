@@ -55,21 +55,27 @@ async def test_gazebo_route_order_and_authority_loss() -> None:
     renewer = asyncio.create_task(renew())
     execution_id = ""
     try:
-        for _ in range(200):
-            try:
-                state = await client.request("state.get")
-            except IpcError:
-                state = {}
-            if state.get("navigation_ready") is True:
-                break
-            await asyncio.sleep(0.1)
-        else:
+
+        async def ready_state() -> dict:
+            for _ in range(300):
+                try:
+                    state = await client.request("state.get")
+                except IpcError:
+                    state = {}
+                if state.get("navigation_ready") is True:
+                    return state
+                await asyncio.sleep(0.1)
             pytest.fail(f"simulation did not qualify navigation: {state}")
+
+        await ready_state()
         pose = await client.request("pose.get")
         assert pose["ok"] is True, pose
-        fields = {name: state[name] for name in ("map_id", "reference_revision", "map_generation")}
 
         async def start(poses: list[list[float]]) -> str:
+            state = await ready_state()
+            fields = {
+                name: state[name] for name in ("map_id", "reference_revision", "map_generation")
+            }
             new_id = uuid4().hex
             reply = await client.request(
                 "navigation.task_start",
