@@ -102,29 +102,7 @@ class WorkspaceReader:
         manifest = await self._manifest(ref)
         if not manifest.waypoint_writes:
             raise DomainError(ErrorCode.UNAVAILABLE, "this map cannot create waypoints")
-        if manifest.grid_id != point.grid_id:
-            raise DomainError(ErrorCode.CONFLICT, "map changed during waypoint editing")
-        dx, dy = pose.x - manifest.origin.x, pose.y - manifest.origin.y
-        c, s = math.cos(manifest.origin.yaw), math.sin(manifest.origin.yaw)
-        gx = (c * dx + s * dy) / manifest.resolution
-        gy = (-s * dx + c * dy) / manifest.resolution
-        if not (0 <= gx < manifest.width and 0 <= gy < manifest.height):
-            raise DomainError(ErrorCode.VALIDATION, "waypoint is outside the map")
-        column, row = math.floor(gx), math.floor(gy)
-        tx, ix = divmod(column, TILE_SIZE)
-        ty, iy = divmod(row, TILE_SIZE)
-        tile = await self._map(
-            _Tile, "map.tile", ref, grid_id=point.grid_id, tile_x=tx, tile_y=ty
-        )
-        assert isinstance(tile, _Tile)
-        if (
-            (tile.grid_id, tile.tile_x, tile.tile_y) != (point.grid_id, tx, ty)
-            or len(tile.cells) != tile.width * tile.height
-            or not (ix < tile.width and iy < tile.height)
-            or tile.cells[iy * tile.width + ix] != 0
-        ):
-            raise DomainError(ErrorCode.CONFLICT, "waypoint must be on current free space")
-        await self._require_grid(ref, point.grid_id)
+        await self._verify_free_target(ref, point.grid_id, pose, manifest)
         await self._waypoints.save_waypoint(
             waypoint_id=point.waypoint_id,
             pose=pose,
@@ -137,6 +115,35 @@ class WorkspaceReader:
             longitude=None,
             create_only=True,
         )
+
+    async def verify_free_target(self, map_ref: MapRef, grid_id: str, pose: Pose2D) -> None:
+        ref = MapRefPayload(map_id=map_ref.map_id, reference_revision=map_ref.reference_revision)
+        await self._verify_free_target(ref, grid_id, pose, await self._manifest(ref))
+
+    async def _verify_free_target(
+        self, ref: MapRefPayload, grid_id: str, pose: Pose2D, manifest: _Manifest
+    ) -> None:
+        if manifest.grid_id != grid_id:
+            raise DomainError(ErrorCode.CONFLICT, "map changed before accepting the target")
+        dx, dy = pose.x - manifest.origin.x, pose.y - manifest.origin.y
+        c, s = math.cos(manifest.origin.yaw), math.sin(manifest.origin.yaw)
+        gx = (c * dx + s * dy) / manifest.resolution
+        gy = (-s * dx + c * dy) / manifest.resolution
+        if not (0 <= gx < manifest.width and 0 <= gy < manifest.height):
+            raise DomainError(ErrorCode.VALIDATION, "target is outside the map")
+        column, row = math.floor(gx), math.floor(gy)
+        tx, ix = divmod(column, TILE_SIZE)
+        ty, iy = divmod(row, TILE_SIZE)
+        tile = await self._map(_Tile, "map.tile", ref, grid_id=grid_id, tile_x=tx, tile_y=ty)
+        assert isinstance(tile, _Tile)
+        if (
+            (tile.grid_id, tile.tile_x, tile.tile_y) != (grid_id, tx, ty)
+            or len(tile.cells) != tile.width * tile.height
+            or not (ix < tile.width and iy < tile.height)
+            or tile.cells[iy * tile.width + ix] != 0
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "target must be on current free space")
+        await self._require_grid(ref, grid_id)
 
     async def verify_task_edit(self, task: TaskDefinition, grid_id: str) -> None:
         try:
