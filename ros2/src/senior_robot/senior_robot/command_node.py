@@ -165,6 +165,9 @@ class CommandNode(Node):
         self._publish_barrier()
         self.publish_command()
 
+    def current_navigation_epoch(self) -> int:
+        return self._last_server_epoch
+
     def navigation_qualified(self) -> bool:
         return self._arbiter.navigation_qualified(self._monotonic_clock.monotonic())
 

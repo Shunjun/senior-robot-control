@@ -340,3 +340,50 @@ async def test_route_service_reports_actual_index_and_blocks_next_on_lost_refere
     assert service.status("patrol-1").status == "canceled"
     assert executor.started == [1, 2]
     assert executor.canceled == ["2"]
+
+
+async def test_starting_route_cannot_inherit_new_connection_epoch():
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+
+    from senior_control.navigation import RoutePlan
+
+    epoch = 4
+    setup = asyncio.Event()
+    ready = asyncio.Event()
+
+    @asynccontextmanager
+    async def prepare(execution_id):
+        assert execution_id == "old"
+        setup.set()
+        await ready.wait()
+        yield "/control/navigation/run_fixture/cmd_vel"
+
+    class NeverNavigate:
+        async def start(self, goal):
+            pytest.fail("old route attempted to start after reconnect")
+
+        async def result(self, execution_id):
+            pytest.fail("old route attempted to read a result")
+
+    service = RouteService(
+        NavigationAdapter(NeverNavigate()), qualified=lambda _ref, _generation: True,
+        prepare=prepare, connection_epoch=lambda: epoch,
+    )
+    plan = RoutePlan(
+        execution_id="old", map_id="yard", reference_revision=3, map_generation="g",
+        poses=[[1.0, 0.0, 0.0]], connection_epoch=4,
+    )
+    assert await service.start(plan, wait_for_goal=False)
+    await asyncio.wait_for(setup.wait(), 1)
+    epoch = 5
+    ready.set()
+    for _ in range(20):
+        if service.current is None:
+            break
+        await asyncio.sleep(0.01)
+    assert service.status("old").status == "failed"
+    retry = plan.model_copy(update={"execution_id": "stale-queued"})
+    assert not await service.start(retry, wait_for_goal=False)

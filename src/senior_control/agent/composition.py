@@ -191,8 +191,10 @@ async def run_agent(config: AgentConfig) -> int:
             config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
         )
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
-        navigation = IpcNavigation(navigation_client, waypoints)
         agent: Agent
+        navigation = IpcNavigation(
+            navigation_client, waypoints, connection_epoch=lambda: agent.connection_epoch
+        )
         context = ExecutionContext(False, False, False, False, None)
 
         def qualified_reference(ref: MapRef, generation: str) -> bool:

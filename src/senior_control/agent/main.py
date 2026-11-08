@@ -179,6 +179,10 @@ class Agent:
         return self._link is not None
 
     @property
+    def connection_epoch(self) -> int:
+        return self._epoch
+
+    @property
     def motion_allowed(self) -> bool:
         supervisor = self._supervisor
         return supervisor is not None and supervisor.motion_allowed and not self._stopping

@@ -13,6 +13,7 @@ from typing import Protocol, cast
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef
+from senior_control.navigation import RouteRejected
 from senior_control.storage.database import Database
 from senior_control.tasks.models import (
     ExecutionRecord,
@@ -116,6 +117,8 @@ class TaskExecutor:
         navigation = cast(QualifiedNavigationPort, self._navigation)
         try:
             await navigation.start_qualified(record.execution_id, task, map_generation)
+        except RouteRejected:
+            return await self._store.mark_needs_review(record.execution_id)
         except asyncio.CancelledError:
             pending = asyncio.create_task(self._store.mark_cancel_pending(record.execution_id))
             await asyncio.shield(pending)

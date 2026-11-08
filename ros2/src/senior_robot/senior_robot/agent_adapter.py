@@ -180,7 +180,7 @@ class AdapterCore:
             if plan.execution_id != execution_id:
                 return {"ok": False, "error": "bad_request"}
             if not await routes.start(plan, wait_for_goal=False):
-                return {"ok": False, "error": "unavailable"}
+                return {"ok": False, "error": "rejected", "execution_id": execution_id}
             return {
                 "ok": True, "execution_id": execution_id, "map_generation": plan.map_generation,
             }
@@ -324,6 +324,7 @@ def main() -> None:
                 ),
                 clear_source=node.clear_navigation_source,
                 source_active=node.navigation_source_matches,
+                connection_epoch=node.current_navigation_epoch,
             )
 
         core = AdapterCore(

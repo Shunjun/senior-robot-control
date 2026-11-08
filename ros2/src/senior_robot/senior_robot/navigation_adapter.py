@@ -156,6 +156,7 @@ class NavigationAdapter:
 class _Route:
     plan: RoutePlan
     started: asyncio.Future[bool]
+    connection_epoch: int | None
     status: RouteStatus = "starting"
     active_waypoint_index: int | None = None
     cancel_requested: bool = False
@@ -184,6 +185,7 @@ class RouteService:
         bind_source: Callable[[str, str, Callable[[], bool]], bool] | None = None,
         clear_source: Callable[[str], None] | None = None,
         source_active: Callable[[str], bool] | None = None,
+        connection_epoch: Callable[[], int] | None = None,
     ) -> None:
         self._adapter = adapter
         self._qualified = qualified
@@ -192,13 +194,18 @@ class RouteService:
         self._bind_source = bind_source
         self._clear_source = clear_source
         self._source_active = source_active
+        self._connection_epoch = connection_epoch
         self._current: _Route | None = None
         self._terminal: dict[str, RouteProgress] = {}
 
     async def start(self, plan: RoutePlan, *, wait_for_goal: bool = True) -> bool:
+        epoch = self._connection_epoch() if self._connection_epoch is not None else None
+        if plan.connection_epoch is not None and plan.connection_epoch != epoch:
+            return False
         if self._current is not None:
             if (
                 self._current.plan != plan
+                or self._current.connection_epoch != epoch
                 or self._current.cancel_requested
                 or self._current.status == "cancel_pending"
             ):
@@ -210,7 +217,7 @@ class RouteService:
             or not self._qualified(plan.map_ref, plan.map_generation)
         ):
             return False
-        route = _Route(plan, asyncio.get_running_loop().create_future())
+        route = _Route(plan, asyncio.get_running_loop().create_future(), epoch)
         self._current = route
         route.task = asyncio.create_task(self._run(route))
         return await asyncio.shield(route.started) if wait_for_goal else True
@@ -225,6 +232,10 @@ class RouteService:
             return (
                 not route.cancel_requested
                 and not binding_failed
+                and (
+                    self._connection_epoch is None
+                    or self._connection_epoch() == route.connection_epoch
+                )
                 and self._qualified(ref, generation)
                 and (
                     route.active_waypoint_index is None

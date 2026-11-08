@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, Pose2D
-from senior_control.navigation import RoutePlan, RouteProgress
+from senior_control.navigation import RoutePlan, RouteProgress, RouteRejected
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import TaskDefinition
 from senior_control.waypoints.store import WaypointStore
@@ -56,15 +56,24 @@ class IpcMapPort:
 class IpcNavigation:
     """Only a matching explicit acknowledgement counts as an accepted action."""
 
-    def __init__(self, client: Requester, waypoints: WaypointStore | None = None) -> None:
+    def __init__(
+        self, client: Requester, waypoints: WaypointStore | None = None,
+        *, connection_epoch: Callable[[], int] | None = None,
+    ) -> None:
         self._client = client
         self._waypoints = waypoints
+        self._connection_epoch = connection_epoch
 
     async def _call(self, kind: str, execution_id: str, **fields: Any) -> dict[str, Any]:
         try:
             reply = await self._client.request(kind, execution_id=execution_id, **fields)
         except (IpcError, OSError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable") from exc
+        if (
+            kind == "navigation.task_start" and reply.get("ok") is False
+            and reply.get("error") == "rejected" and reply.get("execution_id") == execution_id
+        ):
+            raise RouteRejected()
         if reply.get("ok") is not True or reply.get("execution_id") != execution_id:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable")
         return reply
@@ -77,22 +86,33 @@ class IpcNavigation:
     async def start_qualified(
         self, execution_id: str, task: TaskDefinition, map_generation: str
     ) -> None:
+        epoch = self._connection_epoch() if self._connection_epoch is not None else None
         if self._waypoints is None:
-            raise DomainError(ErrorCode.UNAVAILABLE, "route waypoints unavailable")
-        poses = await self._waypoints.route_poses(task.map_ref, task.waypoint_ids)
+            raise RouteRejected()
+        try:
+            poses = await self._waypoints.route_poses(task.map_ref, task.waypoint_ids)
+        except DomainError as exc:
+            raise RouteRejected() from exc
         await self.start_poses(
-            execution_id, task.map_ref, map_generation, poses, task_id=task.task_id
+            execution_id, task.map_ref, map_generation, poses, task_id=task.task_id,
+            connection_epoch=epoch,
         )
 
     async def start_poses(
         self, execution_id: str, map_ref: MapRef, map_generation: str, poses: tuple[Pose2D, ...],
-        *, task_id: str | None = None,
+        *, task_id: str | None = None, connection_epoch: int | None = None,
     ) -> None:
-        plan = RoutePlan(
-            execution_id=execution_id, map_id=map_ref.map_id, task_id=task_id,
-            reference_revision=map_ref.reference_revision, map_generation=map_generation,
-            poses=[[pose.x, pose.y, pose.yaw] for pose in poses],
-        )
+        if connection_epoch is None and self._connection_epoch is not None:
+            connection_epoch = self._connection_epoch()
+        try:
+            plan = RoutePlan(
+                execution_id=execution_id, map_id=map_ref.map_id, task_id=task_id,
+                reference_revision=map_ref.reference_revision, map_generation=map_generation,
+                poses=[[pose.x, pose.y, pose.yaw] for pose in poses],
+                connection_epoch=connection_epoch,
+            )
+        except ValidationError as exc:
+            raise RouteRejected() from exc
         reply = await self._call(
             "navigation.task_start", execution_id, plan=plan.model_dump()
         )
