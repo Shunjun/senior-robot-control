@@ -52,15 +52,17 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 
 ### 工作台实时地图
 
-`senior-robot start` 的仿真档为 Gazebo 的 baseline 场景启用带引用的地图。
+`senior-robot start` 的仿真档启动 Gazebo 的运动校验场景，并启用带引用的地图和 Nav2。
 栅格由启动使用的 SDF 碰撞几何生成，网页图块和 Nav2 的 `/map` 来自同一份栅格。
 定位参考使用该隔离实例的 Gazebo 真值里程计和轮式里程计，任一来源过期、重复或切换时
 停止提供定位资格。手动调试此链路时，应在同一隔离域的
 `simulation_motion.launch.py` 上显式传入 `qualified_reference:=true`。
+每次导航独立启动控制器和 BT 导航节点，结束或撤销权限后回收。仿真配置的速度限制与
+既有平地校验参数一起使用，运行时仍要求安全门报告新鲜的激光和运动观测。
 其他场景及实车配置继续依赖各自可验证的地图和定位来源。
 
 ### 仿真视频
 
-要在浏览器查看 baseline 场景的 RGB 摄像头，在仿真档 JSON 中设置 `"video": true`，
+要在浏览器查看仿真车辆的 RGB 摄像头，在仿真档 JSON 中设置 `"video": true`，
 并让运行 Agent 的 Python 环境安装项目的 `video` 可选依赖。仿真和 Agent 共享
 本次运行专用的私有最新帧，视频继续经现有 WebRTC 通道协商。
