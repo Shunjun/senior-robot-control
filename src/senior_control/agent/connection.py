@@ -123,12 +123,14 @@ class IpcMotion:
         heartbeat_client: IpcClient | None = None,
         disable_client: IpcClient | None = None,
         feedback_client: IpcClient | None = None,
+        safety_client: IpcClient | None = None,
     ) -> None:
         self._client = client
         # //Compatible: isolated callers can still supply one serialized IPC client.
         self._heartbeat_client = heartbeat_client if heartbeat_client is not None else client
         self._disable_client = disable_client if disable_client is not None else client
         self._feedback_client = feedback_client
+        self._safety_client = safety_client if safety_client is not None else client
 
     async def _ok(
         self, kind: str, *, client: IpcClient | None = None, **fields: Any
@@ -164,10 +166,14 @@ class IpcMotion:
         await self._ok("identity", robot_id=robot_id)
 
     async def stop(self, envelope: SimpleEnvelope) -> None:
-        await self._ok("stop", envelope=serialize_envelope(envelope).decode())
+        await self._ok(
+            "stop", client=self._safety_client, envelope=serialize_envelope(envelope).decode()
+        )
 
     async def estop(self, envelope: SimpleEnvelope) -> None:
-        await self._ok("estop", envelope=serialize_envelope(envelope).decode())
+        await self._ok(
+            "estop", client=self._safety_client, envelope=serialize_envelope(envelope).decode()
+        )
 
     async def forward(self, envelope: Envelope) -> None:
         await self._ok("command", envelope=serialize_envelope(envelope).decode())
@@ -201,7 +207,12 @@ class IpcMotion:
         return [DriveExecutionFeedback.model_validate(item) for item in raw]
 
     async def close(self) -> None:
-        for client in {self._client, self._heartbeat_client, self._disable_client,
-                       self._feedback_client}:
+        for client in {
+            self._client,
+            self._heartbeat_client,
+            self._disable_client,
+            self._feedback_client,
+            self._safety_client,
+        }:
             if client is not None:
                 await client.close()

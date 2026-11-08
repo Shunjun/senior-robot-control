@@ -134,6 +134,7 @@ async def run_agent(config: AgentConfig) -> int:
             heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
             feedback_client=IpcClient(config.socket_path),
+            safety_client=IpcClient(config.socket_path),
         )
         try:
             await motion.verify_robot(config.robot_id)
