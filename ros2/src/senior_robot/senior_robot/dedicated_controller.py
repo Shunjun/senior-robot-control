@@ -8,8 +8,8 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 
-from lifecycle_msgs.msg import Transition
-from lifecycle_msgs.srv import ChangeState
+from lifecycle_msgs.msg import State, Transition
+from lifecycle_msgs.srv import ChangeState, GetState
 from rclpy.node import Node
 
 
@@ -23,24 +23,47 @@ class DedicatedController:
         self, name: str, transition: int, process: asyncio.subprocess.Process
     ) -> None:
         client = self._node.create_client(ChangeState, f"/{name}/change_state")
-        deadline = asyncio.get_running_loop().time() + 10
+        observer = self._node.create_client(GetState, f"/{name}/get_state")
+        expected = (
+            State.PRIMARY_STATE_INACTIVE
+            if transition == Transition.TRANSITION_CONFIGURE
+            else State.PRIMARY_STATE_ACTIVE
+        )
+        clock = asyncio.get_running_loop()
+        deadline = clock.time() + 10
+        request_future = state_future = None
         try:
-            while not client.service_is_ready():
-                if process.returncode is not None or asyncio.get_running_loop().time() >= deadline:
-                    raise RuntimeError("scoped Nav2 controller service unavailable")
+            while not (client.service_is_ready() and observer.service_is_ready()):
+                if process.returncode is not None or clock.time() >= deadline:
+                    raise RuntimeError(f"{name} lifecycle services unavailable")
                 await asyncio.sleep(0.025)
             request = ChangeState.Request()
             request.transition.id = transition
-            pending = client.call_async(request)
-            while not pending.done():
-                if process.returncode is not None or asyncio.get_running_loop().time() >= deadline:
-                    pending.cancel()
-                    raise RuntimeError("scoped Nav2 controller transition timed out")
+            request_future = client.call_async(request)
+            deadline = clock.time() + 10
+            last_query = float("-inf")
+            while process.returncode is None and clock.time() < deadline:
+                if request_future.done():
+                    response = request_future.result()
+                    if response is not None and not response.success:
+                        raise RuntimeError(f"{name} lifecycle transition {transition} rejected")
+                if state_future is not None and state_future.done():
+                    state = state_future.result()
+                    if state is not None and state.current_state.id == expected:
+                        return
+                    state_future = None
+                if clock.time() - last_query >= 0.25:
+                    if state_future is not None:
+                        state_future.cancel()
+                    state_future = observer.call_async(GetState.Request())
+                    last_query = clock.time()
                 await asyncio.sleep(0.025)
-            reply = pending.result()
-            if reply is None or not reply.success:
-                raise RuntimeError("scoped Nav2 controller transition rejected")
+            raise RuntimeError(f"{name} lifecycle transition {transition} was unconfirmed")
         finally:
+            for pending in (request_future, state_future):
+                if pending is not None and not pending.done():
+                    pending.cancel()
+            self._node.destroy_client(observer)
             self._node.destroy_client(client)
 
     async def _stop(self, process: asyncio.subprocess.Process) -> None:
