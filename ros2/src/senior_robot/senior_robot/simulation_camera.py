@@ -10,6 +10,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
 from senior_control.vision.simulation_video import publish_image
+from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
 
 _TOPIC = "/camera/color/image_raw"
 
@@ -30,6 +31,7 @@ class SimulationCamera(Node):
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
+    @with_dds_info
     def _on_image(self, image: Image, info: dict[str, Any]) -> None:
         sources = self.get_publishers_info_by_topic(_TOPIC)
         if len(sources) != 1 or (sources[0].node_name, sources[0].node_namespace) != (
@@ -62,12 +64,14 @@ class SimulationCamera(Node):
 def main() -> None:
     rclpy.init()
     node = None
+    executor = MotionExecutor()
     try:
         node = SimulationCamera()
-        rclpy.spin(node)
+        rclpy.spin(node, executor=executor)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        executor.shutdown()
         if node is not None:
             node.destroy_node()
         # //Compatible: Humble's signal handler may already have shut down the context.
