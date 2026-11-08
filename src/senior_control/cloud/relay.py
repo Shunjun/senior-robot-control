@@ -22,6 +22,7 @@ from senior_control.errors import ErrorCode
 from senior_control.protocol import (
     DEVICE_REVOKED_CLOSE_CODE,
     DRIVE_CHALLENGE_SECONDS,
+    WORKSPACE_REQUEST_TYPES,
     EmptyPayload,
     Envelope,
     HeartbeatRequest,
@@ -34,6 +35,7 @@ from senior_control.protocol import (
     VideoCloseEnvelope,
     VideoEnvelope,
     VideoSdpEnvelope,
+    WorkspaceEnvelope,
     serialize_envelope,
     validate_frame,
 )
@@ -46,6 +48,8 @@ VELOCITY = "drive.velocity"
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
 SNAPSHOT = "snapshot"
+WORKSPACE = "workspace"
+WORKSPACE_REPLY_SECONDS = 5.0
 HEARTBEAT_WINDOW_SECONDS = 2.0
 # Five default backoffs (31s), five failed handshakes (up to 25s) and heartbeat margin.
 RECONNECT_GRACE_SECONDS = 60.0
@@ -107,8 +111,14 @@ class Outbox:
                 len(self._items),
             )
             self._items.insert(index, (kind, frame))
-        else:
+        elif kind == WORKSPACE:
             self._items.append((kind, frame))
+        else:
+            index = next(
+                (index for index, (queued, _) in enumerate(self._items) if queued == WORKSPACE),
+                len(self._items),
+            )
+            self._items.insert(index, (kind, frame))
         self._event.set()
         return True
 
@@ -116,8 +126,12 @@ class Outbox:
         self._items = deque(item for item in self._items if item[0] != VELOCITY)
 
     def _evict(self, incoming: str) -> bool:
-        if incoming == VIDEO:
+        if incoming in {VIDEO, WORKSPACE}:
             return False
+        for index, (kind, _) in enumerate(self._items):
+            if kind == WORKSPACE:
+                del self._items[index]
+                return True
         for index, (kind, _) in enumerate(self._items):
             if kind == VIDEO:
                 del self._items[index]
@@ -186,11 +200,19 @@ class _LeaseRequest:
 
 
 @dataclass
+class _WorkspaceRequest:
+    controller: Connection
+    envelope: WorkspaceEnvelope
+    deadline: float = field(default_factory=lambda: time.monotonic() + WORKSPACE_REPLY_SECONDS)
+
+
+@dataclass
 class _Link:
     agent: Connection | None = None
     epoch: int = 0
     controllers: set[Connection] = field(default_factory=set)
     lease_request: _LeaseRequest | None = None
+    workspace_request: _WorkspaceRequest | None = None
     reconnect_until: float = 0.0
 
 
@@ -293,6 +315,7 @@ class Hub:
             wall_origin=time.time(),
         )
         previous, link.agent = link.agent, connection
+        link.workspace_request = None
         link.lease_request = None
         for controller in link.controllers:
             controller.lease_session = None
@@ -342,6 +365,7 @@ class Hub:
                     link.reconnect_until = connection.reconnect_deadline(time.monotonic())
                 link.agent = None
                 link.lease_request = None
+                link.workspace_request = None
                 for controller in link.controllers:
                     controller.lease_session = None
                     controller.challenges.clear()
@@ -460,6 +484,18 @@ class Hub:
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
             return
+        if envelope.payload.request_type in WORKSPACE_REQUEST_TYPES:
+            pending = link.workspace_request
+            if pending is not None and (
+                envelope.payload.request_type == pending.envelope.type
+                and envelope.request_id == pending.envelope.request_id
+                and envelope.session_id == pending.envelope.session_id
+                and envelope.seq == pending.envelope.seq
+            ):
+                link.workspace_request = None
+                if time.monotonic() < pending.deadline:
+                    pending.controller.outbox.put(raw, WORKSPACE)
+            return
         self._handle_lease_response(link, connection, envelope)
         for controller in list(link.controllers):
             if not controller.outbox.put(raw, "response"):
@@ -547,6 +583,17 @@ class Hub:
             and envelope.type in LEASE_TYPES | {"drive.challenge", VELOCITY}
         ):
             self._reject(connection, envelope, ErrorCode.OFFLINE)
+            return
+        if isinstance(envelope, WorkspaceEnvelope):
+            pending_read = link.workspace_request
+            if (
+                envelope.connection_epoch != agent.epoch
+                or (pending_read is not None and time.monotonic() < pending_read.deadline)
+                or not agent.outbox.put(raw, WORKSPACE)
+            ):
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+            else:
+                link.workspace_request = _WorkspaceRequest(connection, envelope)
             return
         if isinstance(envelope, SimpleEnvelope):
             pending = link.lease_request
@@ -692,7 +739,9 @@ class Hub:
             type="response",
             payload=ResponsePayload(request_type=request_type, ok=False, error=error),
         )
-        if not connection.outbox.put(serialize_envelope(reply), "response"):
+        if isinstance(envelope, WorkspaceEnvelope):
+            connection.outbox.put(serialize_envelope(reply), WORKSPACE)
+        elif not connection.outbox.put(serialize_envelope(reply), "response"):
             connection.outbox.close(CLOSE_OVERLOAD)
 
 

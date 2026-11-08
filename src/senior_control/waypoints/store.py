@@ -150,6 +150,32 @@ class WaypointStore:
             await connection.rollback()
         return tuple(_stored(row, adopted=None, link_status=None) for row in rows)
 
+    async def page(
+        self, map_ref: MapRef, after: str, limit: int
+    ) -> tuple[StoredWaypoint, ...]:
+        async with self._database.write_lock:
+            connection = self._database.connection
+            async with connection.execute(
+                """
+                SELECT waypoint_id, kind, x, y, yaw, map_id, reference_revision,
+                       anchor_id, source_robot_id, status, latitude, longitude,
+                       anchor_x, anchor_y, anchor_yaw
+                FROM waypoint
+                WHERE robot_id = ? AND map_id = ? AND reference_revision = ?
+                    AND waypoint_id > ? AND (kind = 'waypoint' OR EXISTS (
+                        SELECT 1 FROM map_home_link AS link
+                        WHERE link.robot_id = waypoint.robot_id
+                          AND link.waypoint_id = waypoint.waypoint_id
+                          AND link.adopted = 1 AND link.status = 'confirmed'
+                    ))
+                ORDER BY waypoint_id LIMIT ?
+                """,
+                (self._robot_id, map_ref.map_id, map_ref.reference_revision, after, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            await connection.rollback()
+        return tuple(_stored(row, adopted=None, link_status=None) for row in rows)
+
     async def save_home(
         self,
         *,

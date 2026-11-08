@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from senior_control.mapping.workspace import WorkspaceMap
 from senior_control.protocol import (
     SimpleEnvelope,
     VelocityEnvelope,
@@ -43,6 +44,7 @@ class AdapterCore:
         request_exit: Callable[[], None],
         server_heartbeat: Callable[[int, float], bool] | None = None,
         require_source_deadline: bool = False,
+        workspace_map: WorkspaceMap | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._submit = submit
@@ -50,6 +52,7 @@ class AdapterCore:
         self._request_exit = request_exit
         self._server_heartbeat = server_heartbeat
         self._require_source_deadline = require_source_deadline
+        self._workspace_map = workspace_map
         self._active_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
@@ -81,6 +84,10 @@ class AdapterCore:
                 return {"ok": False, "error": "bad_request"}
             accepted = self._server_heartbeat(epoch, float(deadline))
             return {"ok": accepted}
+        if kind in {"map.active", "map.manifest", "map.tile"}:
+            if self._workspace_map is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            return self._workspace_map.read(kind, message)
         if kind == "ping":
             return {"ok": True}
         if kind == "disable_motion":

@@ -41,11 +41,24 @@ export const OPERATION_REQUEST_TYPES = [
   "operation.query",
 ] as const;
 
+export const WORKSPACE_REQUEST_TYPES = [
+  "task.get",
+  "waypoint.list",
+  "map.manifest",
+  "map.tile",
+] as const;
+export type WorkspaceRequestType = (typeof WORKSPACE_REQUEST_TYPES)[number];
+
+export function isWorkspaceRequestType(type: string): type is WorkspaceRequestType {
+  return (WORKSPACE_REQUEST_TYPES as readonly string[]).includes(type);
+}
+
 /** Frames a browser may originate for the agent, excluding video signaling. */
 export const REQUEST_TYPES = [
   "drive.velocity",
   ...SIMPLE_REQUEST_TYPES,
   ...OPERATION_REQUEST_TYPES,
+  ...WORKSPACE_REQUEST_TYPES,
 ] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
 
@@ -65,6 +78,7 @@ export const RESPONSE_REQUEST_TYPES = [
   "video.answer",
   "video.candidate",
   "video.close",
+  ...WORKSPACE_REQUEST_TYPES,
 ] as const;
 
 export const ENVELOPE_FIELDS = [
@@ -175,6 +189,7 @@ export interface ResponsePayload {
   challenge_id?: string | null;
   server_deadline?: number | null;
   status?: ResponseStatus | null;
+  data?: Record<string, unknown>;
 }
 
 export interface SnapshotEnvelope extends EnvelopeBase {
@@ -320,7 +335,12 @@ function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (challengeId !== null && !isText(challengeId, 128)) return null;
   if (serverDeadline !== null && (!isFiniteNumber(serverDeadline) || serverDeadline <= 0)) return null;
   if (requestType === "drive.challenge" && value["ok"] && (challengeId === null || serverDeadline === null)) return null;
+  const data = value["data"];
+  if (typeof requestType !== "string") return null;
+  const expectsData = isWorkspaceRequestType(requestType) && value["ok"];
+  if (expectsData ? !isRecord(data) : data !== undefined && data !== null) return null;
   return {
+    ...(isRecord(data) ? { data } : {}),
     request_type: requestType as ResponsePayload["request_type"],
     ok: value["ok"],
     error: error as ErrorCode | null,

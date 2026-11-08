@@ -26,6 +26,7 @@ import {
   REQUEST_TYPES,
   RESPONSE_REQUEST_TYPES,
   SIMPLE_REQUEST_TYPES,
+  WORKSPACE_REQUEST_TYPES,
   SNAPSHOT_FIELDS,
   type LinkStatus,
   type ResponsePayload,
@@ -790,7 +791,9 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
     const operations = quoted(/OPERATION_TYPES = \(([^)]*)\)/.exec(protocol)![1]!);
     expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple);
     expect([...OPERATION_REQUEST_TYPES]).toEqual(operations);
-    expect([...REQUEST_TYPES]).toEqual(["drive.velocity", ...simple, ...operations]);
+    const workspace = literalOf(/WorkspaceRequest = Literal\[[^\]]+\]/.exec(protocol)![0]);
+    expect([...WORKSPACE_REQUEST_TYPES]).toEqual(workspace);
+    expect([...REQUEST_TYPES]).toEqual(["drive.velocity", ...simple, ...operations, ...workspace]);
   });
 
   it("mirrors the response request types and error codes", () => {

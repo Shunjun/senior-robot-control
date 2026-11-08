@@ -16,6 +16,7 @@ from senior_control.agent.main import Agent
 from senior_control.agent.ports import IpcHomePort, IpcMapPort, IpcNavigation, IpcState
 from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
+from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError
 from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
@@ -58,10 +59,17 @@ class AgentConfig:
 
 
 class SnapshotState:
-    def __init__(self, state: IpcState, tasks: TaskStore, waypoints: WaypointStore) -> None:
+    def __init__(
+        self,
+        state: IpcState,
+        tasks: TaskStore,
+        waypoints: WaypointStore,
+        workspace: WorkspaceReader | None = None,
+    ) -> None:
         self._state = state
         self._tasks = tasks
         self._waypoints = waypoints
+        self._workspace = workspace
 
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
@@ -73,7 +81,7 @@ class SnapshotState:
         except DomainError:
             return LiveState(
                 False,
-                None,
+                await self._workspace.active_map() if self._workspace else None,
                 home.waypoint if home else None,
                 task_revision,
                 "unavailable",
@@ -140,7 +148,11 @@ async def run_agent(config: AgentConfig) -> int:
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
         navigation_client = IpcClient(config.socket_path)
+        workspace_client = IpcClient(config.socket_path)
+        display_client = IpcClient(config.socket_path)
         state = IpcState(state_client)
+        workspace = WorkspaceReader(config.robot_id, tasks, waypoints, workspace_client)
+        display = WorkspaceReader(config.robot_id, tasks, waypoints, display_client)
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
         navigation = IpcNavigation(navigation_client)
         agent: Agent
@@ -172,7 +184,11 @@ async def run_agent(config: AgentConfig) -> int:
 
         async def cleanup() -> None:
             await asyncio.gather(
-                state_client.close(), map_client.close(), navigation_client.close()
+                state_client.close(),
+                map_client.close(),
+                navigation_client.close(),
+                workspace_client.close(),
+                display_client.close(),
             )
 
         agent = Agent(
@@ -182,7 +198,8 @@ async def run_agent(config: AgentConfig) -> int:
             tasks=StoreTaskPort(tasks, robot_id=config.robot_id),
             home=home,
             maps=IpcMapPort(map_client),
-            state=SnapshotState(state, tasks, waypoints),
+            state=SnapshotState(state, tasks, waypoints, display),
+            workspace=workspace,
             motion=motion,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",

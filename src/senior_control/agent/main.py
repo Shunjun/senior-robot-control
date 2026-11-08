@@ -28,6 +28,7 @@ from senior_control.agent.dispatcher import (
 )
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import HomeSummary, RobotSnapshot, StatePort
+from senior_control.agent.workspace import WorkspaceReader
 from senior_control.clock import Clock, SystemClock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
@@ -41,6 +42,7 @@ from senior_control.protocol import (
     SnapshotEnvelope,
     VelocityEnvelope,
     VideoEnvelope,
+    WorkspaceEnvelope,
 )
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.vision.signaling import VideoSignaling
@@ -73,6 +75,7 @@ class Agent:
         maps: MapPort,
         state: StatePort,
         motion: MotionPort,
+        workspace: WorkspaceReader | None = None,
         video_session: Callable[[], VideoSession | None] | None = None,
         deadlines: Deadlines | None = None,
         map_root: Path = Path("map-transfer"),
@@ -97,6 +100,8 @@ class Agent:
         self._connector = connector
         self._journal = journal
         self._state = state
+        self._workspace = workspace
+        self._workspace_request: asyncio.Task[None] | None = None
         self._motion = motion
         self._video_session = video_session or (lambda: None)
         self._deadlines = deadlines if deadlines is not None else Deadlines()
@@ -666,6 +671,12 @@ class Agent:
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
             return
+        if isinstance(envelope, WorkspaceEnvelope):
+            # The relay bounds reads to one in flight. Dropping excess here reserves
+            # the ordinary and safety lanes even when the relay violates that limit.
+            if self._workspace_request is None or self._workspace_request.done():
+                self._workspace_request = self._spawn(self._answer_workspace(link, envelope))
+            return
         if envelope.type in HALT_TYPES:
             key = (envelope.type, envelope.connection_epoch, envelope.session_id)
             existing = self._safety_pending.get(key)
@@ -684,7 +695,8 @@ class Agent:
                 self._safety_task.add_done_callback(self._safety_finished)
             return
         safety_active = self._safety_task is not None and not self._safety_task.done()
-        if len(self._inflight) - int(safety_active) >= MAX_INFLIGHT:
+        workspace_active = self._workspace_request in self._inflight
+        if len(self._inflight) - int(safety_active) - int(workspace_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
             convert = getattr(link, "local_command_deadline", None)
@@ -789,6 +801,23 @@ class Agent:
             except Exception:
                 logger.warning("snapshot after edit failed", exc_info=True)
 
+    async def _answer_workspace(self, link: Link, envelope: WorkspaceEnvelope) -> None:
+        try:
+            self._admit(envelope)
+            if self._workspace is None:
+                raise DomainError(ErrorCode.UNAVAILABLE, "workspace reads unavailable")
+            data = await asyncio.wait_for(self._workspace.read(envelope), self._deadlines.edit)
+            self._admit(envelope)
+        except asyncio.TimeoutError:
+            await self._reply(link, envelope, error=ErrorCode.TIMEOUT)
+        except DomainError as exc:
+            await self._reply(link, envelope, error=exc.code)
+        except Exception:
+            logger.exception("workspace read failed")
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+        else:
+            await self._reply(link, envelope, data=data)
+
     async def _reject(self, link: Link, envelope: Envelope, error: ErrorCode) -> None:
         await self._reply(link, envelope, error=error)
 
@@ -800,6 +829,7 @@ class Agent:
         result: OperationResult | None = None,
         error: ErrorCode | None = None,
         status: OperationStatus | None = None,
+        data: dict[str, Any] | None = None,
     ) -> None:
         request_type: Any = envelope.type
         shown = result.status if result is not None else status
@@ -821,6 +851,7 @@ class Agent:
                 ok=error is None,
                 error=error,
                 operation_id=operation_id,
+                data=data,
                 status=shown.value if shown is not None else None,
             ),
         )
@@ -840,7 +871,7 @@ class Agent:
         link: Link | None = None,
         generation: int | None = None,
     ) -> OperationResult:
-        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope)):
+        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope, WorkspaceEnvelope)):
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")

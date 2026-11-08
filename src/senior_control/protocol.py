@@ -1,8 +1,16 @@
 """Versioned, bounded remote control wire format."""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from senior_control.errors import ErrorCode
 
@@ -114,6 +122,47 @@ class MapRefPayload(StrictModel):
     reference_revision: int = Field(ge=0)
 
 
+WorkspaceRequest = Literal["task.get", "waypoint.list", "map.manifest", "map.tile"]
+WORKSPACE_REQUEST_TYPES = frozenset(get_args(WorkspaceRequest))
+
+
+class WorkspacePayload(StrictModel):
+    map_ref: MapRefPayload
+    task_id: ShortText | None = None
+    cursor: ShortText | None = None
+    grid_id: ShortText | None = None
+    tile_x: int | None = Field(default=None, ge=0, le=2047)
+    tile_y: int | None = Field(default=None, ge=0, le=2047)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: Any) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        return {field: value for field, value in result.items() if value is not None}
+
+
+class WorkspaceEnvelope(EnvelopeBase):
+    type: WorkspaceRequest
+    payload: WorkspacePayload
+
+    @model_validator(mode="after")
+    def matching_fields(self) -> "WorkspaceEnvelope":
+        fields = self.payload.model_fields_set - {"map_ref"}
+        match self.type:
+            case "task.get":
+                valid = fields == {"task_id"} and self.payload.task_id is not None
+            case "waypoint.list":
+                valid = fields <= {"cursor"}
+            case "map.manifest":
+                valid = not fields
+            case "map.tile":
+                valid = fields == {"grid_id", "tile_x", "tile_y"} and all(
+                    getattr(self.payload, field) is not None for field in fields
+                )
+        if not valid:
+            raise ValueError("invalid workspace read parameters")
+        return self
+
+
 class HomePayload(StrictModel):
     waypoint_id: ShortText
     map_ref: MapRefPayload
@@ -175,12 +224,17 @@ class ResponsePayload(StrictModel):
         "video.answer",
         "video.candidate",
         "video.close",
+        "task.get",
+        "waypoint.list",
+        "map.manifest",
+        "map.tile",
     ]
     ok: bool
     error: ErrorCode | None = None
     operation_id: str | None = None
     challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
     server_deadline: float | None = None
+    data: dict[str, Any] | None = None
     status: (
         Literal["accepted", "dispatching", "running", "succeeded", "failed", "needs_review"] | None
     ) = None
@@ -189,7 +243,17 @@ class ResponsePayload(StrictModel):
     def consistent_result(self) -> "ResponsePayload":
         if self.ok == (self.error is not None):
             raise ValueError("response success and error conflict")
+        if (self.data is not None) != (self.ok and self.request_type in WORKSPACE_REQUEST_TYPES):
+            raise ValueError("workspace response data does not match its request")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: Any) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        # //Compatible: strict v1 peers accept the original response fields.
+        if self.data is None:
+            result.pop("data", None)
+        return result
 
 
 class ResponseEnvelope(EnvelopeBase):
@@ -233,13 +297,19 @@ class VideoCloseEnvelope(EnvelopeBase):
 VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope
 
 Envelope = Annotated[
-    VelocityEnvelope | SimpleEnvelope | OperationEnvelope | SnapshotEnvelope | ResponseEnvelope,
+    VelocityEnvelope
+    | SimpleEnvelope
+    | OperationEnvelope
+    | WorkspaceEnvelope
+    | SnapshotEnvelope
+    | ResponseEnvelope,
     Field(discriminator="type"),
 ]
 Frame = Annotated[
     VelocityEnvelope
     | SimpleEnvelope
     | OperationEnvelope
+    | WorkspaceEnvelope
     | SnapshotEnvelope
     | ResponseEnvelope
     | VideoSdpEnvelope

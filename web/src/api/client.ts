@@ -2,6 +2,7 @@ import {
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   isRequestType,
+  isWorkspaceRequestType,
   parseInbound,
   parseVideoInbound,
   type EnvelopeBase,
@@ -640,12 +641,15 @@ export class RobotClient implements RobotLink {
     }
     const entry = this.pending.get(envelope.request_id);
     if (entry === undefined || entry.type !== envelope.payload.request_type) return;
-    if ((entry.type === "control.acquire" || entry.type === "drive.challenge") &&
+    const workspace = isWorkspaceRequestType(entry.type);
+    if ((entry.type === "control.acquire" || entry.type === "drive.challenge" || workspace) &&
         (entry.sessionId !== envelope.session_id || entry.epoch !== envelope.connection_epoch || entry.seq !== envelope.seq)) return;
     this.pending.delete(envelope.request_id);
     clearTimeout(entry.timer);
     const { payload } = envelope;
-    if (payload.ok) entry.resolve(payload);
+    if (workspace && (entry.epoch !== this.epoch || this.latest === null || this.latest.stale || !this.latest.connected)) {
+      entry.reject(new CommandError("offline", "workspace response belongs to an expired connection"));
+    } else if (payload.ok) entry.resolve(payload);
     else {
       const code = payload.error ?? "validation";
       entry.reject(new CommandError(code, describeCommandError(code)));
