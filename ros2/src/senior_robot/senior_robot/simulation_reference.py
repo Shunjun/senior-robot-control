@@ -223,10 +223,9 @@ class SimulationReference:
         self._safety_at = (
             time.monotonic()
             if self._safety_gid is not None
-            and any(
-                status.name == "safety_gate" and status.message in _SAFETY_READY
-                for status in msg.status
-            )
+            and status is not None
+            and status.message in _SAFETY_READY
+            and any(item.key == "evidence_ready" and item.value == "true" for item in status.values)
             else float("-inf")
         )
 

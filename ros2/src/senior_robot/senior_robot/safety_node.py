@@ -1023,7 +1023,15 @@ class SafetyGate(Node):
         def age(value: float | None, reference: float) -> str:
             return "unavailable" if value is None else f"{reference - value:.6f}"
 
+        evidence_ready = freshness is not None and all(
+            value is not None and 0 <= reference - value <= freshness.max_age
+            for value, reference in (
+                (freshness.scan_stamp, now), (freshness.scan_received, steady),
+                (freshness.measured_stamp, now), (freshness.measured_received, steady),
+            )
+        )
         values = {
+            "evidence_ready": "true" if evidence_ready else "false",
             "request_vx": str(self._command.vx),
             "request_wz": str(self._command.wz),
             "measured_vx": str(self._measured.vx if self._measured else "unavailable"),
