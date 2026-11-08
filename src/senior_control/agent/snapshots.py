@@ -36,6 +36,7 @@ class LiveState:
     tasks: tuple[TaskSummary, ...] = ()
     # //Compatible: custom ports without a task cut use the agent journal fallback.
     deleted_task_ids: frozenset[str] | None = None
+    map_generation: str | None = None
 
 
 class StatePort(Protocol):
@@ -62,6 +63,7 @@ class RobotSnapshot:
     runnable_task_ids: tuple[str, ...] = ()
     tasks: tuple[TaskSummary, ...] = ()
     home_revision: int = 0
+    map_generation: str | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -123,6 +125,7 @@ def snapshot_envelope(
                 for item in snapshot.tasks
             ],
             home_revision=snapshot.home_revision,
+            map_generation=snapshot.map_generation,
         ),
     )
 
@@ -152,6 +155,7 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
             TaskSummary(item.task_id, item.revision, item.enabled) for item in payload.tasks
         ),
         home_revision=payload.home_revision,
+        map_generation=payload.map_generation,
     )
 
 

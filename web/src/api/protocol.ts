@@ -107,6 +107,7 @@ export const SNAPSHOT_FIELDS = [
   "last_synced_at",
   "tasks",
   "home_revision",
+  "map_generation",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -182,6 +183,8 @@ export interface SnapshotPayload {
    * with no row.
    */
   home_revision: number;
+  //Compatible: legacy snapshots omit the live reference generation.
+  map_generation?: string;
 }
 
 export interface ResponsePayload {
@@ -293,7 +296,10 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (tasks === null) return null;
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
   if (!isCount(homeRevision)) return null;
+  const mapGeneration = value["map_generation"];
+  if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
   return {
+    ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
     connected: value["connected"],
     localized: value["localized"],
     map_ref: mapRef,

@@ -101,6 +101,13 @@ class SimulationReference:
             ref == self._grid.map_ref and generation == self.generation and self.pose() is not None
         )
 
+    def safety_ready(self) -> bool:
+        return (
+            time.monotonic() - self._safety_at <= 1.25
+            and self._safety_gid is not None
+            and self._source("/safety/status", "safety_gate") == self._safety_gid
+        )
+
     def state(
         self, mode: str, execution_status: str = "idle", *, navigation_ready: bool = False
     ) -> dict[str, Any]:
@@ -109,12 +116,7 @@ class SimulationReference:
             "ok": True,
             "sampled_at": time.monotonic(),
             "localized": pose is not None,
-            "safety_clear": mode != "estop"
-            and (
-                time.monotonic() - self._safety_at <= 1.25
-                and self._safety_gid is not None
-                and self._source("/safety/status", "safety_gate") == self._safety_gid
-            ),
+            "safety_clear": mode != "estop" and self.safety_ready(),
             "manual_driving": mode == "manual",
             "map_id": grid.map_ref.map_id if grid else None,
             "reference_revision": grid.map_ref.reference_revision if grid else None,

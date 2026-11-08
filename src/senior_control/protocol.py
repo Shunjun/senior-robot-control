@@ -286,6 +286,15 @@ class SnapshotPayload(StrictModel):
     tasks: list[TaskSummaryPayload] = Field(default_factory=list, max_length=200)
     # home_edit.revision. 0 is the store's answer when that row does not exist yet.
     home_revision: int = Field(default=0, ge=0)
+    map_generation: ShortText | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: Any) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        # //Compatible: omit generation in snapshots without a qualified source.
+        if self.map_generation is None:
+            result.pop("map_generation", None)
+        return result
 
 
 class SnapshotEnvelope(EnvelopeBase):

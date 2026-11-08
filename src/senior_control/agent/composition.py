@@ -116,6 +116,7 @@ class SnapshotState:
             runnable,
             summaries,
             deleted_task_ids,
+            map_generation=state.map_generation,
         )
 
 

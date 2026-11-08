@@ -535,6 +535,7 @@ class Agent:
             key = (
                 snapshot.localized,
                 snapshot.map_ref,
+                snapshot.map_generation,
                 snapshot.home,
                 snapshot.task_revision,
                 snapshot.execution_status,
@@ -1100,6 +1101,7 @@ class Agent:
             collected_at=self._wall_clock(),
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
+            map_generation=live.map_generation,
         )
         return snapshot
 
