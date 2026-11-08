@@ -7,8 +7,11 @@ monotonic clock and keeps running when ROS time is frozen. The timer period is
 simulation configuration, not a physical braking guarantee.
 """
 
+import re
 import secrets
+import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,7 @@ from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.subscription import Subscription
 from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
 
 from senior_control.clock import Clock, SystemClock
@@ -31,6 +35,16 @@ from senior_control.protocol import (
     VelocityEnvelope,
 )
 from senior_control.safety.arbiter import Arbiter, CommandResult, PersistentEstop
+
+
+@dataclass
+class _NavigationSource:
+    execution_id: str
+    topic: str
+    offset: float
+    subscription: Subscription
+    sequence: int = 0
+    last_stamp: int = 0
 
 
 class CommandNode(Node):
@@ -86,6 +100,7 @@ class CommandNode(Node):
                 DriveExecutionFeedback, "/safety/drive_feedback",
                 self._on_drive_feedback, qos_profile_sensor_data
             )
+        self._navigation_source: _NavigationSource | None = None
         self._generation = 1
         self._last_server_epoch = 0
         self._active = False
@@ -144,7 +159,79 @@ class CommandNode(Node):
         self._publish_barrier()
         self.publish_command()
 
+    def navigation_qualified(self) -> bool:
+        return self._arbiter.navigation_qualified(self._monotonic_clock.monotonic())
+
+    def bind_navigation_source(self, execution_id: str, topic: str) -> bool:
+        # An execution-specific topic must be configured at the Nav2 publisher.
+        if (
+            self._navigation_source is not None
+            or not re.fullmatch(r"/control/navigation/run_[0-9a-f]{32}/cmd_vel", topic)
+            or not self._arbiter.begin_navigation(execution_id, self._monotonic_clock.monotonic())
+        ):
+            return False
+        try:
+            def on_sample(message: Twist, info: dict[str, Any]) -> None:
+                self._on_navigation_sample(topic, message, info)
+
+            subscription = self.create_subscription(
+                Twist, topic, on_sample, qos_profile_sensor_data
+            )
+        except Exception:
+            self._arbiter.end_navigation(execution_id)
+            raise
+        self._navigation_source = _NavigationSource(
+            execution_id, topic, time.time() - self._monotonic_clock.monotonic(), subscription
+        )
+        return True
+
+    def clear_navigation_source(self, execution_id: str) -> None:
+        source = self._navigation_source
+        if source is None or source.execution_id != execution_id:
+            return
+        self._navigation_source = None
+        self._arbiter.end_navigation(execution_id)
+        self.destroy_subscription(source.subscription)
+        self.publish_command()
+
+    def _on_navigation_sample(self, topic: str, msg: Twist, info: dict[str, Any]) -> None:
+        source = self._navigation_source
+        if source is None or source.topic != topic:
+            return
+        now = self._monotonic_clock.monotonic()
+        stamp = info.get("source_timestamp")
+        if abs((time.time() - now) - source.offset) > 0.01:
+            self.clear_navigation_source(source.execution_id)
+            return
+        if not isinstance(stamp, int) or stamp <= source.last_stamp:
+            return
+        endpoints = self.get_publishers_info_by_topic(source.topic)
+        if len(endpoints) != 1 or endpoints[0].node_name != "controller_server":
+            return
+        # //Compatible: Humble's Python callback omits the writer GID. Topic isolation
+        # still comes from the controller's run-specific remapping and a private ROS domain.
+        gid = info.get("publisher_gid")
+        if gid is not None and tuple(gid) != tuple(endpoints[0].endpoint_gid):
+            return
+        try:
+            velocity = Velocity(msg.linear.x, msg.angular.z)
+        except ValueError:
+            return
+        sampled = stamp / 1e9 - source.offset - 0.01
+        if self._arbiter.accept_navigation_sample(
+            source.execution_id, source.sequence + 1, velocity, sampled, now
+        ):
+            source.last_stamp = stamp
+            source.sequence += 1
+            self.publish_command()
+
     def publish_command(self) -> None:
+        source = self._navigation_source
+        if source is not None and not self._arbiter.navigation_source_active(
+            source.execution_id, self._monotonic_clock.monotonic()
+        ):
+            self.clear_navigation_source(source.execution_id)
+            return
         now = self._monotonic_clock.monotonic()
         final = self._arbiter.final_command(now)
         if final is None:

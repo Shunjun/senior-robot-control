@@ -538,3 +538,20 @@ def test_stopped_gesture_rejects_higher_sequence_and_old_epoch():
     assert arbiter.accept(fresh, 1.15, received_at=1.0, local_deadline=1.4).accepted
     assert arbiter.accept(command("control.acquire", seq=1, epoch=2), 1.2).accepted
     assert not arbiter.accept(fresh, 1.21, received_at=1.0, local_deadline=1.4).accepted
+
+
+def test_bound_navigation_expires_and_old_run_cannot_restart_motion() -> None:
+    arbiter = Arbiter(ROBOT, 0.2, 2.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 2.5)
+    assert arbiter.begin_navigation("route-a", 1.0)
+    assert arbiter.accept_navigation_sample("route-a", 1, Velocity(0.1, 0), 1.0, 1.05)
+    assert arbiter.final_command(1.10) == (Velocity(0.1, 0), "route-a", 1, 1, 1.3)
+    assert not arbiter.accept_navigation_sample("route-a", 1, Velocity(0.1, 0), 1.1, 1.1)
+    assert arbiter.final_command(1.30) is None
+    arbiter.end_navigation("route-a")
+    assert arbiter.begin_navigation("route-b", 1.35)
+    assert not arbiter.accept_navigation_sample("route-a", 2, Velocity(0.1, 0), 1.35, 1.35)
+    assert not arbiter.accept_navigation_sample("route-b", 1, Velocity(0.1, 0), 1.35, 1.7)
+    arbiter.disconnect(1)
+    assert not arbiter.accept_navigation_sample("route-b", 2, Velocity(0.1, 0), 1.7, 1.7)
+    assert arbiter.final_command(1.75) is None
