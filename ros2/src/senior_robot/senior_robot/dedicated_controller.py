@@ -18,6 +18,17 @@ class DedicatedController:
         self._node = node
         self._params = params
         self._lock = asyncio.Lock()
+        self._standby: tuple[AsyncExitStack, str] | None = None
+        self._in_use = False
+
+    def available(self) -> bool:
+        return self._standby is not None or self._in_use
+
+    async def close(self) -> None:
+        async with self._lock:
+            standby, self._standby = self._standby, None
+            if standby is not None:
+                await standby[0].aclose()
 
     async def _transition(
         self, name: str, transition: int, process: asyncio.subprocess.Process
@@ -95,10 +106,11 @@ class DedicatedController:
         await self._transition(name, Transition.TRANSITION_CONFIGURE, process)
         await self._transition(name, Transition.TRANSITION_ACTIVATE, process)
 
-    @asynccontextmanager
-    async def open(self, execution_id: str) -> AsyncIterator[str]:
+    async def warm(self) -> None:
         async with self._lock, AsyncExitStack() as stack:
-            if not execution_id or not self._params.is_file():
+            if self.available():
+                return
+            if not self._params.is_file():
                 raise RuntimeError("qualified Nav2 controller unavailable")
             if any(
                 name in {"controller_server", "bt_navigator"}
@@ -118,4 +130,17 @@ class DedicatedController:
                 "odom:=/wheel/odom",
             )
             await self._start(stack, "nav2_bt_navigator", "bt_navigator")
-            yield topic
+            self._standby = stack.pop_all(), topic
+
+    @asynccontextmanager
+    async def open(self, execution_id: str) -> AsyncIterator[str]:
+        async with self._lock:
+            if not execution_id or self._standby is None or self._in_use:
+                raise RuntimeError("scoped Nav2 controller is not ready")
+            (stack, topic), self._standby = self._standby, None
+            self._in_use = True
+        try:
+            async with stack:
+                yield topic
+        finally:
+            self._in_use = False

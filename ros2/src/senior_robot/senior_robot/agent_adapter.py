@@ -288,6 +288,7 @@ def main() -> None:
             exiting = True
 
         routes = None
+        controller = None
         navigation_ready: Callable[[], bool] | None = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
@@ -300,6 +301,7 @@ def main() -> None:
             )
 
             planner_active = create_planner_readiness(node)
+            controller = DedicatedController(node, Path(nav_params))
 
             previous_failure = None
 
@@ -310,7 +312,7 @@ def main() -> None:
                     failure = "adapter exiting"
                 elif reference is None or not reference.qualified(ref, generation):
                     failure = "map or localization generation changed"
-                elif not planner_active():
+                elif not planner_active() or not controller.available():
                     failure = "planner state unavailable"
                 elif not reference.safety_ready():
                     failure = (
@@ -333,7 +335,7 @@ def main() -> None:
             routes = RouteService(
                 create_nav2_adapter(node),
                 qualified=qualified,
-                prepare=DedicatedController(node, Path(nav_params)).open,
+                prepare=controller.open,
                 bind_source=lambda execution_id, topic, guard: node.bind_navigation_source(
                     execution_id, topic, qualified=guard
                 ),
@@ -362,10 +364,24 @@ def main() -> None:
         async def serve() -> None:
             server = IpcServer(path, core.handle)
             started = False
+            warmer = None
+
+            async def warm_controller() -> None:
+                assert controller is not None
+                while not exiting:
+                    try:
+                        if reference is not None and reference.pose() is not None:
+                            await controller.warm()
+                    except (RuntimeError, OSError) as exc:
+                        node.get_logger().warning(f"Scoped Nav2 warm-up failed: {exc}")
+                    await asyncio.sleep(2)
+
             try:
                 await server.start()
                 started = True
                 executor.add_node(node)
+                if controller is not None:
+                    warmer = asyncio.create_task(warm_controller())
                 while rclpy.ok() and not exiting:
                     executor.spin_once(timeout_sec=0.0)
                     await asyncio.sleep(0.01)
@@ -379,6 +395,11 @@ def main() -> None:
                     cancellation.cancel()
                     await asyncio.gather(cancellation, return_exceptions=True)
             finally:
+                if warmer is not None:
+                    warmer.cancel()
+                    await asyncio.gather(warmer, return_exceptions=True)
+                if controller is not None:
+                    await controller.close()
                 try:
                     if started:
                         await server.close()
