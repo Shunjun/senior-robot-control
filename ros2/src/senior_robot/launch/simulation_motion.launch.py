@@ -43,6 +43,8 @@ def generate_launch_description():
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("qualified_reference", default_value="false"),
             DeclareLaunchArgument("safety_overlay", default_value=params),
+            DeclareLaunchArgument("video_enabled", default_value="false"),
+            DeclareLaunchArgument("video_frame_path", default_value=""),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([sim, "launch", "simulation.launch.py"])
@@ -59,6 +61,17 @@ def generate_launch_description():
                 ),
                 condition=IfCondition(qualified),
                 launch_arguments={"external_controller": "true", "use_sim_time": "true"}.items(),
+            ),
+            Node(
+                package="senior_robot",
+                executable="simulation_camera",
+                condition=IfCondition(LaunchConfiguration("video_enabled")),
+                parameters=[{
+                    "use_sim_time": True,
+                    "frame_path": ParameterValue(
+                        LaunchConfiguration("video_frame_path"), value_type=str
+                    ),
+                }],
             ),
             Node(package="senior_robot", executable="scan_adapter", parameters=[params, rear_mask]),
             Node(package="senior_scan_matcher", executable="scan_motion_node", parameters=[params]),

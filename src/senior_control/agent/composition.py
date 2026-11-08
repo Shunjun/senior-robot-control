@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,6 +27,8 @@ from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
 from senior_control.tasks.runtime import TaskRuntime
+from senior_control.vision.simulation_video import LatestFrameFile
+from senior_control.vision.stream import AiortcPeerFactory, VideoSession
 from senior_control.waypoints.store import WaypointStore
 
 logger = logging.getLogger("senior_control.agent")
@@ -40,6 +43,7 @@ class AgentConfig:
     socket_path: Path
     workspace_map_bundle: Path | None = None
     workspace_map_sha256: str | None = None
+    simulation_video_frame: Path | None = None
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -57,11 +61,17 @@ class AgentConfig:
             r"[0-9a-f]{64}", self.workspace_map_sha256
         ):
             raise ValueError("workspace map SHA-256 must be 64 lowercase hexadecimal digits")
+        if (
+            self.simulation_video_frame is not None
+            and not self.simulation_video_frame.is_absolute()
+        ):
+            raise ValueError("simulation video slot must have an absolute path")
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "AgentConfig":
         try:
             bundle = environment.get("SENIOR_WORKSPACE_MAP_BUNDLE")
+            video = environment.get("SENIOR_SIMULATION_VIDEO_FRAME")
             return cls(
                 robot_id=environment["SENIOR_ROBOT_ID"],
                 cloud_url=environment["SENIOR_CLOUD_URL"],
@@ -70,9 +80,16 @@ class AgentConfig:
                 socket_path=Path(environment["SENIOR_AGENT_SOCKET"]),
                 workspace_map_bundle=Path(bundle) if bundle is not None else None,
                 workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
+                simulation_video_frame=Path(video) if video is not None else None,
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
+
+
+@dataclass(frozen=True)
+class _ControlViewer:
+    robot_id: str
+    role: str = "control"
 
 
 class SnapshotState:
@@ -233,6 +250,25 @@ async def run_agent(config: AgentConfig) -> int:
                 await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
+        video_path = config.simulation_video_frame
+        if video_path is not None and find_spec("aiortc") is None:
+            logger.warning("simulation video disabled because the video extra is unavailable")
+            video_path = None
+        video_factory: AiortcPeerFactory | None = None
+
+        def video_session() -> VideoSession | None:
+            nonlocal video_factory
+            if video_path is None:
+                return None
+            if video_factory is None:
+                video_factory = AiortcPeerFactory()
+            return VideoSession(
+                robot_id=config.robot_id,
+                viewer=_ControlViewer(config.robot_id),
+                source=LatestFrameFile(video_path),
+                factory=video_factory,
+            )
+
         async def cleanup() -> None:
             await asyncio.gather(
                 state_client.close(),
@@ -241,6 +277,8 @@ async def run_agent(config: AgentConfig) -> int:
                 workspace_client.close(),
                 display_client.close(),
             )
+            if video_factory is not None:
+                await asyncio.to_thread(video_factory.close)
 
         agent = Agent(
             config.robot_id,
@@ -255,6 +293,7 @@ async def run_agent(config: AgentConfig) -> int:
             workspace=workspace,
             navigation=DirectNavigation(state, workspace, waypoints, navigation),
             motion=motion,
+            video_session=video_session,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
             background={"tasks": task_loop},

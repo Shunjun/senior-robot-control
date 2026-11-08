@@ -58,3 +58,9 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 停止提供定位资格。手动调试此链路时，应在同一隔离域的
 `simulation_motion.launch.py` 上显式传入 `qualified_reference:=true`。
 其他场景及实车配置继续依赖各自可验证的地图和定位来源。
+
+### 仿真视频
+
+要在浏览器查看 baseline 场景的 RGB 摄像头，在仿真档 JSON 中设置 `"video": true`，
+并让运行 Agent 的 Python 环境安装项目的 `video` 可选依赖。仿真和 Agent 共享
+本次运行专用的私有最新帧，视频继续经现有 WebRTC 通道协商。

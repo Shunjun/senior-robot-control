@@ -187,3 +187,38 @@ async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="agent failed"):
         await simulation_cli.supervise(profile, credentials)
     assert stopped == [owned_ros]
+
+
+async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_start(
+    tmp_path, monkeypatch,
+):
+    import pytest
+
+    from senior_control import simulation_cli
+
+    slots = []
+
+    async def spawn(*args, **kwargs):
+        slot = Path(kwargs["env"]["SENIOR_SIMULATION_VIDEO_FRAME"])
+        slots.append(slot)
+        assert slot.parent.stat().st_mode & 0o777 == 0o700
+        if "simulation_motion.launch.py" in args:
+            assert f"video_frame_path:={slot}" in args
+            assert "video_enabled:=true" in args
+            return object()
+        raise OSError("agent failed")
+
+    async def verify(*args):
+        pass
+
+    async def cleanup(process, timeout):
+        pass
+
+    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
+    monkeypatch.setattr(simulation_cli, "_stop", cleanup)
+    profile, credentials = _simulation_profile(tmp_path)
+    with pytest.raises(OSError, match="agent failed"):
+        await simulation_cli.supervise(profile.model_copy(update={"video": True}), credentials)
+    assert len(slots) == 2 and slots[0] == slots[1]
+    assert not slots[0].parent.exists()

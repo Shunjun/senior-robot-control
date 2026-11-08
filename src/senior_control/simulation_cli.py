@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 from senior_control.agent.pairing import Credentials, read_credentials
@@ -210,6 +211,13 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
     root = profile.credentials.parent
     env = dict(os.environ)
     env.pop("NOTIFY_SOCKET", None)
+    env.pop("SENIOR_SIMULATION_VIDEO_FRAME", None)
+    camera = TemporaryDirectory(prefix=".camera-", dir=root) if profile.video else None
+    video_args: list[str] = []
+    if camera is not None:
+        frame = Path(camera.name) / "rgb.frame"
+        env["SENIOR_SIMULATION_VIDEO_FRAME"] = str(frame)
+        video_args = ["video_enabled:=true", f"video_frame_path:={frame}"]
     env.update(
         ROS_DOMAIN_ID=str(profile.ros_domain),
         ROS_LOCALHOST_ONLY="1",
@@ -243,6 +251,7 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
             "simulation_motion.launch.py",
             "headless:=true",
             "qualified_reference:=true",
+            *video_args,
             f"agent_socket:={profile.socket}",
             f"robot_id:={credentials.robot_id}",
             f"safety_state_path:={profile.estop_state}",
@@ -277,6 +286,8 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
             finally:
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     loop.remove_signal_handler(signum)
+                if camera is not None:
+                    camera.cleanup()
 
 
 def main(path: Path) -> int:

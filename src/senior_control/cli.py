@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 from getpass import getpass
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -28,6 +29,7 @@ class VehicleProfile(BaseModel):
     cloud_url: str | None = None
     estop_state: Path | None = None
     ros_domain: int | None = None
+    video: bool = False
 
 
 def _pair(profile: VehicleProfile, cloud_url: str, name: str) -> None:
@@ -81,6 +83,8 @@ def _doctor(profile: VehicleProfile) -> int:
             problems.append("Gazebo: source the simulator environment and run doctor again.")
         if shutil.which("xvfb-run") is None:
             problems.append("Display: provide xvfb-run for headless simulation.")
+        if profile.video and find_spec("aiortc") is None:
+            problems.append("Video: install the optional video dependencies.")
         if profile.credentials.parent.is_dir():
             disk = shutil.disk_usage(profile.credentials.parent)
             print(f"Free disk: {disk.free / 2**30:.1f} GiB")
