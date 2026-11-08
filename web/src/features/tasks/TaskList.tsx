@@ -48,6 +48,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const [waypointName, setWaypointName] = useState("");
   const [catalog, setCatalog] = useState<WorkspaceWaypoint[] | null>(null);
   const saveWaypointOperation = useRef<AbortController | null>(null);
+  const waypointAttempt = useRef<{ body: string; operationId: string } | null>(null);
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
   const live = snapshot.connected && !snapshot.stale;
@@ -64,6 +65,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
     setCreatingWaypoint(false);
     setWaypointDraft(null);
     setWaypointName("");
+    waypointAttempt.current = null;
   }
 
   async function saveWaypoint(): Promise<void> {
@@ -76,9 +78,14 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
     setMessage("等待车端确认保存航点…");
     let confirmed = false;
     try {
+      const body = { ...ref, ...waypointDraft, grid_id: workspace.grid_id, waypoint_id: id };
+      const signature = JSON.stringify(body);
+      if (waypointAttempt.current?.body !== signature) {
+        waypointAttempt.current = { body: signature, operationId: crypto.randomUUID() };
+      }
       const response = await link.request<ResponsePayload>("waypoint.create", {
-        operation_id: crypto.randomUUID(),
-        body: { ...ref, ...waypointDraft, grid_id: workspace.grid_id, waypoint_id: id },
+        operation_id: waypointAttempt.current.operationId,
+        body,
       });
       if (operation.signal.aborted) return;
       if (!response.ok) {
