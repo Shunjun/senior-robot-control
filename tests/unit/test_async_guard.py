@@ -3,6 +3,7 @@ import multiprocessing
 import os
 import signal
 import threading
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -125,7 +126,8 @@ def test_ticket_rejects_geometry_horizon_even_while_sensor_is_within_age_limit()
 def test_spawned_worker_is_bounded_and_late_result_cannot_authorize_stop(tmp_path):
     started, released = tmp_path / "started", tmp_path / "released"
     ticket = _ticket()
-    worker = BoundedSafetyWorker(_wait_for_release)
+    ready = threading.Event()
+    worker = BoundedSafetyWorker(_wait_for_release, on_result=lambda _reply: ready.set())
     try:
         assert worker.submit(ticket, (str(started), str(released)))
         deadline = time.monotonic() + 10
@@ -142,6 +144,7 @@ def test_spawned_worker_is_bounded_and_late_result_cannot_authorize_stop(tmp_pat
         assert not _permits(ticket, scan_generation=3)
         assert not _permits(ticket, steady=10.201, ros=20.0)
         released.write_text("release")
+        assert ready.wait(timeout=10), "the queued reply did not wake the consumer"
         reply = None
         deadline = time.monotonic() + 10
         while reply is None and time.monotonic() < deadline:

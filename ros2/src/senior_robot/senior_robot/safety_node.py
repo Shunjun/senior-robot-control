@@ -49,6 +49,7 @@ from senior_control.safety.async_guard import (
     SafetyTicket,
     SafetyWork,
     SafetyWorkResult,
+    WorkerReply,
 )
 from senior_control.safety.drive_feedback import OutputFeedback
 from senior_control.safety.freshness import SafetyFreshness
@@ -176,7 +177,14 @@ class SafetyGate(Node):
         self._motion_generation = 0
         # Configuration is startup-only; cap geometry before any slicing or geometry work.
         self._profile()
-        self._worker = BoundedSafetyWorker()
+        self.declare_parameter("simulation_eager_safety", False)
+        self._safety_wakeup = (
+            self.create_guard_condition(self._on_timer)
+            if self.get_parameter("use_sim_time").value
+            and self.get_parameter("simulation_eager_safety").value
+            else None
+        )
+        self._worker = BoundedSafetyWorker(on_result=self._on_worker_result)
         self._approved: tuple[SafetyTicket, SafetyWorkResult] | None = None
         self._worker_finished = 0
         self._worker_discarded = 0
@@ -500,6 +508,20 @@ class SafetyGate(Node):
     def _on_evidence(self, msg: MotionEvidence) -> None:
         if self._topology_ready():
             self._accept_evidence(msg)
+            if (
+                self._safety_wakeup is not None
+                and not self._worker.pending
+                and self._command != Velocity(0.0, 0.0)
+            ):
+                self._safety_wakeup.trigger()
+
+    def _on_worker_result(self, reply: WorkerReply) -> None:
+        if (
+            self._safety_wakeup is not None
+            and isinstance(reply.value, SafetyWorkResult)
+            and reply.value.decision.allowed
+        ):
+            self._safety_wakeup.trigger()
 
     def _accept_evidence(self, msg: MotionEvidence) -> None:
         previous_epoch = self._epoch_fence.active

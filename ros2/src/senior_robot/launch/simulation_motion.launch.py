@@ -144,6 +144,7 @@ def generate_launch_description():
                     rear_mask,
                     {
                         "robot_id": robot_id,
+                        "simulation_eager_safety": ParameterValue(qualified, value_type=bool),
                         "simulation_rate_hz": ParameterValue(
                             LaunchConfiguration("motion_gate_rate"), value_type=float
                         ),
