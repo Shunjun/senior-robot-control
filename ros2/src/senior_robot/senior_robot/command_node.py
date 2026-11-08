@@ -36,6 +36,7 @@ from senior_control.protocol import (
     VelocityEnvelope,
 )
 from senior_control.safety.arbiter import Arbiter, CommandResult, PersistentEstop
+from senior_robot.motion_lifecycle import with_dds_info
 
 
 @dataclass
@@ -183,6 +184,7 @@ class CommandNode(Node):
         ):
             return False
         try:
+            @with_dds_info
             def on_sample(message: Twist, info: dict[str, Any]) -> None:
                 self._on_navigation_sample(topic, message, info)
 
@@ -292,7 +294,10 @@ class CommandNode(Node):
         self._active = True
         self._publish(velocity)
 
-    def _on_drive_feedback(self, msg: DriveExecutionFeedback, info: dict[str, Any]) -> None:
+    @with_dds_info
+    def _on_drive_feedback(
+        self, msg: DriveExecutionFeedback, info: dict[str, Any] | None = None
+    ) -> None:
         endpoints = self.get_publishers_info_by_topic("/safety/drive_feedback")
         if len(endpoints) != 1:
             return
@@ -300,7 +305,7 @@ class CommandNode(Node):
         sample = self._awaiting_feedback.get(msg.request_id)
         # //Compatible: Humble's Python subscription metadata omits publisher_gid.
         # Require sole expected topology, the command owner boot, and the exact admitted sample.
-        gid = info.get("publisher_gid")
+        gid = info.get("publisher_gid") if info is not None else None
         if (
             endpoint.node_name != "safety_gate"
             or endpoint.node_namespace != "/"

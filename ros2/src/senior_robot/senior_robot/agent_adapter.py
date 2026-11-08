@@ -256,7 +256,7 @@ def main() -> None:
 
     from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
-    from senior_robot.motion_lifecycle import run
+    from senior_robot.motion_lifecycle import MotionExecutor, run
     from senior_robot.simulation_reference import SimulationReference
 
     def spin(node, executor) -> None:
@@ -374,4 +374,9 @@ def main() -> None:
         asyncio.run(serve())
 
     # //Compatible: use the same Humble signal lifecycle as the synchronous CLIs.
-    run(lambda: CommandNode(require_server_heartbeat=True), cli=True, spin=spin)
+    run(
+        lambda: CommandNode(require_server_heartbeat=True),
+        cli=True,
+        spin=spin,
+        executor_factory=MotionExecutor,
+    )

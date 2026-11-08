@@ -10,6 +10,7 @@ from typing import Any
 from senior_control.mapping.simulation import baseline_grid, map_to_odom
 from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
+from senior_robot.motion_lifecycle import with_dds_info
 
 _MAX_AGE = 0.5
 _MAX_SKEW = 0.15
@@ -190,14 +191,17 @@ class SimulationReference:
         except ValueError:
             return None
 
+    @with_dds_info
     def _on_truth(self, msg: Any, info: dict[str, Any]) -> None:
         self._truth = self._observe(
             msg, info, "/ground_truth/odom", "senior_sim_bridge", "world", self._truth
         )
 
+    @with_dds_info
     def _on_wheel(self, msg: Any, info: dict[str, Any]) -> None:
         self._wheel = self._observe(msg, info, "/wheel/odom", "drive", "odom", self._wheel)
 
+    @with_dds_info
     def _on_safety(self, msg: Any, info: dict[str, Any]) -> None:
         self._safety_gid = self._source("/safety/status", "safety_gate", info)
         self._safety_at = (

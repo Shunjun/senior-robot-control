@@ -3,11 +3,36 @@
 import signal
 import sys
 from collections.abc import Callable
+from typing import TypeVar
 
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError  # //Compatible: Humble exposes it here.
-from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor, await_or_execute
 from rclpy.node import Node
+
+_MetadataCallback = TypeVar("_MetadataCallback", bound=Callable)
+
+
+def with_dds_info(callback: _MetadataCallback) -> _MetadataCallback:
+    callback._senior_dds_info = True
+    return callback
+
+
+class MotionExecutor(SingleThreadedExecutor):
+    # //Compatible: Humble takes message metadata, then drops it before invoking
+    # Python callbacks. Preserve it for the explicitly qualified DDS consumers.
+    def _take_subscription(self, sub):
+        if not getattr(sub.callback, "_senior_dds_info", False):
+            return super()._take_subscription(sub)
+        with sub.handle:
+            return sub.handle.take_message(sub.msg_type, sub.raw)
+
+    async def _execute_subscription(self, sub, sample):
+        if not getattr(sub.callback, "_senior_dds_info", False):
+            return await super()._execute_subscription(sub, sample)
+        if sample is not None:
+            message, info = sample
+            await await_or_execute(sub.callback, message, info)
 
 
 def _shutdown_subscription_conversion(exc: RuntimeError) -> bool:
@@ -32,6 +57,7 @@ def run(
     *,
     cli: bool = False,
     spin: Callable[[Node, SingleThreadedExecutor], None] | None = None,
+    executor_factory: Callable[[], SingleThreadedExecutor] | None = None,
 ) -> None:
     """Run one node; CLI mode is a single process entrypoint invocation."""
     # The factory owns partial resources until it successfully returns a Node.
@@ -83,7 +109,7 @@ def run(
         if cli and (stop_requested or not rclpy.ok()):
             return
         # //Compatible: Humble's global executor can disappear during context shutdown.
-        executor = SingleThreadedExecutor()
+        executor = (executor_factory or SingleThreadedExecutor)()
         if cli and (stop_requested or not rclpy.ok()):
             return
         node = factory()
