@@ -287,3 +287,22 @@ it("saves a picked point before exposing it as a selectable route waypoint", asy
   fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
   expect(screen.getByRole("list", { name: "任务航点顺序" }).textContent).toContain("new-point");
 });
+
+it("shows only vehicle-reported progress on the current live map", () => {
+  const current: RobotSnapshot = {
+    ...snapshot,
+    execution_status: "running",
+    map_generation: "grid-1",
+    route_progress: {
+      execution_id: "run-1", task_id: "daily", map_generation: "grid-1",
+      status: "running", active_waypoint_index: 1,
+    },
+  };
+  const robotLink = link();
+  const view = render(<TaskList snapshot={current} link={robotLink} />);
+  expect(screen.getByText(/daily · 第 2 个航点/)).toBeTruthy();
+  view.rerender(<TaskList snapshot={{ ...current, map_generation: "grid-2" }} link={robotLink} />);
+  expect(screen.queryByText(/daily · 第 2 个航点/)).toBeNull();
+  view.rerender(<TaskList snapshot={{ ...current, stale: true }} link={robotLink} />);
+  expect(screen.queryByText(/daily · 第 2 个航点/)).toBeNull();
+});

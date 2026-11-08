@@ -52,6 +52,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
   const live = snapshot.connected && !snapshot.stale;
+  const progress = live && snapshot.route_progress?.map_generation === snapshot.map_generation
+    ? snapshot.route_progress : undefined;
   const available = catalog ?? workspace?.waypoints ?? [];
   const waypoints = new Map(available.map((waypoint) => [waypoint.waypoint_id, waypoint]));
   const resolved = waypointIds.map((id) => waypoints.get(id));
@@ -255,6 +257,12 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
         </header>
         <div className={styles.body}>
           <p className={styles.note}>车端状态 {snapshot.execution_status} · 任务目录 r{snapshot.task_revision}</p>
+          {progress && (
+            <p className={styles.note}>
+              {progress.task_id ?? "导航"}
+              {progress.active_waypoint_index !== null && ` · 第 ${progress.active_waypoint_index + 1} 个航点`}
+            </p>
+          )}
           <div>
             {(snapshot.tasks ?? []).length === 0 && <p>暂无任务</p>}
             {(snapshot.tasks ?? []).map((task) => (

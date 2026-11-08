@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from senior_control.models import MapRef
+from senior_control.navigation import RouteProgress
 from senior_control.protocol import (
     HomePayload,
     MapRefPayload,
@@ -37,6 +38,7 @@ class LiveState:
     # //Compatible: custom ports without a task cut use the agent journal fallback.
     deleted_task_ids: frozenset[str] | None = None
     map_generation: str | None = None
+    route_progress: RouteProgress | None = None
 
 
 class StatePort(Protocol):
@@ -64,6 +66,7 @@ class RobotSnapshot:
     tasks: tuple[TaskSummary, ...] = ()
     home_revision: int = 0
     map_generation: str | None = None
+    route_progress: RouteProgress | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -126,6 +129,7 @@ def snapshot_envelope(
             ],
             home_revision=snapshot.home_revision,
             map_generation=snapshot.map_generation,
+            route_progress=snapshot.route_progress if not stale else None,
         ),
     )
 
@@ -156,6 +160,7 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         ),
         home_revision=payload.home_revision,
         map_generation=payload.map_generation,
+        route_progress=payload.route_progress,
     )
 
 

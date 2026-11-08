@@ -306,7 +306,7 @@ def main() -> None:
                     planner_active()
                     and not exiting and reference is not None
                     and reference.qualified(ref, generation)
-                    and reference.state(node.motion_mode())["safety_clear"]
+                    and reference.safety_ready()
                     and node.navigation_qualified()
                 )
 

@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from senior_control.errors import ErrorCode
+from senior_control.navigation import RouteProgress
 
 DRIVE_CHALLENGE_SECONDS = 0.3
 DRIVE_TRANSPORT_SECONDS = 0.5
@@ -287,6 +288,7 @@ class SnapshotPayload(StrictModel):
     # home_edit.revision. 0 is the store's answer when that row does not exist yet.
     home_revision: int = Field(default=0, ge=0)
     map_generation: ShortText | None = None
+    route_progress: RouteProgress | None = None
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
@@ -294,6 +296,8 @@ class SnapshotPayload(StrictModel):
         # //Compatible: omit generation in snapshots without a qualified source.
         if self.map_generation is None:
             result.pop("map_generation", None)
+        if self.route_progress is None:
+            result.pop("route_progress", None)
         return result
 
 

@@ -108,6 +108,7 @@ export const SNAPSHOT_FIELDS = [
   "tasks",
   "home_revision",
   "map_generation",
+  "route_progress",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -165,6 +166,18 @@ export interface TaskSummary {
   enabled: boolean;
 }
 
+const ROUTE_STATUSES = [
+  "starting", "running", "succeeded", "failed", "cancel_pending", "canceled",
+] as const;
+
+export interface RouteProgress {
+  execution_id: string;
+  task_id: string | null;
+  map_generation: string;
+  status: (typeof ROUTE_STATUSES)[number];
+  active_waypoint_index: number | null;
+}
+
 export interface SnapshotPayload {
   connected: boolean;
   localized: boolean;
@@ -185,6 +198,7 @@ export interface SnapshotPayload {
   home_revision: number;
   //Compatible: legacy snapshots omit the live reference generation.
   map_generation?: string;
+  route_progress?: RouteProgress;
 }
 
 export interface ResponsePayload {
@@ -271,6 +285,23 @@ function parseHome(value: unknown): HomeSummary | null | undefined {
   return { waypoint_id: value["waypoint_id"], map_ref: mapRef, status: value["status"] };
 }
 
+function parseRouteProgress(value: unknown): RouteProgress | null {
+  if (!isRecord(value) || !isText(value["execution_id"], 128) ||
+      !isText(value["map_generation"], 128)) return null;
+  const task = value["task_id"];
+  const status = ROUTE_STATUSES.find((candidate) => candidate === value["status"]);
+  const index = value["active_waypoint_index"];
+  if ((task !== null && !isText(task, 128)) || status === undefined ||
+      (index !== null && (!isCount(index) || index >= 64))) return null;
+  return {
+    execution_id: value["execution_id"],
+    task_id: task,
+    map_generation: value["map_generation"],
+    status,
+    active_waypoint_index: index,
+  };
+}
+
 function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (!isRecord(value)) return null;
   const mapRef = parseMapRef(value["map_ref"]);
@@ -297,9 +328,13 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
   if (!isCount(homeRevision)) return null;
   const mapGeneration = value["map_generation"];
+  const route = value["route_progress"] === undefined ? undefined :
+    parseRouteProgress(value["route_progress"]);
+  if (route === null) return null;
   if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
   return {
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
+    ...(route === undefined || route.map_generation !== mapGeneration ? {} : { route_progress: route }),
     connected: value["connected"],
     localized: value["localized"],
     map_ref: mapRef,

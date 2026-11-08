@@ -536,6 +536,7 @@ class Agent:
                 snapshot.localized,
                 snapshot.map_ref,
                 snapshot.map_generation,
+                snapshot.route_progress,
                 snapshot.home,
                 snapshot.task_revision,
                 snapshot.execution_status,
@@ -1102,6 +1103,7 @@ class Agent:
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,
+            route_progress=live.route_progress,
         )
         return snapshot
 
