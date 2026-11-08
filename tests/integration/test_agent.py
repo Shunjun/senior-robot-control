@@ -38,6 +38,7 @@ from agent_fakes import (
     until,
     velocity,
 )
+from pydantic import ValidationError
 
 from senior_control.agent import Agent, RobotSnapshot
 from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
@@ -50,6 +51,7 @@ from senior_control.agent.snapshots import (
 )
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
+from senior_control.protocol import SnapshotEnvelope
 from senior_control.storage.database import Database
 from senior_control.tasks import Schedule, TaskDefinition, TaskStore
 
@@ -890,6 +892,9 @@ async def test_state_change_is_pushed_without_an_edit(tmp_path: Path) -> None:
     state.execution_status = "navigating"
     await until(lambda: len(link.snapshots) == 3)
     assert link.snapshots[2].execution_status == "navigating"
+    state.navigation_ready = True
+    await until(lambda: len(link.snapshots) == 4)
+    assert link.snapshots[3].navigation_ready is True
     agent.request_shutdown()
     await asyncio.wait_for(runner, timeout=2)
 
@@ -1471,5 +1476,38 @@ async def test_unconfigured_video_offer_does_not_close_the_agent_link(rig: Rig) 
         assert result.type == "video.close"
         assert result.session_id == "viewer"
         assert rig.agent.connected
+    finally:
+        await finish(task, rig)
+
+async def test_navigation_readiness_roundtrip_and_stale_cache(rig: Rig) -> None:
+    task = await start(rig, FakeLink(epoch=1))
+    try:
+        current = await rig.agent.publish_snapshot(ROBOT)
+
+        def frame(snapshot: RobotSnapshot, *, stale: bool = False) -> SnapshotEnvelope:
+            return snapshot_envelope(
+                snapshot, robot_id=ROBOT, session_id="session-1", connection_epoch=1,
+                request_id="snap-ready", seq=1, expires_at=9e9, stale=stale,
+            )
+
+        legacy = frame(current)
+        assert "navigation_ready" not in legacy.model_dump()["payload"]
+        relayed_legacy = SnapshotEnvelope.model_validate_json(legacy.model_dump_json())
+        assert snapshot_from_envelope(relayed_legacy).navigation_ready is None
+        for ready in (False, True):
+            rig.state.navigation_ready = ready
+            live = await rig.agent.publish_snapshot(ROBOT)
+            wire = frame(live)
+            assert wire.model_dump()["payload"]["navigation_ready"] is ready
+            decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+            relayed = snapshot_from_envelope(decoded)
+            assert relayed.navigation_ready is ready
+            assert frame(relayed, stale=True).model_dump()["payload"]["navigation_ready"] is False
+
+        invalid = frame(live).model_dump()
+        for value in ("true", 1, None):
+            invalid["payload"]["navigation_ready"] = value
+            with pytest.raises(ValidationError):
+                SnapshotEnvelope.model_validate(invalid)
     finally:
         await finish(task, rig)

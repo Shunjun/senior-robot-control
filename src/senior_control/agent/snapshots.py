@@ -39,6 +39,7 @@ class LiveState:
     deleted_task_ids: frozenset[str] | None = None
     map_generation: str | None = None
     route_progress: RouteProgress | None = None
+    navigation_ready: bool | None = None
 
 
 class StatePort(Protocol):
@@ -67,6 +68,7 @@ class RobotSnapshot:
     home_revision: int = 0
     map_generation: str | None = None
     route_progress: RouteProgress | None = None
+    navigation_ready: bool | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -92,7 +94,7 @@ def snapshot_envelope(
     ``stale`` and ``last_synced_at`` belong to the cloud's cached copy; an agent leaves them out.
     """
     home = snapshot.home
-    return SnapshotEnvelope(
+    frame = SnapshotEnvelope(
         v=1,
         robot_id=robot_id,
         session_id=session_id,
@@ -132,11 +134,17 @@ def snapshot_envelope(
             route_progress=snapshot.route_progress if not stale else None,
         ),
     )
+    if snapshot.navigation_ready is not None:
+        frame.payload.navigation_ready = (
+            snapshot.navigation_ready and snapshot.connected and not stale
+        )
+    return frame
 
 
 def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
     payload = envelope.payload
     home = payload.home
+    readiness = payload.navigation_ready if "navigation_ready" in payload.model_fields_set else None
     return RobotSnapshot(
         robot_id=envelope.robot_id,
         connected=payload.connected,
@@ -161,6 +169,7 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         home_revision=payload.home_revision,
         map_generation=payload.map_generation,
         route_progress=payload.route_progress,
+        navigation_ready=readiness,
     )
 
 
@@ -202,5 +211,10 @@ class SnapshotCache:
         snapshot, synced = entry
         stale = robot_id in self._offline or self._clock() - synced > self._stale_after
         # The cached copy never claims the robot is connected.
-        shown = replace(snapshot, connected=snapshot.connected and not stale)
+        ready = snapshot.navigation_ready
+        shown = replace(
+            snapshot,
+            connected=snapshot.connected and not stale,
+            navigation_ready=ready and not stale if ready is not None else None,
+        )
         return CloudSnapshot(shown, synced, stale)

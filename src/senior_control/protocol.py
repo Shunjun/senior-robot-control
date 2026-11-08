@@ -289,6 +289,7 @@ class SnapshotPayload(StrictModel):
     home_revision: int = Field(default=0, ge=0)
     map_generation: ShortText | None = None
     route_progress: RouteProgress | None = None
+    navigation_ready: bool = False
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
@@ -298,6 +299,9 @@ class SnapshotPayload(StrictModel):
             result.pop("map_generation", None)
         if self.route_progress is None:
             result.pop("route_progress", None)
+        # //Compatible: a missing readiness bit keeps the legacy manifest fallback.
+        if "navigation_ready" not in self.model_fields_set:
+            result.pop("navigation_ready", None)
         return result
 
 

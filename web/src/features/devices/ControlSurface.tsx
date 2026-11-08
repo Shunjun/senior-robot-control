@@ -78,7 +78,11 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const pickMap = activeMap ? map : { ...map, map_ref: null };
 
-  const directNavigation = activeMap && navigationReady === true;
+  //Compatible: older vehicles advertise navigation eligibility only in the map manifest.
+  const directNavigation = activeMap && (snapshot.navigation_ready ?? navigationReady) === true;
+  const route = snapshot.route_progress;
+  const routeActive = activeMap && route !== undefined && route.map_generation === gridId
+    && (route.status === "starting" || route.status === "running" || route.status === "cancel_pending");
   const [navigationBusy, setNavigationBusy] = useState(false);
   const navigationScope = useRef(0);
   useLayoutEffect(() => {
@@ -86,10 +90,10 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     setNavigationBusy(false);
     setFeedback(null);
     return () => { navigationScope.current += 1; };
-  }, [robotId, link, refKey, gridId, directNavigation, snapshot.connected, snapshot.stale, mode]);
+  }, [robotId, link, refKey, gridId, snapshot.connected, snapshot.stale, mode]);
 
   async function runNavigation(action: "goal" | "return_home", pose?: Pose): Promise<void> {
-    if (!directNavigation || gridId === undefined || !snapshot.localized || snapshot.map_ref === null || navigationBusy) return;
+    if (!directNavigation || gridId === undefined || !snapshot.localized || snapshot.map_ref === null || navigationBusy || routeActive) return;
     const scope = navigationScope.current;
     const label = action === "goal" ? "目标" : "返航";
     setNavigationBusy(true);
@@ -180,9 +184,10 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
                 link={link}
                 homeMapAvailable={activeMap && waypointWrites === true}
                 {...(directNavigation
-                  ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy } }
+                  ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy || routeActive } }
                   : { navigationUnavailable: "车端未报告已验证的导航能力，无法开始、继续或返航。" })}
               />
+              {routeActive && <p className={styles.quiet}>当前路线仍在执行，可以取消导航。</p>}
               <p className={styles.quiet}>
                 {directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
                   : "目标与定位提示为本地预览，车端尚不接收。"}
@@ -193,7 +198,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
                 map={pickMap}
                 draft={activeMap ? draft : null}
                 onDraftChange={setDraft}
-                pending={navigationBusy}
+                pending={navigationBusy || routeActive}
                 onGoal={onGoal}
                 onHint={onHint}
               />

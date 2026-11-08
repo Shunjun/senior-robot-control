@@ -109,6 +109,7 @@ export const SNAPSHOT_FIELDS = [
   "home_revision",
   "map_generation",
   "route_progress",
+  "navigation_ready",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -199,6 +200,7 @@ export interface SnapshotPayload {
   //Compatible: legacy snapshots omit the live reference generation.
   map_generation?: string;
   route_progress?: RouteProgress;
+  navigation_ready?: boolean;
 }
 
 export interface ResponsePayload {
@@ -327,6 +329,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (tasks === null) return null;
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
   if (!isCount(homeRevision)) return null;
+  const navigationReady = value["navigation_ready"];
+  if (navigationReady !== undefined && typeof navigationReady !== "boolean") return null;
   const mapGeneration = value["map_generation"];
   const route = value["route_progress"] === undefined ? undefined :
     parseRouteProgress(value["route_progress"]);
@@ -334,6 +338,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
   return {
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
+    ...(navigationReady === undefined ? {} : { navigation_ready: navigationReady }),
     ...(route === undefined || route.map_generation !== mapGeneration ? {} : { route_progress: route }),
     connected: value["connected"],
     localized: value["localized"],

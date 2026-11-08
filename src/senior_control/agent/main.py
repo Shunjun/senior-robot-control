@@ -541,6 +541,7 @@ class Agent:
                 snapshot.map_ref,
                 snapshot.map_generation,
                 snapshot.route_progress,
+                snapshot.navigation_ready,
                 snapshot.home,
                 snapshot.task_revision,
                 snapshot.execution_status,
@@ -1108,6 +1109,7 @@ class Agent:
             home_revision=home_revision,
             map_generation=live.map_generation,
             route_progress=live.route_progress,
+            navigation_ready=live.navigation_ready,
         )
         return snapshot
 

@@ -28,6 +28,7 @@ import {
   SIMPLE_REQUEST_TYPES,
   WORKSPACE_REQUEST_TYPES,
   SNAPSHOT_FIELDS,
+  parseInbound,
   type LinkStatus,
   type ResponsePayload,
   type RobotSnapshot,
@@ -1378,4 +1379,60 @@ it("sends an eligible goal and return with the current map fence", async () => {
       body: { ...current.map_ref, grid_id: "live-grid" },
     }) },
   ]));
+});
+
+it("validates optional snapshot navigation readiness", () => {
+  expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", wirePayload)))?.payload)
+    .not.toHaveProperty("navigation_ready");
+  for (const navigation_ready of [false, true]) {
+    expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, navigation_ready })))?.payload)
+      .toHaveProperty("navigation_ready", navigation_ready);
+  }
+  for (const navigation_ready of [null, "true", 1]) {
+    expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, navigation_ready })))).toBeNull();
+  }
+});
+
+it("updates navigation readiness from snapshots without reloading the map", async () => {
+  const link = new FakeLink();
+  const base = snapshot("robot-alpha");
+  const current = {
+    ...base,
+    map_generation: "live-grid",
+    home: { waypoint_id: "home", status: "confirmed", map_ref: base.map_ref! },
+  };
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: current.map_generation };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, navigation_ready: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit({ ...current, navigation_ready: false });
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await waitFor(() => expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("true"));
+  const returnHome = () => screen.getByRole("button", { name: "返航" }) as HTMLButtonElement;
+  expect(returnHome().disabled).toBe(true);
+  link.emit({ ...current, navigation_ready: true });
+  expect(returnHome().disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
+  const goal = () => screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement;
+  expect(goal().disabled).toBe(false);
+  link.emit({ ...current, navigation_ready: true, route_progress: {
+    execution_id: "route-1", task_id: null, map_generation: "live-grid",
+    status: "cancel_pending", active_waypoint_index: 0,
+  } });
+  expect(returnHome().disabled).toBe(true);
+  expect(goal().disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  link.emit({ ...current, navigation_ready: false });
+  expect(returnHome().disabled).toBe(true);
+  expect(link.requests.map(({ type }) => type)).toEqual(["map.manifest", "map.tile"]);
 });

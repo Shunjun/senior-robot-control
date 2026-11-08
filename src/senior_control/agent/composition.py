@@ -121,12 +121,16 @@ class SnapshotState:
                 "unavailable",
                 tasks=summaries,
                 deleted_task_ids=deleted_task_ids,
+                navigation_ready=False,
             )
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
-        return LiveState(
+        localized = (
             state.localized and state.map_generation is not None
-            and state.map_generation == state.localization_generation,
+            and state.map_generation == state.localization_generation
+        )
+        return LiveState(
+            localized,
             state.map_ref,
             home.waypoint if home else None,
             task_revision,
@@ -136,6 +140,7 @@ class SnapshotState:
             deleted_task_ids,
             map_generation=state.map_generation,
             route_progress=state.route_progress,
+            navigation_ready=localized and state.map_ref is not None and state.navigation_ready,
         )
 
 
