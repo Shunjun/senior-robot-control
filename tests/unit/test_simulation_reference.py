@@ -24,3 +24,18 @@ def test_map_to_odom_applies_the_same_reference_transform() -> None:
     assert transform.x == pytest.approx(6)
     assert transform.y == pytest.approx(1)
     assert transform.yaw == pytest.approx(1.5707963267948966)
+
+
+def test_route_world_raster_includes_cross_walls_and_preserves_start_corridor() -> None:
+    world = Path("ros2/src/senior_sim/worlds/motion_qualification.sdf")
+    grid = baseline_grid(world, "boot")
+
+    def cell(x: float, y: float) -> int:
+        column = int((x - grid.origin.x) / grid.resolution)
+        row = int((y - grid.origin.y) / grid.resolution)
+        return grid.cells[row * grid.width + column]
+
+    assert cell(0, 3) == 100
+    assert cell(-3.5, 0) == 100
+    assert cell(2, 1.2) == 100
+    assert all(cell(x, 0) == 0 for x in (0, 0.35, 0.7, 1.05))
