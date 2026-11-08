@@ -412,13 +412,13 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     }
   }
 
-  const feedback = [
+  const authorityFeedback = [
     stopFeedback,
     lease === "releasing" ? "控制权释放等待确认。" : released ? "控制权已释放。" : null,
   ].filter(Boolean).join(" ");
   const status = (
     <>
-      {feedback !== "" && <p className={styles.quiet} role="status">{feedback}</p>}
+      {authorityFeedback !== "" && <p className={styles.quiet} role="status">{authorityFeedback}</p>}
       {error !== null && <p className={styles.failure} role="alert">{error}</p>}
     </>
   );

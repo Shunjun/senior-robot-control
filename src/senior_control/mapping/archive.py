@@ -310,7 +310,7 @@ class MapArchive:
         except zipfile.BadZipFile as exc:
             raise DomainError(ErrorCode.VALIDATION, "bundle is not a zip archive") from exc
         with archive:
-            files = MapArchive._read_members(archive, max_bytes)
+            files = MapArchive._read_bounded_members(archive, max_bytes)
         manifest_bytes = files.get("manifest.json")
         if manifest_bytes is None:
             raise DomainError(ErrorCode.VALIDATION, "bundle manifest is missing")
@@ -358,8 +358,11 @@ class MapArchive:
                 )
         return manifest, files
 
+    def _read_members(self, archive: zipfile.ZipFile) -> dict[str, bytes]:
+        return self._read_bounded_members(archive, self._max_uncompressed_bytes)
+
     @staticmethod
-    def _read_members(archive: zipfile.ZipFile, max_bytes: int) -> dict[str, bytes]:
+    def _read_bounded_members(archive: zipfile.ZipFile, max_bytes: int) -> dict[str, bytes]:
         infos = archive.infolist()
         if len(infos) > _MAX_MEMBERS:
             raise DomainError(ErrorCode.VALIDATION, "bundle has too many members")
