@@ -220,7 +220,7 @@ class SafetyGate(Node):
         self._raw_depth_info_topic = str(self.get_parameter("raw_depth_info_topic").value)
         self._publisher = self.create_publisher(Twist, output, 10)
         self._drive_feedback_publisher = self.create_publisher(
-            DriveFeedbackMessage, "/safety/drive_feedback", 10
+            DriveFeedbackMessage, "/safety/drive_feedback", qos_profile_sensor_data
         )
         self._status_publisher = self.create_publisher(DiagnosticArray, "/safety/status", 10)
         self._status_counts: dict[str, int] = {}

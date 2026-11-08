@@ -18,6 +18,7 @@ from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
 from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
 
 from senior_control.clock import Clock, SystemClock
@@ -82,7 +83,8 @@ class CommandNode(Node):
         self._awaiting_feedback: dict[str, VelocityEnvelope] = {}
         if require_server_heartbeat:
             self.create_subscription(
-                DriveExecutionFeedback, "/safety/drive_feedback", self._on_drive_feedback, 10
+                DriveExecutionFeedback, "/safety/drive_feedback",
+                self._on_drive_feedback, qos_profile_sensor_data
             )
         self._generation = 1
         self._last_server_epoch = 0

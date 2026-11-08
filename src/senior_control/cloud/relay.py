@@ -613,12 +613,12 @@ class Hub:
                     and timed_agent.drive_budget.compensation(now) is not None
                     and timed_agent.drive_clock.window.receiver_bounds(now) is not None
                 )
-                reply = {
+                clock_reply = {
                     "type": "drive.clock.reply", "nonce": probe.nonce, "t2": received_at, "t3": now,
                     "connection_epoch": timed_agent.epoch if timed_agent is not None else 0,
                     "ready": ready,
                 }
-                if not connection.outbox.put(json.dumps(reply).encode(), "response"):
+                if not connection.outbox.put(json.dumps(clock_reply).encode(), "response"):
                     connection.outbox.close(CLOSE_OVERLOAD)
                 return
             claimed = data["robot_id"]
