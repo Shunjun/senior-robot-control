@@ -40,8 +40,11 @@ from senior_control.protocol import (
     SimpleEnvelope,
     SnapshotEnvelope,
     VelocityEnvelope,
+    VideoEnvelope,
 )
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
+from senior_control.vision.signaling import VideoSignaling
+from senior_control.vision.stream import VideoSession
 
 logger = logging.getLogger("senior_control.agent")
 
@@ -70,14 +73,15 @@ class Agent:
         maps: MapPort,
         state: StatePort,
         motion: MotionPort,
+        video_session: Callable[[], VideoSession | None] | None = None,
         deadlines: Deadlines | None = None,
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
         on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
-        heartbeat_seconds: float = 0.2,
+        heartbeat_seconds: float = 1.0,
         retry_delay: float = 1.0,
-        heartbeat_window: float = 1.0,
+        heartbeat_window: float = 2.0,
         command_ttl_seconds: float = 0.3,
         source_clock_verified: bool = False,
         snapshot_seconds: float = 2.0,
@@ -94,6 +98,7 @@ class Agent:
         self._journal = journal
         self._state = state
         self._motion = motion
+        self._video_session = video_session or (lambda: None)
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
@@ -125,6 +130,7 @@ class Agent:
         )
         self._link: Link | None = None
         self._revoked_link: Link | None = None
+        self._clock_revoked = False
         self._epoch = 0
         self._last_epoch = 0
         self._heartbeat_generation = 0
@@ -166,7 +172,8 @@ class Agent:
         """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
         self._expire_eligibility()
         return (
-            self.connected
+            self._link is not None
+            and self._link.command_clock_valid()
             and self.motion_allowed
             and not self._safety_blocked
             and self._ledger.eligible(self.robot_id)
@@ -347,14 +354,8 @@ class Agent:
         link = self._link
         if link is None or not self.motion_allowed:
             return
-        if self.recovery_required:
-            # Keep the authenticated status channel alive without renewing ROS motion.
-            await link.send_heartbeat()
-            return
-        if self._safety_blocked:
-            return
         self._expire_eligibility()
-        if self._revoked_link is link:
+        if self._revoked_link is link and not self._clock_revoked:
             await self._quietly(self._motion.disable(link.epoch))
             await self._quietly(link.close())
             return
@@ -373,7 +374,7 @@ class Agent:
             await self._quietly(link.close())
             raise
 
-    async def _session(self) -> None:
+    async def _session(self) -> bool:
         try:
             link = await self._connector()
         except AuthRejected:
@@ -382,59 +383,73 @@ class Agent:
             raise
         self._heartbeat_generation += 1
         self._revoked_link = None
+        self._clock_revoked = False
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
+        received_heartbeat = False
+        # Snapshot collection is independent of heartbeat and control reception.
+        keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
+        video: VideoSignaling | None = None
         try:
-            # Snapshot collection is independent of heartbeat and control reception.
-            keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
-            try:
-                while True:
-                    frame = await link.recv()
-                    if isinstance(frame, HeartbeatFrame):
-                        if self._safety_blocked:
-                            continue
-                        was_eligible = self._was_eligible
-                        self._expire_eligibility()
-                        if was_eligible and not self._was_eligible:
-                            raise ConnectionError("heartbeat continuity expired")
-                        if not self.motion_allowed or self._revoked_link is link:
-                            raise ConnectionError("motion is revoked")
-                        if (
-                            not self.motion_allowed
-                            or frame.robot_id != self.robot_id
-                            or frame.deadline <= self._clock.monotonic()
-                        ):
-                            raise ConnectionError("invalid heartbeat")
-                        generation = self._heartbeat_generation
-                        await asyncio.wait_for(
-                            self._motion.server_heartbeat(link.epoch, frame.deadline),
-                            timeout=self._deadlines.safety,
+            while True:
+                frame = await link.recv()
+                if isinstance(frame, HeartbeatFrame):
+                    if frame.robot_id != self.robot_id or frame.deadline <= self._clock.monotonic():
+                        raise ConnectionError("invalid heartbeat")
+                    received_heartbeat = True
+                    if not link.command_clock_valid():
+                        if self._was_eligible:
+                            self._clock_revoked = True
+                            self._lose_eligibility()
+                            await self._quietly(self._motion.disable(link.epoch))
+                        continue
+                    if self._clock_revoked:
+                        # The old epoch was disabled. Recover motion only on a new epoch.
+                        raise ConnectionError("command clock recovered")
+                    if self._safety_blocked:
+                        continue
+                    was_eligible = self._was_eligible
+                    self._expire_eligibility()
+                    if was_eligible and not self._was_eligible:
+                        raise ConnectionError("heartbeat continuity expired")
+                    if not self.motion_allowed or self._revoked_link is link:
+                        raise ConnectionError("motion is revoked")
+                    generation = self._heartbeat_generation
+                    await asyncio.wait_for(
+                        self._motion.server_heartbeat(link.epoch, frame.deadline),
+                        timeout=self._deadlines.safety,
+                    )
+                    was_eligible = self._was_eligible
+                    self._expire_eligibility()
+                    if (
+                        (was_eligible and not self._was_eligible)
+                        or frame.deadline <= self._clock.monotonic()
+                        or self._link is not link
+                        or self._revoked_link is link
+                        or generation != self._heartbeat_generation
+                        or not self.motion_allowed
+                    ):
+                        raise ConnectionError("heartbeat expired before ROS acknowledgement")
+                    self._ledger.note(frame.robot_id, deadline=frame.deadline)
+                    self._was_eligible = self._ledger.eligible(frame.robot_id)
+                elif isinstance(frame, VideoEnvelope):
+                    if video is None:
+                        video = VideoSignaling(
+                            self.robot_id,
+                            link.epoch,
+                            send=link.send_video,
+                            make_session=self._video_session,
                         )
-                        was_eligible = self._was_eligible
-                        self._expire_eligibility()
-                        if (
-                            (was_eligible and not self._was_eligible)
-                            or frame.deadline <= self._clock.monotonic()
-                            or self._link is not link
-                            or self._revoked_link is link
-                            or generation != self._heartbeat_generation
-                            or not self.motion_allowed
-                        ):
-                            raise ConnectionError("heartbeat expired before ROS acknowledgement")
-                        self._ledger.note(frame.robot_id, deadline=frame.deadline)
-                        self._was_eligible = self._ledger.eligible(frame.robot_id)
-                    else:
-                        await self._receive_command(link, frame)
-            finally:
-                keepalive.cancel()
-                await self._wait_inflight([keepalive])
+                    video.submit(frame)
+                else:
+                    await self._receive_command(link, frame)
         except AuthRejected:
             self.auth_rejected = True
             self.request_shutdown()
             raise
         except (ConnectionError, OSError):
-            return
+            return received_heartbeat
         finally:
             epoch = link.epoch
             if self._link is link:
@@ -442,13 +457,18 @@ class Agent:
                 self._link, self._epoch = None, 0
                 self._ledger.forget(self.robot_id)
             self._log("connection_closed")
+            if video is not None:
+                video.retire()
+            keepalive.cancel()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
-            await self._wait_inflight(inflight)
+            await self._wait_inflight([keepalive, *inflight])
+            if video is not None:
+                await self._quietly(video.close())
             await self._quietly(link.close())
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:

@@ -37,7 +37,7 @@ class CommandNode(Node):
         self.declare_parameter("robot_id", "robot")
         self.declare_parameter("safety_state_path", "")
         self.declare_parameter("heartbeat_seconds", 0.2)
-        self.declare_parameter("disconnect_seconds", 1.0)
+        self.declare_parameter("disconnect_seconds", 2.0 if require_server_heartbeat else 1.0)
         self.declare_parameter("command_ttl_seconds", 0.3)
         self.declare_parameter("command_topic", "/safety/command_in")
         self.declare_parameter("final_command_topic", "/safety/final_command")

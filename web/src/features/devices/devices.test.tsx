@@ -246,6 +246,24 @@ describe("device list", () => {
     expect(within(beta).getByText("离线")).toBeTruthy();
   });
 
+  it.each([
+    { online: true, label: "在线" },
+    { online: false, label: "离线" },
+  ])("updates from reconnecting to $label after the next robot list response", async ({ online, label }) => {
+    const answers = [
+      reply(200, { robots: [{ ...ALPHA, online: false, reconnecting: true }] }),
+      reply(200, { robots: [{ ...ALPHA, online, reconnecting: false }] }),
+    ];
+    const api = new HttpControlApi((async () => answers.shift()!) as typeof fetch, memoryStorage());
+    mount("/robots", api, new FakeLink());
+
+    const robot = await screen.findByRole("link", { name: /Alpha/ });
+    expect(within(robot).getByText("重连中")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    expect(await within(robot).findByText(label)).toBeTruthy();
+  });
+
   it("shows an empty state and a retryable error state", async () => {
     const api = new FakeApi();
     api.robots = [];

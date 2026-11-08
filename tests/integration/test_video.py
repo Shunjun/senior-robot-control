@@ -24,6 +24,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
@@ -519,10 +520,14 @@ async def test_offer_and_candidates_are_bounded() -> None:
 async def test_relay_only_ignores_non_relay_remote_candidates() -> None:
     session, factory, _, _ = make_session(relay_only=True)
     await session.offer("robot-a", video_offer("VP8"))
-    await session.add_ice_candidate("candidate:1 1 udp 1 10.0.0.1 9 typ host")
-    await session.add_ice_candidate("candidate:2 1 udp 1 203.0.113.5 9 typ relay")
-    assert factory.peers[0].candidates == ["candidate:2 1 udp 1 203.0.113.5 9 typ relay"]
-    await session.close()
+    try:
+        await session.add_ice_candidate("candidate:1 1 udp 1 10.0.0.1 9 typ host")
+        await session.add_ice_candidate("candidate:3 1 udp 1 10.0.0.1 9 typ relayfake")
+        await session.add_ice_candidate("candidate:4 1 udp 1 10.0.0.1 9 typ host typ relay")
+        await session.add_ice_candidate("candidate:2 1 udp 1 203.0.113.5 9 typ relay")
+        assert factory.peers[0].candidates == ["candidate:2 1 udp 1 203.0.113.5 9 typ relay"]
+    finally:
+        await session.close()
 
 
 # ------------------------------------------------------------------------ optional aiortc
@@ -574,6 +579,45 @@ async def test_missing_aiortc_reports_unavailable(monkeypatch: pytest.MonkeyPatc
         assert raised.value.reason == "aiortc_not_installed"
     finally:
         factory.close()
+
+
+@pytest.mark.parametrize("line_end", ["\r\n", "\n"])
+@pytest.mark.parametrize("relay_only", [True, False])
+async def test_aiortc_applies_only_relay_candidates_in_relay_only_offer(
+    line_end: str, relay_only: bool
+) -> None:
+    from senior_control.vision.stream import _AiortcPeer
+
+    host = "a=candidate:host 1 UDP 1 10.0.0.1 9000 typ host"
+    relay = "a=candidate:relay 1 UDP 1 192.0.2.1 9000 typ relay"
+    incomplete_type = "a=candidate:other 1 UDP 1 192.0.2.2 9000 typ relayfake"
+    beginning = ["v=0", "m=video 9 UDP/TLS/RTP/SAVPF 96"]
+    ending = ["a=end-of-candidates", ""]
+    offer = line_end.join([*beginning, host, relay, incomplete_type, *ending])
+    expected = line_end.join([*beginning, relay, *ending]) if relay_only else offer
+
+    class Peer:
+        localDescription = SimpleNamespace(sdp=offer)
+
+        def addTransceiver(self, track: object, *, direction: str) -> SimpleNamespace:
+            return SimpleNamespace(setCodecPreferences=lambda _: None)
+
+        async def setRemoteDescription(self, description: SimpleNamespace) -> None:
+            assert description.sdp == expected
+
+        async def createAnswer(self) -> object:
+            return self.localDescription
+
+        async def setLocalDescription(self, description: object) -> None:
+            pass
+
+    aiortc = SimpleNamespace(
+        RTCRtpSender=SimpleNamespace(getCapabilities=lambda _: SimpleNamespace(codecs=[])),
+        RTCSessionDescription=SimpleNamespace,
+    )
+    peer = _AiortcPeer(aiortc, Peer(), object(), PeerRequest("VP8", 1_500_000, None, relay_only))
+    answer = await peer.accept_offer(SessionDescription("offer", offer))
+    assert answer.sdp == expected
 
 
 async def test_aiortc_loopback_delivers_a_real_frame() -> None:
@@ -649,6 +693,79 @@ def offer_frame(**changes: object) -> bytes:
 
 def candidate_frame(kind: str = "video.candidate", **changes: object) -> bytes:
     return wire_frame(kind, {"candidate": "candidate:1 1 udp 1 10.0.0.1 9 typ host"}, **changes)
+
+
+async def test_vehicle_signaling_answers_offer_and_closes_peer_with_link() -> None:
+    from senior_control.protocol import VideoSdpEnvelope, validate_frame
+    from senior_control.vision.signaling import VideoSignaling
+
+    sent: asyncio.Queue[VideoSdpEnvelope] = asyncio.Queue()
+
+    async def send(frame):
+        await sent.put(frame)
+
+    session, factory, _, _ = make_session()
+    signaling = VideoSignaling("robot-a", 1, send=send, make_session=lambda: session)
+    offer = validate_frame(offer_frame(), "robot-a")
+    assert isinstance(offer, VideoSdpEnvelope)
+    try:
+        signaling.submit(offer)
+        reply = await asyncio.wait_for(sent.get(), 1)
+        assert reply.type == "video.answer"
+        assert reply.payload.sdp == "answer-for-VP8"
+        assert reply.session_id == offer.session_id
+        assert reply.request_id == offer.request_id
+    finally:
+        await signaling.close()
+    assert factory.encoders == 0
+
+
+async def test_vehicle_signaling_refuses_a_second_viewer_without_releasing_the_first() -> None:
+    from senior_control.protocol import VideoEnvelope, VideoSdpEnvelope, validate_frame
+    from senior_control.vision.signaling import VideoSignaling
+
+    sent: asyncio.Queue[VideoEnvelope] = asyncio.Queue()
+    session, factory, _, _ = make_session()
+    signaling = VideoSignaling("robot-a", 1, send=sent.put, make_session=lambda: session)
+    first = validate_frame(offer_frame(), "robot-a")
+    second = validate_frame(offer_frame(session_id="second"), "robot-a")
+    assert isinstance(first, VideoSdpEnvelope)
+    assert isinstance(second, VideoSdpEnvelope)
+    try:
+        signaling.submit(first)
+        assert (await asyncio.wait_for(sent.get(), 1)).type == "video.answer"
+        signaling.submit(second)
+        reply = await asyncio.wait_for(sent.get(), 1)
+        assert reply.type == "video.close"
+        assert reply.session_id == "second"
+        assert factory.encoders == 1
+    finally:
+        await signaling.close()
+    assert factory.encoders == 0
+
+
+async def test_vehicle_signaling_closes_offer_when_no_camera_is_available() -> None:
+    from senior_control.protocol import VideoCloseEnvelope, VideoSdpEnvelope, validate_frame
+    from senior_control.vision.signaling import VideoSignaling
+
+    sent: asyncio.Queue[VideoCloseEnvelope] = asyncio.Queue()
+
+    async def send(frame):
+        await sent.put(frame)
+
+    session, factory, _, _ = make_session(source=None)
+    signaling = VideoSignaling("robot-a", 1, send=send, make_session=lambda: session)
+    offer = validate_frame(offer_frame(), "robot-a")
+    assert isinstance(offer, VideoSdpEnvelope)
+    try:
+        signaling.submit(offer)
+        reply = await asyncio.wait_for(sent.get(), 1)
+        assert reply.type == "video.close"
+        assert reply.session_id == offer.session_id
+        assert reply.request_id == offer.request_id
+    finally:
+        await signaling.close()
+    assert factory.opened == 0
 
 
 def stop_frame() -> bytes:

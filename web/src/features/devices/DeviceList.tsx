@@ -23,6 +23,9 @@ function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean })
   if (unknown) {
     return <span className={`${styles.presence} ${styles.presenceUnknown}`}>状态未知</span>;
   }
+  if (robot.reconnecting) {
+    return <span className={`${styles.presence} ${styles.presenceUnknown}`}>重连中</span>;
+  }
   return robot.online ? (
     <span className={`${styles.presence} ${styles.presenceOnline}`}>在线</span>
   ) : (

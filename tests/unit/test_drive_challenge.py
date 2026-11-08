@@ -7,17 +7,18 @@ import pytest
 from senior_control.cloud import relay
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
+from senior_control.errors import ErrorCode
 from senior_control.protocol import validate_frame
 from senior_control.safety.arbiter import Arbiter
 
 
-def frame(kind: str, seq: int, payload: dict | None = None) -> bytes:
+def frame(kind: str, seq: int, payload: dict | None = None, *, epoch: int = 1) -> bytes:
     return json.dumps(
         {
             "v": 1,
             "robot_id": "car-a",
             "session_id": "session-a",
-            "connection_epoch": 1,
+            "connection_epoch": epoch,
             "request_id": f"r{seq}",
             "seq": seq,
             "expires_at": time.time() + 5,
@@ -392,3 +393,53 @@ async def test_reacquire_retires_queued_velocity_and_old_challenges() -> None:
     )
     assert not json.loads(await owner.outbox.get())["payload"]["ok"]
     assert await grant(8) != older_token
+
+
+async def test_reconnect_blocks_motion_until_new_heartbeat_and_lease() -> None:
+    hub = Hub(CloudLimits())
+    previous = hub.attach_agent("car-a")
+    control = hub.attach_controller("car-a", "owner")
+    assert control is not None
+
+    def heartbeat(epoch: int) -> bytes:
+        return json.dumps(
+            {
+                "v": 1,
+                "type": "heartbeat.request",
+                "robot_id": "car-a",
+                "connection_epoch": epoch,
+                "nonce": "probe",
+                "sent_at": time.time(),
+            }
+        ).encode()
+
+    hub.handle_agent_frame(previous, heartbeat(previous.epoch))
+    await previous.outbox.get()
+    acquire = frame("control.acquire", 1)
+    hub.handle_control_frame(control, acquire)
+    await previous.outbox.get()
+    hub.handle_agent_frame(previous, answer(acquire))
+    await control.outbox.get()
+
+    hub.detach(previous)
+    assert hub.is_reconnecting("car-a")
+    current = hub.attach_agent("car-a")
+    hub.handle_control_frame(control, frame("control.acquire", 2, epoch=current.epoch))
+    assert current.outbox.pending == 0
+    assert json.loads(await control.outbox.get())["payload"]["error"] == ErrorCode.OFFLINE
+
+    hub.handle_agent_frame(current, heartbeat(current.epoch))
+    await current.outbox.get()
+    assert hub.is_online("car-a")
+    hub.handle_agent_frame(previous, answer(acquire))
+    assert control.outbox.pending == 0
+    hub.handle_control_frame(control, frame("drive.challenge", 3, epoch=current.epoch))
+    assert not json.loads(await control.outbox.get())["payload"]["ok"]
+
+    acquire = frame("control.acquire", 4, epoch=current.epoch)
+    hub.handle_control_frame(control, acquire)
+    assert await current.outbox.get() == acquire
+    hub.handle_agent_frame(current, answer(acquire))
+    await control.outbox.get()
+    hub.handle_control_frame(control, frame("drive.challenge", 5, epoch=current.epoch))
+    assert json.loads(await control.outbox.get())["payload"]["ok"]

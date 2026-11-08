@@ -3,60 +3,105 @@ import type { RobotLink } from "../../api/client";
 import { DetectionOverlay, type Detection } from "./DetectionOverlay";
 import styles from "./Video.module.css";
 
-export function VideoPanel({ link, stream: suppliedStream = null, frameTimestamp = null, detections = [] }: {
-  link?: RobotLink;
+const MAX_PENDING_CANDIDATES = 64;
+
+interface VideoPanelProps {
+  link?: Pick<RobotLink, "sendVideoSignal" | "subscribeVideo">;
+  live?: boolean;
   stream?: MediaStream | null;
   frameTimestamp?: number | null;
   detections?: Detection[];
-}): ReactElement {
+}
+
+export function VideoPanel({
+  link,
+  live = true,
+  stream: suppliedStream = null,
+  frameTimestamp = null,
+  detections = [],
+}: VideoPanelProps): ReactElement {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(suppliedStream);
   const stream = suppliedStream ?? remoteStream;
 
   useEffect(() => {
     if (
+      !live ||
       link?.sendVideoSignal === undefined ||
       link.subscribeVideo === undefined ||
       typeof RTCPeerConnection === "undefined"
     ) return;
     const peer = new RTCPeerConnection();
     let active = true;
+    let offered = false;
+    const pendingCandidates: string[] = [];
+
+    function finish() {
+      if (!active) return;
+      active = false;
+      peer.close();
+      setRemoteStream(null);
+      if (offered) {
+        try {
+          link?.sendVideoSignal?.("video.close", {});
+        } catch {
+          // The control socket may already be gone; media cleanup remains local.
+        }
+      }
+    }
+
+    function sendCandidate(candidate: string) {
+      try {
+        link?.sendVideoSignal?.("video.candidate", { candidate });
+      } catch {
+        finish();
+      }
+    }
+
     peer.addTransceiver("video", { direction: "recvonly" });
     peer.ontrack = (event) => {
       if (active) setRemoteStream(event.streams[0] ?? new MediaStream([event.track]));
     };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "failed") finish();
+    };
     peer.onicecandidate = (event) => {
-      if (event.candidate !== null) {
-        link.sendVideoSignal?.("video.candidate", { candidate: event.candidate.candidate });
-      }
+      if (!active || event.candidate === null) return;
+      const candidate = event.candidate.candidate;
+      if (offered) sendCandidate(candidate);
+      else if (pendingCandidates.length < MAX_PENDING_CANDIDATES) pendingCandidates.push(candidate);
     };
     const off = link.subscribeVideo(async (frame) => {
       if (!active) return;
-      if (frame.type === "video.answer") {
-        await peer.setRemoteDescription({ type: "answer", sdp: frame.payload.sdp });
-      } else if (frame.type === "video.candidate") {
-        await peer.addIceCandidate({ candidate: frame.payload.candidate });
-      } else if (frame.type === "video.close") {
-        setRemoteStream(null);
-        peer.close();
+      try {
+        if (frame.type === "video.answer") {
+          await peer.setRemoteDescription({ type: "answer", sdp: frame.payload.sdp });
+        } else if (frame.type === "video.candidate") {
+          await peer.addIceCandidate({ candidate: frame.payload.candidate, sdpMLineIndex: 0 });
+        } else if (frame.type === "video.close") {
+          offered = false;
+          finish();
+        }
+      } catch {
+        finish();
       }
     });
     void peer.createOffer()
       .then(async (offer) => {
         await peer.setLocalDescription(offer);
-        if (active && offer.sdp) link.sendVideoSignal?.("video.offer", { sdp: offer.sdp });
+        if (!active || !offer.sdp) return;
+        link.sendVideoSignal?.("video.offer", { sdp: offer.sdp });
+        offered = true;
+        for (const candidate of pendingCandidates.splice(0)) {
+          if (!active) break;
+          sendCandidate(candidate);
+        }
       })
-      .catch(() => setRemoteStream(null));
+      .catch(finish);
     return () => {
-      active = false;
       off();
-      peer.close();
-      try {
-        link.sendVideoSignal?.("video.close", {});
-      } catch {
-        // The control socket may already be gone; media cleanup remains local.
-      }
+      finish();
     };
-  }, [link]);
+  }, [link, live]);
 
   return (
     <section className={styles.panel} aria-label="实时视频">

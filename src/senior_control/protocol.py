@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from senior_control.errors import ErrorCode
 
 DRIVE_CHALLENGE_SECONDS = 0.3
+DEVICE_REVOKED_CLOSE_CODE = 4403
 
 
 class StrictModel(BaseModel):

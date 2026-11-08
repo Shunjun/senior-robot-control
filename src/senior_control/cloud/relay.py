@@ -20,6 +20,7 @@ from senior_control.agent.snapshots import (
 from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
+    DEVICE_REVOKED_CLOSE_CODE,
     DRIVE_CHALLENGE_SECONDS,
     EmptyPayload,
     Envelope,
@@ -45,7 +46,9 @@ VELOCITY = "drive.velocity"
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
 SNAPSHOT = "snapshot"
-HEARTBEAT_WINDOW_SECONDS = 1.0
+HEARTBEAT_WINDOW_SECONDS = 2.0
+# Five default backoffs (31s), five failed handshakes (up to 25s) and heartbeat margin.
+RECONNECT_GRACE_SECONDS = 60.0
 LEASE_ACK_SECONDS = 1.0
 SNAPSHOT_TTL_SECONDS = 60.0
 VIDEO_CLOSE_TTL_SECONDS = 300.0
@@ -164,6 +167,12 @@ class Connection:
     safety_session: str = field(default_factory=lambda: "safety-" + secrets.token_hex(16))
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
 
+    def reconnect_deadline(self, now: float) -> float:
+        if self.heartbeat_at is None:
+            return 0.0
+        disconnected_at = min(now, self.heartbeat_at + HEARTBEAT_WINDOW_SECONDS)
+        return disconnected_at + RECONNECT_GRACE_SECONDS
+
     def server_time(self, monotonic_now: float) -> float:
         return self.wall_origin + (monotonic_now - self.started_at)
 
@@ -182,6 +191,7 @@ class _Link:
     epoch: int = 0
     controllers: set[Connection] = field(default_factory=set)
     lease_request: _LeaseRequest | None = None
+    reconnect_until: float = 0.0
 
 
 class Hub:
@@ -226,9 +236,18 @@ class Hub:
         agent = link.agent if link is not None else None
         return (
             agent is not None
+            and not agent.outbox.closed
             and agent.heartbeat_at is not None
             and time.monotonic() - agent.heartbeat_at <= HEARTBEAT_WINDOW_SECONDS
         )
+
+    def is_reconnecting(self, robot_id: str) -> bool:
+        link = self._links.get(robot_id)
+        if link is None or self.is_online(robot_id):
+            return False
+        now = time.monotonic()
+        deadline = link.agent.reconnect_deadline(now) if link.agent else 0.0
+        return now < max(link.reconnect_until, deadline)
 
     def _push_snapshot(self, robot_id: str, only: Connection | None = None) -> None:
         """Send the cache's view of a robot to its control sockets, or to the one given.
@@ -279,6 +298,8 @@ class Hub:
             controller.lease_session = None
             controller.challenges.clear()
         if previous is not None:
+            if previous.heartbeat_at is not None:
+                link.reconnect_until = previous.reconnect_deadline(connection.started_at)
             previous.outbox.close(CLOSE_SUPERSEDED)
         self._push_snapshot(robot_id)
         return connection
@@ -296,9 +317,7 @@ class Hub:
         if now - last > HEARTBEAT_WINDOW_SECONDS or (
             link.lease_request is not None and now >= link.lease_request.deadline
         ):
-            self.snapshots.mark_offline(connection.robot_id)
-            self._push_snapshot(connection.robot_id)
-            connection.outbox.close(CLOSE_NORMAL)
+            self.detach(connection)
 
     def attach_controller(self, robot_id: str, session_hash: str) -> Connection | None:
         link = self._link(robot_id)
@@ -319,6 +338,8 @@ class Hub:
                 link.agent.outbox.discard_velocity()
                 self._retire_lease(link, connection)
             if link.agent is connection:
+                if connection.heartbeat_at is not None:
+                    link.reconnect_until = connection.reconnect_deadline(time.monotonic())
                 link.agent = None
                 link.lease_request = None
                 for controller in link.controllers:
@@ -356,8 +377,10 @@ class Hub:
         for controller in link.controllers:
             self._stop_viewer_video(controller)
             controller.outbox.close(CLOSE_POLICY)
+        link.reconnect_until = 0.0
         if link.agent is not None:
-            link.agent.outbox.close(CLOSE_POLICY)
+            link.agent.heartbeat_at = None
+            link.agent.outbox.close(DEVICE_REVOKED_CLOSE_CODE)
 
     def close_session(self, session_hash: str) -> None:
         for link in self._links.values():
@@ -399,6 +422,7 @@ class Hub:
                     connection.outbox.close(CLOSE_OVERLOAD)
                     return
                 connection.heartbeat_at = now
+                link.reconnect_until = 0.0
                 return
             envelope = validate_frame(raw, connection.robot_id)
         except (ValueError, ValidationError):
@@ -511,8 +535,17 @@ class Hub:
         ):
             self._reject(connection, envelope, ErrorCode.TIMEOUT)
             return
-        agent = link.agent if link is not None else None
-        if agent is None:
+        agent = link.agent
+        if agent is not None:
+            self.expire_stale_agent(agent)
+        if agent is None or agent.outbox.closed:
+            self._reject(connection, envelope, ErrorCode.OFFLINE)
+            return
+        if (
+            link.reconnect_until
+            and agent.heartbeat_at is None
+            and envelope.type in LEASE_TYPES | {"drive.challenge", VELOCITY}
+        ):
             self._reject(connection, envelope, ErrorCode.OFFLINE)
             return
         if isinstance(envelope, SimpleEnvelope):

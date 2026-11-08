@@ -1383,3 +1383,93 @@ async def test_production_velocity_uses_cloud_deadline_without_clock_bypass(rig:
         )
     finally:
         await finish(task, rig)
+
+
+async def test_clock_unqualified_heartbeat_keeps_status_without_motion(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    class ClockLink(FakeLink):
+        clock_valid = True
+
+        def command_clock_valid(self) -> bool:
+            return self.clock_valid
+
+    link = ClockLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        link.clock_valid = False
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: "disable:1" in rig.motion.events)
+        assert not rig.agent.eligible_for_motion
+        assert rig.agent.connected
+        assert not link.closed
+        assert link.snapshots
+        assert "exit" not in rig.motion.events
+    finally:
+        await finish(task, rig)
+
+
+async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    links = [FakeLink(epoch) for epoch in range(1, 8)]
+    for bad in links[1:6]:
+        bad.drop()
+    for link in links:
+        rig.connector.add(link)
+
+    task = asyncio.create_task(rig.agent.run())
+    try:
+        await until(lambda: rig.agent.connected)
+        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        links[0].drop()
+        await until(lambda: all(bad.closed for bad in links[:6]))
+        assert not rig.agent.eligible_for_motion
+        assert "exit" not in rig.motion.events
+        await until(lambda: rig.agent._epoch == 7)
+        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        assert "heartbeat:7" in rig.motion.events
+        assert "exit" not in rig.motion.events
+    finally:
+        await finish(task, rig)
+
+
+async def test_unconfigured_video_offer_does_not_close_the_agent_link(rig: Rig) -> None:
+    from senior_control.protocol import SdpPayload, VideoEnvelope, VideoSdpEnvelope
+
+    class VideoLink(FakeLink):
+        video: asyncio.Queue[VideoEnvelope]
+
+        def __init__(self) -> None:
+            super().__init__(epoch=1)
+            self.video = asyncio.Queue()
+
+        async def send_video(self, envelope: VideoEnvelope) -> None:
+            await self.video.put(envelope)
+
+    link = VideoLink()
+    task = await start(rig, link)
+    try:
+        link.inbox.put_nowait(
+            VideoSdpEnvelope(
+                v=1,
+                type="video.offer",
+                robot_id=ROBOT,
+                session_id="viewer",
+                request_id="offer",
+                seq=1,
+                connection_epoch=1,
+                expires_at=time.time() + 5,
+                payload=SdpPayload(sdp="v=0"),
+            )
+        )
+        result = await asyncio.wait_for(link.video.get(), 0.5)
+        assert result.type == "video.close"
+        assert result.session_id == "viewer"
+        assert rig.agent.connected
+    finally:
+        await finish(task, rig)

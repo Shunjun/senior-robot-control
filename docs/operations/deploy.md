@@ -13,8 +13,10 @@ FRP、Nginx、Caddy 与证书续期的实际排障记录见[部署复盘与排�
 Compose 只运行一个云进程（其中包含中继与登录限流器）、Caddy 和 coturn。ROS、DDS
 及机器人代理不进入 Compose，也不向公网发布。
 
-当前机器人 agent 的进程入口尚未装配 connector、数据库和 ROS IPC；执行 unit 会以非零
-状态失败。入口完成并经过 Linux 集成验证前，不得启用 `senior-agent.service`。
+机器人 Agent 入口会打开车端数据库，核对本地 ROS IPC 适配器的机器人 ID，再连接云端
+WebSocket。安装 `senior-agent.service` 前，确认适配器已监听，且服务账号可以连接
+`SENIOR_AGENT_SOCKET` 并写入 `SENIOR_DATABASE_PATH` 所在目录。入口和环境变量见
+[车端配对与启动说明](../../README.md)。目标 Linux 上的 systemd 启停与重启仍需验收。
 
 ## 准备和 TLS
 

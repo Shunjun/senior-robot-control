@@ -232,7 +232,12 @@ def create_app(
         robots = await registry.list_active()
         return {
             "robots": [
-                {"id": r.robot_id, "name": r.name, "online": hub.is_online(r.robot_id)}
+                {
+                    "id": r.robot_id,
+                    "name": r.name,
+                    "online": hub.is_online(r.robot_id),
+                    "reconnecting": hub.is_reconnecting(r.robot_id),
+                }
                 for r in robots
             ]
         }

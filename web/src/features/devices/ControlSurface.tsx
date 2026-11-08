@@ -81,7 +81,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
       )}
       <TaskList snapshot={snapshot} link={link} />
       <MapManager robotId={robotId} snapshot={snapshot} link={link} />
-      <VideoPanel link={link} />
+      <VideoPanel link={link} live={snapshot.connected && !snapshot.stale} />
     </div>
   );
 }

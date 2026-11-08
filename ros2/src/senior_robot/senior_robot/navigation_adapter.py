@@ -4,6 +4,7 @@ Controller and recovery output go to separate arbiter inputs. A rejected
 cancel leaves the current goal in place and does not start a replacement.
 """
 
+import asyncio
 import math
 from dataclasses import dataclass
 from typing import Protocol
@@ -52,31 +53,34 @@ class GoalExecutor(Protocol):
 class NavigationAdapter:
     def __init__(self, executor: GoalExecutor) -> None:
         self._executor = executor
+        self._goal_lock = asyncio.Lock()
         self._active: str | None = None
         self._cancel_rejected = False
 
     async def navigate(self, goal: MapGoal) -> str:
-        if self._cancel_rejected or self._active is not None:
-            raise NavigationRejected(self._active or "")
-        execution_id = await self._executor.start(goal)
-        self._active = execution_id
-        return execution_id
+        async with self._goal_lock:
+            if self._cancel_rejected or self._active is not None:
+                raise NavigationRejected(self._active or "")
+            execution_id = await self._executor.start(goal)
+            self._active = execution_id
+            return execution_id
 
     async def cancel(self, execution_id: str) -> OperationResult:
-        if not execution_id.strip():
-            return OperationResult("unknown", OperationStatus.FAILED)
-        if self._active is None and not self._cancel_rejected:
-            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
-        if self._active != execution_id:
-            return OperationResult(execution_id, OperationStatus.FAILED)
-        result = await self._executor.cancel(execution_id)
-        if result.status == OperationStatus.SUCCEEDED:
-            self._active = None
-            self._cancel_rejected = False
+        async with self._goal_lock:
+            if not execution_id.strip():
+                return OperationResult("unknown", OperationStatus.FAILED)
+            if self._active is None and not self._cancel_rejected:
+                return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+            if self._active != execution_id:
+                return OperationResult(execution_id, OperationStatus.FAILED)
+            result = await self._executor.cancel(execution_id)
+            if result.status == OperationStatus.SUCCEEDED:
+                self._active = None
+                self._cancel_rejected = False
+                return result
+            if result.status == OperationStatus.FAILED:
+                self._cancel_rejected = True
             return result
-        if result.status == OperationStatus.FAILED:
-            self._cancel_rejected = True
-        return result
 
 
 def create_navigation_node() -> type:

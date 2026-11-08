@@ -12,6 +12,7 @@ from senior_control.protocol import (
     ResponseEnvelope,
     SimpleEnvelope,
     VelocityEnvelope,
+    VideoEnvelope,
     serialize_envelope,
 )
 from senior_control.runtime.ipc import IpcClient, IpcError
@@ -30,13 +31,15 @@ class Link(Protocol):
 
     epoch: int
 
-    async def recv(self) -> Envelope | HeartbeatFrame:
+    async def recv(self) -> Envelope | VideoEnvelope | HeartbeatFrame:
         """Next frame. A dropped socket raises ``ConnectionError``."""
         ...
 
     def command_clock_valid(self) -> bool: ...
 
     async def send_response(self, envelope: ResponseEnvelope) -> None: ...
+
+    async def send_video(self, envelope: VideoEnvelope) -> None: ...
 
     async def send_snapshot(self, snapshot: RobotSnapshot) -> None: ...
 

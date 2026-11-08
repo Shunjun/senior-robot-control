@@ -126,7 +126,9 @@ function parseRobots(body: unknown): RobotSummary[] {
     ) {
       throw new ApiError("unexpected robot list", 200);
     }
-    return { id: item.id, name: item.name, online: item.online };
+    const robot = { id: item.id, name: item.name, online: item.online };
+    //Compatible: Older relays omit reconnecting.
+    return typeof item.reconnecting === "boolean" ? { ...robot, reconnecting: item.reconnecting } : robot;
   });
 }
 

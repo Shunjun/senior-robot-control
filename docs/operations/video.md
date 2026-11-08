@@ -7,7 +7,7 @@
 - 信令复用已认证的 `/ws/agent` 和 `/ws/control`。不开独立的视频端口，也没有未认证入口。
 - `VideoSession` 在车端按单个观看者创建，构造时带上云端已验证的连接身份（`role` 和所选 `robot_id`）。每次 `offer`、`add_ice_candidate`、`turn_credentials` 都会重新核对：连接必须是 `control` 角色，请求的机器人必须等于所选机器人，也必须等于本车。
 - 视频帧不经过 `Supervisor.submit_drive`，也不占那个唯一的待发速度槽。帧的路径是：相机 → 一个只保留最新帧的槽 → 对端。对端拥塞时丢帧并计数，心跳和停止不受影响。
-- 车上没有相机时，会话报告 `unavailable`（原因 `no_camera`），不生成帧，不显示假画面。`perception_node` 目前不发布相机话题，所以现在车端应传 `source=None`。
+- 车端 Agent 尚未装配相机帧源。收到 offer 时会回送 `video.close`，浏览器清除视频画面，心跳和控制连接继续运行。
 - `aiortc` 在可选依赖 `video` 里。`import senior_control` 不会导入它。只有 `AiortcPeerFactory.open` 才导入，缺少时报告 `aiortc_not_installed`。安装：`uv sync --group dev --extra video`。
 
 ## 信令消息
@@ -22,7 +22,7 @@
 | 车端 → 控制端 | 状态 | `status()` |
 | 任一端 | 结束 | `close()` |
 
-`/ws/control` 与 `/ws/agent` 的信封目前只允许速度、控制、操作、快照和响应这些类型，信令消息还没有对应的信封类型。把这些消息装进信封并经 `Hub` 转发，需要改 `protocol.py` 和 `cloud/relay.py`，也需要具体的车端 WebSocket 客户端，二者都不在本任务范围内，保留为后续工作。
+`/ws/control` 与 `/ws/agent` 已转发 `video.offer`、`video.answer`、`video.candidate` 和 `video.close`。车端为当前连接代次管理一个观看会话，并在连接关闭时释放它。相机帧源和 TURN 临时凭据的生产装配仍待接入。
 
 `aiortc` 的限制：它在 `setLocalDescription` 返回前收集完本地 candidate，并放进 answer，所以车端本地 candidate 随 answer 一次给出，不再逐条 trickle。控制端到车端的 candidate 可以逐条追加。
 
@@ -83,6 +83,6 @@ credential = base64(HMAC-SHA1(共享密钥, username))
 6. 故障：停掉 coturn，`status().state` 变为 `relay_failed`，页面显示“中继不可用”，不显示旧画面。
 7. 带宽：用 `VideoLimits.max_bitrate_bps` 的两倍压力观察，`bitrate_bps` 不超过上限。
 8. 拥塞：用 `tc netem` 限制上行带宽，确认心跳不中断，`drive.stop` 在一个心跳周期内到达车端。
-9. 吊销：信令接入 `Hub` 之后（见“信令消息”一节的后续工作），在云端撤销机器人或登出，确认控制连接关闭会调用会话的 `close()`，`frames_sent` 不再增加，coturn 上对应分配在 TTL 内释放。目前 `VideoSession` 没有接到 `Hub` 的关闭事件，这一步还不能验收。
+9. 吊销：在云端撤销机器人或登出，确认控制连接关闭会释放会话，`frames_sent` 不再增加，coturn 上对应分配在 TTL 内释放。
 
 模板里的 `denied-peer-ip` 禁止中继到私有地址。如果验收时车端和 coturn 在同一个内网，需要按实际网络临时放开对应网段，并在验收后恢复。

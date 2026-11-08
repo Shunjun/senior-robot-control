@@ -571,7 +571,7 @@ async def test_cloud_heartbeat_drives_ros_eligibility_and_half_open_stops(
     from senior_control.models import Velocity
     from senior_control.safety.arbiter import Arbiter
 
-    arbiter = Arbiter(ROBOT, 0.1, 1.0, 1.0, require_server_heartbeat=True)
+    arbiter = Arbiter(ROBOT, 0.1, 2.0, 1.0, require_server_heartbeat=True)
     adapter = _load_adapter().AdapterCore(
         robot_id=ROBOT,
         submit=lambda envelope, received_at=None: arbiter.accept(
@@ -1112,7 +1112,7 @@ async def test_cloud_challenge_to_production_agent_and_real_ipc_arbiter(
     from senior_control.protocol import serialize_envelope
     from senior_control.safety.arbiter import Arbiter
 
-    arbiter = Arbiter(ROBOT, 0.1, 1.0, 0.3, require_server_heartbeat=True)
+    arbiter = Arbiter(ROBOT, 0.1, 2.0, 0.3, require_server_heartbeat=True)
     adapter = _load_adapter().AdapterCore(
         robot_id=ROBOT,
         submit=lambda envelope, received_at=None, local_deadline=None: arbiter.accept(

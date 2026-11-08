@@ -17,7 +17,7 @@ from senior_control.agent.ports import IpcHomePort, IpcMapPort, IpcNavigation, I
 from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.errors import DomainError
-from senior_control.runtime.ipc import IpcClient
+from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
 from senior_control.tasks.runtime import TaskRuntime
@@ -113,8 +113,28 @@ async def run_agent(config: AgentConfig) -> int:
         )
         try:
             await motion.verify_robot(config.robot_id)
+        except IpcError as exc:
+            await motion.close()
+            cause = exc.__cause__
+            while isinstance(cause, IpcError):
+                cause = cause.__cause__
+            # //Compatible: Python 3.10 has distinct asyncio and built-in timeout types.
+            if isinstance(
+                cause,
+                (
+                    FileNotFoundError,
+                    ConnectionError,
+                    asyncio.IncompleteReadError,
+                    asyncio.TimeoutError,
+                    TimeoutError,
+                ),
+            ):
+                logger.warning("ROS adapter identity check could not reach the adapter")
+                return 1
+            logger.exception("ROS adapter identity check failed")
+            return 78
         except Exception:
-            logger.exception("ROS adapter identity does not match the paired robot")
+            logger.exception("ROS adapter identity check failed")
             await motion.close()
             return 78
         state_client = IpcClient(config.socket_path)

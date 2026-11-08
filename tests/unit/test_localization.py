@@ -512,3 +512,20 @@ def test_bad_gps_does_not_kill_healthy_local_navigation() -> None:
 def test_localization_console_script_is_registered() -> None:
     text = (ROOT / "ros2" / "src" / "senior_robot" / "setup.py").read_text()
     assert "localization_node = senior_robot.localization_node:main" in text
+
+
+async def test_scan_match_failure_clears_previous_localization() -> None:
+    def match(seed: Pose2D | None) -> tuple[Pose2D, bool] | None:
+        if seed is None:
+            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "scan expired")
+        return seed, True
+
+    reloc = relocator(Georeference("unreferenced"), match, aligned=None)
+    succeeded = await reloc.begin(MAP, PoseHint(Pose2D(1.0, 2.0, 0.3), "manual"))
+    assert succeeded.status == OperationStatus.SUCCEEDED
+
+    failed = await reloc.begin(MAP, None)
+    assert failed.status == OperationStatus.FAILED
+    assert not reloc.ready
+    assert reloc.pose is None
+    assert reloc.reason == "scan expired"

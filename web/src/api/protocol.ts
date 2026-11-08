@@ -203,6 +203,7 @@ export interface RobotSummary {
   id: string;
   name: string;
   online: boolean;
+  reconnecting?: boolean;
 }
 
 export interface LinkStatus {
