@@ -39,11 +39,18 @@ export interface CellEvidence {
  * lower-left corner, as in a map.yaml `origin`; `resolution` is metres per cell. The grid axes
  * are rotated by `origin.yaw` against the map frame.
  */
+export interface OccupancyGrid {
+  width: number;
+  height: number;
+  values: Int8Array;
+}
+
 export interface OccupancySnapshot {
   map_ref: MapRef | null;
   origin: Pose;
   resolution: number;
   cells: readonly CellEvidence[];
+  grid?: OccupancyGrid;
 }
 
 export interface SafetyZone {
@@ -114,26 +121,26 @@ function clampZoom(zoom: number): number {
 
 /** A view that shows every cell with a margin. An empty map is centred on its origin. */
 export function fitView(map: OccupancySnapshot, width: number, height: number): MapView {
-  if (map.cells.length === 0) {
+  if (map.cells.length === 0 && map.grid === undefined) {
     return { center: { x: map.origin.x, y: map.origin.y }, zoom: 50, width, height };
   }
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const entry of map.cells) {
-    for (const [dx, dy] of [
-      [0, 0],
-      [1, 0],
-      [0, 1],
-      [1, 1],
-    ] as const) {
-      const corner = gridToWorld(map, entry.cell[0] + dx, entry.cell[1] + dy);
+  function includeBounds(x: number, y: number, width: number, height: number): void {
+    for (const [gx, gy] of [[x, y], [x + width, y], [x, y + height], [x + width, y + height]] as const) {
+      const corner = gridToWorld(map, gx, gy);
       minX = Math.min(minX, corner.x);
-      maxX = Math.max(maxX, corner.x);
       minY = Math.min(minY, corner.y);
+      maxX = Math.max(maxX, corner.x);
       maxY = Math.max(maxY, corner.y);
     }
+  }
+  if (map.grid !== undefined) {
+    includeBounds(0, 0, map.grid.width, map.grid.height);
+  } else {
+    for (const { cell: [x, y] } of map.cells) includeBounds(x, y, 1, 1);
   }
   const floor = map.resolution * 10;
   const spanX = Math.max(maxX - minX, floor);
@@ -156,6 +163,10 @@ function isFiltered(entry: CellEvidence): boolean {
 
 // ---------------------------------------------------------------- component
 
+interface WaypointMarker extends Point {
+  waypoint_id: string;
+}
+
 export interface MapCanvasProps {
   map: OccupancySnapshot;
   /** The map is a cached copy, not live. Picking is off. */
@@ -172,6 +183,11 @@ export interface MapCanvasProps {
   /** A press (and optional drag for heading) on the map yields a pose instead of panning. */
   pickEnabled?: boolean;
   onPick?: (pose: Pose) => void;
+  compact?: boolean;
+  taskRoute?: readonly Point[];
+  waypointMarkers?: readonly WaypointMarker[];
+  highlightedWaypoint?: string | null;
+  onAddWaypoint?: (waypointId: string) => void;
 }
 
 const DEFAULT_WIDTH = 640;
@@ -216,6 +232,11 @@ export function MapCanvas({
   zones = [],
   pickEnabled = false,
   onPick,
+  compact = false,
+  taskRoute = [],
+  waypointMarkers = [],
+  highlightedWaypoint = null,
+  onAddWaypoint,
 }: MapCanvasProps): ReactElement {
   const hintId = useId();
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -253,15 +274,45 @@ export function MapCanvas({
   useEffect(() => {
     const element = surfaceRef.current;
     if (element === null || typeof ResizeObserver === "undefined") return;
+    let fittedToSurface = false;
     const observer = new ResizeObserver(() => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        setSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+        setSize({ width, height });
+        if (!fittedToSurface && initialView === undefined && map.grid !== undefined) {
+          const next = fitView(map, width, height);
+          setPlacement({ center: next.center, zoom: next.zoom });
+          fittedToSurface = true;
+        }
       }
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [initialView, map]);
+
+  const occupancyImage = useMemo(() => {
+    const grid = map.grid;
+    if (grid === undefined) return null;
+    const image = document.createElement("canvas");
+    image.width = grid.width;
+    image.height = grid.height;
+    const context = image.getContext("2d");
+    if (context === null) return null;
+    const pixels = context.createImageData(grid.width, grid.height);
+    grid.values.forEach((cell, index) => {
+      if (cell === -1) return;
+      const shade = Math.round(223 - 1.8 * cell);
+      const offset = index * 4;
+      pixels.data[offset] = shade;
+      pixels.data[offset + 1] = shade;
+      pixels.data[offset + 2] = shade;
+      pixels.data[offset + 3] = 255;
+    });
+    context.putImageData(pixels, 0, 0);
+    return image;
+  }, [map.grid]);
 
   const counts = useMemo(() => {
     let raw = 0;
@@ -299,6 +350,11 @@ export function MapCanvas({
       p0.x * ratio,
       p0.y * ratio,
     );
+    if (occupancyImage !== null) {
+      context.imageSmoothingEnabled = false;
+      context.drawImage(occupancyImage, 0, 0);
+      return;
+    }
     for (const entry of map.cells) {
       const inRaw = isRaw(entry);
       const inFiltered = isFiltered(entry);
@@ -311,7 +367,7 @@ export function MapCanvas({
       context.fillStyle = color;
       context.fillRect(entry.cell[0], entry.cell[1], 1, 1);
     }
-  }, [map, view, layer, size.width, size.height]);
+  }, [map, view, layer, occupancyImage, size.width, size.height]);
 
   // Wheel zoom about the cursor. React attaches wheel listeners as passive, so this is native.
   useEffect(() => {
@@ -449,9 +505,9 @@ export function MapCanvas({
   const preview = pending ?? draft;
 
   return (
-    <section className={styles.mapPanel} data-stale={stale}>
+    <section className={styles.mapPanel} data-stale={stale} data-compact={compact}>
       <div className={styles.toolbar}>
-        <fieldset className={styles.layers}>
+        {map.grid === undefined && <fieldset className={styles.layers}>
           <legend className={styles.legend}>显示层</legend>
           {(
             [
@@ -470,7 +526,7 @@ export function MapCanvas({
               <span>{label}</span>
             </label>
           ))}
-        </fieldset>
+        </fieldset>}
         <div className={styles.zoomGroup}>
           <button type="button" className={styles.tool} onClick={() => zoomBy(ZOOM_STEP)}>
             放大
@@ -501,7 +557,7 @@ export function MapCanvas({
         data-zoom={String(view.zoom)}
         data-center-x={String(view.center.x)}
         data-center-y={String(view.center.y)}
-        style={{ aspectRatio: `${size.width} / ${size.height}` }}
+        style={compact ? undefined : { aspectRatio: `${size.width} / ${size.height}` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -545,6 +601,38 @@ export function MapCanvas({
                 .join(" ")}
             />
           )}
+          {taskRoute.length > 1 && (
+            <polyline aria-label="任务航点预览" className={styles.taskRoute}
+              points={taskRoute.map((point) => worldToScreen(view, point)).map(({ x, y }) => `${x},${y}`).join(" ")} />
+          )}
+          {waypointMarkers.map((waypoint) => {
+            const at = worldToScreen(view, waypoint);
+            const selectable = onAddWaypoint !== undefined && !stale;
+            return (
+              <g key={waypoint.waypoint_id} className={styles.waypointMarker}
+                data-highlighted={waypoint.waypoint_id === highlightedWaypoint}
+                data-selectable={selectable}
+                transform={`translate(${at.x} ${at.y})`}
+                role={selectable ? "button" : undefined}
+                tabIndex={selectable ? 0 : undefined}
+                aria-label={`添加地图航点 ${waypoint.waypoint_id}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={selectable ? () => onAddWaypoint(waypoint.waypoint_id) : undefined}
+                onKeyDown={(event) => {
+                  if (selectable && (event.key === "Enter" || event.key === " ")) {
+                    event.preventDefault();
+                    onAddWaypoint(waypoint.waypoint_id);
+                  }
+                }}>
+                <title>{waypoint.waypoint_id}</title>
+                <circle r={12} />
+              </g>
+            );
+          })}
+          {taskRoute.map((point, index) => {
+            const at = worldToScreen(view, point);
+            return <text key={index} x={at.x + 13} y={at.y - 6} className={styles.routeNumber}>{index + 1}</text>;
+          })}
           {home !== null && <Marker kind="home" pose={home} view={view} />}
           {goal !== null && <Marker kind="goal" pose={goal} view={view} />}
           {preview !== null && <Marker kind="draft" pose={preview} view={view} />}
@@ -564,11 +652,12 @@ export function MapCanvas({
         {picking ? "；在地图上按下选点，拖动设定朝向" : "；拖动平移"}
       </p>
 
-      <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
+      {taskRoute.length > 0 && <p className={styles.hint}>任务航点预览</p>}
+      {map.grid === undefined && <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
         <span>原始 {counts.raw}</span>
         <span>过滤 {counts.filtered}</span>
         <span>被过滤掉 {counts.removed}</span>
-      </p>
+      </p>}
     </section>
   );
 }

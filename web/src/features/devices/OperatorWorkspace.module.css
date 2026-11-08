@@ -65,3 +65,8 @@
   .stage { grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
   .operations[data-manual="false"] { max-height: 48dvh; }
 }
+
+.stage[data-tasks="true"] {
+  display: block;
+  flex: 0 0 auto;
+}

@@ -1,10 +1,11 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 
 import type { RobotLink } from "../../api/client";
 import type { RobotSnapshot } from "../../api/protocol";
 import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
+import { useWorkspaceMap } from "../map/useWorkspaceMap";
 import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
 import { MapManager } from "../mapping/MapManager";
 import { TaskList } from "../tasks/TaskList";
@@ -41,17 +42,33 @@ function describePose(pose: Pose | null): string {
  * on screen and never sent.
  */
 export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
+  const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
   const [manualView, setManualView] = useState<PrimaryView>("video");
   const [navigationView, setNavigationView] = useState<PrimaryView>("map");
   const view = mode === "manual" ? manualView : mode === "navigation" ? navigationView : "map";
   const setView = mode === "manual" ? setManualView : setNavigationView;
-  const [draft, setDraft] = useState<Pose | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const refKey = JSON.stringify(snapshot.map_ref);
+  const [selection, setSelection] = useState<{ refKey: string; pose: Pose | null }>({ refKey, pose: null });
+  const [feedback, setFeedback] = useState<{ refKey: string; note: string } | null>(null);
+  useLayoutEffect(() => {
+    setSelection({ refKey, pose: null });
+    setFeedback(null);
+  }, [refKey]);
+  const draft = selection.refKey === refKey ? selection.pose : null;
+  const note = feedback?.refKey === refKey ? feedback.note : null;
+  const { map: occupancy, gridId, waypoints, message } = useWorkspaceMap(link, snapshot, { enabled: view === "map", catalog: mode === "tasks", refresh: mapLoad });
+  const workspace = occupancy !== undefined && gridId !== undefined && waypoints !== undefined
+    ? { map: occupancy, grid_id: gridId, waypoints }
+    : undefined;
+
+  function setDraft(pose: Pose | null): void {
+    setSelection({ refKey, pose });
+  }
 
   // The occupancy layer has no transport to the browser yet: the grid is empty, and the
   // robot's own snapshot supplies the map reference that goals are checked against.
-  const map: OccupancySnapshot = useMemo(
+  const placeholder: OccupancySnapshot = useMemo(
     () => ({
       map_ref: snapshot.map_ref,
       origin: { x: 0, y: 0, yaw: 0 },
@@ -61,12 +78,14 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     [snapshot.map_ref],
   );
 
+  const map = occupancy ?? placeholder;
+
   function onGoal(goal: MapGoal): void {
-    setNote(`目标已设定（${describePose(goal.pose)}），未发送：协议还没有目标指令。`);
+    setFeedback({ refKey, note: `目标已设定（${describePose(goal.pose)}），未发送：协议还没有目标指令。` });
   }
 
   function onHint(hint: PoseHint): void {
-    setNote(`定位提示已设定（${describePose(hint.pose)}），未发送：协议还没有定位提示指令。`);
+    setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：协议还没有定位提示指令。` });
   }
 
   return (
@@ -79,6 +98,11 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
             </button>
           ))}
         </nav>
+        {view === "map" && mode !== "manual" && (
+          <div className={styles.switches}>
+            <button type="button" onClick={() => setMapLoad((previous) => previous + 1)}>刷新地图</button>
+          </div>
+        )}
         {(mode === "manual" || mode === "navigation") && (
           <div className={styles.switches} role="group" aria-label="主视图">
             <button type="button" aria-pressed={view === "video"} onClick={() => setView("video")}>视频</button>
@@ -86,16 +110,20 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
           </div>
         )}
       </div>
-      <div className={styles.stage}>
-        <div className={styles.primary}>
+      {mode === "tasks" && <TaskList snapshot={snapshot} link={link}
+        workspace={workspace} map={occupancy} unavailable={message} />}
+      <div className={styles.stage} data-tasks={mode === "tasks"}>
+        {mode !== "tasks" && <div className={styles.primary}>
           {view === "video" ? (
             <VideoPanel link={link} live={snapshot.connected && !snapshot.stale} compact />
           ) : (
             <>
-              <p className={styles.quiet}>地图不可用 · 尚未收到栅格数据</p>
-              {mode !== "manual" && (
+              {occupancy === undefined && <p className={styles.quiet}>{message}</p>}
+              {(occupancy !== undefined || mode === "navigation") && (
                 <MapCanvas
+                  key={gridId ?? "unavailable"}
                   map={map}
+                  compact={occupancy !== undefined}
                   stale={snapshot.stale || !snapshot.connected}
                   pickEnabled={mode === "navigation"}
                   draft={mode === "navigation" ? draft : null}
@@ -104,7 +132,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               )}
             </>
           )}
-        </div>
+        </div>}
         <div className={styles.operations} data-manual={mode === "manual"}>
           <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
           {mode === "navigation" && (
@@ -121,7 +149,6 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               {note !== null && <p className={styles.quiet} role="status">{note}</p>}
             </>
           )}
-          {mode === "tasks" && <TaskList snapshot={snapshot} link={link} />}
           {mode === "mapping" && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
         </div>
       </div>
