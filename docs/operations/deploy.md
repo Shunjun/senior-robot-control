@@ -111,3 +111,22 @@ Jenkins 专用 Compose 为 cloud 和 Caddy 使用内部网络 `172.29.231.0/24`�
 Caddy 的固定地址 `172.29.231.2`；Caddy 另连默认网络以申请证书。若该网段与节点
 已有网络冲突，部署前同步修改 `deploy/compose.jenkins.yaml` 中的子网、网关、cloud 地址、Caddy 地址与
 `TRUSTED_PROXY`，并保证后两者一致。
+
+## 实车服务配置档
+
+`senior-robot` 接受显式 JSON 配置档。档名以小写字母、数字和短横线组成，例如
+`unit-a.json`。实车档将 `kind` 设为 `real`，用 `cloud_url` 指定 WSS 地址。
+`credentials` 和 `database` 位于 `/var/lib/senior-control/unit-a/`，
+`socket` 位于 `/run/senior-control/unit-a/`。由现场管理员准备这些目录，归属服务账号
+`senior-control`，并按现有流程配置实车 ROS 和急停状态。配对文件归属服务账号，权限为
+0600。命令复用 `/opt/senior-control/deploy/senior-agent.service` 和同目录的 Agent 环境。
+
+```sh
+senior-robot deploy --profile unit-a.json --dry-run
+sudo senior-robot deploy --profile unit-a.json
+sudo senior-robot start --profile unit-a.json
+sudo senior-robot status --profile unit-a.json
+sudo senior-robot stop --profile unit-a.json
+```
+
+部署命令仅创建该档的配置与服务文件，重名时保留已有文件。正式部署和启动是独立操作。

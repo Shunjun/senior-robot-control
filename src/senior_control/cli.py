@@ -26,6 +26,8 @@ class VehicleProfile(BaseModel):
     database: Path | None = None
     socket: Path | None = None
     cloud_url: str | None = None
+    estop_state: Path | None = None
+    ros_domain: int | None = None
 
 
 def _pair(profile: VehicleProfile, cloud_url: str, name: str) -> None:
@@ -66,8 +68,19 @@ def _doctor(profile: VehicleProfile) -> int:
         and profile.socket.parent.is_dir()
     ):
         problems.append("IPC: provide a short absolute socket path in an existing directory.")
-    if profile.kind == "simulation" and not (shutil.which("gz") or shutil.which("ign")):
-        problems.append("Gazebo: source the simulator environment and run doctor again.")
+    if profile.kind == "simulation":
+        if not (shutil.which("gz") or shutil.which("ign")):
+            problems.append("Gazebo: source the simulator environment and run doctor again.")
+        if shutil.which("xvfb-run") is None:
+            problems.append("Display: provide xvfb-run for headless simulation.")
+        if profile.credentials.parent.is_dir():
+            disk = shutil.disk_usage(profile.credentials.parent)
+            print(f"Free disk: {disk.free / 2**30:.1f} GiB")
+        if sys.platform == "linux":
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemAvailable:"):
+                    print(f"Available memory: {int(line.split()[1]) / 2**20:.1f} GiB")
+                    break
     if problems:
         print("\n".join(problems))
         return 1
@@ -200,11 +213,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "deploy":
             return _deploy(profile, args.profile, dry_run=args.dry_run)
         if args.command != "pair":
+            if profile.kind == "simulation":
+                from senior_control.simulation_cli import lifecycle
+
+                return lifecycle(args.command, args.profile, profile)
             if profile.kind != "real" or sys.platform != "linux":
                 raise ValueError("systemd lifecycle requires a real Linux profile")
             unit = _unit(args.profile)
             if not (UNIT_ROOT / unit).is_file():
                 raise ValueError("deploy the selected profile first")
+            if args.command == "status":
+                from senior_control.simulation_cli import service_status
+
+                return service_status(unit, profile, user=False)
             return subprocess.run(
                 ["systemctl", args.command, unit],
                 check=False,
