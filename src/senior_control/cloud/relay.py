@@ -18,11 +18,13 @@ from senior_control.agent.snapshots import (
     snapshot_from_envelope,
 )
 from senior_control.cloud.limits import CloudLimits
+from senior_control.drive_timing import ClockReceiver, DelayBudget
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
     DEVICE_REVOKED_CLOSE_CODE,
     DRIVE_CHALLENGE_SECONDS,
     WORKSPACE_REQUEST_TYPES,
+    DriveClockProbe,
     EmptyPayload,
     Envelope,
     HeartbeatRequest,
@@ -177,6 +179,10 @@ class Connection:
     wall_origin: float = 0.0
     lease_session: str | None = None
     challenges: dict[str, tuple[str, int, float, float]] = field(default_factory=dict)
+    drive_clock: ClockReceiver = field(default_factory=ClockReceiver)
+    drive_budget: DelayBudget = field(default_factory=DelayBudget)
+    drive_timing: bool = False
+    drive_epoch_advertised: int = 0
     highest_seq: int = 0
     safety_session: str = field(default_factory=lambda: "safety-" + secrets.token_hex(16))
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
@@ -351,6 +357,8 @@ class Hub:
         )
         link.controllers.add(connection)
         self._push_snapshot(robot_id, only=connection)
+        if link.agent is not None and link.agent.drive_timing:
+            self._advertise_drive_timing(connection, link.agent.epoch)
         return connection
 
     def detach(self, connection: Connection) -> None:
@@ -428,6 +436,7 @@ class Hub:
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
+        received_at = time.monotonic()
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and data.get("type") == "heartbeat.request":
@@ -438,10 +447,30 @@ class Hub:
                 ):
                     connection.outbox.close(CLOSE_POLICY)
                     return
-                reply = heartbeat.model_dump()
+                reply = heartbeat.model_dump(exclude={"drive_t1", "drive_confirmation"})
                 reply["type"] = "heartbeat.reply"
                 now = time.monotonic()
                 reply["server_time"] = connection.server_time(now)
+                if heartbeat.drive_t1 is not None:
+                    connection.drive_timing = True
+                    confirmation = heartbeat.drive_confirmation
+                    if confirmation is not None:
+                        delay = connection.drive_clock.confirm(
+                            confirmation.nonce, confirmation.t4, now
+                        )
+                        if delay is None:
+                            connection.drive_budget.clear()
+                        else:
+                            connection.drive_budget.note(now, delay)
+                    else:
+                        connection.drive_clock.window.clear()
+                        connection.drive_budget.clear()
+                    connection.drive_clock.sent(
+                        heartbeat.nonce, heartbeat.drive_t1, received_at, now
+                    )
+                    reply.update(drive_t2=received_at, drive_t3=now)
+                    for controller in link.controllers:
+                        self._advertise_drive_timing(controller, connection.epoch)
                 if not connection.outbox.put(json.dumps(reply).encode(), "heartbeat"):
                     connection.outbox.close(CLOSE_OVERLOAD)
                     return
@@ -528,6 +557,16 @@ class Hub:
         if controller not in link.controllers:
             self._retire_lease(link, controller)
 
+    @staticmethod
+    def _advertise_drive_timing(controller: Connection, epoch: int) -> None:
+        if controller.drive_epoch_advertised == epoch:
+            return
+        notice = json.dumps({
+            "type": "drive.timing", "robot_id": controller.robot_id, "connection_epoch": epoch
+        }).encode()
+        if controller.outbox.put(notice, "response"):
+            controller.drive_epoch_advertised = epoch
+
     def handle_control_frame(self, connection: Connection, raw: bytes) -> None:
         link = self._links.get(connection.robot_id)
         if link is None or connection not in link.controllers or connection.outbox.closed:
@@ -535,8 +574,35 @@ class Hub:
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
+        received_at = time.monotonic()
         try:
             data = json.loads(raw)
+            if isinstance(data, dict) and data.get("type") == "drive.clock":
+                probe = DriveClockProbe.model_validate(data)
+                now = time.monotonic()
+                connection.drive_timing = True
+                if probe.confirmation is None:
+                    connection.drive_clock.window.clear()
+                else:
+                    connection.drive_clock.confirm(
+                        probe.confirmation.nonce, probe.confirmation.t4, now
+                    )
+                connection.drive_clock.sent(probe.nonce, probe.t1, received_at, now)
+                timed_agent = link.agent
+                ready = (
+                    connection.drive_clock.window.receiver_bounds(now) is not None
+                    and timed_agent is not None
+                    and timed_agent.drive_budget.compensation(now) is not None
+                    and timed_agent.drive_clock.window.receiver_bounds(now) is not None
+                )
+                reply = {
+                    "type": "drive.clock.reply", "nonce": probe.nonce, "t2": received_at, "t3": now,
+                    "connection_epoch": timed_agent.epoch if timed_agent is not None else 0,
+                    "ready": ready,
+                }
+                if not connection.outbox.put(json.dumps(reply).encode(), "response"):
+                    connection.outbox.close(CLOSE_OVERLOAD)
+                return
             claimed = data["robot_id"]
             if not isinstance(claimed, str):
                 raise ValueError("robot_id must be text")
@@ -549,6 +615,13 @@ class Hub:
             return
         if envelope.seq == 2**63 - 1:
             self._reject(connection, envelope, ErrorCode.VALIDATION)
+            return
+        if (
+            isinstance(envelope, VelocityEnvelope)
+            and envelope.payload.gesture is not None
+            and envelope.seq <= connection.highest_seq
+        ):
+            self._reject(connection, envelope, ErrorCode.CONFLICT)
             return
         connection.highest_seq = max(connection.highest_seq, envelope.seq)
         if (
@@ -618,7 +691,8 @@ class Hub:
             raw = serialize_envelope(envelope)
         if envelope.type == "drive.challenge":
             if (
-                connection.lease_session != envelope.session_id
+                (connection.drive_timing and agent.drive_timing)
+                or connection.lease_session != envelope.session_id
                 or envelope.connection_epoch != agent.epoch
                 or link.lease_request is not None
             ):
@@ -646,11 +720,38 @@ class Hub:
             if not connection.outbox.put(serialize_envelope(reply), "response"):
                 connection.outbox.close(CLOSE_OVERLOAD)
             return
-        if isinstance(envelope, VelocityEnvelope):
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            now = time.monotonic()
+            compensation = agent.drive_budget.compensation(now)
+            sampled_at = envelope.payload.sampled_at
+            if (
+                not agent.drive_timing
+                or not connection.drive_timing
+                or compensation is None
+                or agent.drive_clock.window.receiver_bounds(now) is None
+                or sampled_at is None
+                or envelope.payload.server_issued_at is not None
+                or "server_deadline" in data["payload"]
+                or "server_issued_at" in data["payload"]
+                or connection.lease_session != envelope.session_id
+                or envelope.connection_epoch != agent.epoch
+                or link.lease_request is not None
+            ):
+                self._reject(connection, envelope, ErrorCode.SAFETY_REJECTED)
+                return
+            if connection.drive_clock.window.age_upper(sampled_at, now) > DRIVE_CHALLENGE_SECONDS:
+                self._reject(connection, envelope, ErrorCode.TIMEOUT)
+                return
+            envelope.payload.server_issued_at = now
+            envelope.payload.server_deadline = now + DRIVE_CHALLENGE_SECONDS + compensation
+            raw = serialize_envelope(envelope)
+        elif isinstance(envelope, VelocityEnvelope):
+            # //Compatible: older controllers must use the one-time challenge.
             challenge_id = envelope.payload.challenge_id
             grant = connection.challenges.pop(challenge_id, None) if challenge_id else None
             if (
-                grant is None
+                (connection.drive_timing and agent.drive_timing)
+                or grant is None
                 or "server_deadline" in data["payload"]
                 or envelope.payload.server_deadline is not None
                 or connection.lease_session != envelope.session_id

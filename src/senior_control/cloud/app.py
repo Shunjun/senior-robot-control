@@ -266,7 +266,10 @@ def create_app(
                 await websocket.close(code=CLOSE_POLICY)
                 return
             await websocket.accept(
-                headers=[(b"x-connection-epoch", str(connection.epoch).encode())]
+                headers=[
+                    (b"x-connection-epoch", str(connection.epoch).encode()),
+                    (b"x-drive-timing", b"1"),
+                ]
             )
             await serve_connection(websocket, connection, hub)
         finally:

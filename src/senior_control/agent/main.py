@@ -148,6 +148,8 @@ class Agent:
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
+        self._velocity_task: asyncio.Task[None] | None = None
+        self._queued_velocity: tuple[Link, VelocityEnvelope, int] | None = None
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
         self._safety_cleanups: set[asyncio.Task[None]] = set()
         self._safety_lock = asyncio.Lock()
@@ -678,6 +680,7 @@ class Agent:
                 self._workspace_request = self._spawn(self._answer_workspace(link, envelope))
             return
         if envelope.type in HALT_TYPES:
+            self._queued_velocity = None
             key = (envelope.type, envelope.connection_epoch, envelope.session_id)
             existing = self._safety_pending.get(key)
             if existing is not None:
@@ -694,17 +697,35 @@ class Agent:
                 self._safety_task = self._spawn(self._drain_safety())
                 self._safety_task.add_done_callback(self._safety_finished)
             return
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            self._queued_velocity = (link, envelope, self.continuity_generation)
+            if self._velocity_task is None or self._velocity_task.done():
+                self._velocity_task = self._spawn(self._drain_velocity())
+            return
+        if envelope.type in {"control.acquire", "control.release"}:
+            self._queued_velocity = None
         safety_active = self._safety_task is not None and not self._safety_task.done()
         workspace_active = self._workspace_request in self._inflight
         if len(self._inflight) - int(safety_active) - int(workspace_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
+            # //Compatible: only legacy grants use the wall-anchored conversion.
             convert = getattr(link, "local_command_deadline", None)
-            deadline = convert(envelope.payload.server_deadline) if convert is not None else None
+            deadline = (
+                convert(envelope.payload.server_deadline)
+                if convert is not None
+                else None
+            )
             generation = self.continuity_generation
             self._spawn(self._answer(link, envelope, deadline, generation))
         else:
             self._spawn(self._answer(link, envelope))
+
+    async def _drain_velocity(self) -> None:
+        while self._queued_velocity is not None:
+            link, envelope, generation = self._queued_velocity
+            self._queued_velocity = None
+            await self._answer(link, envelope, generation=generation)
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
         if task.cancelled() or task.exception() is not None:
@@ -921,6 +942,19 @@ class Agent:
                     self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
+        received_at = None
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            convert_timing = getattr(link, "local_drive_timing", None)
+            issued = envelope.payload.server_issued_at
+            remote_deadline = envelope.payload.server_deadline
+            timing = (
+                convert_timing(issued, remote_deadline)
+                if convert_timing is not None and issued is not None and remote_deadline is not None
+                else None
+            )
+            if timing is None:
+                raise DomainError(ErrorCode.TIMEOUT, "motion clock evidence expired")
+            received_at, deadline = timing
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
             if (
                 deadline is None
@@ -934,14 +968,13 @@ class Agent:
             raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
         if isinstance(envelope, VelocityEnvelope):
             if not self._source_clock_verified and (
-                envelope.payload.server_deadline is None or not envelope.payload.challenge_id
+                envelope.payload.server_deadline is None
+                or (envelope.payload.gesture is None and not envelope.payload.challenge_id)
             ):
                 raise DomainError(ErrorCode.UNAVAILABLE, "controller clock is not verified")
             if self._link is None or not self._link.command_clock_valid():
                 raise DomainError(ErrorCode.TIMEOUT, "command clock is not synchronized")
-            if envelope.payload.server_deadline is not None:
-                received_at = None
-            else:
+            if envelope.payload.server_deadline is None:
                 # //Compatible: isolated older tests inject a verified source clock.
                 implied_send = envelope.expires_at - ADMISSION_SECONDS
                 age = self._wall_clock() - implied_send
@@ -962,7 +995,9 @@ class Agent:
                 )
             except Exception as exc:
                 raise DomainError(ErrorCode.SAFETY_REJECTED, "motion was not accepted") from exc
-            self._latest_velocity = envelope
+            if envelope.payload.gesture is None:
+                # //Compatible: isolated legacy supervisor users may resubmit local samples.
+                self._latest_velocity = envelope
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         try:
             await asyncio.wait_for(self._motion.forward(envelope), self._deadlines.safety)

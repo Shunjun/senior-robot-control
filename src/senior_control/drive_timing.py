@@ -38,7 +38,10 @@ class ClockWindow:
             or not 0 <= t3 - t2 <= t4 - t1 + _TIMESTAMP_ERROR
             or (
                 self._samples
-                and (t4 <= self._samples[-1].sender_received or t3 <= self._samples[-1].receiver_sent)
+                and (
+                    t4 <= self._samples[-1].sender_received
+                    or t3 <= self._samples[-1].receiver_sent
+                )
             )
         ):
             self.clear()
@@ -96,3 +99,27 @@ class DelayBudget:
             return None
         p90 = samples[math.ceil(len(samples) * 0.9) - 1]
         return min(DRIVE_TRANSPORT_SECONDS, math.ceil(p90 * 1000) / 1000)
+
+
+class ClockReceiver:
+    """Bind a confirmation to one challenge on the authenticated socket."""
+
+    def __init__(self) -> None:
+        self.window = ClockWindow()
+        self._pending: tuple[str, float, float, float] | None = None
+
+    def sent(self, nonce: str, t1: float, t2: float, t3: float) -> None:
+        self._pending = nonce, t1, t2, t3
+
+    def confirm(self, nonce: str, t4: float, now: float) -> float | None:
+        pending, self._pending = self._pending, None
+        if pending is None or pending[0] != nonce or not 0 <= now - pending[3] <= WINDOW_SECONDS:
+            self.window.clear()
+            return None
+        _, t1, t2, t3 = pending
+        if not self.window.observe(t1, t2, t3, t4):
+            return None
+        bounds = self.window.receiver_bounds(now)
+        if bounds is None:
+            return None
+        return max(0.0, t4 - t3 + bounds[1])

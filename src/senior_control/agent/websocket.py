@@ -10,8 +10,11 @@ from typing import Any, Protocol
 
 from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
+from senior_control.drive_timing import ClockWindow
 from senior_control.protocol import (
     DEVICE_REVOKED_CLOSE_CODE,
+    DRIVE_CHALLENGE_SECONDS,
+    DRIVE_TRANSPORT_SECONDS,
     MAX_MESSAGE_BYTES,
     Envelope,
     ResponseEnvelope,
@@ -44,6 +47,7 @@ class WebSocketLink:
         heartbeat_timeout: float = 1.0,
         heartbeat_freshness: float = 2.0,
         max_clock_offset: float = 0.05,
+        drive_timing: bool = False,
     ) -> None:
         self._socket = socket
         self._robot_id = robot_id
@@ -59,6 +63,9 @@ class WebSocketLink:
         self._clock_anchor: tuple[float, float] | None = None
         self._server_anchor: tuple[float, float] | None = None
         self._send_lock = asyncio.Lock()
+        self._drive_timing = drive_timing
+        self._drive_clock = ClockWindow()
+        self._drive_confirmation: dict[str, str | float] | None = None
 
     async def _send(self, data: str) -> None:
         async with self._send_lock:
@@ -89,18 +96,18 @@ class WebSocketLink:
         self._heartbeat_timer = asyncio.get_running_loop().call_later(
             self._timeout, expired.set_result, None
         )
-        await self._send(
-            json.dumps(
-                {
-                    "v": 1,
-                    "type": "heartbeat.request",
-                    "robot_id": self._robot_id,
-                    "connection_epoch": self.epoch,
-                    "nonce": nonce,
-                    "sent_at": sent_at,
-                }
-            )
-        )
+        request = {
+            "v": 1,
+            "type": "heartbeat.request",
+            "robot_id": self._robot_id,
+            "connection_epoch": self.epoch,
+            "nonce": nonce,
+            "sent_at": sent_at,
+        }
+        if self._drive_timing:
+            request["drive_t1"] = now
+            request["drive_confirmation"] = self._drive_confirmation
+        await self._send(json.dumps(request))
 
     async def recv(self) -> Envelope | VideoEnvelope | HeartbeatFrame:
         from websockets.exceptions import ConnectionClosed
@@ -129,18 +136,14 @@ class WebSocketLink:
             if isinstance(data, dict) and data.get("type") == "heartbeat.reply":
                 pending = self._pending
                 now = self._clock()
+                fields = {
+                    "v", "type", "robot_id", "connection_epoch", "nonce", "sent_at", "server_time"
+                }
+                if self._drive_timing:
+                    fields.update(("drive_t2", "drive_t3"))
                 if (
                     pending is None
-                    or set(data)
-                    != {
-                        "v",
-                        "type",
-                        "robot_id",
-                        "connection_epoch",
-                        "nonce",
-                        "sent_at",
-                        "server_time",
-                    }
+                    or set(data) != fields
                     or data["v"] != 1
                     or data["robot_id"] != self._robot_id
                     or data["connection_epoch"] != self.epoch
@@ -155,6 +158,17 @@ class WebSocketLink:
                 if not math.isfinite(server_time) or not 0 <= elapsed < self._timeout:
                     raise ConnectionError("invalid heartbeat reply timestamp or reply timed out")
                 wall_now = self._wall()
+                if self._drive_timing:
+                    t2, t3 = data["drive_t2"], data["drive_t3"]
+                    if type(t2) not in (float, int) or type(t3) not in (float, int):
+                        raise ConnectionError("invalid drive clock reply")
+                    if abs(wall_now - (pending[2] + elapsed)) > self._max_offset:
+                        self._drive_clock.clear()
+                        self._drive_confirmation = None
+                    elif self._drive_clock.observe(pending[1], t2, t3, now):
+                        self._drive_confirmation = {"nonce": pending[0], "t4": now}
+                    else:
+                        self._drive_confirmation = None
                 self._clock_anchor = self._server_anchor = None
                 if (
                     abs(wall_now - (pending[2] + elapsed)) <= self._max_offset
@@ -175,6 +189,12 @@ class WebSocketLink:
             raise ProtocolRejected("invalid cloud frame") from exc
 
     def command_clock_valid(self) -> bool:
+        if self._drive_timing:
+            return self._drive_clock.bounds(self._clock()) is not None
+        return self._legacy_clock_valid()
+
+    def _legacy_clock_valid(self) -> bool:
+        # //Compatible: old challenges carry wall-anchored cloud timestamps.
         anchor = self._clock_anchor
         if anchor is None:
             return False
@@ -187,10 +207,28 @@ class WebSocketLink:
     def local_command_deadline(self, server_deadline: float) -> float | None:
         """Conservatively map a server deadline onto this host's monotonic clock."""
         anchor = self._server_anchor
-        if anchor is None or not math.isfinite(server_deadline) or not self.command_clock_valid():
+        if anchor is None or not math.isfinite(server_deadline) or not self._legacy_clock_valid():
             return None
         deadline = anchor[1] + server_deadline - anchor[0] - self._max_offset
         return deadline if deadline > self._clock() else None
+
+    def local_drive_timing(
+        self, issued: float, deadline: float
+    ) -> tuple[float, float] | None:
+        now = self._clock()
+        bounds = self._drive_clock.bounds(now)
+        if bounds is None or not 0 < deadline - issued <= (
+            DRIVE_CHALLENGE_SECONDS + DRIVE_TRANSPORT_SECONDS + 1e-9
+        ):
+            return None
+        lower, upper = bounds
+        # Include drift until the last possible admission, not just the current instant.
+        margin = DRIVE_TRANSPORT_SECONDS * 0.0002
+        earliest_issue = issued - upper - margin
+        earliest_deadline = deadline - upper - margin
+        if issued - lower + margin < now - DRIVE_TRANSPORT_SECONDS:
+            return None
+        return earliest_issue, earliest_deadline
 
     async def send_response(self, envelope: ResponseEnvelope) -> None:
         await self._send(serialize_envelope(envelope).decode())
@@ -249,4 +287,7 @@ class WebSocketConnector:
         except (AssertionError, KeyError, ValueError) as exc:
             await socket.close()
             raise ProtocolRejected("invalid cloud handshake") from exc
-        return WebSocketLink(socket, self._robot_id, epoch)
+        return WebSocketLink(
+            socket, self._robot_id, epoch,
+            drive_timing=socket.response.headers.get("x-drive-timing") == "1",
+        )

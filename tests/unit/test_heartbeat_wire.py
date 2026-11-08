@@ -138,3 +138,35 @@ def test_revocation_clears_reconnect_grace_before_and_after_detach(
     assert not hub.is_reconnecting("robot-a")
     hub.detach(agent)
     assert not hub.is_reconnecting("robot-a")
+
+
+async def test_timed_heartbeat_echoes_both_cloud_monotonic_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [10.0]
+    monkeypatch.setattr("senior_control.cloud.relay.time.monotonic", lambda: now[0])
+    hub = Hub(CloudLimits())
+    agent = hub.attach_agent("robot-a")
+    for index in range(4):
+        now[0] = 10.0 + index * 0.2
+        heartbeat = {
+            "v": 1,
+            "type": "heartbeat.request",
+            "robot_id": "robot-a",
+            "connection_epoch": agent.epoch,
+            "nonce": str(index),
+            "sent_at": 100.0,
+            "drive_t1": now[0] - 0.02,
+        }
+        if index:
+            heartbeat["drive_confirmation"] = {
+                "nonce": str(index - 1),
+                "t4": now[0] - 0.18,
+            }
+        hub.handle_agent_frame(agent, json.dumps(heartbeat).encode())
+        raw = await agent.outbox.get()
+        assert isinstance(raw, bytes)
+        reply = json.loads(raw)
+        assert reply["drive_t2"] == reply["drive_t3"] == now[0]
+    assert hub.is_online("robot-a")
+    assert agent.drive_budget.compensation(now[0]) is not None

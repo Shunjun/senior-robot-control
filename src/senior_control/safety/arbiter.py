@@ -519,7 +519,9 @@ class Arbiter:
             assert lease is not None
             if command.payload.gesture is not None and command.payload.gesture < lease.gesture:
                 return _reject(ErrorCode.CONFLICT)
-            lease.closed_gesture = max(lease.gesture, lease.closed_gesture, command.payload.gesture or 0)
+            lease.closed_gesture = max(
+                lease.gesture, lease.closed_gesture, command.payload.gesture or 0
+            )
             self._refresh(command, now)
             self._hold_manual_stop()
             return _ok()

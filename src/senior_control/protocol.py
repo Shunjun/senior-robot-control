@@ -30,6 +30,18 @@ class StrictModel(BaseModel):
     )
 
 
+class DriveClockConfirmation(StrictModel):
+    nonce: str = Field(min_length=1, max_length=128)
+    t4: float
+
+
+class DriveClockProbe(StrictModel):
+    type: Literal["drive.clock"]
+    nonce: str = Field(min_length=1, max_length=128)
+    t1: float
+    confirmation: DriveClockConfirmation | None = None
+
+
 class HeartbeatRequest(StrictModel):
     v: Literal[1]
     type: Literal["heartbeat.request"]
@@ -37,6 +49,8 @@ class HeartbeatRequest(StrictModel):
     connection_epoch: int = Field(ge=1)
     nonce: str = Field(min_length=1, max_length=128)
     sent_at: float
+    drive_t1: float | None = None
+    drive_confirmation: DriveClockConfirmation | None = None
 
 
 class EmptyPayload(StrictModel):

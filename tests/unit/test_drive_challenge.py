@@ -443,3 +443,35 @@ async def test_reconnect_blocks_motion_until_new_heartbeat_and_lease() -> None:
     await control.outbox.get()
     hub.handle_control_frame(control, frame("drive.challenge", 5, epoch=current.epoch))
     assert json.loads(await control.outbox.get())["payload"]["ok"]
+
+
+async def test_timed_input_uses_browser_age_and_cloud_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = SimpleNamespace(wall=100.0, mono=1.0)
+    monkeypatch.setattr(
+        relay, "time", SimpleNamespace(time=lambda: now.wall, monotonic=lambda: now.mono)
+    )
+    hub = Hub(CloudLimits())
+    agent = hub.attach_agent("car-a")
+    control = hub.attach_controller("car-a", "auth")
+    assert control is not None
+    agent.drive_timing = control.drive_timing = True
+    agent.drive_budget.note(1.0, 0.049)
+    agent.drive_budget.note(1.0, 0.051)
+    agent.drive_budget.note(1.0, 0.060)
+    assert agent.drive_clock.window.observe(0.95, 1.0, 1.0, 1.05)
+    assert control.drive_clock.window.observe(0.95, 1.0, 1.0, 1.05)
+    control.lease_session = "session-a"
+    now.mono = 1.2
+    latest = {"vx": 0.1, "wz": 0.0, "gesture": 1, "sampled_at": 1.15}
+    hub.handle_control_frame(control, frame("drive.velocity", 2, latest))
+    assert agent.outbox.pending == 1
+    admitted = json.loads(await agent.outbox.get())["payload"]
+    assert admitted["server_issued_at"] == 1.2
+    assert admitted["server_deadline"] == pytest.approx(1.56)
+    hub.handle_control_frame(control, frame("drive.velocity", 3, {**latest, "sampled_at": 0.92}))
+    assert json.loads(await control.outbox.get())["payload"]["error"] == "timeout"
+    hub.handle_control_frame(control, frame("drive.velocity", 2, latest))
+    assert agent.outbox.pending == 0
+    assert json.loads(await control.outbox.get())["payload"]["error"] == "conflict"

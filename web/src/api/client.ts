@@ -248,6 +248,7 @@ export class HttpControlApi implements ControlApi {
 export interface RobotLink {
   /** Whether this link implements the challenge-based motion protocol. */
   readonly supportsMotionChallenges?: boolean;
+  readonly timedMotion?: boolean;
   subscribeMotionRevoked?(listener: (authorityLost: boolean) => void): () => void;
   connect(robotId: string): Promise<void>;
   disconnect(): void;
@@ -321,6 +322,17 @@ export class RobotClient implements RobotLink {
   private motionVersion = 0;
   private challenge: { id: string; requestedAt: number } | null = null;
   private challengePending: symbol | null = null;
+  private timingEpoch = 0;
+  private timingTimer: ReturnType<typeof setInterval> | null = null;
+  private timingProbe: { nonce: string; sent: number; wall: number } | null = null;
+  private timingConfirmation: { nonce: string; t4: number } | null = null;
+  private readyAt: number | null = null;
+  private gestureCounter = 0;
+  private activeGesture: number | null = null;
+
+  get timedMotion(): boolean {
+    return this.timingEpoch > 0 && this.timingEpoch === this.epoch;
+  }
 
   private generation = 0;
   private socket: SocketLike | null = null;
@@ -403,6 +415,11 @@ export class RobotClient implements RobotLink {
     if (!isRequestType(type)) {
       return Promise.reject(new CommandError("validation", `unsupported request type ${type}`));
     }
+    const timed = this.timedMotion;
+    const stoppingGesture = type === "drive.stop" ? this.activeGesture : null;
+    if (type === "drive.stop" || type === "safety.estop" || type.startsWith("control.")) {
+      this.activeGesture = null;
+    }
     const urgent = type === "drive.stop" || type === "safety.estop";
     const safety = urgent || type === "control.release";
     const authorityLost = type === "safety.estop" || type === "control.release";
@@ -419,12 +436,15 @@ export class RobotClient implements RobotLink {
       if (safety) this.notifyMotionRevoked(authorityLost);
       return Promise.reject(new CommandError("offline", "no live snapshot from the vehicle, so no agent epoch to use"));
     }
-    let wirePayload = payload;
+    if (type === "control.acquire" && timed && !this.driveClockReady()) {
+      return Promise.reject(new CommandError("unavailable", "motion clock is not ready"));
+    }
+    let wirePayload = stoppingGesture === null ? payload : { gesture: stoppingGesture };
     if (type === "drive.velocity") {
       if (this.challenge !== null && performance.now() - this.challenge.requestedAt >= 250) {
         this.challenge = null;
       }
-      if (!this.motionLease || this.challenge === null || socket.bufferedAmount > 0) {
+      if (!this.motionLease || socket.bufferedAmount > 0 || (!timed && this.challenge === null)) {
         this.prefetchChallenge();
         return Promise.reject(new MotionNotReadyError());
       }
@@ -437,8 +457,20 @@ export class RobotClient implements RobotLink {
           Object.keys(input).some((key) => key !== "vx" && key !== "wz")) {
         return Promise.reject(new CommandError("validation", "invalid velocity"));
       }
-      wirePayload = { vx: input.vx, wz: input.wz, challenge_id: this.challenge.id };
-      this.challenge = null;
+      if (timed) {
+        if (!this.driveClockReady()) {
+          this.loseDriveClock();
+          return Promise.reject(new MotionNotReadyError());
+        }
+        this.activeGesture ??= ++this.gestureCounter;
+        wirePayload = {
+          vx: input.vx, wz: input.wz, gesture: this.activeGesture, sampled_at: performance.now() / 1000,
+        };
+      } else {
+        //Compatible: older agents require a one-time cloud challenge per sample.
+        wirePayload = { vx: input.vx, wz: input.wz, challenge_id: this.challenge?.id };
+        this.challenge = null;
+      }
     }
     const requestId = crypto.randomUUID();
     const version = this.motionVersion;
@@ -461,7 +493,8 @@ export class RobotClient implements RobotLink {
     const response = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new CommandError("timeout", "robot did not answer in time"));
+        reject(timed && type === "drive.velocity" ? new MotionNotReadyError() :
+          new CommandError("timeout", "robot did not answer in time"));
       }, this.requestTimeoutMs);
       this.pending.set(requestId, {
         type, sessionId: envelope.session_id, epoch: envelope.connection_epoch, seq: envelope.seq,
@@ -514,7 +547,7 @@ export class RobotClient implements RobotLink {
   }
 
   private prefetchChallenge(): void {
-    if (!this.motionLease || this.challenge !== null || this.challengePending !== null) return;
+    if (this.timedMotion || !this.motionLease || this.challenge !== null || this.challengePending !== null) return;
     const attempt = Symbol("challenge");
     const version = this.motionVersion;
     const requestedAt = performance.now();
@@ -592,6 +625,7 @@ export class RobotClient implements RobotLink {
 
   /** Drop the socket, timers, the previous robot's snapshot and every waiting request. */
   private teardown(): void {
+    this.clearDriveClock();
     this.generation += 1;
     this.invalidateMotion(true);
     this.notifyMotionRevoked(true);
@@ -617,6 +651,7 @@ export class RobotClient implements RobotLink {
   }
 
   private onClosed(code: number): void {
+    this.clearDriveClock();
     this.invalidateMotion(true);
     this.notifyMotionRevoked(true);
     this.clearStaleTimer();
@@ -625,7 +660,88 @@ export class RobotClient implements RobotLink {
     this.setStatus({ state: "closed", robotId: this.robotId, closeCode: code });
   }
 
+  private driveClockReady(): boolean {
+    return this.readyAt !== null && performance.now() - this.readyAt < 1_500;
+  }
+
+  private loseDriveClock(): void {
+    this.readyAt = null;
+    if (!this.motionLease) return;
+    this.invalidateMotion(true);
+    this.notifyMotionRevoked(true);
+  }
+
+  private clearDriveClock(): void {
+    if (this.timingTimer !== null) clearInterval(this.timingTimer);
+    this.timingTimer = null;
+    this.timingEpoch = 0;
+    this.readyAt = null;
+    this.timingProbe = null;
+    this.timingConfirmation = null;
+    this.activeGesture = null;
+  }
+
+  private probeDriveClock(): void {
+    const socket = this.socket;
+    if (!this.driveClockReady()) this.loseDriveClock();
+    if (socket === null || socket.readyState !== SOCKET_OPEN || socket.bufferedAmount > 0) return;
+    if (this.timingProbe !== null && performance.now() - this.timingProbe.sent < 1_000) return;
+    if (this.timingProbe !== null) this.timingConfirmation = null;
+    const nonce = crypto.randomUUID();
+    const sent = performance.now();
+    this.timingProbe = { nonce, sent, wall: Date.now() };
+    try {
+      socket.send(JSON.stringify({
+        type: "drive.clock", nonce, t1: sent / 1000, confirmation: this.timingConfirmation,
+      }));
+    } catch {
+      this.loseDriveClock();
+    }
+  }
+
+  private receiveDriveClock(raw: unknown): boolean {
+    if (typeof raw !== "string" || !raw.startsWith('{"type":')) return false;
+    let frame: Record<string, unknown>;
+    try {
+      frame = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    if (frame.type === "drive.timing") {
+      if (frame.robot_id !== this.robotId || typeof frame.connection_epoch !== "number" ||
+          !Number.isSafeInteger(frame.connection_epoch) || frame.connection_epoch < this.epochFrontier ||
+          frame.connection_epoch <= this.timingEpoch) return true;
+      this.loseDriveClock();
+      this.timingEpoch = frame.connection_epoch;
+      this.timingProbe = null;
+      this.timingConfirmation = null;
+      if (this.timingTimer === null) {
+        this.timingTimer = setInterval(() => this.probeDriveClock(), 500);
+      }
+      this.probeDriveClock();
+      return true;
+    }
+    if (frame.type !== "drive.clock.reply") return false;
+    const pending = this.timingProbe;
+    if (pending === null || frame.nonce !== pending.nonce) return true;
+    this.timingProbe = null;
+    const now = performance.now();
+    const elapsed = now - pending.sent;
+    if (elapsed < 0 || elapsed > 1_000 || Math.abs(Date.now() - pending.wall - elapsed) > 50 ||
+        typeof frame.t2 !== "number" || typeof frame.t3 !== "number" ||
+        !Number.isFinite(frame.t2) || !Number.isFinite(frame.t3) || frame.t3 < frame.t2) {
+      this.timingConfirmation = null;
+      this.loseDriveClock();
+      return true;
+    }
+    this.timingConfirmation = { nonce: pending.nonce, t4: now / 1000 };
+    if (frame.ready === true && frame.connection_epoch === this.timingEpoch) this.readyAt = now;
+    else this.loseDriveClock();
+    return true;
+  }
+
   private receive(raw: unknown): void {
+    if (this.receiveDriveClock(raw)) return;
     const envelope = parseInbound(raw);
     if (envelope === null) {
       const video = parseVideoInbound(raw);

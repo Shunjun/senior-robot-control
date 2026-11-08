@@ -94,8 +94,9 @@ export class DriveController {
     if (this.timer === null) {
       this.timer = setInterval(() => this.tick(), this.intervalMs);
       this.send();
-    } else if (previous === null || previous.vx !== next.vx || previous.wz !== next.wz) {
-      // A changed input goes out at once; an unchanged one waits for the next resend.
+    } else if (!this.link.timedMotion &&
+        (previous === null || previous.vx !== next.vx || previous.wz !== next.wz)) {
+      //Compatible: older links send a changed input immediately.
       this.send();
     }
   }
@@ -114,7 +115,7 @@ export class DriveController {
   }
 
   private tick(): void {
-    if (this.inFlight < MAX_IN_FLIGHT) this.send();
+    if (this.link.timedMotion || this.inFlight < MAX_IN_FLIGHT) this.send();
   }
 
   private send(): void {

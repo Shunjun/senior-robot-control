@@ -730,3 +730,18 @@ it("never sends a remaining axis when the window blurs with both sticks held", a
   expect(link.velocities()).toHaveLength(velocityCount);
   expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
 });
+
+it("samples negotiated motion every 100 ms without waiting for acknowledgements", async () => {
+  vi.useFakeTimers();
+  const link = Object.assign(new FakeLink(), { timedMotion: true });
+  link.requestImpl = () => new Promise(() => {});
+  const controller = new DriveController(link);
+  controller.start({ vx: 0.1, wz: 0 });
+  controller.start({ vx: 0.2, wz: 0 });
+  expect(link.velocities()).toEqual([{ vx: 0.1, wz: 0 }]);
+  await tick(300);
+  expect(link.velocities()).toEqual([
+    { vx: 0.1, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 },
+  ]);
+  controller.stop("unmount");
+});
