@@ -70,6 +70,8 @@ def generate_launch_description():
             "use_sim_time": "true",
             # DDS request/response on the shared VM can exceed one BT tick.
             "bt_navigator.ros__parameters.default_server_timeout": "250",
+            # Humble loads both trees on activation, including the through-poses tree.
+            "bt_navigator.ros__parameters.wait_for_service_timeout": "4000",
             # Leave VM CPU for the scan and motion workers while MPPI is active.
             "controller_server.ros__parameters.FollowPath.batch_size": "400",
             "controller_server.ros__parameters.FollowPath.vx_max": "0.22",
