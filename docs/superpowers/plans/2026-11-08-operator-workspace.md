@@ -103,3 +103,17 @@
 - [ ] 在现有 Ubuntu 检查可用内存、磁盘和时钟，复用构建，串行执行。验证稳定高延迟、500 ms 上界、突发抖动、重复旧速度、丢停车包、过期回执、半开与重连。记录实测 RTT、单向估计及误差、速度输出、里程计和页面反馈。
 - [ ] 运行 Python 单元/集成、前端 Vitest/生产构建及隔离 Playwright，确认退出码和具体通过范围。确认进程回收，直接在清单勾选有证据的子项。
 - [ ] 隔离仿真与公网、实车分别记账。提交验收记录。
+
+### Task 8 · 车端部署、配对与仿真 CLI
+
+本任务可独立于网页任务开发。若在联合验收前完成，Task 7 可使用该工具启动隔离仿真。
+
+**文件** 新增 `src/senior_control/cli.py` 与 `tests/integration/test_vehicle_cli.py`，修改 `pyproject.toml`、`docs/operations/{deploy,hardware,simulation}.md`。复用 `src/senior_control/agent/pairing.py`、`deploy/senior-agent.service` 与现有 ROS 仿真 launch。
+
+**接口** 在 `[project.scripts]` 注册 `senior-robot = "senior_control.cli:main"`。入口为 `main(argv: list[str] | None = None) -> int`，提供 `pair`、`doctor`、`deploy`、`start`、`stop`、`status`。操作均选用显式的 `--profile`。
+
+- [ ] 新增 `test_pair_preserves_existing_credentials` 与 `test_deploy_dry_run_leaves_files_and_services_untouched`。验证配对走 HTTPS，凭据权限为 0600，失败和日志不泄露秘密，预览无副作用。
+- [ ] 新增 `test_simulation_waits_for_matching_adapter`、`test_failed_start_reaps_only_owned_processes` 和 `test_restart_preserves_estop_state`。覆盖 ROS 就绪后再启动 Agent、失败回收、重复启动、状态准确及急停状态保留。
+- [ ] 运行 `.venv/bin/python -m pytest tests/integration/test_vehicle_cli.py -q`，确认新增用例 RED。
+- [ ] 实现配对和只读检查，复用现有一次性码兑换和诊断。实车部署只写所选档的配置及 systemd 单元，显式 `start` 后运行。仿真复用构建，记录本次进程所有权，关停先走 Agent 再回收 ROS 与 Gazebo。
+- [ ] 复跑 CLI 与现有配对、IPC 关停测试。在现有 Ubuntu 验证隔离 HTTPS 配对、仿真启停、进程回收和磁盘内存余量；另在目标 Linux 验证 systemd 路径、账号与服务生命周期。提交 CLI 改动并在剩余工作清单标记实测范围。
