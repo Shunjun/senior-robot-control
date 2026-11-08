@@ -42,10 +42,10 @@ export async function listCurrentWaypoints(
 }
 
 export function useWorkspaceMap(link: RobotLink, snapshot: RobotSnapshot, { enabled, catalog, refresh }: LoadOptions): MapResult {
-  const { robot_id: robotId, map_ref: ref, stale, connected } = snapshot;
+  const { robot_id: robotId, map_ref: ref, map_generation: generation, stale, connected } = snapshot;
   const mapId = ref?.map_id;
   const revision = ref?.reference_revision;
-  const scope = JSON.stringify([robotId, mapId, revision]);
+  const scope = JSON.stringify([robotId, mapId, revision, generation]);
   const [result, setResult] = useState<{ scope: string; link: RobotLink; value: MapResult } | null>(null);
 
   useEffect(() => {
@@ -67,6 +67,9 @@ export function useWorkspaceMap(link: RobotLink, snapshot: RobotSnapshot, { enab
         const manifest = await getMapManifest(link, robotId, mapRef);
         if (reads.signal.aborted) return;
         const { width, height, resolution, origin, tile_size: size, grid_id: gridId } = manifest;
+        if (generation !== undefined && manifest.display_only !== true && gridId !== generation) {
+          throw new Error("地图代次已变化");
+        }
         const values = new Int8Array(width * height);
         for (let y = 0; y < height; y += size) {
           for (let x = 0; x < width; x += size) {
@@ -100,7 +103,7 @@ export function useWorkspaceMap(link: RobotLink, snapshot: RobotSnapshot, { enab
     }
     void load();
     return () => reads.abort();
-  }, [link, robotId, mapId, revision, scope, stale, connected, enabled, catalog, refresh]);
+  }, [link, robotId, mapId, revision, generation, scope, stale, connected, enabled, catalog, refresh]);
 
   if (stale || !connected) return { message: "地图不可用 · 车辆未实时连接" };
   if (ref === null) return { message: "地图不可用 · 当前没有地图引用" };
