@@ -253,3 +253,37 @@ it("assembles current occupancy tiles and catalog before allowing route edits", 
     "map.manifest", "map.tile", "map.tile", "waypoint.list",
   ]);
 });
+
+it("saves a picked point before exposing it as a selectable route waypoint", async () => {
+  const robotLink = link();
+  let confirm!: (response: never) => void;
+  const picked = { waypoint_id: "new-point", x: 0, y: 0, yaw: 0, kind: "waypoint", status: "confirmed" };
+  vi.mocked(robotLink.request).mockImplementation(async (type) => {
+    if (type === "waypoint.create") return new Promise((resolve) => { confirm = resolve; });
+    if (type === "waypoint.list") return { ok: true, data: {
+      robot_id: snapshot.robot_id, map_ref: snapshot.map_ref, grid_id: workspace.grid_id,
+      waypoints: [...workspace.waypoints, picked], next_cursor: null,
+    } } as never;
+    return { ok: false } as never;
+  });
+  render(<TaskList snapshot={listedSnapshot} link={robotLink}
+    workspace={{ ...workspace, waypointWrites: true }} />);
+  fireEvent.click(screen.getByRole("button", { name: "在地图上新建航点" }));
+  const surface = screen.getByRole("application", { name: "地图" });
+  const dispatchPointer = (type: string) => fireEvent(surface, Object.assign(
+    new MouseEvent(type, { bubbles: true, clientX: 320, clientY: 210 }), { pointerId: 1 },
+  ));
+  dispatchPointer("pointerdown");
+  dispatchPointer("pointerup");
+  fireEvent.change(screen.getByLabelText("新航点编号"), { target: { value: "new-point" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存航点" }));
+  expect(robotLink.request).toHaveBeenCalledWith("waypoint.create", expect.objectContaining({
+    body: { ...snapshot.map_ref, grid_id: workspace.grid_id, waypoint_id: "new-point", x: 0, y: 0, yaw: 0 },
+  }));
+  expect(screen.queryByRole("option", { name: "new-point" })).toBeNull();
+  await act(async () => confirm({ ok: true } as never));
+  await screen.findByRole("option", { name: "new-point" });
+  expect(screen.getByRole("list", { name: "任务航点顺序" }).children).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
+  expect(screen.getByRole("list", { name: "任务航点顺序" }).textContent).toContain("new-point");
+});

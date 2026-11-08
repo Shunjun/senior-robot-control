@@ -1,9 +1,10 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ResponsePayload, RobotSnapshot, TaskSummary } from "../../api/protocol";
 import { getTaskDetails, type TaskDetails, type WorkspaceWaypoint } from "../../api/workspace";
-import { MapCanvas, type OccupancySnapshot } from "../map/MapCanvas";
+import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
+import { listCurrentWaypoints } from "../map/useWorkspaceMap";
 import { draftSchedule, NEW_TASK, ScheduleEditor, type TaskDraft } from "./ScheduleEditor";
 import styles from "./Tasks.module.css";
 
@@ -11,6 +12,7 @@ export interface TaskWorkspaceData {
   grid_id: string;
   map: OccupancySnapshot;
   waypoints: readonly WorkspaceWaypoint[];
+  waypointWrites?: boolean;
 }
 
 interface TaskListProps {
@@ -41,15 +43,68 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const [message, setMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
+  const [creatingWaypoint, setCreatingWaypoint] = useState(false);
+  const [waypointDraft, setWaypointDraft] = useState<Pose | null>(null);
+  const [waypointName, setWaypointName] = useState("");
+  const [catalog, setCatalog] = useState<WorkspaceWaypoint[] | null>(null);
+  const saveWaypointOperation = useRef<AbortController | null>(null);
+  useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
+
   const live = snapshot.connected && !snapshot.stale;
-  const available = workspace?.waypoints ?? [];
+  const available = catalog ?? workspace?.waypoints ?? [];
   const waypoints = new Map(available.map((waypoint) => [waypoint.waypoint_id, waypoint]));
   const resolved = waypointIds.map((id) => waypoints.get(id));
   const route = resolved.filter((point) => point !== undefined);
   const missingWaypoint = route.length !== waypointIds.length;
   const schedule = draftSchedule(draft);
   const canSubmit = live && workspace !== undefined && schedule !== null && draft.task_id.trim() !== ""
-    && route.length > 0 && !missingWaypoint && !pending && !conflict;
+    && route.length > 0 && !missingWaypoint && !pending && !conflict && !creatingWaypoint;
+
+  function clearWaypointDraft(): void {
+    setCreatingWaypoint(false);
+    setWaypointDraft(null);
+    setWaypointName("");
+  }
+
+  async function saveWaypoint(): Promise<void> {
+    const ref = snapshot.map_ref;
+    const id = waypointName.trim();
+    if (pending || !live || !workspace?.waypointWrites || ref === null || waypointDraft === null || !id || waypoints.has(id)) return;
+    const operation = new AbortController();
+    saveWaypointOperation.current = operation;
+    setPending(true);
+    setMessage("等待车端确认保存航点…");
+    let confirmed = false;
+    try {
+      const response = await link.request<ResponsePayload>("waypoint.create", {
+        operation_id: crypto.randomUUID(),
+        body: { ...ref, ...waypointDraft, grid_id: workspace.grid_id, waypoint_id: id },
+      });
+      if (operation.signal.aborted) return;
+      if (!response.ok) {
+        setMessage("车端未确认保存航点。");
+        return;
+      }
+      confirmed = true;
+      clearWaypointDraft();
+      const current = await listCurrentWaypoints(link, snapshot.robot_id, ref, workspace.grid_id, operation.signal);
+      setCatalog(current);
+      if (current.some((waypoint) => waypoint.waypoint_id === id)) {
+        setSelected(id);
+        setHighlight(id);
+        setMessage("航点已保存，可加入路线。");
+      } else {
+        setMessage("车端已保存航点，但当前目录暂不可选用该航点。");
+      }
+    } catch (error) {
+      if (operation.signal.aborted) return;
+      setMessage(confirmed ? "航点已保存，目录刷新失败。请重新读取地图。"
+        : `航点保存未确认：${error instanceof CommandError ? describeCommandError(error.code) : "无法发送"}。`);
+    } finally {
+      if (!operation.signal.aborted) setPending(false);
+      if (saveWaypointOperation.current === operation) saveWaypointOperation.current = null;
+    }
+  }
 
   function addWaypoint(id: string): void {
     if (pending || !waypoints.has(id)) return;
@@ -67,6 +122,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   }
 
   function newTask(): void {
+    clearWaypointDraft();
     setEditing(null);
     setDraft(NEW_TASK);
     setWaypointIds([]);
@@ -176,7 +232,10 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             taskRoute={missingWaypoint ? [] : route}
             waypointMarkers={available}
             highlightedWaypoint={highlight}
-            {...(pending ? {} : { onAddWaypoint: addWaypoint })} />
+            draft={waypointDraft}
+            pickEnabled={creatingWaypoint && !pending}
+            onPick={setWaypointDraft}
+            {...(pending || creatingWaypoint ? {} : { onAddWaypoint: addWaypoint })} />
         )}
       </div>
       <section className={styles.panel} aria-label="任务管理" data-open={drawerOpen}>
@@ -224,6 +283,24 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
               </label>
               <button type="button" disabled={!waypoints.has(selected)} onClick={() => addWaypoint(selected)}>加入路线</button>
             </div>
+            {workspace?.waypointWrites === true && (
+              creatingWaypoint ? (
+                <div className={styles.taskRow}>
+                  <p className={styles.note}>
+                    {waypointDraft === null ? "在地图空闲区域选点，可拖动设置朝向。"
+                      : `已选位置 X ${waypointDraft.x.toFixed(2)} m · Y ${waypointDraft.y.toFixed(2)} m`}
+                  </p>
+                  <label>新航点编号
+                    <input value={waypointName} onChange={(event) => setWaypointName(event.target.value)} />
+                  </label>
+                  <button type="button" disabled={waypointDraft === null || waypointName.trim() === "" || waypoints.has(waypointName.trim())}
+                    onClick={() => void saveWaypoint()}>保存航点</button>
+                  <button type="button" onClick={clearWaypointDraft}>取消新航点</button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setCreatingWaypoint(true)}>在地图上新建航点</button>
+              )
+            )}
             <ol aria-label="任务航点顺序" className={styles.route}>
               {waypointIds.map((id, index) => (
                 <li key={`${index}:${id}`}>

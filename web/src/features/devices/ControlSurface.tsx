@@ -57,9 +57,9 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   }, [refKey]);
   const draft = selection.refKey === refKey ? selection.pose : null;
   const note = feedback?.refKey === refKey ? feedback.note : null;
-  const { map: occupancy, gridId, waypoints, message, displayOnly } = useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
+  const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites } = useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
   const workspace = occupancy !== undefined && gridId !== undefined && waypoints !== undefined
-    ? { map: occupancy, grid_id: gridId, waypoints }
+    ? { map: occupancy, grid_id: gridId, waypoints, waypointWrites: waypointWrites === true }
     : undefined;
 
   function setDraft(pose: Pose | null): void {
@@ -142,7 +142,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               <HomeControls
                 snapshot={snapshot}
                 link={link}
-                homeMapAvailable={activeMap}
+                homeMapAvailable={activeMap && waypointWrites === true}
                 navigationUnavailable="车端未报告已验证的导航能力，无法开始、继续或返航。"
               />
               <p className={styles.quiet}>目标与定位提示为本地预览，车端尚不接收。</p>
