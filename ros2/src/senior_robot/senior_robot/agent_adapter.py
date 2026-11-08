@@ -68,6 +68,7 @@ class AdapterCore:
         self._routes = routes
         self._navigation_ready = navigation_ready
         self._active_epoch: int | None = None
+        self._heartbeat_epoch: int | None = None
         self._highest_epoch = -1
         self._disabled_through_epoch = -1
         # //Compatible: legacy isolated adapter tests do not have a heartbeat callback.
@@ -76,9 +77,10 @@ class AdapterCore:
 
     def release(self) -> None:
         """End the active epoch only. Safe to repeat."""
-        if self._active_epoch is not None:
-            self._disconnect(self._active_epoch)
-            self._active_epoch = None
+        epoch = self._heartbeat_epoch if self._heartbeat_epoch is not None else self._active_epoch
+        self._heartbeat_epoch = self._active_epoch = None
+        if epoch is not None:
+            self._disconnect(epoch)
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
@@ -106,6 +108,8 @@ class AdapterCore:
             ):
                 return {"ok": False, "error": "bad_request"}
             accepted = self._server_heartbeat(epoch, float(deadline))
+            if accepted:
+                self._heartbeat_epoch = epoch
             return {"ok": accepted}
         if kind in {"state.get", "pose.get"}:
             provider = self._state_provider if kind == "state.get" else self._pose_provider
@@ -128,7 +132,9 @@ class AdapterCore:
             epoch = message.get("connection_epoch")
             if not isinstance(epoch, int) or isinstance(epoch, bool):
                 return {"ok": False, "error": "bad_request"}
-            if epoch < max(self._highest_epoch, self._disabled_through_epoch):
+            if epoch < max(
+                self._highest_epoch, self._disabled_through_epoch, self._heartbeat_epoch or 0
+            ):
                 return {"ok": True}
             self._disabled_through_epoch = epoch
             self.motion_disabled = True

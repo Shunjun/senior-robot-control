@@ -1199,3 +1199,21 @@ async def test_cloud_challenge_to_production_agent_and_real_ipc_arbiter(
             agent.request_shutdown()
             await asyncio.wait_for(runner, 2)
     await server.close()
+
+
+async def test_adapter_revokes_heartbeat_epoch_without_a_browser_lease() -> None:
+    revoked = []
+    adapter = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda *_args: None,
+        disconnect=revoked.append,
+        request_exit=lambda: None,
+        server_heartbeat=lambda _epoch, _deadline: True,
+    )
+    assert (await adapter.handle({
+        "type": "server_heartbeat", "connection_epoch": 2, "deadline": 1.0,
+    }))["ok"]
+    assert (await adapter.handle({"type": "disable_motion", "connection_epoch": 1}))["ok"]
+    assert revoked == []
+    assert (await adapter.handle({"type": "disable_motion", "connection_epoch": 2}))["ok"]
+    assert revoked == [2]

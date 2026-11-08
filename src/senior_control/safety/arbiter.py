@@ -525,7 +525,7 @@ class Arbiter:
         return True
 
     def disconnect(self, connection_epoch: int) -> None:
-        if self._navigation_run is not None and connection_epoch == self._server_epoch:
+        if self._require_server_heartbeat and connection_epoch == self._server_epoch:
             self._server_disabled_epoch = max(connection_epoch, self._server_disabled_epoch)
             self._clear_motion()
         lease = self._lease
