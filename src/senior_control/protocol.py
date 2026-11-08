@@ -15,6 +15,8 @@ from pydantic import (
 from senior_control.errors import ErrorCode
 
 DRIVE_CHALLENGE_SECONDS = 0.3
+DRIVE_TRANSPORT_SECONDS = 0.5
+DRIVE_HOLD_FLOOR_SECONDS = 0.2
 DEVICE_REVOKED_CLOSE_CODE = 4403
 
 
@@ -38,7 +40,7 @@ class HeartbeatRequest(StrictModel):
 
 
 class EmptyPayload(StrictModel):
-    pass
+    gesture: int | None = Field(default=None, ge=1, le=2**53 - 1)
 
 
 class VelocityPayload(StrictModel):
@@ -46,6 +48,22 @@ class VelocityPayload(StrictModel):
     wz: float
     challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
     server_deadline: float | None = None
+    gesture: int | None = Field(default=None, ge=1, le=2**53 - 1)
+    sampled_at: float | None = None
+    server_issued_at: float | None = None
+
+    @model_validator(mode="after")
+    def validate_sample(self) -> "VelocityPayload":
+        if (self.gesture is None) != (self.sampled_at is None):
+            raise ValueError("sample requires both gesture and source time")
+        if self.gesture is not None:
+            if self.challenge_id is not None:
+                raise ValueError("timed sample cannot use a legacy challenge")
+            if (self.server_issued_at is None) != (self.server_deadline is None):
+                raise ValueError("sample grant requires both issuance and deadline")
+        elif self.server_issued_at is not None:
+            raise ValueError("sample grant requires a timed sample")
+        return self
 
 
 class EnvelopeBase(StrictModel):
@@ -76,6 +94,12 @@ class SimpleEnvelope(EnvelopeBase):
         "navigation.resume",
     ]
     payload: EmptyPayload
+
+    @model_validator(mode="after")
+    def validate_gesture(self) -> "SimpleEnvelope":
+        if self.payload.gesture is not None and self.type != "drive.stop":
+            raise ValueError("gesture is only supported for drive.stop")
+        return self
 
 
 OPERATION_TYPES = (
@@ -354,7 +378,13 @@ def serialize_envelope(envelope: Envelope | VideoEnvelope) -> bytes:
         validated = _frame_adapter.validate_python(envelope)
     except ValidationError as exc:
         raise ValueError("invalid envelope") from exc
-    raw = _frame_adapter.dump_json(validated)
+    # //Compatible: omit new optional timing fields from legacy wire payloads.
+    excluded: dict[str, set[str]] = {}
+    if isinstance(validated, VelocityEnvelope) and validated.payload.gesture is None:
+        excluded["payload"] = {"gesture", "sampled_at", "server_issued_at"}
+    if isinstance(validated, SimpleEnvelope) and validated.payload.gesture is None:
+        excluded["payload"] = {"gesture"}
+    raw = _frame_adapter.dump_json(validated, exclude=excluded)
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("message too large")
     return raw

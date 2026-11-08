@@ -492,3 +492,49 @@ def test_same_session_reacquire_retires_old_velocity():
     assert arbiter.final_command(0.04) is None
     assert arbiter.accept(command("drive.velocity", seq=4, vx=0.2), 0.05).accepted
     assert arbiter.tick(0.06) == Velocity(0.2, 0.0)
+
+
+def test_remote_hold_floor_after_valid_admission():
+    for arrival, issued, expected in (
+        (1.276, 1.0, 1.650),
+        (1.600, 1.1, 1.800),
+        (1.650, 1.2, None),
+        (1.601, 1.1, None),
+    ):
+        arbiter = gate()
+        assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+        sample = VelocityPayload(
+            vx=0.2,
+            wz=0.0,
+            gesture=1,
+            sampled_at=10.0,
+            server_issued_at=20.0,
+            server_deadline=20.65,
+        )
+        velocity = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+        result = arbiter.accept(velocity, arrival, received_at=issued, local_deadline=1.650)
+        assert result.accepted is (expected is not None)
+        final = arbiter.final_command(arrival)
+        if expected is None:
+            assert final is None
+        else:
+            assert final is not None
+            assert final[-1] == expected
+            assert arbiter.tick(expected) == Velocity(0.0, 0.0)
+
+
+def test_stopped_gesture_rejects_higher_sequence_and_old_epoch():
+    arbiter = gate()
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    stop = command("drive.stop", seq=2).model_copy(update={"payload": EmptyPayload(gesture=1)})
+    assert arbiter.accept(stop, 1.1).accepted
+
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.4
+    )
+    queued = command("drive.velocity", seq=3).model_copy(update={"payload": sample})
+    assert not arbiter.accept(queued, 1.15, received_at=1.0, local_deadline=1.4).accepted
+    fresh = queued.model_copy(update={"payload": sample.model_copy(update={"gesture": 2})})
+    assert arbiter.accept(fresh, 1.15, received_at=1.0, local_deadline=1.4).accepted
+    assert arbiter.accept(command("control.acquire", seq=1, epoch=2), 1.2).accepted
+    assert not arbiter.accept(fresh, 1.21, received_at=1.0, local_deadline=1.4).accepted
