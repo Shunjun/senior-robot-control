@@ -5,7 +5,7 @@ import os
 import secrets
 import signal
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 
 from lifecycle_msgs.msg import Transition
@@ -19,8 +19,10 @@ class DedicatedController:
         self._params = params
         self._lock = asyncio.Lock()
 
-    async def _transition(self, transition: int, process: asyncio.subprocess.Process) -> None:
-        client = self._node.create_client(ChangeState, "/controller_server/change_state")
+    async def _transition(
+        self, name: str, transition: int, process: asyncio.subprocess.Process
+    ) -> None:
+        client = self._node.create_client(ChangeState, f"/{name}/change_state")
         deadline = asyncio.get_running_loop().time() + 10
         try:
             while not client.service_is_ready():
@@ -41,45 +43,54 @@ class DedicatedController:
         finally:
             self._node.destroy_client(client)
 
+    async def _stop(self, process: asyncio.subprocess.Process) -> None:
+        # Stop the exact process group created for this run.
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGINT)
+        try:
+            await asyncio.wait_for(process.wait(), 4)
+        except asyncio.TimeoutError:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+
+    async def _start(
+        self, stack: AsyncExitStack, package: str, name: str, *remappings: str
+    ) -> None:
+        process = await asyncio.create_subprocess_exec(
+            "ros2",
+            "run",
+            package,
+            name,
+            "--ros-args",
+            "--params-file",
+            str(self._params),
+            *remappings,
+            start_new_session=True,
+        )
+        stack.push_async_callback(self._stop, process)
+        await self._transition(name, Transition.TRANSITION_CONFIGURE, process)
+        await self._transition(name, Transition.TRANSITION_ACTIVATE, process)
+
     @asynccontextmanager
     async def open(self, execution_id: str) -> AsyncIterator[str]:
-        async with self._lock:
+        async with self._lock, AsyncExitStack() as stack:
             if not execution_id or not self._params.is_file():
                 raise RuntimeError("qualified Nav2 controller unavailable")
             if any(
-                name == "controller_server"
+                name in {"controller_server", "bt_navigator"}
                 for name, _ in self._node.get_node_names_and_namespaces()
             ):
-                raise RuntimeError("a Nav2 controller is already present")
+                raise RuntimeError("a Nav2 controller or navigator is already present")
             topic = f"/control/navigation/run_{secrets.token_hex(16)}/cmd_vel"
-            sim = str(bool(self._node.get_parameter("use_sim_time").value)).lower()
-            controller = await asyncio.create_subprocess_exec(
-                "ros2",
-                "run",
+            await self._start(
+                stack,
                 "nav2_controller",
                 "controller_server",
-                "--ros-args",
-                "--params-file",
-                str(self._params),
-                "-p",
-                f"use_sim_time:={sim}",
                 "-r",
                 f"cmd_vel:={topic}",
                 "-r",
                 f"/cmd_vel:={topic}",
-                start_new_session=True,
             )
-            try:
-                await self._transition(Transition.TRANSITION_CONFIGURE, controller)
-                await self._transition(Transition.TRANSITION_ACTIVATE, controller)
-                yield topic
-            finally:
-                # Stop the exact process group created for this run.
-                with suppress(ProcessLookupError):
-                    os.killpg(controller.pid, signal.SIGINT)
-                try:
-                    await asyncio.wait_for(controller.wait(), 4)
-                except asyncio.TimeoutError:
-                    with suppress(ProcessLookupError):
-                        os.killpg(controller.pid, signal.SIGKILL)
-                    await controller.wait()
+            await self._start(stack, "nav2_bt_navigator", "bt_navigator")
+            yield topic

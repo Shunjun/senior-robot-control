@@ -22,7 +22,15 @@ def generate_launch_description():
     controller_params = RewrittenYaml(
         source_file=PathJoinSubstitution([robot, "config", "nav2.yaml"]),
         root_key="",
-        param_rewrites={"use_sim_time": "true"},
+        param_rewrites={
+            "use_sim_time": "true",
+            "default_nav_to_pose_bt_xml": PathJoinSubstitution(
+                [robot, "behavior_trees", "navigate.xml"]
+            ),
+            "default_nav_through_poses_bt_xml": PathJoinSubstitution(
+                [robot, "behavior_trees", "navigate_through_poses.xml"]
+            ),
+        },
         convert_types=True,
     )
     return LaunchDescription(

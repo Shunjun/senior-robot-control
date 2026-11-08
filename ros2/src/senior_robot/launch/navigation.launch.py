@@ -61,6 +61,7 @@ def generate_launch_description():
                 remappings=remappings,
             ),
             Node(
+                condition=UnlessCondition(external_controller),
                 package="nav2_bt_navigator",
                 executable="bt_navigator",
                 name="bt_navigator",
@@ -78,7 +79,7 @@ def generate_launch_description():
                     {
                         "use_sim_time": use_sim_time,
                         "autostart": True,
-                        "node_names": ["planner_server", "bt_navigator"],
+                        "node_names": ["planner_server"],
                     }
                 ],
             ),
