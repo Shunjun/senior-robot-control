@@ -82,3 +82,25 @@ def test_doctor_reports_missing_build_without_writing(tmp_path: Path, capsys) ->
     assert "ROS build" in output
     assert "secret" not in output
     assert sorted(p.name for p in tmp_path.iterdir()) == ["credential.json", "profile.json"]
+
+
+def test_deploy_dry_run_leaves_files_and_services_untouched(tmp_path: Path, monkeypatch) -> None:
+    profile = tmp_path / "unit-a.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "kind": "real",
+                "credentials": "/var/lib/senior-control/unit-a/credentials.json",
+                "database": "/var/lib/senior-control/unit-a/state.db",
+                "socket": "/run/senior-control/unit-a/adapter.sock",
+                "cloud_url": "wss://example.test/ws/agent",
+            }
+        )
+    )
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("dry run invoked a system mutation")
+
+    monkeypatch.setattr(cli.subprocess, "run", unexpected)
+    assert cli.main(["deploy", "--profile", str(profile), "--dry-run"]) == 0
+    assert list(tmp_path.iterdir()) == [profile]

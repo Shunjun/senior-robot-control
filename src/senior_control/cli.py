@@ -3,7 +3,10 @@
 import argparse
 import asyncio
 import os
+import re
 import shutil
+import stat
+import subprocess
 import sys
 from getpass import getpass
 from pathlib import Path
@@ -22,6 +25,7 @@ class VehicleProfile(BaseModel):
     ros_setup: Path | None = None
     database: Path | None = None
     socket: Path | None = None
+    cloud_url: str | None = None
 
 
 def _pair(profile: VehicleProfile, cloud_url: str, name: str) -> None:
@@ -71,6 +75,108 @@ def _doctor(profile: VehicleProfile) -> int:
     return 0
 
 
+SERVICE_ROOT = Path("/opt/senior-control")
+ENV_ROOT = Path("/etc/senior-control")
+UNIT_ROOT = Path("/etc/systemd/system")
+
+
+def _unit(profile_path: Path) -> str:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", profile_path.stem):
+        raise ValueError("profile filename must be a lowercase service name")
+    return f"senior-agent-{profile_path.stem}.service"
+
+
+def _install_once(path: Path, contents: str, mode: int) -> None:
+    import tempfile
+
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            os.fchmod(output.fileno(), mode)
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+    finally:
+        os.unlink(temporary)
+
+
+def _deploy(profile: VehicleProfile, profile_path: Path, *, dry_run: bool) -> int:
+    if profile.kind != "real":
+        raise ValueError("deploy requires a real vehicle profile")
+    unit = _unit(profile_path)
+    state_root = Path("/var/lib/senior-control") / profile_path.stem
+    socket_root = Path("/run/senior-control") / profile_path.stem
+    fields = {
+        "SENIOR_CREDENTIALS_FILE": (profile.credentials, state_root),
+        "SENIOR_DATABASE_PATH": (profile.database, state_root),
+        "SENIOR_AGENT_SOCKET": (profile.socket, socket_root),
+    }
+    values: dict[str, str] = {}
+    for key, (path, root) in fields.items():
+        if path is None or path.parent != root or not re.fullmatch(r"[a-zA-Z0-9_./-]+", str(path)):
+            raise ValueError("invalid vehicle path")
+        values[key] = str(path)
+    if profile.credentials == profile.database:
+        raise ValueError("database and credential paths must differ")
+    if profile.socket is None or len(os.fsencode(profile.socket)) > 100:
+        raise ValueError("socket path is too long")
+    cloud = urlsplit(profile.cloud_url or "")
+    if (
+        cloud.scheme != "wss"
+        or not cloud.hostname
+        or cloud.username
+        or cloud.password
+        or not re.fullmatch(r"wss://[a-zA-Z0-9.:/\[\]_-]+", profile.cloud_url or "")
+    ):
+        raise ValueError("cloud URL must use TLS")
+    values["SENIOR_CLOUD_URL"] = cloud.geturl()
+    env_file = ENV_ROOT / f"{profile_path.stem}.env"
+    unit_file = UNIT_ROOT / unit
+    if dry_run:
+        print(f"Would create {env_file} and {unit_file}.")
+        return 0
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise ValueError("real deployment requires root on Linux")
+    import pwd
+
+    account = pwd.getpwnam("senior-control")
+    for directory in (state_root, socket_root):
+        info = directory.stat()
+        if (
+            directory.resolve() != directory
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != account.pw_uid
+            or info.st_mode & 0o022
+        ):
+            raise ValueError("service directories must belong to senior-control")
+    credential = profile.credentials.lstat()
+    if credential.st_uid != account.pw_uid or stat.S_IMODE(credential.st_mode) != 0o600:
+        raise ValueError("credential must belong to senior-control with mode 0600")
+    read_credentials(profile.credentials)
+    if not os.access(SERVICE_ROOT / ".venv/bin/python", os.X_OK):
+        raise ValueError("service Python is unavailable")
+    template = (SERVICE_ROOT / "deploy/senior-agent.service").read_text(encoding="utf-8")
+    unit_contents = template.replace("/etc/senior-control/agent.env", str(env_file))
+    env_contents = "".join(f"{key}={value}\n" for key, value in values.items())
+    written: list[Path] = []
+    try:
+        for path, data, mode in (
+            (env_file, env_contents, 0o600),
+            (unit_file, unit_contents, 0o644),
+        ):
+            _install_once(path, data, mode)
+            written.append(path)
+        subprocess.run(["systemctl", "daemon-reload"], check=True, timeout=10)
+    except BaseException:
+        for path in reversed(written):
+            path.unlink(missing_ok=True)
+        raise
+    print(f"Deployed {unit}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="senior-robot")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -80,19 +186,43 @@ def main(argv: list[str] | None = None) -> int:
     pair.add_argument("--name", required=True)
     doctor = commands.add_parser("doctor", help="check the profile without starting services")
     doctor.add_argument("--profile", required=True, type=Path)
+    deploy = commands.add_parser("deploy", help="install the selected real vehicle service")
+    deploy.add_argument("--profile", required=True, type=Path)
+    deploy.add_argument("--dry-run", action="store_true")
+    for command in ("start", "stop", "status"):
+        service = commands.add_parser(command)
+        service.add_argument("--profile", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         profile = VehicleProfile.model_validate_json(args.profile.read_bytes())
         if args.command == "doctor":
             return _doctor(profile)
+        if args.command == "deploy":
+            return _deploy(profile, args.profile, dry_run=args.dry_run)
+        if args.command != "pair":
+            if profile.kind != "real" or sys.platform != "linux":
+                raise ValueError("systemd lifecycle requires a real Linux profile")
+            unit = _unit(args.profile)
+            if not (UNIT_ROOT / unit).is_file():
+                raise ValueError("deploy the selected profile first")
+            return subprocess.run(
+                ["systemctl", args.command, unit],
+                check=False,
+                timeout=30,
+            ).returncode
         _pair(profile, args.cloud_url, args.name)
     except FileExistsError:
-        print("Pairing skipped. Credential file already exists.", file=sys.stderr)
+        message = (
+            "Pairing skipped. Credential file already exists."
+            if args.command == "pair"
+            else "Deployment skipped. A destination file already exists."
+        )
+        print(message, file=sys.stderr)
         return 1
-    except (OSError, ValueError, EOFError, KeyboardInterrupt):
+    except (OSError, ValueError, EOFError, KeyboardInterrupt, KeyError, subprocess.SubprocessError):
         message = (
             "Could not read a valid vehicle profile."
-            if args.command == "doctor"
+            if args.command != "pair"
             else "Pairing failed. Check the profile, TLS URL and pairing code."
         )
         print(message, file=sys.stderr)
