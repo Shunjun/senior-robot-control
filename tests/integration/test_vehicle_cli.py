@@ -59,3 +59,26 @@ def test_pair_prompts_and_uses_tls(tmp_path: Path, monkeypatch) -> None:
         )
         == 0
     )
+
+
+def test_doctor_reports_missing_build_without_writing(tmp_path: Path, capsys) -> None:
+    credential = tmp_path / "credential.json"
+    credential.write_text('{"robot_id":"robot-a","device_token":"secret"}')
+    credential.chmod(0o600)
+    profile = tmp_path / "profile.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "kind": "simulation",
+                "credentials": str(credential),
+                "ros_setup": str(tmp_path / "install" / "setup.bash"),
+                "database": str(tmp_path / "robot.db"),
+                "socket": str(tmp_path / "robot.sock"),
+            }
+        )
+    )
+    assert cli.main(["doctor", "--profile", str(profile)]) == 1
+    output = capsys.readouterr().out
+    assert "ROS build" in output
+    assert "secret" not in output
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["credential.json", "profile.json"]
