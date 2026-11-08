@@ -290,7 +290,15 @@ async def test_qualified_route_runs_in_order(end):
     assert goals == ([1, 2, 3] if end == "succeeded" else [1, 2])
 
 
-async def test_route_service_reports_actual_index_and_blocks_next_on_lost_reference():
+@pytest.fixture
+def navigation_source_path(monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root / "ros2/src/senior_robot"))
+
+
+async def test_route_service_reports_actual_index_and_blocks_next_on_lost_reference(
+    navigation_source_path,
+):
     import asyncio
 
     from senior_robot.navigation_adapter import NavigationAdapter, RouteService
@@ -342,7 +350,7 @@ async def test_route_service_reports_actual_index_and_blocks_next_on_lost_refere
     assert executor.canceled == ["2"]
 
 
-async def test_starting_route_cannot_inherit_new_connection_epoch():
+async def test_starting_route_cannot_inherit_new_connection_epoch(navigation_source_path):
     import asyncio
     from contextlib import asynccontextmanager
 
