@@ -176,6 +176,8 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     leaseRef.current = value;
     setLease(value);
   }
+  const [stopFeedback, setStopFeedback] = useState<string | null>(null);
+  const [released, setReleased] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assist, setAssist] = useState(false);
   const [readout, setReadout] = useState<DriveInput>(STILL);
@@ -201,15 +203,21 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     held.current = NOT_HELD;
     setAuthority("none");
     setError(null);
+    setStopFeedback(null);
+    setReleased(false);
     setAssist(false);
     setReadout(STILL);
     const next = new DriveController(link, {
       onEvent: (event) => {
-        if (event.type === "command_failed") {
+        if (controller.current !== next) return;
+        if (event.type === "stopped" && !next.holding) {
+          setStopFeedback("停车指令已确认。");
+        } else if (event.type === "command_failed") {
           // The lease is not taken back. The operator acquires it again on purpose.
           setError(`车端没有接受遥控指令：${event.message}。`);
           setAuthority("none");
-        } else if (event.type === "stop_unconfirmed") {
+        } else if (event.type === "stop_unconfirmed" && !next.holding) {
+          setStopFeedback(null);
           setError(`停止未确认：${event.message}。请立即按下急停。`);
         }
       },
@@ -297,7 +305,10 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
 
   function hold(axis: keyof Held, value: number): void {
     if (!canDrive) return;
-    if (held.current.linear === null && held.current.angular === null) setError(null);
+    if (held.current.linear === null && held.current.angular === null) {
+      setError(null);
+      setStopFeedback(null);
+    }
     held.current = { ...held.current, [axis]: value };
     drive();
   }
@@ -323,6 +334,7 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     const mine = session.current;
     setAuthority("pending");
     setError(null);
+    setReleased(false);
     try {
       await link.request("control.acquire", {});
       if (mine === session.current) setAuthority("held");
@@ -335,12 +347,16 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
 
   async function giveUp(): Promise<void> {
     const mine = ++session.current;
-    controller.current?.stop("release_lease");
+    if (controller.current?.holding) {
+      setStopFeedback("停车指令等待确认。");
+      controller.current.stop("release_lease");
+    }
     held.current = NOT_HELD;
     setGestureReset((previous) => previous + 1);
     setAuthority("releasing");
     try {
       await link.request("control.release", {});
+      if (mine === session.current) setReleased(true);
     } catch (failure) {
       if (mine === session.current) {
         setError(`释放控制权未确认：${describeFailure(failure).message}。`);
@@ -354,19 +370,35 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     held.current = NOT_HELD;
     setGestureReset((previous) => previous + 1);
     setReadout(STILL);
+    setStopFeedback("停车指令等待确认。");
     if (controller.current?.holding) {
       controller.current.stop("release");
     } else {
       const mine = session.current;
-      void link.request("drive.stop", {}).catch((failure: unknown) => {
-        if (mine === session.current) setError(`停止未确认：${describeFailure(failure).message}。`);
-      });
+      void link.request("drive.stop", {}).then(
+        () => {
+          if (mine === session.current && !controller.current?.holding) setStopFeedback("停车指令已确认。");
+        },
+        (failure: unknown) => {
+          if (mine !== session.current || controller.current?.holding) return;
+          setStopFeedback(null);
+          setError(`停止未确认：${describeFailure(failure).message}。`);
+        },
+      );
     }
   }
 
-  if (!active) {
-    return error === null ? <></> : <p className={styles.failure} role="alert">{error}</p>;
-  }
+  const feedback = [
+    stopFeedback,
+    lease === "releasing" ? "控制权释放等待确认。" : released ? "控制权已释放。" : null,
+  ].filter(Boolean).join(" ");
+  const status = (
+    <>
+      {feedback !== "" && <p className={styles.quiet} role="status">{feedback}</p>}
+      {error !== null && <p className={styles.failure} role="alert">{error}</p>}
+    </>
+  );
+  if (!active) return status;
 
   return (
     <section className={styles.drive} aria-label="遥控" data-compact={compact} data-locked={!unlocked}>
@@ -399,7 +431,6 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
         </div>
       </header>
 
-      {lease === "releasing" && <p className={styles.quiet} role="status">正在释放控制权…</p>}
       {lock !== null && <p className={styles.lock}>{lock}</p>}
       {live && !supportsMotionChallenges && (
         <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
@@ -425,11 +456,7 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
       {unlocked && lease !== "held" && (
         <p className={styles.quiet}>先获取控制权，再按住摇杆。松手、切走页面或失去焦点都会停车。</p>
       )}
-      {error !== null && (
-        <p className={styles.failure} role="alert">
-          {error}
-        </p>
-      )}
+      {status}
 
       <div className={styles.pads} key={robotId}>
         <Joystick

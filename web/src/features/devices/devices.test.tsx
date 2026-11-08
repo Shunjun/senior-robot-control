@@ -1256,6 +1256,7 @@ describe("operator workspace", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "导航与定位" })));
     expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(1);
     expect(link.requests.filter(({ type }) => type === "control.release")).toHaveLength(1);
+    expect(screen.getByText(/停车指令已确认。 控制权已释放。/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "手动驾驶" }));
     expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
     fireEvent.keyDown(stick, { key: "ArrowUp" });
