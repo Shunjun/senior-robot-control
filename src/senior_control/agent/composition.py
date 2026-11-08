@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError
+from senior_control.mapping.workspace_export import load_exported_grid
 from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
@@ -34,6 +36,8 @@ class AgentConfig:
     device_token: str = field(repr=False)
     database_path: Path
     socket_path: Path
+    workspace_map_bundle: Path | None = None
+    workspace_map_sha256: str | None = None
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -43,16 +47,27 @@ class AgentConfig:
             raise ValueError("cloud URL must use authenticated TLS")
         if not self.database_path.is_absolute() or not self.socket_path.is_absolute():
             raise ValueError("database and socket paths must be absolute")
+        if (self.workspace_map_bundle is None) != (self.workspace_map_sha256 is None):
+            raise ValueError("workspace map bundle and SHA-256 must be configured together")
+        if self.workspace_map_bundle is not None and not self.workspace_map_bundle.is_absolute():
+            raise ValueError("workspace map bundle path must be absolute")
+        if self.workspace_map_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.workspace_map_sha256
+        ):
+            raise ValueError("workspace map SHA-256 must be 64 lowercase hexadecimal digits")
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "AgentConfig":
         try:
+            bundle = environment.get("SENIOR_WORKSPACE_MAP_BUNDLE")
             return cls(
                 robot_id=environment["SENIOR_ROBOT_ID"],
                 cloud_url=environment["SENIOR_CLOUD_URL"],
                 device_token=environment["SENIOR_DEVICE_TOKEN"],
                 database_path=Path(environment["SENIOR_DATABASE_PATH"]),
                 socket_path=Path(environment["SENIOR_AGENT_SOCKET"]),
+                workspace_map_bundle=Path(bundle) if bundle is not None else None,
+                workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
@@ -151,8 +166,23 @@ async def run_agent(config: AgentConfig) -> int:
         workspace_client = IpcClient(config.socket_path)
         display_client = IpcClient(config.socket_path)
         state = IpcState(state_client)
-        workspace = WorkspaceReader(config.robot_id, tasks, waypoints, workspace_client)
-        display = WorkspaceReader(config.robot_id, tasks, waypoints, display_client)
+        exported_grid = None
+        if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
+            try:
+                exported_grid = await asyncio.to_thread(
+                    load_exported_grid,
+                    config.workspace_map_bundle,
+                    config.workspace_map_sha256,
+                    config.robot_id,
+                )
+            except (DomainError, OSError):
+                logger.warning("configured workspace display map is unavailable", exc_info=True)
+        workspace = WorkspaceReader(
+            config.robot_id, tasks, waypoints, workspace_client, exported_grid=exported_grid
+        )
+        display = WorkspaceReader(
+            config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
+        )
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
         navigation = IpcNavigation(navigation_client)
         agent: Agent

@@ -23,6 +23,7 @@ export interface MapManifest extends WorkspaceIdentity {
   resolution: number;
   origin: MapPose;
   tile_size: 32;
+  display_only?: boolean;
 }
 
 export interface MapTile extends WorkspaceIdentity {
@@ -112,11 +113,12 @@ export async function getMapManifest(
   link: RobotLink, robotId: string, mapRef: MapRef,
 ): Promise<MapManifest> {
   const data = await read(link, robotId, mapRef, "map.manifest");
-  const { width, height, resolution, origin, tile_size } = data;
+  const { width, height, resolution, origin, tile_size, display_only } = data;
   valid(isInteger(width, 1, MAX_GRID_SIDE) && isInteger(height, 1, MAX_GRID_SIDE) &&
     width * height <= MAX_GRID_CELLS && isNumber(resolution) && resolution > 0 &&
-    isPose(origin) && tile_size === TILE_SIZE);
-  return { ...data, width, height, resolution, origin, tile_size };
+    isPose(origin) && tile_size === TILE_SIZE &&
+    (display_only === undefined || typeof display_only === "boolean"));
+  return { ...data, width, height, resolution, origin, tile_size, display_only: display_only ?? false };
 }
 
 export async function getMapTile(

@@ -244,6 +244,30 @@ def rewrite_waypoint_map(source: Path, destination: Path, map_id: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy(
+    tmp_path: Path,
+) -> None:
+    from senior_control.mapping.workspace_export import load_exported_grid
+
+    store = filled_store("building", 5, (0.5, 1.0))
+    bundle = tmp_path / "workspace.zip"
+    await archive_for(store, "robot").export_bundle(store, store.map_ref, bundle)
+    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    grid = load_exported_grid(bundle, digest, "robot")
+    assert grid.map_ref == store.map_ref
+    assert grid.grid_id == digest
+    assert grid.display_only
+    assert grid.cells[2 * grid.width + 1] == 100
+    # Painted by the localization graph but never confirmed in the stable layer.
+    assert grid.cells[grid.width + 4] == 255
+
+    with pytest.raises(DomainError, match="hash"):
+        load_exported_grid(bundle, "0" * 64, "robot")
+    with pytest.raises(DomainError, match="another vehicle"):
+        load_exported_grid(bundle, digest, "other")
+
+
+@pytest.mark.asyncio
 async def test_corrupt_bundle_preserves_active_map(tmp_path: Path) -> None:
     store = filled_store("yard", 3, (1.25, 0.25))
     original = store.map_ref

@@ -6,7 +6,13 @@ from pydantic import Field, ValidationError
 
 from senior_control.agent.ports import Requester
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.workspace import MAX_GRID_CELLS, MAX_GRID_SIDE, TILE_SIZE
+from senior_control.mapping.workspace import (
+    MAX_GRID_CELLS,
+    MAX_GRID_SIDE,
+    TILE_SIZE,
+    WorkspaceGrid,
+    WorkspaceMap,
+)
 from senior_control.models import MapRef
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel, WorkspaceEnvelope
 from senior_control.runtime.ipc import IpcError
@@ -35,6 +41,7 @@ class _Manifest(_MapReply):
     resolution: float = Field(gt=0)
     origin: _Origin
     tile_size: Literal[32]
+    display_only: bool = False
 
 
 class _Tile(_MapReply):
@@ -47,19 +54,28 @@ class _Tile(_MapReply):
 
 class WorkspaceReader:
     def __init__(
-        self, robot_id: str, tasks: TaskStore, waypoints: WaypointStore, maps: Requester
+        self,
+        robot_id: str,
+        tasks: TaskStore,
+        waypoints: WaypointStore,
+        maps: Requester,
+        *,
+        exported_grid: WorkspaceGrid | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._tasks = tasks
         self._waypoints = waypoints
         self._maps = maps
+        if exported_grid is not None and not exported_grid.display_only:
+            raise ValueError("workspace export must be read-only")
+        self._exported_grid = exported_grid
 
     async def active_map(self) -> MapRef | None:
         try:
             reply = _MapReply.model_validate(await self._maps.request("map.active"))
             return MapRef(reply.map_ref.map_id, reply.map_ref.reference_revision)
         except (IpcError, OSError, ValidationError):
-            return None
+            return self._exported_grid.map_ref if self._exported_grid is not None else None
 
     async def read(self, envelope: WorkspaceEnvelope) -> dict[str, Any]:
         if envelope.robot_id != self._robot_id:
@@ -73,6 +89,7 @@ class WorkspaceReader:
                 _Tile,
                 envelope.type,
                 ref,
+                allow_export=True,
                 grid_id=payload.grid_id,
                 tile_x=payload.tile_x,
                 tile_y=payload.tile_y,
@@ -86,9 +103,10 @@ class WorkspaceReader:
                 raise DomainError(ErrorCode.CONFLICT, "map tile identity or size changed")
             return {**base, **tile.model_dump(exclude={"v", "ok"})}
 
-        active = await self._manifest(ref)
         if envelope.type == "map.manifest":
-            return {**base, **active.model_dump(exclude={"v", "ok"})}
+            manifest = await self._manifest(ref, allow_export=True)
+            return {**base, **manifest.model_dump(exclude={"v", "ok"}, exclude_defaults=True)}
+        active = await self._manifest(ref)
         if envelope.type == "task.get":
             assert payload.task_id is not None
             task = await self._tasks.get(payload.task_id)
@@ -131,22 +149,42 @@ class WorkspaceReader:
             raise DomainError(ErrorCode.CONFLICT, "map changed during workspace read")
         return {**base, "grid_id": active.grid_id, **data}
 
-    async def _manifest(self, ref: MapRefPayload) -> _Manifest:
-        result = await self._map(_Manifest, "map.manifest", ref)
+    async def _manifest(self, ref: MapRefPayload, *, allow_export: bool = False) -> _Manifest:
+        result = await self._map(_Manifest, "map.manifest", ref, allow_export=allow_export)
         assert isinstance(result, _Manifest)
         if result.width * result.height > MAX_GRID_CELLS:
             raise DomainError(ErrorCode.UNAVAILABLE, "map raster is too large")
+        if result.display_only and not allow_export:
+            raise DomainError(ErrorCode.UNAVAILABLE, "exported maps are read-only")
         return result
 
     async def _map(
-        self, model: type[_MapReply], kind: str, ref: MapRefPayload, **fields: Any
+        self,
+        model: type[_MapReply],
+        kind: str,
+        ref: MapRefPayload,
+        *,
+        allow_export: bool = False,
+        **fields: Any,
     ) -> _MapReply:
+        request = {**ref.model_dump(), **fields}
         try:
-            raw = await self._maps.request(kind, **ref.model_dump(), **fields)
-            if raw.get("ok") is False and raw.get("error") in ("conflict", "validation"):
-                raise DomainError(ErrorCode(raw["error"]), "map reference or tile changed")
+            raw = await self._maps.request(kind, **request)
+        except (IpcError, OSError):
+            raw = {"ok": False, "error": "unavailable"}
+        if (
+            allow_export
+            and self._exported_grid is not None
+            and raw.get("ok") is False
+            and raw.get("error") in ("unknown_type", "unavailable")
+        ):
+            exported = WorkspaceMap(lambda: self._exported_grid)
+            raw = {"v": 1, **exported.read(kind, request)}
+        if raw.get("ok") is False and raw.get("error") in ("conflict", "validation"):
+            raise DomainError(ErrorCode(raw["error"]), "map reference or tile changed")
+        try:
             result = model.model_validate(raw)
-        except (IpcError, OSError, ValidationError) as exc:
+        except ValidationError as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "qualified map is unavailable") from exc
         if result.map_ref != ref:
             raise DomainError(ErrorCode.CONFLICT, "map reference changed")

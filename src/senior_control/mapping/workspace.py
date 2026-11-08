@@ -22,7 +22,9 @@ class WorkspaceGrid:
     height: int
     resolution: float
     origin: Pose2D
-    cells: tuple[int, ...]
+    # Dense archives use bytes (255 encodes unknown) to bound memory use.
+    cells: tuple[int, ...] | bytes
+    display_only: bool = False
 
     def __post_init__(self) -> None:
         size = self.width * self.height
@@ -35,7 +37,11 @@ class WorkspaceGrid:
             or len(self.cells) != size
             or not math.isfinite(self.resolution)
             or self.resolution <= 0
-            or any(type(cell) is not int or not -1 <= cell <= 100 for cell in self.cells)
+            or (
+                any(cell > 100 and cell != 255 for cell in self.cells)
+                if isinstance(self.cells, bytes)
+                else any(type(cell) is not int or not -1 <= cell <= 100 for cell in self.cells)
+            )
         ):
             raise ValueError("invalid occupancy grid")
 
@@ -67,6 +73,7 @@ class WorkspaceMap:
                 "resolution": grid.resolution,
                 "origin": asdict(grid.origin),
                 "tile_size": TILE_SIZE,
+                **({"display_only": True} if grid.display_only else {}),
             }
         if kind != "map.tile":
             return {"ok": False, "error": "validation"}
@@ -83,7 +90,7 @@ class WorkspaceMap:
         x, y = tx * TILE_SIZE, ty * TILE_SIZE
         width, height = min(TILE_SIZE, grid.width - x), min(TILE_SIZE, grid.height - y)
         cells = [
-            cell
+            -1 if cell == 255 else cell
             for row in range(y, y + height)
             for cell in grid.cells[row * grid.width + x : row * grid.width + x + width]
         ]

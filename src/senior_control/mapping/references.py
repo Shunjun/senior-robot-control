@@ -130,8 +130,11 @@ class SlamSnapshot:
 
     @classmethod
     def read(cls, destination: Path) -> "SlamSnapshot":
-        raw: object = json.loads((destination / "occupancy.json").read_text(encoding="utf-8"))
-        body = _mapping(raw)
+        return cls.from_json((destination / "occupancy.json").read_bytes())
+
+    @classmethod
+    def from_json(cls, data: bytes) -> "SlamSnapshot":
+        body = _mapping(json.loads(data))
         if _whole(body.get("format_version")) != FORMAT_VERSION:
             raise ValueError("unsupported occupancy snapshot")
         bindings = tuple(_binding(_item) for _item in _sequence(body.get("bindings")))

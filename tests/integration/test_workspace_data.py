@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,22 @@ async def test_workspace_read_is_reference_fenced(tmp_path: Path) -> None:
         with pytest.raises(DomainError) as missing:
             await reader.read(command("map.manifest"))
         assert missing.value.code is ErrorCode.UNAVAILABLE
+
+        fallback = WorkspaceReader(
+            "r1",
+            tasks,
+            waypoints,
+            LoopbackMap(WorkspaceMap(lambda: None)),
+            exported_grid=replace(active, display_only=True),
+        )
+        assert await fallback.active_map() == REF
+        manifest = await fallback.read(command("map.manifest"))
+        assert manifest["display_only"] is True
+        tile = await fallback.read(command("map.tile", grid_id="grid", tile_x=0, tile_y=0))
+        assert tile["cells"] == [100]
+        with pytest.raises(DomainError) as read_only:
+            await fallback.read(command("task.get", task_id=task.task_id))
+        assert read_only.value.code is ErrorCode.UNAVAILABLE
 
 
 def test_tile_fits_ipc_frame() -> None:
