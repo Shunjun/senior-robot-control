@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
-from senior_control.tasks.route import QualifiedRoute
+from senior_control.navigation import QualifiedRoute
 
 SAFETY_COMMAND_TOPIC = "/control/recovery_cmd"
 ERROR_NONE = 0

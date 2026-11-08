@@ -250,7 +250,7 @@ async def test_qualified_route_runs_in_order(end):
     import asyncio
 
     from senior_control.models import MapRef, Pose2D
-    from senior_control.tasks.route import QualifiedRoute
+    from senior_control.navigation import QualifiedRoute
 
     goals = []
     generation = "map-a"
