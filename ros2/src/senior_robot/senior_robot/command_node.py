@@ -200,6 +200,16 @@ class CommandNode(Node):
         )
         return True
 
+    def navigation_source_matches(self, execution_id: str) -> bool:
+        source = self._navigation_source
+        return (
+            source is not None
+            and source.execution_id == execution_id
+            and self._arbiter.navigation_source_active(
+                execution_id, self._monotonic_clock.monotonic()
+            )
+        )
+
     def clear_navigation_source(self, execution_id: str) -> None:
         source = self._navigation_source
         if source is None or source.execution_id != execution_id:
