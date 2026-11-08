@@ -248,7 +248,7 @@ export class HttpControlApi implements ControlApi {
 export type DriveFeedback =
   | { status: "applied"; latencyMs: number; vx: number; wz: number; limited: boolean }
   | { status: "blocked"; reason: string | null }
-  | { status: "superseded" | "expired" };
+  | { status: "superseded" | "expired" | "unconfirmed" };
 
 interface AwaitedDriveFeedback {
   sentAt: number;
@@ -701,7 +701,7 @@ export class RobotClient implements RobotLink {
     const sentAt = performance.now();
     const timer = setTimeout(() => {
       this.awaitedDriveFeedback.delete(requestId);
-      this.reportDriveFeedback(seq, { status: "expired" });
+      this.reportDriveFeedback(seq, { status: "unconfirmed" });
     }, 2_000);
     this.awaitedDriveFeedback.set(requestId, { sentAt, epoch: this.epoch, seq, gesture, timer });
     if (this.awaitedDriveFeedback.size > 32) {

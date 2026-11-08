@@ -441,6 +441,8 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
             {feedback?.status === "blocked" && ` · 安全门拦截${feedback.reason ? `（${feedback.reason}）` : ""}`}
             {feedback?.status === "superseded" && " · 指令已替换"}
             {feedback?.status === "expired" && " · 指令超时"}
+            {feedback?.status === "unconfirmed" && " · 未收到输出回执"}
+
           </p>
         </div>
         <div className={styles.leaseGroup}>
