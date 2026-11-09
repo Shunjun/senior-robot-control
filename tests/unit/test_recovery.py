@@ -603,3 +603,32 @@ def test_nav2_is_differential_without_forced_rotation():
         net_x = primitive["poses"][-1][0] - primitive["poses"][0][0]
         net_y = primitive["poses"][-1][1] - primitive["poses"][0][1]
         assert math.hypot(net_x, net_y) >= 0.05
+
+
+async def test_navigation_rejects_overlapping_goal_start():
+    import asyncio
+
+    module = navigation_module()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    started: list[object] = []
+
+    class DelayedExecutor:
+        async def start(self, goal: object) -> str:
+            started.append(goal)
+            entered.set()
+            await release.wait()
+            return "nav-1"
+
+    adapter = module.NavigationAdapter(DelayedExecutor())
+    goal = module.MapGoal(MAP, Pose2D(1.0, 2.0, 0.0))
+    replacement = module.MapGoal(MAP, Pose2D(4.0, 5.0, 0.1))
+    first = asyncio.create_task(adapter.navigate(goal))
+    await entered.wait()
+    second = asyncio.create_task(adapter.navigate(replacement))
+    await asyncio.sleep(0)
+    release.set()
+    assert await first == "nav-1"
+    with pytest.raises(module.NavigationRejected):
+        await second
+    assert started == [goal]

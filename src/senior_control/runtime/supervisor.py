@@ -27,7 +27,7 @@ class Supervisor:
         call_ros: Callable[[str], Awaitable[Any]],
         drive_sink: Callable[[float, float], Awaitable[None]],
         publish_cmd_vel: Callable[[float, float], Awaitable[None]],
-        connect: Callable[[], Awaitable[None]] | None = None,
+        connect: Callable[[], Awaitable[bool | None]] | None = None,
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         heartbeat_seconds: float = 0.2,
         retry_delay: float = 1.0,
@@ -180,12 +180,12 @@ class Supervisor:
             if self._running:
                 self._fault(f"background task {name} ended")
 
-    async def _uplink_loop(self, connect: Callable[[], Awaitable[None]]) -> None:
+    async def _uplink_loop(self, connect: Callable[[], Awaitable[bool | None]]) -> None:
         delay = self._retry_delay
         while self._running:
             self.state = "connecting"
             try:
-                await connect()
+                healthy = await connect()
             except AuthRejected:
                 self.state = "auth_failed"
                 self._revoke("device credential rejected")
@@ -195,7 +195,9 @@ class Supervisor:
                 self.state = "reconnecting"
             else:
                 self.state = "reconnecting"
-                delay = self._retry_delay
+                # //Compatible: existing connect callbacks return None on success.
+                if healthy is not False:
+                    delay = self._retry_delay
             if not self._running:
                 return
             await asyncio.sleep(delay)

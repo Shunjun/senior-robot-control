@@ -8,6 +8,10 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
 
+[project.scripts]
+senior-robot = "senior_control.cli:main"
+
+
 [project.optional-dependencies]
 safety = [
     "shapely>=2,<3",

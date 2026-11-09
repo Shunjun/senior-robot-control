@@ -5,6 +5,7 @@ import styles from "./Drive.module.css";
 
 export interface EmergencyStopProps {
   link: RobotLink;
+  compact?: boolean;
 }
 
 interface StopState {
@@ -21,7 +22,7 @@ interface StopState {
  * the operator's retry. "Confirmed" appears only after the robot answered ok; a timeout, an
  * error or silence is reported as not confirmed so the operator reaches for the physical stop.
  */
-export function EmergencyStop({ link }: EmergencyStopProps): ReactElement {
+export function EmergencyStop({ link, compact = false }: EmergencyStopProps): ReactElement {
   const [state, setState] = useState<StopState>({ acknowledged: false, inFlight: 0, failure: null });
   const latest = useRef(0);
 
@@ -49,13 +50,14 @@ export function EmergencyStop({ link }: EmergencyStopProps): ReactElement {
 
   const { acknowledged, inFlight, failure } = state;
   return (
-    <div className={styles.estopDock}>
+    <div className={styles.estopDock} data-compact={compact}>
       {!acknowledged && failure !== null && (
         <p className={styles.estopFailure} role="alert">
           急停未确认：{failure}。请立即使用车上的物理急停。
         </p>
       )}
-      {acknowledged && (
+      {inFlight > 0 && <p className={styles.estopFailure} role="status">急停等待确认</p>}
+      {acknowledged && inFlight === 0 && (
         <p className={styles.estopConfirmed} role="status">
           急停已确认：车端已应答
         </p>

@@ -12,7 +12,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Protocol, cast
+from typing import IO, Protocol, cast
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.references import AnchorPose, SlamSnapshot
@@ -27,6 +27,7 @@ COORDINATE_CONVENTION = "right_handed_xy_yaw"
 STABLE_LAYER = "occupancy/occupancy.json"
 _MAX_MEMBERS = 1024
 _READ_CHUNK = 65_536
+MAX_BUNDLE_BYTES = 67_108_864
 
 
 @dataclass(frozen=True)
@@ -116,7 +117,7 @@ class MapArchive:
         georeference: Georeference | None = None,
         home_waypoint_id: str | None = None,
         sensor_summary: tuple[tuple[str, str], ...] = (),
-        max_uncompressed_bytes: int = 67_108_864,
+        max_uncompressed_bytes: int = MAX_BUNDLE_BYTES,
         capture_timeout_seconds: float = 1.0,
     ) -> None:
         self._pose_graph = pose_graph
@@ -295,12 +296,21 @@ class MapArchive:
         await self._pose_graph.reset()
 
     async def validate_and_extract(self, path: Path, directory: Path) -> BundleManifest:
+        manifest, files = self.inspect_bundle(path, max_bytes=self._max_uncompressed_bytes)
+        _materialize(directory, files)
+        return manifest
+
+    @staticmethod
+    def inspect_bundle(
+        path: Path | IO[bytes], *, max_bytes: int = MAX_BUNDLE_BYTES
+    ) -> tuple[BundleManifest, dict[str, bytes]]:
+        """Validate archive structure, bounds and checksums without loading the pose graph."""
         try:
             archive = zipfile.ZipFile(path)
         except zipfile.BadZipFile as exc:
             raise DomainError(ErrorCode.VALIDATION, "bundle is not a zip archive") from exc
         with archive:
-            files = self._read_members(archive)
+            files = MapArchive._read_bounded_members(archive, max_bytes)
         manifest_bytes = files.get("manifest.json")
         if manifest_bytes is None:
             raise DomainError(ErrorCode.VALIDATION, "bundle manifest is missing")
@@ -346,10 +356,13 @@ class MapArchive:
                 raise DomainError(
                     ErrorCode.VALIDATION, "waypoint source does not match the bundle source"
                 )
-        _materialize(directory, files)
-        return manifest
+        return manifest, files
 
     def _read_members(self, archive: zipfile.ZipFile) -> dict[str, bytes]:
+        return self._read_bounded_members(archive, self._max_uncompressed_bytes)
+
+    @staticmethod
+    def _read_bounded_members(archive: zipfile.ZipFile, max_bytes: int) -> dict[str, bytes]:
         infos = archive.infolist()
         if len(infos) > _MAX_MEMBERS:
             raise DomainError(ErrorCode.VALIDATION, "bundle has too many members")
@@ -364,10 +377,7 @@ class MapArchive:
                 raise DomainError(ErrorCode.VALIDATION, "bundle path is duplicated")
             names.add(normalized)
             declared += info.file_size
-            if (
-                info.file_size > self._max_uncompressed_bytes
-                or declared > self._max_uncompressed_bytes
-            ):
+            if info.file_size > max_bytes or declared > max_bytes:
                 raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
 
         files: dict[str, bytes] = {}
@@ -379,13 +389,11 @@ class MapArchive:
                 parts: list[bytes] = []
                 with archive.open(info) as member:
                     while True:
-                        chunk = member.read(
-                            min(_READ_CHUNK, self._max_uncompressed_bytes - total + 1)
-                        )
+                        chunk = member.read(min(_READ_CHUNK, max_bytes - total + 1))
                         if not chunk:
                             break
                         total += len(chunk)
-                        if total > self._max_uncompressed_bytes:
+                        if total > max_bytes:
                             raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
                         parts.append(chunk)
                 files[info.filename] = b"".join(parts)

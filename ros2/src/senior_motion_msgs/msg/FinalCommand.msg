@@ -8,3 +8,5 @@ uint64 sequence
 float64 steady_deadline
 float64 vx
 float64 wz
+string<=128 request_id
+uint64 gesture

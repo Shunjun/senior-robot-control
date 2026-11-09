@@ -42,6 +42,8 @@ interface ShellProps {
 
 function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice, pairing }: ShellProps): ReactElement {
   const { robotId } = useParams();
+  const [openDeviceList, setOpenDeviceList] = useState<string | null>(null);
+  const devicesOpen = robotId !== undefined && openDeviceList === robotId;
   const selected: RobotSummary | undefined = list.robots.find((robot) => robot.id === robotId);
 
   let main: ReactElement;
@@ -71,13 +73,19 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
   }
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-workspace={selected !== undefined}>
       <header className={styles.header}>
         <div className={styles.brand}>
           <span className={styles.mark} aria-hidden="true" />
           <span className={styles.brandName}>车辆控制台</span>
           <span className={styles.brandTag}>SENIOR · CTRL</span>
         </div>
+        {selected !== undefined && (
+          <button type="button" className={styles.switchDevice} aria-expanded={devicesOpen}
+            aria-controls="device-switcher" onClick={() => setOpenDeviceList(devicesOpen ? null : selected.id)}>
+            切换车辆
+          </button>
+        )}
         <button type="button" className={styles.logout} disabled={loggingOut} onClick={onLogout}>
           退出登录
         </button>
@@ -87,7 +95,7 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
           {notice}
         </p>
       )}
-      <aside className={styles.side}>
+      <aside id="device-switcher" className={styles.side} data-open={devicesOpen}>
         <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} pairing={pairing} />
       </aside>
       <main className={styles.main}>{main}</main>

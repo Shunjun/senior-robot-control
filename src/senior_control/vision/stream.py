@@ -287,7 +287,7 @@ class VideoSession:
         if self._candidates >= self._limits.max_candidates:
             raise ValueError("too many ICE candidates")
         self._candidates += 1
-        if self._relay_only and " typ relay" not in candidate:
+        if self._relay_only and not _is_relay_candidate(candidate):
             return
         await peer.add_remote_candidate(candidate)
 
@@ -441,13 +441,16 @@ def _to_av_frame(av: Any, image: ImageFrame) -> Any:
     return frame
 
 
+def _is_relay_candidate(candidate: str) -> bool:
+    return candidate.split()[6:8] == ["typ", "relay"]
+
+
 def _only_relay_candidates(sdp: str) -> str:
-    kept = [
+    return "".join(
         line
-        for line in sdp.split("\r\n")
-        if not line.startswith("a=candidate:") or " typ relay" in line
-    ]
-    return "\r\n".join(kept)
+        for line in sdp.splitlines(keepends=True)
+        if not line.startswith("a=candidate:") or _is_relay_candidate(line)
+    )
 
 
 def _lower_bitrate_cap(cap_bps: int) -> None:
@@ -517,7 +520,8 @@ class _AiortcPeer:
         ]
         transceiver = pc.addTransceiver(self._track, direction="sendonly")
         transceiver.setCodecPreferences(codecs)
-        await pc.setRemoteDescription(aiortc.RTCSessionDescription(sdp=offer.sdp, type="offer"))
+        offer_sdp = _only_relay_candidates(offer.sdp) if self._request.relay_only else offer.sdp
+        await pc.setRemoteDescription(aiortc.RTCSessionDescription(sdp=offer_sdp, type="offer"))
         await pc.setLocalDescription(await pc.createAnswer())
         sdp = pc.localDescription.sdp
         if self._request.relay_only:

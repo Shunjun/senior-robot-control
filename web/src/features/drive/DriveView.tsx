@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
-import { CommandError, MotionNotReadyError, describeCommandError, type RobotLink } from "../../api/client";
+import { CommandError, MotionNotReadyError, describeCommandError, type DriveFeedback, type RobotLink } from "../../api/client";
 import type { ErrorCode, RobotSnapshot } from "../../api/protocol";
 import styles from "./Drive.module.css";
 import { Joystick, type ReleaseReason } from "./Joystick";
@@ -94,8 +94,9 @@ export class DriveController {
     if (this.timer === null) {
       this.timer = setInterval(() => this.tick(), this.intervalMs);
       this.send();
-    } else if (previous === null || previous.vx !== next.vx || previous.wz !== next.wz) {
-      // A changed input goes out at once; an unchanged one waits for the next resend.
+    } else if (!this.link.timedMotion &&
+        (previous === null || previous.vx !== next.vx || previous.wz !== next.wz)) {
+      //Compatible: older links send a changed input immediately.
       this.send();
     }
   }
@@ -114,7 +115,7 @@ export class DriveController {
   }
 
   private tick(): void {
-    if (this.inFlight < MAX_IN_FLIGHT) this.send();
+    if (this.link.timedMotion || this.inFlight < MAX_IN_FLIGHT) this.send();
   }
 
   private send(): void {
@@ -143,9 +144,11 @@ export interface DriveViewProps {
   link: RobotLink;
   /** The robot's snapshot. Null until the first one arrives. */
   snapshot: RobotSnapshot | null;
+  active?: boolean;
+  compact?: boolean;
 }
 
-type Lease = "none" | "pending" | "held";
+type Lease = "none" | "pending" | "held" | "releasing";
 
 interface Held {
   linear: number | null;
@@ -166,11 +169,21 @@ function speed(value: number): string {
   return value.toFixed(2);
 }
 
-export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactElement {
+export function DriveView({ robotId, link, snapshot, active = true, compact = false }: DriveViewProps): ReactElement {
   const [lease, setLease] = useState<Lease>("none");
+  const leaseRef = useRef<Lease>("none");
+  function setAuthority(value: Lease): void {
+    leaseRef.current = value;
+    setLease(value);
+  }
+  const [stopFeedback, setStopFeedback] = useState<string | null>(null);
+  const [released, setReleased] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assist, setAssist] = useState(false);
   const [readout, setReadout] = useState<DriveInput>(STILL);
+  const [feedback, setFeedback] = useState<DriveFeedback | null>(null);
+  const [lastOutput, setLastOutput] = useState<Extract<DriveFeedback, { status: "applied" }> | null>(null);
+  const [feedbackStale, setFeedbackStale] = useState(false);
   const [gestureReset, setGestureReset] = useState(0);
   const controller = useRef<DriveController | null>(null);
   const held = useRef<Held>(NOT_HELD);
@@ -184,31 +197,41 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   const limited = live && !localized;
   const unlocked = live && (localized || assist);
   const supportsMotionChallenges = link.supportsMotionChallenges === true;
-  const canDrive = unlocked && lease === "held" && supportsMotionChallenges;
+  const canDrive = active && unlocked && lease === "held" && supportsMotionChallenges;
 
   // Layout, not passive: the stop for the old robot must leave before the shell's own cleanup
   // disconnects the link, and a parent's passive cleanup runs before a child's.
   useLayoutEffect(() => {
     session.current += 1;
     held.current = NOT_HELD;
-    setLease("none");
+    setAuthority("none");
     setError(null);
+    setStopFeedback(null);
+    setReleased(false);
     setAssist(false);
     setReadout(STILL);
     const next = new DriveController(link, {
       onEvent: (event) => {
-        if (event.type === "command_failed") {
+        if (controller.current !== next) return;
+        if (event.type === "stopped" && !next.holding) {
+          setStopFeedback("停车指令已确认。");
+        } else if (event.type === "command_failed") {
           // The lease is not taken back. The operator acquires it again on purpose.
           setError(`车端没有接受遥控指令：${event.message}。`);
-          setLease("none");
-        } else if (event.type === "stop_unconfirmed") {
+          setAuthority("none");
+        } else if (event.type === "stop_unconfirmed" && !next.holding) {
+          setStopFeedback(null);
           setError(`停止未确认：${event.message}。请立即按下急停。`);
         }
       },
     });
     controller.current = next;
     return () => {
+      session.current += 1;
       next.stop("unmount");
+      if (leaseRef.current === "held" || leaseRef.current === "pending") {
+        void link.request("control.release", {}).catch(() => undefined);
+      }
       controller.current = null;
     };
   }, [link, robotId]);
@@ -219,9 +242,11 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
       held.current = NOT_HELD;
       controller.current?.stop("disabled");
       setReadout(STILL);
-      if (authorityLost) {
+      if (authorityLost && leaseRef.current !== "releasing") {
         session.current += 1;
-        setLease("none");
+        setAuthority("none");
+        setFeedback(null);
+        setLastOutput(null);
       }
     });
   }, [link]);
@@ -229,11 +254,54 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
   useLayoutEffect(() => {
     if (live) return;
     session.current += 1;
-    setLease("none");
+    setAuthority("none");
     held.current = NOT_HELD;
     controller.current?.stop("disabled");
     setReadout(STILL);
   }, [live]);
+
+  useLayoutEffect(() => {
+    if (!active) revoke.current();
+  }, [active]);
+
+  const revoke = useRef<() => void>(() => undefined);
+  revoke.current = () => {
+    if (leaseRef.current === "held" || leaseRef.current === "pending") void giveUp();
+  };
+
+  useEffect(() => {
+    const onBlur = () => revoke.current();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") revoke.current();
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("pagehide", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("pagehide", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    setFeedback(null);
+    setLastOutput(null);
+    setFeedbackStale(false);
+    return link.subscribeDriveFeedback?.((result) => {
+      setFeedback(result);
+      if (result.status === "applied") {
+        setLastOutput(result);
+        setFeedbackStale(false);
+      }
+    });
+  }, [link, robotId, live]);
+
+  useEffect(() => {
+    if (lastOutput === null) return;
+    const staleTimer = setTimeout(() => setFeedbackStale(true), 2_000);
+    return () => clearTimeout(staleTimer);
+  }, [lastOutput]);
 
   useEffect(() => {
     // Localization came back: the limited mode ends and cannot be resumed by accident later.
@@ -261,7 +329,10 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
 
   function hold(axis: keyof Held, value: number): void {
     if (!canDrive) return;
-    if (held.current.linear === null && held.current.angular === null) setError(null);
+    if (held.current.linear === null && held.current.angular === null) {
+      setError(null);
+      setStopFeedback(null);
+    }
     held.current = { ...held.current, [axis]: value };
     drive();
   }
@@ -285,42 +356,97 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
 
   async function acquire(): Promise<void> {
     const mine = session.current;
-    setLease("pending");
+    setAuthority("pending");
     setError(null);
+    setReleased(false);
     try {
       await link.request("control.acquire", {});
-      if (mine === session.current) setLease("held");
+      if (mine === session.current) setAuthority("held");
     } catch (failure) {
       if (mine !== session.current) return;
-      setLease("none");
+      setAuthority("none");
       setError(`没有拿到控制权：${describeFailure(failure).message}。`);
     }
   }
 
   async function giveUp(): Promise<void> {
-    const mine = session.current;
-    controller.current?.stop("release_lease");
+    const mine = ++session.current;
+    if (controller.current?.holding) {
+      setStopFeedback("停车指令等待确认。");
+      controller.current.stop("release_lease");
+    }
     held.current = NOT_HELD;
-    setLease("none");
+    setGestureReset((previous) => previous + 1);
+    setAuthority("releasing");
     try {
       await link.request("control.release", {});
+      if (mine === session.current) setReleased(true);
     } catch (failure) {
       if (mine === session.current) {
         setError(`释放控制权未确认：${describeFailure(failure).message}。`);
       }
+    } finally {
+      if (mine === session.current) setAuthority("none");
     }
   }
 
+  function park(): void {
+    held.current = NOT_HELD;
+    setGestureReset((previous) => previous + 1);
+    setReadout(STILL);
+    setStopFeedback("停车指令等待确认。");
+    if (controller.current?.holding) {
+      controller.current.stop("release");
+    } else {
+      const mine = session.current;
+      void link.request("drive.stop", {}).then(
+        () => {
+          if (mine === session.current && !controller.current?.holding) setStopFeedback("停车指令已确认。");
+        },
+        (failure: unknown) => {
+          if (mine !== session.current || controller.current?.holding) return;
+          setStopFeedback(null);
+          setError(`停止未确认：${describeFailure(failure).message}。`);
+        },
+      );
+    }
+  }
+
+  const authorityFeedback = [
+    stopFeedback,
+    lease === "releasing" ? "控制权释放等待确认。" : released ? "控制权已释放。" : null,
+  ].filter(Boolean).join(" ");
+  const status = (
+    <>
+      {authorityFeedback !== "" && <p className={styles.quiet} role="status">{authorityFeedback}</p>}
+      {error !== null && <p className={styles.failure} role="alert">{error}</p>}
+    </>
+  );
+  if (!active) return status;
+
   return (
-    <section className={styles.drive} aria-label="遥控" data-locked={!unlocked}>
+    <section className={styles.drive} aria-label="遥控" data-compact={compact} data-locked={!unlocked}>
       <header className={styles.driveHead}>
-        <div>
+        <div className={styles.telemetry}>
           <p className={styles.eyebrow}>遥控 / {robotId}</p>
           <p className={styles.readout}>
             请求 vx {speed(readout.vx)} m/s · wz {speed(readout.wz)} rad/s
           </p>
+          <p className={styles.readout}>
+            控制反馈延迟 {lastOutput === null ? "无样本" : `${Math.round(lastOutput.latencyMs)} ms`}
+            {lastOutput !== null && feedbackStale && " · 样本已过期"}
+            {lastOutput !== null && (
+              <> · 输出 {speed(lastOutput.vx)} m/s / {speed(lastOutput.wz)} rad/s{lastOutput.limited && " · 已限幅"}</>
+            )}
+            {feedback?.status === "blocked" && ` · 安全门拦截${feedback.reason ? `（${feedback.reason}）` : ""}`}
+            {feedback?.status === "superseded" && " · 指令已替换"}
+            {feedback?.status === "expired" && " · 指令超时"}
+            {feedback?.status === "unconfirmed" && " · 未收到输出回执"}
+
+          </p>
         </div>
         <div className={styles.leaseGroup}>
+          <button type="button" className={styles.ghost} onClick={park}>停车</button>
           {lease === "held" ? (
             <>
               <span className={styles.leaseTag}>已持有控制权</span>
@@ -332,45 +458,24 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
             <button
               type="button"
               className={styles.primary}
-              disabled={!live || lease === "pending"}
+              disabled={!live || lease === "pending" || lease === "releasing"}
               onClick={() => void acquire()}
             >
               获取控制权
             </button>
           )}
+          {limited && (
+            <button
+              type="button"
+              className={styles.ghost}
+              aria-pressed={assist}
+              onClick={() => setAssist(!assist)}
+            >
+              {assist ? "退出定位辅助遥控" : "进入定位辅助遥控"}
+            </button>
+          )}
         </div>
       </header>
-
-      {lock !== null && <p className={styles.lock}>{lock}</p>}
-      {live && !supportsMotionChallenges && (
-        <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
-      )}
-      {live && !localized && !assist && (
-        <p className={styles.lock}>定位未完成，遥控已锁定。进入定位辅助遥控后以低速行驶。</p>
-      )}
-      {limited && assist && (
-        <p className={styles.assistNote}>
-          定位辅助遥控已开启，限速 {Math.round(ASSIST_SCALE * 100)}%：只用于把车移到能重新定位的位置。
-        </p>
-      )}
-      {limited && (
-        <button
-          type="button"
-          className={styles.ghost}
-          aria-pressed={assist}
-          onClick={() => setAssist(!assist)}
-        >
-          {assist ? "退出定位辅助遥控" : "进入定位辅助遥控"}
-        </button>
-      )}
-      {unlocked && lease !== "held" && (
-        <p className={styles.quiet}>先获取控制权，再按住摇杆。松手、切走页面或失去焦点都会停车。</p>
-      )}
-      {error !== null && (
-        <p className={styles.failure} role="alert">
-          {error}
-        </p>
-      )}
 
       <div className={styles.pads} key={robotId}>
         <Joystick
@@ -391,6 +496,24 @@ export function DriveView({ robotId, link, snapshot }: DriveViewProps): ReactEle
           onChange={(value) => hold("angular", value)}
           onRelease={(reason) => release("angular", reason)}
         />
+      </div>
+      <div className={styles.driveNotes}>
+        {lock !== null && <p className={styles.lock}>{lock}</p>}
+        {live && !supportsMotionChallenges && (
+          <p className={styles.lock}>遥控暂不可用：等待车端安全许可。</p>
+        )}
+        {live && !localized && !assist && (
+          <p className={styles.lock}>定位未完成，遥控已锁定。进入定位辅助遥控后以低速行驶。</p>
+        )}
+        {limited && assist && (
+          <p className={styles.assistNote}>
+            定位辅助遥控已开启，限速 {Math.round(ASSIST_SCALE * 100)}%：只用于把车移到能重新定位的位置。
+          </p>
+        )}
+        {unlocked && lease !== "held" && (
+          <p className={styles.quiet}>先获取控制权，再按住摇杆。松手、切走页面或失去焦点都会停车。</p>
+        )}
+        {status}
       </div>
     </section>
   );

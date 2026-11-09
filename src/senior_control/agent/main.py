@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -23,16 +24,19 @@ from senior_control.agent.dispatcher import (
     Dispatcher,
     HomePort,
     MapPort,
+    NavigationAction,
     OperationNotCommitted,
     TaskPort,
 )
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import HomeSummary, RobotSnapshot, StatePort
+from senior_control.agent.workspace import WorkspaceReader
 from senior_control.clock import Clock, SystemClock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.observability import Metrics
 from senior_control.protocol import (
+    DriveExecutionFeedback,
     Envelope,
     OperationEnvelope,
     ResponseEnvelope,
@@ -40,8 +44,13 @@ from senior_control.protocol import (
     SimpleEnvelope,
     SnapshotEnvelope,
     VelocityEnvelope,
+    VideoEnvelope,
+    WorkspaceEnvelope,
 )
+from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
+from senior_control.vision.signaling import VideoSignaling
+from senior_control.vision.stream import VideoSession
 
 logger = logging.getLogger("senior_control.agent")
 
@@ -70,14 +79,17 @@ class Agent:
         maps: MapPort,
         state: StatePort,
         motion: MotionPort,
+        workspace: WorkspaceReader | None = None,
+        navigation: NavigationAction | None = None,
+        video_session: Callable[[], VideoSession | None] | None = None,
         deadlines: Deadlines | None = None,
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
         on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
-        heartbeat_seconds: float = 0.2,
+        heartbeat_seconds: float = 1.0,
         retry_delay: float = 1.0,
-        heartbeat_window: float = 1.0,
+        heartbeat_window: float = 2.0,
         command_ttl_seconds: float = 0.3,
         source_clock_verified: bool = False,
         snapshot_seconds: float = 2.0,
@@ -93,7 +105,11 @@ class Agent:
         self._connector = connector
         self._journal = journal
         self._state = state
+        self._workspace = workspace
+        self._navigation = navigation
+        self._workspace_request: asyncio.Task[None] | None = None
         self._motion = motion
+        self._video_session = video_session or (lambda: None)
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
@@ -122,9 +138,12 @@ class Agent:
             metrics=self.metrics,
             map_root=map_root,
             admit=self._admit,
+            navigation=navigation,
+            waypoint_create=workspace.create_waypoint if workspace is not None else None,
         )
         self._link: Link | None = None
         self._revoked_link: Link | None = None
+        self._clock_revoked = False
         self._epoch = 0
         self._last_epoch = 0
         self._heartbeat_generation = 0
@@ -137,6 +156,9 @@ class Agent:
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
+        self._velocity_task: asyncio.Task[None] | None = None
+        self._queued_velocity: tuple[Link, VelocityEnvelope, int] | None = None
+        self._replaced_velocity: deque[DriveExecutionFeedback] = deque(maxlen=16)
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
         self._safety_cleanups: set[asyncio.Task[None]] = set()
         self._safety_lock = asyncio.Lock()
@@ -157,6 +179,10 @@ class Agent:
         return self._link is not None
 
     @property
+    def connection_epoch(self) -> int:
+        return self._epoch
+
+    @property
     def motion_allowed(self) -> bool:
         supervisor = self._supervisor
         return supervisor is not None and supervisor.motion_allowed and not self._stopping
@@ -166,7 +192,8 @@ class Agent:
         """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
         self._expire_eligibility()
         return (
-            self.connected
+            self._link is not None
+            and self._link.command_clock_valid()
             and self.motion_allowed
             and not self._safety_blocked
             and self._ledger.eligible(self.robot_id)
@@ -347,14 +374,8 @@ class Agent:
         link = self._link
         if link is None or not self.motion_allowed:
             return
-        if self.recovery_required:
-            # Keep the authenticated status channel alive without renewing ROS motion.
-            await link.send_heartbeat()
-            return
-        if self._safety_blocked:
-            return
         self._expire_eligibility()
-        if self._revoked_link is link:
+        if self._revoked_link is link and not self._clock_revoked:
             await self._quietly(self._motion.disable(link.epoch))
             await self._quietly(link.close())
             return
@@ -373,7 +394,7 @@ class Agent:
             await self._quietly(link.close())
             raise
 
-    async def _session(self) -> None:
+    async def _session(self) -> bool:
         try:
             link = await self._connector()
         except AuthRejected:
@@ -381,60 +402,77 @@ class Agent:
             self.request_shutdown()
             raise
         self._heartbeat_generation += 1
+        self._queued_velocity = None
+        self._replaced_velocity.clear()
         self._revoked_link = None
+        self._clock_revoked = False
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
+        received_heartbeat = False
+        # Snapshot collection is independent of heartbeat and control reception.
+        keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
+        feedback = asyncio.ensure_future(self._forward_drive_feedback(link))
+        video: VideoSignaling | None = None
         try:
-            # Snapshot collection is independent of heartbeat and control reception.
-            keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
-            try:
-                while True:
-                    frame = await link.recv()
-                    if isinstance(frame, HeartbeatFrame):
-                        if self._safety_blocked:
-                            continue
-                        was_eligible = self._was_eligible
-                        self._expire_eligibility()
-                        if was_eligible and not self._was_eligible:
-                            raise ConnectionError("heartbeat continuity expired")
-                        if not self.motion_allowed or self._revoked_link is link:
-                            raise ConnectionError("motion is revoked")
-                        if (
-                            not self.motion_allowed
-                            or frame.robot_id != self.robot_id
-                            or frame.deadline <= self._clock.monotonic()
-                        ):
-                            raise ConnectionError("invalid heartbeat")
-                        generation = self._heartbeat_generation
-                        await asyncio.wait_for(
-                            self._motion.server_heartbeat(link.epoch, frame.deadline),
-                            timeout=self._deadlines.safety,
+            while True:
+                frame = await link.recv()
+                if isinstance(frame, HeartbeatFrame):
+                    if frame.robot_id != self.robot_id or frame.deadline <= self._clock.monotonic():
+                        raise ConnectionError("invalid heartbeat")
+                    received_heartbeat = True
+                    if not link.command_clock_valid():
+                        if self._was_eligible:
+                            self._clock_revoked = True
+                            self._lose_eligibility()
+                            await self._quietly(self._motion.disable(link.epoch))
+                        continue
+                    if self._clock_revoked:
+                        # The old epoch was disabled. Recover motion only on a new epoch.
+                        raise ConnectionError("command clock recovered")
+                    if self._safety_blocked:
+                        continue
+                    was_eligible = self._was_eligible
+                    self._expire_eligibility()
+                    if was_eligible and not self._was_eligible:
+                        raise ConnectionError("heartbeat continuity expired")
+                    if not self.motion_allowed or self._revoked_link is link:
+                        raise ConnectionError("motion is revoked")
+                    generation = self._heartbeat_generation
+                    await asyncio.wait_for(
+                        self._motion.server_heartbeat(link.epoch, frame.deadline),
+                        timeout=self._deadlines.safety,
+                    )
+                    was_eligible = self._was_eligible
+                    self._expire_eligibility()
+                    if (
+                        (was_eligible and not self._was_eligible)
+                        or frame.deadline <= self._clock.monotonic()
+                        or self._link is not link
+                        or self._revoked_link is link
+                        or generation != self._heartbeat_generation
+                        or not self.motion_allowed
+                    ):
+                        raise ConnectionError("heartbeat expired before ROS acknowledgement")
+                    self._ledger.note(frame.robot_id, deadline=frame.deadline)
+                    self._was_eligible = self._ledger.eligible(frame.robot_id)
+                elif isinstance(frame, VideoEnvelope):
+                    if video is None:
+                        video = VideoSignaling(
+                            self.robot_id,
+                            link.epoch,
+                            send=link.send_video,
+                            make_session=self._video_session,
                         )
-                        was_eligible = self._was_eligible
-                        self._expire_eligibility()
-                        if (
-                            (was_eligible and not self._was_eligible)
-                            or frame.deadline <= self._clock.monotonic()
-                            or self._link is not link
-                            or self._revoked_link is link
-                            or generation != self._heartbeat_generation
-                            or not self.motion_allowed
-                        ):
-                            raise ConnectionError("heartbeat expired before ROS acknowledgement")
-                        self._ledger.note(frame.robot_id, deadline=frame.deadline)
-                        self._was_eligible = self._ledger.eligible(frame.robot_id)
-                    else:
-                        await self._receive_command(link, frame)
-            finally:
-                keepalive.cancel()
-                await self._wait_inflight([keepalive])
+                    video.submit(frame)
+                else:
+                    await self._receive_command(link, frame)
         except AuthRejected:
             self.auth_rejected = True
             self.request_shutdown()
             raise
         except (ConnectionError, OSError):
-            return
+            return received_heartbeat
         finally:
             epoch = link.epoch
             if self._link is link:
@@ -442,14 +480,39 @@ class Agent:
                 self._link, self._epoch = None, 0
                 self._ledger.forget(self.robot_id)
             self._log("connection_closed")
+            if video is not None:
+                video.retire()
+            keepalive.cancel()
+            feedback.cancel()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
-            await self._wait_inflight(inflight)
+            await self._wait_inflight([keepalive, feedback, *inflight])
+            if video is not None:
+                await self._quietly(video.close())
             await self._quietly(link.close())
+
+    async def _forward_drive_feedback(self, link: Link) -> None:
+        take = getattr(self._motion, "take_drive_feedback", None)
+        send = getattr(link, "send_drive_feedback", None)
+        if take is None or send is None:
+            return
+        while self._link is link:
+            await asyncio.sleep(0.05)
+            try:
+                results = list(self._replaced_velocity)
+                self._replaced_velocity.clear()
+                for result in (*results, *(await take())):
+                    if self._link is link and result.robot_id == self.robot_id:
+                        await send(result)
+            except (ConnectionError, OSError):
+                return
+            except (DomainError, IpcError, ValueError):
+                # //Compatible: feedback is optional when the local adapter is older.
+                await asyncio.sleep(0.5)
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
         """Push on a state change, and at least every ``snapshot_seconds``.
@@ -476,6 +539,9 @@ class Agent:
             key = (
                 snapshot.localized,
                 snapshot.map_ref,
+                snapshot.map_generation,
+                snapshot.route_progress,
+                snapshot.navigation_ready,
                 snapshot.home,
                 snapshot.task_revision,
                 snapshot.execution_status,
@@ -646,7 +712,14 @@ class Agent:
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
             return
+        if isinstance(envelope, WorkspaceEnvelope):
+            # The relay bounds reads to one in flight. Dropping excess here reserves
+            # the ordinary and safety lanes even when the relay violates that limit.
+            if self._workspace_request is None or self._workspace_request.done():
+                self._workspace_request = self._spawn(self._answer_workspace(link, envelope))
+            return
         if envelope.type in HALT_TYPES:
+            self._queued_velocity = None
             key = (envelope.type, envelope.connection_epoch, envelope.session_id)
             existing = self._safety_pending.get(key)
             if existing is not None:
@@ -663,16 +736,34 @@ class Agent:
                 self._safety_task = self._spawn(self._drain_safety())
                 self._safety_task.add_done_callback(self._safety_finished)
             return
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            if self._queued_velocity is not None:
+                previous = self._queued_velocity[1]
+                self._replaced_velocity.append(DriveExecutionFeedback.superseded(previous))
+            self._queued_velocity = (link, envelope, self.continuity_generation)
+            if self._velocity_task is None or self._velocity_task.done():
+                self._velocity_task = self._spawn(self._drain_velocity())
+            return
+        if envelope.type in {"control.acquire", "control.release"}:
+            self._queued_velocity = None
         safety_active = self._safety_task is not None and not self._safety_task.done()
-        if len(self._inflight) - int(safety_active) >= MAX_INFLIGHT:
+        workspace_active = self._workspace_request in self._inflight
+        if len(self._inflight) - int(safety_active) - int(workspace_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
+            # //Compatible: only legacy grants use the wall-anchored conversion.
             convert = getattr(link, "local_command_deadline", None)
             deadline = convert(envelope.payload.server_deadline) if convert is not None else None
             generation = self.continuity_generation
             self._spawn(self._answer(link, envelope, deadline, generation))
         else:
             self._spawn(self._answer(link, envelope))
+
+    async def _drain_velocity(self) -> None:
+        while self._queued_velocity is not None:
+            link, envelope, generation = self._queued_velocity
+            self._queued_velocity = None
+            await self._answer(link, envelope, generation=generation)
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
         if task.cancelled() or task.exception() is not None:
@@ -769,6 +860,23 @@ class Agent:
             except Exception:
                 logger.warning("snapshot after edit failed", exc_info=True)
 
+    async def _answer_workspace(self, link: Link, envelope: WorkspaceEnvelope) -> None:
+        try:
+            self._admit(envelope)
+            if self._workspace is None:
+                raise DomainError(ErrorCode.UNAVAILABLE, "workspace reads unavailable")
+            data = await asyncio.wait_for(self._workspace.read(envelope), self._deadlines.edit)
+            self._admit(envelope)
+        except asyncio.TimeoutError:
+            await self._reply(link, envelope, error=ErrorCode.TIMEOUT)
+        except DomainError as exc:
+            await self._reply(link, envelope, error=exc.code)
+        except Exception:
+            logger.exception("workspace read failed")
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+        else:
+            await self._reply(link, envelope, data=data)
+
     async def _reject(self, link: Link, envelope: Envelope, error: ErrorCode) -> None:
         await self._reply(link, envelope, error=error)
 
@@ -780,6 +888,7 @@ class Agent:
         result: OperationResult | None = None,
         error: ErrorCode | None = None,
         status: OperationStatus | None = None,
+        data: dict[str, Any] | None = None,
     ) -> None:
         request_type: Any = envelope.type
         shown = result.status if result is not None else status
@@ -801,6 +910,7 @@ class Agent:
                 ok=error is None,
                 error=error,
                 operation_id=operation_id,
+                data=data,
                 status=shown.value if shown is not None else None,
             ),
         )
@@ -820,7 +930,7 @@ class Agent:
         link: Link | None = None,
         generation: int | None = None,
     ) -> OperationResult:
-        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope)):
+        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope, WorkspaceEnvelope)):
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
@@ -870,6 +980,24 @@ class Agent:
                     self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
+        if isinstance(envelope, SimpleEnvelope) and envelope.type == "navigation.cancel":
+            if self._navigation is not None:
+                self._admit(envelope)
+                await self._navigation("navigation.cancel", request_id, {})
+                return OperationResult(request_id, OperationStatus.SUCCEEDED)
+        received_at = None
+        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
+            convert_timing = getattr(link, "local_drive_timing", None)
+            issued = envelope.payload.server_issued_at
+            remote_deadline = envelope.payload.server_deadline
+            timing = (
+                convert_timing(issued, remote_deadline)
+                if convert_timing is not None and issued is not None and remote_deadline is not None
+                else None
+            )
+            if timing is None:
+                raise DomainError(ErrorCode.TIMEOUT, "motion clock evidence expired")
+            received_at, deadline = timing
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
             if (
                 deadline is None
@@ -883,14 +1011,13 @@ class Agent:
             raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
         if isinstance(envelope, VelocityEnvelope):
             if not self._source_clock_verified and (
-                envelope.payload.server_deadline is None or not envelope.payload.challenge_id
+                envelope.payload.server_deadline is None
+                or (envelope.payload.gesture is None and not envelope.payload.challenge_id)
             ):
                 raise DomainError(ErrorCode.UNAVAILABLE, "controller clock is not verified")
             if self._link is None or not self._link.command_clock_valid():
                 raise DomainError(ErrorCode.TIMEOUT, "command clock is not synchronized")
-            if envelope.payload.server_deadline is not None:
-                received_at = None
-            else:
+            if envelope.payload.server_deadline is None:
                 # //Compatible: isolated older tests inject a verified source clock.
                 implied_send = envelope.expires_at - ADMISSION_SECONDS
                 age = self._wall_clock() - implied_send
@@ -911,7 +1038,9 @@ class Agent:
                 )
             except Exception as exc:
                 raise DomainError(ErrorCode.SAFETY_REJECTED, "motion was not accepted") from exc
-            self._latest_velocity = envelope
+            if envelope.payload.gesture is None:
+                # //Compatible: isolated legacy supervisor users may resubmit local samples.
+                self._latest_velocity = envelope
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
         try:
             await asyncio.wait_for(self._motion.forward(envelope), self._deadlines.safety)
@@ -974,6 +1103,9 @@ class Agent:
             collected_at=self._wall_clock(),
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
+            map_generation=live.map_generation,
+            route_progress=live.route_progress,
+            navigation_ready=live.navigation_ready,
         )
         return snapshot
 

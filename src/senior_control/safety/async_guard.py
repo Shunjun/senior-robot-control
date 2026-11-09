@@ -336,9 +336,15 @@ def _worker_main(jobs: Any, replies: Any, processor: Callable[[Any], Any]) -> No
 class BoundedSafetyWorker:
     """One spawned process; ROS callbacks never perform process or pipe I/O."""
 
-    def __init__(self, processor: Callable[[Any], Any] = evaluate_safety_work) -> None:
+    def __init__(
+        self,
+        processor: Callable[[Any], Any] = evaluate_safety_work,
+        *,
+        on_result: Callable[[WorkerReply], None] | None = None,
+    ) -> None:
         self._context = multiprocessing.get_context("spawn")
         self._processor = processor
+        self._on_result = on_result
         self._inbox: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._outbox: queue.Queue[WorkerReply] = queue.Queue(maxsize=1)
         self._process: Any = None
@@ -372,6 +378,8 @@ class BoundedSafetyWorker:
                     try:
                         result = replies.get(timeout=0.05)
                         self._outbox.put_nowait(result)
+                        if self._on_result is not None:
+                            self._on_result(result)
                         break
                     except queue.Empty:
                         if not process.is_alive():

@@ -21,6 +21,8 @@ from senior_control.errors import ErrorCode
 from senior_control.models import Velocity
 from senior_control.protocol import (
     DRIVE_CHALLENGE_SECONDS,
+    DRIVE_HOLD_FLOOR_SECONDS,
+    DRIVE_TRANSPORT_SECONDS,
     Envelope,
     SimpleEnvelope,
     VelocityEnvelope,
@@ -49,6 +51,8 @@ class _Lease:
     seq: int
     refreshed_at: float
     alive: bool
+    gesture: int = 0
+    closed_gesture: int = 0
 
 
 def _ok() -> CommandResult:
@@ -299,8 +303,11 @@ class Arbiter:
         self._manual = False
         self._recovery = False
         self._navigation = False
+        self._navigation_run: str | None = None
+        self._navigation_seq = 0
         self._velocity = _ZERO
         self._deadline: float | None = None
+        self._strict_deadline = False
 
     def accept(
         self,
@@ -414,25 +421,92 @@ class Arbiter:
 
     def tick(self, now: float) -> Velocity:
         self._expire(now)
-        if self._estop or not self._connected(now):
+        if self._estop or not (
+            self._connected(now)
+            or (self._navigation_run is not None and self.navigation_qualified(now))
+        ):
             return _ZERO
         if (
             (self._manual or self._navigation or self._recovery)
             and self._deadline is not None
-            and now <= self._deadline
+            and (now < self._deadline or (not self._strict_deadline and now == self._deadline))
         ):
             return self._velocity
         return _ZERO
 
     def final_command(self, now: float) -> tuple[Velocity, str, int, int, float] | None:
         velocity = self.tick(now)
+        if self._navigation_run is not None and velocity != _ZERO and self._deadline is not None:
+            return (
+                velocity,
+                self._navigation_run,
+                self._server_epoch,
+                self._navigation_seq,
+                self._deadline,
+            )
         lease = self._lease
-        if velocity == _ZERO or lease is None or self._deadline is None:
+        if lease is None or self._deadline is None:
             return None
         deadline = self._deadline
-        if self._require_server_heartbeat:
+        if velocity == _ZERO and not (
+            self._strict_deadline
+            and self._manual
+            and not self._estop
+            and self._connected(now)
+            and now < deadline
+        ):
+            return None
+        if self._require_server_heartbeat and not self._strict_deadline:
+            # //Compatible: legacy commands retain the original heartbeat cap on publication.
             deadline = min(deadline, self._server_deadline)
         return velocity, lease.session_id, lease.epoch, lease.seq, deadline
+
+    def navigation_qualified(self, now: float) -> bool:
+        self._expire(now)
+        return (
+            self._require_server_heartbeat
+            and math.isfinite(now)
+            and self._server_epoch > self._server_disabled_epoch
+            and now < self._server_deadline
+            and not self._estop
+            and not self._connected(now)
+        )
+
+    def navigation_source_active(self, execution_id: str, now: float) -> bool:
+        return self.navigation_qualified(now) and self._navigation_run == execution_id
+
+    def begin_navigation(self, execution_id: str, now: float) -> bool:
+        if (
+            not execution_id
+            or len(execution_id) > 128
+            or self._navigation_run is not None
+            or not self.navigation_qualified(now)
+        ):
+            return False
+        self._clear_motion()
+        self._navigation_run = execution_id
+        self._navigation = True
+        self._strict_deadline = True
+        return True
+
+    def accept_navigation_sample(
+        self, execution_id: str, sequence: int, velocity: Velocity, sampled: float, now: float
+    ) -> bool:
+        if (
+            not self.navigation_source_active(execution_id, now)
+            or sequence <= self._navigation_seq
+            or not math.isfinite(sampled)
+            or not sampled <= now < sampled + self._command_ttl_seconds
+        ):
+            return False
+        self._navigation_seq = sequence
+        self._velocity = velocity
+        self._deadline = min(sampled + self._command_ttl_seconds, self._server_deadline)
+        return True
+
+    def end_navigation(self, execution_id: str) -> None:
+        if self._navigation_run == execution_id:
+            self._clear_motion()
 
     def accept_autonomous(
         self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float
@@ -452,6 +526,9 @@ class Arbiter:
         return True
 
     def disconnect(self, connection_epoch: int) -> None:
+        if self._require_server_heartbeat and connection_epoch == self._server_epoch:
+            self._server_disabled_epoch = max(connection_epoch, self._server_disabled_epoch)
+            self._clear_motion()
         lease = self._lease
         if lease is not None and lease.epoch == connection_epoch:
             lease.alive = False
@@ -510,6 +587,13 @@ class Arbiter:
         if kind == "drive.stop":
             if self._estop:
                 return _reject(ErrorCode.SAFETY_REJECTED)
+            lease = self._lease
+            assert lease is not None
+            if command.payload.gesture is not None and command.payload.gesture < lease.gesture:
+                return _reject(ErrorCode.CONFLICT)
+            lease.closed_gesture = max(
+                lease.gesture, lease.closed_gesture, command.payload.gesture or 0
+            )
             self._refresh(command, now)
             self._hold_manual_stop()
             return _ok()
@@ -546,7 +630,27 @@ class Arbiter:
             return _reject(ErrorCode.VALIDATION)
         if self._require_server_heartbeat and received_at is None and local_deadline is None:
             return _reject(ErrorCode.VALIDATION)
-        if local_deadline is not None:
+        gesture = command.payload.gesture
+        if gesture is not None:
+            lease = self._lease
+            assert lease is not None
+            if gesture < lease.gesture or gesture <= lease.closed_gesture:
+                return _reject(ErrorCode.CONFLICT)
+            if (
+                received_at is None
+                or local_deadline is None
+                or command.payload.server_issued_at is None
+                or not math.isfinite(received_at)
+                or not math.isfinite(local_deadline)
+                or received_at > now
+            ):
+                return _reject(ErrorCode.VALIDATION)
+            if now >= local_deadline or now > received_at + DRIVE_TRANSPORT_SECONDS:
+                return _reject(ErrorCode.TIMEOUT)
+            deadline = max(local_deadline, now + DRIVE_HOLD_FLOOR_SECONDS)
+            lease.gesture = gesture
+        elif local_deadline is not None:
+            # //Compatible: preserve the original challenge deadline for older controllers.
             source_window = (
                 DRIVE_CHALLENGE_SECONDS
                 if command.payload.server_deadline is not None
@@ -573,6 +677,7 @@ class Arbiter:
         self._recovery = False
         self._velocity = Velocity(command.payload.vx, command.payload.wz)
         self._deadline = deadline
+        self._strict_deadline = gesture is not None
         return _ok()
 
     def _accept_safety(
@@ -642,10 +747,17 @@ class Arbiter:
         self._manual = False
         self._recovery = False
         self._navigation = False
+        self._navigation_run = None
+        self._navigation_seq = 0
         self._velocity = _ZERO
         self._deadline = None
 
     def _expire(self, now: float) -> None:
+        if self._navigation_run is not None and (
+            not math.isfinite(now) or now >= self._server_deadline
+        ):
+            self._server_disabled_epoch = max(self._server_epoch, self._server_disabled_epoch)
+            self._clear_motion()
         lease = self._lease
         if lease is None or not lease.alive:
             return

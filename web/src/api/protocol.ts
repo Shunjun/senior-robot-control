@@ -35,17 +35,33 @@ export const OPERATION_REQUEST_TYPES = [
   "task.delete",
   "task.enable",
   "home.set",
+  "navigation.goal",
+  "navigation.return_home",
+  "waypoint.create",
   "map.export",
   "map.import",
   "map.clear",
   "operation.query",
 ] as const;
 
+export const WORKSPACE_REQUEST_TYPES = [
+  "task.get",
+  "waypoint.list",
+  "map.manifest",
+  "map.tile",
+] as const;
+export type WorkspaceRequestType = (typeof WORKSPACE_REQUEST_TYPES)[number];
+
+export function isWorkspaceRequestType(type: string): type is WorkspaceRequestType {
+  return (WORKSPACE_REQUEST_TYPES as readonly string[]).includes(type);
+}
+
 /** Frames a browser may originate for the agent, excluding video signaling. */
 export const REQUEST_TYPES = [
   "drive.velocity",
   ...SIMPLE_REQUEST_TYPES,
   ...OPERATION_REQUEST_TYPES,
+  ...WORKSPACE_REQUEST_TYPES,
 ] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
 
@@ -65,6 +81,7 @@ export const RESPONSE_REQUEST_TYPES = [
   "video.answer",
   "video.candidate",
   "video.close",
+  ...WORKSPACE_REQUEST_TYPES,
 ] as const;
 
 export const ENVELOPE_FIELDS = [
@@ -90,6 +107,9 @@ export const SNAPSHOT_FIELDS = [
   "last_synced_at",
   "tasks",
   "home_revision",
+  "map_generation",
+  "route_progress",
+  "navigation_ready",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -147,6 +167,18 @@ export interface TaskSummary {
   enabled: boolean;
 }
 
+const ROUTE_STATUSES = [
+  "starting", "running", "succeeded", "failed", "cancel_pending", "canceled",
+] as const;
+
+export interface RouteProgress {
+  execution_id: string;
+  task_id: string | null;
+  map_generation: string;
+  status: (typeof ROUTE_STATUSES)[number];
+  active_waypoint_index: number | null;
+}
+
 export interface SnapshotPayload {
   connected: boolean;
   localized: boolean;
@@ -165,6 +197,10 @@ export interface SnapshotPayload {
    * with no row.
    */
   home_revision: number;
+  //Compatible: legacy snapshots omit the live reference generation.
+  map_generation?: string;
+  route_progress?: RouteProgress;
+  navigation_ready?: boolean;
 }
 
 export interface ResponsePayload {
@@ -175,6 +211,7 @@ export interface ResponsePayload {
   challenge_id?: string | null;
   server_deadline?: number | null;
   status?: ResponseStatus | null;
+  data?: Record<string, unknown>;
 }
 
 export interface SnapshotEnvelope extends EnvelopeBase {
@@ -203,6 +240,7 @@ export interface RobotSummary {
   id: string;
   name: string;
   online: boolean;
+  reconnecting?: boolean;
 }
 
 export interface LinkStatus {
@@ -249,6 +287,23 @@ function parseHome(value: unknown): HomeSummary | null | undefined {
   return { waypoint_id: value["waypoint_id"], map_ref: mapRef, status: value["status"] };
 }
 
+function parseRouteProgress(value: unknown): RouteProgress | null {
+  if (!isRecord(value) || !isText(value["execution_id"], 128) ||
+      !isText(value["map_generation"], 128)) return null;
+  const task = value["task_id"];
+  const status = ROUTE_STATUSES.find((candidate) => candidate === value["status"]);
+  const index = value["active_waypoint_index"];
+  if ((task !== null && !isText(task, 128)) || status === undefined ||
+      (index !== null && (!isCount(index) || index >= 64))) return null;
+  return {
+    execution_id: value["execution_id"],
+    task_id: task,
+    map_generation: value["map_generation"],
+    status,
+    active_waypoint_index: index,
+  };
+}
+
 function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (!isRecord(value)) return null;
   const mapRef = parseMapRef(value["map_ref"]);
@@ -274,7 +329,17 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (tasks === null) return null;
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
   if (!isCount(homeRevision)) return null;
+  const navigationReady = value["navigation_ready"];
+  if (navigationReady !== undefined && typeof navigationReady !== "boolean") return null;
+  const mapGeneration = value["map_generation"];
+  const route = value["route_progress"] === undefined ? undefined :
+    parseRouteProgress(value["route_progress"]);
+  if (route === null) return null;
+  if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
   return {
+    ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
+    ...(navigationReady === undefined ? {} : { navigation_ready: navigationReady }),
+    ...(route === undefined || route.map_generation !== mapGeneration ? {} : { route_progress: route }),
     connected: value["connected"],
     localized: value["localized"],
     map_ref: mapRef,
@@ -319,7 +384,12 @@ function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (challengeId !== null && !isText(challengeId, 128)) return null;
   if (serverDeadline !== null && (!isFiniteNumber(serverDeadline) || serverDeadline <= 0)) return null;
   if (requestType === "drive.challenge" && value["ok"] && (challengeId === null || serverDeadline === null)) return null;
+  const data = value["data"];
+  if (typeof requestType !== "string") return null;
+  const expectsData = isWorkspaceRequestType(requestType) && value["ok"];
+  if (expectsData ? !isRecord(data) : data !== undefined && data !== null) return null;
   return {
+    ...(isRecord(data) ? { data } : {}),
     request_type: requestType as ResponsePayload["request_type"],
     ok: value["ok"],
     error: error as ErrorCode | null,

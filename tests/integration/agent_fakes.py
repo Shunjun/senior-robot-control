@@ -260,6 +260,7 @@ class FakeState:
     runnable_task_ids: tuple[str, ...] = ()
     localized: bool = True
     execution_status: str = "idle"
+    navigation_ready: bool | None = None
     calls: int = field(default=0)
 
     async def collect(self) -> LiveState:
@@ -280,6 +281,7 @@ class FakeState:
             task_revision=self.task_revision,
             runnable_task_ids=self.runnable_task_ids,
             execution_status=self.execution_status,
+            navigation_ready=self.navigation_ready,
         )
 
 

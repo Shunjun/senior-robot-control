@@ -146,8 +146,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
     : snapshot.connected ? "online" : "offline";
 
   return (
-    <>
-    <article className={styles.panel}>
+    <article className={styles.panel} data-workspace="true">
       <header className={styles.panelHead}>
         <div>
           <p className={styles.eyebrow}>设备 / {robot.id}</p>
@@ -158,6 +157,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
         >
           {presence === "unknown" ? "状态未知" : presence === "online" ? "在线" : "离线"}
         </span>
+        <EmergencyStop key={attempt} link={link} compact />
       </header>
 
       {linkState === "connecting" && (
@@ -192,8 +192,5 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
         </>
       )}
     </article>
-    {/* Outside the clipped panel: a clip-path would cut off the fixed button. */}
-    <EmergencyStop link={link} />
-    </>
   );
 }

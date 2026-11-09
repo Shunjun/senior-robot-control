@@ -221,3 +221,56 @@ def test_identical_command_refresh_keeps_original_geometry_deadline(monkeypatch,
     finally:
         gate.destroy_node()
         rclpy.shutdown()
+
+
+def test_drive_feedback_follows_actual_output(monkeypatch):
+    from types import SimpleNamespace
+
+    rclpy = pytest.importorskip("rclpy")
+    from senior_motion_msgs.msg import FinalCommand
+    from senior_robot import safety_node as module
+
+    rclpy.init()
+    gate = module.SafetyGate()
+    try:
+        events = []
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: 10.0))
+        monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
+        monkeypatch.setattr(gate, "_report", lambda _reason: None)
+        monkeypatch.setattr(
+            gate, "_publisher", SimpleNamespace(publish=lambda msg: events.append(("output", msg)))
+        )
+        monkeypatch.setattr(
+            gate,
+            "_drive_feedback_publisher",
+            SimpleNamespace(publish=lambda msg: events.append(("feedback", msg))),
+        )
+        gid = b"fixture"
+        gate._final_fence.set_publisher(gid)
+        gate._on_command(FinalCommand(robot_id="robot", owner_boot_id="boot", generation=1), gid)
+        gate._on_command(
+            FinalCommand(
+                robot_id="robot",
+                owner_boot_id="boot",
+                session_id="page",
+                generation=1,
+                connection_epoch=3,
+                sequence=2,
+                steady_deadline=10.4,
+                request_id="req-2",
+                gesture=5,
+                vx=0.2,
+            ),
+            gid,
+        )
+        assert events == []
+        gate._publish(Velocity(0.0, 0.0), "scan_topology_unqualified")
+        assert [kind for kind, _ in events] == ["output", "feedback"]
+        assert events[0][1].linear.x == 0.0
+        feedback = events[1][1]
+        assert feedback.status == "blocked"
+        assert feedback.reason == "scan_topology_unqualified"
+        assert (feedback.request_id, feedback.gesture, feedback.connection_epoch) == ("req-2", 5, 3)
+    finally:
+        gate.destroy_node()
+        rclpy.shutdown()

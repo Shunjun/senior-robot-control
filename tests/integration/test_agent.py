@@ -38,6 +38,7 @@ from agent_fakes import (
     until,
     velocity,
 )
+from pydantic import ValidationError
 
 from senior_control.agent import Agent, RobotSnapshot
 from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
@@ -50,6 +51,7 @@ from senior_control.agent.snapshots import (
 )
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
+from senior_control.protocol import SnapshotEnvelope
 from senior_control.storage.database import Database
 from senior_control.tasks import Schedule, TaskDefinition, TaskStore
 
@@ -890,6 +892,9 @@ async def test_state_change_is_pushed_without_an_edit(tmp_path: Path) -> None:
     state.execution_status = "navigating"
     await until(lambda: len(link.snapshots) == 3)
     assert link.snapshots[2].execution_status == "navigating"
+    state.navigation_ready = True
+    await until(lambda: len(link.snapshots) == 4)
+    assert link.snapshots[3].navigation_ready is True
     agent.request_shutdown()
     await asyncio.wait_for(runner, timeout=2)
 
@@ -1381,5 +1386,135 @@ async def test_production_velocity_uses_cloud_deadline_without_clock_bypass(rig:
             rig.agent.metrics.series()[("agent_operations_total", "drive.velocity", "succeeded")]
             == 1
         )
+    finally:
+        await finish(task, rig)
+
+
+async def test_clock_unqualified_heartbeat_keeps_status_without_motion(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    class ClockLink(FakeLink):
+        clock_valid = True
+
+        def command_clock_valid(self) -> bool:
+            return self.clock_valid
+
+    link = ClockLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        link.clock_valid = False
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: "disable:1" in rig.motion.events)
+        assert not rig.agent.eligible_for_motion
+        assert rig.agent.connected
+        assert not link.closed
+        assert link.snapshots
+        assert "exit" not in rig.motion.events
+    finally:
+        await finish(task, rig)
+
+
+async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Rig) -> None:
+    from senior_control.agent.connection import HeartbeatFrame
+
+    links = [FakeLink(epoch) for epoch in range(1, 8)]
+    for bad in links[1:6]:
+        bad.drop()
+    for link in links:
+        rig.connector.add(link)
+
+    task = asyncio.create_task(rig.agent.run())
+    try:
+        await until(lambda: rig.agent.connected)
+        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        links[0].drop()
+        await until(lambda: all(bad.closed for bad in links[:6]))
+        assert not rig.agent.eligible_for_motion
+        assert "exit" not in rig.motion.events
+        await until(lambda: rig.agent._epoch == 7)
+        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+        await until(lambda: rig.agent.eligible_for_motion)
+        assert "heartbeat:7" in rig.motion.events
+        assert "exit" not in rig.motion.events
+    finally:
+        await finish(task, rig)
+
+
+async def test_unconfigured_video_offer_does_not_close_the_agent_link(rig: Rig) -> None:
+    from senior_control.protocol import SdpPayload, VideoEnvelope, VideoSdpEnvelope
+
+    class VideoLink(FakeLink):
+        video: asyncio.Queue[VideoEnvelope]
+
+        def __init__(self) -> None:
+            super().__init__(epoch=1)
+            self.video = asyncio.Queue()
+
+        async def send_video(self, envelope: VideoEnvelope) -> None:
+            await self.video.put(envelope)
+
+    link = VideoLink()
+    task = await start(rig, link)
+    try:
+        link.inbox.put_nowait(
+            VideoSdpEnvelope(
+                v=1,
+                type="video.offer",
+                robot_id=ROBOT,
+                session_id="viewer",
+                request_id="offer",
+                seq=1,
+                connection_epoch=1,
+                expires_at=time.time() + 5,
+                payload=SdpPayload(sdp="v=0"),
+            )
+        )
+        result = await asyncio.wait_for(link.video.get(), 0.5)
+        assert result.type == "video.close"
+        assert result.session_id == "viewer"
+        assert rig.agent.connected
+    finally:
+        await finish(task, rig)
+
+
+async def test_navigation_readiness_roundtrip_and_stale_cache(rig: Rig) -> None:
+    task = await start(rig, FakeLink(epoch=1))
+    try:
+        current = await rig.agent.publish_snapshot(ROBOT)
+
+        def frame(snapshot: RobotSnapshot, *, stale: bool = False) -> SnapshotEnvelope:
+            return snapshot_envelope(
+                snapshot,
+                robot_id=ROBOT,
+                session_id="session-1",
+                connection_epoch=1,
+                request_id="snap-ready",
+                seq=1,
+                expires_at=9e9,
+                stale=stale,
+            )
+
+        legacy = frame(current)
+        assert "navigation_ready" not in legacy.model_dump()["payload"]
+        relayed_legacy = SnapshotEnvelope.model_validate_json(legacy.model_dump_json())
+        assert snapshot_from_envelope(relayed_legacy).navigation_ready is None
+        for ready in (False, True):
+            rig.state.navigation_ready = ready
+            live = await rig.agent.publish_snapshot(ROBOT)
+            wire = frame(live)
+            assert wire.model_dump()["payload"]["navigation_ready"] is ready
+            decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+            relayed = snapshot_from_envelope(decoded)
+            assert relayed.navigation_ready is ready
+            assert frame(relayed, stale=True).model_dump()["payload"]["navigation_ready"] is False
+
+        invalid = frame(live).model_dump()
+        for value in ("true", 1, None):
+            invalid["payload"]["navigation_ready"] = value
+            with pytest.raises(ValidationError):
+                SnapshotEnvelope.model_validate(invalid)
     finally:
         await finish(task, rig)

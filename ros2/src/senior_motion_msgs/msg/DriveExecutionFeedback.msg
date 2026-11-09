@@ -1,0 +1,12 @@
+string<=128 robot_id
+string<=128 owner_boot_id
+string<=128 session_id
+string<=128 request_id
+uint64 connection_epoch
+uint64 sequence
+uint64 gesture
+string<=16 status
+float64 vx
+float64 wz
+bool limited
+string<=128 reason

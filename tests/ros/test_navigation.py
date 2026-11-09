@@ -243,3 +243,164 @@ def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
     finally:
         probe.destroy_node()
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize("end", ["succeeded", "failed", "map_changed", "canceled"])
+async def test_qualified_route_runs_in_order(end):
+    import asyncio
+
+    from senior_control.models import MapRef, Pose2D
+    from senior_control.navigation import QualifiedRoute
+
+    goals = []
+    generation = "map-a"
+    arrived = asyncio.Event()
+    release = asyncio.Event()
+
+    async def navigate(pose):
+        goals.append(pose.x)
+        if pose.x == 2:
+            arrived.set()
+            await release.wait()
+        return end != "failed" or pose.x != 2
+
+    route = QualifiedRoute(navigate, lambda ref, nonce: nonce == generation)
+    run = asyncio.create_task(
+        route.run(
+            MapRef("map", 1),
+            "map-a",
+            (
+                Pose2D(1, 0, 0),
+                Pose2D(2, 0, 0),
+                Pose2D(3, 0, 0),
+            ),
+        )
+    )
+    await asyncio.wait_for(arrived.wait(), 1)
+    if end == "map_changed":
+        generation = "map-b"
+    elif end == "canceled":
+        run.cancel()
+    release.set()
+    if end == "canceled":
+        with pytest.raises(asyncio.CancelledError):
+            await run
+    else:
+        assert await run is (end == "succeeded")
+    assert goals == ([1, 2, 3] if end == "succeeded" else [1, 2])
+
+
+@pytest.fixture
+def navigation_source_path(monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root / "ros2/src/senior_robot"))
+
+
+async def test_route_service_reports_actual_index_and_blocks_next_on_lost_reference(
+    navigation_source_path,
+):
+    import asyncio
+
+    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+
+    from senior_control.models import MapRef, OperationResult, OperationStatus
+    from senior_control.navigation import RoutePlan
+
+    class GoalExecutor:
+        def __init__(self):
+            self.started = []
+            self.results = {}
+            self.canceled = []
+
+        async def start(self, goal):
+            self.started.append(goal.pose.x)
+            key = str(len(self.started))
+            self.results[key] = asyncio.get_running_loop().create_future()
+            return key
+
+        async def result(self, key):
+            return await self.results[key]
+
+        async def cancel(self, key):
+            self.canceled.append(key)
+            return OperationResult(key, OperationStatus.SUCCEEDED)
+
+    ref = MapRef("yard", 3)
+    generation = "gen-a"
+    executor = GoalExecutor()
+    service = RouteService(
+        NavigationAdapter(executor), qualified=lambda r, token: (r, token) == (ref, generation)
+    )
+    plan = RoutePlan(
+        execution_id="patrol-1",
+        map_id="yard",
+        reference_revision=3,
+        map_generation=generation,
+        poses=[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+    )
+    assert await service.start(plan)
+    assert service.status("patrol-1").active_waypoint_index == 0
+    executor.results["1"].set_result(True)
+    for _ in range(20):
+        if len(executor.started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert service.status("patrol-1").active_waypoint_index == 1
+    generation = "gen-b"
+    assert await service.cancel("patrol-1")
+    assert service.status("patrol-1").status == "canceled"
+    assert executor.started == [1, 2]
+    assert executor.canceled == ["2"]
+
+
+async def test_starting_route_cannot_inherit_new_connection_epoch(navigation_source_path):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+
+    from senior_control.navigation import RoutePlan
+
+    epoch = 4
+    setup = asyncio.Event()
+    ready = asyncio.Event()
+
+    @asynccontextmanager
+    async def prepare(execution_id):
+        assert execution_id == "old"
+        setup.set()
+        await ready.wait()
+        yield "/control/navigation/run_fixture/cmd_vel"
+
+    class NeverNavigate:
+        async def start(self, goal):
+            pytest.fail("old route attempted to start after reconnect")
+
+        async def result(self, execution_id):
+            pytest.fail("old route attempted to read a result")
+
+    service = RouteService(
+        NavigationAdapter(NeverNavigate()),
+        qualified=lambda _ref, _generation: True,
+        prepare=prepare,
+        connection_epoch=lambda: epoch,
+    )
+    plan = RoutePlan(
+        execution_id="old",
+        map_id="yard",
+        reference_revision=3,
+        map_generation="g",
+        poses=[[1.0, 0.0, 0.0]],
+        connection_epoch=4,
+    )
+    assert await service.start(plan, wait_for_goal=False)
+    await asyncio.wait_for(setup.wait(), 1)
+    epoch = 5
+    ready.set()
+    for _ in range(20):
+        if service.current is None:
+            break
+        await asyncio.sleep(0.01)
+    assert service.status("old").status == "failed"
+    retry = plan.model_copy(update={"execution_id": "stale-queued"})
+    assert not await service.start(retry, wait_for_goal=False)

@@ -109,3 +109,81 @@ def test_token_file_requires_private_permissions(tmp_path: Path) -> None:
         read_token(token)
     token.chmod(0o600)
     assert read_token(token) == "secret"
+
+
+@pytest.mark.parametrize("missing_adapter", [True, False])
+async def test_composition_classifies_adapter_startup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_adapter: bool
+) -> None:
+    from senior_control.agent import composition
+    from senior_control.runtime.ipc import IpcClient
+
+    async def missing_socket(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("adapter is starting")
+
+    async def reject_identity(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+        assert kind == "identity"
+        assert fields["robot_id"] == "robot-a"
+        return {"ok": False}
+
+    def unexpected_connector(*args: object, **kwargs: object) -> None:
+        pytest.fail("cloud connector must wait for adapter identity")
+
+    if missing_adapter:
+        monkeypatch.setattr(composition.asyncio, "open_unix_connection", missing_socket)
+    else:
+        monkeypatch.setattr(IpcClient, "request", reject_identity)
+    monkeypatch.setattr(composition, "WebSocketConnector", unexpected_connector)
+
+    config = AgentConfig(
+        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+    )
+    assert await composition.run_agent(config) == (1 if missing_adapter else 78)
+
+
+async def test_composition_retries_python310_asyncio_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from senior_control.agent import composition
+    from senior_control.runtime.ipc import IpcClient, IpcError
+
+    class LegacyAsyncioTimeout(Exception):
+        pass
+
+    async def timed_out(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+        raise IpcError("ipc request identity failed") from LegacyAsyncioTimeout()
+
+    # //Compatible: asyncio.TimeoutError and builtins.TimeoutError are distinct in Python 3.10.
+    monkeypatch.setattr(composition.asyncio, "TimeoutError", LegacyAsyncioTimeout)
+    monkeypatch.setattr(IpcClient, "request", timed_out)
+    config = AgentConfig(
+        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+    )
+    assert await composition.run_agent(config) == 1
+
+
+@pytest.mark.parametrize("truncated", [True, False])
+async def test_composition_distinguishes_truncated_and_malformed_identity_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, truncated: bool
+) -> None:
+    import asyncio
+
+    from senior_control.agent import composition
+    from senior_control.runtime.ipc import IpcClient, IpcError
+
+    async def invalid_reply(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+        try:
+            try:
+                if truncated:
+                    raise asyncio.IncompleteReadError(b"", 4)
+                raise ValueError("invalid JSON")
+            except (ValueError, asyncio.IncompleteReadError) as exc:
+                raise IpcError("could not read frame") from exc
+        except IpcError as exc:
+            raise IpcError("ipc request identity failed") from exc
+
+    monkeypatch.setattr(IpcClient, "request", invalid_reply)
+    config = AgentConfig(
+        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+    )
+    assert await composition.run_agent(config) == (1 if truncated else 78)

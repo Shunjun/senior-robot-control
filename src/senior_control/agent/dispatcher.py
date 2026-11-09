@@ -71,6 +71,7 @@ class MapPort(Protocol):
 
 
 Action = Callable[[], Awaitable[int | None]]
+NavigationAction = Callable[[str, str, Mapping[str, Any]], Awaitable[None]]
 
 
 class Dispatcher:
@@ -88,6 +89,8 @@ class Dispatcher:
         metrics: Metrics,
         map_root: Path,
         admit: Callable[[OperationEnvelope], None],
+        navigation: NavigationAction | None = None,
+        waypoint_create: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._journal = journal
@@ -98,6 +101,8 @@ class Dispatcher:
         self._metrics = metrics
         self._map_root = map_root
         self._admit = admit
+        self._navigation = navigation
+        self._waypoint_create = waypoint_create
         self._lanes = {"edit": asyncio.Lock(), "map": asyncio.Lock()}
 
     async def run(self, envelope: OperationEnvelope) -> OperationResult:
@@ -223,9 +228,23 @@ class Dispatcher:
                     raise ValueError("enabled must be a boolean")
                 task_id = _text(body, "task_id")
                 return "edit", lambda: self._tasks.set_enabled(task_id, enabled, revision)
+            if kind == "waypoint.create":
+                if expected is not None:
+                    raise ValueError("create takes no expected revision")
+                waypoint_create = self._waypoint_create
+                if waypoint_create is None:
+                    raise DomainError(ErrorCode.UNAVAILABLE, "waypoint editing is unavailable")
+                return "edit", lambda: self._none(waypoint_create(body))
             if kind == "home.set":
                 revision = _required(expected)
                 return "edit", lambda: self._set_home(revision)
+            if kind in {"navigation.goal", "navigation.return_home"}:
+                navigation = self._navigation
+                if navigation is None:
+                    raise DomainError(ErrorCode.UNAVAILABLE, "qualified navigation is unavailable")
+                if expected is not None:
+                    raise ValueError("navigation takes no expected revision")
+                return "edit", lambda: self._none(navigation(kind, operation_id, body))
             if kind == "map.export":
                 map_ref = _map_ref(body)
                 destination = self._transfer_path(body)
@@ -295,16 +314,26 @@ def _map_ref(body: Mapping[str, Any]) -> MapRef:
 class StoreTaskPort:
     """Task edits through ``TaskStore``; the store keeps its own SQL and revision check."""
 
-    def __init__(self, store: TaskStore, *, robot_id: str) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        *,
+        robot_id: str,
+        verify_workspace: Callable[[TaskDefinition, str], Awaitable[None]] | None = None,
+    ) -> None:
         self._store = store
         self._robot_id = robot_id
+        self._verify_workspace = verify_workspace
 
     async def create(self, body: Mapping[str, Any]) -> int:
-        stored = await self._store.create(self._definition(body))
+        definition = self._definition(body)
+        await self._qualify_workspace(body, definition)
+        stored = await self._store.create(definition)
         return stored.revision
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
         definition = self._definition(body)
+        await self._qualify_workspace(body, definition)
         stored = await self._store.update(definition, expected_revision)
         return stored.revision
 
@@ -317,6 +346,19 @@ class StoreTaskPort:
             raise DomainError(ErrorCode.CONFLICT, "task does not exist")
         stored = await self._store.update(replace(current, enabled=enabled), expected_revision)
         return stored.revision
+
+    async def _qualify_workspace(self, body: Mapping[str, Any], definition: TaskDefinition) -> None:
+        # //Compatible: older clients submit without a workspace raster id.
+        if "grid_id" not in body:
+            return
+        grid_id = body["grid_id"]
+        if not isinstance(grid_id, str) or not grid_id.strip() or len(grid_id) > 128:
+            raise DomainError(ErrorCode.VALIDATION, "invalid workspace grid id")
+        if any(not isinstance(point, str) for point in body["waypoint_ids"]):
+            raise DomainError(ErrorCode.VALIDATION, "invalid waypoint id")
+        if self._verify_workspace is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "workspace editing is unavailable")
+        await self._verify_workspace(definition, grid_id)
 
     def _definition(self, body: Mapping[str, Any]) -> TaskDefinition:
         try:

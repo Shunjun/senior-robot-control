@@ -66,6 +66,7 @@ def generate_launch_description():
             Node(
                 package="ros_gz_bridge",
                 executable="parameter_bridge",
+                name="senior_sim_bridge",
                 parameters=[
                     {
                         "config_file": PathJoinSubstitution([share, "config", "bridge.yaml"]),

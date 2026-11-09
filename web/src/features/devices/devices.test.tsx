@@ -26,7 +26,9 @@ import {
   REQUEST_TYPES,
   RESPONSE_REQUEST_TYPES,
   SIMPLE_REQUEST_TYPES,
+  WORKSPACE_REQUEST_TYPES,
   SNAPSHOT_FIELDS,
+  parseInbound,
   type LinkStatus,
   type ResponsePayload,
   type RobotSnapshot,
@@ -244,6 +246,24 @@ describe("device list", () => {
     const beta = within(nav).getByRole("link", { name: /Beta/ });
     expect(within(alpha).getByText("在线")).toBeTruthy();
     expect(within(beta).getByText("离线")).toBeTruthy();
+  });
+
+  it.each([
+    { online: true, label: "在线" },
+    { online: false, label: "离线" },
+  ])("updates from reconnecting to $label after the next robot list response", async ({ online, label }) => {
+    const answers = [
+      reply(200, { robots: [{ ...ALPHA, online: false, reconnecting: true }] }),
+      reply(200, { robots: [{ ...ALPHA, online, reconnecting: false }] }),
+    ];
+    const api = new HttpControlApi((async () => answers.shift()!) as typeof fetch, memoryStorage());
+    mount("/robots", api, new FakeLink());
+
+    const robot = await screen.findByRole("link", { name: /Alpha/ });
+    expect(within(robot).getByText("重连中")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    expect(await within(robot).findByText(label)).toBeTruthy();
   });
 
   it("shows an empty state and a retryable error state", async () => {
@@ -772,7 +792,9 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
     const operations = quoted(/OPERATION_TYPES = \(([^)]*)\)/.exec(protocol)![1]!);
     expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple);
     expect([...OPERATION_REQUEST_TYPES]).toEqual(operations);
-    expect([...REQUEST_TYPES]).toEqual(["drive.velocity", ...simple, ...operations]);
+    const workspace = literalOf(/WorkspaceRequest = Literal\[[^\]]+\]/.exec(protocol)![0]);
+    expect([...WORKSPACE_REQUEST_TYPES]).toEqual(workspace);
+    expect([...REQUEST_TYPES]).toEqual(["drive.velocity", ...simple, ...operations, ...workspace]);
   });
 
   it("mirrors the response request types and error codes", () => {
@@ -1206,4 +1228,211 @@ describe("device pairing", () => {
     await screen.findByText("演示 · 仓库车 A");
     expect(screen.queryByRole("button", { name: "添加设备" })).toBeNull();
   });
+});
+
+describe("operator workspace", () => {
+  async function openWorkspace() {
+    const link = new FakeLink();
+    link.requestImpl = async () => ({ ok: true });
+    mount("/robots/robot-alpha", new FakeApi(), link);
+    await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+    link.emit(snapshot("robot-alpha"));
+    return link;
+  }
+
+  it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
+    await openWorkspace();
+    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    const stop = screen.getByRole("button", { name: "停车" });
+    fireEvent.click(screen.getByRole("button", { name: "地图" }));
+    expect(screen.getByRole("group", { name: "前进后退摇杆" })).toBe(stick);
+    expect(screen.getByRole("button", { name: "停车" })).toBe(stop);
+  });
+
+  it("test_leaving_manual_revokes_gesture_without_rearm", async () => {
+    const link = await openWorkspace();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "获取控制权" })));
+    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    fireEvent.keyDown(stick, { key: "ArrowUp" });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "导航与定位" })));
+    expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(1);
+    expect(link.requests.filter(({ type }) => type === "control.release")).toHaveLength(1);
+    expect(screen.getByText(/停车指令已确认。 控制权已释放。/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "手动驾驶" }));
+    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
+    fireEvent.keyDown(stick, { key: "ArrowUp" });
+    expect(link.requests.filter(({ type }) => type === "drive.velocity")).toHaveLength(1);
+  });
+});
+
+it("keeps an exported map read-only and leaves live navigation cancellation available", async () => {
+  const link = new FakeLink();
+  const current = snapshot("robot-alpha");
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "export-1" };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, display_only: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await screen.findByText("地图导出副本 · 仅供查看");
+  expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("false");
+  for (const name of ["开始导航", "设为 Home", "返航", "确认目标"]) {
+    expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  }
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "任务管理" }));
+  await screen.findByText("地图导出副本 · 仅供查看");
+  expect((screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(link.requests.some(({ type }) => type === "waypoint.list")).toBe(false);
+});
+
+it("test_latency_ignores_old_or_unapplied_ack", async () => {
+  const { client, socket } = await connected();
+  const onFeedback = vi.fn();
+  const unsubscribe = client.subscribeDriveFeedback(onFeedback);
+  try {
+    socket.receive({ type: "drive.timing", robot_id: "robot-alpha", connection_epoch: AGENT_EPOCH });
+    const probe = socket.lastSent();
+    socket.receive({
+      type: "drive.clock.reply", nonce: probe["nonce"], t2: 1, t3: 1,
+      connection_epoch: AGENT_EPOCH, ready: true,
+    });
+    const acquire = client.request("control.acquire", {});
+    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
+    await acquire;
+    const velocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const sample = socket.lastSent();
+    respondTo(socket, sample, { request_type: "drive.velocity", ok: true });
+    await velocity;
+    expect(onFeedback).not.toHaveBeenCalled();
+    const feedback = {
+      ...sample, type: "drive.feedback",
+      gesture: (sample["payload"] as { gesture: number }).gesture,
+      status: "applied", vx: 0.1, wz: 0, limited: true,
+    };
+    socket.receive({ ...feedback, connection_epoch: AGENT_EPOCH - 1 });
+    socket.receive({ ...feedback, seq: Number(sample["seq"]) - 1 });
+    socket.receive({ ...feedback, gesture: feedback.gesture + 1 });
+    expect(onFeedback).not.toHaveBeenCalled();
+    socket.receive(feedback);
+    expect(onFeedback).toHaveBeenCalledOnce();
+    expect(onFeedback).toHaveBeenCalledWith(expect.objectContaining({
+      status: "applied", vx: 0.1, limited: true, latencyMs: expect.any(Number),
+    }));
+
+    const lastVelocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
+    const stoppedSample = socket.lastSent();
+    const stop = client.request("drive.stop", {});
+    respondTo(socket, socket.lastSent(), { request_type: "drive.stop", ok: true });
+    await stop;
+    respondTo(socket, stoppedSample, { request_type: "drive.velocity", ok: true });
+    await lastVelocity;
+    socket.receive({ ...stoppedSample, type: "drive.feedback", gesture: feedback.gesture,
+      status: "applied", vx: 0.2, wz: 0, limited: false });
+    expect(onFeedback).toHaveBeenCalledOnce();
+  } finally {
+    unsubscribe();
+    client.disconnect();
+  }
+});
+
+it("sends an eligible goal and return with the current map fence", async () => {
+  const link = new FakeLink();
+  const base = snapshot("robot-alpha");
+  const current = { ...base, home: { waypoint_id: "home", status: "confirmed", map_ref: base.map_ref! } };
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "live-grid" };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, navigation_ready: true, waypoint_writes: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
+  await screen.findByText(/车端已受理目标/);
+  fireEvent.click(screen.getByRole("button", { name: "返航" }));
+  await screen.findByText(/车端已受理返航/);
+  expect(link.requests).toEqual(expect.arrayContaining([
+    { type: "navigation.goal", payload: expect.objectContaining({
+      body: { ...current.map_ref, grid_id: "live-grid", x: 0.5, y: 0.5, yaw: 0 },
+    }) },
+    { type: "navigation.return_home", payload: expect.objectContaining({
+      body: { ...current.map_ref, grid_id: "live-grid" },
+    }) },
+  ]));
+});
+
+it("validates optional snapshot navigation readiness", () => {
+  expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", wirePayload)))?.payload)
+    .not.toHaveProperty("navigation_ready");
+  for (const navigation_ready of [false, true]) {
+    expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, navigation_ready })))?.payload)
+      .toHaveProperty("navigation_ready", navigation_ready);
+  }
+  for (const navigation_ready of [null, "true", 1]) {
+    expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, navigation_ready })))).toBeNull();
+  }
+});
+
+it("updates navigation readiness from snapshots without reloading the map", async () => {
+  const link = new FakeLink();
+  const base = snapshot("robot-alpha");
+  const current = {
+    ...base,
+    map_generation: "live-grid",
+    home: { waypoint_id: "home", status: "confirmed", map_ref: base.map_ref! },
+  };
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: current.map_generation };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: {
+      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
+      tile_size: 32, navigation_ready: true,
+    } };
+    if (type === "map.tile") return { data: {
+      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
+    } };
+    return { ok: true };
+  };
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit({ ...current, navigation_ready: false });
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await waitFor(() => expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("true"));
+  const returnHome = () => screen.getByRole("button", { name: "返航" }) as HTMLButtonElement;
+  expect(returnHome().disabled).toBe(true);
+  link.emit({ ...current, navigation_ready: true });
+  expect(returnHome().disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
+  const goal = () => screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement;
+  expect(goal().disabled).toBe(false);
+  link.emit({ ...current, navigation_ready: true, route_progress: {
+    execution_id: "route-1", task_id: null, map_generation: "live-grid",
+    status: "cancel_pending", active_waypoint_index: 0,
+  } });
+  expect(returnHome().disabled).toBe(true);
+  expect(goal().disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  link.emit({ ...current, navigation_ready: false });
+  expect(returnHome().disabled).toBe(true);
+  expect(link.requests.map(({ type }) => type)).toEqual(["map.manifest", "map.tile"]);
 });

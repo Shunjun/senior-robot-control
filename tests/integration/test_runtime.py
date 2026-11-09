@@ -209,10 +209,11 @@ async def test_auth_failure_does_not_retry_forever() -> None:
         connect=flaky,
         heartbeat_seconds=0.02,
         retry_delay=0.01,
+        max_retry_delay=0.02,
     )
     async with retrying:
         await settle(0.3)
-        assert attempts["network"] >= 3
+        assert attempts["network"] >= 6
         assert retrying.state == "reconnecting"
 
 

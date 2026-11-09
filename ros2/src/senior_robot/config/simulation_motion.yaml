@@ -88,5 +88,5 @@ command_node:
   ros__parameters:
     use_sim_time: true
     heartbeat_seconds: 0.2
-    disconnect_seconds: 1.0
+    disconnect_seconds: 2.0
     command_ttl_seconds: 0.3

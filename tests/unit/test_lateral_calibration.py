@@ -18,7 +18,7 @@ PROFILE = ROOT / "ros2/src/senior_robot/config/simulation_motion_flat_lateral.ya
 BASE_PROFILE = ROOT / "ros2/src/senior_robot/config/simulation_motion.yaml"
 ROBOT = ROOT / "ros2/src/senior_sim/urdf/senior.urdf.xacro"
 WORLD = ROOT / "tests/fixtures/fortress_lateral_calibration_world.sdf"
-BASE_WORLD = ROOT / "tests/ros/motion_qualification.sdf"
+BASE_WORLD = ROOT / "ros2/src/senior_sim/worlds/motion_qualification.sdf"
 
 
 def test_empirical_flat_fortress_lateral_stopping_envelope():

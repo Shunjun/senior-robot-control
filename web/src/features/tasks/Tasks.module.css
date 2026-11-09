@@ -20,3 +20,37 @@
 .taskRow { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0; }
 .taskRow code { flex: 1; color: var(--teal); }
 .taskRow button { min-height: 34px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+}
+.map { min-width: 0; min-height: 0; overflow: auto; }
+.workspace .panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 8px;
+  gap: 6px;
+}
+.header, .footer { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.footer { justify-content: end; border-top: 1px solid var(--line); padding-top: 6px; }
+.footer p { margin: 0; flex: 1 0 100%; overflow-wrap: anywhere; }
+.body { min-width: 0; overflow: auto; }
+.fields { margin: 0; padding: 6px; min-width: 0; border: 1px solid var(--line); }
+.route { padding-inline-start: 24px; }
+.route li::marker { color: var(--teal); }
+.drawerToggle { display: none; }
+.taskRow { flex-wrap: wrap; }
+.taskRow select { min-height: 34px; max-width: 100%; }
+.taskRow code { overflow-wrap: anywhere; }
+
+@media (max-width: 680px) {
+  .workspace { grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
+  .workspace .panel { max-height: 52dvh; }
+  .drawerToggle { display: block; margin-inline-start: auto; min-height: 34px; }
+  .panel[data-open="false"] .body, .panel[data-open="false"] .footer { display: none; }
+}

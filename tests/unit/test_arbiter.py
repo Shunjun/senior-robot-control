@@ -492,3 +492,107 @@ def test_same_session_reacquire_retires_old_velocity():
     assert arbiter.final_command(0.04) is None
     assert arbiter.accept(command("drive.velocity", seq=4, vx=0.2), 0.05).accepted
     assert arbiter.tick(0.06) == Velocity(0.2, 0.0)
+
+
+def test_remote_hold_floor_after_valid_admission():
+    for arrival, issued, expected in (
+        (1.276, 1.0, 1.650),
+        (1.600, 1.1, 1.800),
+        (1.650, 1.2, None),
+        (1.601, 1.1, None),
+    ):
+        arbiter = gate()
+        assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+        sample = VelocityPayload(
+            vx=0.2,
+            wz=0.0,
+            gesture=1,
+            sampled_at=10.0,
+            server_issued_at=20.0,
+            server_deadline=20.65,
+        )
+        velocity = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+        result = arbiter.accept(velocity, arrival, received_at=issued, local_deadline=1.650)
+        assert result.accepted is (expected is not None)
+        final = arbiter.final_command(arrival)
+        if expected is None:
+            assert final is None
+        else:
+            assert final is not None
+            assert final[-1] == expected
+            assert arbiter.tick(expected) == Velocity(0.0, 0.0)
+
+
+def test_stopped_gesture_rejects_higher_sequence_and_old_epoch():
+    arbiter = gate()
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    stop = command("drive.stop", seq=2).model_copy(update={"payload": EmptyPayload(gesture=1)})
+    assert arbiter.accept(stop, 1.1).accepted
+
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.4
+    )
+    queued = command("drive.velocity", seq=3).model_copy(update={"payload": sample})
+    assert not arbiter.accept(queued, 1.15, received_at=1.0, local_deadline=1.4).accepted
+    fresh = queued.model_copy(update={"payload": sample.model_copy(update={"gesture": 2})})
+    assert arbiter.accept(fresh, 1.15, received_at=1.0, local_deadline=1.4).accepted
+    assert arbiter.accept(command("control.acquire", seq=1, epoch=2), 1.2).accepted
+    assert not arbiter.accept(fresh, 1.21, received_at=1.0, local_deadline=1.4).accepted
+
+
+def test_bound_navigation_expires_and_old_run_cannot_restart_motion() -> None:
+    arbiter = Arbiter(ROBOT, 0.2, 2.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 2.5)
+    assert arbiter.begin_navigation("route-a", 1.0)
+    assert arbiter.accept_navigation_sample("route-a", 1, Velocity(0.1, 0), 1.0, 1.05)
+    assert arbiter.final_command(1.10) == (Velocity(0.1, 0), "route-a", 1, 1, 1.3)
+    assert not arbiter.accept_navigation_sample("route-a", 1, Velocity(0.1, 0), 1.1, 1.1)
+    assert arbiter.final_command(1.30) is None
+    arbiter.end_navigation("route-a")
+    assert arbiter.begin_navigation("route-b", 1.35)
+    assert not arbiter.accept_navigation_sample("route-a", 2, Velocity(0.1, 0), 1.35, 1.35)
+    assert not arbiter.accept_navigation_sample("route-b", 1, Velocity(0.1, 0), 1.35, 1.7)
+    arbiter.disconnect(1)
+    assert not arbiter.accept_navigation_sample("route-b", 2, Velocity(0.1, 0), 1.7, 1.7)
+    assert arbiter.final_command(1.75) is None
+
+
+def test_timed_dropped_stop_and_duplicate_cannot_extend_execution():
+    arbiter = gate(require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 2.0)
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.4
+    )
+    motion = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+    assert arbiter.accept(motion, 1.3, received_at=1.0, local_deadline=1.4).accepted
+    # The operator released the stick, but the stop packet never arrived. Replaying the
+    # last speed within its original admission window must not refresh its hold floor.
+    replay = arbiter.accept(motion, 1.39, received_at=1.0, local_deadline=1.4)
+    assert not replay.accepted
+    final = arbiter.final_command(1.49)
+    assert final is not None and final[-1] == 1.5
+    assert arbiter.tick(1.49) == Velocity(0.2, 0.0)
+    assert arbiter.tick(1.5) == Velocity(0.0, 0.0)
+    assert arbiter.final_command(1.5) is None
+
+
+def test_timed_half_open_heartbeat_revokes_motion_before_sample_deadline():
+    arbiter = gate(require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 1.0, 1.6)
+    assert arbiter.accept(command("control.acquire", seq=1), 1.0).accepted
+    sample = VelocityPayload(
+        vx=0.2, wz=0.0, gesture=1, sampled_at=10.0, server_issued_at=20.0, server_deadline=20.6
+    )
+    motion = command("drive.velocity", seq=2).model_copy(update={"payload": sample})
+    assert arbiter.accept(motion, 1.45, received_at=1.1, local_deadline=1.7).accepted
+    assert arbiter.tick(1.59) == Velocity(0.2, 0.0)
+    # Cloud heartbeats stopped while the socket stayed open. The speed's own
+    # compensated cutoff (1.7) cannot outlive the independent heartbeat lease.
+    assert arbiter.tick(1.6) == Velocity(0.0, 0.0)
+    assert not arbiter.server_heartbeat(1, 1.61, 2.0)
+    assert arbiter.server_heartbeat(2, 1.62, 2.0)
+    assert arbiter.accept(command("control.acquire", seq=1, epoch=2), 1.62).accepted
+    delayed = motion.model_copy(update={"seq": 3})
+    assert not arbiter.accept(delayed, 1.63, received_at=1.1, local_deadline=1.7).accepted
+    assert arbiter.tick(1.63) == Velocity(0.0, 0.0)

@@ -43,7 +43,13 @@ class Relocalizer:
     async def begin(self, map_ref: MapRef, hint: PoseHint | None) -> OperationResult:
         if map_ref != self._map_ref:
             return self._fail("map reference mismatch")
-        matched = self._scan_match(self._seed(hint))
+        self.ready = False
+        self.pose = None
+        self.reason = "matching"
+        try:
+            matched = self._scan_match(self._seed(hint))
+        except DomainError as exc:
+            return self._fail(str(exc))
         if matched is None or not matched[1]:
             return self._fail("no reliable match")
         self.ready = True

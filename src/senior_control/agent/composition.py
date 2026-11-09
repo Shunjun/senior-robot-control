@@ -2,25 +2,33 @@
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from senior_control.agent.connection import IpcMotion
+from senior_control.agent.direct_navigation import DirectNavigation
 from senior_control.agent.dispatcher import StoreTaskPort
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.main import Agent
 from senior_control.agent.ports import IpcHomePort, IpcMapPort, IpcNavigation, IpcState
 from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
+from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError
-from senior_control.runtime.ipc import IpcClient
+from senior_control.mapping.workspace_export import load_exported_grid
+from senior_control.models import MapRef
+from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
 from senior_control.tasks.runtime import TaskRuntime
+from senior_control.vision.simulation_video import LatestFrameFile
+from senior_control.vision.stream import AiortcPeerFactory, VideoSession
 from senior_control.waypoints.store import WaypointStore
 
 logger = logging.getLogger("senior_control.agent")
@@ -33,6 +41,9 @@ class AgentConfig:
     device_token: str = field(repr=False)
     database_path: Path
     socket_path: Path
+    workspace_map_bundle: Path | None = None
+    workspace_map_sha256: str | None = None
+    simulation_video_frame: Path | None = None
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -42,26 +53,57 @@ class AgentConfig:
             raise ValueError("cloud URL must use authenticated TLS")
         if not self.database_path.is_absolute() or not self.socket_path.is_absolute():
             raise ValueError("database and socket paths must be absolute")
+        if (self.workspace_map_bundle is None) != (self.workspace_map_sha256 is None):
+            raise ValueError("workspace map bundle and SHA-256 must be configured together")
+        if self.workspace_map_bundle is not None and not self.workspace_map_bundle.is_absolute():
+            raise ValueError("workspace map bundle path must be absolute")
+        if self.workspace_map_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.workspace_map_sha256
+        ):
+            raise ValueError("workspace map SHA-256 must be 64 lowercase hexadecimal digits")
+        if (
+            self.simulation_video_frame is not None
+            and not self.simulation_video_frame.is_absolute()
+        ):
+            raise ValueError("simulation video slot must have an absolute path")
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "AgentConfig":
         try:
+            bundle = environment.get("SENIOR_WORKSPACE_MAP_BUNDLE")
+            video = environment.get("SENIOR_SIMULATION_VIDEO_FRAME")
             return cls(
                 robot_id=environment["SENIOR_ROBOT_ID"],
                 cloud_url=environment["SENIOR_CLOUD_URL"],
                 device_token=environment["SENIOR_DEVICE_TOKEN"],
                 database_path=Path(environment["SENIOR_DATABASE_PATH"]),
                 socket_path=Path(environment["SENIOR_AGENT_SOCKET"]),
+                workspace_map_bundle=Path(bundle) if bundle is not None else None,
+                workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
+                simulation_video_frame=Path(video) if video is not None else None,
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
 
 
+@dataclass(frozen=True)
+class _ControlViewer:
+    robot_id: str
+    role: str = "control"
+
+
 class SnapshotState:
-    def __init__(self, state: IpcState, tasks: TaskStore, waypoints: WaypointStore) -> None:
+    def __init__(
+        self,
+        state: IpcState,
+        tasks: TaskStore,
+        waypoints: WaypointStore,
+        workspace: WorkspaceReader | None = None,
+    ) -> None:
         self._state = state
         self._tasks = tasks
         self._waypoints = waypoints
+        self._workspace = workspace
 
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
@@ -73,17 +115,23 @@ class SnapshotState:
         except DomainError:
             return LiveState(
                 False,
-                None,
+                await self._workspace.active_map() if self._workspace else None,
                 home.waypoint if home else None,
                 task_revision,
                 "unavailable",
                 tasks=summaries,
                 deleted_task_ids=deleted_task_ids,
+                navigation_ready=False,
             )
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
+        localized = (
+            state.localized
+            and state.map_generation is not None
+            and state.map_generation == state.localization_generation
+        )
         return LiveState(
-            False,
+            localized,
             state.map_ref,
             home.waypoint if home else None,
             task_revision,
@@ -91,6 +139,9 @@ class SnapshotState:
             runnable,
             summaries,
             deleted_task_ids,
+            map_generation=state.map_generation,
+            route_progress=state.route_progress,
+            navigation_ready=localized and state.map_ref is not None and state.navigation_ready,
         )
 
 
@@ -110,30 +161,86 @@ async def run_agent(config: AgentConfig) -> int:
             IpcClient(config.socket_path),
             heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
+            feedback_client=IpcClient(config.socket_path),
+            safety_client=IpcClient(config.socket_path),
         )
         try:
             await motion.verify_robot(config.robot_id)
+        except IpcError as exc:
+            await motion.close()
+            cause = exc.__cause__
+            while isinstance(cause, IpcError):
+                cause = cause.__cause__
+            # //Compatible: Python 3.10 has distinct asyncio and built-in timeout types.
+            if isinstance(
+                cause,
+                (
+                    FileNotFoundError,
+                    ConnectionError,
+                    asyncio.IncompleteReadError,
+                    asyncio.TimeoutError,
+                    TimeoutError,
+                ),
+            ):
+                logger.warning("ROS adapter identity check could not reach the adapter")
+                return 1
+            logger.exception("ROS adapter identity check failed")
+            return 78
         except Exception:
-            logger.exception("ROS adapter identity does not match the paired robot")
+            logger.exception("ROS adapter identity check failed")
             await motion.close()
             return 78
         state_client = IpcClient(config.socket_path)
         map_client = IpcClient(config.socket_path)
-        navigation_client = IpcClient(config.socket_path)
+        navigation_client = IpcClient(config.socket_path, timeout=3.0)
+        workspace_client = IpcClient(config.socket_path)
+        display_client = IpcClient(config.socket_path)
         state = IpcState(state_client)
+        exported_grid = None
+        if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
+            try:
+                exported_grid = await asyncio.to_thread(
+                    load_exported_grid,
+                    config.workspace_map_bundle,
+                    config.workspace_map_sha256,
+                    config.robot_id,
+                )
+            except (DomainError, OSError):
+                logger.warning("configured workspace display map is unavailable", exc_info=True)
+        workspace = WorkspaceReader(
+            config.robot_id, tasks, waypoints, workspace_client, exported_grid=exported_grid
+        )
+        display = WorkspaceReader(
+            config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
+        )
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
-        navigation = IpcNavigation(navigation_client)
         agent: Agent
+        navigation = IpcNavigation(
+            navigation_client, waypoints, connection_epoch=lambda: agent.connection_epoch
+        )
+        context = ExecutionContext(False, False, False, False, None)
+
+        def qualified_reference(ref: MapRef, generation: str) -> bool:
+            return (
+                context.localized
+                and context.safety_clear
+                and not context.manual_driving
+                and context.active_map == ref
+                and context.map_generation == context.localization_generation == generation
+            )
+
         executor = TaskExecutor(
             database,
             tasks,
             navigation,
             link_up=lambda: agent.eligible_for_motion,
             generation=lambda: agent.continuity_generation,
+            qualified_reference=qualified_reference,
         )
         runtime = TaskRuntime(tasks, executor, generation=lambda: agent.continuity_generation)
 
         async def task_loop() -> None:
+            nonlocal context
             while True:
                 try:
                     live = await state.read()
@@ -146,24 +253,56 @@ async def run_agent(config: AgentConfig) -> int:
                         live.safety_clear,
                         live.manual_driving,
                         live.map_ref,
+                        map_generation=live.map_generation if live.navigation_ready else None,
+                        localization_generation=live.localization_generation,
                     )
                 await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
+        video_path = config.simulation_video_frame
+        if video_path is not None and find_spec("aiortc") is None:
+            logger.warning("simulation video disabled because the video extra is unavailable")
+            video_path = None
+        video_factory: AiortcPeerFactory | None = None
+
+        def video_session() -> VideoSession | None:
+            nonlocal video_factory
+            if video_path is None:
+                return None
+            if video_factory is None:
+                video_factory = AiortcPeerFactory()
+            return VideoSession(
+                robot_id=config.robot_id,
+                viewer=_ControlViewer(config.robot_id),
+                source=LatestFrameFile(video_path),
+                factory=video_factory,
+            )
+
         async def cleanup() -> None:
             await asyncio.gather(
-                state_client.close(), map_client.close(), navigation_client.close()
+                state_client.close(),
+                map_client.close(),
+                navigation_client.close(),
+                workspace_client.close(),
+                display_client.close(),
             )
+            if video_factory is not None:
+                await asyncio.to_thread(video_factory.close)
 
         agent = Agent(
             config.robot_id,
             connector=WebSocketConnector(config.cloud_url, config.device_token, config.robot_id),
             journal=journal,
-            tasks=StoreTaskPort(tasks, robot_id=config.robot_id),
+            tasks=StoreTaskPort(
+                tasks, robot_id=config.robot_id, verify_workspace=workspace.verify_task_edit
+            ),
             home=home,
             maps=IpcMapPort(map_client),
-            state=SnapshotState(state, tasks, waypoints),
+            state=SnapshotState(state, tasks, waypoints, display),
+            workspace=workspace,
+            navigation=DirectNavigation(state, workspace, waypoints, navigation),
             motion=motion,
+            video_session=video_session,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
             background={"tasks": task_loop},

@@ -205,3 +205,49 @@
     padding: var(--space-2) var(--space-4);
   }
 }
+
+/* Vehicle workspace fills the dynamic viewport. Scrolling stays inside its panels. */
+.app:has(.shell[data-workspace="true"]) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.shell[data-workspace="true"] {
+  grid-template-columns: minmax(175px, 230px) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "header header" "notice notice" "side main";
+}
+
+.shell[data-workspace="true"] .header { padding: 4px 12px; }
+.shell[data-workspace="true"] .side { overflow: auto; }
+.shell[data-workspace="true"] .main { padding: 6px; min-height: 0; }
+.switchDevice { display: none; }
+
+@media (max-width: 860px), (max-height: 520px) {
+  .shell[data-workspace="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "header" "notice" "main";
+  }
+
+  .shell[data-workspace="true"] .brandTag { display: none; }
+  .shell[data-workspace="true"] .brandName { font-size: 15px; }
+  .shell[data-workspace="true"] .logout { min-height: 32px; padding: 0 6px; }
+  .switchDevice {
+    display: block;
+    margin-inline-start: auto;
+    min-height: 32px;
+    color: var(--ink);
+    background: var(--graphite-900);
+    border: 1px solid var(--line);
+  }
+  .shell[data-workspace="true"] .side {
+    display: none;
+    position: fixed;
+    z-index: 30;
+    inset: auto 0 0;
+    max-height: 75dvh;
+    background: var(--graphite-900);
+    border-top: 1px solid var(--line);
+  }
+  .shell[data-workspace="true"] .side[data-open="true"] { display: block; }
+}

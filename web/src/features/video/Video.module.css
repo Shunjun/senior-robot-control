@@ -10,3 +10,21 @@
 .facts div { padding: var(--space-2); background: var(--graphite-900); }
 .facts dt { color: var(--ink-dim); font-size: 12px; }
 .facts dd { margin: 0; font-family: var(--font-data); }
+
+.panel[data-compact="true"] {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
+  padding: 4px;
+}
+.panel[data-compact="true"] .kicker,
+.panel[data-compact="true"] .facts { display: none; }
+.panel[data-compact="true"] h3 { font-size: 13px; }
+.panel[data-compact="true"] .viewport { min-height: 0; }
+.panel[data-compact="true"] .viewport video {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  object-fit: contain;
+}

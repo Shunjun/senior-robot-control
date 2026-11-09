@@ -136,3 +136,29 @@ async def test_legacy_navigation_ipc_cannot_report_unqualified_task_start(tmp_pa
         await IpcNavigation(client).start("run-1", task)
     assert error.value.code is ErrorCode.UNAVAILABLE
     assert client.calls == []
+
+
+async def test_stop_uses_an_independent_motion_ipc_client() -> None:
+    from unittest.mock import AsyncMock
+
+    from senior_control.agent.connection import IpcMotion
+    from senior_control.protocol import SimpleEnvelope
+
+    motion_ipc = AsyncMock()
+    safety_ipc = AsyncMock()
+    safety_ipc.request.return_value = {"ok": True}
+    stop = SimpleEnvelope(
+        type="drive.stop",
+        robot_id="robot-a",
+        session_id="session",
+        connection_epoch=1,
+        seq=1,
+        expires_at=5.0,
+        v=1,
+        request_id="stop",
+        payload={},
+    )
+    motion = IpcMotion(motion_ipc, safety_client=safety_ipc)
+    await motion.stop(stop)
+    motion_ipc.request.assert_not_awaited()
+    safety_ipc.request.assert_awaited_once()

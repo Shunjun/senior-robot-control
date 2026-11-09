@@ -13,6 +13,7 @@ import aiosqlite
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.references import WaypointBinding
 from senior_control.models import MapRef, Pose2D
+from senior_control.navigation import MAX_ROUTE_WAYPOINTS
 from senior_control.storage.database import Database
 
 WAYPOINT_STATEMENTS: tuple[str, ...] = (
@@ -150,6 +151,61 @@ class WaypointStore:
             await connection.rollback()
         return tuple(_stored(row, adopted=None, link_status=None) for row in rows)
 
+    async def route_poses(
+        self, map_ref: MapRef, waypoint_ids: tuple[str, ...]
+    ) -> tuple[Pose2D, ...]:
+        if not 1 <= len(waypoint_ids) <= MAX_ROUTE_WAYPOINTS:
+            raise DomainError(ErrorCode.VALIDATION, "route waypoint count is invalid")
+        placeholders = ", ".join("?" for _ in waypoint_ids)
+        async with self._database.write_lock:
+            connection = self._database.connection
+            async with connection.execute(
+                f"""
+                SELECT waypoint_id, x, y, yaw FROM waypoint
+                WHERE robot_id = ? AND map_id = ? AND reference_revision = ?
+                    AND waypoint_id IN ({placeholders}) AND status = 'confirmed'
+                    AND (kind = 'waypoint' OR EXISTS (
+                        SELECT 1 FROM map_home_link AS link
+                        WHERE link.robot_id = waypoint.robot_id
+                          AND link.waypoint_id = waypoint.waypoint_id
+                          AND link.adopted = 1 AND link.status = 'confirmed'
+                    ))
+                """,
+                (self._robot_id, map_ref.map_id, map_ref.reference_revision, *waypoint_ids),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            await connection.rollback()
+        poses = {_text(row[0]): Pose2D(float(row[1]), float(row[2]), float(row[3])) for row in rows}
+        try:
+            return tuple(poses[waypoint_id] for waypoint_id in waypoint_ids)
+        except KeyError as exc:
+            raise DomainError(ErrorCode.CONFLICT, "route waypoint is unavailable") from exc
+
+    async def page(self, map_ref: MapRef, after: str, limit: int) -> tuple[StoredWaypoint, ...]:
+        async with self._database.write_lock:
+            connection = self._database.connection
+            async with connection.execute(
+                """
+                SELECT waypoint_id, kind, x, y, yaw, map_id, reference_revision,
+                       anchor_id, source_robot_id, status, latitude, longitude,
+                       anchor_x, anchor_y, anchor_yaw
+                FROM waypoint
+                WHERE robot_id = ? AND map_id = ? AND reference_revision = ?
+                    AND waypoint_id > ? AND status = 'confirmed'
+                    AND (kind = 'waypoint' OR EXISTS (
+                        SELECT 1 FROM map_home_link AS link
+                        WHERE link.robot_id = waypoint.robot_id
+                          AND link.waypoint_id = waypoint.waypoint_id
+                          AND link.adopted = 1 AND link.status = 'confirmed'
+                    ))
+                ORDER BY waypoint_id LIMIT ?
+                """,
+                (self._robot_id, map_ref.map_id, map_ref.reference_revision, after, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            await connection.rollback()
+        return tuple(_stored(row, adopted=None, link_status=None) for row in rows)
+
     async def save_home(
         self,
         *,
@@ -192,6 +248,7 @@ class WaypointStore:
         status: str,
         latitude: float | None,
         longitude: float | None,
+        create_only: bool = False,
     ) -> Waypoint:
         return await self._save(
             waypoint_id=waypoint_id,
@@ -205,6 +262,7 @@ class WaypointStore:
             adopted=None,
             latitude=latitude,
             longitude=longitude,
+            create_only=create_only,
         )
 
     async def sync_poses(self, bindings: tuple[WaypointBinding, ...]) -> None:
@@ -246,12 +304,19 @@ class WaypointStore:
         latitude: float | None,
         longitude: float | None,
         expected_revision: int | None = None,
+        create_only: bool = False,
     ) -> Waypoint:
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 if kind == "home":
                     await self._bump_home_revision(connection, expected_revision)
                 target = await self._target_id(connection, kind, waypoint_id)
+                if create_only:
+                    async with connection.execute(
+                        "SELECT 1 FROM waypoint WHERE waypoint_id = ?", (target,)
+                    ) as cursor:
+                        if await cursor.fetchone() is not None:
+                            raise DomainError(ErrorCode.CONFLICT, "waypoint id already exists")
                 await _write_waypoint(
                     connection,
                     waypoint_id=target,

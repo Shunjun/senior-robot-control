@@ -77,6 +77,7 @@ class WsClient:
         self._task: asyncio.Task[None] | None = None
         self.accepted = False
         self.closed = False
+        self.close_code: int | None = None
         self.response_headers: dict[bytes, bytes] = {}
 
     async def connect(self) -> bool:
@@ -112,6 +113,7 @@ class WsClient:
             text = message.get("text")
             return text.encode() if text is not None else message.get("bytes")
         self.closed = True
+        self.close_code = message.get("code")
         return None
 
     async def aclose(self) -> None:
@@ -306,6 +308,7 @@ async def test_revoked_device_cannot_reconnect(cloud: Cloud) -> None:
 
     assert await before.receive() is None
     assert before.closed is True
+    assert before.close_code == 4403
     after = await cloud.agent(token)
     assert await after.connect() is False
 

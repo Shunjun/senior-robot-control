@@ -1671,3 +1671,43 @@ async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
         assert row is not None and row[0] == execution_id
         assert isinstance(row[1], str) and len(row[1]) == 32
         assert await journal.safety.pending()
+
+
+async def test_navigation_adapter_cancels_route_when_reference_changes():
+    from senior_control.models import OperationResult, OperationStatus
+
+    adapter_module = navigation_module()
+    generation = "first"
+    entered = asyncio.Event()
+    goals = []
+    canceled = []
+
+    class Executor:
+        async def start(self, goal):
+            goals.append(goal.pose.x)
+            return str(len(goals))
+
+        async def result(self, execution_id):
+            if execution_id == "2":
+                entered.set()
+                await asyncio.Future()
+            return True
+
+        async def cancel(self, execution_id):
+            canceled.append(execution_id)
+            return OperationResult(execution_id, OperationStatus.SUCCEEDED)
+
+    adapter = adapter_module.NavigationAdapter(Executor())
+    route = asyncio.create_task(
+        adapter.run_route(
+            MapRef("map", 1),
+            generation,
+            (Pose2D(1, 0, 0), Pose2D(2, 0, 0), Pose2D(3, 0, 0)),
+            qualified=lambda _ref, nonce: nonce == generation,
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    generation = "second"
+    assert await asyncio.wait_for(route, 1) is False
+    assert goals == [1, 2]
+    assert canceled == ["2"]

@@ -398,3 +398,25 @@
     grid-template-columns: 1fr;
   }
 }
+
+.mapPanel[data-compact="true"] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  clip-path: none;
+  gap: 4px;
+  padding: 4px;
+}
+.mapPanel[data-compact="true"] .surface {
+  flex: 1;
+  min-height: 0;
+}
+.mapPanel[data-compact="true"] .tool { min-height: 32px; padding-inline: 6px; }
+.mapPanel[data-compact="true"] .hint { margin: 0; }
+.waypointMarker circle { fill: var(--graphite-900); stroke: var(--teal); stroke-width: 2; }
+.waypointMarker[data-selectable="true"] { pointer-events: auto; cursor: pointer; }
+.waypointMarker[data-highlighted="true"] circle,
+.waypointMarker:focus-visible circle { fill: var(--amber); stroke: var(--ink); }
+.taskRoute { stroke: var(--teal); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
+.routeNumber { fill: var(--ink); paint-order: stroke; stroke: var(--graphite-950); stroke-width: 3; }

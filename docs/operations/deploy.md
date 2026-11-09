@@ -13,8 +13,10 @@ FRP、Nginx、Caddy 与证书续期的实际排障记录见[部署复盘与排�
 Compose 只运行一个云进程（其中包含中继与登录限流器）、Caddy 和 coturn。ROS、DDS
 及机器人代理不进入 Compose，也不向公网发布。
 
-当前机器人 agent 的进程入口尚未装配 connector、数据库和 ROS IPC；执行 unit 会以非零
-状态失败。入口完成并经过 Linux 集成验证前，不得启用 `senior-agent.service`。
+机器人 Agent 入口会打开车端数据库，核对本地 ROS IPC 适配器的机器人 ID，再连接云端
+WebSocket。安装 `senior-agent.service` 前，确认适配器已监听，且服务账号可以连接
+`SENIOR_AGENT_SOCKET` 并写入 `SENIOR_DATABASE_PATH` 所在目录。入口和环境变量见
+[车端配对与启动说明](../../README.md)。目标 Linux 上的 systemd 启停与重启仍需验收。
 
 ## 准备和 TLS
 
@@ -109,3 +111,31 @@ Jenkins 专用 Compose 为 cloud 和 Caddy 使用内部网络 `172.29.231.0/24`�
 Caddy 的固定地址 `172.29.231.2`；Caddy 另连默认网络以申请证书。若该网段与节点
 已有网络冲突，部署前同步修改 `deploy/compose.jenkins.yaml` 中的子网、网关、cloud 地址、Caddy 地址与
 `TRUSTED_PROXY`，并保证后两者一致。
+
+## 实车服务配置档
+
+`senior-robot` 接受显式 JSON 配置档。档名以小写字母、数字和短横线组成，例如
+`unit-a.json`。实车档将 `kind` 设为 `real`，用 `cloud_url` 指定 WSS 地址。
+`credentials` 和 `database` 位于 `/var/lib/senior-control/unit-a/`，
+`socket` 位于 `/run/senior-control/unit-a/`。由现场管理员准备这些目录，归属服务账号
+`senior-control`，并按现有流程配置实车 ROS 和急停状态。配对文件归属服务账号，权限为
+0600。命令复用 `/opt/senior-control/deploy/senior-agent.service` 和同目录的 Agent 环境。
+
+```sh
+senior-robot deploy --profile unit-a.json --dry-run
+sudo senior-robot deploy --profile unit-a.json
+sudo senior-robot start --profile unit-a.json
+sudo senior-robot status --profile unit-a.json
+sudo senior-robot stop --profile unit-a.json
+```
+
+部署命令仅创建该档的配置与服务文件，重名时保留已有文件。正式部署和启动是独立操作。
+
+## 工作台只读地图
+
+车端已有同一车辆导出的地图包时，可以在 Agent 环境配置中设置
+`SENIOR_WORKSPACE_MAP_BUNDLE`（地图包的绝对路径）和
+`SENIOR_WORKSPACE_MAP_SHA256`（确认后的完整文件 SHA-256，小写十六进制）。
+Agent 启动时校验摘要、地图包内容和来源车辆。工作台在缺少实时地图时显示包中的长期
+占据层，文件变化后需要重新配置摘要并重启 Agent。只读图可用于查看，任务编辑、
+定位与导航继续等待实时地图来源。

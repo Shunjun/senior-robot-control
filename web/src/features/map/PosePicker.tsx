@@ -26,6 +26,7 @@ export interface PosePickerProps {
   onDraftChange: (pose: Pose | null) => void;
   onGoal: (goal: MapGoal) => void;
   onHint: (hint: PoseHint) => void;
+  pending?: boolean;
 }
 
 type Mode = "goal" | "hint";
@@ -104,6 +105,7 @@ export function PosePicker({
   onDraftChange,
   onGoal,
   onHint,
+  pending = false,
 }: PosePickerProps): ReactElement {
   const [mode, setMode] = useState<Mode>("goal");
   const [fields, setFields] = useState<Fields>(EMPTY);
@@ -126,7 +128,7 @@ export function PosePicker({
   const pose = parseFields(fields);
   const reason = blockReason(snapshot, map, mode);
   const invalid = pose === null;
-  const blocked = reason !== null || invalid;
+  const blocked = reason !== null || invalid || pending;
   const mapRef = map.map_ref;
 
   function submit(): void {

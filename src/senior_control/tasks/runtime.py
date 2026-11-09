@@ -49,6 +49,8 @@ class TaskRuntime:
         map_generation = (
             reference.map_generation
             if reference is not None and not reference.review_required
+            else context.map_generation
+            if reference is None
             else None
         )
         current = replace(
@@ -74,6 +76,13 @@ class TaskRuntime:
             except Exception as exc:
                 if safety_failure is None:
                     safety_failure = exc
+
+        canceling = {
+            intent.execution_id for intent in safety_intents if intent.action is IntentAction.PAUSE
+        }
+        for record in active:
+            if record.execution_id not in canceling:
+                await self._executor.reconcile(record, current.map_generation)
 
         if self._last_wall is None:
             cursor = await self._store.scan_cursor()

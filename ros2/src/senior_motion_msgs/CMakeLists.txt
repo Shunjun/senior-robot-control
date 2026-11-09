@@ -7,7 +7,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHeader.msg" "msg/MotionEvidence.msg"
-  "msg/FinalCommand.msg"
+  "msg/FinalCommand.msg" "msg/DriveExecutionFeedback.msg"
   "msg/BoundedSafetyScan.msg" "msg/DepthSample.msg" "msg/BoundedDepthEvidence.msg"
   "msg/SemanticObject.msg" "msg/SemanticAssociation.msg" "msg/BoundedSemanticEvidence.msg"
   "msg/RawCaptureHeader.msg" "msg/BoundedRawImage.msg" "msg/BoundedRawCameraInfo.msg"
