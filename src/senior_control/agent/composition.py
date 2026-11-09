@@ -126,7 +126,8 @@ class SnapshotState:
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
         localized = (
-            state.localized and state.map_generation is not None
+            state.localized
+            and state.map_generation is not None
             and state.map_generation == state.localization_generation
         )
         return LiveState(
@@ -221,10 +222,13 @@ async def run_agent(config: AgentConfig) -> int:
 
         def qualified_reference(ref: MapRef, generation: str) -> bool:
             return (
-                context.localized and context.safety_clear and not context.manual_driving
+                context.localized
+                and context.safety_clear
+                and not context.manual_driving
                 and context.active_map == ref
                 and context.map_generation == context.localization_generation == generation
             )
+
         executor = TaskExecutor(
             database,
             tasks,

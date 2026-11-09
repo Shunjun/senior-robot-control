@@ -49,7 +49,9 @@ class TaskRuntime:
         map_generation = (
             reference.map_generation
             if reference is not None and not reference.review_required
-            else context.map_generation if reference is None else None
+            else context.map_generation
+            if reference is None
+            else None
         )
         current = replace(
             context,

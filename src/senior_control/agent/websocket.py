@@ -138,7 +138,13 @@ class WebSocketLink:
                 pending = self._pending
                 now = self._clock()
                 fields = {
-                    "v", "type", "robot_id", "connection_epoch", "nonce", "sent_at", "server_time"
+                    "v",
+                    "type",
+                    "robot_id",
+                    "connection_epoch",
+                    "nonce",
+                    "sent_at",
+                    "server_time",
                 }
                 if self._drive_timing:
                     fields.update(("drive_t2", "drive_t3"))
@@ -213,9 +219,7 @@ class WebSocketLink:
         deadline = anchor[1] + server_deadline - anchor[0] - self._max_offset
         return deadline if deadline > self._clock() else None
 
-    def local_drive_timing(
-        self, issued: float, deadline: float
-    ) -> tuple[float, float] | None:
+    def local_drive_timing(self, issued: float, deadline: float) -> tuple[float, float] | None:
         now = self._clock()
         bounds = self._drive_clock.bounds(now)
         if bounds is None or not 0 < deadline - issued <= (
@@ -293,6 +297,8 @@ class WebSocketConnector:
             await socket.close()
             raise ProtocolRejected("invalid cloud handshake") from exc
         return WebSocketLink(
-            socket, self._robot_id, epoch,
+            socket,
+            self._robot_id,
+            epoch,
             drive_timing=socket.response.headers.get("x-drive-timing") == "1",
         )

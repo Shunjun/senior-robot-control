@@ -753,11 +753,7 @@ class Agent:
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
             # //Compatible: only legacy grants use the wall-anchored conversion.
             convert = getattr(link, "local_command_deadline", None)
-            deadline = (
-                convert(envelope.payload.server_deadline)
-                if convert is not None
-                else None
-            )
+            deadline = convert(envelope.payload.server_deadline) if convert is not None else None
             generation = self.continuity_generation
             self._spawn(self._answer(link, envelope, deadline, generation))
         else:

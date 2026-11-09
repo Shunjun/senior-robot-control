@@ -421,9 +421,10 @@ class Arbiter:
 
     def tick(self, now: float) -> Velocity:
         self._expire(now)
-        if self._estop or not (self._connected(now) or (
-            self._navigation_run is not None and self.navigation_qualified(now)
-        )):
+        if self._estop or not (
+            self._connected(now)
+            or (self._navigation_run is not None and self.navigation_qualified(now))
+        ):
             return _ZERO
         if (
             (self._manual or self._navigation or self._recovery)

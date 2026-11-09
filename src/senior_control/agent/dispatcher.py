@@ -347,9 +347,7 @@ class StoreTaskPort:
         stored = await self._store.update(replace(current, enabled=enabled), expected_revision)
         return stored.revision
 
-    async def _qualify_workspace(
-        self, body: Mapping[str, Any], definition: TaskDefinition
-    ) -> None:
+    async def _qualify_workspace(self, body: Mapping[str, Any], definition: TaskDefinition) -> None:
         # //Compatible: older clients submit without a workspace raster id.
         if "grid_id" not in body:
             return

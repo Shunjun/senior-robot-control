@@ -5,8 +5,12 @@ from senior_control.safety.drive_feedback import OutputFeedback
 
 def key(seq: int) -> DriveFeedbackKey:
     return DriveFeedbackKey(
-        robot_id="car-a", session_id="page-a", connection_epoch=2,
-        seq=seq, request_id=f"sample-{seq}", gesture=1,
+        robot_id="car-a",
+        session_id="page-a",
+        connection_epoch=2,
+        seq=seq,
+        request_id=f"sample-{seq}",
+        gesture=1,
     )
 
 
@@ -74,7 +78,13 @@ def test_timed_sample_sequence_can_round_trip_through_browser_feedback() -> None
 
     with pytest.raises(ValueError, match="sequence"):
         VelocityEnvelope(
-            v=1, type="drive.velocity", robot_id="car-a", session_id="page-a",
-            connection_epoch=2, request_id="sample", seq=2**53, expires_at=0.0,
+            v=1,
+            type="drive.velocity",
+            robot_id="car-a",
+            session_id="page-a",
+            connection_epoch=2,
+            request_id="sample",
+            seq=2**53,
+            expires_at=0.0,
             payload=VelocityPayload(vx=0.0, wz=0.0, gesture=1, sampled_at=100.0),
         )

@@ -373,9 +373,12 @@ class SafetyGate(Node):
         if self._timed_command:
             try:
                 key = DriveFeedbackKey(
-                    robot_id=msg.robot_id, session_id=msg.session_id,
-                    connection_epoch=msg.connection_epoch, request_id=msg.request_id,
-                    seq=msg.sequence, gesture=msg.gesture,
+                    robot_id=msg.robot_id,
+                    session_id=msg.session_id,
+                    connection_epoch=msg.connection_epoch,
+                    request_id=msg.request_id,
+                    seq=msg.sequence,
+                    gesture=msg.gesture,
                 )
             except ValueError:
                 pass
@@ -433,8 +436,19 @@ class SafetyGate(Node):
                 if len(packet) != layout.size:
                     raise ValueError("invalid guard frame")
                 (
-                    kind, gid, robot, boot, session, request, generation, epoch,
-                    sequence, gesture, deadline, vx, wz,
+                    kind,
+                    gid,
+                    robot,
+                    boot,
+                    session,
+                    request,
+                    generation,
+                    epoch,
+                    sequence,
+                    gesture,
+                    deadline,
+                    vx,
+                    wz,
                 ) = layout.unpack(packet)
                 if kind not in (0, 1, 2):
                     raise ValueError("invalid guard frame type")
@@ -1048,8 +1062,10 @@ class SafetyGate(Node):
         evidence_ready = freshness is not None and all(
             value is not None and 0 <= reference - value <= freshness.max_age
             for value, reference in (
-                (freshness.scan_stamp, now), (freshness.scan_received, steady),
-                (freshness.measured_stamp, now), (freshness.measured_received, steady),
+                (freshness.scan_stamp, now),
+                (freshness.scan_received, steady),
+                (freshness.measured_stamp, now),
+                (freshness.measured_received, steady),
             )
         )
         values = {

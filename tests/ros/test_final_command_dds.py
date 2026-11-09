@@ -241,19 +241,25 @@ def test_drive_feedback_follows_actual_output(monkeypatch):
             gate, "_publisher", SimpleNamespace(publish=lambda msg: events.append(("output", msg)))
         )
         monkeypatch.setattr(
-            gate, "_drive_feedback_publisher",
+            gate,
+            "_drive_feedback_publisher",
             SimpleNamespace(publish=lambda msg: events.append(("feedback", msg))),
         )
         gid = b"fixture"
         gate._final_fence.set_publisher(gid)
-        gate._on_command(
-            FinalCommand(robot_id="robot", owner_boot_id="boot", generation=1), gid
-        )
+        gate._on_command(FinalCommand(robot_id="robot", owner_boot_id="boot", generation=1), gid)
         gate._on_command(
             FinalCommand(
-                robot_id="robot", owner_boot_id="boot", session_id="page",
-                generation=1, connection_epoch=3, sequence=2, steady_deadline=10.4,
-                request_id="req-2", gesture=5, vx=0.2,
+                robot_id="robot",
+                owner_boot_id="boot",
+                session_id="page",
+                generation=1,
+                connection_epoch=3,
+                sequence=2,
+                steady_deadline=10.4,
+                request_id="req-2",
+                gesture=5,
+                vx=0.2,
             ),
             gid,
         )

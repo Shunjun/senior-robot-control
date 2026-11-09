@@ -1210,9 +1210,15 @@ async def test_adapter_revokes_heartbeat_epoch_without_a_browser_lease() -> None
         request_exit=lambda: None,
         server_heartbeat=lambda _epoch, _deadline: True,
     )
-    assert (await adapter.handle({
-        "type": "server_heartbeat", "connection_epoch": 2, "deadline": 1.0,
-    }))["ok"]
+    assert (
+        await adapter.handle(
+            {
+                "type": "server_heartbeat",
+                "connection_epoch": 2,
+                "deadline": 1.0,
+            }
+        )
+    )["ok"]
     assert (await adapter.handle({"type": "disable_motion", "connection_epoch": 1}))["ok"]
     assert revoked == []
     assert (await adapter.handle({"type": "disable_motion", "connection_epoch": 2}))["ok"]

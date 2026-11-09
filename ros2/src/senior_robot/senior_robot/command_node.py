@@ -103,8 +103,10 @@ class CommandNode(Node):
         self._awaiting_feedback: dict[str, VelocityEnvelope] = {}
         if require_server_heartbeat:
             self.create_subscription(
-                DriveExecutionFeedback, "/safety/drive_feedback",
-                self._on_drive_feedback, qos_profile_sensor_data
+                DriveExecutionFeedback,
+                "/safety/drive_feedback",
+                self._on_drive_feedback,
+                qos_profile_sensor_data,
             )
         self._navigation_source: _NavigationSource | None = None
         self._generation = 1
@@ -186,6 +188,7 @@ class CommandNode(Node):
         ):
             return False
         try:
+
             @with_dds_info
             def on_sample(message: Twist, info: dict[str, Any]) -> None:
                 self._on_navigation_sample(topic, message, info)
@@ -297,7 +300,9 @@ class CommandNode(Node):
         msg.vx, msg.wz = velocity.vx, velocity.wz
         sample = self._drive_sample
         if sample is not None and (session, epoch, sequence) == (
-            sample.session_id, sample.connection_epoch, sample.seq
+            sample.session_id,
+            sample.connection_epoch,
+            sample.seq,
         ):
             msg.request_id = sample.request_id
             msg.gesture = sample.payload.gesture or 0
@@ -322,9 +327,8 @@ class CommandNode(Node):
             or endpoint.node_namespace != "/"
             or (gid is not None and bytes(endpoint.endpoint_gid) != bytes(gid))
             or sample is None
-            or (sample.session_id, sample.connection_epoch, sample.seq, sample.payload.gesture) != (
-                msg.session_id, msg.connection_epoch, msg.sequence, msg.gesture
-            )
+            or (sample.session_id, sample.connection_epoch, sample.seq, sample.payload.gesture)
+            != (msg.session_id, msg.connection_epoch, msg.sequence, msg.gesture)
             or msg.owner_boot_id != self._owner_boot
             or msg.robot_id != str(self.get_parameter("robot_id").value)
             or msg.connection_epoch != self._last_server_epoch
@@ -335,10 +339,15 @@ class CommandNode(Node):
         )
         try:
             feedback = ExecutionFeedback(
-                robot_id=msg.robot_id, session_id=msg.session_id,
-                connection_epoch=msg.connection_epoch, request_id=msg.request_id,
-                seq=msg.sequence, gesture=msg.gesture, status=msg.status,
-                reason=msg.reason or None, **output,
+                robot_id=msg.robot_id,
+                session_id=msg.session_id,
+                connection_epoch=msg.connection_epoch,
+                request_id=msg.request_id,
+                seq=msg.sequence,
+                gesture=msg.gesture,
+                status=msg.status,
+                reason=msg.reason or None,
+                **output,
             )
         except ValueError:
             return
@@ -346,8 +355,10 @@ class CommandNode(Node):
         self._feedback.append(feedback)
 
     def take_drive_feedback(self) -> list[dict[str, Any]]:
-        return [self._feedback.popleft().model_dump(exclude_none=True)
-                for _ in range(min(len(self._feedback), 8))]
+        return [
+            self._feedback.popleft().model_dump(exclude_none=True)
+            for _ in range(min(len(self._feedback), 8))
+        ]
 
     def _publish_barrier(self) -> None:
         msg = FinalCommand()

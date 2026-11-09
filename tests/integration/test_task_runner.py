@@ -1986,12 +1986,17 @@ async def test_runtime_persists_confirmed_route_completion(tmp_path: Path) -> No
 
         navigation = Navigation()
         executor = CoreTaskExecutor(
-            database, store, navigation,
-            qualified_reference=lambda ref, gen: ref == MAP and gen == "g"
+            database,
+            store,
+            navigation,
+            qualified_reference=lambda ref, gen: ref == MAP and gen == "g",
         )
         running = await executor.persist_and_dispatch(
-            due_intent(task, occurrence), task, map_generation="g",
-            localization_generation="g", localized=True,
+            due_intent(task, occurrence),
+            task,
+            map_generation="g",
+            localization_generation="g",
+            localized=True,
         )
         assert running.status is ExecutionStatus.RUNNING
         runtime = CoreTaskRuntime(store, executor)

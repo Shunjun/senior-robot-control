@@ -57,8 +57,11 @@ class IpcNavigation:
     """Only a matching explicit acknowledgement counts as an accepted action."""
 
     def __init__(
-        self, client: Requester, waypoints: WaypointStore | None = None,
-        *, connection_epoch: Callable[[], int] | None = None,
+        self,
+        client: Requester,
+        waypoints: WaypointStore | None = None,
+        *,
+        connection_epoch: Callable[[], int] | None = None,
     ) -> None:
         self._client = client
         self._waypoints = waypoints
@@ -70,8 +73,10 @@ class IpcNavigation:
         except (IpcError, OSError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable") from exc
         if (
-            kind == "navigation.task_start" and reply.get("ok") is False
-            and reply.get("error") == "rejected" and reply.get("execution_id") == execution_id
+            kind == "navigation.task_start"
+            and reply.get("ok") is False
+            and reply.get("error") == "rejected"
+            and reply.get("execution_id") == execution_id
         ):
             raise RouteRejected()
         if reply.get("ok") is not True or reply.get("execution_id") != execution_id:
@@ -94,28 +99,39 @@ class IpcNavigation:
         except DomainError as exc:
             raise RouteRejected() from exc
         await self.start_poses(
-            execution_id, task.map_ref, map_generation, poses, task_id=task.task_id,
+            execution_id,
+            task.map_ref,
+            map_generation,
+            poses,
+            task_id=task.task_id,
             connection_epoch=epoch,
         )
 
     async def start_poses(
-        self, execution_id: str, map_ref: MapRef, map_generation: str, poses: tuple[Pose2D, ...],
-        *, task_id: str | None = None, connection_epoch: int | None = None,
+        self,
+        execution_id: str,
+        map_ref: MapRef,
+        map_generation: str,
+        poses: tuple[Pose2D, ...],
+        *,
+        task_id: str | None = None,
+        connection_epoch: int | None = None,
     ) -> None:
         if connection_epoch is None and self._connection_epoch is not None:
             connection_epoch = self._connection_epoch()
         try:
             plan = RoutePlan(
-                execution_id=execution_id, map_id=map_ref.map_id, task_id=task_id,
-                reference_revision=map_ref.reference_revision, map_generation=map_generation,
+                execution_id=execution_id,
+                map_id=map_ref.map_id,
+                task_id=task_id,
+                reference_revision=map_ref.reference_revision,
+                map_generation=map_generation,
                 poses=[[pose.x, pose.y, pose.yaw] for pose in poses],
                 connection_epoch=connection_epoch,
             )
         except ValidationError as exc:
             raise RouteRejected() from exc
-        reply = await self._call(
-            "navigation.task_start", execution_id, plan=plan.model_dump()
-        )
+        reply = await self._call("navigation.task_start", execution_id, plan=plan.model_dump())
         if reply.get("map_generation") != map_generation:
             raise DomainError(ErrorCode.CONFLICT, "ROS accepted a different reference generation")
 

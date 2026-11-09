@@ -85,7 +85,9 @@ class AdapterCore:
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
         if kind in {
-            "navigation.task_start", "navigation.task_status", "navigation.task_cancel",
+            "navigation.task_start",
+            "navigation.task_status",
+            "navigation.task_cancel",
             "navigation.current",
         }:
             return await self._route_request(kind, message)
@@ -121,8 +123,10 @@ class AdapterCore:
                 return {"ok": False, "error": "unavailable"}
             result = self._workspace_map.read(kind, message)
             if (
-                kind == "map.manifest" and result.get("ok") is True
-                and self._navigation_ready is not None and self._navigation_ready()
+                kind == "map.manifest"
+                and result.get("ok") is True
+                and self._navigation_ready is not None
+                and self._navigation_ready()
             ):
                 result["navigation_ready"] = True
             return result
@@ -182,13 +186,16 @@ class AdapterCore:
             if not await routes.start(plan, wait_for_goal=False):
                 return {"ok": False, "error": "rejected", "execution_id": execution_id}
             return {
-                "ok": True, "execution_id": execution_id, "map_generation": plan.map_generation,
+                "ok": True,
+                "execution_id": execution_id,
+                "map_generation": plan.map_generation,
             }
         if kind == "navigation.task_cancel":
             return {"ok": await routes.cancel(execution_id), "execution_id": execution_id}
         progress = routes.status(execution_id)
         return {
-            "ok": True, "execution_id": execution_id,
+            "ok": True,
+            "execution_id": execution_id,
             "progress": progress.model_dump() if progress is not None else None,
         }
 

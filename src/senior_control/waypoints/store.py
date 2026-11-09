@@ -181,9 +181,7 @@ class WaypointStore:
         except KeyError as exc:
             raise DomainError(ErrorCode.CONFLICT, "route waypoint is unavailable") from exc
 
-    async def page(
-        self, map_ref: MapRef, after: str, limit: int
-    ) -> tuple[StoredWaypoint, ...]:
+    async def page(self, map_ref: MapRef, after: str, limit: int) -> tuple[StoredWaypoint, ...]:
         async with self._database.write_lock:
             connection = self._database.connection
             async with connection.execute(

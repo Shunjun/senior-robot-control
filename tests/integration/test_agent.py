@@ -1479,6 +1479,7 @@ async def test_unconfigured_video_offer_does_not_close_the_agent_link(rig: Rig) 
     finally:
         await finish(task, rig)
 
+
 async def test_navigation_readiness_roundtrip_and_stale_cache(rig: Rig) -> None:
     task = await start(rig, FakeLink(epoch=1))
     try:
@@ -1486,8 +1487,14 @@ async def test_navigation_readiness_roundtrip_and_stale_cache(rig: Rig) -> None:
 
         def frame(snapshot: RobotSnapshot, *, stale: bool = False) -> SnapshotEnvelope:
             return snapshot_envelope(
-                snapshot, robot_id=ROBOT, session_id="session-1", connection_epoch=1,
-                request_id="snap-ready", seq=1, expires_at=9e9, stale=stale,
+                snapshot,
+                robot_id=ROBOT,
+                session_id="session-1",
+                connection_epoch=1,
+                request_id="snap-ready",
+                seq=1,
+                expires_at=9e9,
+                stale=stale,
             )
 
         legacy = frame(current)

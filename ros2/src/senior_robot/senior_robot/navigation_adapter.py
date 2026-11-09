@@ -248,8 +248,12 @@ class RouteService:
             nonlocal binding_failed
             if index is None:
                 self._revoke(route)
-            elif topic is not None and self._bind_source is not None and not self._bind_source(
-                plan.execution_id, topic, lambda: qualified(plan.map_ref, plan.map_generation)
+            elif (
+                topic is not None
+                and self._bind_source is not None
+                and not self._bind_source(
+                    plan.execution_id, topic, lambda: qualified(plan.map_ref, plan.map_generation)
+                )
             ):
                 binding_failed = True
                 return
@@ -266,9 +270,11 @@ class RouteService:
                 if self._prepare is not None:
                     topic = await stack.enter_async_context(self._prepare(plan.execution_id))
                 succeeded = await self._adapter.run_route(
-                    plan.map_ref, plan.map_generation,
+                    plan.map_ref,
+                    plan.map_generation,
                     tuple(Pose2D(*pose) for pose in plan.poses),
-                    qualified=qualified, goal_changed=changed,
+                    qualified=qualified,
+                    goal_changed=changed,
                 )
         except Exception:
             # Unknown terminality is retained when the adapter still owns a goal.
@@ -280,9 +286,12 @@ class RouteService:
             if self._adapter.active_goal is not None:
                 route.status = "cancel_pending"
             else:
-                self._finish(route, "canceled" if route.cancel_requested else (
-                    "succeeded" if succeeded else "failed"
-                ))
+                self._finish(
+                    route,
+                    "canceled"
+                    if route.cancel_requested
+                    else ("succeeded" if succeeded else "failed"),
+                )
 
     def _revoke(self, route: _Route) -> None:
         if self._clear_source is not None:

@@ -39,8 +39,7 @@ class ClockWindow:
             or (
                 self._samples
                 and (
-                    t4 <= self._samples[-1].sender_received
-                    or t3 <= self._samples[-1].receiver_sent
+                    t4 <= self._samples[-1].sender_received or t3 <= self._samples[-1].receiver_sent
                 )
             )
         ):

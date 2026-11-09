@@ -89,8 +89,12 @@ async def test_measured_asymmetric_transport_bounds_reach_final_admission(
             pass
 
     link = WebSocketLink(
-        FakeSocket(), "car-a", agent.epoch,
-        clock=lambda: now - offset, wall_clock=lambda: 200 + now, drive_timing=True,
+        FakeSocket(),
+        "car-a",
+        agent.epoch,
+        clock=lambda: now - offset,
+        wall_clock=lambda: 200 + now,
+        drive_timing=True,
     )
     for _ in range(4):
         await link.send_heartbeat()
@@ -115,17 +119,29 @@ async def test_measured_asymmetric_transport_bounds_reach_final_admission(
     issued = now
     deadline = issued + 0.3 + compensation
     sample = VelocityEnvelope(
-        v=1, type="drive.velocity", robot_id="car-a", session_id="page-a",
-        connection_epoch=agent.epoch, request_id="drive-a", seq=2, expires_at=0.0,
+        v=1,
+        type="drive.velocity",
+        robot_id="car-a",
+        session_id="page-a",
+        connection_epoch=agent.epoch,
+        request_id="drive-a",
+        seq=2,
+        expires_at=0.0,
         payload=VelocityPayload(
-            vx=0.2, wz=0.0, gesture=1, sampled_at=100.0,
-            server_issued_at=issued, server_deadline=deadline,
+            vx=0.2,
+            wz=0.0,
+            gesture=1,
+            sampled_at=100.0,
+            server_issued_at=issued,
+            server_deadline=deadline,
         ),
     )
     arbiter = Arbiter("car-a", 0.2, 2.0, 0.3)
     acquire = SimpleEnvelope(
         **sample.model_dump(exclude={"type", "payload", "seq"}),
-        type="control.acquire", seq=1, payload=EmptyPayload(),
+        type="control.acquire",
+        seq=1,
+        payload=EmptyPayload(),
     )
     assert arbiter.accept(acquire, now - offset).accepted
     now += 0.4
@@ -133,11 +149,17 @@ async def test_measured_asymmetric_transport_bounds_reach_final_admission(
     assert timing is not None
     earliest_issue, earliest_deadline = timing
     assert arbiter.accept(
-        sample, now - offset, received_at=earliest_issue, local_deadline=earliest_deadline,
+        sample,
+        now - offset,
+        received_at=earliest_issue,
+        local_deadline=earliest_deadline,
     ).accepted
     # The IPC queues can make a sample expire even though the Agent received it in time.
     now += 0.11
     later = sample.model_copy(update={"seq": 3})
     assert not arbiter.accept(
-        later, now - offset, received_at=earliest_issue, local_deadline=earliest_deadline,
+        later,
+        now - offset,
+        received_at=earliest_issue,
+        local_deadline=earliest_deadline,
     ).accepted

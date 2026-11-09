@@ -52,6 +52,9 @@ class OutputFeedback:
         if velocity == Velocity(0.0, 0.0) and velocity != sample.requested:
             return DriveExecutionFeedback(**key, status="blocked", reason=reason[:128])
         return DriveExecutionFeedback(
-            **key, status="applied", vx=velocity.vx, wz=velocity.wz,
+            **key,
+            status="applied",
+            vx=velocity.vx,
+            wz=velocity.wz,
             limited=velocity != sample.requested,
         )

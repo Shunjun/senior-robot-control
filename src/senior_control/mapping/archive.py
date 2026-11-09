@@ -377,10 +377,7 @@ class MapArchive:
                 raise DomainError(ErrorCode.VALIDATION, "bundle path is duplicated")
             names.add(normalized)
             declared += info.file_size
-            if (
-                info.file_size > max_bytes
-                or declared > max_bytes
-            ):
+            if info.file_size > max_bytes or declared > max_bytes:
                 raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
 
         files: dict[str, bytes] = {}
@@ -392,9 +389,7 @@ class MapArchive:
                 parts: list[bytes] = []
                 with archive.open(info) as member:
                     while True:
-                        chunk = member.read(
-                            min(_READ_CHUNK, max_bytes - total + 1)
-                        )
+                        chunk = member.read(min(_READ_CHUNK, max_bytes - total + 1))
                         if not chunk:
                             break
                         total += len(chunk)

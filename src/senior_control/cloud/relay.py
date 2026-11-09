@@ -579,9 +579,9 @@ class Hub:
     def _advertise_drive_timing(controller: Connection, epoch: int) -> None:
         if controller.drive_epoch_advertised == epoch:
             return
-        notice = json.dumps({
-            "type": "drive.timing", "robot_id": controller.robot_id, "connection_epoch": epoch
-        }).encode()
+        notice = json.dumps(
+            {"type": "drive.timing", "robot_id": controller.robot_id, "connection_epoch": epoch}
+        ).encode()
         if controller.outbox.put(notice, "response"):
             controller.drive_epoch_advertised = epoch
 
@@ -614,7 +614,10 @@ class Hub:
                     and timed_agent.drive_clock.window.receiver_bounds(now) is not None
                 )
                 clock_reply = {
-                    "type": "drive.clock.reply", "nonce": probe.nonce, "t2": received_at, "t3": now,
+                    "type": "drive.clock.reply",
+                    "nonce": probe.nonce,
+                    "t2": received_at,
+                    "t3": now,
                     "connection_epoch": timed_agent.epoch if timed_agent is not None else 0,
                     "ready": ready,
                 }

@@ -557,7 +557,6 @@ def test_bound_navigation_expires_and_old_run_cannot_restart_motion() -> None:
     assert arbiter.final_command(1.75) is None
 
 
-
 def test_timed_dropped_stop_and_duplicate_cannot_extend_execution():
     arbiter = gate(require_server_heartbeat=True)
     assert arbiter.server_heartbeat(1, 1.0, 2.0)

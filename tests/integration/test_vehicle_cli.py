@@ -190,7 +190,8 @@ async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
 
 
 async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_start(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     import pytest
 

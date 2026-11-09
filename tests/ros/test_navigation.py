@@ -332,7 +332,10 @@ async def test_route_service_reports_actual_index_and_blocks_next_on_lost_refere
         NavigationAdapter(executor), qualified=lambda r, token: (r, token) == (ref, generation)
     )
     plan = RoutePlan(
-        execution_id="patrol-1", map_id="yard", reference_revision=3, map_generation=generation,
+        execution_id="patrol-1",
+        map_id="yard",
+        reference_revision=3,
+        map_generation=generation,
         poses=[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
     )
     assert await service.start(plan)
@@ -377,12 +380,18 @@ async def test_starting_route_cannot_inherit_new_connection_epoch(navigation_sou
             pytest.fail("old route attempted to read a result")
 
     service = RouteService(
-        NavigationAdapter(NeverNavigate()), qualified=lambda _ref, _generation: True,
-        prepare=prepare, connection_epoch=lambda: epoch,
+        NavigationAdapter(NeverNavigate()),
+        qualified=lambda _ref, _generation: True,
+        prepare=prepare,
+        connection_epoch=lambda: epoch,
     )
     plan = RoutePlan(
-        execution_id="old", map_id="yard", reference_revision=3, map_generation="g",
-        poses=[[1.0, 0.0, 0.0]], connection_epoch=4,
+        execution_id="old",
+        map_id="yard",
+        reference_revision=3,
+        map_generation="g",
+        poses=[[1.0, 0.0, 0.0]],
+        connection_epoch=4,
     )
     assert await service.start(plan, wait_for_goal=False)
     await asyncio.wait_for(setup.wait(), 1)
