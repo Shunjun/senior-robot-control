@@ -23,7 +23,9 @@ Gazebo、设备、ROS 节点或模型下载。仿真与硬件 profile 必须保�
 
 在已安装 Agent 依赖、ROS 2 Humble、Gazebo Fortress 和 Xvfb 的 Linux 用户会话中，
 为每个实例准备独立的私有目录（权限 0700）。选用现场未使用的 ROS 域。
-将下面的配置保存为 JSON 文件，并把绝对路径换成该实例的路径。
+将下面的配置保存为 `~/senior-sim/simulation.json`，并把绝对路径换成该实例的路径。
+省略 `--profile` 时，命令会读取此文件，并要求 `kind` 为 `simulation`。其他配置位置可用
+`--profile` 指定，实车配置仍须显式指定。
 
 ```json
 {
@@ -39,11 +41,11 @@ Gazebo、设备、ROS 节点或模型下载。仿真与硬件 profile 必须保�
 ```
 
 ```sh
-senior-robot pair --profile simulation.json --cloud-url https://robot.example.com --name "隔离仿真"
-senior-robot doctor --profile simulation.json
-senior-robot start --profile simulation.json
-senior-robot status --profile simulation.json
-senior-robot stop --profile simulation.json
+senior-robot pair --cloud-url https://robot.example.com --name "隔离仿真"
+senior-robot doctor
+senior-robot start
+senior-robot status
+senior-robot stop
 ```
 
 `start` 需要可用的 systemd 用户会话。仿真启动后，命令先核对 ROS 适配器身份，再启动

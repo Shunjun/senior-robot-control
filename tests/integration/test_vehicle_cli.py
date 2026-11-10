@@ -1,7 +1,59 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from senior_control import cli
+
+
+@pytest.fixture
+def default_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    profile = tmp_path / "senior-sim" / "simulation.json"
+    profile.parent.mkdir()
+    profile.write_text(json.dumps({"kind": "simulation", "credentials": "/test/credentials.json"}))
+    return profile
+
+
+def test_doctor_defaults_to_simulation_profile(default_profile, monkeypatch):
+    monkeypatch.setattr(cli, "_doctor", lambda profile: 0 if profile.kind == "simulation" else 1)
+    assert cli.main(["doctor"]) == 0
+
+
+def test_explicit_profile_overrides_simulation_default(default_profile, tmp_path, monkeypatch):
+    profile = tmp_path / "real.json"
+    profile.write_text(json.dumps({"kind": "real", "credentials": "/test/credentials.json"}))
+    monkeypatch.setattr(cli, "_doctor", lambda profile: 0 if profile.kind == "real" else 1)
+    assert cli.main(["doctor", "--profile", str(profile)]) == 0
+
+
+def test_real_profile_requires_explicit_selection(default_profile, monkeypatch, capsys):
+    default_profile.write_text(
+        json.dumps({"kind": "real", "credentials": "/test/credentials.json"})
+    )
+    monkeypatch.setattr(cli, "_doctor", lambda _: pytest.fail("real profile was loaded by default"))
+    assert cli.main(["doctor"]) == 1
+    assert "--profile" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["start", "stop", "status"])
+def test_lifecycle_uses_default_simulation_profile(default_profile, monkeypatch, command):
+    from senior_control import simulation_cli
+
+    def lifecycle(action, path, profile):
+        assert (action, path, profile.kind) == (command, default_profile, "simulation")
+        return 0
+
+    monkeypatch.setattr(simulation_cli, "lifecycle", lifecycle)
+    assert cli.main([command]) == 0
+
+
+def test_deploy_requires_explicit_real_profile(default_profile, monkeypatch):
+    monkeypatch.setattr(cli, "_install_once", lambda *_: pytest.fail("installed a service"))
+    with pytest.raises(SystemExit) as error:
+        cli.main(["deploy"])
+    assert error.value.code == 2
+    assert cli.main(["deploy", "--profile", str(default_profile)]) == 1
 
 
 def test_pair_preserves_existing_credentials(tmp_path: Path, monkeypatch, capsys) -> None:

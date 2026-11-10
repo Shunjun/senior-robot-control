@@ -1,4 +1,4 @@
-"""Operator commands for explicitly selected vehicle profiles."""
+"""Operator commands for real vehicles and simulation."""
 
 import argparse
 import asyncio
@@ -205,33 +205,42 @@ def _deploy(profile: VehicleProfile, profile_path: Path, *, dry_run: bool) -> in
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="senior-robot")
     commands = parser.add_subparsers(dest="command", required=True)
-    pair = commands.add_parser("pair", help="exchange a one-time code over HTTPS")
-    pair.add_argument("--profile", required=True, type=Path)
+    simulation_default = argparse.ArgumentParser(add_help=False)
+    simulation_default.add_argument(
+        "--profile", type=Path, help="JSON profile (default: ~/senior-sim/simulation.json)"
+    )
+    pair = commands.add_parser(
+        "pair", parents=[simulation_default], help="exchange a one-time code over HTTPS"
+    )
     pair.add_argument("--cloud-url", required=True)
     pair.add_argument("--name", required=True)
-    doctor = commands.add_parser("doctor", help="check the profile without starting services")
-    doctor.add_argument("--profile", required=True, type=Path)
+    commands.add_parser(
+        "doctor", parents=[simulation_default], help="check the profile without starting services"
+    )
     deploy = commands.add_parser("deploy", help="install the selected real vehicle service")
     deploy.add_argument("--profile", required=True, type=Path)
     deploy.add_argument("--dry-run", action="store_true")
     for command in ("start", "stop", "status"):
-        service = commands.add_parser(command)
-        service.add_argument("--profile", required=True, type=Path)
+        commands.add_parser(command, parents=[simulation_default])
     args = parser.parse_args(argv)
     try:
-        profile = VehicleProfile.model_validate_json(args.profile.read_bytes())
+        profile_path = args.profile or Path.home() / "senior-sim" / "simulation.json"
+        profile = VehicleProfile.model_validate_json(profile_path.read_bytes())
+        if args.profile is None and profile.kind != "simulation":
+            print("Real vehicles require an explicit --profile.", file=sys.stderr)
+            return 1
         if args.command == "doctor":
             return _doctor(profile)
         if args.command == "deploy":
-            return _deploy(profile, args.profile, dry_run=args.dry_run)
+            return _deploy(profile, profile_path, dry_run=args.dry_run)
         if args.command != "pair":
             if profile.kind == "simulation":
                 from senior_control.simulation_cli import lifecycle
 
-                return lifecycle(args.command, args.profile, profile)
+                return lifecycle(args.command, profile_path, profile)
             if profile.kind != "real" or sys.platform != "linux":
                 raise ValueError("systemd lifecycle requires a real Linux profile")
-            unit = _unit(args.profile)
+            unit = _unit(profile_path)
             if not (UNIT_ROOT / unit).is_file():
                 raise ValueError("deploy the selected profile first")
             if args.command == "status":
@@ -259,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
             else "Pairing failed. Check the profile, TLS URL and pairing code."
         )
         print(message, file=sys.stderr)
+        if args.profile is None:
+            print("Check ~/senior-sim/simulation.json or pass --profile.", file=sys.stderr)
         return 1
     print("Device paired.")
     return 0
