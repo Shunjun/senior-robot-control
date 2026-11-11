@@ -72,7 +72,7 @@ python3.10 -m venv --system-site-packages .ros-venv
 rosdep update --rosdistro humble
 rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
 cd ros2
-../.ros-venv/bin/python -m colcon build --packages-select senior_sim senior_robot
+../.ros-venv/bin/python -m colcon build --packages-up-to senior_sim senior_robot
 source install/setup.bash
 ```
 
