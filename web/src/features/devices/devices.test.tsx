@@ -115,6 +115,9 @@ class FakeApi implements ControlApi {
   async logout(): Promise<void> {
     this.loggedOut += 1;
   }
+  async revokeRobot(robotId: string): Promise<void> {
+    this.robots = this.robots.filter((robot) => robot.id !== robotId);
+  }
   async createPairingCode() { return { code: "example", expires_in: 30 }; }
   async listRobots(): Promise<RobotSummary[]> {
     if (this.failure !== null) throw this.failure;
@@ -1513,4 +1516,90 @@ it("explains the vehicle's concrete navigation blocker", async () => {
     expect(screen.queryByText(`无法导航：${explanation}`)).not.toBeNull();
     expect(screen.queryByText("车端未报告已验证的导航能力，无法开始、继续或返航。")).toBeNull();
   }
+});
+
+// ---------------------------------------------------------------- revoke pairing
+
+describe("device unpairing", () => {
+  it("deletes with session, CSRF and an encoded robot ID", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(reply(200, { csrf_token: "csrf-delete" }))
+      .mockResolvedValueOnce(reply(204)).mockResolvedValueOnce(reply(401));
+    const api = new HttpControlApi(fetchImpl, null);
+    await api.login("pw");
+    await api.revokeRobot("robot/a b");
+    expect(fetchImpl).toHaveBeenLastCalledWith("/api/robots/robot%2Fa%20b", expect.objectContaining({
+      method: "DELETE", credentials: "same-origin", headers: { "X-CSRF-Token": "csrf-delete" },
+    }));
+    await expect(api.revokeRobot("robot-alpha")).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("confirms credential invalidation, prevents duplicates and exits the removed robot", async () => {
+    let finish!: () => void;
+    const revokeRobot = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const api = Object.assign(new FakeApi(), { revokeRobot });
+    const link = new FakeLink();
+    mount("/robots/robot-alpha", api, link);
+    await waitFor(() => expect(link.connects).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "切换车辆" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    expect(screen.getByText(/车端凭据将失效/)).toBeTruthy();
+    expect(revokeRobot).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "确认删除配对" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(revokeRobot).toHaveBeenCalledExactlyOnceWith("robot-alpha");
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish());
+    await screen.findByRole("heading", { name: "选择一台设备" });
+    expect(screen.queryByRole("link", { name: /Alpha/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Beta/ })).toBeTruthy();
+    expect(link.disconnects).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the device after failure and allows retry or cancellation", async () => {
+    const revokeRobot = vi.fn().mockRejectedValue(new ApiError("failed", 500));
+    mount("/robots", Object.assign(new FakeApi(), { revokeRobot }), new FakeLink());
+    await screen.findByRole("link", { name: /Alpha/ });
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await screen.findByText(/删除配对失败/);
+    expect(screen.getByRole("link", { name: /Alpha/ })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "确认删除配对" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("button", { name: "确认删除配对" })).toBeNull();
+  });
+
+  it("keeps another selected robot and rejects an older refresh that still contains the deleted one", async () => {
+    const api = new FakeApi();
+    const link = new FakeLink();
+    const listRobots = vi.spyOn(api, "listRobots");
+    mount("/robots/robot-alpha", api, link);
+    await waitFor(() => expect(link.connects).toHaveLength(1));
+    let finishRefresh!: (robots: RobotSummary[]) => void;
+    listRobots.mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "切换车辆" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 Beta 装卸车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Beta/ })).toBeNull());
+    await act(async () => finishRefresh([ALPHA, BETA]));
+    expect(screen.queryByRole("link", { name: /Beta/ })).toBeNull();
+    expect(link.connects).toEqual(["robot-alpha"]);
+    expect(screen.getByRole("heading", { name: ALPHA.name })).toBeTruthy();
+  });
+
+  it("hides deletion in demo mode", async () => {
+    mount("/robots", new FakeApi(), new FakeLink(), true);
+    await screen.findByRole("link", { name: /Alpha/ });
+    expect(screen.queryByRole("button", { name: /删除.*配对/ })).toBeNull();
+  });
+
+  it("returns to login when revocation discovers an expired session", async () => {
+    const revokeRobot = vi.fn().mockRejectedValue(new UnauthorizedError("expired"));
+    mount("/robots", Object.assign(new FakeApi(), { revokeRobot }), new FakeLink());
+    await screen.findByRole("link", { name: /Alpha/ });
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await screen.findByRole("heading", { name: "操作员登录" });
+  });
 });

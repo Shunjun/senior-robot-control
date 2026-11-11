@@ -94,6 +94,7 @@ export interface ControlApi {
   login(password: string): Promise<void>;
   logout(): Promise<void>;
   listRobots(): Promise<RobotSummary[]>;
+  revokeRobot(robotId: string): Promise<void>;
   createPairingCode(signal?: AbortSignal): Promise<PairingCode>;
 }
 
@@ -198,6 +199,20 @@ export class HttpControlApi implements ControlApi {
     }
     if (!response.ok) throw new ApiError(await detail(response), response.status);
     return parseRobots(await response.json());
+  }
+
+  async revokeRobot(robotId: string): Promise<void> {
+    const csrf = this.csrf;
+    const response = await this.fetchImpl(`/api/robots/${encodeURIComponent(robotId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: csrf === null ? {} : { [CSRF_HEADER]: csrf },
+    });
+    if (response.status === 401) {
+      if (this.csrf === csrf) this.setCsrf(null);
+      throw new UnauthorizedError("login required");
+    }
+    if (!response.ok) throw new ApiError(await detail(response), response.status);
   }
 
   async createPairingCode(signal?: AbortSignal): Promise<PairingCode> {

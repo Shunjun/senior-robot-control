@@ -30,6 +30,9 @@ function demoSnapshot(robot: RobotSummary): RobotSnapshot {
 class DemoApi implements ControlApi {
   async login(): Promise<void> {}
   async logout(): Promise<void> {}
+  async revokeRobot(): Promise<void> {
+    throw new ApiError("演示模式无法删除配对", 403);
+  }
   async createPairingCode(): Promise<PairingCode> {
     throw new ApiError("演示模式无法配对", 403);
   }
