@@ -801,7 +801,16 @@ class MotionFusion(Node):
             if previous_epoch is not None:
                 self._break_progress(
                     "source_epoch_changed",
-                    details={"previous_epoch": previous_epoch, "new_epoch": message.source_epoch},
+                    details={
+                        "previous_epoch": previous_epoch,
+                        "new_epoch": message.source_epoch,
+                        "valid": message.valid,
+                        "reason": message.reason[:120],
+                        "start_ns": message.interval_start.sec * 1_000_000_000
+                        + message.interval_start.nanosec,
+                        "end_ns": message.header.stamp.sec * 1_000_000_000
+                        + message.header.stamp.nanosec,
+                    },
                 )
             self._scan_frontier.reset()
         stamp_ns = Time.from_msg(message.header.stamp).nanoseconds

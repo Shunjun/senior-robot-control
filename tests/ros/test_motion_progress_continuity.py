@@ -197,6 +197,71 @@ def test_progress_uses_all_received_source_intervals(
         rclpy.shutdown()
 
 
+def test_epoch_change_preserves_the_triggering_scan_failure_in_first_break(monkeypatch):
+    rclpy = pytest.importorskip("rclpy")
+    from rclpy.parameter import Parameter
+    from rclpy.time import Time
+    from senior_motion_msgs.msg import ScanMotion
+    from senior_robot.motion_fusion import MotionFusion
+
+    values = {
+        "sensor_max_age": 2.0,
+        "alignment_max_gap": 0.3,
+        "pending_wait": 0.2,
+        "max_variance": 0.1,
+        "min_quality": 0.3,
+        "max_yaw_error": 0.1,
+        "startup_window": 0.6,
+        "wheel_motion_limit": 0.004,
+        "stall_distance": 0.04,
+        "lateral_limit": 0.04,
+        "yaw_limit": 0.12,
+        "progress_stationary_max_linear_speed": 0.001,
+        "progress_stationary_max_yaw_rate": 0.001,
+    }
+    rclpy.init()
+    fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
+    emitted, logs = [], []
+    clock = {"now": 100_010_000_000}
+    monkeypatch.setattr(fusion, "_scan_topology_ready", lambda: True)
+    monkeypatch.setattr(
+        fusion,
+        "get_clock",
+        lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock["now"])),
+    )
+    monkeypatch.setattr(fusion, "_publisher", SimpleNamespace(publish=emitted.append))
+    monkeypatch.setattr(fusion, "get_logger", lambda: SimpleNamespace(warning=logs.append))
+    try:
+        base = prime_stationary_progress(fusion, clock, 100_000_000_000)
+        emitted.clear()
+        message = ScanMotion()
+        message.header.frame_id = "base_link"
+        message.header.stamp = Time(nanoseconds=base + 100_000_000).to_msg()
+        message.interval_start = Time(nanoseconds=base).to_msg()
+        message.source_epoch = "replacement-scan"
+        message.valid = False
+        message.reason = "relative_covariance_unqualified"
+        clock["now"] = base + 110_000_000
+        fusion._on_scan(message)
+
+        assert fusion._progress.unqualified and not fusion._progress_started
+        assert emitted and all(not item.valid for item in emitted)
+        assert len(logs) == 1
+        first_break = json.loads(logs[0].removeprefix("motion_progress_break "))
+        assert first_break["reason"] == "source_epoch_changed"
+        assert first_break["details"] == {
+            "previous_epoch": "stable-independent-scan",
+            "new_epoch": "replacement-scan",
+            "valid": False,
+            "reason": "relative_covariance_unqualified",
+            "start_ns": base,
+            "end_ns": base + 100_000_000,
+        }
+    finally:
+        fusion.destroy_node()
+        rclpy.shutdown()
+
+
 def test_missing_source_interval_requires_explicit_fresh_stationary_requalification(monkeypatch):
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import Twist
