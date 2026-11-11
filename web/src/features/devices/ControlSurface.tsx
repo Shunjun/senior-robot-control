@@ -36,6 +36,23 @@ function describePose(pose: Pose | null): string {
   return `X ${pose.x.toFixed(2)} m, Y ${pose.y.toFixed(2)} m, 朝向 ${((pose.yaw * 180) / Math.PI).toFixed(1)}°`;
 }
 
+function navigationUnavailableMessage(reason: string | null | undefined): string {
+  //Compatible: legacy snapshots have no concrete navigation diagnostic.
+  if (reason == null) return "车端未报告已验证的导航能力，无法开始、继续或返航。";
+  const explanations: Record<string, string> = {
+    "map or localization generation changed": "地图或定位代次已变化，请等待重新定位。",
+    "map or localization unavailable": "当前地图或定位尚未就绪。",
+    "planner state unavailable": "路径规划器或运动控制器尚未就绪。",
+    "heartbeat or control authority unavailable": "车辆心跳或控制权限尚未就绪。",
+    "navigation unavailable": "车端导航尚未就绪。",
+  };
+  const sensorPrefix = "safety status unavailable (";
+  const explanation = reason.startsWith(sensorPrefix) && reason.endsWith(")")
+    ? `传感器安全检查尚未通过：${reason.slice(sensorPrefix.length, -1)}。`
+    : explanations[reason] ?? `车端导航尚未就绪：${reason}。`;
+  return `无法导航：${explanation}`;
+}
+
 /** Drive and map controls for the selected vehicle and its current map reference. */
 export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
@@ -62,8 +79,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     setSelection({ refKey, pose });
   }
 
-  // The occupancy layer has no transport to the browser yet: the grid is empty, and the
-  // robot's own snapshot supplies the map reference that goals are checked against.
+  // Keep an empty preview until the current occupancy map has loaded.
   const placeholder: OccupancySnapshot = useMemo(
     () => ({
       map_ref: snapshot.map_ref,
@@ -77,6 +93,11 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const map = occupancy ?? placeholder;
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const pickMap = activeMap ? map : { ...map, map_ref: null };
+  const liveMapTelemetry = activeMap && snapshot.connected && !snapshot.stale && snapshot.localized
+    && snapshot.map_generation !== undefined && snapshot.map_generation === gridId
+    && snapshot.map_ref !== null && map.map_ref !== null
+    && snapshot.map_ref.map_id === map.map_ref.map_id
+    && snapshot.map_ref.reference_revision === map.map_ref.reference_revision;
 
   //Compatible: older vehicles advertise navigation eligibility only in the map manifest.
   const directNavigation = activeMap && (snapshot.navigation_ready ?? navigationReady) === true;
@@ -161,15 +182,20 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
             <>
               {message !== undefined && <p className={styles.quiet}>{message}</p>}
               {(occupancy !== undefined || mode === "navigation") && (
-                <MapCanvas
-                  key={gridId ?? "unavailable"}
-                  map={map}
-                  compact={occupancy !== undefined}
-                  stale={snapshot.stale || !snapshot.connected}
-                  pickEnabled={mode === "navigation" && activeMap}
-                  draft={mode === "navigation" ? draft : null}
-                  onPick={setDraft}
-                />
+                <>
+                  <MapCanvas
+                    key={gridId ?? "unavailable"}
+                    map={map}
+                    compact={occupancy !== undefined}
+                    robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
+                    scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
+                    stale={snapshot.stale || !snapshot.connected}
+                    pickEnabled={mode === "navigation" && activeMap}
+                    draft={mode === "navigation" ? draft : null}
+                    onPick={setDraft}
+                  />
+                  {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.quiet}>车辆位置暂不可用</p>}
+                </>
               )}
             </>
           )}
@@ -185,7 +211,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
                 homeMapAvailable={activeMap && waypointWrites === true}
                 {...(directNavigation
                   ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy || routeActive } }
-                  : { navigationUnavailable: "车端未报告已验证的导航能力，无法开始、继续或返航。" })}
+                  : { navigationUnavailable: navigationUnavailableMessage(snapshot.navigation_block_reason) })}
               />
               {routeActive && <p className={styles.quiet}>当前路线仍在执行，可以取消导航。</p>}
               <p className={styles.quiet}>

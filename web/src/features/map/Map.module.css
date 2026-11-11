@@ -420,3 +420,21 @@
 .waypointMarker:focus-visible circle { fill: var(--amber); stroke: var(--ink); }
 .taskRoute { stroke: var(--teal); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
 .routeNumber { fill: var(--ink); paint-order: stroke; stroke: var(--graphite-950); stroke-width: 3; }
+
+.scanHits {
+  fill: #a78bfa;
+  stroke: #eee7ff;
+  stroke-width: 0.8;
+  pointer-events: none;
+}
+
+.scanLegend {
+  color: #a78bfa;
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+.scanLegend::before {
+  content: "●";
+  margin-right: 0.5em;
+}

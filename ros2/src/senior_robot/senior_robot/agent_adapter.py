@@ -286,6 +286,9 @@ def main() -> None:
                 current.status if current is not None else "idle",
                 navigation_ready=navigation_ready is not None and navigation_ready(),
             )
+            result["navigation_block_reason"] = (
+                None if result["navigation_ready"] else previous_failure or "navigation unavailable"
+            )
             if current is not None and current.map_generation == result["map_generation"]:
                 result["route_progress"] = current.model_dump()
             return result
@@ -297,6 +300,7 @@ def main() -> None:
         routes = None
         controller = None
         navigation_ready: Callable[[], bool] | None = None
+        previous_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
         if reference is not None and nav_params and Path(nav_params).is_file():
@@ -309,8 +313,6 @@ def main() -> None:
 
             planner_active = create_planner_readiness(node)
             controller = DedicatedController(node, Path(nav_params))
-
-            previous_failure = None
 
             def qualified(ref, generation):
                 nonlocal previous_failure
@@ -335,8 +337,12 @@ def main() -> None:
                 return failure is None
 
             def can_navigate() -> bool:
+                nonlocal previous_failure
                 grid = reference.grid() if reference is not None else None
-                return grid is not None and qualified(grid.map_ref, grid.grid_id)
+                if grid is None:
+                    previous_failure = "map or localization unavailable"
+                    return False
+                return qualified(grid.map_ref, grid.grid_id)
 
             navigation_ready = can_navigate
             routes = RouteService(

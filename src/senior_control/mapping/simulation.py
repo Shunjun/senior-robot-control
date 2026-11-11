@@ -3,6 +3,7 @@
 import hashlib
 import math
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from pathlib import Path
 
 from senior_control.mapping.workspace import WorkspaceGrid
@@ -57,3 +58,32 @@ def map_to_odom(truth: Pose2D, wheel: Pose2D) -> Pose2D:
     yaw = math.remainder(truth.yaw - wheel.yaw, 2 * math.pi)
     c, s = math.cos(yaw), math.sin(yaw)
     return Pose2D(truth.x - c * wheel.x + s * wheel.y, truth.y - s * wheel.x - c * wheel.y, yaw)
+
+
+def project_scan(
+    robot: Pose2D,
+    sensor: Pose2D,
+    ranges: Sequence[float],
+    angle_min: float,
+    angle_increment: float,
+    range_min: float,
+    range_max: float,
+) -> list[dict[str, float]]:
+    """Display-only hit points, sampled to keep state IPC well below 8 KiB."""
+    points = []
+    c, s = math.cos(robot.yaw), math.sin(robot.yaw)
+    x = robot.x + c * sensor.x - s * sensor.y
+    y = robot.y + s * sensor.x + c * sensor.y
+    stride = max(1, math.ceil(len(ranges) / 64))
+    for index in range(0, len(ranges), stride):
+        distance = ranges[index]
+        if not math.isfinite(distance) or not range_min <= distance < range_max:
+            continue
+        angle = robot.yaw + sensor.yaw + angle_min + index * angle_increment
+        points.append(
+            {
+                "x": round(x + distance * math.cos(angle), 3),
+                "y": round(y + distance * math.sin(angle), 3),
+            }
+        )
+    return points

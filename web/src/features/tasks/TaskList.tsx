@@ -231,20 +231,30 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   }
 
   const displayedMap = live ? workspace?.map ?? map : undefined;
+  const liveMapTelemetry = live && snapshot.localized && workspace !== undefined
+    && snapshot.map_generation !== undefined && snapshot.map_generation === workspace.grid_id
+    && snapshot.map_ref !== null && displayedMap?.map_ref != null
+    && snapshot.map_ref.map_id === displayedMap.map_ref.map_id
+    && snapshot.map_ref.reference_revision === displayedMap.map_ref.reference_revision;
   return (
     <div className={styles.workspace}>
       <div className={styles.map}>
         {displayedMap === undefined ? (
           <p className={styles.warning}>{unavailable ?? "地图不可用"}</p>
         ) : (
-          <MapCanvas key={workspace?.grid_id ?? "read-only"} map={displayedMap} stale={!live} compact
-            taskRoute={missingWaypoint ? [] : route}
-            waypointMarkers={available}
-            highlightedWaypoint={highlight}
-            draft={waypointDraft}
-            pickEnabled={creatingWaypoint && !pending}
-            onPick={setWaypointDraft}
-            {...(pending || creatingWaypoint ? {} : { onAddWaypoint: addWaypoint })} />
+          <>
+            <MapCanvas key={workspace?.grid_id ?? "read-only"} map={displayedMap} stale={!live} compact
+              robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
+              scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
+              taskRoute={missingWaypoint ? [] : route}
+              waypointMarkers={available}
+              highlightedWaypoint={highlight}
+              draft={waypointDraft}
+              pickEnabled={creatingWaypoint && !pending}
+              onPick={setWaypointDraft}
+              {...(pending || creatingWaypoint ? {} : { onAddWaypoint: addWaypoint })} />
+            {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.note}>车辆位置暂不可用</p>}
+          </>
         )}
       </div>
       <section className={styles.panel} aria-label="任务管理" data-open={drawerOpen}>

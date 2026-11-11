@@ -110,6 +110,9 @@ export const SNAPSHOT_FIELDS = [
   "map_generation",
   "route_progress",
   "navigation_ready",
+  "robot_pose",
+  "navigation_block_reason",
+  "scan_points",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -179,6 +182,15 @@ export interface RouteProgress {
   active_waypoint_index: number | null;
 }
 
+export interface MapPoint {
+  x: number;
+  y: number;
+}
+
+export interface RobotPose extends MapPoint {
+  yaw: number;
+}
+
 export interface SnapshotPayload {
   connected: boolean;
   localized: boolean;
@@ -201,6 +213,11 @@ export interface SnapshotPayload {
   map_generation?: string;
   route_progress?: RouteProgress;
   navigation_ready?: boolean;
+  //Compatible: older snapshots omit live map telemetry.
+  robot_pose?: RobotPose | null;
+  //Compatible: older vehicles do not report the navigation blocker.
+  navigation_block_reason?: string | null;
+  scan_points?: MapPoint[];
 }
 
 export interface ResponsePayload {
@@ -304,6 +321,26 @@ function parseRouteProgress(value: unknown): RouteProgress | null {
   };
 }
 
+function parseRobotPose(value: unknown): RobotPose | null | undefined {
+  //Compatible: missing or null telemetry means there is no qualified live pose.
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || !isFiniteNumber(value["x"]) || !isFiniteNumber(value["y"]) ||
+      !isFiniteNumber(value["yaw"])) return undefined;
+  return { x: value["x"], y: value["y"], yaw: value["yaw"] };
+}
+
+function parseScanPoints(value: unknown): MapPoint[] | null {
+  //Compatible: legacy snapshots may omit or null the scan overlay.
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 96) return null;
+  const points: MapPoint[] = [];
+  for (const point of value) {
+    if (!isRecord(point) || !isFiniteNumber(point["x"]) || !isFiniteNumber(point["y"])) return null;
+    points.push({ x: point["x"], y: point["y"] });
+  }
+  return points;
+}
+
 function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (!isRecord(value)) return null;
   const mapRef = parseMapRef(value["map_ref"]);
@@ -325,10 +362,15 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   ) {
     return null;
   }
+  const robotPose = parseRobotPose(value["robot_pose"]);
+  const scanPoints = parseScanPoints(value["scan_points"]);
+  if (robotPose === undefined || scanPoints === null) return null;
   const tasks = parseTasks(value["tasks"]);
   if (tasks === null) return null;
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
   if (!isCount(homeRevision)) return null;
+  const navigationBlockReason = value["navigation_block_reason"] ?? null;
+  if (navigationBlockReason !== null && !isText(navigationBlockReason, 256)) return null;
   const navigationReady = value["navigation_ready"];
   if (navigationReady !== undefined && typeof navigationReady !== "boolean") return null;
   const mapGeneration = value["map_generation"];
@@ -352,6 +394,9 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     last_synced_at: value["last_synced_at"],
     tasks,
     home_revision: homeRevision,
+    robot_pose: robotPose,
+    navigation_block_reason: navigationBlockReason,
+    scan_points: scanPoints,
   };
 }
 

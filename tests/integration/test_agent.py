@@ -1032,7 +1032,17 @@ async def test_slow_snapshot_does_not_block_heartbeat_reply(tmp_path: Path) -> N
         await asyncio.wait_for(task, 2)
 
 
-async def test_disconnect_cancels_inflight_old_epoch_operations(rig: Rig) -> None:
+async def test_disconnect_cancels_inflight_old_epoch_operations(rig: Rig, monkeypatch) -> None:
+    closing = asyncio.Event()
+    persist = asyncio.Event()
+    original_finish = rig.journal.finish
+
+    async def gated_finish(*args, **kwargs):
+        closing.set()
+        await persist.wait()
+        return await original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(rig.journal, "finish", gated_finish)
     link = FakeLink(epoch=1)
     task = await start(rig, link)
     try:
@@ -1045,11 +1055,26 @@ async def test_disconnect_cancels_inflight_old_epoch_operations(rig: Rig) -> Non
             )
         )
         await until(lambda: bool(rig.maps.calls))
+        inflight = set(rig.agent._inflight)
+        assert inflight
         link.drop()
-        await until(lambda: not rig.agent._inflight, timeout=0.1)
+        await asyncio.wait_for(closing.wait(), timeout=2)
+        # Cancellation must revoke the old link before waiting for journal I/O.
+        assert not rig.agent.connected
+        assert not rig.agent.eligible_for_motion
+        assert any(not operation.done() for operation in inflight)
+        persist.set()
+        _, pending = await asyncio.wait(inflight, timeout=2)
+        assert not pending
+        # A regular map timeout returns an error response, rather than cancelling
+        # the task. It must not satisfy this disconnect assertion.
+        assert all(operation.cancelled() for operation in inflight)
+        assert not rig.agent._inflight
         entry = await rig.journal.get("old-export")
         assert entry is not None and entry.status is OperationStatus.NEEDS_REVIEW
+        assert entry.error is None
     finally:
+        persist.set()
         await finish(task, rig)
 
 

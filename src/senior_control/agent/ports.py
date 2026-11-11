@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, Pose2D
 from senior_control.navigation import RoutePlan, RouteProgress, RouteRejected
+from senior_control.protocol import RobotPosePayload, ScanPointPayload
 from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import TaskDefinition
 from senior_control.waypoints.store import WaypointStore
@@ -178,6 +179,10 @@ class RuntimeState:
     localization_generation: str | None = None
     navigation_ready: bool = False
     route_progress: RouteProgress | None = None
+    # //Compatible: legacy IPC does not provide live map geometry.
+    robot_pose: RobotPosePayload | None = None
+    navigation_block_reason: str | None = None
+    scan_points: tuple[ScanPointPayload, ...] = ()
 
 
 class StateReply(BaseModel):
@@ -196,6 +201,10 @@ class StateReply(BaseModel):
     localization_generation: str | None = None
     navigation_ready: bool = False
     route_progress: RouteProgress | None = None
+    # //Compatible: older adapters omit live geometry.
+    robot_pose: RobotPosePayload | None = None
+    navigation_block_reason: str | None = Field(default=None, max_length=256)
+    scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
 
 
 class IpcState:
@@ -217,6 +226,12 @@ class IpcState:
                 if state.map_id is None or state.reference_revision is None
                 else MapRef(state.map_id, state.reference_revision)
             )
+            geometry_live = (
+                state.localized
+                and map_ref is not None
+                and state.map_generation is not None
+                and state.map_generation == state.localization_generation
+            )
             return RuntimeState(
                 state.localized,
                 state.safety_clear,
@@ -227,6 +242,9 @@ class IpcState:
                 state.localization_generation,
                 state.navigation_ready,
                 state.route_progress,
+                robot_pose=state.robot_pose if geometry_live else None,
+                scan_points=tuple(state.scan_points) if geometry_live else (),
+                navigation_block_reason=state.navigation_block_reason,
             )
         except (IpcError, OSError, ValueError, ValidationError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS state unavailable") from exc
