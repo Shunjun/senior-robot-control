@@ -48,6 +48,19 @@ senior-robot status
 senior-robot stop
 ```
 
+`start` 默认等同于 `start --headless true`，通过 Xvfb 无窗口运行。要打开本机 Gazebo
+窗口，在 Linux 图形桌面的终端执行：
+
+```sh
+senior-robot start --headless false
+```
+
+窗口模式绕过 Xvfb，将当前终端的 `DISPLAY`、`XAUTHORITY` 及相关桌面会话环境传入
+systemd 用户服务；缺少 `DISPLAY` 时会明确报错。需要可访问的 X11 或 XWayland 显示和
+相应认证权限。纯 SSH 会话可继续使用默认无窗口模式。模式是本次启动参数，无需修改
+JSON 配置。若同一配置已经启动，命令只提示正在运行；切换模式须先 `stop` 再重新 `start`，
+不会额外启动第二套仿真。
+
 `start` 需要可用的 systemd 用户会话。仿真启动后，命令先核对 ROS 适配器身份，再启动
 Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服务的仿真进程。复用同一档的
 急停文件。状态分别显示进程、IPC 身份核验和该次运行最新的云端连接事件。

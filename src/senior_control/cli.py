@@ -221,7 +221,14 @@ def main(argv: list[str] | None = None) -> int:
     deploy.add_argument("--profile", required=True, type=Path)
     deploy.add_argument("--dry-run", action="store_true")
     for command in ("start", "stop", "status"):
-        commands.add_parser(command, parents=[simulation_default])
+        lifecycle_parser = commands.add_parser(command, parents=[simulation_default])
+        if command == "start":
+            lifecycle_parser.add_argument(
+                "--headless",
+                choices=("true", "false"),
+                default="true",
+                help="run simulation without a Gazebo window (default: true)",
+            )
     args = parser.parse_args(argv)
     try:
         profile_path = args.profile or Path.home() / "senior-sim" / "simulation.json"
@@ -237,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
             if profile.kind == "simulation":
                 from senior_control.simulation_cli import lifecycle
 
+                if args.command == "start" and args.headless == "false":
+                    return lifecycle(args.command, profile_path, profile, headless=False)
                 return lifecycle(args.command, profile_path, profile)
             if profile.kind != "real" or sys.platform != "linux":
                 raise ValueError("systemd lifecycle requires a real Linux profile")

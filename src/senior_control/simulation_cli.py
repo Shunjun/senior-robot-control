@@ -1,5 +1,6 @@
 """Own a single simulator and Agent within a transient user service."""
 
+import argparse
 import asyncio
 import fcntl
 import hashlib
@@ -25,7 +26,33 @@ def _unit(profile: Path) -> str:
     return f"senior-sim-{key}.service"
 
 
-def lifecycle(command: str, profile: Path, config: VehicleProfile) -> int:
+class DisplayUnavailableError(ValueError):
+    """Windowed simulation has no desktop display in the invoking session."""
+
+
+_DESKTOP_ENVIRONMENT = (
+    "DISPLAY",
+    "XAUTHORITY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "QT_QPA_PLATFORM",
+    "DBUS_SESSION_BUS_ADDRESS",
+)
+
+
+def _desktop_environment() -> list[str]:
+    if not os.environ.get("DISPLAY", "").strip():
+        raise DisplayUnavailableError(
+            "Windowed simulation requires an available desktop DISPLAY. "
+            "Run start from a graphical session or use --headless true."
+        )
+    return [
+        f"--setenv={name}={os.environ[name]}" for name in _DESKTOP_ENVIRONMENT if name in os.environ
+    ]
+
+
+def lifecycle(command: str, profile: Path, config: VehicleProfile, *, headless: bool = True) -> int:
     if sys.platform != "linux":
         raise ValueError("simulation requires Linux")
     unit = _unit(profile)
@@ -36,6 +63,11 @@ def lifecycle(command: str, profile: Path, config: VehicleProfile) -> int:
         if active.returncode == 0:
             print(f"{unit} is already running.")
             return 0
+        try:
+            desktop = [] if headless else _desktop_environment()
+        except DisplayUnavailableError as error:
+            print(str(error), file=sys.stderr)
+            return 1
         argv = [
             "systemd-run",
             "--user",
@@ -46,11 +78,14 @@ def lifecycle(command: str, profile: Path, config: VehicleProfile) -> int:
             "--property=TimeoutStartSec=45",
             "--property=TimeoutStopSec=30",
             "--property=UMask=0077",
+            *desktop,
             "--",
             sys.executable,
             "-m",
             "senior_control.simulation_cli",
             str(profile.resolve()),
+            "--headless",
+            str(headless).lower(),
         ]
     elif command == "status":
         return service_status(unit, config, user=True)
@@ -206,8 +241,12 @@ async def _stop(process: asyncio.subprocess.Process, timeout: float) -> None:
         await process.wait()
 
 
-async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
+async def supervise(
+    profile: VehicleProfile, credentials: Credentials, *, headless: bool = True
+) -> int:
     assert profile.socket is not None
+    if not headless:
+        _desktop_environment()
     root = profile.credentials.parent
     env = dict(os.environ)
     env.pop("NOTIFY_SOCKET", None)
@@ -243,13 +282,12 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
             'source "$1" || exit; shift; exec "$@"',
             "senior-ros",
             str(profile.ros_setup),
-            "xvfb-run",
-            "-a",
+            *(["xvfb-run", "-a"] if headless else []),
             "ros2",
             "launch",
             "senior_robot",
             "simulation_motion.launch.py",
-            "headless:=true",
+            f"headless:={str(headless).lower()}",
             "qualified_reference:=true",
             *video_args,
             f"agent_socket:={profile.socket}",
@@ -290,7 +328,7 @@ async def supervise(profile: VehicleProfile, credentials: Credentials) -> int:
                     camera.cleanup()
 
 
-def main(path: Path) -> int:
+def main(path: Path, *, headless: bool = True) -> int:
     try:
         profile = VehicleProfile.model_validate_json(path.read_bytes())
         validate_simulation_profile(profile)
@@ -310,11 +348,18 @@ def main(path: Path) -> int:
             if os.path.lexists(profile.socket):
                 raise ValueError("socket path is already occupied")
             _initialize_estop(profile.estop_state, credentials.robot_id)
-            return asyncio.run(supervise(profile, credentials))
+            return asyncio.run(supervise(profile, credentials, headless=headless))
+    except DisplayUnavailableError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     except (OSError, ValueError, IpcError):
         print("Simulation startup failed. Check the profile, build and adapter.", file=sys.stderr)
         return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(Path(sys.argv[1])))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("profile", type=Path)
+    parser.add_argument("--headless", choices=("true", "false"), default="true")
+    arguments = parser.parse_args()
+    raise SystemExit(main(arguments.profile, headless=arguments.headless == "true"))

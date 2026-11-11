@@ -275,3 +275,130 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
         await simulation_cli.supervise(profile.model_copy(update={"video": True}), credentials)
     assert len(slots) == 2 and slots[0] == slots[1]
     assert not slots[0].parent.exists()
+
+
+@pytest.mark.parametrize("headless", ["true", "false"])
+def test_start_accepts_explicit_headless(default_profile, monkeypatch, headless):
+    from senior_control import simulation_cli
+
+    def lifecycle(action, path, profile, *, headless=True):
+        assert (action, path) == ("start", default_profile)
+        assert headless is (requested == "true")
+        return 0
+
+    requested = headless
+    monkeypatch.setattr(simulation_cli, "lifecycle", lifecycle)
+    assert cli.main(["start", "--headless", requested]) == 0
+
+
+def test_start_rejects_invalid_headless(default_profile):
+    with pytest.raises(SystemExit) as error:
+        cli.main(["start", "--headless", "maybe"])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("headless", [True, False])
+def test_simulation_service_receives_runtime_mode_and_desktop(tmp_path, monkeypatch, headless):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    calls = []
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":7")
+    monkeypatch.setenv("XAUTHORITY", "/tmp/desktop auth")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=1 if "is-active" in argv else 0)
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    profile, _ = _simulation_profile(tmp_path)
+    assert (
+        simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=headless)
+        == 0
+    )
+    assert len(calls) == 2
+    service = calls[1]
+    assert service[-2:] == ["--headless", str(headless).lower()]
+    if headless:
+        assert not any(arg.startswith("--setenv=") for arg in service)
+    else:
+        assert "--setenv=DISPLAY=:7" in service
+        assert "--setenv=XAUTHORITY=/tmp/desktop auth" in service
+        assert "--setenv=XDG_RUNTIME_DIR=/run/user/1000" in service
+        assert service.index("--setenv=DISPLAY=:7") < service.index("--")
+
+
+def test_windowed_start_requires_display_without_starting_service(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    calls = []
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    profile, _ = _simulation_profile(tmp_path)
+    assert (
+        simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=False) == 1
+    )
+    assert len(calls) == 1 and "is-active" in calls[0]
+    assert "DISPLAY" in capsys.readouterr().err
+
+
+def test_windowed_start_does_not_duplicate_running_simulation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    calls = []
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    profile, _ = _simulation_profile(tmp_path)
+    assert (
+        simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=False) == 0
+    )
+    assert len(calls) == 1 and "is-active" in calls[0]
+
+
+@pytest.mark.parametrize("headless", [True, False])
+async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatch, headless):
+    from senior_control import simulation_cli
+
+    calls = []
+    monkeypatch.setenv("DISPLAY", ":7")
+
+    async def spawn(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    async def verify(*args):
+        raise ValueError("stop after inspecting launch")
+
+    async def cleanup(*args):
+        pass
+
+    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
+    monkeypatch.setattr(simulation_cli, "_stop", cleanup)
+    profile, credentials = _simulation_profile(tmp_path)
+    with pytest.raises(ValueError, match="stop after inspecting launch"):
+        await simulation_cli.supervise(profile, credentials, headless=headless)
+    assert len(calls) == 1
+    argv, options = calls[0]
+    assert f"headless:={str(headless).lower()}" in argv
+    assert ("xvfb-run" in argv) is headless
+    assert options["env"]["DISPLAY"] == ":7"
