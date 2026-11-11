@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from senior_control.mapping.simulation import baseline_grid, map_to_odom
+from senior_control.mapping.simulation import baseline_grid, map_to_odom, project_scan
 from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
 from senior_robot.motion_lifecycle import with_dds_info
@@ -41,10 +41,18 @@ class SimulationReference:
         from rclpy.clock import Clock, ClockType
         from rclpy.duration import Duration
         from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-        from tf2_ros import TransformBroadcaster
+        from sensor_msgs.msg import LaserScan
+        from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 
         self._node = node
         self._grid = baseline_grid(world, secrets.token_hex(16))
+        self._scan_points: list[dict[str, float]] = []
+        self._scan_received = float("-inf")
+        self._scan_stamp = float("-inf")
+        self._scan_generation = ""
+        self._scan_gid: bytes | None = None
+        self._scan_tf = Buffer()
+        self._scan_listener = TransformListener(self._scan_tf, node)
         self._truth: _Observation | None = None
         self._wheel: _Observation | None = None
         self._pose: Pose2D | None = None
@@ -78,6 +86,7 @@ class SimulationReference:
         )
         node.create_subscription(Odometry, "/wheel/odom", self._on_wheel, qos_profile_sensor_data)
         node.create_subscription(DiagnosticArray, "/safety/status", self._on_safety, 10)
+        node.create_subscription(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         node.create_timer(0.05, self._tick, clock=steady)
 
@@ -129,7 +138,74 @@ class SimulationReference:
             "localization_generation": grid.grid_id if grid and pose else None,
             "execution_status": execution_status,
             "navigation_ready": navigation_ready,
+            "robot_pose": {"x": pose.x, "y": pose.y, "yaw": pose.yaw} if pose else None,
+            "scan_points": self.scan_points() if pose else [],
         }
+
+    def scan_points(self) -> list[dict[str, float]]:
+        now = self._node.get_clock().now().nanoseconds / 1e9
+        if (
+            self.pose() is None
+            or self._truth is None
+            or self._scan_generation != self.generation
+            or not 0 <= time.monotonic() - self._scan_received <= _MAX_AGE
+            or not 0 <= now - self._scan_stamp <= _MAX_AGE
+            or abs(self._truth.stamp - self._scan_stamp) > _MAX_SKEW
+            or self._scan_gid != self._source("/scan", "senior_sim_bridge")
+        ):
+            return []
+        return self._scan_points
+
+    @with_dds_info
+    def _on_scan(self, msg: Any, info: dict[str, Any]) -> None:
+        from rclpy.time import Time
+        from tf2_ros import TransformException
+
+        self._scan_points = []
+        pose = self.pose()
+        source = self._source("/scan", "senior_sim_bridge", info)
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
+        now = self._node.get_clock().now().nanoseconds / 1e9
+        if (
+            pose is None
+            or self._truth is None
+            or source is None
+            or msg.header.frame_id != "laser_link"
+            or not 0 <= now - stamp <= _MAX_AGE
+            or abs(self._truth.stamp - stamp) > _MAX_SKEW
+            or not 0 < len(msg.ranges) <= 4096
+            or not all(
+                math.isfinite(v)
+                for v in (msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
+            )
+            or not 0 < msg.range_min < msg.range_max
+        ):
+            return
+        try:
+            transform = self._scan_tf.lookup_transform("base_link", "laser_link", Time())
+        except TransformException:
+            return
+        t, q = transform.transform.translation, transform.transform.rotation
+        # Only the planar, fixed laser mount of this qualified simulation is supported.
+        if (
+            not all(math.isfinite(v) for v in (t.x, t.y, q.x, q.y, q.z, q.w))
+            or abs(q.x) > 1e-6
+            or abs(q.y) > 1e-6
+            or not math.isclose(q.z * q.z + q.w * q.w, 1.0, abs_tol=0.02)
+        ):
+            return
+        sensor = Pose2D(t.x, t.y, 2 * math.atan2(q.z, q.w))
+        self._scan_points = project_scan(
+            pose,
+            sensor,
+            msg.ranges,
+            msg.angle_min,
+            msg.angle_increment,
+            msg.range_min,
+            msg.range_max,
+        )
+        self._scan_stamp, self._scan_received = stamp, time.monotonic()
+        self._scan_generation, self._scan_gid = self.generation, source
 
     def pose_reply(self) -> dict[str, Any]:
         pose = self.pose()

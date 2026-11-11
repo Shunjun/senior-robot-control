@@ -142,6 +142,9 @@ class SnapshotState:
             map_generation=state.map_generation,
             route_progress=state.route_progress,
             navigation_ready=localized and state.map_ref is not None and state.navigation_ready,
+            robot_pose=state.robot_pose,
+            navigation_block_reason=state.navigation_block_reason,
+            scan_points=state.scan_points,
         )
 
 

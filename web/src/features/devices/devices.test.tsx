@@ -1436,3 +1436,81 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
   expect(returnHome().disabled).toBe(true);
   expect(link.requests.map(({ type }) => type)).toEqual(["map.manifest", "map.tile"]);
 });
+
+it("validates bounded finite live map telemetry and defaults legacy snapshots", () => {
+  const parse = (payload: Record<string, unknown>) => parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, ...payload })));
+  expect(parse({})?.payload).toMatchObject({ robot_pose: null, scan_points: [] });
+  expect(parse({ robot_pose: null, scan_points: null })?.payload).toMatchObject({ robot_pose: null, scan_points: [] });
+  const pose = { x: 1, y: -2, yaw: 0.4 };
+  const points = Array.from({ length: 96 }, (_, x) => ({ x, y: 2 }));
+  expect(parse({ robot_pose: pose, scan_points: points })?.payload).toMatchObject({ robot_pose: pose, scan_points: points });
+  for (const invalid of [{ robot_pose: { ...pose, yaw: null } }, { scan_points: [...points, { x: 0, y: 0 }] }, { scan_points: [{ x: 0, y: "1" }] }, { robot_pose: [] }]) {
+    expect(parse(invalid)).toBeNull();
+  }
+  expect(parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, robot_pose: pose })).replace('"yaw":0.4', '"yaw":1e400'))).toBeNull();
+});
+
+it.each([false, true])("shows only telemetry qualified for the displayed map (export copy: %s)", async (displayOnly) => {
+  const link = new FakeLink();
+  const current = snapshot("robot-alpha", { map_generation: "live-grid", robot_pose: { x: 0.2, y: 0.4, yaw: 0 }, scan_points: [{ x: 0.5, y: 0.5 }] });
+  const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "live-grid" };
+  link.requestImpl = async (type) => {
+    if (type === "map.manifest") return { data: { ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 }, tile_size: 32, display_only: displayOnly } };
+    if (type === "map.tile") return { data: { ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0] } };
+    return { ok: true };
+  };
+  const { container } = mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  if (displayOnly) {
+    await screen.findByText("地图导出副本 · 仅供查看");
+    expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+    expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+    expect(screen.queryByText("车辆位置暂不可用")).not.toBeNull();
+    return;
+  }
+  await waitFor(() => expect(screen.queryByLabelText("实时激光命中点")).not.toBeNull());
+  const first = container.querySelector('[data-marker="robot"]')!.getAttribute("transform");
+  link.emit({ ...current, robot_pose: { x: 0.6, y: 0.8, yaw: Math.PI / 2 } });
+  expect(container.querySelector('[data-marker="robot"]')!.getAttribute("transform")).not.toBe(first);
+  const { map_generation: _generation, ...legacy } = current;
+  link.emit(legacy);
+  expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+  expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+  for (const overrides of [{ localized: false }, { stale: true }, { connected: false }, { map_generation: "other-grid" }, { map_ref: { map_id: "other", reference_revision: 2 } }]) {
+    link.emit({ ...current, ...overrides });
+    expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+    expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+  }
+});
+
+it("validates optional navigation block diagnostics", () => {
+  const parse = (navigation_block_reason?: unknown) => parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, navigation_block_reason })));
+  expect(parse()?.payload).toMatchObject({ navigation_block_reason: null });
+  expect(parse(null)?.payload).toMatchObject({ navigation_block_reason: null });
+  expect(parse("planner state unavailable")?.payload).toMatchObject({ navigation_block_reason: "planner state unavailable" });
+  expect(parse("x".repeat(256))).not.toBeNull();
+  for (const value of ["", "x".repeat(257), 1, false, {}]) expect(parse(value)).toBeNull();
+});
+
+it("explains the vehicle's concrete navigation blocker", async () => {
+  const link = new FakeLink();
+  mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(snapshot("robot-alpha", { navigation_ready: false }));
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  expect(screen.queryByText("车端未报告已验证的导航能力，无法开始、继续或返航。")).not.toBeNull();
+  for (const [reason, explanation] of [
+    ["map or localization generation changed", "地图或定位代次已变化，请等待重新定位。"],
+    ["map or localization unavailable", "当前地图或定位尚未就绪。"],
+    ["planner state unavailable", "路径规划器或运动控制器尚未就绪。"],
+    ["safety status unavailable (scan stale)", "传感器安全检查尚未通过：scan stale。"],
+    ["heartbeat or control authority unavailable", "车辆心跳或控制权限尚未就绪。"],
+    ["navigation unavailable", "车端导航尚未就绪。"],
+  ] as const) {
+    link.emit(snapshot("robot-alpha", { navigation_ready: false, navigation_block_reason: reason }));
+    expect(screen.queryByText(`无法导航：${explanation}`)).not.toBeNull();
+    expect(screen.queryByText("车端未报告已验证的导航能力，无法开始、继续或返航。")).toBeNull();
+  }
+});

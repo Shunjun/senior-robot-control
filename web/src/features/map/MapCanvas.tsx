@@ -174,6 +174,8 @@ export interface MapCanvasProps {
   /** Initial viewport. Without it the map is fitted to the surface. */
   view?: MapView;
   robot?: Pose | null;
+  /** Fresh laser hits already transformed into the map frame. */
+  scanPoints?: readonly Point[];
   home?: Pose | null;
   goal?: Pose | null;
   /** The pose being edited, drawn dashed. */
@@ -225,6 +227,7 @@ export function MapCanvas({
   stale,
   view: initialView,
   robot = null,
+  scanPoints = [],
   home = null,
   goal = null,
   draft = null,
@@ -636,7 +639,16 @@ export function MapCanvas({
           {home !== null && <Marker kind="home" pose={home} view={view} />}
           {goal !== null && <Marker kind="goal" pose={goal} view={view} />}
           {preview !== null && <Marker kind="draft" pose={preview} view={view} />}
-          {robot !== null && <Marker kind="robot" pose={robot} view={view} />}
+          {!stale && scanPoints.length > 0 && (
+            <g aria-label="实时激光命中点" className={styles.scanHits}>
+              <title>实时激光命中点 · 独立于静态地图</title>
+              {scanPoints.map((point, index) => {
+                const at = worldToScreen(view, point);
+                return <circle key={index} cx={at.x} cy={at.y} r={3} />;
+              })}
+            </g>
+          )}
+          {!stale && robot !== null && <Marker kind="robot" pose={robot} view={view} />}
           <g className={styles.scale} transform={`translate(16 ${size.height - 18})`}>
             <line x1={0} y1={0} x2={bar.pixels} y2={0} />
             <line x1={0} y1={-4} x2={0} y2={4} />
@@ -652,6 +664,7 @@ export function MapCanvas({
         {picking ? "；在地图上按下选点，拖动设定朝向" : "；拖动平移"}
       </p>
 
+      {!stale && scanPoints.length > 0 && <p className={styles.scanLegend}>实时激光命中点 · 独立于静态地图</p>}
       {taskRoute.length > 0 && <p className={styles.hint}>任务航点预览</p>}
       {map.grid === undefined && <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
         <span>原始 {counts.raw}</span>

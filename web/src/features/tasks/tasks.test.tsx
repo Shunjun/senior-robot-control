@@ -306,3 +306,20 @@ it("shows only vehicle-reported progress on the current live map", () => {
   view.rerender(<TaskList snapshot={{ ...current, stale: true }} link={robotLink} />);
   expect(screen.queryByText(/daily · 第 2 个航点/)).toBeNull();
 });
+
+it("shows current vehicle and laser hits on task maps only for qualified live generations", () => {
+  const robotLink = link();
+  const current = { ...snapshot, map_generation: workspace.grid_id, robot_pose: { x: 1, y: 2, yaw: 0.2 }, scan_points: [{ x: 2, y: 3 }] };
+  const { container, rerender } = render(<TaskList snapshot={current} link={robotLink} workspace={workspace} />);
+  expect(screen.queryByLabelText("实时激光命中点")).not.toBeNull();
+  expect(container.querySelector('[data-marker="robot"]')).not.toBeNull();
+  for (const overrides of [{ localized: false }, { connected: false }, { stale: true }, { map_generation: "other-grid" }, { map_ref: { map_id: "other", reference_revision: 2 } }]) {
+    rerender(<TaskList snapshot={{ ...current, ...overrides }} link={robotLink} workspace={workspace} map={map} />);
+    expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+    expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+  }
+  rerender(<TaskList snapshot={current} link={robotLink} map={map} />);
+  expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+  expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+  expect(screen.queryByText("车辆位置暂不可用")).not.toBeNull();
+});

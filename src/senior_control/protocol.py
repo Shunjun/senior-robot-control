@@ -270,6 +270,15 @@ class TaskSummaryPayload(StrictModel):
     enabled: bool
 
 
+class ScanPointPayload(StrictModel):
+    x: float
+    y: float
+
+
+class RobotPosePayload(ScanPointPayload):
+    yaw: float
+
+
 class SnapshotPayload(StrictModel):
     """The robot's own view of itself, pushed on connect and after each change."""
 
@@ -290,6 +299,10 @@ class SnapshotPayload(StrictModel):
     map_generation: ShortText | None = None
     route_progress: RouteProgress | None = None
     navigation_ready: bool = False
+    # //Compatible: legacy snapshots have no live geometry.
+    robot_pose: RobotPosePayload | None = None
+    navigation_block_reason: str | None = Field(default=None, max_length=256)
+    scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
@@ -299,6 +312,13 @@ class SnapshotPayload(StrictModel):
             result.pop("map_generation", None)
         if self.route_progress is None:
             result.pop("route_progress", None)
+        # //Compatible: omit optional geometry when the source has no live observation.
+        if self.navigation_block_reason is None:
+            result.pop("navigation_block_reason", None)
+        if self.robot_pose is None:
+            result.pop("robot_pose", None)
+        if not self.scan_points:
+            result.pop("scan_points", None)
         # //Compatible: a missing readiness bit keeps the legacy manifest fallback.
         if "navigation_ready" not in self.model_fields_set:
             result.pop("navigation_ready", None)

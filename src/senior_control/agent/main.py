@@ -1106,6 +1106,9 @@ class Agent:
             map_generation=live.map_generation,
             route_progress=live.route_progress,
             navigation_ready=live.navigation_ready,
+            robot_pose=live.robot_pose,
+            navigation_block_reason=live.navigation_block_reason,
+            scan_points=live.scan_points,
         )
         return snapshot
 

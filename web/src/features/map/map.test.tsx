@@ -584,3 +584,15 @@ describe("map layout", () => {
     expect(css).toMatch(/:focus-visible/);
   });
 });
+
+it("renders live scan hits in the map frame and hides all live overlays on cached maps", () => {
+  const live = { map: ROTATED, view: VIEW, robot: { x: 3.4, y: -1.6, yaw: Math.PI / 2 }, scanPoints: [{ x: 3.5, y: -1.5 }] };
+  const { container, rerender } = render(<MapCanvas {...live} stale={false} />);
+  const hit = screen.getByLabelText("实时激光命中点").querySelector("circle")!;
+  expect(Number(hit.getAttribute("cx"))).toBeCloseTo(332);
+  expect(Number(hit.getAttribute("cy"))).toBeCloseTo(198);
+  expect(container.querySelector('[data-marker="robot"]')?.getAttribute("transform")).toContain("rotate(-90)");
+  rerender(<MapCanvas {...live} stale />);
+  expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+  expect(container.querySelector('[data-marker="robot"]')).toBeNull();
+});

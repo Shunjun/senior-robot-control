@@ -10,6 +10,8 @@ from senior_control.navigation import RouteProgress
 from senior_control.protocol import (
     HomePayload,
     MapRefPayload,
+    RobotPosePayload,
+    ScanPointPayload,
     SnapshotEnvelope,
     SnapshotPayload,
     TaskSummaryPayload,
@@ -40,6 +42,10 @@ class LiveState:
     map_generation: str | None = None
     route_progress: RouteProgress | None = None
     navigation_ready: bool | None = None
+    # //Compatible: older sources do not supply live geometry.
+    robot_pose: RobotPosePayload | None = None
+    navigation_block_reason: str | None = None
+    scan_points: tuple[ScanPointPayload, ...] = ()
 
 
 class StatePort(Protocol):
@@ -69,6 +75,10 @@ class RobotSnapshot:
     map_generation: str | None = None
     route_progress: RouteProgress | None = None
     navigation_ready: bool | None = None
+    # //Compatible: older sources do not supply live geometry.
+    robot_pose: RobotPosePayload | None = None
+    navigation_block_reason: str | None = None
+    scan_points: tuple[ScanPointPayload, ...] = ()
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -132,6 +142,19 @@ def snapshot_envelope(
             home_revision=snapshot.home_revision,
             map_generation=snapshot.map_generation,
             route_progress=snapshot.route_progress if not stale else None,
+            navigation_block_reason=snapshot.navigation_block_reason,
+            robot_pose=snapshot.robot_pose
+            if not stale
+            and snapshot.connected
+            and snapshot.localized
+            and snapshot.map_generation is not None
+            else None,
+            scan_points=list(snapshot.scan_points)
+            if not stale
+            and snapshot.connected
+            and snapshot.localized
+            and snapshot.map_generation is not None
+            else [],
         ),
     )
     if snapshot.navigation_ready is not None:
@@ -170,6 +193,9 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         map_generation=payload.map_generation,
         route_progress=payload.route_progress,
         navigation_ready=readiness,
+        robot_pose=payload.robot_pose,
+        navigation_block_reason=payload.navigation_block_reason,
+        scan_points=tuple(payload.scan_points),
     )
 
 
@@ -215,6 +241,8 @@ class SnapshotCache:
         shown = replace(
             snapshot,
             connected=snapshot.connected and not stale,
+            robot_pose=snapshot.robot_pose if not stale else None,
+            scan_points=snapshot.scan_points if not stale else (),
             navigation_ready=ready and not stale if ready is not None else None,
         )
         return CloudSnapshot(shown, synced, stale)
