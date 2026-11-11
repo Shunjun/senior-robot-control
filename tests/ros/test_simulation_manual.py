@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient
+from senior_control.runtime.ipc import IpcClient, IpcError
 
 
 async def test_gazebo_manual_motion_and_stop():
@@ -40,9 +40,10 @@ async def test_gazebo_manual_motion_and_stop():
 
     async def renew():
         while running:
-            await heartbeat.request(
+            reply = await heartbeat.request(
                 "server_heartbeat", connection_epoch=epoch, deadline=time.monotonic() + 1
             )
+            assert reply.get("ok") is True, reply
             await asyncio.sleep(0.15)
 
     renewer = asyncio.create_task(renew())
@@ -62,6 +63,16 @@ async def test_gazebo_manual_motion_and_stop():
         import json
 
         now = time.monotonic()
+        if kind == "drive.velocity":
+            envelope["payload"] = {
+                **payload,
+                "gesture": 1,
+                "sampled_at": now,
+                "server_issued_at": now,
+                "server_deadline": now + 0.3,
+            }
+        if renewer.done():
+            await renewer
         result = await client.request(
             "command", envelope=json.dumps(envelope), received_at=now, local_deadline=now + 0.2
         )
@@ -90,6 +101,10 @@ async def test_gazebo_manual_motion_and_stop():
             await asyncio.sleep(0.01)
         else:
             pytest.fail("safety output did not return to zero within 500 ms")
+        first_zero = next(at for at, vx, wz in outputs if at >= stopped_at and vx == 0 and wz == 0)
+        await asyncio.sleep(0.5)
+        after_stop = [(vx, wz) for at, vx, wz in outputs if at >= first_zero]
+        assert len(after_stop) >= 2 and all(vx == 0 and wz == 0 for vx, wz in after_stop)
         assert any(vx > 0.01 for _, vx, _ in outputs), "safety output never allowed motion"
         final = await client.request("state.get")
         pose = final.get("robot_pose")
@@ -97,8 +112,13 @@ async def test_gazebo_manual_motion_and_stop():
         assert pose["x"] - start["x"] >= 0.02, (start, pose)
         print(f"Observed motion {pose['x'] - start['x']:.3f} m and actual zero output")
     finally:
-        await client.request("disable_motion", connection_epoch=epoch)
         running = False
+        try:
+            await client.request("disable_motion", connection_epoch=epoch)
+        except (IpcError, OSError):
+            pass
+        observer.cancel()
+        renewer.cancel()
         await asyncio.gather(observer, renewer, return_exceptions=True)
         await client.close()
         await heartbeat.close()
