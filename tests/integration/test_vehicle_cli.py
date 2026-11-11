@@ -402,3 +402,303 @@ async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatc
     assert f"headless:={str(headless).lower()}" in argv
     assert ("xvfb-run" in argv) is headless
     assert options["env"]["DISPLAY"] == ":7"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_requalify_motion_selects_simulation_profile(default_profile, monkeypatch, explicit):
+    from senior_control import simulation_cli
+
+    calls = []
+
+    def requalify(path, profile):
+        calls.append((path, profile.kind))
+        return 0
+
+    monkeypatch.setattr(simulation_cli, "requalify_motion", requalify)
+    argv = ["requalify-motion"]
+    if explicit:
+        argv += ["--profile", str(default_profile)]
+    assert cli.main(argv) == 0
+    assert calls == [(default_profile, "simulation")]
+
+
+@pytest.fixture
+def requalification_runtime(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, _ = _simulation_profile(tmp_path)
+    calls = []
+    probes = []
+    validations = []
+
+    def validate(candidate):
+        validations.append(candidate)
+
+    async def probe(candidate):
+        probes.append(candidate)
+        return True
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(simulation_cli, "validate_simulation_profile", validate)
+    monkeypatch.setattr(simulation_cli, "_probe", probe)
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    return profile, calls, probes, validations
+
+
+def test_requalify_motion_only_arms_existing_service(requalification_runtime, tmp_path, capsys):
+    from senior_control import simulation_cli
+
+    profile, calls, probes, validations = requalification_runtime
+    path = tmp_path / "simulation.json"
+    assert simulation_cli.requalify_motion(path, profile) == 0
+    assert validations == [profile] and probes == [profile]
+    assert len(calls) == 2
+    assert calls[0][0] == [
+        "systemctl",
+        "--user",
+        "is-active",
+        "--quiet",
+        simulation_cli._unit(path),
+    ]
+    argv, options = calls[1]
+    assert argv[:2] == ["/bin/bash", "-c"]
+    assert argv[4:8] == [str(profile.ros_setup), "73", "/usr/bin/python3", "-c"]
+    assert 'export ROS_DOMAIN_ID="$1" ROS_LOCALHOST_ONLY=1' in argv[2]
+    assert "/motion_fusion/requalify_progress" in argv[-1]
+    assert "std_srvs.srv import Trigger" in argv[-1]
+    assert "timeout_sec=5.0" in argv[-1] and "timeout_sec=10.0" in argv[-1]
+    assert options["env"]["ROS_DOMAIN_ID"] == "73"
+    assert options["env"]["ROS_LOCALHOST_ONLY"] == "1"
+    assert options["timeout"] == 25 and options["capture_output"] is True
+    output = capsys.readouterr()
+    assert "accepted (armed), not yet qualified" in output.out
+    assert "requested/applied zero" in output.out and "two contiguous stationary" in output.out
+    assert output.err == ""
+
+
+def test_requalify_motion_rejects_real_profile(requalification_runtime, tmp_path, capsys):
+    from senior_control import simulation_cli
+
+    profile, calls, probes, validations = requalification_runtime
+    assert (
+        simulation_cli.requalify_motion(
+            tmp_path / "real.json", profile.model_copy(update={"kind": "real"})
+        )
+        == 1
+    )
+    assert calls == [] and probes == [] and validations == []
+    assert "only for simulation" in capsys.readouterr().err
+
+
+def test_requalify_motion_validates_before_service_access(tmp_path, monkeypatch, capsys):
+    from senior_control import simulation_cli
+
+    profile, _ = _simulation_profile(tmp_path)
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(
+        simulation_cli.subprocess, "run", lambda *a, **k: pytest.fail("ran service")
+    )
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == 1
+    assert "Check the simulation profile" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("missing", ["service", "adapter", "identity_error", "ipc_timeout"])
+def test_requalify_motion_requires_live_service_and_adapter(
+    requalification_runtime,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    missing,
+):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, calls, probes, _ = requalification_runtime
+    if missing == "service":
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return SimpleNamespace(returncode=3)
+
+        monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    else:
+
+        async def probe(candidate):
+            probes.append(candidate)
+            if missing == "identity_error":
+                raise simulation_cli.IpcError("secret must not appear")
+            if missing == "ipc_timeout":
+                raise TimeoutError("secret must not appear")
+            return False
+
+        monkeypatch.setattr(simulation_cli, "_probe", probe)
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == 1
+    assert len(calls) == 1
+    assert (len(probes) == 0) is (missing == "service")
+    output = capsys.readouterr()
+    assert output.out == "" and "secret" not in output.err
+
+
+@pytest.mark.parametrize("failure", ["rejected", "timeout", "unavailable"])
+def test_requalify_motion_request_failure_is_bounded_and_private(
+    requalification_runtime,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    failure,
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, calls, _, _ = requalification_runtime
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "systemctl" in argv:
+            return SimpleNamespace(returncode=0)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"secret")
+        if failure == "unavailable":
+            raise OSError("secret")
+        return SimpleNamespace(returncode=1, stdout=b"secret", stderr=b"secret")
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == 1
+    assert len(calls) == 2
+    output = capsys.readouterr()
+    assert output.out == "" and "secret" not in output.err
+    assert "failed" in output.err
+
+
+@pytest.mark.parametrize(
+    ("reason", "explanation"),
+    [
+        ("progress_history_not_broken", "no requalification was armed"),
+        ("motion_anomaly_latched", "cannot clear it"),
+        ("stationary_profile_unqualified", "calibration is unavailable"),
+        ("clock_unqualified", "restore valid clock"),
+    ],
+)
+def test_requalify_motion_reports_allowlisted_rejections(
+    requalification_runtime,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    reason,
+    explanation,
+):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, _, _, _ = requalification_runtime
+
+    def run(argv, **kwargs):
+        if "systemctl" in argv:
+            return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=1, stdout=f"{reason}\n".encode(), stderr=b"secret")
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert reason in output.err and explanation in output.err
+    assert "secret" not in output.err and "accepted" not in output.err
+
+
+@pytest.mark.parametrize(
+    "untrusted",
+    [b"secret\nclock_unqualified", b"motion anomaly remains latched", b"\xffsecret"],
+)
+def test_requalify_motion_filters_non_allowlisted_child_output(
+    requalification_runtime,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    untrusted,
+):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, _, _, _ = requalification_runtime
+
+    def run(argv, **kwargs):
+        if "systemctl" in argv:
+            return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=1, stdout=untrusted, stderr=b"secret traceback")
+
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "failed or was rejected" in output.err
+    assert "secret" not in output.err and "traceback" not in output.err
+
+
+@pytest.mark.parametrize(
+    ("message", "identifier"),
+    [
+        ("progress history is not broken", "progress_history_not_broken"),
+        ("motion anomaly remains latched", "motion_anomaly_latched"),
+        ("stationary profile unqualified", "stationary_profile_unqualified"),
+        ("clock unqualified", "clock_unqualified"),
+        ("unknown secret reason", ""),
+    ],
+)
+def test_requalification_helper_only_emits_approved_identifiers(
+    monkeypatch,
+    capsys,
+    message,
+    identifier,
+):
+    import sys
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    cleanup = []
+    future = SimpleNamespace(
+        done=lambda: True,
+        cancelled=lambda: False,
+        exception=lambda: None,
+        result=lambda: SimpleNamespace(success=False, message=message),
+    )
+    client = SimpleNamespace(wait_for_service=lambda **_: True, call_async=lambda _: future)
+    node = SimpleNamespace(
+        create_client=lambda *_: client,
+        destroy_node=lambda: cleanup.append("node"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "rclpy",
+        SimpleNamespace(
+            init=lambda **_: None,
+            create_node=lambda _: node,
+            spin_until_future_complete=lambda *_, **__: None,
+            shutdown=lambda: cleanup.append("shutdown"),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "std_srvs", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "std_srvs.srv",
+        SimpleNamespace(
+            Trigger=SimpleNamespace(Request=lambda: object()),
+        ),
+    )
+    with pytest.raises(SystemExit) as error:
+        exec(simulation_cli._REQUALIFY_MOTION, {})
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert output.out.strip() == identifier and output.err == ""
+    assert cleanup == ["node", "shutdown"]

@@ -83,6 +83,38 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 和 Web，以便整条链路识别新增的状态字段。导航不可用时，快照携带车端检查未通过的
 原因，网页分别提示地图定位、规划控制器、传感器证据或心跳权限问题。
 
+### 运动连续性中断后的显式恢复
+
+若扫描等运动证据源曾中断，源恢复后仍可能因 `progress_history_unqualified` 保持停车。
+先确认仿真稳定、车辆静止，并松开移动控件，再在仿真宿主机执行：
+
+```sh
+senior-robot requalify-motion
+# 使用其他仿真档时：
+senior-robot requalify-motion --profile /home/toby/another-sim/simulation.json
+```
+
+命令验证仿真档、该档的运行中用户服务和 ROS 适配器身份后，加载该档的 ROS 环境，
+在对应隔离域请求现有 `/motion_fusion/requalify_progress` 服务。未运行、身份核验失败、
+服务拒绝或超时均返回失败；实车档不提供此操作。此命令不重启仿真、不发送速度命令，
+也不清除急停或真实运动异常锁存。拒绝时终端区分无需重新核验
+（`progress_history_not_broken`）、运动异常仍锁存（`motion_anomaly_latched`）、
+静止校准未就绪（`stationary_profile_unqualified`）和时钟未就绪（`clock_unqualified`）。
+未知服务错误只显示通用失败信息。
+
+终端返回 `accepted (armed), not yet qualified` 只表示请求已受理，尚未恢复运动资格。
+保留正常控制会话的零速请求，保持静止；请求后必须有新鲜的请求零速、实际输出零速，
+并通过两个连续、独立对齐的扫描、轮速和 IMU 静止观测区间。持续非零请求、证据再次中断
+或不满足静止阈值时，安全门继续停车；命令不会伪造观测或降低判断条件。
+
+`senior-robot status` 只报告进程、IPC 和云端连接，不能证明运动资格恢复。
+通过同一 ROS 域的 `/motion/evidence` 实时运动证据检查 `valid` 恢复且不再报告
+`progress_history_unqualified`；再检查 `/safety/status` 的新鲜 `evidence_ready=true`
+以及工作台中当前车辆的安全许可与拦截原因。保持零速时，安全门仍可能显示
+`zero_requested`，这是正常停车状态；历史 `count.*` 计数不会因恢复而清零。
+全部实时安全条件满足后再尝试驾驶；若仍被拦截，按当前原因检查，不能把请求受理当作
+解除所有安全限制。
+
 ### 仿真视频
 
 要在浏览器查看仿真车辆的 RGB 摄像头，在仿真档 JSON 中设置 `"video": true`，
