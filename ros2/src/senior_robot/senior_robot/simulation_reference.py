@@ -4,6 +4,7 @@ import json
 import math
 import secrets
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,10 @@ class SimulationReference:
         self._scan_listener = TransformListener(self._scan_tf, node)
         self._truth: _Observation | None = None
         self._wheel: _Observation | None = None
+        self._observation_history: dict[str, deque[_Observation]] = {
+            "/ground_truth/odom": deque(maxlen=32),
+            "/wheel/odom": deque(maxlen=32),
+        }
         self._deferred_observations: dict[str, DeferredSourceQueue[_Observation]] = {
             "/ground_truth/odom": DeferredSourceQueue(max_pending=32),
             "/wheel/odom": DeferredSourceQueue(max_pending=32),
@@ -107,12 +112,15 @@ class SimulationReference:
         return self._grid if self._ready and self._unique_map() else None
 
     def pose(self) -> Pose2D | None:
+        ros_now = self._node.get_clock().now().nanoseconds / 1e9
         if (
             self._pose is None
-            or time.monotonic() - self._pose_at > _MAX_AGE
+            or not 0 <= time.monotonic() - self._pose_at <= _MAX_AGE
             or self.grid() is None
             or self._truth is None
             or self._wheel is None
+            or not 0 <= ros_now - self._truth.stamp <= _MAX_AGE
+            or not 0 <= ros_now - self._wheel.stamp <= _MAX_AGE
             or self._source("/ground_truth/odom", "senior_sim_bridge") != self._truth.publisher
             or self._source("/wheel/odom", "drive") != self._wheel.publisher
         ):
@@ -281,7 +289,10 @@ class SimulationReference:
             return None
         queue = self._deferred_observations[topic]
         tail = queue.latest()
-        latest = tail.value if tail is not None else previous
+        history = self._observation_history[topic]
+        # The selected coherent pair may contain an older wheel observation.
+        # Source ordering must still use the latest admitted (or pending) sample.
+        latest = tail.value if tail is not None else history[-1] if history else previous
         if latest is not None and (source != latest.publisher or stamp < latest.stamp):
             self._invalidate("observation_source_or_stamp_changed", details={"topic": topic})
             previous = latest = None
@@ -306,12 +317,13 @@ class SimulationReference:
         if not 0 <= (now_ns - stamp_ns) / 1e9 <= _MAX_AGE:
             self._invalidate("observation_ros_expired", details={"topic": topic})
             return None
+        history.append(observation)
         return observation
 
     def _drain_observations(self, now_ns: int, steady: float) -> bool:
-        for topic, name, attribute in (
-            ("/ground_truth/odom", "senior_sim_bridge", "_truth"),
-            ("/wheel/odom", "drive", "_wheel"),
+        for topic, name in (
+            ("/ground_truth/odom", "senior_sim_bridge"),
+            ("/wheel/odom", "drive"),
         ):
             queue = self._deferred_observations[topic]
             for _ in range(32):
@@ -329,24 +341,55 @@ class SimulationReference:
                 if status != "ready":
                     self._invalidate("future_" + status, details={"topic": topic})
                     return False
-                previous = getattr(self, attribute)
+                history = self._observation_history[topic]
+                previous = history[-1] if history else None
                 if previous is not None and head.value.stamp <= previous.stamp:
                     self._invalidate("future_stamp_order", details={"topic": topic})
                     return False
                 queue.consume()
-                setattr(self, attribute, head.value)
+                history.append(head.value)
                 self._future_admitted = min(self._future_admitted + 1, 2**31 - 1)
         return True
 
+    def _coherent_pair(
+        self, ros_now: float, steady: float, truth_source: bytes, wheel_source: bytes
+    ) -> tuple[_Observation, _Observation] | None:
+        def fresh(observation: _Observation, publisher: bytes) -> bool:
+            return (
+                observation.publisher == publisher
+                and 0 <= ros_now - observation.stamp <= _MAX_AGE
+                and 0 <= steady - observation.received <= _MAX_AGE
+            )
+
+        truth = next(
+            (
+                item
+                for item in reversed(self._observation_history["/ground_truth/odom"])
+                if fresh(item, truth_source)
+            ),
+            None,
+        )
+        if truth is None:
+            return None
+        wheel = min(
+            (
+                item
+                for item in self._observation_history["/wheel/odom"]
+                if fresh(item, wheel_source) and abs(truth.stamp - item.stamp) <= _MAX_SKEW
+            ),
+            key=lambda item: (abs(truth.stamp - item.stamp), -item.stamp),
+            default=None,
+        )
+        return (truth, wheel) if wheel is not None else None
+
     @with_dds_info
     def _on_truth(self, msg: Any, info: dict[str, Any]) -> None:
-        self._truth = self._observe(
-            msg, info, "/ground_truth/odom", "senior_sim_bridge", "world", self._truth
-        )
+        # Only _tick publishes a coherent pair with its derived pose and TF.
+        self._observe(msg, info, "/ground_truth/odom", "senior_sim_bridge", "world", self._truth)
 
     @with_dds_info
     def _on_wheel(self, msg: Any, info: dict[str, Any]) -> None:
-        self._wheel = self._observe(msg, info, "/wheel/odom", "drive", "odom", self._wheel)
+        self._observe(msg, info, "/wheel/odom", "drive", "odom", self._wheel)
 
     @with_dds_info
     def _on_safety(self, msg: Any, info: dict[str, Any]) -> None:
@@ -401,6 +444,15 @@ class SimulationReference:
                 "skew": abs(truth.stamp - wheel.stamp) if truth and wheel else None,
                 "future_observations": self._future_observations,
                 "future_admitted": self._future_admitted,
+                "admitted_latest": {
+                    topic: {
+                        "stamp": history[-1].stamp,
+                        "ros_age": now - history[-1].stamp,
+                        "steady_age": steady - history[-1].received,
+                    }
+                    for topic, history in self._observation_history.items()
+                    if history
+                },
                 "pending": {
                     topic: {
                         "stamp_ns": head.stamp_ns,
@@ -421,6 +473,8 @@ class SimulationReference:
         self._truth = self._wheel = None
         for queue in self._deferred_observations.values():
             queue.clear()
+        for history in self._observation_history.values():
+            history.clear()
 
     def _tick(self) -> None:
         now = self._node.get_clock().now()
@@ -446,18 +500,13 @@ class SimulationReference:
         steady = time.monotonic()
         if not self._drain_observations(now.nanoseconds, steady):
             return
-        truth, wheel = self._truth, self._wheel
-        if (
-            truth is None
-            or wheel is None
-            or not 0 <= steady - min(truth.received, wheel.received) <= _MAX_AGE
-            or not 0 <= ros_now - truth.stamp <= _MAX_AGE
-            or not 0 <= ros_now - wheel.stamp <= _MAX_AGE
-            or abs(truth.stamp - wheel.stamp) > _MAX_SKEW
-        ):
+        pair = self._coherent_pair(ros_now, steady, truth_source, wheel_source)
+        if pair is None:
             if self._localization_live:
                 self._invalidate("observation_pair_unqualified")
             return
+        truth, wheel = pair
+        self._truth, self._wheel = truth, wheel
         transform = map_to_odom(truth.pose, wheel.pose)
         message = self._transform_type()
         message.header.frame_id = "map"

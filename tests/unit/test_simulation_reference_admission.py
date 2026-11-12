@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sys
+from collections import deque
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -52,6 +53,10 @@ def reference(monkeypatch):
     ref._pose_at = clock.steady
     ref._truth = module._Observation(ref._pose, clock.ros, clock.steady, b"truth")
     ref._wheel = module._Observation(ref._pose, clock.ros, clock.steady, b"wheel")
+    ref._observation_history = {
+        "/ground_truth/odom": deque([ref._truth], maxlen=32),
+        "/wheel/odom": deque([ref._wheel], maxlen=32),
+    }
     ref._deferred_observations = {
         "/ground_truth/odom": DeferredSourceQueue(max_pending=32),
         "/wheel/odom": DeferredSourceQueue(max_pending=32),
@@ -104,7 +109,8 @@ def test_future_observation_preserves_generation_then_uses_original_receipt(refe
     message.pose.pose.position.x = 99.0
     clock.ros, clock.steady = 10.02, 100.03
     ref._tick()
-    admitted = getattr(ref, "_" + stream)
+    topic = "/ground_truth/odom" if stream == "truth" else "/wheel/odom"
+    admitted = ref._observation_history[topic][-1]
     assert admitted.stamp == 10.02 and admitted.received == 100.01
     assert admitted.pose.x == 0.01
     assert ref.generation == "original" and ref._localization_live
@@ -128,6 +134,7 @@ def test_queued_observation_never_survives_expiry_rollback_or_identity_change(
     assert ref.generation != "original" and not ref._localization_live
     assert ref._truth is None and ref._wheel is None
     assert ref._deferred_observations["/ground_truth/odom"].peek() is None
+    assert all(not history for history in ref._observation_history.values())
     assert len(reference.logs) == 1
     details = json.loads(reference.logs[0].split(" ", 1)[1])
     assert details["reason"] and "truth_ros_age" in details and "skew" in details
@@ -152,6 +159,7 @@ def test_future_queue_overflow_fails_closed(reference):
         ref._on_truth(odometry(10.001 + index * 0.001), {})
     assert ref.generation != "original" and not ref._localization_live
     assert ref._deferred_observations["/ground_truth/odom"].peek() is None
+    assert all(not history for history in ref._observation_history.values())
 
 
 def test_future_admission_does_not_relax_pair_skew(reference):
@@ -206,3 +214,136 @@ def test_current_publisher_change_still_invalidates_without_pending_samples(refe
     reference.sources["/wheel/odom"] = b"replacement"
     ref._tick()
     assert ref.generation != "original" and not ref._localization_live
+
+
+def _wheel_ahead_of_delayed_truth(runtime, *, future_truth=False):
+    ref, clock = runtime.ref, runtime.clock
+    clock.ros, clock.steady = 10.164, 100.328
+    ref._on_wheel(odometry(10.16, frame="odom", x=0.16), {})
+    if future_truth:
+        ref._on_truth(odometry(10.18, x=0.18), {})
+    ref._tick()
+
+
+def test_delayed_stream_keeps_original_coherent_pair_while_future_truth_waits(reference):
+    ref, clock = reference.ref, reference.clock
+    original_truth, original_wheel = ref._truth, ref._wheel
+    _wheel_ahead_of_delayed_truth(reference, future_truth=True)
+    assert ref.generation == "original" and ref._localization_live
+    assert ref._truth is original_truth and ref._wheel is original_wheel
+    assert ref._pose_at == 100.0
+    clock.ros, clock.steady = 10.18, 100.35
+    ref._tick()
+    assert ref.generation == "original" and ref._localization_live
+    assert ref._truth.stamp == 10.18 and ref._truth.received == 100.328
+    assert ref._wheel.stamp == 10.16 and ref._wheel.received == 100.328
+    assert ref._pose_at == 100.328
+
+
+def test_pair_uses_latest_qualified_truth_and_closest_wheel_not_latest_wheel(reference):
+    ref, clock = reference.ref, reference.clock
+    clock.ros, clock.steady = 10.12, 100.12
+    ref._on_truth(odometry(10.06, x=0.06), {})
+    ref._on_wheel(odometry(10.04, frame="odom", x=0.04), {})
+    ref._on_wheel(odometry(10.12, frame="odom", x=0.12), {})
+    ref._tick()
+    assert ref._truth.stamp == 10.06 and ref._wheel.stamp == 10.04
+    assert ref._pose.x == 0.06 and ref.generation == "original"
+
+
+@pytest.mark.parametrize("expired_clock", ["ros", "steady"])
+def test_coherent_history_pair_cannot_extend_either_original_age_limit(reference, expired_clock):
+    ref, clock = reference.ref, reference.clock
+    _wheel_ahead_of_delayed_truth(reference)
+    assert ref.generation == "original" and ref._pose_at == 100.0
+    setattr(clock, expired_clock, 10.501 if expired_clock == "ros" else 100.501)
+    ref._tick()
+    assert ref.generation != "original" and ref._pose is None
+    assert all(not history for history in ref._observation_history.values())
+
+
+def test_historical_pair_does_not_move_the_single_stream_order_frontier_backwards(reference):
+    ref = reference.ref
+    _wheel_ahead_of_delayed_truth(reference)
+    assert ref.generation == "original" and ref._wheel.stamp == 10.0
+    ref._on_wheel(odometry(10.08, frame="odom"), {})
+    assert ref.generation != "original" and not ref._localization_live
+    assert not ref._observation_history["/ground_truth/odom"]
+    assert all(item.stamp != 10.16 for item in ref._observation_history["/wheel/odom"])
+
+
+def test_duplicate_latest_sample_does_not_renew_history_receipt(reference):
+    ref, clock = reference.ref, reference.clock
+    _wheel_ahead_of_delayed_truth(reference)
+    assert ref.generation == "original"
+    clock.steady = 100.4
+    ref._on_wheel(odometry(10.16, frame="odom", x=99.0), {})
+    wheel_history = ref._observation_history["/wheel/odom"]
+    assert len(wheel_history) == 2
+    assert wheel_history[-1].received == 100.328 and wheel_history[-1].pose.x == 0.16
+    ref._tick()
+    assert ref._pose_at == 100.0 and ref.generation == "original"
+
+
+@pytest.mark.parametrize("failure", ["publisher", "rollback", "invalid-frame"])
+def test_history_is_cleared_immediately_on_source_clock_or_payload_invalidation(reference, failure):
+    ref, clock = reference.ref, reference.clock
+    if failure == "publisher":
+        reference.sources["/wheel/odom"] = b"new-wheel"
+        ref._tick()
+    elif failure == "rollback":
+        clock.ros = 9.99
+        ref._tick()
+    else:
+        ref._on_wheel(odometry(10.01, frame="wrong-frame"), {})
+    assert ref.generation != "original" and not ref._localization_live
+    assert all(not history for history in ref._observation_history.values())
+
+
+def test_accepted_history_is_bounded_without_resetting_receipts(reference):
+    ref, clock = reference.ref, reference.clock
+    for index in range(1, 40):
+        clock.ros, clock.steady = 10 + index / 100, 100 + index / 100
+        ref._on_truth(odometry(clock.ros, x=index / 100), {})
+        ref._on_wheel(odometry(clock.ros, frame="odom", x=index / 100), {})
+    ref._tick()
+    assert ref.generation == "original" and ref._pose_at == 100.39
+    for history in ref._observation_history.values():
+        assert len(history) == 32 and history[0].received == 100.08
+
+
+@pytest.mark.parametrize("expired_clock", ["ros", "steady"])
+def test_pose_read_cannot_replay_cached_pair_past_either_age_limit(reference, expired_clock):
+    ref, clock = reference.ref, reference.clock
+    _wheel_ahead_of_delayed_truth(reference)
+    assert ref.pose() is not None
+    setattr(clock, expired_clock, 10.501 if expired_clock == "ros" else 100.501)
+    assert ref.pose() is None
+    assert ref.pose_reply() == {"ok": False, "error": "unavailable"}
+
+
+@pytest.mark.parametrize("expired_clock", ["ros", "steady"])
+def test_expired_closest_wheel_cannot_be_paired_with_a_fresh_truth(reference, expired_clock):
+    ref, clock = reference.ref, reference.clock
+    clock.ros, clock.steady = 10.2, 100.2
+    ref._on_truth(odometry(10.01), {})
+    ref._on_wheel(odometry(10.2, frame="odom"), {})
+    ref._tick()
+    assert ref._truth.stamp == 10.01 and ref._wheel.stamp == 10.0
+    assert ref.generation == "original"
+    setattr(clock, expired_clock, 10.501 if expired_clock == "ros" else 100.501)
+    ref._tick()
+    assert ref.generation != "original" and ref._pose is None
+
+
+def test_callbacks_do_not_mix_new_observation_stamps_into_the_cached_pose_pair(reference):
+    ref, clock = reference.ref, reference.clock
+    original_truth, original_wheel, original_pose = ref._truth, ref._wheel, ref._pose
+    clock.ros, clock.steady = 10.12, 100.12
+    ref._on_truth(odometry(10.12, x=0.12), {})
+    ref._on_wheel(odometry(10.1, frame="odom", x=0.1), {})
+    assert ref._truth is original_truth and ref._wheel is original_wheel
+    assert ref.pose() is original_pose and ref._pose_at == 100.0
+    ref._tick()
+    assert ref._truth.stamp == 10.12 and ref._wheel.stamp == 10.1
+    assert ref._pose.x == 0.12 and ref._pose_at == 100.12
