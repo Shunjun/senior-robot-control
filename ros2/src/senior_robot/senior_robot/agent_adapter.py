@@ -46,6 +46,14 @@ def _spin_ready_callbacks(executor: Any, *, clock: Callable[[], float] = time.mo
             break
 
 
+def _route_safety_ready(reference: Any, routes: Any, *, continuing: bool = True) -> bool:
+    """Keep a running planner alive on a blocked sweep without admitting a new route."""
+    current = routes.current if routes is not None else None
+    if continuing and current is not None and current.status == "running":
+        return bool(reference.navigation_evidence_ready())
+    return bool(reference.safety_ready())
+
+
 class AdapterCore:
     """Maps IPC requests to the arbiter. After ``disable_motion`` nothing drives."""
 
@@ -318,6 +326,7 @@ def main() -> None:
         controller = None
         navigation_ready: Callable[[], bool] | None = None
         previous_failure = None
+        previous_route_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
         if reference is not None and nav_params and Path(nav_params).is_file():
@@ -331,8 +340,8 @@ def main() -> None:
             planner_active = create_planner_readiness(node)
             controller = DedicatedController(node, Path(nav_params))
 
-            def qualified(ref, generation):
-                nonlocal previous_failure
+            def qualified(ref, generation, *, continuing=True):
+                nonlocal previous_failure, previous_route_failure
                 failure = None
                 if exiting:
                     failure = "adapter exiting"
@@ -340,16 +349,24 @@ def main() -> None:
                     failure = "map or localization generation changed"
                 elif not planner_active() or not controller.available():
                     failure = "planner state unavailable"
-                elif not reference.safety_ready():
+                elif not _route_safety_ready(reference, routes, continuing=continuing):
                     failure = (
                         f"safety status unavailable ({reference.safety_reason} "
                         f"{reference.safety_ages})"
                     )
                 elif not node.navigation_qualified():
                     failure = "heartbeat or control authority unavailable"
-                if failure != previous_failure:
-                    if failure is not None and routes is not None and routes.current is not None:
-                        node.get_logger().warning(f"Route qualification lost: {failure}")
+                if continuing:
+                    if failure != previous_route_failure:
+                        current = routes.current if routes is not None else None
+                        if (
+                            failure is not None
+                            and current is not None
+                            and current.status == "running"
+                        ):
+                            node.get_logger().warning(f"Route qualification lost: {failure}")
+                        previous_route_failure = failure
+                else:
                     previous_failure = failure
                 return failure is None
 
@@ -359,7 +376,7 @@ def main() -> None:
                 if grid is None:
                     previous_failure = "map or localization unavailable"
                     return False
-                return qualified(grid.map_ref, grid.grid_id)
+                return qualified(grid.map_ref, grid.grid_id, continuing=False)
 
             navigation_ready = can_navigate
             routes = RouteService(

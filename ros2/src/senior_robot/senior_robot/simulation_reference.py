@@ -66,6 +66,7 @@ class SimulationReference:
         self._pose: Pose2D | None = None
         self._pose_at = float("-inf")
         self._safety_at = float("-inf")
+        self._navigation_evidence_at = float("-inf")
         self.safety_reason = "no_status"
         self.safety_ages = ""
         self._safety_gid: bytes | None = None
@@ -124,8 +125,15 @@ class SimulationReference:
         )
 
     def safety_ready(self) -> bool:
+        return self._safety_status_fresh(self._safety_at)
+
+    def navigation_evidence_ready(self) -> bool:
+        """A running route may replan a rejected sweep; no velocity is authorized here."""
+        return self._safety_status_fresh(self._navigation_evidence_at)
+
+    def _safety_status_fresh(self, observed_at: float) -> bool:
         return (
-            time.monotonic() - self._safety_at <= 1.25
+            0 <= time.monotonic() - observed_at <= 1.25
             and self._safety_gid is not None
             and self._source("/safety/status", "safety_gate") == self._safety_gid
         )
@@ -355,12 +363,21 @@ class SimulationReference:
             if status is not None
             else ""
         )
-        self._safety_at = (
-            time.monotonic()
-            if self._safety_gid is not None
+        certified = (
+            self._safety_gid is not None
             and status is not None
-            and status.message in _SAFETY_READY
             and any(item.key == "evidence_ready" and item.value == "true" for item in status.values)
+        )
+        now = time.monotonic()
+        self._safety_at = (
+            now if certified and self.safety_reason in _SAFETY_READY else float("-inf")
+        )
+        self._navigation_evidence_at = (
+            now
+            if certified
+            and (
+                self.safety_reason in _SAFETY_READY or self.safety_reason == "hard_sweep_collision"
+            )
             else float("-inf")
         )
 
