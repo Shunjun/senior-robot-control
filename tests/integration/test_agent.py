@@ -1757,3 +1757,42 @@ async def test_initial_snapshot_failure_retries_at_first_successful_poll(snapsho
     assert runtime.link.sent_at == [0.25]
     await runtime.tick()
     assert len(runtime.link.snapshots) == 1
+
+
+@pytest.mark.parametrize("initially_connected", [True, False])
+async def test_public_snapshot_collect_cannot_cross_connection_epoch(
+    snapshot_polls,
+    initially_connected,
+):
+    from senior_control.protocol import RobotPosePayload
+
+    runtime = snapshot_polls
+    if not initially_connected:
+        runtime.agent._link, runtime.agent._epoch = None, 0
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    pending = asyncio.create_task(runtime.agent.publish_snapshot(ROBOT))
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    replacement = runtime.new_link(2)
+    runtime.agent._link, runtime.agent._epoch = replacement, replacement.epoch
+    runtime.state.pose = RobotPosePayload(x=9.0, y=0.0, yaw=0.0)
+    release.set()
+    old = await asyncio.wait_for(pending, 1)
+    assert (
+        old.robot_pose.x == 0.0
+    )  # Return the collected value, without publishing it across epochs.
+    assert len(runtime.link.snapshots) == 1
+    assert replacement.snapshots == []
+    fresh = await runtime.agent.publish_snapshot(ROBOT)
+    assert fresh.robot_pose.x == 9.0
+    assert replacement.snapshots == [fresh]
+    assert len(runtime.link.snapshots) == 1
+
+
+async def test_public_snapshot_offline_collect_remains_available_without_sending(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.agent._link, runtime.agent._epoch = None, 0
+    snapshot = await runtime.agent.publish_snapshot(ROBOT)
+    assert snapshot.connected is False
+    assert snapshot.robot_pose.x == 0.0
+    assert len(runtime.link.snapshots) == 1

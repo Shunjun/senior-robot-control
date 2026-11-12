@@ -1102,9 +1102,9 @@ class Agent:
     async def publish_snapshot(self, robot_id: str) -> RobotSnapshot:
         if robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "snapshot is for another robot")
+        link, epoch = self._link, self._epoch
         snapshot = await self._collect()
-        link = self._link
-        if link is not None:
+        if link is not None and self._link is link and self._epoch == epoch:
             await link.send_snapshot(snapshot)
         return snapshot
 
