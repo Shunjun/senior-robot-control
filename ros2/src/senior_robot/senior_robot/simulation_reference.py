@@ -1,5 +1,6 @@
 """Reference authority for the explicitly isolated, pinned Gazebo baseline world."""
 
+import json
 import math
 import secrets
 import time
@@ -10,6 +11,7 @@ from typing import Any
 from senior_control.mapping.simulation import baseline_grid, map_to_odom, project_scan
 from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
+from senior_control.safety.motion_runtime import DeferredSample, DeferredSourceQueue
 from senior_robot.motion_lifecycle import with_dds_info
 
 _MAX_AGE = 0.5
@@ -55,6 +57,12 @@ class SimulationReference:
         self._scan_listener = TransformListener(self._scan_tf, node)
         self._truth: _Observation | None = None
         self._wheel: _Observation | None = None
+        self._deferred_observations: dict[str, DeferredSourceQueue[_Observation]] = {
+            "/ground_truth/odom": DeferredSourceQueue(max_pending=32),
+            "/wheel/odom": DeferredSourceQueue(max_pending=32),
+        }
+        self._future_observations = self._future_admitted = 0
+        self._last_qualification_log = float("-inf")
         self._pose: Pose2D | None = None
         self._pose_at = float("-inf")
         self._safety_at = float("-inf")
@@ -249,27 +257,78 @@ class SimulationReference:
         frame: str,
         previous: _Observation | None,
     ) -> _Observation | None:
+        received = time.monotonic()
+        now_ns = self._node.get_clock().now().nanoseconds
         source = self._source(topic, name, info)
         if source is None or (msg.header.frame_id, msg.child_frame_id) != (frame, "base_link"):
+            self._invalidate("observation_identity_or_frame", details={"topic": topic})
             return None
-        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
-        now = self._node.get_clock().now().nanoseconds / 1e9
-        if not 0 <= now - stamp <= _MAX_AGE or stamp <= 0:
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        stamp = stamp_ns / 1e9
+        if self._last_ros is not None and now_ns / 1e9 < self._last_ros:
+            self._invalidate("clock_rollback")
             return None
-        if previous is not None and (source != previous.publisher or stamp < previous.stamp):
-            self._invalidate()
-        elif previous is not None and stamp == previous.stamp:
+        if stamp_ns <= 0 or not 0 <= msg.header.stamp.nanosec < 1_000_000_000:
+            self._invalidate("observation_time_invalid", details={"topic": topic})
+            return None
+        queue = self._deferred_observations[topic]
+        tail = queue.latest()
+        latest = tail.value if tail is not None else previous
+        if latest is not None and (source != latest.publisher or stamp < latest.stamp):
+            self._invalidate("observation_source_or_stamp_changed", details={"topic": topic})
+            previous = latest = None
+        elif latest is not None and stamp == latest.stamp:
             return previous
         position, q = msg.pose.pose.position, msg.pose.pose.orientation
         if not math.isclose(sum(v * v for v in (q.x, q.y, q.z, q.w)), 1, abs_tol=0.02):
+            self._invalidate("observation_orientation_invalid", details={"topic": topic})
             return None
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         try:
-            return _Observation(
-                Pose2D(position.x, position.y, yaw), stamp, time.monotonic(), source
-            )
+            observation = _Observation(Pose2D(position.x, position.y, yaw), stamp, received, source)
         except ValueError:
+            self._invalidate("observation_pose_invalid", details={"topic": topic})
             return None
+        if stamp_ns > now_ns or queue.peek() is not None:
+            if not queue.offer(DeferredSample(stamp_ns, now_ns, received, observation)):
+                self._invalidate("future_queue_rejected", details={"topic": topic})
+                return None
+            self._future_observations = min(self._future_observations + 1, 2**31 - 1)
+            return previous
+        if not 0 <= (now_ns - stamp_ns) / 1e9 <= _MAX_AGE:
+            self._invalidate("observation_ros_expired", details={"topic": topic})
+            return None
+        return observation
+
+    def _drain_observations(self, now_ns: int, steady: float) -> bool:
+        for topic, name, attribute in (
+            ("/ground_truth/odom", "senior_sim_bridge", "_truth"),
+            ("/wheel/odom", "drive", "_wheel"),
+        ):
+            queue = self._deferred_observations[topic]
+            for _ in range(32):
+                head = queue.peek()
+                if head is None:
+                    break
+                if self._source(topic, name) != head.value.publisher:
+                    self._invalidate("future_source_changed", details={"topic": topic})
+                    return False
+                status = queue.status(
+                    now_ros_ns=now_ns, now_steady=steady, max_age=_MAX_AGE, pending_wait=_MAX_AGE
+                )
+                if status == "waiting":
+                    break
+                if status != "ready":
+                    self._invalidate("future_" + status, details={"topic": topic})
+                    return False
+                previous = getattr(self, attribute)
+                if previous is not None and head.value.stamp <= previous.stamp:
+                    self._invalidate("future_stamp_order", details={"topic": topic})
+                    return False
+                queue.consume()
+                setattr(self, attribute, head.value)
+                self._future_admitted = min(self._future_admitted + 1, 2**31 - 1)
+        return True
 
     @with_dds_info
     def _on_truth(self, msg: Any, info: dict[str, Any]) -> None:
@@ -305,39 +364,82 @@ class SimulationReference:
             else float("-inf")
         )
 
-    def _invalidate(self) -> None:
+    def _invalidate(self, reason: str, *, details: dict[str, object] | None = None) -> None:
+        steady = time.monotonic()
+        if steady - self._last_qualification_log >= 1.0:
+            self._last_qualification_log = steady
+            now = self._node.get_clock().now().nanoseconds / 1e9
+            truth, wheel = self._truth, self._wheel
+            snapshot = {
+                "reason": reason,
+                "details": details or {},
+                "generation": self.generation,
+                "localized": self._localization_live,
+                "ros_now": now,
+                "steady_now": steady,
+                "truth_ros_age": now - truth.stamp if truth else None,
+                "wheel_ros_age": now - wheel.stamp if wheel else None,
+                "truth_steady_age": steady - truth.received if truth else None,
+                "wheel_steady_age": steady - wheel.received if wheel else None,
+                "skew": abs(truth.stamp - wheel.stamp) if truth and wheel else None,
+                "future_observations": self._future_observations,
+                "future_admitted": self._future_admitted,
+                "pending": {
+                    topic: {
+                        "stamp_ns": head.stamp_ns,
+                        "received_ros_ns": head.received_ros_ns,
+                        "steady_age": steady - head.received_steady,
+                    }
+                    for topic, queue in self._deferred_observations.items()
+                    if (head := queue.peek()) is not None
+                },
+            }
+            self._node.get_logger().warning(
+                "reference_qualification_lost " + json.dumps(snapshot, sort_keys=True)
+            )
         if self._localization_live:
             self._grid = replace(self._grid, grid_id=secrets.token_hex(16))
         self._localization_live = False
         self._pose = None
         self._truth = self._wheel = None
+        for queue in self._deferred_observations.values():
+            queue.clear()
 
     def _tick(self) -> None:
         now = self._node.get_clock().now()
         ros_now = now.nanoseconds / 1e9
         if self._last_ros is not None and ros_now < self._last_ros:
-            self._invalidate()
+            self._invalidate("clock_rollback")
         self._last_ros = ros_now
-        if (
-            not self._unique_map()
-            or self._source("/ground_truth/odom", "senior_sim_bridge") is None
-        ):
+        truth_source = self._source("/ground_truth/odom", "senior_sim_bridge")
+        wheel_source = self._source("/wheel/odom", "drive")
+        if not self._unique_map() or truth_source is None or wheel_source is None:
             self._ready = False
-            self._invalidate()
+            self._invalidate("reference_topology_invalid")
+            return
+        if (self._truth is not None and self._truth.publisher != truth_source) or (
+            self._wheel is not None and self._wheel.publisher != wheel_source
+        ):
+            self._invalidate("observation_publisher_changed")
             return
         if not self._ready:
             self._map_message.header.stamp = now.to_msg()
             self._publisher.publish(self._map_message)
             self._ready = True
+        steady = time.monotonic()
+        if not self._drain_observations(now.nanoseconds, steady):
+            return
         truth, wheel = self._truth, self._wheel
         if (
             truth is None
             or wheel is None
-            or time.monotonic() - min(truth.received, wheel.received) > _MAX_AGE
+            or not 0 <= steady - min(truth.received, wheel.received) <= _MAX_AGE
+            or not 0 <= ros_now - truth.stamp <= _MAX_AGE
+            or not 0 <= ros_now - wheel.stamp <= _MAX_AGE
             or abs(truth.stamp - wheel.stamp) > _MAX_SKEW
         ):
             if self._localization_live:
-                self._invalidate()
+                self._invalidate("observation_pair_unqualified")
             return
         transform = map_to_odom(truth.pose, wheel.pose)
         message = self._transform_type()
