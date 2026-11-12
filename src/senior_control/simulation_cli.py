@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import errno
 import fcntl
 import hashlib
 import json
@@ -462,6 +463,29 @@ async def supervise(
                     camera.cleanup()
 
 
+def _remove_stale_socket(path: Path) -> None:
+    """Remove an owned, refused socket only while both simulation locks are held."""
+    try:
+        original = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(original.st_mode) or original.st_uid != os.getuid():
+        raise ValueError("simulator IPC path is not an owned socket")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.setblocking(False)
+        result = probe.connect_ex(os.fspath(path))
+    if result != errno.ECONNREFUSED:
+        raise ValueError("simulator IPC socket is live or cannot be safely checked")
+    current = path.lstat()
+    if (
+        not stat.S_ISSOCK(current.st_mode)
+        or current.st_uid != os.getuid()
+        or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
+    ):
+        raise ValueError("simulator IPC socket changed during stale check")
+    path.unlink()
+
+
 def main(path: Path, *, headless: bool = True) -> int:
     try:
         profile = VehicleProfile.model_validate_json(path.read_bytes())
@@ -479,8 +503,7 @@ def main(path: Path, *, headless: bool = True) -> int:
                 fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
                 lock = stack.enter_context(os.fdopen(fd, "wb"))
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if os.path.lexists(profile.socket):
-                raise ValueError("socket path is already occupied")
+            _remove_stale_socket(profile.socket)
             _initialize_estop(profile.estop_state, credentials.robot_id)
             return asyncio.run(supervise(profile, credentials, headless=headless))
     except DisplayUnavailableError as error:

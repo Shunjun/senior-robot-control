@@ -784,3 +784,227 @@ async def test_status_probe_preserves_legacy_adapter_identity(tmp_path, monkeypa
     monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
     monkeypatch.setattr(simulation_cli, "IpcClient", Client)
     assert await simulation_cli._probe(profile) is True
+
+
+@pytest.fixture
+def short_socket_root(monkeypatch):
+    import errno
+    import stat
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    original_lstat = Path.lstat
+    original_socket = simulation_cli.socket.socket
+
+    # The local test environment prohibits AF_UNIX bind. Preserve real inode races while
+    # modeling socket metadata and connect results, without starting a listener.
+    def socket_lstat(path, *args, **kwargs):
+        info = original_lstat(path, *args, **kwargs)
+        if path.suffix == ".sock" and stat.S_ISREG(info.st_mode):
+            return SimpleNamespace(
+                st_mode=stat.S_IFSOCK | 0o600,
+                st_uid=info.st_uid,
+                st_dev=info.st_dev,
+                st_ino=info.st_ino,
+            )
+        return info
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setblocking(self, value):
+            assert value is False
+
+        def connect_ex(self, address):
+            return errno.ECONNREFUSED
+
+    monkeypatch.setattr(Path, "lstat", socket_lstat)
+    monkeypatch.setattr(
+        simulation_cli.socket,
+        "socket",
+        lambda *args, **kwargs: (
+            original_socket(*args, **kwargs) if "fileno" in kwargs or len(args) > 3 else Probe()
+        ),
+    )
+    with TemporaryDirectory(prefix="sim-socket-", dir="/tmp") as directory:
+        yield Path(directory)
+
+
+def _stale_test_socket(path):
+    path.touch()
+
+
+def test_stale_socket_is_removed_and_missing_path_is_allowed(short_socket_root):
+    from senior_control import simulation_cli
+
+    path = short_socket_root / "adapter.sock"
+    simulation_cli._remove_stale_socket(path)
+    _stale_test_socket(path)
+    simulation_cli._remove_stale_socket(path)
+    assert not path.exists()
+
+
+def test_live_socket_is_preserved(short_socket_root, monkeypatch):
+    from senior_control import simulation_cli
+
+    path = short_socket_root / "adapter.sock"
+    _stale_test_socket(path)
+    probe = simulation_cli.socket.socket()
+    monkeypatch.setattr(probe, "connect_ex", lambda _: 0)
+    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: probe)
+    identity = path.lstat()
+    with pytest.raises(ValueError, match="live or cannot"):
+        simulation_cli._remove_stale_socket(path)
+    assert path.lstat().st_ino == identity.st_ino
+
+
+@pytest.mark.parametrize("kind", ["regular", "symlink", "foreign_owner"])
+def test_stale_cleanup_rejects_unowned_or_non_socket_paths(
+    short_socket_root,
+    monkeypatch,
+    kind,
+):
+    from senior_control import simulation_cli
+
+    path = short_socket_root / "adapter.sock"
+    if kind == "regular":
+        path = short_socket_root / "adapter.txt"
+        path.write_text("preserve me")
+    elif kind == "symlink":
+        target = short_socket_root / "target.sock"
+        _stale_test_socket(target)
+        path.symlink_to(target)
+    else:
+        _stale_test_socket(path)
+        actual_uid = path.lstat().st_uid
+        monkeypatch.setattr(simulation_cli.os, "getuid", lambda: actual_uid + 1)
+    original = path.lstat()
+    with pytest.raises(ValueError, match="not an owned socket"):
+        simulation_cli._remove_stale_socket(path)
+    assert path.lstat().st_ino == original.st_ino
+
+
+@pytest.mark.parametrize("outcome", ["permission", "timeout", "pending", "again", "missing"])
+def test_stale_cleanup_preserves_uncertain_socket(short_socket_root, monkeypatch, outcome):
+    import errno
+
+    from senior_control import simulation_cli
+
+    path = short_socket_root / "adapter.sock"
+    _stale_test_socket(path)
+    original = path.lstat()
+    errors = {
+        "permission": errno.EACCES,
+        "timeout": errno.ETIMEDOUT,
+        "pending": errno.EINPROGRESS,
+        "again": errno.EAGAIN,
+        "missing": errno.ENOENT,
+    }
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setblocking(self, value):
+            assert value is False
+
+        def connect_ex(self, address):
+            assert address == str(path)
+            return errors[outcome]
+
+    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: Probe())
+    with pytest.raises(ValueError, match="cannot be safely checked"):
+        simulation_cli._remove_stale_socket(path)
+    assert path.lstat().st_ino == original.st_ino
+
+
+def test_stale_cleanup_preserves_socket_replaced_during_probe(short_socket_root, monkeypatch):
+    import errno
+
+    from senior_control import simulation_cli
+
+    path = short_socket_root / "adapter.sock"
+    replacement = short_socket_root / "replacement.sock"
+    _stale_test_socket(path)
+    _stale_test_socket(replacement)
+    replacement_identity = replacement.lstat()
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setblocking(self, value):
+            pass
+
+        def connect_ex(self, address):
+            replacement.replace(path)
+            return errno.ECONNREFUSED
+
+    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: Probe())
+    with pytest.raises(ValueError, match="changed during stale check"):
+        simulation_cli._remove_stale_socket(path)
+    assert path.lstat().st_ino == replacement_identity.st_ino
+
+
+@pytest.mark.parametrize("lock_failure", [False, True])
+def test_main_only_cleans_stale_socket_after_both_locks(
+    short_socket_root,
+    monkeypatch,
+    lock_failure,
+):
+    import os
+
+    from senior_control import simulation_cli
+
+    profile, credentials = _simulation_profile(short_socket_root)
+    path = short_socket_root / "simulation.json"
+    path.write_text(profile.model_dump_json())
+    _stale_test_socket(profile.socket)
+    events = []
+    original_open = os.open
+    original_cleanup = simulation_cli._remove_stale_socket
+
+    def open_lock(lock_path, flags, mode=0o777, *, dir_fd=None):
+        if str(lock_path).startswith("/tmp/senior-simulator-ros-"):
+            lock_path = short_socket_root / "domain.lock"
+        return original_open(lock_path, flags, mode, dir_fd=dir_fd)
+
+    def lock(fd, operation):
+        events.append("lock")
+        if lock_failure and len(events) == 2:
+            raise BlockingIOError("test lock is busy")
+
+    def cleanup(socket_path):
+        assert events == ["lock", "lock"]
+        events.append("cleanup")
+        original_cleanup(socket_path)
+
+    async def supervise(*args, **kwargs):
+        events.append("supervise")
+        assert not profile.socket.exists()
+        return 0
+
+    monkeypatch.setattr(simulation_cli, "validate_simulation_profile", lambda _: None)
+    monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
+    monkeypatch.setattr(simulation_cli, "_initialize_estop", lambda *_: None)
+    monkeypatch.setattr(simulation_cli.os, "open", open_lock)
+    monkeypatch.setattr(simulation_cli.fcntl, "flock", lock)
+    monkeypatch.setattr(simulation_cli, "_remove_stale_socket", cleanup)
+    monkeypatch.setattr(simulation_cli, "supervise", supervise)
+    assert simulation_cli.main(path) == (1 if lock_failure else 0)
+    assert events == (
+        ["lock", "lock"] if lock_failure else ["lock", "lock", "cleanup", "supervise"]
+    )
+    assert profile.socket.exists() is lock_failure
