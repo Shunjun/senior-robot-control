@@ -285,6 +285,7 @@ def main() -> None:
     def spin(node, executor) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
         path = Path(os.environ[SOCKET_ENV])
+        node.declare_parameter("ipc_replace_existing_socket", True)
         node.declare_parameter("simulation_qualified_reference", False)
         node.declare_parameter("simulation_baseline_world", "")
         reference = None
@@ -392,7 +393,10 @@ def main() -> None:
         )
 
         async def serve() -> None:
-            server = IpcServer(path, core.handle)
+            server = IpcServer(
+                path, core.handle,
+                replace_existing=node.get_parameter("ipc_replace_existing_socket").value,
+            )
             started = False
             warmer = None
 

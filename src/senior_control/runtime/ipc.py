@@ -75,10 +75,13 @@ async def _read(reader: asyncio.StreamReader) -> Message:
 class IpcServer:
     """ROS-side listener. The handler answers one request per frame."""
 
-    def __init__(self, path: Path, handler: Handler) -> None:
+    def __init__(self, path: Path, handler: Handler, *, replace_existing: bool = True) -> None:
+        if type(replace_existing) is not bool:
+            raise ValueError("replace_existing must be a boolean")
         self._path = path
         self._text = _check_path(path)
         self._handler = handler
+        self._replace_existing = replace_existing
         self._server: asyncio.AbstractServer | None = None
         self._start_task: asyncio.Task[asyncio.CancelledError | None] | None = None
         self._closing = False
@@ -107,11 +110,13 @@ class IpcServer:
     async def _start(self) -> asyncio.CancelledError | None:
         pending_socket: socket.socket | None = None
         try:
-            try:
-                if stat.S_ISSOCK(os.stat(self._path).st_mode):
-                    os.unlink(self._path)
-            except FileNotFoundError:
-                pass
+            # //Compatible: legacy callers may replace a socket; isolated simulations opt out.
+            if self._replace_existing:
+                try:
+                    if stat.S_ISSOCK(os.stat(self._path).st_mode):
+                        os.unlink(self._path)
+                except FileNotFoundError:
+                    pass
             pending_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             pending_socket.setblocking(False)
             previous = os.umask(0o177)

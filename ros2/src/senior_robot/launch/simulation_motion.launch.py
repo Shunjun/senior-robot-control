@@ -162,6 +162,7 @@ def generate_launch_description():
                     {
                         "robot_id": robot_id,
                         "safety_state_path": LaunchConfiguration("safety_state_path"),
+                        "ipc_replace_existing_socket": False,
                         "use_sim_time": True,
                         "simulation_baseline_world": ParameterValue(world, value_type=str),
                         "navigation_controller_params": ParameterValue(
