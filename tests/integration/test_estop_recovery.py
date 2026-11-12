@@ -284,6 +284,9 @@ async def test_replay_is_resolved_and_old_epoch_cannot_disrupt_new_session(
                 first.inbox.put_nowait(simple("safety.estop", seq=4))
                 await until(lambda: bool(first.responses))
                 assert first.responses[-1].payload.error is ErrorCode.CONFLICT
+                # The conflict response is sent before durable replay cleanup completes.
+                assert agent._safety_task is not None
+                await asyncio.wait_for(asyncio.shield(agent._safety_task), 2)
                 assert not await journal.safety.pending()
                 assert not agent.recovery_required
                 first.drop()
@@ -319,6 +322,7 @@ async def test_burst_of_64_safety_requests_with_blocked_ipc_retains_recovery_obl
 
     rig = heartbeat_arbiter_rig()
     entered, release = asyncio.Event(), asyncio.Event()
+    dequeued, allow_dispatch = asyncio.Event(), asyncio.Event()
 
     async def handle(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] in {"estop", "stop"}:
@@ -336,18 +340,34 @@ async def test_burst_of_64_safety_requests_with_blocked_ipc_retains_recovery_obl
             agent = ipc_agent(
                 journal, FakeConnector(link), socket_path, rig, deadlines=Deadlines(safety=0.2)
             )
+            original_dispatch = agent.dispatch
+
+            async def gated_dispatch(envelope: Any, **kwargs: Any) -> Any:
+                if envelope.type == kind:
+                    # Dequeue the first safety request, then fill the pending capacity
+                    # before starting its real 200 ms blocked-IPC deadline. Otherwise
+                    # this capacity test accidentally times 64 durable SQLite commits.
+                    dequeued.set()
+                    await allow_dispatch.wait()
+                return await original_dispatch(envelope, **kwargs)
+
+            agent.dispatch = gated_dispatch  # type: ignore[method-assign]
             runner = asyncio.create_task(agent.run())
             try:
                 await until(lambda: agent.connected)
                 link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
                 await until(lambda: agent.eligible_for_motion)
                 link.inbox.put_nowait(simple(kind, seq=1))
-                await asyncio.wait_for(entered.wait(), 1)
+                await asyncio.wait_for(dequeued.wait(), 1)
+                assert not entered.is_set()
                 for index in range(MAX_SAFETY_PENDING):
                     link.inbox.put_nowait(
                         simple(kind, seq=1).model_copy(update={"session_id": f"burst-{index}"})
                     )
                 await until(lambda: len(agent._safety_pending) == MAX_SAFETY_PENDING)
+                allow_dispatch.set()
+                await asyncio.wait_for(entered.wait(), 1)
+                assert len(agent._safety_pending) == MAX_SAFETY_PENDING
                 if overflow:
                     link.inbox.put_nowait(
                         simple(kind, seq=1).model_copy(update={"session_id": "overflow"})
@@ -359,6 +379,7 @@ async def test_burst_of_64_safety_requests_with_blocked_ipc_retains_recovery_obl
                 assert await journal.safety.pending()
                 assert agent._safety_task is not None and agent._safety_task.done()
             finally:
+                allow_dispatch.set()
                 release.set()
                 agent.request_shutdown()
                 if not runner.done():
