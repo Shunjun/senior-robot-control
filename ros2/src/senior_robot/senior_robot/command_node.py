@@ -220,11 +220,12 @@ class CommandNode(Node):
             )
         )
 
-    def clear_navigation_source(self, execution_id: str) -> None:
+    def clear_navigation_source(self, execution_id: str, *, reason: str = "requested") -> None:
         source = self._navigation_source
         if source is None or source.execution_id != execution_id:
             return
         self._navigation_source = None
+        self.get_logger().warning(f"navigation_source_cleared reason={reason}")
         self._arbiter.end_navigation(execution_id)
         self.destroy_subscription(source.subscription)
         self.publish_command()
@@ -233,10 +234,16 @@ class CommandNode(Node):
         source = self._navigation_source
         if source is None or source.topic != topic:
             return
-        now = self._monotonic_clock.monotonic()
         stamp = info.get("source_timestamp")
-        if not source.qualified() or abs((time.time() - now) - source.offset) > 0.01:
-            self.clear_navigation_source(source.execution_id)
+        if not source.qualified():
+            self.clear_navigation_source(source.execution_id, reason="qualification_lost")
+            return
+        # Pair clocks after potentially slow DDS/reference qualification. Its
+        # elapsed time is not clock drift and must not enter this comparison.
+        wall_now = time.time()
+        clock_now = self._monotonic_clock.monotonic()
+        if abs((wall_now - clock_now) - source.offset) > 0.01:
+            self.clear_navigation_source(source.execution_id, reason="clock_offset_changed")
             return
         if not isinstance(stamp, int) or stamp <= max(source.bound_at_ns, source.last_stamp):
             return
@@ -256,6 +263,9 @@ class CommandNode(Node):
             math.trunc(msg.linear.x * 100) / 100,
             math.trunc(msg.angular.z * 100) / 100,
         )
+        # Publisher graph checks may also take time. Check the original DDS
+        # sample's lifetime against current time, never callback-entry time.
+        now = self._monotonic_clock.monotonic()
         # The safety worker must finish checking a sample before a different
         # Nav2 output replaces it. A producer zero always takes precedence.
         if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.16:
@@ -271,14 +281,17 @@ class CommandNode(Node):
 
     def publish_command(self) -> None:
         source = self._navigation_source
-        if source is not None and (
-            not source.qualified()
-            or not self._arbiter.navigation_source_active(
+        if source is not None:
+            if not source.qualified():
+                self.clear_navigation_source(source.execution_id, reason="qualification_lost")
+                return
+            if not self._arbiter.navigation_source_active(
                 source.execution_id, self._monotonic_clock.monotonic()
-            )
-        ):
-            self.clear_navigation_source(source.execution_id)
-            return
+            ):
+                self.clear_navigation_source(
+                    source.execution_id, reason="navigation_lease_inactive"
+                )
+                return
         now = self._monotonic_clock.monotonic()
         final = self._arbiter.final_command(now)
         if final is None:
