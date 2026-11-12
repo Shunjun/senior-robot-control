@@ -82,6 +82,15 @@ class ManualIntent:
 
 
 @dataclass(frozen=True)
+class AcceptedManualIntent:
+    """One admitted sample and its fixed local receipt/deadline at handoff."""
+
+    intent: ManualIntent
+    received_steady: float
+    deadline_steady: float
+
+
+@dataclass(frozen=True)
 class MotionTarget:
     velocity: Velocity
     source: Literal["manual", "navigation", "idle"]

@@ -6,6 +6,7 @@ import pytest
 
 from senior_control.models import BodyTwist, Velocity
 from senior_control.motion.contracts import (
+    AcceptedManualIntent,
     BodyMotion,
     ControlOutput,
     ManualIntent,
@@ -85,3 +86,11 @@ def test_enum_boundaries_reject_undefined_states_and_events() -> None:
             enum("unknown")
     assert TaskStatus("paused_takeover") is TaskStatus.PAUSED_TAKEOVER
     assert TaskStatus("paused_fault") is TaskStatus.PAUSED_FAULT
+
+
+def test_admitted_snapshot_freezes_sample_and_deadline_together() -> None:
+    snapshot = AcceptedManualIntent(ManualIntent("a", 1, 1, 0.5, 0.0, "low"), 10.0, 11.0)
+    with pytest.raises(FrozenInstanceError):
+        snapshot.deadline_steady = 20.0  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        snapshot.intent.sequence = 100  # type: ignore[misc]

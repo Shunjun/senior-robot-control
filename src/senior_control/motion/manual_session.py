@@ -2,7 +2,7 @@
 
 from math import isfinite
 
-from senior_control.motion.contracts import ManualIntent
+from senior_control.motion.contracts import AcceptedManualIntent, ManualIntent
 
 
 def _finite_number(value: float) -> bool:
@@ -26,7 +26,7 @@ class ManualSession:
     idempotency belong to that owner. Increasing gesture numbers cannot prove a
     real user release/press edge; the UI must enforce that separately.
 
-    All times are receipt/processing times from one local steady clock. Equal
+    All times belong to one local steady clock; receipt and processing are distinct. Equal
     times are allowed; a backward or nonfinite clock permanently closes the
     session. The initial lease starts at construction, even before any intent.
     Instances are owned serially by the ingress; they are not thread-safe.
@@ -40,7 +40,7 @@ class ManualSession:
         if not _finite_number(now_steady):
             raise ValueError("creation time must be finite")
         deadline = now_steady + ttl
-        if not isfinite(deadline) or deadline <= now_steady:
+        if not _finite_number(deadline) or deadline <= now_steady:
             raise ValueError("manual TTL must produce a finite future deadline")
         self._authority_id = authority_id
         self._ttl = ttl
@@ -49,7 +49,8 @@ class ManualSession:
         self._last_gesture = -1
         self._last_sequence = -1
         self._closed = False
-        self._latest: ManualIntent | None = None
+        self._latest: AcceptedManualIntent | None = None
+        self._last_received_steady: float | None = None
 
     @property
     def authority_id(self) -> str:
@@ -66,26 +67,53 @@ class ManualSession:
         """Whether this authority has been permanently revoked."""
         return self._closed
 
-    def accept(self, intent: ManualIntent, *, now_steady: float) -> bool:
-        """Replace the pending sample only on valid, monotonic admission.
+    def accept(
+        self,
+        intent: ManualIntent,
+        *,
+        now_steady: float,
+        received_steady: float | None = None,
+        queue_deadline_steady: float | None = None,
+    ) -> bool:
+        """Admit with one deadline derived from original local receipt time.
 
-        Gesture is nondecreasing; packet sequence strictly increases across the
-        entire authority, including gesture changes and consumed samples. Both
-        counters are nonnegative integers. Rejections never refresh the lease.
+        Processing time must not regress. Accepted receipt times are separately
+        nondecreasing (equal times are legal); future/invalid/expired receipts
+        are rejected without renewing the lease or advancing admitted counters.
+        A supplied queue cutoff can only shorten the receipt-derived deadline.
+        Expiration of the existing session always precedes new admission.
         """
         if not self._live(now_steady):
             return False
         if not self._admissible(intent):
             return False
-        deadline = now_steady + self._ttl
-        if not isfinite(deadline) or deadline <= now_steady:
-            self.close()
+        # //Compatible: omitted receipt is only for immediate same-stack admission.
+        received = now_steady if received_steady is None else received_steady
+        deadline = self._receipt_deadline(received, now_steady, queue_deadline_steady)
+        if deadline is None:
             return False
         self._last_gesture = intent.gesture
         self._last_sequence = intent.sequence
+        self._last_received_steady = received
         self._deadline_steady = deadline
-        self._latest = intent
+        self._latest = AcceptedManualIntent(intent, received, deadline)
         return True
+
+    def _receipt_deadline(
+        self, received: float, now: float, queue_deadline: float | None
+    ) -> float | None:
+        if not _finite_number(received) or received > now:
+            return None
+        if self._last_received_steady is not None and received < self._last_received_steady:
+            return None
+        deadline = received + self._ttl
+        if not _finite_number(deadline) or deadline <= now:
+            return None
+        if queue_deadline is not None:
+            if not _finite_number(queue_deadline) or queue_deadline <= now:
+                return None
+            deadline = min(deadline, queue_deadline)
+        return deadline
 
     def expire(self, *, now_steady: float) -> None:
         """Close at or beyond the deadline; never renew an idle lease."""
@@ -96,12 +124,13 @@ class ManualSession:
         self._closed = True
         self._latest = None
 
-    def take_latest(self, *, now_steady: float) -> ManualIntent | None:
-        """Consume the latest admitted intent once, only while its lease is live.
+    def take_latest(self, *, now_steady: float) -> AcceptedManualIntent | None:
+        """Consume one immutable sample with its original receipt and fixed deadline.
 
         Empty reads do not replay the last sample or renew the lease. This is
-        an ingress handoff, not a held target: the downstream owner must retain
-        the authority/deadline fence and revoke held targets when it closes.
+        an ingress handoff, not a held target: downstream retains this snapshot
+        unchanged and revokes held targets when its authority closes. A later
+        admission cannot change the deadline of a previously consumed sample.
         """
         if not self._live(now_steady):
             return None

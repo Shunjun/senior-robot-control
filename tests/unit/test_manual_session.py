@@ -16,12 +16,18 @@ def session() -> ManualSession:
     return ManualSession("authority-a", ttl=1.0, now_steady=10.0)
 
 
+def take_intent(control: ManualSession, *, now_steady: float) -> ManualIntent:
+    latest = control.take_latest(now_steady=now_steady)
+    assert latest is not None
+    return latest.intent
+
+
 def test_continuous_updates_refresh_local_liveness() -> None:
     control = session()
     for sequence, now in enumerate((10.5, 11.0, 11.5, 12.0), start=1):
         assert control.accept(intent(sequence=sequence), now_steady=now)
     assert control.deadline_steady == 13.0
-    assert control.take_latest(now_steady=12.5) == intent(sequence=4)
+    assert take_intent(control, now_steady=12.5) == intent(sequence=4)
     control.expire(now_steady=12.75)
     assert not control.closed
     control.expire(now_steady=13.0)
@@ -45,7 +51,7 @@ def test_rejected_packet_cannot_extend_lease_or_replace_latest(bad: ManualIntent
     assert control.accept(intent(), now_steady=10.0)
     assert not control.accept(bad, now_steady=10.75)
     assert control.deadline_steady == 11.0
-    assert control.take_latest(now_steady=10.8) == intent()
+    assert take_intent(control, now_steady=10.8) == intent()
     control.expire(now_steady=11.0)
     assert control.closed
 
@@ -66,7 +72,7 @@ def test_normalized_endpoints_and_zero_remain_intents() -> None:
     for sequence, value in enumerate((-1.0, 0.0, 1.0), start=1):
         sample = replace(intent(sequence=sequence), linear=value, turn=-value, gear="high")
         assert control.accept(sample, now_steady=10.0)
-        assert control.take_latest(now_steady=10.0) == sample
+        assert take_intent(control, now_steady=10.0) == sample
     assert not control.closed
 
 
@@ -112,7 +118,7 @@ def test_queue_keeps_only_latest_sample_and_take_consumes_once() -> None:
     control = session()
     for sequence in range(1, 1001):
         assert control.accept(intent(sequence=sequence), now_steady=10.0)
-    assert control.take_latest(now_steady=10.5) == intent(sequence=1000)
+    assert take_intent(control, now_steady=10.5) == intent(sequence=1000)
     assert control.take_latest(now_steady=10.5) is None
     assert control.deadline_steady == 11.0
     assert not control.accept(intent(sequence=999), now_steady=10.6)
@@ -178,7 +184,7 @@ def test_new_authority_requires_an_explicit_new_session() -> None:
     assert not current.accept(intent(sequence=100), now_steady=11.0)
     fresh = replace(intent(), authority_id="authority-b")
     assert current.accept(fresh, now_steady=11.0)
-    assert current.take_latest(now_steady=11.0) == fresh
+    assert take_intent(current, now_steady=11.0) == fresh
     assert not previous.accept(fresh, now_steady=11.0)
 
 
@@ -198,3 +204,86 @@ def test_unrepresentably_large_configuration_is_a_value_error(field: str) -> Non
             ManualSession("authority-a", ttl=10**1000, now_steady=10.0)
         else:
             ManualSession("authority-a", ttl=1.0, now_steady=10**1000)
+
+
+def test_delayed_receipt_sets_deadline_from_receipt_not_processing() -> None:
+    control = session()
+    assert control.accept(intent(), now_steady=10.5, received_steady=10.1)
+    assert control.deadline_steady == 11.1
+    latest = control.take_latest(now_steady=10.6)
+    assert latest is not None
+    assert latest.intent == intent()
+    assert latest.received_steady == 10.1
+    assert latest.deadline_steady == 11.1
+    control.expire(now_steady=11.1)
+    assert control.closed
+
+
+@pytest.mark.parametrize("received", [float("nan"), float("inf"), 10.6, 9.5, 9.4])
+def test_bad_receipt_does_not_refresh_or_replace(received: float) -> None:
+    control = session()
+    assert control.accept(intent(), now_steady=10.0)
+    assert not control.accept(intent(sequence=2), now_steady=10.5, received_steady=received)
+    assert control.deadline_steady == 11.0
+    assert take_intent(control, now_steady=10.6) == intent()
+
+
+def test_receipt_monotonicity_is_independent_of_processing_clock() -> None:
+    control = session()
+    assert control.accept(intent(), now_steady=10.4, received_steady=10.2)
+    assert not control.accept(intent(sequence=2), now_steady=10.5, received_steady=10.1)
+    assert not control.closed
+    assert control.accept(intent(sequence=2), now_steady=10.6, received_steady=10.2)
+    assert control.deadline_steady == 11.2
+
+
+def test_expiration_precedes_processing_a_later_received_packet() -> None:
+    control = session()
+    assert control.accept(intent(), now_steady=10.0)
+    assert not control.accept(intent(sequence=2), now_steady=11.0, received_steady=10.9)
+    assert control.closed
+
+
+def test_shorter_queue_cutoff_is_the_single_session_deadline() -> None:
+    control = session()
+    assert control.accept(
+        intent(), now_steady=10.2, received_steady=10.0, queue_deadline_steady=10.5
+    )
+    assert control.deadline_steady == 10.5
+    latest = control.take_latest(now_steady=10.3)
+    assert latest is not None and latest.deadline_steady == 10.5
+    assert not control.accept(intent(sequence=2), now_steady=10.5, received_steady=10.4)
+    assert control.closed
+
+
+@pytest.mark.parametrize("cutoff", [10.5, 10.4, float("nan"), float("inf")])
+def test_invalid_or_expired_queue_cutoff_cannot_refresh(cutoff: float) -> None:
+    control = session()
+    assert not control.accept(
+        intent(), now_steady=10.5, received_steady=10.0, queue_deadline_steady=cutoff
+    )
+    assert control.deadline_steady == 11.0
+    assert control.accept(intent(), now_steady=10.6)
+
+
+def test_taken_snapshot_deadline_never_changes_after_new_admission() -> None:
+    control = session()
+    assert control.accept(intent(), now_steady=10.0)
+    taken = control.take_latest(now_steady=10.0)
+    assert taken is not None
+    assert control.accept(intent(sequence=2), now_steady=10.8)
+    assert taken.intent.sequence == 1
+    assert taken.deadline_steady == 11.0
+    assert control.deadline_steady == 11.8
+
+
+def test_large_integer_deadline_sum_is_rejected_as_configuration_error() -> None:
+    with pytest.raises(ValueError):
+        ManualSession("authority-a", ttl=10**308, now_steady=10**308)
+
+
+def test_large_integer_receipt_sum_rejects_without_raising_or_renewing() -> None:
+    control = ManualSession("authority-a", ttl=10**308, now_steady=10**307)
+    assert not control.accept(intent(), now_steady=10**308, received_steady=10**308)
+    assert not control.closed
+    assert control.deadline_steady == 11 * 10**307
