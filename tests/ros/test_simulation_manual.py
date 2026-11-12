@@ -114,7 +114,12 @@ async def test_gazebo_manual_motion_and_stop():
         state = {}
         for _ in range(300):
             state = await client.request("state.get")
-            if state.get("localized") and state.get("safety_clear") and state.get("robot_pose"):
+            if (
+                state.get("localized")
+                and state.get("safety_clear")
+                and state.get("robot_pose")
+                and state.get("scan_points")
+            ):
                 break
             await asyncio.sleep(0.1)
         else:
