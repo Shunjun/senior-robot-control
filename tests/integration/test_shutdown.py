@@ -266,6 +266,54 @@ def _load_adapter() -> Any:
     return module
 
 
+@pytest.mark.parametrize(
+    ("callback_seconds", "expected_count"), [(0.0, 16), (0.0025, 2), (0.01, 1)]
+)
+def test_adapter_batches_ready_callbacks_with_a_count_and_time_budget(
+    callback_seconds: float, expected_count: int
+) -> None:
+    from copy import deepcopy
+
+    adapter = _load_adapter()
+    samples = [
+        {"stamp": index, "received": index + 0.01, "metadata": {"source": "original"}}
+        for index in range(32)
+    ]
+    original = deepcopy(samples)
+
+    class Executor:
+        now = 0.0
+
+        def __init__(self) -> None:
+            self.processed: list[dict[str, Any]] = []
+
+        def spin_once(self, *, timeout_sec: float) -> None:
+            assert timeout_sec == 0.0
+            self.processed.append(samples[len(self.processed)])
+            self.now += callback_seconds
+
+    executor = Executor()
+    adapter._spin_ready_callbacks(executor, clock=lambda: executor.now)
+    assert len(executor.processed) == expected_count
+    assert all(sample is samples[index] for index, sample in enumerate(executor.processed))
+    assert samples == original
+
+
+def test_adapter_idle_callback_polling_stays_bounded_when_spin_returns_none() -> None:
+    adapter = _load_adapter()
+
+    class IdleExecutor:
+        calls = 0
+
+        def spin_once(self, *, timeout_sec: float) -> None:
+            assert timeout_sec == 0.0
+            self.calls += 1
+
+    executor = IdleExecutor()
+    adapter._spin_ready_callbacks(executor, clock=lambda: 0.0)
+    assert executor.calls == 16
+
+
 class ArbiterRig:
     """AdapterCore on the real arbiter, wired as CommandNode wires it: submit and disconnect."""
 

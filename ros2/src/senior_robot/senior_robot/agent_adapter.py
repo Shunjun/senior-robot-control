@@ -11,6 +11,7 @@ only publisher and cannot replay an old lease behind a stop. ``rclpy`` is import
 
 import asyncio
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,15 @@ _ENVELOPE_KINDS = {
     "stop": "drive.stop",
     "estop": "safety.estop",
 }
+
+
+def _spin_ready_callbacks(executor: Any, *, clock: Callable[[], float] = time.monotonic) -> None:
+    """Drain a bounded callback batch before yielding to the IPC event loop."""
+    deadline = clock() + 0.004
+    for _ in range(16):
+        executor.spin_once(timeout_sec=0.0)
+        if clock() >= deadline:
+            break
 
 
 class AdapterCore:
@@ -403,14 +413,14 @@ def main() -> None:
                 if controller is not None:
                     warmer = asyncio.create_task(warm_controller())
                 while rclpy.ok() and not exiting:
-                    executor.spin_once(timeout_sec=0.0)
-                    await asyncio.sleep(0.01)
+                    _spin_ready_callbacks(executor)
+                    await asyncio.sleep(0.005)
                 if routes is not None and routes.current is not None:
                     cancellation = asyncio.create_task(routes.cancel(routes.current.execution_id))
                     deadline = asyncio.get_running_loop().time() + 3.0
                     while not cancellation.done() and asyncio.get_running_loop().time() < deadline:
                         if rclpy.ok():
-                            executor.spin_once(timeout_sec=0.0)
+                            _spin_ready_callbacks(executor)
                         await asyncio.sleep(0.01)
                     cancellation.cancel()
                     await asyncio.gather(cancellation, return_exceptions=True)
