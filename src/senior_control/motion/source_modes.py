@@ -6,12 +6,18 @@ from enum import Enum
 
 from senior_control.models import BodyTwist
 from senior_control.motion.contracts import BodyMotion
-from senior_control.motion.observations import AdaptedObservation, AdmissionConfig, Source
+from senior_control.motion.observations import (
+    AdaptedObservation,
+    AdmissionConfig,
+    Observation,
+    Source,
+)
 
 
 class SourceMode(str, Enum):
     UNAVAILABLE = "unavailable"
     RECOVERING = "recovering"
+    FUSED_REFERENCE = "fused_reference"
     LASER_REFERENCE = "laser_reference"
     GPS_IMU_REFERENCE = "gps_imu_reference"
     WHEEL_IMU_LIMITED = "wheel_imu_limited"
@@ -42,6 +48,12 @@ class MotionAssessment:
 def select_reference(
     views: dict[Source, SourceView], config: AdmissionConfig, *, now_steady: float
 ) -> MotionAssessment:
+    # //Compatible: raw points/deltas go through T3b, not the legacy same-window helper.
+    views = {
+        source: view
+        for source, view in views.items()
+        if isinstance(view.observation.original, Observation)
+    }
     ready = {source: view.observation for source, view in views.items() if view.ready}
 
     def paired(first: Source, second: Source) -> bool:

@@ -7,6 +7,10 @@ body yaw rate for IMU. Diagonal-only data explicitly leaves correlation unknown.
 import math
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from senior_control.motion.sample_types import MotionSample
 
 
 class Source(str, Enum):
@@ -19,6 +23,7 @@ class Source(str, Enum):
 class Frame(str, Enum):
     BODY = "body"
     ENU = "enu"
+    SENSOR = "sensor"
 
 
 class SourceStatus(str, Enum):
@@ -53,6 +58,8 @@ class Observation:
     status: SourceStatus
     values: tuple[float, ...]
     covariance: Covariance
+    # //Compatible: legacy normalized intervals have no certified statistical model by default.
+    model_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +128,7 @@ class AdmissionConfig:
 
 @dataclass(frozen=True)
 class AdaptedObservation:
-    original: Observation
+    original: "MotionSample"
     body_values: tuple[float, ...]
     body_covariance: Covariance | None
     valid_until_steady: float
@@ -169,14 +176,19 @@ def _number(value: object) -> bool:
 
 
 def metadata_error(
-    observation: Observation, heading: Heading | None, *, now_ros: float, now_steady: float
+    observation: "MotionSample", heading: Heading | None, *, now_ros: float, now_steady: float
 ) -> str | None:
     """No owner access: reject malformed values before hashing or ordering them.
 
     Nonfinite component/covariance *measurements* remain payload failures;
     malformed identity/time metadata never changes owner clocks or watermarks.
     """
-    if not isinstance(observation, Observation) or not isinstance(observation.source, Source):
+    from senior_control.models import Pose2D
+    from senior_control.motion.sample_types import DeltaObservation, PointObservation
+
+    if not isinstance(
+        observation, (Observation, PointObservation, DeltaObservation)
+    ) or not isinstance(observation.source, Source):
         return "invalid_source"
     if (
         type(observation.epoch) is not str
@@ -195,11 +207,32 @@ def metadata_error(
     )
     if not all(_number(value) and math.isfinite(value) for value in stamps):
         return "invalid_metadata"
+    if isinstance(observation, DeltaObservation) and not isinstance(observation.delta, Pose2D):
+        return "invalid_delta"
+    if isinstance(observation, (PointObservation, DeltaObservation)):
+        if observation.body_from_sensor is not None and not isinstance(
+            observation.body_from_sensor, Pose2D
+        ):
+            return "invalid_extrinsic"
+        if isinstance(observation, DeltaObservation) and observation.body_from_sensor is None:
+            return "invalid_extrinsic"
+        extrinsic = observation.body_from_sensor
+        if extrinsic is not None and not all(
+            _number(v) and math.isfinite(v) for v in (extrinsic.x, extrinsic.y, extrinsic.yaw)
+        ):
+            return "invalid_extrinsic"
+    if observation.model_id is not None and not isinstance(observation.model_id, str):
+        return "invalid_model_id"
     covariance = observation.covariance
-    if (
-        not isinstance(observation.values, tuple)
-        or not all(_number(value) for value in observation.values)
-        or not isinstance(covariance, Covariance)
+    if not isinstance(observation.values, tuple) or not all(
+        _number(value) for value in observation.values
+    ):
+        return "invalid_structure"
+    if covariance is None:
+        if isinstance(observation, Observation):
+            return "missing_covariance"
+    elif (
+        not isinstance(covariance, Covariance)
         or not isinstance(covariance.kind, CovarianceKind)
         or not isinstance(covariance.values, tuple)
         or not all(_number(value) for value in covariance.values)
@@ -226,7 +259,11 @@ def metadata_error(
     if (
         observation.end_ros > now_ros
         or observation.received_steady > now_steady
-        or observation.start_ros >= observation.end_ros
+        or observation.start_ros > observation.end_ros
+        or (
+            not isinstance(observation, PointObservation)
+            and observation.start_ros == observation.end_ros
+        )
     ):
         return "future_or_invalid_interval"
     return None
@@ -243,7 +280,7 @@ def is_current(
 
 
 def validate(
-    observation: Observation,
+    observation: "MotionSample",
     rule: SourceRule,
     *,
     now_ros: float,
@@ -251,6 +288,8 @@ def validate(
     heading: Heading | None,
     config: AdmissionConfig,
 ) -> str | None:
+    from senior_control.motion.sample_types import DeltaObservation, PointObservation
+
     structural = metadata_error(observation, heading, now_ros=now_ros, now_steady=now_steady)
     if structural is not None:
         return structural
@@ -264,15 +303,37 @@ def validate(
         return str(observation.status.value)
     if not rule.min_quality <= observation.quality <= 1:
         return "quality"
-    dimension = {Source.LASER: 3, Source.WHEEL: 3, Source.GPS: 2, Source.IMU: 1}[observation.source]
+    if isinstance(observation, DeltaObservation):
+        if observation.source is not Source.LASER or observation.frame not in (
+            Frame.BODY,
+            Frame.SENSOR,
+        ):
+            return "delta_source_or_frame"
+        dimension = 3
+    elif isinstance(observation, PointObservation):
+        if observation.source is Source.LASER:
+            return "laser_requires_delta_or_interval"
+        dimension = 1 if observation.source is Source.IMU else 2
+        expected_frame = Frame.ENU if observation.source is Source.GPS else Frame.BODY
+        if observation.frame is not expected_frame:
+            return "frame"
+        if observation.source is Source.GPS and observation.body_from_sensor is None:
+            return "gps_extrinsic_missing"
+    else:
+        dimension = {Source.LASER: 3, Source.WHEEL: 3, Source.GPS: 2, Source.IMU: 1}[
+            observation.source
+        ]
+        expected_frame = Frame.ENU if observation.source is Source.GPS else Frame.BODY
+        if observation.frame is not expected_frame:
+            return "frame"
     if len(observation.values) != dimension or not all(
         math.isfinite(x) for x in observation.values
     ):
         return "invalid_components"
-    expected_frame = Frame.ENU if observation.source is Source.GPS else Frame.BODY
-    if observation.frame is not expected_frame:
-        return "frame"
-    if not covariance_valid(observation.covariance, dimension, rule.max_variance):
+    maximum = math.inf if isinstance(observation, DeltaObservation) else rule.max_variance
+    if observation.covariance is not None and not covariance_valid(
+        observation.covariance, dimension, maximum
+    ):
         return "covariance"
     if observation.source is Source.GPS:
         if heading is None:
@@ -299,13 +360,15 @@ def validate(
 
 
 def adapt(
-    observation: Observation,
+    observation: "MotionSample",
     *,
     now_ros: float,
     now_steady: float,
     rule: SourceRule,
     heading: Heading | None,
 ) -> AdaptedObservation:
+    from senior_control.motion.sample_types import DeltaObservation, PointObservation
+
     values = observation.values
     covariance: Covariance | None = observation.covariance
     heading_context = None
@@ -317,6 +380,10 @@ def adapt(
         # T3b owns heading/velocity cross-correlation; never assume independence.
         covariance = None
         heading_context = heading
+    if isinstance(observation, (PointObservation, DeltaObservation)):
+        # Raw time support is consumed by TemporalResolver, never the legacy exact-window selector.
+        values = ()
+        covariance = None
     deadline = min(
         observation.received_steady + rule.max_age_s,
         now_steady + rule.max_age_s - (now_ros - observation.end_ros),

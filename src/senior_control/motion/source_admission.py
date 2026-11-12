@@ -1,13 +1,14 @@
 """One owner for clock/epoch admission and distinct-sample recovery history."""
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
+from senior_control.motion.admission_events import AdmissionEvent, SourceSnapshot
 from senior_control.motion.observations import (
     AdaptedObservation,
     AdmissionConfig,
     Heading,
-    Observation,
     Source,
     SourceRule,
     adapt,
@@ -15,6 +16,7 @@ from senior_control.motion.observations import (
     metadata_error,
     validate,
 )
+from senior_control.motion.sample_types import MotionSample
 from senior_control.motion.source_modes import MotionAssessment, SourceView, select_reference
 
 
@@ -44,7 +46,13 @@ class _State:
 
 
 class AdmissionOwner:
-    def __init__(self, config: AdmissionConfig):
+    def __init__(self, config: AdmissionConfig, *, event_capacity: int | None = None):
+        # //Compatible: legacy pure callers need no journal; T3b must inject capacity.
+        if event_capacity is not None and event_capacity < 1:
+            raise ValueError("event_capacity must be positive")
+        self._events: deque[AdmissionEvent] = deque(maxlen=event_capacity)
+        self._event_capacity = event_capacity
+        self._cursor = 0
         self.config = config
         self._states = {source: _State() for source in Source}
         self._now_ros: float | None = None
@@ -89,7 +97,7 @@ class AdmissionOwner:
         return finite and not rollback and not paused
 
     @staticmethod
-    def _source_order(observation: Observation, state: _State) -> str | None:
+    def _source_order(observation: MotionSample, state: _State) -> str | None:
         if observation.epoch in state.retired:
             return "retired_epoch"
         if observation.epoch == state.epoch and (
@@ -108,7 +116,7 @@ class AdmissionOwner:
 
     @staticmethod
     def _reject_evidence(
-        observation: Observation, state: _State, *, now_ros: float, now_steady: float
+        observation: MotionSample, state: _State, *, now_ros: float, now_steady: float
     ) -> None:
         if observation.epoch != state.epoch:
             return
@@ -141,7 +149,7 @@ class AdmissionOwner:
         self._heading_received = heading.received_steady
         return None
 
-    def _admit_epoch(self, observation: Observation, state: _State) -> str | None:
+    def _admit_epoch(self, observation: MotionSample, state: _State) -> str | None:
         if observation.epoch == state.epoch:
             return None
         if len(state.retired) >= self.config.epoch_history_limit:
@@ -151,6 +159,9 @@ class AdmissionOwner:
             state.retired.add(state.epoch)
         state.interrupt()
         state.epoch = observation.epoch
+        state.sequence = 0
+        state.end_ros = -math.inf
+        state.received_steady = -math.inf
         return None
 
     def _expire(self, state: _State, *, now_ros: float, now_steady: float) -> None:
@@ -165,7 +176,7 @@ class AdmissionOwner:
 
     def _accept(
         self,
-        observation: Observation,
+        observation: MotionSample,
         state: _State,
         rule: SourceRule,
         *,
@@ -193,9 +204,9 @@ class AdmissionOwner:
             >= span
         )
 
-    def ingest(
+    def _ingest(
         self,
-        observation: Observation,
+        observation: MotionSample,
         *,
         now_ros: float,
         now_steady: float,
@@ -210,6 +221,10 @@ class AdmissionOwner:
         ordering = self._source_order(observation, state)
         if ordering is not None:
             return AdmissionDecision(False, ordering)
+        if state.epoch is not None and observation.epoch != state.epoch:
+            reason = self._admit_epoch(observation, state)
+            if reason is not None:
+                return AdmissionDecision(False, reason)
         rule = self.config.rule(observation.source)
         reason = validate(
             observation,
@@ -234,12 +249,71 @@ class AdmissionOwner:
         )
         return AdmissionDecision(True, "admitted")
 
-    def assess(self, *, now_ros: float, now_steady: float) -> MotionAssessment:
-        clocks_valid = self._clock(now_ros, now_steady)
+    def _markers(self) -> dict[Source, tuple[AdaptedObservation | None, str | None, int]]:
+        return {
+            source: (state.observation, state.epoch, state.count)
+            for source, state in self._states.items()
+        }
+
+    def _record(
+        self, before: dict[Source, tuple[AdaptedObservation | None, str | None, int]]
+    ) -> None:
+        if self._event_capacity is None:
+            return
+        for source, state in self._states.items():
+            previous, epoch, count = before[source]
+            current = state.observation
+            if current is previous:
+                continue
+            reset = previous is not None and (
+                current is None or epoch != state.epoch or state.count <= count
+            )
+            if reset:
+                self._cursor += 1
+                self._events.append(AdmissionEvent(self._cursor, source, None))
+            if current is not None:
+                self._cursor += 1
+                self._events.append(AdmissionEvent(self._cursor, source, current))
+
+    def ingest(
+        self,
+        observation: MotionSample,
+        *,
+        now_ros: float,
+        now_steady: float,
+        heading: Heading | None = None,
+    ) -> AdmissionDecision:
+        structural = metadata_error(observation, heading, now_ros=now_ros, now_steady=now_steady)
+        if structural is not None:
+            return AdmissionDecision(False, structural)
+        before = self._markers()
+        decision = self._ingest(
+            observation, now_ros=now_ros, now_steady=now_steady, heading=heading
+        )
+        self._record(before)
+        return decision
+
+    def _views(self, *, now_ros: float, now_steady: float) -> dict[Source, SourceView]:
+        before = self._markers()
         views = {}
-        if clocks_valid:
+        if self._clock(now_ros, now_steady):
             for source, state in self._states.items():
                 self._expire(state, now_ros=now_ros, now_steady=now_steady)
                 if state.observation is not None:
                     views[source] = SourceView(state.observation, state.ready)
+        self._record(before)
+        return views
+
+    def assess(self, *, now_ros: float, now_steady: float) -> MotionAssessment:
+        views = self._views(now_ros=now_ros, now_steady=now_steady)
         return select_reference(views, self.config, now_steady=now_steady)
+
+    def snapshot(self, *, after_cursor: int, now_ros: float, now_steady: float) -> SourceSnapshot:
+        if self._event_capacity is None or after_cursor < 0 or after_cursor > self._cursor:
+            raise ValueError("T3b snapshot needs configured journal and valid cursor")
+        views = self._views(now_ros=now_ros, now_steady=now_steady)
+        gap = bool(self._events and after_cursor < self._events[0].cursor - 1)
+        events = tuple(event for event in self._events if event.cursor > after_cursor)
+        return SourceSnapshot(
+            self._cursor, events, gap, tuple(views.items()), now_ros, now_steady, self.config.rules
+        )
