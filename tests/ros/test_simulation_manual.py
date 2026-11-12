@@ -5,12 +5,24 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from statistics import median
 
 import pytest
 
 from senior_control.runtime.ipc import IpcClient, IpcError
+
+
+def _drain_observer(
+    spin_once: Callable[[], None], *, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Drain ready callbacks without monopolizing heartbeat and IPC tasks."""
+    deadline = clock() + 0.004
+    for _ in range(16):
+        spin_once()
+        if clock() >= deadline:
+            break
 
 
 async def test_gazebo_manual_motion_and_stop():
@@ -62,8 +74,10 @@ async def test_gazebo_manual_motion_and_stop():
 
     async def spin():
         while running:
-            rclpy.spin_once(node, timeout_sec=0)
-            await asyncio.sleep(0.01)
+            # Output, ground-truth odometry and diagnostics share this executor.
+            # One callback per 10 ms can backlog above 100 Hz and skew stop measurements.
+            _drain_observer(lambda: rclpy.spin_once(node, timeout_sec=0))
+            await asyncio.sleep(0.005)
 
     observer = asyncio.create_task(spin())
     client = IpcClient(Path(socket), timeout=3)
@@ -222,3 +236,31 @@ async def test_gazebo_manual_motion_and_stop():
         await heartbeat.close()
         node.destroy_node()
         rclpy.shutdown()
+
+
+def test_manual_observer_drains_bursts_with_bounded_work():
+    pending = deque(range(100))
+    observed = []
+
+    def spin_once():
+        observed.append(pending.popleft())
+
+    _drain_observer(spin_once, clock=lambda: 0.0)
+    assert observed == list(range(16))
+    assert len(pending) == 84
+    # A second event-loop turn handles the next burst without starving other tasks.
+    _drain_observer(spin_once, clock=lambda: 0.0)
+    assert observed == list(range(32))
+
+
+def test_manual_observer_yields_when_callback_time_budget_is_spent():
+    now = 0.0
+    calls = 0
+
+    def spin_once():
+        nonlocal now, calls
+        now += 0.001
+        calls += 1
+
+    _drain_observer(spin_once, clock=lambda: now)
+    assert calls == 4
