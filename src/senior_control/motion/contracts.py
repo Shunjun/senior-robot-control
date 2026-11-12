@@ -100,10 +100,15 @@ class MotionTarget:
 
 @dataclass(frozen=True)
 class BodyMotion:
-    """Interval average and current absolute component bounds, not two measurements."""
+    """Interval reference; current absolute bounds may be unsupported (None).
+
+    Qualification concerns the reference, not a T4 permission. Statistical
+    covariance alone does not establish a deterministic current-speed bound.
+    """
 
     average: BodyTwist
-    upper: BodyTwist
+    # //Compatible: pure T3a references may lack a supported current true-speed bound.
+    upper: BodyTwist | None
     interval_start_ros: float
     interval_end_ros: float
     computed_steady: float
