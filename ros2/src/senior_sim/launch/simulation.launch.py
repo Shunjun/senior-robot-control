@@ -70,7 +70,8 @@ def generate_launch_description():
                 parameters=[
                     {
                         "config_file": PathJoinSubstitution([share, "config", "bridge.yaml"]),
-                        "use_sim_time": sim_time,
+                        # Conversion copies Gazebo stamps; this node need not consume /clock.
+                        "use_sim_time": False,
                     }
                 ],
             ),
