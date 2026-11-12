@@ -394,7 +394,8 @@ def main() -> None:
 
         async def serve() -> None:
             server = IpcServer(
-                path, core.handle,
+                path,
+                core.handle,
                 replace_existing=node.get_parameter("ipc_replace_existing_socket").value,
             )
             started = False
@@ -416,8 +417,28 @@ def main() -> None:
                 executor.add_node(node)
                 if controller is not None:
                     warmer = asyncio.create_task(warm_controller())
+                yielded_at = time.monotonic()
+                last_stall_log = float("-inf")
                 while rclpy.ok() and not exiting:
+                    resumed_at = time.monotonic()
+                    cpu_at = time.thread_time()
                     _spin_ready_callbacks(executor)
+                    finished_at = time.monotonic()
+                    callback_wall = finished_at - resumed_at
+                    callback_cpu = time.thread_time() - cpu_at
+                    resume_delay = resumed_at - yielded_at
+                    if (
+                        max(callback_wall, resume_delay) > 0.05
+                        and finished_at - last_stall_log >= 1.0
+                    ):
+                        last_stall_log = finished_at
+                        node.get_logger().warning(
+                            "adapter_loop_stall "
+                            f"callback_wall={callback_wall:.6f} "
+                            f"callback_cpu={callback_cpu:.6f} "
+                            f"resume_delay={resume_delay:.6f}"
+                        )
+                    yielded_at = finished_at
                     await asyncio.sleep(0.005)
                 if routes is not None and routes.current is not None:
                     cancellation = asyncio.create_task(routes.cancel(routes.current.execution_id))
