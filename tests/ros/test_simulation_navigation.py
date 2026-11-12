@@ -65,7 +65,9 @@ async def test_gazebo_route_order_and_authority_loss() -> None:
                 if state.get("navigation_ready") is True:
                     return state
                 await asyncio.sleep(0.1)
-            pytest.fail(f"simulation did not qualify navigation: {state}")
+            diagnostic = {key: value for key, value in state.items() if key != "scan_points"}
+            diagnostic["scan_points_count"] = len(state.get("scan_points", []))
+            pytest.fail(f"simulation did not qualify navigation: {diagnostic}")
 
         await ready_state()
         pose = await client.request("pose.get")

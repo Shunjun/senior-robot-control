@@ -15,11 +15,23 @@ async def test_gazebo_manual_motion_and_stop():
     if not socket:
         pytest.skip("requires the dedicated qualified Gazebo simulation")
     rclpy = pytest.importorskip("rclpy")
+    from diagnostic_msgs.msg import DiagnosticArray
     from geometry_msgs.msg import Twist
 
     rclpy.init()
     node = rclpy.create_node("manual_acceptance_observer")
     outputs = []
+    diagnostics = []
+
+    def record_status(message):
+        for status in message.status:
+            if status.name == "safety_gate":
+                diagnostics.append(
+                    (status.message, {item.key: item.value for item in status.values})
+                )
+                del diagnostics[:-20]
+
+    node.create_subscription(DiagnosticArray, "/safety/status", record_status, 10)
     node.create_subscription(
         Twist,
         "/cmd_vel",
@@ -93,6 +105,7 @@ async def test_gazebo_manual_motion_and_stop():
         for sequence in range(2, 32):
             await send("drive.velocity", sequence, {"vx": 0.08, "wz": 0.0})
             await asyncio.sleep(0.1)
+        motion_diagnostics = list(diagnostics)
         await send("drive.stop", 32, {})
         stopped_at = time.monotonic()
         for _ in range(50):
@@ -105,7 +118,10 @@ async def test_gazebo_manual_motion_and_stop():
         await asyncio.sleep(0.5)
         after_stop = [(vx, wz) for at, vx, wz in outputs if at >= first_zero]
         assert len(after_stop) >= 2 and all(vx == 0 and wz == 0 for vx, wz in after_stop)
-        assert any(vx > 0.01 for _, vx, _ in outputs), "safety output never allowed motion"
+        assert any(vx > 0.01 for _, vx, _ in outputs), (
+            "safety output never allowed motion",
+            motion_diagnostics,
+        )
         final = await client.request("state.get")
         pose = final.get("robot_pose")
         assert pose is not None, final
