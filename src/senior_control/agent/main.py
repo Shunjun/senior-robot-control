@@ -63,6 +63,33 @@ ADMISSION_SECONDS = 5.0
 MAX_COMMAND_CLOCK_ERROR = 0.05
 
 
+def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
+    """Retain values, so producer-owned mutable geometry cannot rewrite the sent baseline."""
+    pose, route = snapshot.robot_pose, snapshot.route_progress
+    return (
+        snapshot.localized,
+        snapshot.map_ref,
+        snapshot.map_generation,
+        None
+        if route is None
+        else (
+            route.execution_id,
+            route.task_id,
+            route.map_generation,
+            route.status,
+            route.active_waypoint_index,
+        ),
+        snapshot.navigation_ready,
+        snapshot.home,
+        snapshot.task_revision,
+        snapshot.execution_status,
+        snapshot.runnable_task_ids,
+        None if pose is None else (pose.x, pose.y, pose.yaw),
+        tuple((point.x, point.y) for point in snapshot.scan_points[:64]),
+        snapshot.navigation_block_reason,
+    )
+
+
 async def _never_publish(vx: float, wz: float) -> None:
     raise AssertionError("the agent must not publish /cmd_vel")
 
@@ -520,15 +547,24 @@ class Agent:
         The relay refreshes ``last_synced_at`` only from snapshots, so an idle robot must keep
         sending them or the cloud would show it stale.
         """
-        try:
-            await self.publish_snapshot(self.robot_id)
-        except Exception:
-            logger.warning("initial snapshot unavailable", exc_info=True)
         loop = asyncio.get_running_loop()
         last_key: tuple[Any, ...] | None = None
         last_sent = loop.time()
-        while True:
+        if self._link is not link:
+            return
+        try:
+            snapshot = await self._collect()
+            if self._link is not link:
+                return
+            key = _snapshot_change_key(snapshot)
+            await link.send_snapshot(snapshot)
+            last_key, last_sent = key, loop.time()
+        except Exception:
+            logger.warning("initial snapshot unavailable", exc_info=True)
+        while self._link is link:
             await asyncio.sleep(self._state_poll_seconds)
+            if self._link is not link:
+                return
             try:
                 snapshot = await self._collect()
             except Exception:
@@ -536,19 +572,9 @@ class Agent:
                 # link is still up, so the next successful collect must keep the cloud fresh.
                 logger.warning("periodic snapshot collect failed", exc_info=True)
                 continue
-            key = (
-                snapshot.localized,
-                snapshot.map_ref,
-                snapshot.map_generation,
-                snapshot.route_progress,
-                snapshot.navigation_ready,
-                snapshot.home,
-                snapshot.task_revision,
-                snapshot.execution_status,
-                snapshot.runnable_task_ids,
-            )
-            if last_key is None:
-                last_key = key
+            if self._link is not link:
+                return
+            key = _snapshot_change_key(snapshot)
             if key == last_key and loop.time() - last_sent < self._snapshot_seconds:
                 continue
             try:

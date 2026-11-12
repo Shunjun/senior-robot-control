@@ -1543,3 +1543,217 @@ async def test_navigation_readiness_roundtrip_and_stale_cache(rig: Rig) -> None:
                 SnapshotEnvelope.model_validate(invalid)
     finally:
         await finish(task, rig)
+
+
+@pytest.fixture
+async def snapshot_polls(tmp_path, monkeypatch, request):
+    import importlib
+    from types import SimpleNamespace
+
+    from senior_control.protocol import RobotPosePayload, ScanPointPayload
+
+    main = importlib.import_module("senior_control.agent.main")
+    actual_asyncio = asyncio
+    now = [0.0]
+    sleeps = asyncio.Queue()
+    initial_failure = getattr(request, "param", None)
+
+    class GeometryState(FakeState):
+        def __init__(self):
+            super().__init__()
+            self.pose = RobotPosePayload(x=0.0, y=0.0, yaw=0.0)
+            self.points = [ScanPointPayload(x=1.0, y=2.0)]
+            self.reason = None
+            self.generation = "live-generation"
+            self.hold = None
+            self.entered = asyncio.Event()
+            self.initial_failed = False
+
+        async def collect(self):
+            if initial_failure == "collect" and not self.initial_failed:
+                self.initial_failed = True
+                raise OSError("initial source unavailable")
+            value = replace(
+                await super().collect(),
+                robot_pose=self.pose,
+                scan_points=tuple(self.points),
+                navigation_block_reason=self.reason,
+                map_generation=self.generation,
+            )
+            if self.hold is not None:
+                hold, self.hold = self.hold, None
+                self.entered.set()
+                await hold.wait()
+            return value
+
+    class TimedLink(FakeLink):
+        def __init__(self, epoch):
+            super().__init__(epoch)
+            self.sent_at = []
+            self.initial_failed = False
+
+        async def send_snapshot(self, snapshot):
+            assert not self.closed
+            if initial_failure == "send" and not self.initial_failed:
+                self.initial_failed = True
+                raise OSError("initial send unavailable")
+            self.sent_at.append(now[0])
+            await super().send_snapshot(snapshot)
+
+    class ControlledAsyncio:
+        def __getattr__(self, name):
+            return getattr(actual_asyncio, name)
+
+        def get_running_loop(self):
+            return SimpleNamespace(time=lambda: now[0])
+
+        async def sleep(self, delay):
+            assert delay == 0.25
+            future = actual_asyncio.get_running_loop().create_future()
+            sleeps.put_nowait(future)
+            await future
+            now[0] += delay
+
+    state, link = GeometryState(), TimedLink(1)
+    agent = await idle_agent(tmp_path, link, state)
+    agent._link, agent._epoch = link, link.epoch
+    monkeypatch.setattr(main, "asyncio", ControlledAsyncio())
+    task = asyncio.create_task(agent._keep_snapshot_fresh(link))
+    tasks = [task]
+    pending = await asyncio.wait_for(sleeps.get(), 1)
+
+    async def tick():
+        nonlocal pending
+        pending.set_result(None)
+        pending = await asyncio.wait_for(sleeps.get(), 1)
+
+    async def resume():
+        pending.set_result(None)
+
+    try:
+        yield SimpleNamespace(
+            agent=agent,
+            link=link,
+            state=state,
+            task=task,
+            tick=tick,
+            resume=resume,
+            sleeps=sleeps,
+            tasks=tasks,
+            new_link=TimedLink,
+        )
+    finally:
+        for running in tasks:
+            running.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        agent._link = None
+        await agent._cleanup()
+
+
+@pytest.mark.parametrize(
+    "change", ["pose", "laser", "reason", "pose-none", "laser-clear", "generation"]
+)
+async def test_perception_change_pushes_at_the_next_existing_poll(snapshot_polls, change):
+    from senior_control.protocol import RobotPosePayload
+
+    runtime = snapshot_polls
+    assert len(runtime.link.snapshots) == 1
+    if change == "pose":
+        runtime.state.pose = RobotPosePayload(x=0.1, y=0.0, yaw=0.0)
+    elif change == "laser":
+        runtime.state.points[0].x = 3.0
+    elif change == "reason":
+        runtime.state.reason = "sensor evidence unavailable"
+    elif change == "pose-none":
+        runtime.state.pose = None
+    elif change == "laser-clear":
+        runtime.state.points.clear()
+    else:
+        runtime.state.generation = "replacement-generation"
+        runtime.state.pose = None
+        runtime.state.points.clear()
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 2
+    assert runtime.link.sent_at == [0.0, 0.25]
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 2
+
+
+async def test_snapshot_change_key_does_not_alias_mutable_producer_geometry(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.state.pose.x = 0.1
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 2
+    runtime.state.pose.x = 0.2
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 3
+    runtime.state.points[0].y = 4.0
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 4
+    runtime.state.points[0].y = 5.0
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 5
+
+
+async def test_unchanged_geometry_keeps_the_existing_two_second_keepalive(snapshot_polls):
+    runtime = snapshot_polls
+    for _ in range(7):
+        await runtime.tick()
+        assert len(runtime.link.snapshots) == 1
+    await runtime.tick()
+    assert runtime.link.sent_at == [0.0, 2.0]
+    for _ in range(7):
+        await runtime.tick()
+    assert len(runtime.link.snapshots) == 2
+    await runtime.tick()
+    assert runtime.link.sent_at == [0.0, 2.0, 4.0]
+
+
+async def test_rapid_geometry_changes_coalesce_to_one_snapshot_per_existing_poll(snapshot_polls):
+    runtime = snapshot_polls
+    for step in range(1, 9):
+        before = len(runtime.link.snapshots)
+        for value in range(100):
+            runtime.state.pose.x = step + value / 1000
+            runtime.state.points[0].x = value / 1000
+        assert len(runtime.link.snapshots) == before
+        await runtime.tick()
+        assert len(runtime.link.snapshots) == before + 1
+        assert runtime.link.snapshots[-1].robot_pose.x == step + 0.099
+    assert runtime.link.sent_at == [index * 0.25 for index in range(9)]
+    assert runtime.state.calls == 9  # one initial collect and exactly one per existing poll
+
+
+async def test_retired_epoch_collect_cannot_send_or_revive_old_geometry(snapshot_polls):
+    from senior_control.protocol import RobotPosePayload
+
+    runtime = snapshot_polls
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    await runtime.resume()
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    await runtime.link.close()
+    replacement = runtime.new_link(2)
+    runtime.agent._link, runtime.agent._epoch = replacement, replacement.epoch
+    runtime.state.pose = RobotPosePayload(x=9.0, y=0.0, yaw=0.0)
+    release.set()
+    await asyncio.wait_for(runtime.task, 1)
+    assert len(runtime.link.snapshots) == 1
+    assert replacement.snapshots == []
+    fresh = asyncio.create_task(runtime.agent._keep_snapshot_fresh(replacement))
+    runtime.tasks.append(fresh)
+    await asyncio.wait_for(runtime.sleeps.get(), 1)
+    assert len(replacement.snapshots) == 1
+    assert replacement.snapshots[0].robot_pose.x == 9.0
+    assert len(runtime.link.snapshots) == 1
+
+
+@pytest.mark.parametrize("snapshot_polls", ["collect", "send"], indirect=True)
+async def test_initial_snapshot_failure_retries_at_first_successful_poll(snapshot_polls):
+    runtime = snapshot_polls
+    assert runtime.link.snapshots == []
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 1
+    assert runtime.link.sent_at == [0.25]
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 1
