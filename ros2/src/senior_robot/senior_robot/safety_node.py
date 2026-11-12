@@ -185,6 +185,8 @@ class SafetyGate(Node):
             else None
         )
         self._worker = BoundedSafetyWorker(on_result=self._on_worker_result)
+        if self._safety_wakeup is not None:
+            self._worker.warmup()
         self._approved: tuple[SafetyTicket, SafetyWorkResult] | None = None
         self._worker_finished = 0
         self._worker_discarded = 0

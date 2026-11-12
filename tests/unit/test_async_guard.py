@@ -41,6 +41,10 @@ def _large_reply(_job):
     return b"x" * (8 * 1024 * 1024)
 
 
+def _echo_work(job):
+    return job
+
+
 class _ReadyBlockingQueue:
     def __init__(self, ready, queue):
         self.ready = ready
@@ -120,6 +124,54 @@ def test_ticket_rejects_geometry_horizon_even_while_sensor_is_within_age_limit()
     # but its swept uncertainty was only calculated through ROS time 20.2.
     assert 20.21 - 20.0 < 0.8
     assert not _permits(_ticket(), steady=10.1, ros=20.21)
+
+
+def test_warmup_starts_idle_worker_without_pending_work_or_replies():
+    replies = []
+    worker = BoundedSafetyWorker(_echo_work, on_result=replies.append)
+    try:
+        assert worker._process is None and worker._supervisor is None
+        assert worker.warmup()
+        supervisor = worker._supervisor
+        assert worker.warmup() and worker._supervisor is supervisor
+        deadline = time.monotonic() + 10
+        while (
+            worker._process is None or not worker._process.is_alive()
+        ) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert worker._process is not None and worker._process.is_alive()
+        assert not worker.pending and worker.poll() is None and not replies
+        assert worker.submit(_ticket(), "real submitted work")
+        deadline = time.monotonic() + 10
+        result = None
+        while result is None and time.monotonic() < deadline:
+            result = worker.poll()
+            time.sleep(0.01)
+        assert result is not None and result.error is None
+        assert result.value == "real submitted work" and result.ticket == _ticket()
+        assert not worker.pending
+    finally:
+        worker.close()
+
+
+def test_warmed_worker_is_reaped_when_closed_without_any_submission():
+    worker = BoundedSafetyWorker(_echo_work)
+    try:
+        assert worker.warmup()
+        deadline = time.monotonic() + 10
+        while (
+            worker._process is None or not worker._process.is_alive()
+        ) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        process = worker._process
+        assert process is not None and process.is_alive()
+        assert not worker.pending and worker.poll() is None
+    finally:
+        worker.close()
+    assert worker._supervisor is not None
+    worker._supervisor.join(timeout=3)
+    assert not worker._supervisor.is_alive() and not process.is_alive()
+    assert not worker.warmup() and not worker.submit(_ticket(), None)
 
 
 def test_spawned_worker_is_bounded_and_late_result_cannot_authorize_stop(tmp_path):
@@ -322,7 +374,8 @@ def test_spawned_worker_decodes_bounded_raw_scan_and_retains_sensor_transform():
         worker.close()
 
 
-def test_process_start_and_large_result_transport_do_not_block_safety_thread():
+@pytest.mark.parametrize("prewarm", [False, True], ids=["lazy-submit", "warmup"])
+def test_process_start_and_large_result_transport_do_not_block_safety_thread(prewarm):
     started, release = threading.Event(), threading.Event()
 
     class SlowProcess:
@@ -350,7 +403,7 @@ def test_process_start_and_large_result_transport_do_not_block_safety_thread():
     worker._context = SlowContext()
     try:
         before = time.monotonic()
-        assert worker.submit(_ticket(), None)
+        assert worker.warmup() if prewarm else worker.submit(_ticket(), None)
         assert time.monotonic() - before < 0.1
         assert started.wait(timeout=2)
         before = time.monotonic()
