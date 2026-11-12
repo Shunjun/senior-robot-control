@@ -95,7 +95,9 @@ senior-robot requalify-motion --profile /home/toby/another-sim/simulation.json
 ```
 
 命令验证仿真档、该档的运行中用户服务和 ROS 适配器身份后，加载该档的 ROS 环境，
-在对应隔离域请求现有 `/motion_fusion/requalify_progress` 服务。未运行、身份核验失败、
+在对应隔离域请求现有 `/motion_fusion/requalify_progress` 服务。适配器身份必须报告实际
+运行的 ROS 域，并与当前配置一致；修改配置中的域号后需重启对应仿真，不能沿用旧进程。
+旧版适配器缺少域信息时此命令拒绝执行，请重新构建 ROS 工作区并重启仿真。未运行、身份核验失败、
 服务拒绝或超时均返回失败；实车档不提供此操作。此命令不重启仿真、不发送速度命令，
 也不清除急停或真实运动异常锁存。拒绝时终端区分无需重新核验
 （`progress_history_not_broken`）、运动异常仍锁存（`motion_anomaly_latched`）、

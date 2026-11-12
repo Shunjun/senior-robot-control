@@ -1223,3 +1223,17 @@ async def test_adapter_revokes_heartbeat_epoch_without_a_browser_lease() -> None
     assert revoked == []
     assert (await adapter.handle({"type": "disable_motion", "connection_epoch": 2}))["ok"]
     assert revoked == [2]
+
+
+@pytest.mark.parametrize("domain", [None, 73])
+async def test_adapter_identity_reports_its_own_runtime_domain_only_for_matching_robot(domain):
+    core = _load_adapter().AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda *args: None,
+        disconnect=lambda epoch: None,
+        request_exit=lambda: None,
+        ros_domain=domain,
+    )
+    expected = {"ok": True} if domain is None else {"ok": True, "ros_domain": domain}
+    assert await core.handle({"type": "identity", "robot_id": ROBOT}) == expected
+    assert await core.handle({"type": "identity", "robot_id": "other-robot"}) == {"ok": False}

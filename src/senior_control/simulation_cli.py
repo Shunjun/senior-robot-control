@@ -156,10 +156,14 @@ def requalify_motion(profile_path: Path, profile: VehicleProfile) -> int:
             return 1
 
         async def verified_adapter() -> bool:
-            return await asyncio.wait_for(_probe(profile), timeout=5)
+            return await asyncio.wait_for(_probe(profile, require_domain=True), timeout=5)
 
         if not asyncio.run(verified_adapter()):
-            print("Motion requalification requires a verified live ROS adapter.", file=sys.stderr)
+            print(
+                "Motion requalification requires a verified live ROS adapter in the configured "
+                "ROS domain. Rebuild/restart older adapters or restore the running profile domain.",
+                file=sys.stderr,
+            )
             return 1
         env = dict(os.environ)
         env.pop("NOTIFY_SOCKET", None)
@@ -263,7 +267,7 @@ def service_status(unit: str, profile: VehicleProfile, *, user: bool) -> int:
     return 0 if active == "active" else 1
 
 
-async def _probe(profile: VehicleProfile) -> bool:
+async def _probe(profile: VehicleProfile, *, require_domain: bool = False) -> bool:
     if profile.socket is None:
         return False
     try:
@@ -271,7 +275,13 @@ async def _probe(profile: VehicleProfile) -> bool:
         client = IpcClient(profile.socket)
         try:
             reply = await client.request("identity", robot_id=credentials.robot_id)
-            return reply.get("ok") is True
+            if reply.get("ok") is not True:
+                return False
+            # //Compatible: legacy status needs no domain; recovery verifies the live domain.
+            if not require_domain:
+                return True
+            domain = reply.get("ros_domain")
+            return type(domain) is int and domain == profile.ros_domain
         finally:
             await client.close()
     except (OSError, ValueError, IpcError):

@@ -436,7 +436,8 @@ def requalification_runtime(tmp_path, monkeypatch):
     def validate(candidate):
         validations.append(candidate)
 
-    async def probe(candidate):
+    async def probe(candidate, *, require_domain=False):
+        assert require_domain is True
         probes.append(candidate)
         return True
 
@@ -530,7 +531,7 @@ def test_requalify_motion_requires_live_service_and_adapter(
         monkeypatch.setattr(simulation_cli.subprocess, "run", run)
     else:
 
-        async def probe(candidate):
+        async def probe(candidate, *, require_domain=False):
             probes.append(candidate)
             if missing == "identity_error":
                 raise simulation_cli.IpcError("secret must not appear")
@@ -702,3 +703,84 @@ def test_requalification_helper_only_emits_approved_identifiers(
     output = capsys.readouterr()
     assert output.out.strip() == identifier and output.err == ""
     assert cleanup == ["node", "shutdown"]
+
+
+@pytest.mark.parametrize(
+    ("reported_domain", "configured_domain", "accepted"),
+    [
+        (73, 73, True),
+        (74, 73, False),
+        (None, 73, False),
+        (True, 1, False),
+        (73.0, 73, False),
+        ("73", 73, False),
+    ],
+)
+def test_requalification_verifies_live_adapter_domain_before_service(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    reported_domain,
+    configured_domain,
+    accepted,
+):
+    from types import SimpleNamespace
+
+    from senior_control import simulation_cli
+
+    profile, credentials = _simulation_profile(tmp_path)
+    profile = profile.model_copy(update={"ros_domain": configured_domain})
+    calls = []
+    closed = []
+
+    class Client:
+        def __init__(self, path):
+            assert path == profile.socket
+
+        async def request(self, operation, **kwargs):
+            assert operation == "identity" and kwargs == {"robot_id": credentials.robot_id}
+            reply = {"ok": True}
+            if reported_domain is not None:
+                reply["ros_domain"] = reported_domain
+            return reply
+
+        async def close(self):
+            closed.append(True)
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(simulation_cli, "validate_simulation_profile", lambda _: None)
+    monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
+    monkeypatch.setattr(simulation_cli, "IpcClient", Client)
+    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    assert simulation_cli.requalify_motion(tmp_path / "simulation.json", profile) == (
+        0 if accepted else 1
+    )
+    assert len(calls) == (2 if accepted else 1)
+    assert closed == [True]
+    output = capsys.readouterr()
+    if not accepted:
+        assert output.out == "" and "configured ROS domain" in output.err
+
+
+async def test_status_probe_preserves_legacy_adapter_identity(tmp_path, monkeypatch):
+    from senior_control import simulation_cli
+
+    profile, credentials = _simulation_profile(tmp_path)
+
+    class Client:
+        def __init__(self, path):
+            pass
+
+        async def request(self, *args, **kwargs):
+            return {"ok": True}
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
+    monkeypatch.setattr(simulation_cli, "IpcClient", Client)
+    assert await simulation_cli._probe(profile) is True

@@ -54,8 +54,10 @@ class AdapterCore:
         take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
         routes: "RouteService | None" = None,
         navigation_ready: Callable[[], bool] | None = None,
+        ros_domain: int | None = None,
     ) -> None:
         self._robot_id = robot_id
+        self._ros_domain = ros_domain
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
@@ -96,7 +98,11 @@ class AdapterCore:
                 return {"ok": False, "error": "unsupported"}
             return {"ok": True, "feedback": self._take_drive_feedback()}
         if kind == "identity":
-            return {"ok": message.get("robot_id") == self._robot_id}
+            reply = {"ok": message.get("robot_id") == self._robot_id}
+            # //Compatible: legacy adapters omit their runtime ROS domain.
+            if reply["ok"] and self._ros_domain is not None:
+                return {**reply, "ros_domain": self._ros_domain}
+            return reply
         if kind == "server_heartbeat":
             epoch, deadline = message.get("connection_epoch"), message.get("deadline")
             if (
@@ -372,6 +378,7 @@ def main() -> None:
             pose_provider=reference.pose_reply if reference is not None else None,
             routes=routes,
             navigation_ready=navigation_ready,
+            ros_domain=node.context.get_domain_id(),
         )
 
         async def serve() -> None:
