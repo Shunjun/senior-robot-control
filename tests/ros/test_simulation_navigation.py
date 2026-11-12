@@ -1,6 +1,7 @@
 """Opt-in route acceptance against a dedicated, isolated Gazebo launch."""
 
 import asyncio
+import math
 import os
 import time
 from pathlib import Path
@@ -88,10 +89,16 @@ async def test_gazebo_route_order_and_authority_loss() -> None:
             return new_id
 
         x, y = pose["x"], pose["y"]
-        execution_id = await start([[x + distance, y, 0.0] for distance in (0.35, 0.7, 1.05)])
+        # The obstacle near (2, 1.2) blocks the original straight corridor's
+        # conservative safety envelope before x=1.05. Keep the same safety
+        # profile and choose a route with room for that envelope on both sides.
+        heading = -math.atan2(0.3, 0.4)
+        execution_id = await start(
+            [[x + 0.4 * step, y - 0.3 * step, heading] for step in (1, 2, 3)]
+        )
         assert await wait_for_route(execution_id, {"succeeded"}, 90) == {0, 1, 2}
         final_pose = await client.request("pose.get")
-        assert final_pose["x"] >= x + 0.8, final_pose
+        assert final_pose["x"] >= x + 0.95 and final_pose["y"] <= y - 0.7, final_pose
 
         execution_id = await start([[x, y, 0.0]])
         for _ in range(200):
