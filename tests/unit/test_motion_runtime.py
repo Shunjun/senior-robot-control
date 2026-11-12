@@ -411,6 +411,34 @@ def test_applied_command_pulses_integrate_without_inventing_requested_motion():
     assert actual.lateral_velocity == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize("replacement", [Velocity(0.08, 0), Velocity(0, 0), Velocity(0, 0.2)])
+def test_ordered_same_instant_command_transition_only_changes_future_integration(replacement):
+    commands = TimedCommandBuffer(max_gap=0.15, max_samples=10)
+    assert commands.add(1.0, Velocity(0.04, 0))
+    assert commands.add(1.1, Velocity(0.04, 0))
+    before = commands.integrated(1.0, 1.1)
+    bounds = commands.diagnostic_bounds()
+    assert commands.replace_latest(1.1, replacement)
+    assert commands.diagnostic_bounds() == bounds
+    assert commands.integrated(1.0, 1.1) == before
+    future = commands.integrated(1.1, 1.2)
+    assert future is not None
+    assert future.velocity.vx == pytest.approx(replacement.vx)
+    assert future.velocity.wz == pytest.approx(replacement.wz)
+    assert commands.integrated(1.1, 1.3) is None
+    assert not commands.add(1.09, replacement)
+    assert commands.diagnostic_bounds() == (None, None, 0)
+
+
+@pytest.mark.parametrize("stamp", [1.0, 1.2, float("nan"), float("inf")])
+def test_command_replacement_cannot_insert_history_or_change_timestamp(stamp):
+    commands = TimedCommandBuffer(max_gap=0.15, max_samples=10)
+    assert not commands.replace_latest(stamp, Velocity(0, 0))
+    assert commands.add(1.1, Velocity(0.08, 0))
+    assert not commands.replace_latest(stamp, Velocity(0, 0))
+    assert commands.diagnostic_bounds() == (None, None, 0)
+
+
 def test_changing_curvature_is_composed_on_se2_not_component_averaged():
     commands = TimedCommandBuffer(max_gap=0.51, max_samples=10)
     assert commands.add(1.0, Velocity(0.6, 0.2))

@@ -574,9 +574,18 @@ def test_duplicate_applied_command_at_identical_ros_stamp_is_idempotent(monkeypa
         rclpy.shutdown()
 
 
-@pytest.mark.parametrize("failure", ["different_value", "rollback", "float_collision"])
-def test_same_stamp_conflicting_applied_value_and_rollback_still_break_progress(
-    monkeypatch, failure
+@pytest.mark.parametrize(
+    ("failure", "sim_time"),
+    [
+        ("different_value", False),
+        ("rollback", False),
+        ("rollback", True),
+        ("float_collision", False),
+        ("float_collision", True),
+    ],
+)
+def test_applied_time_conflicts_rollback_and_float_collision_still_break_progress(
+    monkeypatch, failure, sim_time
 ):
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import Twist
@@ -584,6 +593,7 @@ def test_same_stamp_conflicting_applied_value_and_rollback_still_break_progress(
     from senior_robot.motion_fusion import MotionFusion
 
     values = dict(
+        use_sim_time=sim_time,
         sensor_max_age=2.0,
         alignment_max_gap=0.3,
         pending_wait=0.2,
@@ -619,6 +629,68 @@ def test_same_stamp_conflicting_applied_value_and_rollback_still_break_progress(
         assert fusion._progress.unqualified
         assert fusion._first_progress_break["reason"] == "applied_command_timestamp_rejected"
         assert fusion._commands.diagnostic_bounds() == (None, None, 0)
+    finally:
+        fusion.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize(("initial", "replacement"), [(0.0, 0.08), (0.08, 0.0), (0.04, 0.08)])
+def test_ordered_applied_command_changes_at_same_ros_instant_keep_progress(
+    monkeypatch, initial, replacement
+):
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import Twist
+    from rclpy.parameter import Parameter
+    from senior_robot.motion_fusion import MotionFusion
+
+    from senior_control.models import Pose2D, Velocity
+    from senior_control.safety.motion_estimator import MotionEstimate, WheelOdom
+
+    values = dict(
+        use_sim_time=True,
+        sensor_max_age=2.0,
+        alignment_max_gap=0.3,
+        pending_wait=0.2,
+        max_variance=0.1,
+        min_quality=0.3,
+        max_yaw_error=0.1,
+        startup_window=0.6,
+        wheel_motion_limit=0.004,
+        stall_distance=0.04,
+        lateral_limit=0.04,
+        yaw_limit=0.12,
+    )
+    rclpy.init()
+    fusion = MotionFusion(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
+    clock = {"now": 2_312_000_000}
+    monkeypatch.setattr(
+        fusion,
+        "get_clock",
+        lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock["now"])),
+    )
+    monkeypatch.setattr(fusion, "_try_pending", lambda: None)
+    try:
+        fusion._progress_started = True
+        command = Twist()
+        command.linear.x = initial
+        fusion._on_command(command)
+        bounds = fusion._commands.diagnostic_bounds()
+        estimate = MotionEstimate(Pose2D(0, 0, 0), Velocity(0, 0), (0.001,) * 3, 0.8, dt=1.0)
+        assert fusion._slip.update(
+            Velocity(0.05, 0), WheelOdom(Pose2D(0.1, 0, 0), 1.0, 1.0), estimate
+        ).anomalous
+        fusion._stop_acknowledgement.trip()
+        command.linear.x = replacement
+        fusion._on_command(command)
+        assert not fusion._progress.unqualified and fusion._first_progress_break is None
+        assert fusion._commands.diagnostic_bounds() == bounds
+        assert fusion._last_applied_command[0] == clock["now"]
+        assert fusion._last_applied_command[1].vx == replacement
+        actual = fusion._commands.integrated(2.312, 2.4)
+        assert actual is not None and actual.velocity.vx == pytest.approx(replacement)
+        assert not fusion._stop_acknowledgement.ready
+        assert fusion._slip.latched
+        assert fusion._commands.integrated(2.312, 2.7) is None
     finally:
         fusion.destroy_node()
         rclpy.shutdown()

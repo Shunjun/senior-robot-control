@@ -899,6 +899,19 @@ class TimedCommandBuffer:
         self._samples.append((stamp, velocity))
         return True
 
+    def replace_latest(self, stamp: float, velocity: Velocity) -> bool:
+        """Apply an ordered transition at an already-proven identical source instant.
+
+        The caller must compare the original integer timestamp, not rounded
+        float seconds. This changes only the value governing future time;
+        no timestamp or history lifetime is advanced.
+        """
+        if not self._samples or not math.isfinite(stamp) or stamp != self._samples[-1][0]:
+            self._samples.clear()
+            return False
+        self._samples[-1] = (stamp, velocity)
+        return True
+
     def integrated(self, start: float, end: float) -> CommandInterval | None:
         if not math.isfinite(start) or not math.isfinite(end) or end <= start:
             return None

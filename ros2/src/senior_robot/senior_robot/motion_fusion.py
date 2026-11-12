@@ -353,7 +353,20 @@ class MotionFusion(Node):
             steady = time.monotonic()
             self._progress_requalification.applied(velocity, steady=steady, ros_ns=ros_ns)
             prior_bounds = self._commands.diagnostic_bounds()
-            if not self._commands.add(ros_ns / 1e9, velocity):
+            # Only simulation's discrete /clock may legitimately receive ordered
+            # output changes at one instant. Keep wall-clock conflicts fail closed.
+            # The zero-duration boundary governs only subsequent ROS time.
+            same_instant = (
+                bool(self.get_parameter("use_sim_time").value)
+                and self._last_applied_command is not None
+                and self._last_applied_command[0] == ros_ns
+            )
+            accepted = (
+                self._commands.replace_latest(ros_ns / 1e9, velocity)
+                if same_instant
+                else self._commands.add(ros_ns / 1e9, velocity)
+            )
+            if not accepted:
                 self._last_applied_command = None
                 self._break_progress(
                     "applied_command_timestamp_rejected",
