@@ -640,3 +640,18 @@
 }
 .panel[data-workspace="true"] .freshness { margin: 0; gap: 5px; }
 .panel[data-workspace="true"] .bigStatus { font-size: 13px; margin: 0; }
+
+/* The runtime, tools and logs share one scrollable vehicle workspace. */
+.panel[data-workspace="true"] {
+  display: block;
+  overflow: auto;
+  padding-bottom: 24px;
+}
+.panel[data-workspace="true"] .panelHead {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-wrap: wrap;
+  background: var(--graphite-900);
+  padding: 8px;
+}

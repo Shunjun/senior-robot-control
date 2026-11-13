@@ -1,3 +1,4 @@
+import { decodeVehicleFrame, VEHICLE_REQUEST_TYPES, type VehicleFrame, type VehicleRequestType } from "./vehicleState";
 // Mirror of src/senior_control/protocol.py and src/senior_control/errors.py (wire format v1).
 // The lists below are hand-mirrored; devices.test.tsx parses the Python sources and fails when
 // a request type, error code, envelope field or snapshot field drifts apart.
@@ -19,7 +20,6 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export const SIMPLE_REQUEST_TYPES = [
   "control.acquire",
-  "drive.challenge",
   "control.release",
   "drive.stop",
   "safety.estop",
@@ -58,7 +58,6 @@ export function isWorkspaceRequestType(type: string): type is WorkspaceRequestTy
 
 /** Frames a browser may originate for the agent, excluding video signaling. */
 export const REQUEST_TYPES = [
-  "drive.velocity",
   ...SIMPLE_REQUEST_TYPES,
   ...OPERATION_REQUEST_TYPES,
   ...WORKSPACE_REQUEST_TYPES,
@@ -66,11 +65,10 @@ export const REQUEST_TYPES = [
 export type RequestType = (typeof REQUEST_TYPES)[number];
 
 export const RESPONSE_REQUEST_TYPES = [
+  "task.execution.command",
   ...OPERATION_REQUEST_TYPES,
   "control.acquire",
-  "drive.challenge",
   "control.release",
-  "drive.velocity",
   "drive.stop",
   "safety.estop",
   "safety.reset",
@@ -134,9 +132,22 @@ export const VIDEO_SIGNAL_TYPES = [
 export type VideoSignalType = (typeof VIDEO_SIGNAL_TYPES)[number];
 export type VideoSignalEnvelope = EnvelopeBase &
   (
-    | { type: "video.offer" | "video.answer"; payload: { sdp: string } }
-    | { type: "video.candidate"; payload: { candidate: string } }
-    | { type: "video.close"; payload: Record<string, never> }
+    | {
+      type: "video.offer" | "video.answer";
+      payload: {
+        sdp: string;
+      };
+    }
+    | {
+      type: "video.candidate";
+      payload: {
+        candidate: string;
+      };
+    }
+    | {
+      type: "video.close";
+      payload: Record<string, never>;
+    }
   );
 
 export interface EnvelopeBase {
@@ -192,6 +203,8 @@ export interface RobotPose extends MapPoint {
 }
 
 export interface SnapshotPayload {
+  //Compatible: legacy map/video snapshots omit the UI extension and never enable intent driving.
+  vehicle_ui?: VehicleFrame;
   connected: boolean;
   localized: boolean;
   map_ref: MapRef | null;
@@ -221,12 +234,10 @@ export interface SnapshotPayload {
 }
 
 export interface ResponsePayload {
-  request_type: (typeof RESPONSE_REQUEST_TYPES)[number];
+  request_type: (typeof RESPONSE_REQUEST_TYPES)[number] | VehicleRequestType;
   ok: boolean;
   error?: ErrorCode | null;
   operation_id?: string | null;
-  challenge_id?: string | null;
-  server_deadline?: number | null;
   status?: ResponseStatus | null;
   data?: Record<string, unknown>;
 }
@@ -306,12 +317,12 @@ function parseHome(value: unknown): HomeSummary | null | undefined {
 
 function parseRouteProgress(value: unknown): RouteProgress | null {
   if (!isRecord(value) || !isText(value["execution_id"], 128) ||
-      !isText(value["map_generation"], 128)) return null;
+    !isText(value["map_generation"], 128)) return null;
   const task = value["task_id"];
   const status = ROUTE_STATUSES.find((candidate) => candidate === value["status"]);
   const index = value["active_waypoint_index"];
   if ((task !== null && !isText(task, 128)) || status === undefined ||
-      (index !== null && (!isCount(index) || index >= 64))) return null;
+    (index !== null && (!isCount(index) || index >= 64))) return null;
   return {
     execution_id: value["execution_id"],
     task_id: task,
@@ -325,7 +336,7 @@ function parseRobotPose(value: unknown): RobotPose | null | undefined {
   //Compatible: missing or null telemetry means there is no qualified live pose.
   if (value === undefined || value === null) return null;
   if (!isRecord(value) || !isFiniteNumber(value["x"]) || !isFiniteNumber(value["y"]) ||
-      !isFiniteNumber(value["yaw"])) return undefined;
+    !isFiniteNumber(value["yaw"])) return undefined;
   return { x: value["x"], y: value["y"], yaw: value["yaw"] };
 }
 
@@ -378,7 +389,16 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     parseRouteProgress(value["route_progress"]);
   if (route === null) return null;
   if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
+  let vehicle: VehicleFrame | undefined;
+  if (value["vehicle_ui"] !== undefined) {
+    try {
+      vehicle = decodeVehicleFrame(value["vehicle_ui"]);
+    } catch {
+      return null;
+    }
+  }
   return {
+    ...(vehicle === undefined ? {} : { vehicle_ui: vehicle }),
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
     ...(navigationReady === undefined ? {} : { navigation_ready: navigationReady }),
     ...(route === undefined || route.map_generation !== mapGeneration ? {} : { route_progress: route }),
@@ -412,10 +432,25 @@ function parseTasks(value: unknown): TaskSummary[] | null {
   return tasks;
 }
 
+/** Matches the car's TaskNavigationState, including unique action identities. */
+function isTaskNavigationState(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = ["execution_id", "phase", "epoch", "completed", "remaining"];
+  if (Object.keys(value).length !== keys.length || keys.some(key => !(key in value))) return false;
+  if (!isText(value["execution_id"], 128)) return false;
+  const phase = value["phase"];
+  if (typeof phase !== "string" || !["starting", "running", "revoking", "paused", "succeeded", "canceled", "failed"].includes(phase)) return false;
+  if (!isCount(value["epoch"]) || !Number.isSafeInteger(value["epoch"])) return false;
+  const completed = value["completed"], remaining = value["remaining"];
+  if (!Array.isArray(completed) || !Array.isArray(remaining)) return false;
+  const actions: unknown[] = [...completed, ...remaining];
+  return actions.every(id => isText(id, 256)) && new Set(actions).size === actions.length;
+}
+
 function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (!isRecord(value) || typeof value["ok"] !== "boolean") return null;
   const requestType = value["request_type"];
-  if (!(RESPONSE_REQUEST_TYPES as readonly unknown[]).includes(requestType)) return null;
+  if (!(RESPONSE_REQUEST_TYPES as readonly unknown[]).includes(requestType) && !(VEHICLE_REQUEST_TYPES as readonly unknown[]).includes(requestType)) return null;
   const error = value["error"] ?? null;
   if (error !== null && !(ERROR_CODES as readonly unknown[]).includes(error)) return null;
   // Same rule as ResponsePayload.consistent_result: success and error cannot agree.
@@ -424,23 +459,21 @@ function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (status !== null && !(RESPONSE_STATUSES as readonly unknown[]).includes(status)) return null;
   const operationId = value["operation_id"] ?? null;
   if (operationId !== null && typeof operationId !== "string") return null;
-  const challengeId = value["challenge_id"] ?? null;
-  const serverDeadline = value["server_deadline"] ?? null;
-  if (challengeId !== null && !isText(challengeId, 128)) return null;
-  if (serverDeadline !== null && (!isFiniteNumber(serverDeadline) || serverDeadline <= 0)) return null;
-  if (requestType === "drive.challenge" && value["ok"] && (challengeId === null || serverDeadline === null)) return null;
   const data = value["data"];
   if (typeof requestType !== "string") return null;
-  const expectsData = isWorkspaceRequestType(requestType) && value["ok"];
-  if (expectsData ? !isRecord(data) : data !== undefined && data !== null) return null;
+  const typed = VEHICLE_REQUEST_TYPES.includes(requestType) || requestType === "control.acquire" || requestType === "control.release";
+  const expectsData = (isWorkspaceRequestType(requestType) || requestType.startsWith("settings.") || requestType === "control.acquire") && value["ok"];
+  //Compatible: older navigation and non-task operation.query replies omit lifecycle data.
+  const optionalTask = requestType === "navigation.goal" || requestType === "navigation.return_home" || requestType === "operation.query";
+  if (optionalTask) {
+    if (data !== undefined && data !== null && (!value["ok"] || !isTaskNavigationState(data))) return null;
+  } else if (expectsData ? (!isRecord(data) && !(requestType === "settings.result" && data === null)) : data !== undefined && data !== null && (!typed || !isRecord(data))) return null;
   return {
     ...(isRecord(data) ? { data } : {}),
     request_type: requestType as ResponsePayload["request_type"],
     ok: value["ok"],
     error: error as ErrorCode | null,
     operation_id: operationId,
-    challenge_id: challengeId,
-    server_deadline: serverDeadline,
     status: status as ResponseStatus | null,
   };
 }

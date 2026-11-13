@@ -403,3 +403,6 @@
   .drive[data-compact="true"] .telemetry { max-height: 54px; min-width: 0; overflow: auto; }
   .drive[data-compact="true"] .readout { font-size: 13px; }
 }
+
+.estopDock[data-compact="true"] .estop { width: 52px; height: 48px; }
+.estopDock[data-compact="true"] { max-width: min(340px, calc(100vw - 32px)); }

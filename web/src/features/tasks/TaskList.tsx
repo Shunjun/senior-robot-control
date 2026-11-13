@@ -48,7 +48,10 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const [waypointName, setWaypointName] = useState("");
   const [catalog, setCatalog] = useState<WorkspaceWaypoint[] | null>(null);
   const saveWaypointOperation = useRef<AbortController | null>(null);
-  const waypointAttempt = useRef<{ body: string; operationId: string } | null>(null);
+  const waypointAttempt = useRef<{
+    body: string;
+    operationId: string;
+  } | null>(null);
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
   const live = snapshot.connected && !snapshot.stale;
@@ -80,7 +83,12 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
     setMessage("等待车端确认保存航点…");
     let confirmed = false;
     try {
-      const body = { ...ref, ...waypointDraft, grid_id: workspace.grid_id, waypoint_id: id };
+      const body = {
+        ...ref,
+        ...waypointDraft,
+        grid_id: workspace.grid_id,
+        waypoint_id: id
+      };
       const signature = JSON.stringify(body);
       if (waypointAttempt.current?.body !== signature) {
         waypointAttempt.current = { body: signature, operationId: crypto.randomUUID() };
@@ -211,7 +219,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
     }
   }
 
-  async function changeTask(task: TaskSummary, action: "pause" | "enable" | "delete"): Promise<void> {
+  async function changeTask(task: TaskSummary, action: "disable" | "enable" | "delete"): Promise<void> {
     if (!live || pending) return;
     setPending(true);
     setMessage("等待车端确认变更…");
@@ -281,8 +289,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
                 <button type="button" aria-label={`编辑 ${task.task_id}`} disabled={!workspace || pending}
                   onClick={() => void openTask(task.task_id)}>编辑</button>
                 <button type="button" disabled={!live || pending}
-                  onClick={() => void changeTask(task, task.enabled ? "pause" : "enable")}>
-                  {task.enabled ? "暂停" : "启用"}
+                  onClick={() => void changeTask(task, task.enabled ? "disable" : "enable")}>
+                  {task.enabled ? "停用计划" : "启用计划"}
                 </button>
                 <button type="button" disabled={!live || pending}
                   onClick={() => void changeTask(task, "delete")}>删除</button>

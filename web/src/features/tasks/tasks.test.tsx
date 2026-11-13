@@ -11,7 +11,10 @@ import { draftSchedule, NEW_TASK, ScheduleEditor, type TaskDraft } from "./Sched
 import { TaskList, type TaskWorkspaceData } from "./TaskList";
 
 beforeEach(() => vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null));
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const snapshot: RobotSnapshot = {
   robot_id: "robot-alpha",
@@ -78,13 +81,15 @@ describe("task schedules", () => {
     fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
     await screen.findByText("车端已确认保存任务。");
     const created = vi.mocked(robotLink.request).mock.calls[0]?.[1] as {
-      body: { waypoint_ids: string[] };
+      body: {
+        waypoint_ids: string[];
+      };
     };
     expect(created.body.waypoint_ids).toEqual(["gate"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    fireEvent.click(screen.getByRole("button", { name: "停用计划" }));
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: "启用" }));
+    fireEvent.click(screen.getByRole("button", { name: "启用计划" }));
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(3));
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]!);
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(4));
@@ -117,12 +122,22 @@ describe("task schedules", () => {
 
 const task = { task_id: "daily", revision: 4, enabled: true };
 const listedSnapshot = { ...snapshot, tasks: [task] };
-const map = { map_ref: snapshot.map_ref!, origin: { x: 0, y: 0, yaw: 0 }, resolution: 1, cells: [] };
+const map = {
+  map_ref: snapshot.map_ref!,
+  origin: { x: 0, y: 0, yaw: 0 },
+  resolution: 1,
+  cells: []
+};
 const workspace: TaskWorkspaceData = {
   grid_id: "grid-1",
   map,
   waypoints: ["gate", "hall", "dock"].map((waypoint_id, x) => ({
-    waypoint_id, x, y: 0, yaw: 0, status: "active", kind: "waypoint",
+    waypoint_id,
+    x,
+    y: 0,
+    yaw: 0,
+    status: "active",
+    kind: "waypoint",
   })),
 };
 const taskDetails = {
@@ -142,7 +157,11 @@ function taskLink(waypointIds: string[]) {
       return { ok: true, data: { ...taskDetails, waypoint_ids: waypointIds } } as never;
     }
     if (type === "task.update") {
-      waypointIds = (payload as { body: { waypoint_ids: string[] } }).body.waypoint_ids;
+      waypointIds = (payload as {
+        body: {
+          waypoint_ids: string[];
+        };
+      }).body.waypoint_ids;
     }
     return { ok: true } as never;
   });
@@ -179,7 +198,9 @@ describe("ordered task route", () => {
   it("test_reference_change_rejects_late_route_read", async () => {
     const robotLink = link();
     let resolveRead!: (value: never) => void;
-    vi.mocked(robotLink.request).mockImplementation(() => new Promise((resolve) => { resolveRead = resolve; }));
+    vi.mocked(robotLink.request).mockImplementation(() => new Promise((resolve) => {
+      resolveRead = resolve;
+    }));
     const view = render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
     openTask();
     await waitFor(() => expect(robotLink.request).toHaveBeenCalled());
@@ -229,15 +250,30 @@ it("assembles current occupancy tiles and catalog before allowing route edits", 
   const robotLink = link();
   const identity = { robot_id: snapshot.robot_id, map_ref: snapshot.map_ref, grid_id: "grid-1" };
   vi.mocked(robotLink.request).mockImplementation(async (type, payload) => {
-    if (type === "map.manifest") return { data: {
-      ...identity, width: 33, height: 2, resolution: 1, origin: map.origin, tile_size: 32,
-    } } as never;
+    if (type === "map.manifest") return {
+      data: {
+        ...identity,
+        width: 33,
+        height: 2,
+        resolution: 1,
+        origin: map.origin,
+        tile_size: 32,
+      }
+    } as never;
     if (type === "map.tile") {
-      const x = (payload as { tile_x: number }).tile_x;
-      return { data: {
-        ...identity, tile_x: x, tile_y: 0, width: x === 0 ? 32 : 1, height: 2,
-        cells: x === 0 ? [...Array(32).fill(0), ...Array(32).fill(-1)] : [5, 75],
-      } } as never;
+      const x = (payload as {
+        tile_x: number;
+      }).tile_x;
+      return {
+        data: {
+          ...identity,
+          tile_x: x,
+          tile_y: 0,
+          width: x === 0 ? 32 : 1,
+          height: 2,
+          cells: x === 0 ? [...Array(32).fill(0), ...Array(32).fill(-1)] : [5, 75],
+        }
+      } as never;
     }
     return { data: { ...identity, waypoints: workspace.waypoints, next_cursor: null } } as never;
   });
@@ -257,13 +293,27 @@ it("assembles current occupancy tiles and catalog before allowing route edits", 
 it("saves a picked point before exposing it as a selectable route waypoint", async () => {
   const robotLink = link();
   let confirm!: (response: never) => void;
-  const picked = { waypoint_id: "new-point", x: 0, y: 0, yaw: 0, kind: "waypoint", status: "confirmed" };
+  const picked = {
+    waypoint_id: "new-point",
+    x: 0,
+    y: 0,
+    yaw: 0,
+    kind: "waypoint",
+    status: "confirmed"
+  };
   vi.mocked(robotLink.request).mockImplementation(async (type) => {
-    if (type === "waypoint.create") return new Promise((resolve) => { confirm = resolve; });
-    if (type === "waypoint.list") return { ok: true, data: {
-      robot_id: snapshot.robot_id, map_ref: snapshot.map_ref, grid_id: workspace.grid_id,
-      waypoints: [...workspace.waypoints, picked], next_cursor: null,
-    } } as never;
+    if (type === "waypoint.create") return new Promise((resolve) => {
+      confirm = resolve;
+    });
+    if (type === "waypoint.list") return {
+      ok: true, data: {
+        robot_id: snapshot.robot_id,
+        map_ref: snapshot.map_ref,
+        grid_id: workspace.grid_id,
+        waypoints: [...workspace.waypoints, picked],
+        next_cursor: null,
+      }
+    } as never;
     return { ok: false } as never;
   });
   render(<TaskList snapshot={listedSnapshot} link={robotLink}
@@ -278,7 +328,14 @@ it("saves a picked point before exposing it as a selectable route waypoint", asy
   fireEvent.change(screen.getByLabelText("新航点编号"), { target: { value: "new-point" } });
   fireEvent.click(screen.getByRole("button", { name: "保存航点" }));
   expect(robotLink.request).toHaveBeenCalledWith("waypoint.create", expect.objectContaining({
-    body: { ...snapshot.map_ref, grid_id: workspace.grid_id, waypoint_id: "new-point", x: 0, y: 0, yaw: 0 },
+    body: {
+      ...snapshot.map_ref,
+      grid_id: workspace.grid_id,
+      waypoint_id: "new-point",
+      x: 0,
+      y: 0,
+      yaw: 0
+    },
   }));
   expect(screen.queryByRole("option", { name: "new-point" })).toBeNull();
   await act(async () => confirm({ ok: true } as never));
@@ -294,8 +351,11 @@ it("shows only vehicle-reported progress on the current live map", () => {
     execution_status: "running",
     map_generation: "grid-1",
     route_progress: {
-      execution_id: "run-1", task_id: "daily", map_generation: "grid-1",
-      status: "running", active_waypoint_index: 1,
+      execution_id: "run-1",
+      task_id: "daily",
+      map_generation: "grid-1",
+      status: "running",
+      active_waypoint_index: 1,
     },
   };
   const robotLink = link();
@@ -309,7 +369,12 @@ it("shows only vehicle-reported progress on the current live map", () => {
 
 it("shows current vehicle and laser hits on task maps only for qualified live generations", () => {
   const robotLink = link();
-  const current = { ...snapshot, map_generation: workspace.grid_id, robot_pose: { x: 1, y: 2, yaw: 0.2 }, scan_points: [{ x: 2, y: 3 }] };
+  const current = {
+    ...snapshot,
+    map_generation: workspace.grid_id,
+    robot_pose: { x: 1, y: 2, yaw: 0.2 },
+    scan_points: [{ x: 2, y: 3 }]
+  };
   const { container, rerender } = render(<TaskList snapshot={current} link={robotLink} workspace={workspace} />);
   expect(screen.queryByLabelText("实时激光命中点")).not.toBeNull();
   expect(container.querySelector('[data-marker="robot"]')).not.toBeNull();

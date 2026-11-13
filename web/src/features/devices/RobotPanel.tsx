@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
 import type { RobotLink } from "../../api/client";
 import type { RobotSnapshot, RobotSummary } from "../../api/protocol";
 import { EmergencyStop } from "../drive/EmergencyStop";
+import { VehicleStateView } from "./VehicleStateView";
+import { VehicleTools } from "./VehicleTools";
 import { ControlSurface } from "./ControlSurface";
 import styles from "./Devices.module.css";
 
@@ -15,90 +17,6 @@ export interface RobotPanelProps {
 
 type LinkState = "connecting" | "open" | "closed";
 
-function useNowSeconds(): number {
-  const [now, setNow] = useState(() => Date.now() / 1000);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now() / 1000), 1_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
-}
-
-function formatClock(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleTimeString("zh-CN", { hour12: false });
-}
-
-function formatAge(seconds: number): string {
-  const age = Math.max(0, Math.floor(seconds));
-  if (age < 1) return "刚刚";
-  if (age < 60) return `${age} 秒前`;
-  if (age < 3600) return `${Math.floor(age / 60)} 分钟前`;
-  return `${Math.floor(age / 3600)} 小时前`;
-}
-
-// ---------------------------------------------------------------- readout
-
-function Readout({ snapshot }: { snapshot: RobotSnapshot }): ReactElement {
-  const now = useNowSeconds();
-  const age = formatAge(now - snapshot.last_synced_at);
-  const { stale } = snapshot;
-  return (
-    <section className={styles.readout} data-stale={stale}>
-      <div className={styles.freshness}>
-        {stale ? (
-          <>
-            <span className={styles.stalePill}>缓存快照 · 非实时</span>
-            <span className={styles.syncNote}>
-              最后同步 {formatClock(snapshot.last_synced_at)}（{age}）
-            </span>
-          </>
-        ) : (
-          <>
-            <span className={styles.livePill}>实时快照</span>
-            <span className={styles.syncNote}>同步于 {age}</span>
-          </>
-        )}
-      </div>
-      {stale && (
-        <p className={styles.staleWarning}>
-          以下数据是云端缓存，不代表车辆当前状态。恢复实时前不要据此下达指令。
-        </p>
-      )}
-      <p className={styles.bigStatus}>{snapshot.execution_status}</p>
-      <dl className={styles.facts}>
-        <div>
-          <dt>车端连接</dt>
-          <dd>{snapshot.connected ? "已连接" : "未连接"}</dd>
-        </div>
-        <div>
-          <dt>定位</dt>
-          <dd>{snapshot.localized ? "已定位" : "未定位"}</dd>
-        </div>
-        <div>
-          <dt>地图</dt>
-          <dd>
-            {snapshot.map_ref === null
-              ? "无地图"
-              : `${snapshot.map_ref.map_id} · r${snapshot.map_ref.reference_revision}`}
-          </dd>
-        </div>
-        <div>
-          <dt>Home</dt>
-          <dd>{snapshot.home === null ? "未设置" : `${snapshot.home.waypoint_id} · ${snapshot.home.status}`}</dd>
-        </div>
-        <div>
-          <dt>任务版本</dt>
-          <dd>{snapshot.task_revision}</dd>
-        </div>
-        <div>
-          <dt>可执行任务</dt>
-          <dd>{snapshot.runnable_task_ids.length}</dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
 // ---------------------------------------------------------------- panel
 
 export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactElement {
@@ -109,7 +27,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
   const lost = useRef(onLinkLost);
   lost.current = onLinkLost;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let cancelled = false;
     setSnapshot(null);
     setLinkState("connecting");
@@ -157,7 +75,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
         >
           {presence === "unknown" ? "状态未知" : presence === "online" ? "在线" : "离线"}
         </span>
-        <EmergencyStop key={attempt} link={link} compact />
+        <EmergencyStop key={`${robot.id}:${attempt}`} link={link} compact />
       </header>
 
       {linkState === "connecting" && (
@@ -187,10 +105,13 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
         )
       ) : (
         <>
-          <Readout snapshot={snapshot} />
+          <p className={styles.quiet}>
+            <span>{snapshot.stale ? "缓存快照 · 非实时" : "实时快照"}</span> · 最后同步 {new Date(snapshot.last_synced_at * 1000).toLocaleTimeString("zh-CN", { hour12: false })}</p>
+          <VehicleStateView key={`state-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} />
           <ControlSurface robotId={robot.id} link={link} snapshot={snapshot} />
         </>
       )}
+      <VehicleTools key={`tools-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} />
     </article>
   );
 }
