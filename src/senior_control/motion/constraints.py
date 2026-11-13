@@ -5,7 +5,7 @@ covariance and wheel references alone never establish these physical bounds.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from shapely.affinity import rotate, translate
@@ -177,6 +177,10 @@ class RiskEnvelope:
     synthetic: bool
     # //Compatible: nonzero lateral drift requires an independent settling guarantee.
     lateral_stop_s: float | None = None
+
+    # //Compatible: absent until a separately supported actuator/body stop model exists.
+    brake_drive_overshoot: Velocity | None = None
+    brake_tracking_basis: str = ""
 
     def __post_init__(self) -> None:
         numbers = (
@@ -416,6 +420,12 @@ def _reachable_shape(
     return sweep
 
 
+@dataclass(frozen=True)
+class BrakingProof:
+    brake: BrakeRequest
+    deadline_steady: float | None
+
+
 class ConstraintEngine:
     def __init__(self, config: ConstraintConfig):
         self.config = config
@@ -573,20 +583,27 @@ class ConstraintEngine:
                 return "sweep_unknown"
         return None
 
-    def _stop(self, s: ConstraintSnapshot, now: float) -> BrakeRequest:
+    def _stop_certificate(self, s: ConstraintSnapshot, now: float) -> BrakingProof:
         error = self._context_error(s, now)
         if error:
-            return BrakeRequest(BrakeKind.CONTROLLED, error, False)
+            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, error, False), None)
         try:
             c = self._sweep(s, Velocity(0, 0), stop_only=True, coarse=True)
             reason = self._clear(c, s, now)
         except ValueError as error:
-            return BrakeRequest(BrakeKind.CONTROLLED, str(error), False)
+            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, str(error), False), None)
         if reason == "sweep_obstructed":
-            return BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False)
+            return BrakingProof(
+                BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False), None
+            )
         if reason:
-            return BrakeRequest(BrakeKind.CONTROLLED, reason, False)
-        return BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True)
+            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, reason, False), None)
+        return BrakingProof(
+            BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True), now + c.horizon_s
+        )
+
+    def _stop(self, s: ConstraintSnapshot, now: float) -> BrakeRequest:
+        return self._stop_certificate(s, now).brake
 
     def identity(self, s: ConstraintSnapshot) -> tuple[str, ...]:
         return _identity(s)
@@ -722,6 +739,81 @@ class ConstraintEngine:
         self, result: ConstraintResult, s: ConstraintSnapshot, now: float
     ) -> ConstraintResult:
         return self.tighten(result, s, now)
+
+    def braking_proof(
+        self,
+        s: ConstraintSnapshot,
+        command: Velocity,
+        acceleration: Velocity,
+        candidate: Velocity,
+        now: float,
+    ) -> BrakingProof:
+        """Certify an actual zero-goal command family via an independent model.
+
+        Overshoot bounds the WHOLE stop-family drive response, including grip
+        recovery; the model also guarantees settling under ResponseBounds.
+        It bounds departure from the hull of current body and commanded speeds,
+        not an instantaneous wheel/body residual. Original scope/deadlines
+        apply. The caller supplies a jerk-feasible zero-goal trajectory step.
+        """
+        e = s.envelope
+        if e is None or e.brake_drive_overshoot is None or not e.brake_tracking_basis:
+            return BrakingProof(
+                BrakeRequest(BrakeKind.CONTROLLED, "missing_brake_tracking_model", False), None
+            )
+        error = e.brake_drive_overshoot
+        numbers = (
+            error.vx,
+            error.wz,
+            command.vx,
+            command.wz,
+            acceleration.vx,
+            acceleration.wz,
+            candidate.vx,
+            candidate.wz,
+        )
+        if not all(math.isfinite(x) for x in numbers) or min(error.vx, error.wz) < 0:
+            return BrakingProof(
+                BrakeRequest(BrakeKind.CONTROLLED, "invalid_brake_tracking_model", False), None
+            )
+
+        def domain(old: tuple[float, float], a: float, b: float, err: float) -> tuple[float, float]:
+            return min(old[0], a - err, b - err), max(old[1], a + err, b + err)
+
+        risk = replace(
+            e,
+            linear_interval=domain(e.linear_interval, command.vx, candidate.vx, error.vx),
+            yaw_interval=domain(e.yaw_interval, command.wz, candidate.wz, error.wz),
+            reaction_accel_upper=Velocity(
+                max(
+                    e.reaction_accel_upper.vx,
+                    abs(acceleration.vx)
+                    if command.vx == 0
+                    else max(acceleration.vx * (1 if command.vx > 0 else -1), 0),
+                ),
+                max(
+                    e.reaction_accel_upper.wz,
+                    abs(acceleration.wz)
+                    if command.wz == 0
+                    else max(acceleration.wz * (1 if command.wz > 0 else -1), 0),
+                ),
+            ),
+        )
+        # The mapped domain is independent model evidence; do not intersect it
+        # with a CURRENT body bound that says nothing about future actuator drive.
+        proof = replace(s, envelope=risk, motion=replace(s.motion, upper=None))
+        return self._stop_certificate(proof, now)
+
+    def validate_braking(
+        self,
+        s: ConstraintSnapshot,
+        command: Velocity,
+        acceleration: Velocity,
+        candidate: Velocity,
+        now: float,
+    ) -> BrakeRequest:
+        # //Compatible: callers needing only the brake retain their existing API.
+        return self.braking_proof(s, command, acceleration, candidate, now).brake
 
     def validate_output(
         self, result: ConstraintResult, s: ConstraintSnapshot, velocity: Velocity, now: float
