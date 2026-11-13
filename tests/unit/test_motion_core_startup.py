@@ -201,10 +201,22 @@ def test_source_intent_then_release_preserves_one_way_startup(
     replay, source, velocity, expected_mode, expected_fault
 ):
     core, now = replay.core, replay.clock.steady
-    # Real reducer admits a source with healthy evidence, without a body
-    # stillness claim. This is an ingress boundary test, not Nav2 qualification.
+    # Use captured current body/wheel evidence for the real 9555 ingress check,
+    # without claiming independent stillness or bypassing conditional recovery.
+    replay.clock.ros = 1.44
+    core._reference = copy.deepcopy(replay.capture["reference"])
+    _, body, wheel = core._inputs(now)
+    assert body is not None and wheel is not None
     core.machine.observe(
-        RecoveryObservation("source-ready", 1, now - 0.1, now + 0.8, True, False), now
+        RecoveryObservation(
+            body.epoch,
+            body.sequence,
+            body.stamp_steady,
+            body.deadline_steady,
+            body.fresh(now) and wheel.fresh(now),
+            False,
+        ),
+        now,
     )
     intent = N(
         owner_boot_id="producer",

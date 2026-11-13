@@ -1,7 +1,7 @@
 """Single motion-state reducer; no task runner, authority manager or actuator."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from senior_control.motion.contracts import (
     MotionEvent,
@@ -23,6 +23,8 @@ class RecoveryObservation:
     deadline_steady: float
     healthy: bool
     stationary: bool
+    # //Compatible: only the scoped T5 stop owner can provide this permission.
+    manual_rearm_ready: bool = False
 
 
 class MotionStateMachine:
@@ -75,6 +77,11 @@ class MotionStateMachine:
             and old.epoch == evidence.epoch
             and (evidence.sequence <= old.sequence or evidence.stamp_steady <= old.stamp_steady)
         ):
+            if old.manual_rearm_ready and not evidence.manual_rearm_ready:
+                # A newer proof veto may tighten permission while point sensors
+                # are unchanged. Never recount or extend that original sample.
+                self._evidence = replace(old, manual_rearm_ready=False)
+                self._project(now, "manual_permission_revoked")
             return
         continuous = old is not None and old.epoch == evidence.epoch and now < old.deadline_steady
         if not continuous or not evidence.healthy:
@@ -105,6 +112,10 @@ class MotionStateMachine:
 
     def _stationary(self, now: float) -> bool:
         return self._healthy(now) and self._evidence is not None and self._evidence.stationary
+
+    def _manual_ready(self, now: float) -> bool:
+        e = self._evidence
+        return bool(e and e.manual_rearm_ready and e.stamp_steady <= now < e.deadline_steady)
 
     def _pause_sources(self) -> None:
         self._manual = None
@@ -138,7 +149,12 @@ class MotionStateMachine:
         runnable = not (self._software or self._hardware or self._fault or self._feedback_lost)
         if self._replan and runnable:
             actions.append("replan_task")
-        if mode is M.IDLE:
+        if mode is M.IDLE or (
+            runnable
+            and self._manual is None
+            and (self._task is None or self.task_paused)
+            and self._manual_ready(now)
+        ):
             actions.append("acquire")
         if self.task_paused and runnable and self._stationary(now):
             actions.append("resume_task")
@@ -180,15 +196,23 @@ class MotionStateMachine:
                 if self._feedback_task and not (self._software or self._hardware or self._fault):
                     self._replan = True
                 self._feedback_task = False
+            elif self._manual_ready(now):
+                # Manual-only recovery never consumes the pending task replan.
+                self._feedback_lost = False
 
     def _source_event(self, event: MotionEvent, now: float) -> None:
         blocked = self._software or self._hardware or self._fault or self._feedback_lost
         kind = event.kind
-        if kind is K.MANUAL_START and not blocked and self._healthy(now):
+        if (
+            kind is K.MANUAL_START
+            and not blocked
+            and (self._healthy(now) or self._manual_ready(now))
+        ):
             if self._task is not None:
                 self.task_paused = True
             self._manual = event.source_id
             self._replan = False
+            self._feedback_task = False
         elif kind in (K.MANUAL_RELEASE, K.MANUAL_EXPIRED) and event.source_id == self._manual:
             self._manual = None
         elif kind is K.TASK_START and not blocked and self._manual is None and self._healthy(now):
