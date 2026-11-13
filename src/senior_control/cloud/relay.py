@@ -6,7 +6,7 @@ import logging
 import secrets
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -33,6 +33,9 @@ from senior_control.protocol import (
     ManualIntentEnvelope,
     ResponseEnvelope,
     ResponsePayload,
+    SettingsApplyEnvelope,
+    SettingsGetEnvelope,
+    SettingsResultEnvelope,
     SimpleEnvelope,
     SnapshotEnvelope,
     VelocityEnvelope,
@@ -209,6 +212,7 @@ class Connection:
     manual_session: str | None = None
     manual_requests: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     motion_intent: bool = False
+    settings_requests: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     safety_session: str = field(default_factory=lambda: "safety-" + secrets.token_hex(16))
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
 
@@ -353,7 +357,9 @@ class Hub:
             robot_id,
             Outbox(
                 self._limits.outbox_frames,
-                on_discard=lambda kind, raw: self._settle_discarded_intent(link, kind, raw),
+                on_discard=lambda kind, raw: self._settle_discarded_command(
+                    link, kind, raw, robot_id
+                ),
             ),
             link.epoch,
             started_at=time.monotonic(),
@@ -593,6 +599,9 @@ class Hub:
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
             return
+        if envelope.payload.request_type.startswith("settings."):
+            self._route_settings_reply(link, envelope)
+            return
         if envelope.payload.request_type in WORKSPACE_REQUEST_TYPES:
             pending = link.workspace_request
             if pending is not None and (
@@ -615,6 +624,19 @@ class Hub:
             if not controller.outbox.put(raw, "response"):
                 controller.outbox.close(CLOSE_OVERLOAD)
 
+    def _route_settings_reply(self, link: _Link, envelope: ResponseEnvelope) -> None:
+        for controller in link.controllers:
+            if (
+                envelope.controller_generation == controller.controller_generation
+                and controller.settings_requests.get(envelope.request_id)
+                == (envelope.session_id, envelope.seq, envelope.payload.request_type)
+            ):
+                controller.settings_requests.pop(envelope.request_id)
+                public = envelope.model_copy(update={"controller_generation": None})
+                if not controller.outbox.put(serialize_envelope(public), "response"):
+                    controller.outbox.close(CLOSE_OVERLOAD)
+                return
+
     def _route_manual_reply(self, link: _Link, envelope: ResponseEnvelope) -> bool:
         for controller in list(link.controllers):
             pending = controller.manual_requests.get(envelope.request_id)
@@ -630,7 +652,25 @@ class Hub:
                 return True
         return False
 
-    def _settle_discarded_intent(self, link: _Link, kind: str, raw: bytes) -> None:
+    def _settle_discarded_command(self, link: _Link, kind: str, raw: bytes, robot_id: str) -> None:
+        if kind.startswith("settings."):
+            request = validate_frame(raw, robot_id)
+            assert isinstance(
+                request, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+            )
+            # Only queued, never-transmitted work is rejected here. In-flight
+            # settings still require the vehicle's durable receipt or result query.
+            self._route_settings_reply(
+                link,
+                ResponseEnvelope(
+                    **request.model_dump(exclude={"type", "payload"}),
+                    type="response",
+                    payload=ResponsePayload(
+                        request_type=request.type, ok=False, error=ErrorCode.CONFLICT
+                    ),
+                ),
+            )
+            return
         if kind != "drive.intent":
             return
         intent = ManualIntentEnvelope.model_validate_json(raw)
@@ -976,6 +1016,16 @@ class Hub:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
                 return
             connection.challenges.clear()
+        if isinstance(
+            envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+        ):
+            if envelope.connection_epoch != agent.epoch or len(connection.settings_requests) >= 8:
+                self._reject(connection, envelope, ErrorCode.CONFLICT)
+                return
+            envelope = envelope.model_copy(
+                update={"controller_generation": connection.controller_generation}
+            )
+            raw = serialize_envelope(envelope)
         kind: str = envelope.type
         if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):
             kind = VIDEO_CLOSE if envelope.type == "video.close" else VIDEO
@@ -984,6 +1034,14 @@ class Hub:
                 return
         if not agent.outbox.put(raw, kind):
             self._reject(connection, envelope, ErrorCode.CONFLICT)
+        elif isinstance(
+            envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+        ):
+            connection.settings_requests[envelope.request_id] = (
+                envelope.session_id,
+                envelope.seq,
+                envelope.type,
+            )
         elif isinstance(envelope, SimpleEnvelope) and kind in LEASE_TYPES:
             link.lease_request = _LeaseRequest(connection, envelope)
         elif kind == VIDEO_CLOSE:
@@ -1032,7 +1090,23 @@ class Hub:
             connection.outbox.close(CLOSE_OVERLOAD)
 
 
-async def _pump_in(websocket: WebSocket, connection: Connection, hub: Hub) -> None:
+def _settings_frame(raw: bytes) -> bool:
+    try:
+        frame = json.loads(raw)
+        kind = frame.get("type", "")
+        if kind == "response":
+            kind = frame.get("payload", {}).get("request_type", "")
+        return isinstance(kind, str) and kind.startswith("settings.")
+    except (ValueError, AttributeError):
+        return False
+
+
+async def _pump_in(
+    websocket: WebSocket,
+    connection: Connection,
+    hub: Hub,
+    valid: Callable[[], Awaitable[bool]] | None = None,
+) -> None:
     while True:
         message = cast(dict[str, Any], await websocket.receive())
         if message["type"] == "websocket.disconnect":
@@ -1043,13 +1117,18 @@ async def _pump_in(websocket: WebSocket, connection: Connection, hub: Hub) -> No
             if text is None:
                 continue
             data = text.encode()
+        if valid is not None and _settings_frame(data) and not await valid():
+            connection.outbox.close(CLOSE_POLICY)
+            return
         if connection.role == "agent":
             hub.handle_agent_frame(connection, data)
         else:
             hub.handle_control_frame(connection, data)
 
 
-async def _pump_out(websocket: WebSocket, connection: Connection) -> None:
+async def _pump_out(
+    websocket: WebSocket, connection: Connection, valid: Callable[[], Awaitable[bool]] | None = None
+) -> None:
     while True:
         item = await connection.outbox.get()
         if isinstance(item, int):
@@ -1057,6 +1136,9 @@ async def _pump_out(websocket: WebSocket, connection: Connection) -> None:
                 await websocket.close(code=item)
             except RuntimeError:
                 pass
+            return
+        if valid is not None and _settings_frame(item) and not await valid():
+            await websocket.close(code=CLOSE_POLICY)
             return
         await websocket.send_text(item.decode())
 
@@ -1067,10 +1149,16 @@ async def _watch_heartbeat(connection: Connection, hub: Hub) -> None:
         hub.expire_stale_agent(connection)
 
 
-async def serve_connection(websocket: WebSocket, connection: Connection, hub: Hub) -> None:
+async def serve_connection(
+    websocket: WebSocket,
+    connection: Connection,
+    hub: Hub,
+    *,
+    valid: Callable[[], Awaitable[bool]] | None = None,
+) -> None:
     """Run one accepted socket until either side ends it, then release every task."""
-    reader = asyncio.ensure_future(_pump_in(websocket, connection, hub))
-    writer = asyncio.ensure_future(_pump_out(websocket, connection))
+    reader = asyncio.ensure_future(_pump_in(websocket, connection, hub, valid))
+    writer = asyncio.ensure_future(_pump_out(websocket, connection, valid))
     watcher = (
         asyncio.ensure_future(_watch_heartbeat(connection, hub))
         if connection.role == "agent"

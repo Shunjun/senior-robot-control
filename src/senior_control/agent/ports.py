@@ -464,6 +464,11 @@ class TaskAwareMotion(IpcMotion):
         self.tasks = tasks
 
     settings: SettingsService | None = None
+    _manual_clock: Callable[[], float] = time.monotonic
+
+    def bind_clock(self, clock: Callable[[], float]) -> None:
+        """Use the same steady domain as Agent ingress/deadline construction."""
+        self._manual_clock = clock
 
     async def manual(
         self,
@@ -481,25 +486,35 @@ class TaskAwareMotion(IpcMotion):
             )
         if self.settings is None:
             raise DomainError(ErrorCode.UNAVAILABLE, "vehicle driving profile is not selected")
-        if envelope.type == "control.acquire":
-            for attempt in range(5):
+        for attempt in range(5):
+            if envelope.type == "control.acquire":
                 try:
-                    await self.tasks.control_current("takeover", envelope.request_id)
-                    break
+                    retired = await self.tasks.control_current("takeover", envelope.request_id)
                 except DomainError as exc:
                     if exc.code is not ErrorCode.UNAVAILABLE or attempt == 4:
                         raise
                     await asyncio.sleep(0.05)
-        snapshot = self.settings.published_snapshot
-        return await super().manual(
-            envelope,
-            received_steady=received_steady,
-            deadline_steady=deadline_steady,
-            driving=snapshot.driving.model_dump(),
-            driving_version=snapshot.driving_version,
-        )
+                    continue
+            async with self.settings.runtime.admission():
+                if envelope.type == "control.acquire":
+                    if not await self.tasks.manual_handoff_matches(retired):
+                        continue  # Release the gate before retiring the changed owner.
+                if envelope.type == "drive.intent" and (
+                    deadline_steady is None or self._manual_clock() >= deadline_steady
+                ):
+                    raise DomainError(ErrorCode.TIMEOUT, "intent expired before local handoff")
+                snapshot = self.settings.published_snapshot
+                return await super().manual(
+                    envelope,
+                    received_steady=received_steady,
+                    deadline_steady=deadline_steady,
+                    driving=snapshot.driving.model_dump(),
+                    driving_version=snapshot.driving_version,
+                )
+        raise DomainError(ErrorCode.UNAVAILABLE, "task ownership changed before manual handoff")
 
     async def forward(self, envelope: Envelope) -> None:
+        # //Compatible: native Agent acquire uses manual(), not this legacy forwarded command.
         if envelope.type == "control.acquire":
             for attempt in range(5):
                 try:

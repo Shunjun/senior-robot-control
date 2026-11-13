@@ -33,6 +33,7 @@ from senior_control.agent.dispatcher import (
     TaskPort,
 )
 from senior_control.agent.journal import AgentJournal
+from senior_control.agent.settings_wire import settings_command
 from senior_control.agent.snapshots import HomeSummary, RobotSnapshot, StatePort
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.clock import Clock, SystemClock
@@ -47,6 +48,10 @@ from senior_control.protocol import (
     RecoveryEnvelope,
     ResponseEnvelope,
     ResponsePayload,
+    SettingsApplyEnvelope,
+    SettingsEnvelope,
+    SettingsGetEnvelope,
+    SettingsResultEnvelope,
     SimpleEnvelope,
     SnapshotEnvelope,
     TaskExecutionEnvelope,
@@ -56,6 +61,7 @@ from senior_control.protocol import (
 )
 from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
+from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
 
@@ -119,6 +125,8 @@ class Agent:
         maps: MapPort,
         state: StatePort,
         motion: MotionPort,
+        settings: SettingsService | None = None,
+        runtime_gate: RuntimeGate | None = None,
         workspace: WorkspaceReader | None = None,
         navigation: NavigationAction | None = None,
         video_session: Callable[[], VideoSession | None] | None = None,
@@ -142,6 +150,9 @@ class Agent:
         if not robot_id.strip():
             raise ValueError("robot id is required")
         self.robot_id = robot_id
+        self._settings = settings
+        # //Compatible: callers injecting only settings still share that owner's gate.
+        self._runtime_gate = runtime_gate or (settings.runtime if settings is not None else None)
         self._native_manual = native_manual
         self._native_reset_token: int | None = None
         self._queued_intent: tuple[Link, ManualIntentEnvelope, float, float] | None = None
@@ -171,6 +182,10 @@ class Agent:
         self._source_clock_verified = source_clock_verified
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
+        # //Compatible: isolated/non-native MotionPort implementations have no admission clock.
+        bind_clock = getattr(motion, "bind_clock", None)
+        if bind_clock is not None:
+            bind_clock(self._clock.monotonic)
         self._heartbeat_window = heartbeat_window
         self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
         self._home = home
@@ -264,7 +279,12 @@ class Agent:
         if self._was_eligible and not self._ledger.eligible(self.robot_id):
             self._lose_eligibility()
 
+    def _invalidate_gate(self) -> None:
+        if self._runtime_gate is not None:
+            self._runtime_gate.invalidate()
+
     def _lose_eligibility(self) -> None:
+        self._invalidate_gate()
         if not self._was_eligible:
             return
         self._was_eligible = False
@@ -670,6 +690,12 @@ class Agent:
         if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
             self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
             return
+        if envelope.type in HALT_TYPES | {
+            "control.release",
+            "safety.estop.reset",
+            "safety.fault.recover",
+        }:
+            self._invalidate_gate()
         key = self._safety_key(envelope)
         overflow = (
             envelope.type in HALT_TYPES
@@ -802,6 +828,13 @@ class Agent:
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
+            return
+        if isinstance(
+            envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+        ):
+            if len(self._inflight) >= MAX_INFLIGHT:
+                raise ConnectionError("agent command capacity exceeded")
+            self._spawn(self._answer_settings(link, envelope))
             return
         if isinstance(envelope, WorkspaceEnvelope):
             # The relay bounds reads to one in flight. Dropping excess here reserves
@@ -991,6 +1024,19 @@ class Agent:
             except Exception:
                 logger.warning("snapshot after edit failed", exc_info=True)
 
+    async def _answer_settings(self, link: Link, envelope: SettingsEnvelope) -> None:
+        try:
+            self._admit(envelope)
+            if self._settings is None:
+                raise DomainError(ErrorCode.UNAVAILABLE, "settings are not configured")
+            data = await settings_command(self._settings, envelope)
+        except DomainError as exc:
+            await self._reply(link, envelope, error=exc.code)
+        except (ValueError, RuntimeError):
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+        else:
+            await self._reply(link, envelope, data=data)
+
     async def _answer_workspace(self, link: Link, envelope: WorkspaceEnvelope) -> None:
         try:
             self._admit(envelope)
@@ -1050,6 +1096,16 @@ class Agent:
                 status=shown.value if shown is not None else None,
             ),
         )
+        logger.info(
+            "agent_command_result",
+            extra={
+                "event": "agent_command_result",
+                "request_id": envelope.request_id,
+                "request_type": envelope.type,
+                "task_id": getattr(envelope.payload, "task_id", None),
+                "result": error.value if error else "response_ok",
+            },
+        )
         try:
             await link.send_response(response)
         except Exception:
@@ -1066,7 +1122,41 @@ class Agent:
         link: Link | None = None,
         generation: int | None = None,
     ) -> OperationResult:
-        if isinstance(envelope, (ResponseEnvelope, SnapshotEnvelope, WorkspaceEnvelope)):
+        if envelope.type in HALT_TYPES | {
+            "control.release",
+            "safety.estop.reset",
+            "safety.fault.recover",
+        }:
+            self._invalidate_gate()
+        # Native manual admission lives at TaskAwareMotion's physical handoff;
+        # task mutations serialize inside LifecycleStore, never around port I/O.
+        admission = not self._native_manual and envelope.type == "drive.velocity"
+        if admission and self._settings is not None:
+            async with self._settings.runtime.admission():
+                return await self._dispatch(
+                    envelope, deadline=deadline, link=link, generation=generation
+                )
+        return await self._dispatch(envelope, deadline=deadline, link=link, generation=generation)
+
+    async def _dispatch(
+        self,
+        envelope: Envelope,
+        *,
+        deadline: float | None = None,
+        link: Link | None = None,
+        generation: int | None = None,
+    ) -> OperationResult:
+        if isinstance(
+            envelope,
+            (
+                ResponseEnvelope,
+                SnapshotEnvelope,
+                WorkspaceEnvelope,
+                SettingsGetEnvelope,
+                SettingsApplyEnvelope,
+                SettingsResultEnvelope,
+            ),
+        ):
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
