@@ -61,7 +61,7 @@ from senior_control.protocol import (
 )
 from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
-from senior_control.settings.service import SettingsService
+from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
 
@@ -126,6 +126,7 @@ class Agent:
         state: StatePort,
         motion: MotionPort,
         settings: SettingsService | None = None,
+        runtime_gate: RuntimeGate | None = None,
         workspace: WorkspaceReader | None = None,
         navigation: NavigationAction | None = None,
         video_session: Callable[[], VideoSession | None] | None = None,
@@ -150,6 +151,8 @@ class Agent:
             raise ValueError("robot id is required")
         self.robot_id = robot_id
         self._settings = settings
+        # //Compatible: callers injecting only settings still share that owner's gate.
+        self._runtime_gate = runtime_gate or (settings.runtime if settings is not None else None)
         self._native_manual = native_manual
         self._native_reset_token: int | None = None
         self._queued_intent: tuple[Link, ManualIntentEnvelope, float, float] | None = None
@@ -179,6 +182,10 @@ class Agent:
         self._source_clock_verified = source_clock_verified
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
+        # //Compatible: isolated/non-native MotionPort implementations have no admission clock.
+        bind_clock = getattr(motion, "bind_clock", None)
+        if bind_clock is not None:
+            bind_clock(self._clock.monotonic)
         self._heartbeat_window = heartbeat_window
         self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
         self._home = home
@@ -272,7 +279,12 @@ class Agent:
         if self._was_eligible and not self._ledger.eligible(self.robot_id):
             self._lose_eligibility()
 
+    def _invalidate_gate(self) -> None:
+        if self._runtime_gate is not None:
+            self._runtime_gate.invalidate()
+
     def _lose_eligibility(self) -> None:
+        self._invalidate_gate()
         if not self._was_eligible:
             return
         self._was_eligible = False
@@ -678,6 +690,12 @@ class Agent:
         if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
             self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
             return
+        if envelope.type in HALT_TYPES | {
+            "control.release",
+            "safety.estop.reset",
+            "safety.fault.recover",
+        }:
+            self._invalidate_gate()
         key = self._safety_key(envelope)
         overflow = (
             envelope.type in HALT_TYPES
@@ -890,11 +908,7 @@ class Agent:
             link, envelope, received, deadline = self._queued_intent
             self._queued_intent = None
             try:
-                if self._settings is None:
-                    result = await self._manual_control(envelope, received, deadline)
-                else:
-                    async with self._settings.runtime.lock:
-                        result = await self._manual_control(envelope, received, deadline)
+                result = await self._manual_control(envelope, received, deadline)
             except DomainError as exc:
                 await self._reply(link, envelope, error=exc.code)
             else:
@@ -1108,18 +1122,17 @@ class Agent:
         link: Link | None = None,
         generation: int | None = None,
     ) -> OperationResult:
-        admission = envelope.type in {
-            "control.acquire",
-            "drive.intent",
-            "drive.velocity",
-            "navigation.start",
-            "navigation.resume",
-            "navigation.goal",
-            "navigation.return_home",
-            "task.execution.command",
-        }
+        if envelope.type in HALT_TYPES | {
+            "control.release",
+            "safety.estop.reset",
+            "safety.fault.recover",
+        }:
+            self._invalidate_gate()
+        # Native manual admission lives at TaskAwareMotion's physical handoff;
+        # task mutations serialize inside LifecycleStore, never around port I/O.
+        admission = not self._native_manual and envelope.type == "drive.velocity"
         if admission and self._settings is not None:
-            async with self._settings.runtime.lock:
+            async with self._settings.runtime.admission():
                 return await self._dispatch(
                     envelope, deadline=deadline, link=link, generation=generation
                 )

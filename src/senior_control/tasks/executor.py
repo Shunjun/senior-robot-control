@@ -5,6 +5,7 @@ uses LifecycleService as the sole writer of execution identity and progress.
 """
 
 import asyncio
+import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -263,8 +264,8 @@ class TaskExecutor(_UnmigratedExecutor):
         self.lifecycle = lifecycle
         self.context = ExecutionContext(False, False, False, False, None)
 
-    def current_context(self) -> Context:
-        context = self.context
+    def current_context(self, context: ExecutionContext | None = None) -> Context:
+        context = self.context if context is None else context
         fresh = context.valid_until is None or time.monotonic() < context.valid_until
         ready = (
             fresh
@@ -407,20 +408,23 @@ class TaskExecutor(_UnmigratedExecutor):
         await self.lifecycle.reconcile(execution_id)
         await self.lifecycle.reconcile(execution_id)
 
-    async def control_current(self, action: Action, request_id: str) -> None:
+    async def control_current(
+        self, action: Action, request_id: str
+    ) -> tuple[str, int | None] | None:
+        """Return the exact durable owner/revision checked after retirement."""
         assert self.lifecycle is not None
         record = await self._store.latest_execution()
         if record is None:
             if action == "resume":
                 raise DomainError(ErrorCode.CONFLICT, "no paused task")
-            return
+            return None
         try:
             state = await self.lifecycle.store.load(record.execution_id)
         except KeyError:
             if record.status in {ExecutionStatus.SUCCEEDED, ExecutionStatus.FAILED}:
                 if action == "resume":
                     raise DomainError(ErrorCode.CONFLICT, "task is terminal") from None
-                return
+                return record.execution_id, None
             definition = await self._store.get(record.task_id)
             if definition is None:
                 raise DomainError(ErrorCode.UNAVAILABLE, "task definition is unavailable") from None
@@ -433,7 +437,13 @@ class TaskExecutor(_UnmigratedExecutor):
         if state.phase in {"succeeded", "failed", "canceled"}:
             if action == "resume":
                 raise DomainError(ErrorCode.CONFLICT, "task is terminal")
-            return
+            return record.execution_id, state.version
+        if action == "takeover":
+            # A retry may retire a new owner or a resumed epoch. Its old receipt
+            # must not settle this new obligation under the same acquire request.
+            request_id = uuid.uuid5(
+                uuid.NAMESPACE_URL, json.dumps([request_id, record.execution_id, state.epoch])
+            ).hex
         await self.control(record.execution_id, action, request_id)
         state = await self.lifecycle.store.load(record.execution_id)
         if action == "takeover" and state.phase not in {"succeeded", "failed", "canceled"}:
@@ -442,6 +452,43 @@ class TaskExecutor(_UnmigratedExecutor):
                 raise DomainError(ErrorCode.UNAVAILABLE, "task output retirement is pending")
         if action == "cancel" and state.phase not in {"canceled", "succeeded", "failed"}:
             raise DomainError(ErrorCode.UNAVAILABLE, "task cancellation is pending")
+
+        return record.execution_id, state.version
+
+    async def manual_handoff_matches(self, retired: tuple[str, int | None] | None) -> bool:
+        """Read the authoritative owner under composition's handoff gate.
+
+        Lifecycle mutations use that same gate. This method neither dispatches
+        effects nor waits for a port; changed ownership is retired outside it.
+        """
+        assert self.lifecycle is not None
+        record = await self._store.latest_execution()
+        if record is None:
+            return retired is None
+        if retired is None or record.execution_id != retired[0]:
+            return False
+        try:
+            state = await self.lifecycle.store.load(record.execution_id)
+        except KeyError:
+            # //Compatible: completed unbound history has no lifecycle revision.
+            if retired[1] is not None or record.status not in {
+                ExecutionStatus.SUCCEEDED,
+                ExecutionStatus.FAILED,
+            }:
+                return False
+        else:
+            if state.version != retired[1]:
+                return False
+            if state.phase not in {"succeeded", "failed", "canceled"}:
+                if (
+                    state.phase != "paused"
+                    or state.stopped_for != "takeover"
+                    or state.pending is not None
+                    or await self.lifecycle.store.active_effects(record.execution_id)
+                ):
+                    return False
+        # The existing coarse projection also exposes an older resumed instance.
+        return not await self._store.executions_for_scan(None, datetime.now(timezone.utc))
 
     async def reconcile(self, record: ExecutionRecord, map_generation: str | None) -> None:
         if self.lifecycle is None:

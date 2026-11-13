@@ -11,6 +11,8 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, TypeVar
@@ -26,6 +28,7 @@ from senior_control.tasks.store import TaskStore
 T = TypeVar("T")
 EffectStatus = Literal["ready", "sending", "done", "retired"]
 ContextProvider = Callable[[], core.Context]
+Admission = Callable[[], AbstractAsyncContextManager[ContextProvider]]
 MAX_EFFECT_BATCH = 100
 
 
@@ -104,24 +107,52 @@ def _decode(payload: str) -> core.Lifecycle:
 
 
 class LifecycleStore:
-    def __init__(self, tasks: TaskStore, *, boot_id: str) -> None:
+    def __init__(
+        self, tasks: TaskStore, *, boot_id: str, admission: Admission | None = None
+    ) -> None:
         if not boot_id:
             raise ValueError("process boot identity required")
         self.tasks = tasks
         self.database = tasks._database
         self.robot_id = tasks._robot_id
         self.boot_id = boot_id
+        self._admission = admission
+        self._sample: ContextVar[ContextProvider | None] = ContextVar(
+            "task_commit_context", default=None
+        )
 
-    async def _atomic(self, work: Callable[[aiosqlite.Connection], Awaitable[T]]) -> T:
+    def _context(self, fallback: ContextProvider) -> core.Context:
+        return (self._sample.get() or fallback)()
+
+    async def _atomic(
+        self, work: Callable[[aiosqlite.Connection], Awaitable[T]], *, mutation: bool = True
+    ) -> T:
         async def locked() -> T:
             async with self.database.write_lock:
                 async with self.tasks._transaction() as connection:
-                    return await work(connection)
+                    result = await work(connection)
+                    sample = self._sample.get()
+                    if sample is not None and isinstance(result, core.Transition):
+                        if any(effect.kind == "plan" for effect in result.effects):
+                            if not sample().motion_allowed:
+                                raise VersionConflict("task admission changed before commit")
+                    return result
+
+        async def guarded() -> T:
+            if not mutation or self._admission is None:
+                # //Compatible: isolated stores retain their existing synchronous context port.
+                return await locked()
+            async with self._admission() as sample:
+                token = self._sample.set(sample)
+                try:
+                    return await locked()
+                finally:
+                    self._sample.reset(token)
 
         # Cancellation cannot release the shared lock with an uncompleted commit
         # or queued SQLite write. The caller may receive cancellation after commit;
         # its stable operation id remains queryable in that case.
-        pending = asyncio.create_task(locked())
+        pending = asyncio.create_task(guarded())
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
@@ -138,7 +169,7 @@ class LifecycleStore:
             for statement in (*AGENT_JOURNAL_STATEMENTS, *SCHEMA):
                 await connection.execute(statement)
 
-        await self._atomic(work)
+        await self._atomic(work, mutation=False)
 
     async def _load(
         self, connection: aiosqlite.Connection, execution_id: str
@@ -175,7 +206,7 @@ class LifecycleStore:
                 task_id=record.execution_id,
                 actions=tuple(f"{i}:{point}" for i, point in enumerate(task.waypoint_ids)),
             )
-            result = core.event(state, core.Event("restart"), context())
+            result = core.event(state, core.Event("restart"), self._context(context))
             await self._save(connection, None, result)
 
         await self._atomic(work)
@@ -196,7 +227,7 @@ class LifecycleStore:
                 raise RuntimeError("task instance scan limit exceeded")
             return result
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def load(self, execution_id: str) -> core.Lifecycle:
         async def work(connection: aiosqlite.Connection) -> core.Lifecycle:
@@ -205,7 +236,7 @@ class LifecycleStore:
                 raise KeyError(execution_id)
             return state
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def query(self, request_id: str) -> core.Receipt | None:
         async def work(connection: aiosqlite.Connection) -> core.Receipt | None:
@@ -217,7 +248,7 @@ class LifecycleStore:
                 row = await cursor.fetchone()
             return core.Receipt(**json.loads(str(row[0]))) if row else None
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def _replay(
         self,
@@ -389,7 +420,7 @@ class LifecycleStore:
                 return replay
             if await self._load(connection, cmd.task_id) is not None:
                 raise VersionConflict("instance identity is already owned")
-            result = core.command(core.Lifecycle(), cmd, context())
+            result = core.command(core.Lifecycle(), cmd, self._context(context))
             assert result.receipt is not None
             if result.receipt.accepted:
                 if route_poses is not None:
@@ -438,7 +469,7 @@ class LifecycleStore:
             if replay is not None:
                 return replay
             state = await self._require(connection, cmd.task_id, expected_version)
-            result = core.command(state, cmd, context())
+            result = core.command(state, cmd, self._context(context))
             assert result.receipt is not None
             await self._save(connection, state, result)
             await self._receipt(connection, result.receipt, fingerprint)
@@ -474,7 +505,7 @@ class LifecycleStore:
                 and incoming.epoch != state.epoch
             ):
                 raise StaleEffect("old execution epoch")
-            result = core.event(state, incoming, context())
+            result = core.event(state, incoming, self._context(context))
             await self._save(connection, state, result)
             return result
 
@@ -513,7 +544,7 @@ class LifecycleStore:
                 for row in rows
             )
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def effect_page(
         self,
@@ -542,7 +573,7 @@ class LifecycleStore:
             cursor_value = int(page[-1][0]) if len(rows) > limit else None
             return EffectPage(effects, cursor_value)
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def effects(self, execution_id: str) -> tuple[StoredEffect, ...]:
         # //Compatible: full diagnostic history for existing callers/tests only.
@@ -561,7 +592,7 @@ class LifecycleStore:
                 for row in rows
             )
 
-        return await self._atomic(work)
+        return await self._atomic(work, mutation=False)
 
     async def claim_effect(self, execution_id: str, effect_id: str) -> StoredEffect | None:
         async def work(connection: aiosqlite.Connection) -> StoredEffect | None:
@@ -609,7 +640,9 @@ class LifecycleStore:
             else:
                 if state.pending != effect:
                     raise StaleEffect(effect_id)
-                result = core.acknowledge(state, effect_id, epoch, ok=ok, context=context())
+                result = core.acknowledge(
+                    state, effect_id, epoch, ok=ok, context=self._context(context)
+                )
             await self._save(connection, state, result)
             status = "sending" if effect.kind == "revoke" and not ok else "done"
             await connection.execute(
@@ -643,7 +676,7 @@ class LifecycleStore:
                         connection, str(execution_id), record.task_id
                     )
                 state = _decode(str(payload))
-                result = core.event(state, core.Event("restart"), context())
+                result = core.event(state, core.Event("restart"), self._context(context))
                 await self._save(connection, state, result)
                 await connection.execute(
                     "UPDATE task_lifecycle SET boot_id=? WHERE execution_id=?",

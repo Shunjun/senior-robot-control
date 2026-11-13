@@ -5,8 +5,8 @@ import json
 import math
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Coroutine
-from contextlib import AsyncExitStack, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -49,10 +49,11 @@ class RuntimeCheck:
 class RuntimeGate:
     """Composition MUST hold this same lock for runtime transitions/output admission.
 
-    ``update`` publishes observations. Real composition uses ``transition`` across
-    reducer/task motion admission AND publishing its result; it must not accept
-    motion then asynchronously report it here. Settings holds the lock through durable commit.
-    There is no check-then-commit callback or stale MotionState argument.
+    Production serializes short task commits and the physical manual handoff,
+    not task-port reconciliation. A generation fences samples taken outside the
+    lock; the scoped provider rechecks generation/expiry inside the transaction.
+    Settings holds the lock through durable commit and immutable publication.
+    ``update``/``transition`` retain the same fence for isolated runtime callers.
     """
 
     def __init__(
@@ -64,7 +65,18 @@ class RuntimeGate:
         self._observe = observe
         self._refresh = refresh
         self.lock = asyncio.Lock()
+        self.generation = 0
         self._state = RuntimeCheck()
+
+    def invalidate(self) -> None:
+        """Nonblocking fence for safety/connection changes that must bypass the lock."""
+        self.generation += 1
+
+    @asynccontextmanager
+    async def admission(self) -> AsyncIterator[None]:
+        async with self.lock:
+            self.invalidate()
+            yield
 
     @property
     def state(self) -> RuntimeCheck:
@@ -95,7 +107,7 @@ class RuntimeGate:
         cannot accidentally permit settings. Composition must route EVERY motion
         acceptance/start through here, including task resume and manual intent.
         """
-        async with self.lock:
+        async with self.admission():
             self._state = RuntimeCheck()
             self._state = await operation()
 
@@ -103,7 +115,7 @@ class RuntimeGate:
         self, *, stationary: bool, executing_motion_task: bool, manual_active: bool = False
     ) -> None:
         """Publish observed state; motion admission itself must use transition()."""
-        async with self.lock:
+        async with self.admission():
             self._state = RuntimeCheck(stationary, executing_motion_task, manual_active)
 
 
@@ -279,6 +291,8 @@ class SettingsService:
                     await self._store.write_receipt(connection, fingerprint, result)
                 # This assignment is after commit and before either serialization lock releases.
                 self._snapshot = updated
+                if request.group == "driving":
+                    self.runtime.invalidate()
                 if updated.debug_deadline_utc != current.debug_deadline_utc:
                     self._deadline_steady = (
                         self._steady_now() + updated.logging.debug_restore_seconds
