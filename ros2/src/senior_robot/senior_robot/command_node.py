@@ -654,6 +654,9 @@ class CommandNode(Node):
                 return {"ok": False, "accepted": False, "error": "conflict"}
             if envelope.type == "control.acquire":
                 previous = self._manual_ingress.view(now)
+                retry = self._manual_ingress.request == (envelope.request_id, "{}")
+                if "acquire" not in runtime.allowed_actions and not retry:
+                    return {"ok": False, "error": "unavailable"}
                 receipt = self._manual_ingress.acquire(envelope.request_id, now)
                 if receipt.state is ManualAuthorityState.PREPARED and (
                     previous is None or previous.authority_id != receipt.authority_id
@@ -668,7 +671,8 @@ class CommandNode(Node):
                 return {"ok": False, "error": "bad_request"}
             view = self._manual_ingress.view(now)
             if view is None or (
-                view.state is ManualAuthorityState.PREPARED and not runtime.stationary
+                view.state is ManualAuthorityState.PREPARED
+                and "acquire" not in runtime.allowed_actions
             ):
                 return {"ok": False, "accepted": False, "error": "safety_rejected"}
             sample = self._manual_ingress.accept(

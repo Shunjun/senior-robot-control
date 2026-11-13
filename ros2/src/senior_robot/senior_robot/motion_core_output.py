@@ -65,7 +65,7 @@ class MotionCoreOutput:
         self.output_generation = 0
         self._input_boot = ""
         self._input_floor = -1
-        self._drive_sign = 0
+        self._manual_motion_source: str | None = None
         self._reference: dict[str, Any] | None = None
         self._reference_boot = ""
         self._reference_sequence = 0
@@ -206,6 +206,14 @@ class MotionCoreOutput:
         if not all(math.isfinite(x) for x in (velocity.vx, velocity.wz)):
             return False
         source_id = f"{msg.source_id}:{msg.source_epoch}"
+        if msg.source_kind == "manual" and source_id != self._manual_motion_source:
+            try:
+                _, body, wheel = self._inputs(now)
+                imu = self._imu_feedback(now)
+                if body is None and not self._limited_ready(now, wheel, imu):
+                    return False
+            except (ValueError, KeyError, TypeError):
+                return False
         if self.target.source_id != source_id:
             if msg.source_kind == "navigation" and self.machine.task_paused:
                 self._event(K.TASK_RESUME, now, msg.source_id)
@@ -427,6 +435,48 @@ class MotionCoreOutput:
             body = None
         return ref, body, wheel
 
+    def _imu_feedback(self, now: float) -> Feedback | None:
+        """Native yaw point only; the unused linear slot is not body evidence."""
+        packet = self._reference
+        if packet is None:
+            return None
+        ros_now = self.node.get_clock().now().nanoseconds / 1e9
+        for row in packet["sources"]:
+            if row["source"] != "imu" or not row["ready"]:
+                continue
+            sample = row["sample"]
+            if (
+                not 0
+                <= ros_now - sample["stamp_ros"]
+                <= self.profile.temporal().prediction_horizon_s
+            ):
+                return None
+            point = Feedback(
+                Velocity(0, sample["values"][0]),
+                sample["received_steady"],
+                row["valid_until_steady"],
+                sample["epoch"],
+                sample["sequence"],
+                True,
+                "native IMU yaw only; linear component unsupported",
+            )
+            return point if point.fresh(now) else None
+        return None
+
+    def _limited_ready(
+        self,
+        now: float,
+        wheel: Feedback | None,
+        imu: Feedback | None,
+    ) -> bool:
+        return bool(
+            wheel is not None
+            and wheel.fresh(now)
+            and imu is not None
+            and imu.fresh(now)
+            and self.controller.limited_rearm_ready(now, epochs=(wheel.epoch, imu.epoch))
+        )
+
     def tick(self) -> None:
         now = time.monotonic()
         self.sequence += 1
@@ -448,6 +498,7 @@ class MotionCoreOutput:
                 )
                 self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
             ref, body, wheel = self._inputs(now)
+            imu_point = self._imu_feedback(now)
             packet = self._reference
             if packet is None:
                 raise ValueError("reference_missing")
@@ -491,7 +542,8 @@ class MotionCoreOutput:
             if healthy:
                 if body is None and wheel is not None:
                     stamp, deadline = wheel.stamp_steady, wheel.deadline_steady
-                self._event(K.FEEDBACK_HEALTHY, now)
+                if body is not None:
+                    self._event(K.FEEDBACK_HEALTHY, now)
             elif self._last_healthy:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
@@ -550,13 +602,7 @@ class MotionCoreOutput:
             if body is None:
                 # Body speed is unknown: use an independent declared mechanical
                 # envelope under the passive flat-scene hypothesis, not wheel +/- error.
-                linear = (
-                    (0.0, p.assumed_body_cap)
-                    if self._drive_sign > 0
-                    else (-p.assumed_body_cap, 0.0)
-                    if self._drive_sign < 0
-                    else (-p.assumed_body_cap, p.assumed_body_cap)
-                )
+                linear = (-p.assumed_body_cap, p.assumed_body_cap)
                 gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
                 angular = (gyro - p.yaw_error, gyro + p.yaw_error)
             else:
@@ -608,7 +654,20 @@ class MotionCoreOutput:
             permission = self.scheduler.update(ctx, now)
             estop = self.machine.state.mode is MotionMode.ESTOP
             decision = self.controller.tick(
-                self.target.velocity, ctx, permission, body, wheel, now, estop=estop
+                self.target.velocity,
+                ctx,
+                permission,
+                body,
+                wheel,
+                now,
+                estop=estop,
+                imu=imu_point,
+                require_limited_rearm=(
+                    body is None
+                    and self.target.source == "manual"
+                    and self.target.source_id != self._manual_motion_source
+                    and self.target.velocity != Velocity(0, 0)
+                ),
             )
             reason = decision.reason
             if self.target.velocity == Velocity(0, 0) and decision.verified:
@@ -628,8 +687,6 @@ class MotionCoreOutput:
                     self._wheel_epoch_used = wheel.epoch
             if decision.command is not None:
                 output = decision.command
-                if output.vx:
-                    self._drive_sign = 1 if output.vx > 0 else -1
             # No candidate never holds the previous nonzero Twist. The fallback
             # is explicitly unverified stop/fault output, not a safe-stop claim.
             elif decision.emergency and reason in {
@@ -645,7 +702,34 @@ class MotionCoreOutput:
                 self._last_fault_condition = None
             reason = f"{mode.value}:{reason}"
             self.node._emit_motion_core(output, reason)
+            if self.target.source == "manual" and output != Velocity(0, 0):
+                self._manual_motion_source = self.target.source_id
+            if body is None and wheel is not None and imu_point is not None:
+                ready = self._limited_ready(now, wheel, imu_point)
+                readiness_deadline = min(wheel.deadline_steady, imu_point.deadline_steady)
+                if ready:
+                    readiness_deadline = min(readiness_deadline, decision.evidence_deadline)
+                    deadline = (
+                        min(deadline, readiness_deadline)
+                        if deadline is not None
+                        else readiness_deadline
+                    )
+                self.machine.observe(
+                    RecoveryObservation(
+                        epoch,
+                        self.sequence,
+                        min(wheel.stamp_steady, imu_point.stamp_steady),
+                        readiness_deadline,
+                        False,
+                        False,
+                        manual_rearm_ready=ready,
+                    ),
+                    now,
+                )
+                if healthy:
+                    self._event(K.FEEDBACK_HEALTHY, now)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+            self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
             self.node._emit_motion_core(Velocity(0, 0), reason)
             if self._last_healthy:
