@@ -66,6 +66,9 @@ class MotionCoreOutput:
         self._input_boot = ""
         self._input_floor = -1
         self._drive_sign = 0
+        # One-way startup phase. Zero commands never establish body stillness;
+        # only independent stillness or an accepted nonzero source ends it.
+        self._startup_motion_unconfirmed = True
         self._reference: dict[str, Any] | None = None
         self._reference_boot = ""
         self._reference_sequence = 0
@@ -216,8 +219,25 @@ class MotionCoreOutput:
         if self.machine.state.mode not in {expected, MotionMode.OBSTACLE_HOLD}:
             self.revoke("state_rejected_target")
             return False
+        if velocity != Velocity(0, 0):
+            self._startup_motion_unconfirmed = False
         self.target = MotionTarget(velocity, msg.source_kind, source_id, float(msg.steady_deadline))
         return True
+
+    def _startup_stop_uncertain(self, body: Feedback | None, context: ConstraintSnapshot) -> bool:
+        """Classify initial unknown motion; never relax the T4 stopping result."""
+        return (
+            self._startup_motion_unconfirmed
+            and body is None
+            and context.mode is SourceMode.WHEEL_IMU_LIMITED
+            and context.motion.average is None
+            and context.motion.upper is None
+            and self.target.source == "idle"
+            and self.target.velocity == Velocity(0, 0)
+            and self.controller.trajectory.velocity == Velocity(0, 0)
+            and self.controller.trajectory.acceleration == Velocity(0, 0)
+            and self.machine.state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+        )
 
     def _apply_close(self, msg: Any, reason: str, now: float) -> bool:
         self.revoke(reason, now=now)
@@ -637,10 +657,16 @@ class MotionCoreOutput:
                 "stop_response_failed",
                 "infeasible_no_reverse",
             }:
-                condition = (reason, epoch)
-                if condition != self._last_fault_condition:
-                    self._event(K.EXECUTION_FAULT, now)
-                    self._last_fault_condition = condition
+                if reason == "stop_envelope_blocked" and self._startup_stop_uncertain(body, ctx):
+                    # Keep emergency/unverified STOP and zero output. Missing
+                    # initial body evidence is not an observed execution failure.
+                    if self.machine.state.mode is not MotionMode.FEEDBACK_STOP:
+                        self._event(K.FEEDBACK_LOST, now)
+                else:
+                    condition = (reason, epoch)
+                    if condition != self._last_fault_condition:
+                        self._event(K.EXECUTION_FAULT, now)
+                        self._last_fault_condition = condition
             elif not decision.emergency:
                 self._last_fault_condition = None
             reason = f"{mode.value}:{reason}"
@@ -655,6 +681,8 @@ class MotionCoreOutput:
         state = self.machine.state
         actions = list(state.allowed_actions)
         actual_stationary = healthy and self._stationary(body, wheel, now)
+        if actual_stationary:
+            self._startup_motion_unconfirmed = False
         if not actual_stationary:
             actions = [x for x in actions if x not in {"estop_reset", "fault_recover"}]
         if not healthy:

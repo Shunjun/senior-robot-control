@@ -1,0 +1,1330 @@
+{
+  "provenance": {
+    "source_head": "41a0a30854df45a4d67d054b2c3e31fd7bcb22a6",
+    "native_motion_sha256": "138e52cd299d70c828fedf984c587dcecb325bc6126be496830be6577c6af0a4",
+    "reference_packet": 86,
+    "limitations": "No raw scan or exact timer ROS clock recorded. These mm-rounded display hits are captured static-scene occupancy witnesses, not full perception replay. The near-body free patch used for recovery is synthetic and does not grant physical qualification. Only fields consumed by this core path are retained; recovery is limited to packets 88 through 103."
+  },
+  "fault_steady": 122854.587476293,
+  "blocked_ros": 1.46,
+  "reference": {
+    "sequence": 86,
+    "sampled_steady": 122854.509980584,
+    "sampled_ros": 1.41,
+    "reference": {
+      "start_ros": 1.2,
+      "end_ros": 1.3,
+      "mode": "laser_reference",
+      "average": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "wz": -3.8073000264484326e-19
+      },
+      "source_health": [
+        {
+          "source": "laser",
+          "ready": true,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+          "valid_until_steady": 122855.197235126
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "valid_until_steady": 122855.30065654201
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "valid_until_steady": 122855.26982758401
+        }
+      ]
+    },
+    "sources": [
+      {
+        "source": "laser",
+        "ready": true,
+        "valid_until_steady": 122855.197235126,
+        "sample": {
+          "received_steady": 122854.405235126,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+          "sequence": 14
+        }
+      },
+      {
+        "source": "imu",
+        "ready": true,
+        "valid_until_steady": 122855.30065654201,
+        "sample": {
+          "values": [
+            -3.3302822634171884e-19
+          ],
+          "received_steady": 122854.500656542,
+          "stamp_ros": 1.4,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 71
+        }
+      },
+      {
+        "source": "wheel",
+        "ready": true,
+        "valid_until_steady": 122855.26982758401,
+        "sample": {
+          "values": [
+            1.2445601712447088e-19,
+            5.490145823617581e-20
+          ],
+          "received_steady": 122854.469827584,
+          "stamp_ros": 1.37,
+          "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 25
+        }
+      }
+    ]
+  },
+  "hit_witnesses": [
+    [
+      -3.4,
+      0.002
+    ],
+    [
+      -3.399,
+      -0.372
+    ],
+    [
+      3.9,
+      -0.375
+    ],
+    [
+      3.9,
+      0.018
+    ],
+    [
+      3.903,
+      0.413
+    ],
+    [
+      -3.402,
+      0.345
+    ]
+  ],
+  "recovery_references": [
+    {
+      "sequence": 88,
+      "sampled_steady": 122854.611396751,
+      "sampled_ros": 1.506,
+      "reference": {
+        "start_ros": 1.3,
+        "end_ros": 1.4,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 3.3055651463448266e-21
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.302023417
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.403916501
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.371914418
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.302023417,
+          "sample": {
+            "received_steady": 122854.515023417,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 15
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.403916501,
+          "sample": {
+            "values": [
+              -1.757636136722063e-18
+            ],
+            "received_steady": 122854.605916501,
+            "stamp_ros": 1.5,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 76
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.371914418,
+          "sample": {
+            "values": [
+              -3.1827997929467355e-20,
+              1.631503889896331e-19
+            ],
+            "received_steady": 122854.571914418,
+            "stamp_ros": 1.47,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 28
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 89,
+      "sampled_steady": 122854.660303001,
+      "sampled_ros": 1.556,
+      "reference": {
+        "start_ros": 1.4,
+        "end_ros": 1.5,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -5.346854301521086e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.407681501
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.444384209
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.443770834
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.407681501,
+          "sample": {
+            "received_steady": 122854.618681501,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 16
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.444384209,
+          "sample": {
+            "values": [
+              -7.153143302685977e-19
+            ],
+            "received_steady": 122854.645384209,
+            "stamp_ros": 1.54,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 78
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.443770834,
+          "sample": {
+            "values": [
+              3.406970835315827e-20,
+              2.499266712785268e-20
+            ],
+            "received_steady": 122854.644770834,
+            "stamp_ros": 1.54,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 30
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 90,
+      "sampled_steady": 122854.710051876,
+      "sampled_ros": 1.606,
+      "reference": {
+        "start_ros": 1.4,
+        "end_ros": 1.5,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -5.346854301521086e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.407681501
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.50381483401
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.47546466801
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.407681501,
+          "sample": {
+            "received_steady": 122854.618681501,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 16
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.50381483401,
+          "sample": {
+            "values": [
+              -2.521888718288253e-19
+            ],
+            "received_steady": 122854.703814834,
+            "stamp_ros": 1.6,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 81
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.47546466801,
+          "sample": {
+            "values": [
+              9.487635725417512e-21,
+              3.3262949495372835e-20
+            ],
+            "received_steady": 122854.675464668,
+            "stamp_ros": 1.5699999999999998,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 31
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 91,
+      "sampled_steady": 122854.760162043,
+      "sampled_ros": 1.653,
+      "reference": {
+        "start_ros": 1.5,
+        "end_ros": 1.6,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -1.026627748962298e-18
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.505682209
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.52690716801
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.518389168
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.505682209,
+          "sample": {
+            "received_steady": 122854.713682209,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 17
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.52690716801,
+          "sample": {
+            "values": [
+              -1.1871253432660584e-18
+            ],
+            "received_steady": 122854.726907168,
+            "stamp_ros": 1.62,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 82
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.518389168,
+          "sample": {
+            "values": [
+              3.483539410058794e-20,
+              1.1583480804984525e-19
+            ],
+            "received_steady": 122854.718389168,
+            "stamp_ros": 1.6099999999999999,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 32
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 92,
+      "sampled_steady": 122854.810190001,
+      "sampled_ros": 1.703,
+      "reference": {
+        "start_ros": 1.5,
+        "end_ros": 1.6,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -1.026627748962298e-18
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.505682209
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.607112834
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.577106376
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.505682209,
+          "sample": {
+            "received_steady": 122854.713682209,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 17
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.607112834,
+          "sample": {
+            "values": [
+              -9.28008350937924e-19
+            ],
+            "received_steady": 122854.807112834,
+            "stamp_ros": 1.7,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 86
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.577106376,
+          "sample": {
+            "values": [
+              9.31678984205341e-20,
+              1.2271501332075226e-19
+            ],
+            "received_steady": 122854.777106376,
+            "stamp_ros": 1.67,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 34
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 93,
+      "sampled_steady": 122854.859994793,
+      "sampled_ros": 1.748,
+      "reference": {
+        "start_ros": 1.6,
+        "end_ros": 1.7,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -1.0001380489786115e-18
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.610985501
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.653653584
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.653031084
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.610985501,
+          "sample": {
+            "received_steady": 122854.818985501,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 18
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.653653584,
+          "sample": {
+            "values": [
+              -4.339775025989217e-19
+            ],
+            "received_steady": 122854.853653584,
+            "stamp_ros": 1.74,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 88
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.653031084,
+          "sample": {
+            "values": [
+              6.585912247090577e-20,
+              1.2057295569734047e-19
+            ],
+            "received_steady": 122854.853031084,
+            "stamp_ros": 1.74,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 36
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 94,
+      "sampled_steady": 122854.910086293,
+      "sampled_ros": 1.797,
+      "reference": {
+        "start_ros": 1.6,
+        "end_ros": 1.7,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -1.0001380489786115e-18
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.610985501
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.691830168
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.684566668
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.610985501,
+          "sample": {
+            "received_steady": 122854.818985501,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 18
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.691830168,
+          "sample": {
+            "values": [
+              7.916411459723586e-19
+            ],
+            "received_steady": 122854.892830168,
+            "stamp_ros": 1.78,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 90
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.684566668,
+          "sample": {
+            "values": [
+              -2.980219463004977e-20,
+              1.4579300389943638e-19
+            ],
+            "received_steady": 122854.884566668,
+            "stamp_ros": 1.77,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 37
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 95,
+      "sampled_steady": 122854.959822543,
+      "sampled_ros": 1.842,
+      "reference": {
+        "start_ros": 1.7,
+        "end_ros": 1.8,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 7.977974462391208e-20
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.71815220901
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.758437084
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.758165668
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.71815220901,
+          "sample": {
+            "received_steady": 122854.928152209,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 19
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.758437084,
+          "sample": {
+            "values": [
+              8.803409707100176e-20
+            ],
+            "received_steady": 122854.958437084,
+            "stamp_ros": 1.8399999999999999,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 93
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.758165668,
+          "sample": {
+            "values": [
+              -1.3357167454538111e-21,
+              1.185783242942079e-19
+            ],
+            "received_steady": 122854.958165668,
+            "stamp_ros": 1.8399999999999999,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 39
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 96,
+      "sampled_steady": 122855.009963876,
+      "sampled_ros": 1.888,
+      "reference": {
+        "start_ros": 1.7,
+        "end_ros": 1.8,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 7.977974462391208e-20
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.71815220901
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.802655376
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.792677209
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.71815220901,
+          "sample": {
+            "received_steady": 122854.928152209,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 19
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.802655376,
+          "sample": {
+            "values": [
+              -1.627487355365066e-18
+            ],
+            "received_steady": 122855.002655376,
+            "stamp_ros": 1.88,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 95
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.792677209,
+          "sample": {
+            "values": [
+              6.480983435211078e-20,
+              6.829540630118895e-20
+            ],
+            "received_steady": 122854.992677209,
+            "stamp_ros": 1.87,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 40
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 97,
+      "sampled_steady": 122855.059966376,
+      "sampled_ros": 1.938,
+      "reference": {
+        "start_ros": 1.8,
+        "end_ros": 1.9,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -2.9919082597205784e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.822854251
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.842226584
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.832300709
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.822854251,
+          "sample": {
+            "received_steady": 122855.034854251,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 20
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.842226584,
+          "sample": {
+            "values": [
+              -4.567270608941045e-20
+            ],
+            "received_steady": 122855.042226584,
+            "stamp_ros": 1.92,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 97
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.832300709,
+          "sample": {
+            "values": [
+              6.04519178558823e-20,
+              2.1940760346938387e-20
+            ],
+            "received_steady": 122855.033300709,
+            "stamp_ros": 1.9100000000000001,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 41
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 98,
+      "sampled_steady": 122855.110018668,
+      "sampled_ros": 1.985,
+      "reference": {
+        "start_ros": 1.8,
+        "end_ros": 1.9,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -2.9919082597205784e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.822854251
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.905175084
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.89521641801
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.822854251,
+          "sample": {
+            "received_steady": 122855.034854251,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 20
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.905175084,
+          "sample": {
+            "values": [
+              -1.4661183650602252e-19
+            ],
+            "received_steady": 122855.105175084,
+            "stamp_ros": 1.98,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 100
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.89521641801,
+          "sample": {
+            "values": [
+              -1.8499892885981665e-20,
+              1.813105876627737e-19
+            ],
+            "received_steady": 122855.095216418,
+            "stamp_ros": 1.97,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 43
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 99,
+      "sampled_steady": 122855.160019209,
+      "sampled_ros": 2.035,
+      "reference": {
+        "start_ros": 1.9,
+        "end_ros": 2.0,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 1.0498866608320446e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.926419084
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.945489084
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.936173418
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.926419084,
+          "sample": {
+            "received_steady": 122855.137419084,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 21
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122855.945489084,
+          "sample": {
+            "values": [
+              -1.0908502400662426e-18
+            ],
+            "received_steady": 122855.145489084,
+            "stamp_ros": 2.02,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 102
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.936173418,
+          "sample": {
+            "values": [
+              -5.056674618508881e-20,
+              1.6323265054217012e-19
+            ],
+            "received_steady": 122855.137173418,
+            "stamp_ros": 2.01,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 44
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 100,
+      "sampled_steady": 122855.210295793,
+      "sampled_ros": 2.082,
+      "reference": {
+        "start_ros": 1.9,
+        "end_ros": 2.0,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 1.0498866608320446e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122855.926419084
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.007636626
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122855.99817762601
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122855.926419084,
+          "sample": {
+            "received_steady": 122855.137419084,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 21
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122856.007636626,
+          "sample": {
+            "values": [
+              -2.979525579822504e-20
+            ],
+            "received_steady": 122855.207636626,
+            "stamp_ros": 2.08,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 105
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122855.99817762601,
+          "sample": {
+            "values": [
+              -6.077802250759755e-20,
+              8.194172293464584e-20
+            ],
+            "received_steady": 122855.198177626,
+            "stamp_ros": 2.07,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 46
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 101,
+      "sampled_steady": 122855.260528251,
+      "sampled_ros": 2.131,
+      "reference": {
+        "start_ros": 2.0,
+        "end_ros": 2.1,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -4.443774253820685e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122856.032735001
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.04906587601
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.03970800102
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122856.032735001,
+          "sample": {
+            "received_steady": 122855.238735001,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 22
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122856.04906587601,
+          "sample": {
+            "values": [
+              -6.02708263066469e-19
+            ],
+            "received_steady": 122855.249065876,
+            "stamp_ros": 2.12,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 107
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122856.03970800102,
+          "sample": {
+            "values": [
+              -3.094389772509723e-20,
+              9.56912887547338e-20
+            ],
+            "received_steady": 122855.241708001,
+            "stamp_ros": 2.11,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 47
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 102,
+      "sampled_steady": 122855.310074835,
+      "sampled_ros": 2.18,
+      "reference": {
+        "start_ros": 2.0,
+        "end_ros": 2.1,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -4.443774253820685e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122856.032735001
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.089248501
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.09971896
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122856.032735001,
+          "sample": {
+            "received_steady": 122855.238735001,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 22
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122856.089248501,
+          "sample": {
+            "values": [
+              -8.536819206469329e-19
+            ],
+            "received_steady": 122855.290248501,
+            "stamp_ros": 2.16,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 109
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122856.09971896,
+          "sample": {
+            "values": [
+              -3.8781552333023146e-20,
+              -4.589463691468688e-21
+            ],
+            "received_steady": 122855.29971896,
+            "stamp_ros": 2.17,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 49
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 103,
+      "sampled_steady": 122855.359849668,
+      "sampled_ros": 2.227,
+      "reference": {
+        "start_ros": 2.1,
+        "end_ros": 2.2,
+        "mode": "laser_reference",
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -3.4592013341883295e-19
+        },
+        "source_health": [
+          {
+            "source": "laser",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "valid_until_steady": 122856.134368001
+          },
+          {
+            "source": "imu",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.15315329301
+          },
+          {
+            "source": "wheel",
+            "ready": true,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "valid_until_steady": 122856.14358446
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": "laser",
+          "ready": true,
+          "valid_until_steady": 122856.134368001,
+          "sample": {
+            "received_steady": 122855.340368001,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a7232d56100000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"c989aee57a5d8a2aa48f11598ce14bd2-1\", 0]",
+            "sequence": 23
+          }
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "valid_until_steady": 122856.15315329301,
+          "sample": {
+            "values": [
+              1.195476739930227e-18
+            ],
+            "received_steady": 122855.353153293,
+            "stamp_ros": 2.22,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a4132532f00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 112
+          }
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "valid_until_steady": 122856.14358446,
+          "sample": {
+            "values": [
+              -2.7391609794367717e-20,
+              4.962854336649368e-20
+            ],
+            "received_steady": 122855.34458446,
+            "stamp_ros": 2.21,
+            "epoch": "[\"4e32ca77809941599bc39acb2b818aa7\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a3c328af200000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            "sequence": 50
+          }
+        }
+      ]
+    }
+  ]
+}
