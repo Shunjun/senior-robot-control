@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, replace
 from enum import Enum
 
+from shapely import box as batch_box
 from shapely.affinity import rotate, translate
 from shapely.geometry import GeometryCollection, MultiPoint, Polygon, box
 from shapely.geometry.base import BaseGeometry
@@ -119,16 +120,21 @@ def prepare_perception(
     # Squares circumscribe Euclidean error disks; never use an inscribed circle.
     # Collision checks only need intersection with any square, including its
     # boundary. Retain all squares without normalizing their union topology.
+    occupied: BaseGeometry
     if error_m and hits:
         bounds = [(x - error_m, y - error_m, x + error_m, y + error_m) for x, y in hits]
-        squares = [box(*extent) for extent in bounds]
         # //Compatible: retain union's numerical behavior for degenerate or
         # overflowing squares, outside the regular finite-area set contract.
         regular = all(
-            0 < (right - left) * (top - bottom) < math.inf
-            for left, bottom, right, top in bounds
+            0 < (right - left) * (top - bottom) < math.inf for left, bottom, right, top in bounds
         )
-        occupied = GeometryCollection(squares) if regular else unary_union(squares)
+        if regular:
+            # One GEOS batch avoids a Python polygon/ring construction per ray.
+            # Coordinates, ordering and closed-square boundaries stay identical.
+            left, bottom, right, top = zip(*bounds, strict=True)
+            occupied = GeometryCollection(batch_box(left, bottom, right, top))
+        else:
+            occupied = unary_union([box(*extent) for extent in bounds])
     else:
         occupied = MultiPoint(hits) if hits else GeometryCollection()
     return Perception(

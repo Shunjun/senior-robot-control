@@ -381,6 +381,9 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
         assert owned.payload.vehicle_ui["manual_authority"]["authority_id"] == authority
         assert peer.payload.vehicle_ui["manual_authority"] is None
         assert b"manual_controller_generation" not in owned_frame
+        assert b"manual_agent_epoch" not in owned_frame
+        assert b"manual_controller_generation" not in peer_frame
+        assert b"manual_agent_epoch" not in peer_frame
         original_wall = agent._wall_clock
         agent._wall_clock = lambda: original_wall() + 60  # Not a motion-clock qualifier.
         moved = await request(

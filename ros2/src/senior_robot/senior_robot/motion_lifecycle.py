@@ -1,7 +1,6 @@
 """Bounded shutdown for the motion-chain ROS entrypoints."""
 
 import signal
-import sys
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -52,11 +51,22 @@ def _shutdown_subscription_conversion(exc: RuntimeError) -> bool:
     return False
 
 
+def _spin_cli(
+    node: Node, executor: SingleThreadedExecutor, should_stop: Callable[[], bool]
+) -> None:
+    executor.add_node(node)
+    try:
+        while rclpy.ok() and not should_stop():
+            executor.spin_once()
+    finally:
+        executor.remove_node(node)
+
+
 def run(
     factory: Callable[[], Node],
     *,
     cli: bool = False,
-    spin: Callable[[Node, SingleThreadedExecutor], None] | None = None,
+    spin: Callable[[Node, SingleThreadedExecutor, Callable[[], bool]], None] | None = None,
     executor_factory: Callable[[], SingleThreadedExecutor] | None = None,
 ) -> None:
     """Run one node; CLI mode is a single process entrypoint invocation."""
@@ -65,36 +75,25 @@ def run(
     previous_handler = signal.getsignal(signal.SIGINT) if cli else None
     previous_term = signal.getsignal(signal.SIGTERM) if cli else None
     stop_requested = False
-    if cli and callable(previous_handler):
+    stop_guard = None
+    executor = None
+    if cli:
 
-        def first_interrupt(signum, frame):
+        def request_stop(signum, frame):
             nonlocal stop_requested
             stop_requested = True
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-            if isinstance(sys.exc_info()[1], (KeyboardInterrupt, ExternalShutdownException)):
-                return
-            if previous_handler is signal.default_int_handler:
-                # //Compatible: let Humble's native signal chain close the context
-                # without asynchronously interrupting partially built ROS tasks.
-                return
-            previous_handler(signum, frame)
+            signal.signal(signum, signal.SIG_IGN)
+            if stop_guard is not None:
+                stop_guard.trigger()
 
-        # //Compatible: install before Humble chains its native signal handler.
-        signal.signal(signal.SIGINT, first_interrupt)
-    if cli and previous_term != signal.SIG_IGN:
-
-        def first_termination(signum, frame):
-            nonlocal stop_requested
-            stop_requested = True
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            if callable(previous_term):
-                previous_term(signum, frame)
-
-        signal.signal(signal.SIGTERM, first_termination)
+        # Signals request an orderly exit; publishers stay live for source revocation.
+        for signum, handler in ((signal.SIGINT, previous_handler), (signal.SIGTERM, previous_term)):
+            if handler != signal.SIG_IGN:
+                signal.signal(signum, request_stop)
     try:
         if cli:
-            # //Compatible: delay Humble's native handlers until construction
-            # has completed, so they cannot close a half-built executor context.
+            # //Compatible: Humble's native handlers close the context before node
+            # cleanup. The CLI owns signals until revocation and destruction finish.
             rclpy.init(signal_handler_options=rclpy.signals.SignalHandlerOptions.NO)
         else:
             rclpy.init()
@@ -104,7 +103,6 @@ def run(
             signal.signal(signal.SIGTERM, previous_term)
         raise
     node = None
-    executor = None
     try:
         if cli and (stop_requested or not rclpy.ok()):
             return
@@ -116,14 +114,17 @@ def run(
         if cli and (stop_requested or not rclpy.ok()):
             return
         if cli:
-            rclpy.signals.install_signal_handlers(rclpy.signals.SignalHandlerOptions.ALL)
-            if stop_requested or not rclpy.ok():
-                return
+            # A ready callback wakes spin_once without polling timers or closing
+            # the ROS context.
+            stop_guard = node.create_guard_condition(lambda: None)
         if spin is None:
-            rclpy.spin(node, executor=executor)
+            if cli:
+                _spin_cli(node, executor, lambda: stop_requested)
+            else:
+                rclpy.spin(node, executor=executor)
         else:
             # //Compatible: async IPC shares this owned executor and signal lifecycle.
-            spin(node, executor)
+            spin(node, executor, lambda: stop_requested)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     except RCLError:
@@ -141,8 +142,8 @@ def run(
         try:
             try:
                 if cli:
-                    # //Compatible: Humble's native signal thread must finish
-                    # before the executor unregisters its signal guard.
+                    # //Compatible: release Humble's registrations before the
+                    # executor destroys its signal guard.
                     rclpy.signals.uninstall_signal_handlers()
             finally:
                 try:
