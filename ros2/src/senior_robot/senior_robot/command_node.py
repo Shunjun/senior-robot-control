@@ -17,7 +17,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
@@ -881,10 +880,6 @@ class CommandNode(Node):
 
 
 def main() -> None:
-    rclpy.init()
-    node = CommandNode()
-    try:
-        rclpy.spin(node)
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    from senior_robot.motion_lifecycle import MotionExecutor, run
+
+    run(CommandNode, cli=True, executor_factory=MotionExecutor)

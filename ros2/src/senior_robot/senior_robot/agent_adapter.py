@@ -359,7 +359,7 @@ def main() -> None:
     from senior_robot.motion_lifecycle import MotionExecutor, run
     from senior_robot.simulation_reference import SimulationReference
 
-    def spin(node, executor) -> None:
+    def spin(node, executor, should_stop: Callable[[], bool]) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
         path = Path(os.environ[SOCKET_ENV])
         node.declare_parameter("ipc_replace_existing_socket", True)
@@ -542,7 +542,7 @@ def main() -> None:
                     warmer = asyncio.create_task(warm_controller())
                 yielded_at = time.monotonic()
                 last_stall_log = float("-inf")
-                while rclpy.ok() and not exiting:
+                while rclpy.ok() and not exiting and not should_stop():
                     resumed_at = time.monotonic()
                     cpu_at = time.thread_time()
                     _spin_ready_callbacks(executor)
