@@ -707,6 +707,9 @@ class Agent:
             return
         # From receipt until durable admission, no new motion or ROS heartbeat is authorized.
         deadline = asyncio.get_running_loop().time() + self._deadlines.safety
+        # Fence an older marker clear even if this receipt is canceled while waiting
+        # for its lock, before durable admission can complete.
+        self._safety_receipts += 1
         self._safety_admitting += 1
         try:
             await self._acquire_safety_lock(deadline)
@@ -722,7 +725,6 @@ class Agent:
                         return
                 else:
                     await self._safety_storage(self._journal.safety.mark(), deadline)
-                self._safety_receipts += 1
                 self._latest_velocity = None
                 if overflow:
                     self.recovery_required = True

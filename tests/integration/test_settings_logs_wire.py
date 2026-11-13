@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 from agent_fakes import FakeConnector, FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
 from test_cloud import ORIGIN, Cloud, WsClient
+from test_cloud import cloud as cloud
 from test_manual_wire import runtime
 
 from senior_control.agent.journal import AgentJournal
@@ -32,8 +33,6 @@ from senior_control.tasks.lifecycle_store import LifecycleStore
 from senior_control.vehicle_logs.models import LogInput, LogQuery
 from senior_control.vehicle_logs.service import VehicleLogService
 from senior_control.vehicle_logs.store import VehicleLogStore
-
-pytest_plugins = ["test_cloud"]
 
 
 def frame(robot: str, kind: str, payload: dict[str, Any], seq: int) -> bytes:

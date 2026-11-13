@@ -1,4 +1,5 @@
 import { testPort } from "../../api/vehicleState.testUtils";
+import { VEHICLE_REQUEST_TYPES } from "../../api/vehicleState";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -806,7 +807,9 @@ function literalOf(text: string): string[] {
 }
 
 function fieldsOf(body: string): string[] {
-  return [...body.matchAll(/^ {4}(\w+): /gm)].map((match) => match[1]!);
+  return [...body.matchAll(/^ {4}(\w+): (.*)$/gm)]
+    .filter((match) => !/=\s*PrivateAttr\(/.test(match[2]!))
+    .map((match) => match[1]!);
 }
 
 describe("protocol parity with src/senior_control/protocol.py", () => {
@@ -826,14 +829,24 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
 
   it("mirrors the response request types and error codes", () => {
     const responseBody = pythonClass(protocol, "ResponsePayload");
-    expect([...RESPONSE_REQUEST_TYPES]).toEqual(literalOf(responseBody).filter(x => x !== "drive.velocity" && x !== "drive.challenge"));
+    const requests = literalOf(responseBody).filter(x => x !== "drive.velocity" && x !== "drive.challenge");
+    expect([...new Set([...RESPONSE_REQUEST_TYPES, ...VEHICLE_REQUEST_TYPES])].sort())
+      .toEqual([...requests].sort());
+    for (const requestType of requests) {
+      expect(parseInbound(JSON.stringify(frame("response", "robot-alpha", {
+        request_type: requestType, ok: false, error: "unavailable",
+      })))?.type).toBe("response");
+    }
     const codes = [...pythonClass(errors, "ErrorCode").matchAll(/= "(\w+)"/g)].map((m) => m[1]!);
     expect([...ERROR_CODES]).toEqual(codes);
   });
 
   it("mirrors the envelope and snapshot fields and the size bound", () => {
     expect([...ENVELOPE_FIELDS]).toEqual(fieldsOf(pythonClass(protocol, "EnvelopeBase")));
-    expect([...SNAPSHOT_FIELDS]).toEqual(fieldsOf(pythonClass(protocol, "SnapshotPayload")));
+    // The UI extension has its own decoder; the two owner fields are relay-only
+    // and are cleared before browser delivery (test_manual_wire covers that boundary).
+    expect([...SNAPSHOT_FIELDS, "vehicle_ui", "manual_controller_generation", "manual_agent_epoch"])
+      .toEqual(fieldsOf(pythonClass(protocol, "SnapshotPayload")));
     expect(MAX_MESSAGE_BYTES).toBe(Number(/MAX_MESSAGE_BYTES = (\d+)/.exec(protocol)![1]));
   });
 });
