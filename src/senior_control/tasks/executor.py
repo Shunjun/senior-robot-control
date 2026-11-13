@@ -413,7 +413,7 @@ class TaskExecutor(_UnmigratedExecutor):
     ) -> tuple[str, int | None] | None:
         """Return the exact durable owner/revision checked after retirement."""
         assert self.lifecycle is not None
-        record = await self._store.latest_execution()
+        record = await self._store.current_execution()
         if record is None:
             if action == "resume":
                 raise DomainError(ErrorCode.CONFLICT, "no paused task")
@@ -462,7 +462,7 @@ class TaskExecutor(_UnmigratedExecutor):
         effects nor waits for a port; changed ownership is retired outside it.
         """
         assert self.lifecycle is not None
-        record = await self._store.latest_execution()
+        record = await self._store.current_execution()
         if record is None:
             return retired is None
         if retired is None or record.execution_id != retired[0]:
@@ -487,8 +487,9 @@ class TaskExecutor(_UnmigratedExecutor):
                     or await self.lifecycle.store.active_effects(record.execution_id)
                 ):
                     return False
-        # The existing coarse projection also exposes an older resumed instance.
-        return not await self._store.executions_for_scan(None, datetime.now(timezone.utc))
+        # current_execution already preferred any active projection. Under the
+        # shared admission gate no new owner can commit between that read and IPC.
+        return True
 
     async def reconcile(self, record: ExecutionRecord, map_generation: str | None) -> None:
         if self.lifecycle is None:

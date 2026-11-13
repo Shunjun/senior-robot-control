@@ -19,7 +19,7 @@ from senior_control.models import MapRef, Pose2D
 from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.settings.models import SettingsRequest
 from senior_control.settings.service import RuntimeGate, SettingsService
-from senior_control.tasks.lifecycle import Command
+from senior_control.tasks.lifecycle import Command, Event
 from senior_control.tasks.models import TaskDefinition
 from senior_control.tasks.schedule import Schedule
 
@@ -36,6 +36,8 @@ from senior_control.tasks.schedule import Schedule
         "retirement-fence",
         "takeover-submit",
         "takeover-resume",
+        "older-resumed",
+        "older-resumed-snapshot",
     ],
 )
 async def test_task_port_waits_do_not_starve_fresh_manual_intents(
@@ -121,7 +123,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                         raise IpcError("controlled state read failure")
             return reply
         if kind == "manual":
-            if path.startswith("takeover-"):
+            if path.startswith("takeover-") or path == "older-resumed":
                 state = await service.store.load("execution")
                 handoff_states.append((state.phase, state.stopped_for, state.pending is None))
             manual_calls.append((time.monotonic(), fields["deadline_steady"]))
@@ -196,6 +198,126 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
 
         settings = agent._settings
         assert settings is not None
+        if path in {"older-resumed", "older-resumed-snapshot"}:
+            assert (await submit()).receipt.accepted
+            await service.reconcile("execution")
+            await executor.control_current("pause", "pause-A")
+            assert (await service.store.load("execution")).phase == "paused"
+            paused = await service.store.tasks.current_execution()
+            assert paused is not None and paused.execution_id == "execution"
+            later = datetime.now(timezone.utc)
+            task_b = await service.store.tasks.create(
+                TaskDefinition(
+                    "definition-B",
+                    "robot",
+                    MapRef("map", 1),
+                    ("b",),
+                    Schedule.interval(later, 86400, "UTC"),
+                    "UTC",
+                    True,
+                    0,
+                    later,
+                )
+            )
+            result = await service.submit(
+                Command("submit-B", "submit", "execution-B", ("0:b",)),
+                task_b,
+                later,
+                execution_poses=(Pose2D(1, 0, 0),),
+            )
+            assert result.receipt is not None and result.receipt.accepted
+            await service.reconcile("execution-B")
+            state_b = await service.store.load("execution-B")
+            progressed = await service.event(
+                "execution-B",
+                Event("action_completed", state_b.epoch, "0:b"),
+                expected_version=state_b.version,
+            )
+            completed = await service.event(
+                "execution-B",
+                Event("completed", state_b.epoch),
+                expected_version=progressed.state.version,
+            )
+            assert completed.state.phase == "succeeded"
+            state_a = await service.store.load("execution")
+            await link.inbox.put(
+                envelope(
+                    "task.execution.command",
+                    {
+                        "request_id": "resume-A",
+                        "expected_version": state_a.version,
+                        "task_id": "execution",
+                        "action": "resume",
+                    },
+                    generation=None,
+                    request="resume-A",
+                )
+            )
+            await until(lambda: any(r.request_id == "resume-A" for r in link.responses))
+            assert next(r for r in link.responses if r.request_id == "resume-A").payload.ok
+            assert (await service.store.load("execution")).phase == "running"
+            latest = await service.store.tasks.latest_execution()
+            assert latest is not None and latest.execution_id == "execution-B"
+            if path == "older-resumed-snapshot":
+                live = await agent._state.collect()
+                assert live.vehicle_ui is not None
+                frame_task = live.vehicle_ui["task"]
+                state_a = await service.store.load("execution")
+                assert frame_task == {
+                    "task_id": "execution",
+                    "version": state_a.version,
+                    "phase": "running",
+                    "completed": 0,
+                    "total": 1,
+                    "stopped_for": None,
+                    "allowed_actions": ["pause", "cancel", "takeover"],
+                }
+                # The existing web taskCommand forwards these exact frame fields.
+                await link.inbox.put(
+                    envelope(
+                        "task.execution.command",
+                        {
+                            "request_id": "frame-pause",
+                            "expected_version": frame_task["version"],
+                            "task_id": frame_task["task_id"],
+                            "action": "pause",
+                        },
+                        generation=None,
+                        request="frame-pause",
+                    )
+                )
+                await until(lambda: any(r.request_id == "frame-pause" for r in link.responses))
+                response = next(r for r in link.responses if r.request_id == "frame-pause")
+                assert response.payload.ok
+                receipt = response.payload.data
+                assert receipt is not None and receipt["accepted"] is True
+                assert receipt["request_id"] == "frame-pause"
+                assert receipt["task_id"] == frame_task["task_id"]
+                assert isinstance(receipt["version"], int)
+                assert (await service.store.load("execution")).phase == "paused"
+                fallback = await agent._state.collect()
+                assert fallback.vehicle_ui is not None
+                assert fallback.vehicle_ui["task"] == {
+                    "task_id": "execution-B",
+                    "version": completed.state.version,
+                    "phase": "succeeded",
+                    "completed": 1,
+                    "total": 1,
+                    "stopped_for": None,
+                    "allowed_actions": [],
+                }
+                assert await service.store.load("execution-B") == completed.state
+                return
+            await link.inbox.put(envelope("control.acquire", {}, request="acquire"))
+            await until(lambda: any(r.request_id == "acquire" for r in link.responses))
+            acquired = next(r for r in link.responses if r.request_id == "acquire")
+            assert acquired.payload.ok, acquired.payload
+            assert handoff_states == [("paused", "takeover", True)]
+            assert len(manual_calls) == 1
+            assert await service.store.load("execution-B") == completed.state
+            historical = await service.store.tasks.current_execution()
+            assert historical is not None and historical.execution_id == "execution-B"
+            return
         if path.startswith("takeover-"):
             if path == "takeover-resume":
                 assert (await submit()).receipt.accepted

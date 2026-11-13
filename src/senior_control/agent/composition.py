@@ -200,10 +200,10 @@ class SnapshotState:
             task_view = None
             if self._navigation is not None:
                 self._navigation.executor.context = state.for_tasks(self._connected())
-                latest = await self._tasks.latest_execution()
-                if latest is not None:
+                current = await self._tasks.current_execution()
+                if current is not None:
                     try:
-                        task_view = await self._navigation.execution_view(latest.execution_id)
+                        task_view = await self._navigation.execution_view(current.execution_id)
                     except KeyError:
                         pass  # //Compatible: unmigrated execution has no lifecycle projection.
             ui = vehicle_frame(
