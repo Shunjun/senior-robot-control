@@ -3,6 +3,8 @@
 from dataclasses import replace
 
 import pytest
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, box
+from shapely.ops import unary_union
 
 from senior_control.models import BodyTwist, Pose2D, Velocity
 from senior_control.motion.constraints import (
@@ -21,7 +23,7 @@ from senior_control.motion.contracts import BodyMotion, BrakeKind, MotionTarget,
 from senior_control.motion.source_modes import SourceMode
 
 
-def scene(now=0.0, hits=(), rear=True, epoch="scan", revision=1, no_return=False):
+def scene(now=0.0, hits=(), rear=True, epoch="scan", revision=1, no_return=False, error_m=0.02):
     patch = FreePatch(
         ((-20 if rear else 0, -20), (20, -20), (20, 20), (-20 if rear else 0, 20)),
         PatchKind.NO_RETURN if no_return else PatchKind.OBSERVED_FREE,
@@ -29,7 +31,7 @@ def scene(now=0.0, hits=(), rear=True, epoch="scan", revision=1, no_return=False
     return prepare_perception(
         (patch,),
         hits,
-        error_m=0.02,
+        error_m=error_m,
         stamp_steady=now,
         deadline_steady=now + 2,
         source_epoch=epoch,
@@ -423,3 +425,102 @@ def test_stopping_integrals_match_closed_form_triangular_and_plateau_cases():
     plateau = stop_axis(0.5, 0, 0.5, 2, 0.1)
     assert plateau.duration == pytest.approx(1.35, abs=1e-12, rel=0)
     assert plateau.distance == pytest.approx(0.3625, abs=1e-12, rel=0)
+
+
+@pytest.mark.parametrize(
+    "hits",
+    [
+        (),
+        ((0.0, 0.0),),
+        ((0.0, 0.0), (0.0, 0.0)),  # duplicate
+        ((0.0, 0.0), (0.25, 0.0)),  # overlapping error squares
+        ((0.0, 0.0), (0.5, 0.0)),  # edge contact at error=.25
+        ((0.0, 0.0), (0.5, 0.5)),  # corner contact at error=.25
+        ((0.0, 0.0), (2.0, 2.0)),  # disconnected
+    ],
+)
+@pytest.mark.parametrize("error_m", [0.0, 0.02, 0.25])
+def test_occupied_intersection_preserves_every_hit_and_closed_error_boundary(hits, error_m):
+    occupied = scene(hits=hits, error_m=error_m).occupied
+    parts = (
+        [box(x - error_m, y - error_m, x + error_m, y + error_m) for x, y in hits]
+        if error_m
+        else [Point(x, y) for x, y in hits]
+    )
+    probes = [
+        GeometryCollection(),
+        Point(10, 10),
+        LineString([(-3, -3), (3, 3)]),
+        box(-3, -3, 3, 3),
+        box(0.3, -0.1, 0.4, 0.1),  # gap when squares/points are disconnected
+    ]
+    for x, y in hits:
+        edge = x + error_m
+        corner = y + error_m
+        probes.extend(
+            [
+                Point(x, y),
+                Point(edge, y),
+                Point(edge, corner),
+                Point(edge + 1e-9, corner + 1e-9),
+                LineString([(edge, y - 1), (edge, y + 1)]),
+                box(edge, corner, edge + 0.1, corner + 0.1),
+            ]
+        )
+    # Independent finite-union membership oracle, including zero-area contacts.
+    for probe in probes:
+        assert probe.intersects(occupied) == any(probe.intersects(part) for part in parts)
+    assert occupied.is_empty == (not hits)
+    if not error_m and hits:
+        assert isinstance(occupied, MultiPoint)
+
+
+@pytest.mark.parametrize("target", [Velocity(0.6, 0), Velocity(-0.3, 0), Velocity(0.3, 0.5)])
+@pytest.mark.parametrize("current", [0.0, 0.4])
+@pytest.mark.parametrize(
+    "hits",
+    [(), ((0.0, 0.0),), ((0.5, 0.0), (0.52, 0.0)), ((2.0, 2.0), (2.04, 2.04))],
+)
+def test_occupied_representation_preserves_refine_latest_veto_and_output(target, current, hits):
+    e = engine()
+    s = snapshot(target=target, current=current, hits=hits)
+    # The former normalized union is a comparison oracle, not required topology.
+    normalized = replace(
+        s, perception=replace(s.perception, occupied=unary_union(s.perception.occupied))
+    )
+    actual = e.refine(s, 0)
+    expected = e.refine(normalized, 0)
+    assert (actual.permit, actual.brake) == (expected.permit, expected.brake)
+    prior = e.refine(snapshot(target=target, current=current), 0)
+    tightened = e.tighten(prior, s, 0.1)
+    normalized_tightened = e.tighten(prior, normalized, 0.1)
+    assert (tightened.permit, tightened.brake) == (
+        normalized_tightened.permit,
+        normalized_tightened.brake,
+    )
+    assert e.validate_output(prior, s, target, 0.1) == e.validate_output(
+        prior, normalized, target, 0.1
+    )
+
+
+@pytest.mark.parametrize(
+    ("hit", "error_m"),
+    [
+        ((1e20, 1e20), 0.02),
+        ((1e20, 0.0), 0.02),
+        ((0.0, 0.0), 5e-324),  # area underflow
+        ((0.0, 0.0), 1e154),  # area overflow with finite coordinates
+        ((1e308, 0.0), 1e308),  # coordinate overflow
+    ],
+)
+@pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+def test_numerical_error_squares_preserve_existing_union_behavior(hit, error_m):
+    # Finite inputs can still round a positive-error square to a point or line.
+    # Normalization of duplicate degenerate polygons has legacy GEOS semantics.
+    x, y = hit
+    square = box(x - error_m, y - error_m, x + error_m, y + error_m)
+    expected = unary_union([square, square])
+    actual = scene(hits=(hit, hit), error_m=error_m).occupied
+    assert actual.is_empty == expected.is_empty
+    assert Point(x, y).intersects(actual) == Point(x, y).intersects(expected)
