@@ -2,6 +2,8 @@
 
 #include <array>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,23 @@ struct LaserScan {
   double range_max = 0.0;
   std::vector<double> ranges;
 };
+struct GeometryMetrics {
+  unsigned valid_rays = 0;
+  std::optional<unsigned> normal_windows;
+  std::optional<double> spread, translation_information, determinant, yaw_information;
+};
+struct MatchMetrics {
+  double response = 0.0, residual = 0.0, inlier_fraction = 0.0;
+  unsigned inliers = 0, total = 0;
+  Pose anchor;
+  std::array<double, 9> covariance{};
+};
+struct MatchDiagnostics {
+  std::optional<GeometryMetrics> geometry;
+  std::optional<MatchMetrics> match;
+  std::optional<std::array<double, 9>> relative_covariance;
+  std::vector<std::string> failures;
+};
 struct MatchResult {
   bool valid = false;
   std::string reason;
@@ -28,6 +47,7 @@ struct MatchResult {
   double response = 0.0;
   double residual = 0.0;
   unsigned valid_rays = 0;
+  MatchDiagnostics diagnostics;
 };
 struct MatcherLimits {
   double max_interval = 0.3;
@@ -43,6 +63,9 @@ struct MatcherLimits {
   double reanchor_yaw = 0.1;
   unsigned min_rays = 100;
 };
+bool relative_covariance_qualified(const std::array<double, 9> &, double);
+std::vector<std::string> qualification_failures(const MatchMetrics &, const MatcherLimits &);
+std::vector<std::pair<std::string, std::string>> diagnostic_values(const MatchDiagnostics &);
 class LocalMatcher {
 public:
   explicit LocalMatcher(MatcherLimits limits = {});

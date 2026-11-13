@@ -44,7 +44,10 @@ LaserScan room(Pose sensor, double stamp)
 TEST(LocalMatcher, TracksIndependentTranslationAndYaw)
 {
   LocalMatcher matcher;
-  EXPECT_FALSE(matcher.update(room({0, 0, 0}, 1.0)).valid);
+  const auto initial = matcher.update(room({0, 0, 0}, 1.0));
+  EXPECT_FALSE(initial.valid);
+  EXPECT_TRUE(initial.diagnostics.geometry.has_value());
+  EXPECT_FALSE(initial.diagnostics.match.has_value());
   auto result = matcher.update(room({0.08, -0.04, 0.06}, 1.1));
   ASSERT_TRUE(result.valid) << result.reason;
   EXPECT_NEAR(result.sensor_delta.x, 0.08, 0.035);
@@ -231,7 +234,11 @@ TEST(LocalMatcher, RejectsQuantizedParallelWalls)
       std::numeric_limits<double>::quiet_NaN();
   }
   LocalMatcher matcher;
-  EXPECT_EQ(matcher.update(scan).reason, "unobservable_geometry");
+  const auto rejected = matcher.update(scan);
+  EXPECT_EQ(rejected.reason, "unobservable_geometry");
+  ASSERT_TRUE(rejected.diagnostics.geometry.has_value());
+  EXPECT_FALSE(rejected.diagnostics.match.has_value());
+  EXPECT_FALSE(rejected.diagnostics.failures.empty());
   scan.stamp = 1.1;
   EXPECT_EQ(matcher.update(scan).reason, "unobservable_geometry");
 }
