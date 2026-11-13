@@ -101,6 +101,28 @@ class TaskStore:
         await migrate_core(self._database)
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_lifecycle_binding ("
+                    "execution_id TEXT PRIMARY KEY REFERENCES task_execution(execution_id))"
+                )
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_direct_route ("
+                    "task_id TEXT PRIMARY KEY REFERENCES task_definition(task_id))"
+                )
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_execution_definition "
+                    "(execution_id TEXT PRIMARY KEY "
+                    "REFERENCES task_execution(execution_id), definition TEXT NOT NULL)"
+                )
+                await connection.execute(
+                    "CREATE INDEX IF NOT EXISTS task_execution_recent_idx "
+                    "ON task_execution(occurrence_utc DESC, execution_id)"
+                )
+                await connection.execute(
+                    "CREATE TABLE IF NOT EXISTS task_execution_route "
+                    "(execution_id TEXT PRIMARY KEY "
+                    "REFERENCES task_execution(execution_id), poses TEXT NOT NULL)"
+                )
                 # //Compatible: indexes are rebuilt idempotently on existing databases.
                 await connection.execute(
                     "CREATE INDEX IF NOT EXISTS task_execution_generation_idx "
@@ -125,6 +147,7 @@ class TaskStore:
                         UPDATE task_execution
                         SET status = ?, rollback_confirmed = 0
                         WHERE status IN (?, ?)
+                          AND execution_id NOT IN (SELECT execution_id FROM task_lifecycle_binding)
                           AND task_id IN (
                               SELECT task_id FROM task_definition WHERE robot_id = ?
                           )
@@ -168,7 +191,8 @@ class TaskStore:
             async with self._database.connection.execute(
                 "SELECT task_id, robot_id, map_id, reference_revision, waypoint_ids, "
                 "schedule_kind, every_seconds, cron_expression, timezone, enabled, revision, "
-                "created_at FROM task_definition WHERE robot_id = ? ORDER BY task_id",
+                "created_at FROM task_definition WHERE robot_id = ? "
+                "AND task_id NOT IN (SELECT task_id FROM task_direct_route) ORDER BY task_id",
                 (self._robot_id,),
             ) as cursor:
                 rows = await cursor.fetchall()
@@ -187,6 +211,7 @@ class TaskStore:
                     LEFT JOIN agent_deleted_task AS d
                         ON d.task_id = t.task_id AND d.robot_id = t.robot_id
                     WHERE t.robot_id = ?
+                    AND t.task_id NOT IN (SELECT task_id FROM task_direct_route)
                     ORDER BY t.task_id
                     """,
                     (self._robot_id,),
@@ -233,6 +258,18 @@ class TaskStore:
             raise RuntimeError("task scan execution limit exceeded")
         return tuple(_execution(row) for row in rows)
 
+    async def latest_execution(self) -> ExecutionRecord | None:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT e.execution_id,e.task_id,e.occurrence_utc,e.status,e.navigation_sent,"
+                "e.rollback_confirmed FROM task_execution e "
+                "JOIN task_definition t ON t.task_id=e.task_id "
+                "WHERE t.robot_id=? AND e.status<>'skipped' ORDER BY e.occurrence_utc DESC LIMIT 1",
+                (self._robot_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return _execution(row) if row else None
+
     async def list_executions(self) -> tuple[ExecutionRecord, ...]:
         async with self._database.write_lock:
             async with self._database.connection.execute(
@@ -255,6 +292,46 @@ class TaskStore:
         if stored is None:
             raise DomainError(ErrorCode.VALIDATION, "task was not stored")
         return stored
+
+    async def snapshot_execution_definition(
+        self,
+        connection: aiosqlite.Connection,
+        execution_id: str,
+        task_id: str,
+    ) -> None:
+        await connection.execute(
+            "INSERT OR IGNORE INTO task_execution_definition SELECT ?, "
+            "json_array(task_id,robot_id,map_id,reference_revision,waypoint_ids,schedule_kind,"
+            "every_seconds,cron_expression,timezone,enabled,revision,created_at) "
+            "FROM task_definition WHERE task_id=? AND robot_id=?",
+            (execution_id, task_id, self._robot_id),
+        )
+
+    async def execution_definition(self, execution_id: str) -> TaskDefinition | None:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT d.definition FROM task_execution_definition d JOIN task_execution e "
+                "ON e.execution_id=d.execution_id JOIN task_definition t ON t.task_id=e.task_id "
+                "WHERE d.execution_id=? AND t.robot_id=?",
+                (execution_id, self._robot_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return _task(json.loads(str(row[0]))) if row else None
+
+    async def execution_route(
+        self, execution_id: str
+    ) -> tuple[tuple[float, float, float], ...] | None:
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                "SELECT r.poses FROM task_execution_route r JOIN task_execution e "
+                "ON e.execution_id=r.execution_id JOIN task_definition t ON t.task_id=e.task_id "
+                "WHERE r.execution_id=? AND t.robot_id=?",
+                (execution_id, self._robot_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return tuple((float(p[0]), float(p[1]), float(p[2])) for p in json.loads(str(row[0])))
 
     async def get(self, task_id: str) -> TaskDefinition | None:
         async with self._database.write_lock:
@@ -353,55 +430,94 @@ class TaskStore:
     async def claim(
         self, task: TaskDefinition, occurrence_utc: datetime, *, generation: int = 0
     ) -> ExecutionRecord:
-        self._require_robot(task)
-        occurrence = _utc(occurrence_utc)
         execution_id = uuid.uuid4().hex
         try:
             async with self._database.write_lock:
                 async with self._transaction() as connection:
-                    current = await self._task_in(connection, task.task_id)
-                    if current is None:
-                        raise DomainError(ErrorCode.CONFLICT, "task does not exist")
-                    if not current.enabled:
-                        raise DomainError(ErrorCode.CONFLICT, "task is disabled")
-                    if current != task:
-                        raise DomainError(ErrorCode.CONFLICT, "task definition changed")
-                    if await self._deleted(connection, task.task_id):
-                        raise DomainError(ErrorCode.CONFLICT, "task is deleted")
-                    if await self._invalidated(connection, task.task_id):
-                        raise DomainError(ErrorCode.CONFLICT, "map link invalidated")
-                    if await self._in_flight(connection):
-                        raise DomainError(ErrorCode.CONFLICT, "execution already in flight")
-                    await connection.execute(
-                        """
-                        INSERT INTO task_execution (
-                            execution_id, task_id, occurrence_utc, status,
-                            navigation_sent, rollback_confirmed
-                        )
-                        VALUES (?, ?, ?, ?, 0, 0)
-                        """,
-                        (
-                            execution_id,
-                            task.task_id,
-                            _stamp(occurrence),
-                            ExecutionStatus.DISPATCHING.value,
-                        ),
+                    stored = await self.claim_in_transaction(
+                        connection,
+                        task,
+                        occurrence_utc,
+                        execution_id=execution_id,
+                        generation=generation,
                     )
-                    await connection.execute(
-                        "INSERT INTO task_execution_generation(execution_id, generation) "
-                        "VALUES (?, ?)",
-                        (execution_id, generation),
-                    )
-                    stored = await self._execution_in(connection, execution_id)
         except sqlite3.IntegrityError as exc:
             raise DomainError(ErrorCode.CONFLICT, "duplicate execution") from exc
+        return stored
+
+    async def claim_in_transaction(
+        self,
+        connection: aiosqlite.Connection,
+        task: TaskDefinition,
+        occurrence_utc: datetime,
+        *,
+        execution_id: str,
+        generation: int = 0,
+        lifecycle: bool = False,
+    ) -> ExecutionRecord:
+        """Caller owns Database.write_lock and its transaction; no commit or external I/O."""
+        if connection is not self._database.connection:
+            raise ValueError("claim must use the TaskStore database connection")
+        self._require_robot(task)
+        occurrence = _utc(occurrence_utc)
+        current = await self._task_in(connection, task.task_id)
+        if current is None:
+            raise DomainError(ErrorCode.CONFLICT, "task does not exist")
+        if not current.enabled:
+            raise DomainError(ErrorCode.CONFLICT, "task is disabled")
+        if current != task:
+            raise DomainError(ErrorCode.CONFLICT, "task definition changed")
+        if await self._deleted(connection, task.task_id):
+            raise DomainError(ErrorCode.CONFLICT, "task is deleted")
+        if await self._invalidated(connection, task.task_id):
+            raise DomainError(ErrorCode.CONFLICT, "map link invalidated")
+        if await self._in_flight(connection):
+            raise DomainError(ErrorCode.CONFLICT, "execution already in flight")
+        await connection.execute(
+            """
+            INSERT INTO task_execution (
+                execution_id, task_id, occurrence_utc, status,
+                navigation_sent, rollback_confirmed
+            )
+            VALUES (?, ?, ?, ?, 0, 0)
+            """,
+            (
+                execution_id,
+                task.task_id,
+                _stamp(occurrence),
+                ExecutionStatus.DISPATCHING.value,
+            ),
+        )
+        await connection.execute(
+            "INSERT INTO task_execution_generation(execution_id, generation) VALUES (?, ?)",
+            (execution_id, generation),
+        )
+        stored = await self._execution_in(connection, execution_id)
         if stored is None:
             raise DomainError(ErrorCode.CONFLICT, "execution was not stored")
+        if lifecycle:
+            await self.snapshot_execution_definition(connection, execution_id, task.task_id)
+            await connection.execute(
+                "INSERT INTO task_lifecycle_binding(execution_id) VALUES (?)", (execution_id,)
+            )
         return stored
+
+    # //Compatible: unbound executions retain legacy writers during serial migration.
+    async def _require_legacy_writer(
+        self,
+        connection: aiosqlite.Connection,
+        execution_id: str,
+    ) -> None:
+        async with connection.execute(
+            "SELECT 1 FROM task_lifecycle_binding WHERE execution_id = ?", (execution_id,)
+        ) as cursor:
+            if await cursor.fetchone() is not None:
+                raise DomainError(ErrorCode.CONFLICT, "execution is owned by task lifecycle")
 
     async def mark_running(self, execution_id: str) -> ExecutionRecord:
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await self._require_legacy_writer(connection, execution_id)
                 await connection.execute(
                     "UPDATE task_execution SET status = ?, navigation_sent = 1 "
                     "WHERE execution_id = ? AND status = ? AND task_id IN "
@@ -425,6 +541,7 @@ class TaskStore:
         status = ExecutionStatus.SUCCEEDED if succeeded else ExecutionStatus.FAILED
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await self._require_legacy_writer(connection, execution_id)
                 await connection.execute(
                     "UPDATE task_execution SET status = ? "
                     "WHERE execution_id = ? AND status = ? AND navigation_sent = 1 "
@@ -436,7 +553,9 @@ class TaskStore:
         async with self._database.write_lock:
             async with self._transaction() as connection:
                 await connection.execute(
-                    "UPDATE task_execution SET status = ? WHERE status IN (?, ?) AND task_id IN "
+                    "UPDATE task_execution SET status = ? WHERE status IN (?, ?) "
+                    "AND execution_id NOT IN (SELECT execution_id FROM task_lifecycle_binding) "
+                    "AND task_id IN "
                     "(SELECT task_id FROM task_definition WHERE robot_id = ?) AND execution_id IN "
                     "(SELECT execution_id FROM task_execution_generation WHERE generation = ?)",
                     (
@@ -451,6 +570,7 @@ class TaskStore:
     async def mark_cancel_pending(self, execution_id: str) -> ExecutionRecord:
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await self._require_legacy_writer(connection, execution_id)
                 current = await self._execution_in(connection, execution_id)
                 if current is None or current.status not in {
                     ExecutionStatus.DISPATCHING,
@@ -471,6 +591,7 @@ class TaskStore:
             raise DomainError(ErrorCode.VALIDATION, "execution id is required")
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await self._require_legacy_writer(connection, execution_id)
                 current = await self._execution_in(connection, execution_id)
                 if current is None:
                     raise DomainError(ErrorCode.CONFLICT, "execution does not exist")
@@ -639,6 +760,7 @@ class TaskStore:
     ) -> ExecutionRecord:
         async with self._database.write_lock:
             async with self._transaction() as connection:
+                await self._require_legacy_writer(connection, execution_id)
                 await connection.execute(
                     """
                     UPDATE task_execution

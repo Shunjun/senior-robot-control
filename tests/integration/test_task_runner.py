@@ -528,11 +528,10 @@ async def test_offline_link_does_not_start_navigation(tmp_path: Path) -> None:
         store, saved = await saved_task(database, created)
         navigation = RecordingNavigation()
         executor = TaskExecutor(database, store, navigation, link_up=lambda: False)
-        record = await executor.persist_and_dispatch(due_intent(saved, due), saved)
+        with pytest.raises(DomainError):
+            await executor.persist_and_dispatch(due_intent(saved, due), saved)
 
     assert navigation.calls == []
-    assert record.status is ExecutionStatus.NEEDS_REVIEW
-    assert record.navigation_sent is False
 
 
 async def test_pause_cancels_a_sent_goal(tmp_path: Path) -> None:
@@ -629,7 +628,7 @@ async def test_store_lists_tasks_and_executions_for_robot(tmp_path: Path) -> Non
         assert await store.list_executions() == (record,)
 
 
-async def test_runtime_dispatches_due_task_and_cancels_on_disconnect(tmp_path: Path) -> None:
+async def test_runtime_dispatches_due_task_and_retains_it_on_disconnect(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     async with Database(tmp_path / "robot.db") as database:
         store, task = await saved_task(database, created)
@@ -643,7 +642,7 @@ async def test_runtime_dispatches_due_task_and_cancels_on_disconnect(tmp_path: P
         await runtime.tick(
             created + timedelta(seconds=1802), 13.0, replace(context, connected=False)
         )
-        assert navigation.calls[1] == f"cancel:{navigation.calls[0]}"
+        assert len(navigation.calls) == 1
 
 
 async def test_runtime_restart_records_offline_gap_without_dispatch(tmp_path: Path) -> None:
@@ -705,7 +704,11 @@ async def test_runtime_retries_unknown_cancel_even_after_connection_returns(tmp_
         await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
         record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
         assert record is not None
-        await runtime.tick(created + timedelta(seconds=1801), 3.0, replace(live, connected=False))
+        await runtime.tick(
+            created + timedelta(seconds=1801),
+            3.0,
+            replace(live, connected=False, safety_clear=False),
+        )
         pending = await store.execution_by_id(record.execution_id)
         assert pending is not None and pending.status.value == "cancel_pending"
         await runtime.tick(created + timedelta(seconds=1802), 4.0, live)
@@ -870,7 +873,7 @@ async def test_runtime_propagates_database_failure(
             )
 
 
-async def test_start_ack_after_reconnect_requires_cancel(tmp_path: Path) -> None:
+async def test_start_ack_after_reconnect_keeps_vehicle_task(tmp_path: Path) -> None:
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     generation = [1]
     async with Database(tmp_path / "robot.db") as database:
@@ -885,11 +888,11 @@ async def test_start_ack_after_reconnect_requires_cancel(tmp_path: Path) -> None
         nav.release.set()
         await dispatch
         record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
-        assert record is not None and record.status is not ExecutionStatus.RUNNING
-        assert f"cancel:{record.execution_id}" in nav.calls
+        assert record is not None and record.status is ExecutionStatus.RUNNING
+        assert f"cancel:{record.execution_id}" not in nav.calls
 
 
-async def test_running_task_is_cancelled_after_generation_changes_between_ticks(
+async def test_running_task_survives_connection_generation_changes_between_ticks(
     tmp_path: Path,
 ) -> None:
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
@@ -908,8 +911,8 @@ async def test_running_task_is_cancelled_after_generation_changes_between_ticks(
         generation[0] = 2
         await runtime.tick(created + timedelta(seconds=1801), 3.0, live)
         record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
-        assert record is not None and record.status is ExecutionStatus.PAUSED
-        assert f"cancel:{record.execution_id}" in nav.calls
+        assert record is not None and record.status is ExecutionStatus.RUNNING
+        assert f"cancel:{record.execution_id}" not in nav.calls
 
 
 async def test_delayed_old_loss_callback_does_not_cancel_new_generation(tmp_path: Path) -> None:
@@ -1034,7 +1037,9 @@ async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
         await runtime.tick(created + timedelta(seconds=1799), 1.0, live)
         await runtime.tick(created + timedelta(seconds=1800), 2.0, live)
         generation[0] = 2
-        tick = asyncio.create_task(runtime.tick(created + timedelta(seconds=1801), 3.0, live))
+        tick = asyncio.create_task(
+            runtime.tick(created + timedelta(seconds=1801), 3.0, replace(live, safety_clear=False))
+        )
         try:
             await asyncio.wait_for(nav.entered.wait(), 1)
             record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
@@ -1546,7 +1551,11 @@ async def test_pending_skip_failure_does_not_delay_active_cancellation(tmp_path:
         await store.mark_running(claimed.execution_id)
         executor._navigation = SyntheticNavigationFence(navigation, reference)
         with pytest.raises(sqlite3.OperationalError):
-            await runtime.tick(due + timedelta(seconds=0.2), 1.4, replace(live, connected=False))
+            await runtime.tick(
+                due + timedelta(seconds=0.2),
+                1.4,
+                replace(live, connected=False, safety_clear=False),
+            )
         record = await store.execution_by_id(claimed.execution_id)
         assert record is not None and record.status is ExecutionStatus.PAUSED
         assert navigation.calls == [f"cancel:{claimed.execution_id}"]
@@ -1738,7 +1747,9 @@ async def test_range_skip_failure_never_starves_active_cancellation(
         for seconds, mono in ((4.2, 5.0), (4.4, 5.2)):
             with pytest.raises(sqlite3.IntegrityError, match="skip rejected"):
                 await runtime.tick(
-                    due + timedelta(seconds=seconds), mono, replace(live, connected=False)
+                    due + timedelta(seconds=seconds),
+                    mono,
+                    replace(live, connected=False, safety_clear=False),
                 )
         record = await store.execution_by_id(running.execution_id)
         assert record is not None and record.status is ExecutionStatus.PAUSED
@@ -1791,7 +1802,11 @@ async def test_committed_range_retry_is_idempotent_and_extends_window(
 
         store.record_skip = uncertain_commit
         tick = asyncio.create_task(
-            runtime.tick(due + timedelta(seconds=4.2), 5.0, replace(live, connected=False))
+            runtime.tick(
+                due + timedelta(seconds=4.2),
+                5.0,
+                replace(live, connected=False, safety_clear=False),
+            )
         )
         await asyncio.wait_for(entered.wait(), 1)
         if failure == "cancelled":
@@ -1802,7 +1817,9 @@ async def test_committed_range_retry_is_idempotent_and_extends_window(
             with pytest.raises(sqlite3.OperationalError, match="uncertain range commit"):
                 await tick
         store.record_skip = record_skip
-        await runtime.tick(due + timedelta(seconds=4.4), 5.2, replace(live, connected=False))
+        await runtime.tick(
+            due + timedelta(seconds=4.4), 5.2, replace(live, connected=False, safety_clear=False)
+        )
         records = await store.skips()
         assert len(records) == 1
         assert records[0].skip_from == due + timedelta(seconds=0.2)

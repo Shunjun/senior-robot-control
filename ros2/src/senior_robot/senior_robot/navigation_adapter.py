@@ -10,7 +10,7 @@ import math
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
@@ -78,6 +78,7 @@ class NavigationAdapter:
         *,
         qualified: Callable[[MapRef, str], bool],
         goal_changed: Callable[[int | None], None] | None = None,
+        action_completed: Callable[[int], None] | None = None,
     ) -> bool:
         get_result = getattr(self._executor, "result", None)
         if not callable(get_result):
@@ -98,15 +99,22 @@ class NavigationAdapter:
                 if goal_changed is not None and qualified(ref, generation):
                     goal_changed(index)
                 index += 1
-                while qualified(ref, generation):
-                    done, _ = await asyncio.wait({result}, timeout=0.05)
+                while True:
+                    # Drain an already-ready result before honoring a concurrent
+                    # revoke, so committed action progress reaches the boundary.
+                    permitted = qualified(ref, generation)
+                    done, _ = await asyncio.wait({result}, timeout=0.05 if permitted else 0)
                     if done:
                         succeeded = result.result()
                         async with self._goal_lock:
                             if self._active != execution_id or self._cancel_rejected:
                                 return False
                             self._active = None
+                        if succeeded and action_completed is not None:
+                            action_completed(index - 1)
                         return succeeded
+                    if not permitted:
+                        break
                 if goal_changed is not None:
                     goal_changed(None)
                 await self.cancel(execution_id)
@@ -161,6 +169,8 @@ class _Route:
     active_waypoint_index: int | None = None
     cancel_requested: bool = False
     task: asyncio.Task[None] | None = None
+    completed: list[str] = field(default_factory=list)
+    output_exited: bool = False
 
     def progress(self) -> RouteProgress:
         return RouteProgress(
@@ -169,6 +179,11 @@ class _Route:
             map_generation=self.plan.map_generation,
             status=self.status,
             active_waypoint_index=self.active_waypoint_index,
+            task_epoch=self.plan.task_epoch,
+            effect_id=self.plan.effect_id,
+            completed_action_ids=list(self.completed),
+            sources_fenced_through_epoch=self.plan.task_epoch if self.output_exited else None,
+            controller_output_exited=self.output_exited,
         )
 
 
@@ -186,6 +201,7 @@ class RouteService:
         clear_source: Callable[[str], None] | None = None,
         source_active: Callable[[str], bool] | None = None,
         connection_epoch: Callable[[], int] | None = None,
+        source_retired: Callable[[str], bool] | None = None,
     ) -> None:
         self._adapter = adapter
         self._qualified = qualified
@@ -195,11 +211,29 @@ class RouteService:
         self._clear_source = clear_source
         self._source_active = source_active
         self._connection_epoch = connection_epoch
+        self._source_retired = source_retired
+        self._fences: dict[str, int] = {}
         self._current: _Route | None = None
         self._terminal: dict[str, RouteProgress] = {}
 
+    def output_retired(self, execution_id: str, task_epoch: int) -> bool:
+        if self._fences.get(execution_id, 0) < task_epoch:
+            return False
+        current = self._current
+        if current is not None and current.plan.execution_id == execution_id:
+            return False
+        return self._source_retired is not None and self._source_retired(execution_id)
+
     async def start(self, plan: RoutePlan, *, wait_for_goal: bool = True) -> bool:
-        epoch = self._connection_epoch() if self._connection_epoch is not None else None
+        epoch = (
+            (self._connection_epoch() if self._connection_epoch is not None else None)
+            if plan.task_epoch is None
+            else None
+        )
+        if plan.task_epoch is not None and plan.task_epoch <= self._fences.get(
+            plan.execution_id, 0
+        ):
+            return False
         if plan.connection_epoch is not None and plan.connection_epoch != epoch:
             return False
         if self._current is not None:
@@ -212,7 +246,13 @@ class RouteService:
                 return False
             return await asyncio.shield(self._current.started) if wait_for_goal else True
         if (
-            plan.execution_id in self._terminal
+            (
+                plan.execution_id in self._terminal
+                and (
+                    plan.task_epoch is None
+                    or plan.task_epoch <= (self._terminal[plan.execution_id].task_epoch or 0)
+                )
+            )
             or self._adapter.active_goal is not None
             or not self._qualified(plan.map_ref, plan.map_generation)
         ):
@@ -233,7 +273,8 @@ class RouteService:
                 not route.cancel_requested
                 and not binding_failed
                 and (
-                    self._connection_epoch is None
+                    plan.task_epoch is not None
+                    or self._connection_epoch is None
                     or self._connection_epoch() == route.connection_epoch
                 )
                 and self._qualified(ref, generation)
@@ -246,11 +287,10 @@ class RouteService:
 
         def changed(index: int | None) -> None:
             nonlocal binding_failed
-            if index is None:
-                self._revoke(route)
-            elif (
+            if index is not None and (
                 topic is not None
                 and self._bind_source is not None
+                and not (self._source_active is not None and self._source_active(plan.execution_id))
                 and not self._bind_source(
                     plan.execution_id, topic, lambda: qualified(plan.map_ref, plan.map_generation)
                 )
@@ -275,12 +315,26 @@ class RouteService:
                     tuple(Pose2D(*pose) for pose in plan.poses),
                     qualified=qualified,
                     goal_changed=changed,
+                    action_completed=lambda index: (
+                        route.completed.append(plan.action_ids[index])
+                        if plan.task_epoch is not None
+                        else None
+                    ),
                 )
         except Exception:
             # Unknown terminality is retained when the adapter still owns a goal.
             logging.getLogger(__name__).exception("qualified Nav2 route failed")
         finally:
+            self._revoke(route)
             changed(None)
+            # The dedicated publisher context has exited before this point.
+            # The gate must also acknowledge its source-retirement barrier.
+            if self._source_retired is not None:
+                for _ in range(50):
+                    if self._source_retired(plan.execution_id):
+                        route.output_exited = True
+                        break
+                    await asyncio.sleep(0.01)
             if not route.started.done():
                 route.started.set_result(False)
             if self._adapter.active_goal is not None:
@@ -311,17 +365,41 @@ class RouteService:
         current = self._current
         if current is not None and current.plan.execution_id == execution_id:
             return current.progress()
-        return self._terminal.get(execution_id)
+        terminal = self._terminal.get(execution_id)
+        if (
+            terminal is not None
+            and terminal.task_epoch is not None
+            and self._source_retired is not None
+        ):
+            if self._source_retired(execution_id):
+                terminal = terminal.model_copy(
+                    update={
+                        "controller_output_exited": True,
+                        "sources_fenced_through_epoch": terminal.task_epoch,
+                    }
+                )
+                self._terminal[execution_id] = terminal
+        return terminal
 
     @property
     def current(self) -> RouteProgress | None:
         return self._current.progress() if self._current is not None else None
 
-    async def cancel(self, execution_id: str) -> bool:
+    async def cancel(self, execution_id: str, *, task_epoch: int | None = None) -> bool:
+        if task_epoch is not None:
+            self._fences[execution_id] = max(task_epoch, self._fences.get(execution_id, 0))
         route = self._current
         if route is None or route.plan.execution_id != execution_id:
+            if task_epoch is not None and self._clear_source is not None:
+                self._clear_source(execution_id)
             # Unknown requests cannot affect the current route.
             return execution_id in self._terminal
+        if (
+            task_epoch is not None
+            and route.plan.task_epoch is not None
+            and task_epoch < route.plan.task_epoch
+        ):
+            return False
         route.cancel_requested = True
         self._revoke(route)
         if route.task is not None:

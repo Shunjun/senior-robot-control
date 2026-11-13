@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     model_serializer,
@@ -56,7 +57,15 @@ class HeartbeatRequest(StrictModel):
 
 
 class EmptyPayload(StrictModel):
+    authority_id: str | None = Field(default=None, min_length=1, max_length=128)
     gesture: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_serializer(mode="wrap")
+    def serialize_authority(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.authority_id is None:
+            value.pop("authority_id", None)
+        return value
 
 
 class VelocityPayload(StrictModel):
@@ -83,6 +92,7 @@ class VelocityPayload(StrictModel):
 
 
 class EnvelopeBase(StrictModel):
+    _received_steady: float | None = PrivateAttr(default=None)
     v: Literal[1]
     robot_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
@@ -159,12 +169,70 @@ class SimpleEnvelope(EnvelopeBase):
         "navigation.resume",
     ]
     payload: EmptyPayload
+    controller_generation: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_serializer(mode="wrap")
+    def serialize_context(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.controller_generation is None:
+            value.pop("controller_generation", None)
+        return value
 
     @model_validator(mode="after")
     def validate_gesture(self) -> "SimpleEnvelope":
         if self.payload.gesture is not None and self.type != "drive.stop":
             raise ValueError("gesture is only supported for drive.stop")
+        if self.payload.authority_id is not None and self.type != "control.release":
+            raise ValueError("authority id is only supported for control.release")
+        if self.controller_generation is not None and self.type not in {
+            "control.acquire",
+            "control.release",
+        }:
+            raise ValueError("trusted controller context belongs only to manual requests")
         return self
+
+
+class ManualIntentPayload(StrictModel):
+    authority_id: str = Field(min_length=1, max_length=128)
+    gesture: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
+    sequence: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
+    linear: float = Field(ge=-1, le=1)
+    turn: float = Field(ge=-1, le=1)
+    gear: Literal["low", "high"]
+
+
+class ManualIntentEnvelope(EnvelopeBase):
+    type: Literal["drive.intent"]
+    payload: ManualIntentPayload
+    controller_generation: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_serializer(mode="wrap")
+    def serialize_context(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.controller_generation is None:
+            value.pop("controller_generation", None)
+        return value
+
+
+class RecoveryPayload(StrictModel):
+    revision: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+
+class RecoveryEnvelope(EnvelopeBase):
+    type: Literal["safety.estop.reset", "safety.fault.recover"]
+    payload: RecoveryPayload
+
+
+class TaskExecutionCommandPayload(StrictModel):
+    request_id: str = Field(min_length=1, max_length=128)
+    expected_version: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    task_id: str = Field(min_length=1, max_length=128)
+    action: Literal["pause", "resume", "cancel", "takeover"]
+
+
+class TaskExecutionEnvelope(EnvelopeBase):
+    type: Literal["task.execution.command"]
+    payload: TaskExecutionCommandPayload
 
 
 OPERATION_TYPES = (
@@ -303,10 +371,18 @@ class SnapshotPayload(StrictModel):
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = Field(default=None, max_length=256)
     scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
+    # //Compatible: absent on unmigrated vehicles; never fabricate a new capability.
+    vehicle_ui: dict[str, Any] | None = None
+    # Relay-only owner metadata; stripped before control-socket delivery.
+    manual_controller_generation: int | None = None
+    manual_agent_epoch: int | None = None
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
         result: dict[str, Any] = handler(self)
+        for optional in ("vehicle_ui", "manual_controller_generation", "manual_agent_epoch"):
+            if getattr(self, optional) is None:
+                result.pop(optional, None)
         # //Compatible: omit generation in snapshots without a qualified source.
         if self.map_generation is None:
             result.pop("map_generation", None)
@@ -330,8 +406,114 @@ class SnapshotEnvelope(EnvelopeBase):
     payload: SnapshotPayload
 
 
+class BodyReferenceState(StrictModel):
+    average: dict[Literal["vx", "vy", "wz"], float]
+    source: str = Field(min_length=1, max_length=128)
+    computed_steady: float
+    valid_until_steady: float
+
+    @model_validator(mode="after")
+    def complete(self) -> "BodyReferenceState":
+        if set(self.average) != {"vx", "vy", "wz"}:
+            raise ValueError("independent body average needs all components")
+        if self.valid_until_steady <= self.computed_steady:
+            raise ValueError("body reference interval is invalid")
+        return self
+
+
+class MotionRuntimeState(StrictModel):
+    """Trusted local /motion/runtime JSON; never accepted from a control socket."""
+
+    schema_version: Literal[1] = Field(alias="schema")
+    robot_id: str = Field(min_length=1, max_length=128)
+    boot_id: str = Field(min_length=1, max_length=128)
+    sequence: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    sampled_steady: float
+    valid_until: float
+    mode: Literal[
+        "idle",
+        "manual",
+        "task",
+        "braking",
+        "obstacle_hold",
+        "feedback_stop",
+        "execution_fault",
+        "estop",
+    ]
+    reason: str = Field(max_length=512)
+    stationary: bool
+    healthy: bool
+    evidence_stamp_steady: float | None
+    evidence_deadline_steady: float | None
+    estop_revision: int = Field(ge=0)
+    fault_revision: int = Field(ge=0)
+    confirmed_estop_status: Literal["clear", "software_latched", "hardware_latched"]
+    allowed_actions: list[
+        Literal["acquire", "estop_reset", "fault_recover", "replan_task", "resume_task"]
+    ]
+    task_id: str | None = Field(default=None, max_length=128)
+    output_generation: int = Field(ge=0)
+    body_reference: BodyReferenceState | None
+    wheel_linear_mps: float | None
+
+    @model_serializer(mode="wrap")
+    def serialize_schema(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if "schema_version" in value:
+            value["schema"] = value.pop("schema_version")
+        return value
+
+    @model_validator(mode="after")
+    def evidence_window(self) -> "MotionRuntimeState":
+        if self.valid_until <= self.sampled_steady:
+            raise ValueError("runtime observation interval is invalid")
+        if (self.evidence_stamp_steady is None) != (self.evidence_deadline_steady is None):
+            raise ValueError("runtime evidence interval must be paired")
+        if (
+            self.evidence_stamp_steady is not None
+            and self.evidence_deadline_steady is not None
+            and self.evidence_deadline_steady <= self.evidence_stamp_steady
+        ):
+            raise ValueError("runtime evidence interval is invalid")
+        return self
+
+
+class TaskNavigationState(StrictModel):
+    """Optional lifecycle details on navigation acceptance and operation query."""
+
+    execution_id: str = Field(min_length=1, max_length=128)
+    phase: Literal["starting", "running", "revoking", "paused", "succeeded", "canceled", "failed"]
+    epoch: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    completed: list[Annotated[str, Field(min_length=1, max_length=256)]]
+    remaining: list[Annotated[str, Field(min_length=1, max_length=256)]]
+
+    @model_validator(mode="after")
+    def unique_actions(self) -> "TaskNavigationState":
+        actions = self.completed + self.remaining
+        if len(set(actions)) != len(actions):
+            raise ValueError("task action identities must be unique")
+        return self
+
+
+class TaskCommandReceiptPayload(StrictModel):
+    request_id: str = Field(min_length=1, max_length=128)
+    task_id: str = Field(min_length=1, max_length=128)
+    accepted: bool
+    reason: str = Field(min_length=1, max_length=512)
+    version: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+
+class PreparedAuthorityPayload(StrictModel):
+    authority_id: str = Field(min_length=1, max_length=128)
+    state: Literal["prepared", "active", "closed"]
+
+
 class ResponsePayload(StrictModel):
     request_type: Literal[
+        "drive.intent",
+        "safety.estop.reset",
+        "safety.fault.recover",
+        "task.execution.command",
         "task.create",
         "task.update",
         "task.delete",
@@ -377,8 +559,26 @@ class ResponsePayload(StrictModel):
     def consistent_result(self) -> "ResponsePayload":
         if self.ok == (self.error is not None):
             raise ValueError("response success and error conflict")
-        if (self.data is not None) != (self.ok and self.request_type in WORKSPACE_REQUEST_TYPES):
-            raise ValueError("workspace response data does not match its request")
+        workspace = self.request_type in WORKSPACE_REQUEST_TYPES
+        task = self.request_type == "task.execution.command"
+        if (workspace or task) and (self.data is not None) != self.ok:
+            raise ValueError("response data does not match its request")
+        # //Compatible: older navigation/query replies omit task details.
+        optional_manual = self.request_type == "control.acquire"
+        optional_task = self.request_type in {
+            "navigation.goal",
+            "navigation.return_home",
+            "operation.query",
+        }
+        if self.data is not None:
+            if not self.ok or not (workspace or task or optional_task or optional_manual):
+                raise ValueError("response data does not match its request")
+            if optional_task:
+                TaskNavigationState.model_validate(self.data)
+            elif task:
+                TaskCommandReceiptPayload.model_validate(self.data)
+            elif optional_manual:
+                PreparedAuthorityPayload.model_validate(self.data)
         return self
 
     @model_serializer(mode="wrap")
@@ -393,6 +593,14 @@ class ResponsePayload(StrictModel):
 class ResponseEnvelope(EnvelopeBase):
     type: Literal["response"]
     payload: ResponsePayload
+    controller_generation: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_serializer(mode="wrap")
+    def serialize_context(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.controller_generation is None:
+            value.pop("controller_generation", None)
+        return value
 
 
 MAX_SDP_CHARS = 16384
@@ -433,6 +641,9 @@ VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope
 Envelope = Annotated[
     VelocityEnvelope
     | SimpleEnvelope
+    | TaskExecutionEnvelope
+    | ManualIntentEnvelope
+    | RecoveryEnvelope
     | OperationEnvelope
     | WorkspaceEnvelope
     | SnapshotEnvelope
@@ -442,6 +653,9 @@ Envelope = Annotated[
 Frame = Annotated[
     VelocityEnvelope
     | SimpleEnvelope
+    | TaskExecutionEnvelope
+    | ManualIntentEnvelope
+    | RecoveryEnvelope
     | OperationEnvelope
     | WorkspaceEnvelope
     | SnapshotEnvelope
@@ -492,8 +706,10 @@ def serialize_envelope(envelope: Envelope | VideoEnvelope) -> bytes:
     excluded: dict[str, set[str]] = {}
     if isinstance(validated, VelocityEnvelope) and validated.payload.gesture is None:
         excluded["payload"] = {"gesture", "sampled_at", "server_issued_at"}
-    if isinstance(validated, SimpleEnvelope) and validated.payload.gesture is None:
-        excluded["payload"] = {"gesture"}
+    if isinstance(validated, SimpleEnvelope):
+        excluded["payload"] = {
+            name for name in ("gesture", "authority_id") if getattr(validated.payload, name) is None
+        }
     raw = _frame_adapter.dump_json(validated, exclude=excluded)
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("message too large")

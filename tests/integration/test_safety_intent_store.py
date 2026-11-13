@@ -28,7 +28,8 @@ async def test_existing_robot_database_upgrades_without_losing_operation_or_safe
         entry = await journal.get("edit")
         assert entry is not None and entry.revision == 3
         async with database.connection.execute("PRAGMA user_version") as cursor:
-            assert (await cursor.fetchone())[0] == 3
+            row = await cursor.fetchone()
+            assert row is not None and row[0] == 3
 
     async with Database(path) as database:
         journal = AgentJournal(database, robot_id="robot-1")
@@ -68,3 +69,32 @@ async def test_unknown_agent_schema_returns_nonrestartable_exit(tmp_path: Path) 
         socket_path=tmp_path / "agent.sock",
     )
     assert await run_agent(config) == 78
+
+
+async def test_completed_safety_receipt_survives_reset_and_reopen(tmp_path: Path) -> None:
+    from senior_control.errors import DomainError, ErrorCode
+
+    path = tmp_path / "robot.db"
+    async with Database(path) as database:
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        assert not await journal.safety.admit("first", "content")
+        assert await journal.safety.pending()
+        await journal.safety.complete("first")
+        await journal.safety.clear_rejected()  # Actual confirmed recovery resolves obligation.
+    async with Database(path) as database:
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        assert await journal.safety.admit("first", "content")
+        assert not await journal.safety.pending()
+        with pytest.raises(DomainError) as error:
+            await journal.safety.admit("first", "different-content")
+        assert error.value.code is ErrorCode.CONFLICT
+        assert not await journal.safety.pending()
+        assert not await journal.safety.admit("second", "content")
+        assert await journal.safety.pending()
+    async with Database(path) as database:
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        assert not await journal.safety.admit("second", "content")
+        assert await journal.safety.pending()  # Unknown does not become completed on boot.

@@ -118,3 +118,26 @@ class SettingsResult(FrozenModel):
     reason: str
     snapshot: SettingsSnapshot
     capabilities: SettingsCapabilities
+
+
+def simulation_settings_profile() -> SettingsProfile:
+    """Explicit simulation product policy, never measured hardware capability.
+
+    Composition must opt in to this profile. The controller still constrains
+    combined wheel requests and physical execution; real vehicles need a profile.
+    """
+    defaults = DrivingSettings(
+        low_linear_mps=5 / 9,
+        high_linear_mps=25 / 18,
+        low_angular_rps=1,
+        high_angular_rps=1,
+        reverse_linear_mps=0.3,
+    )
+    maximum = DrivingSettings(
+        low_linear_mps=25 / 18,
+        high_linear_mps=25 / 18,
+        low_angular_rps=2,
+        high_angular_rps=2,
+        reverse_linear_mps=0.3,
+    )
+    return SettingsProfile(defaults, maximum)

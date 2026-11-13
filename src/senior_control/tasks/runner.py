@@ -1,6 +1,7 @@
 """Pure schedule decisions. No database writes and no navigation."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from senior_control.tasks.models import (
@@ -57,13 +58,15 @@ class TaskRunner:
             for instance in self._instances
             if instance.status in _ACTIVE and instance.task_id in tasks
         ]
-        busy = bool(active)
+        busy = any(instance.status in _ACTIVE for instance in self._instances)
         for instance in active:
             task = tasks[instance.task_id]
             reason = (
                 "cancel_pending"
                 if instance.status is ExecutionStatus.CANCEL_PENDING
-                else _block_reason(task, context, busy=False)
+                else _block_reason(
+                    task, replace(context, connected=True, admission_ready=True), busy=False
+                )
             )
             if reason is not None:
                 intents.append(
@@ -172,6 +175,8 @@ def _scan(
 def _block_reason(task: TaskDefinition, context: ExecutionContext, busy: bool) -> str | None:
     if not context.connected:
         return "offline"
+    if not context.admission_ready and not busy:
+        return "navigation_unavailable"
     if context.manual_driving:
         return "manual"
     if not context.safety_clear:

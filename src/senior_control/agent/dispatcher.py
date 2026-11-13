@@ -9,16 +9,22 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+if TYPE_CHECKING:
+    from senior_control.tasks.executor import TaskExecutor
+from senior_control.agent.direct_navigation import DirectNavigation
 from senior_control.agent.journal import AgentJournal, JournalEntry
+from senior_control.agent.ports import IpcState
+from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.operations import MapOperations
-from senior_control.models import MapRef, OperationResult, OperationStatus
+from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_control.observability import Metrics
-from senior_control.protocol import OperationEnvelope
+from senior_control.protocol import OperationEnvelope, TaskExecutionEnvelope
 from senior_control.tasks import Schedule, TaskDefinition, TaskStore
 from senior_control.waypoints import HomeService, LocalizedPose
+from senior_control.waypoints.store import WaypointStore
 
 logger = logging.getLogger("senior_control.agent")
 
@@ -108,7 +114,16 @@ class Dispatcher:
     async def run(self, envelope: OperationEnvelope) -> OperationResult:
         payload = envelope.payload
         operation_id = payload.operation_id
+        durable = (
+            self._navigation
+            if isinstance(self._navigation, LifecycleNavigationOperations)
+            else None
+        )
         if envelope.type == "operation.query":
+            if durable is not None:
+                result = await durable.query(operation_id)
+                if result is not None:
+                    return result
             entry = await self._journal.get(operation_id)
             if entry is None:
                 raise DomainError(ErrorCode.OPERATION_UNKNOWN, "operation was never issued")
@@ -116,6 +131,14 @@ class Dispatcher:
 
         fingerprint = _fingerprint(envelope)
         existing = await self._journal.get(operation_id)
+        if existing is not None and existing.fingerprint != fingerprint:
+            raise DomainError(ErrorCode.CONFLICT, "operation id was used for other content")
+        if durable is not None and envelope.type in {"navigation.goal", "navigation.return_home"}:
+            if existing is None:
+                self._admit(envelope)
+            elif await durable.query(operation_id) is None:
+                return self._replay(existing, fingerprint)
+            return await durable.accept(envelope, fingerprint)
         if existing is not None:
             return self._replay(existing, fingerprint)
         self._admit(envelope)
@@ -428,3 +451,159 @@ class StoreMapPort:
 
     async def clear(self, operation_id: str, expected: MapRef) -> None:
         await self._operations.clear_map(expected, operation_id=operation_id)
+
+
+@dataclass(frozen=True)
+class TaskOperationResult(OperationResult):
+    task_state: dict[str, Any]
+
+
+class _TaskRouteReceiver:
+    def __init__(self, executor: "TaskExecutor", fingerprint: str, state: IpcState) -> None:
+        self.executor, self.fingerprint, self.state = executor, fingerprint, state
+
+    async def start_poses(
+        self, execution_id: str, map_ref: MapRef, map_generation: str, poses: tuple[Pose2D, ...]
+    ) -> None:
+        live = await self.state.read()
+        self.executor.context = live.for_tasks(self.executor.context.connected)
+        await self.executor.submit_route(
+            execution_id, self.fingerprint, map_ref, map_generation, poses
+        )
+
+    async def cancel_current(self) -> None:
+        raise DomainError(ErrorCode.VALIDATION, "use lifecycle cancellation")
+
+
+class LifecycleNavigationOperations:
+    """Direct target validation plus atomic task acceptance; no outer journal.begin."""
+
+    def __init__(
+        self,
+        executor: "TaskExecutor",
+        state: IpcState,
+        workspace: WorkspaceReader,
+        waypoints: WaypointStore,
+    ) -> None:
+        self.executor, self.state, self.workspace, self.waypoints = (
+            executor,
+            state,
+            workspace,
+            waypoints,
+        )
+
+    async def query(
+        self, operation_id: str, *, acceptance: bool = False
+    ) -> TaskOperationResult | None:
+        service = self.executor.lifecycle
+        assert service is not None
+        await service.start()
+        receipt = await service.store.query(operation_id)
+        if receipt is None:
+            return None
+        if not receipt.accepted:
+            raise DomainError(ErrorCode.UNAVAILABLE, receipt.reason)
+        state = await service.store.load(receipt.task_id)
+        status = OperationStatus.ACCEPTED
+        if not acceptance:
+            status = {
+                "starting": OperationStatus.DISPATCHING,
+                "running": OperationStatus.RUNNING,
+                "succeeded": OperationStatus.SUCCEEDED,
+                "failed": OperationStatus.FAILED,
+            }.get(state.phase, status)
+        return TaskOperationResult(
+            operation_id,
+            status,
+            {
+                "execution_id": receipt.task_id,
+                "phase": state.phase,
+                "epoch": state.epoch,
+                "completed": list(state.completed),
+                "remaining": list(state.remaining),
+            },
+        )
+
+    async def execution_view(self, execution_id: str) -> dict[str, Any]:
+        """T6 projection only; T2/T5 own the enclosing vehicle frame and authority."""
+        service = self.executor.lifecycle
+        assert service is not None
+        await service.start()
+        state = await service.store.load(execution_id)
+        actions: list[str] = []
+        if state.phase == "paused":
+            if (
+                self.executor.current_context().motion_allowed
+                and await service.store.tasks.execution_route(execution_id) is not None
+            ):
+                actions.append("resume")
+            actions.extend(("cancel", "takeover"))
+        elif state.phase in {"starting", "running", "revoking"}:
+            actions.extend(("pause", "cancel", "takeover"))
+        return {
+            "task_id": execution_id,
+            "version": state.version,
+            "phase": state.phase,
+            "completed": len(state.completed),
+            "total": len(state.actions),
+            "stopped_for": state.stopped_for,
+            "allowed_actions": actions,
+        }
+
+    async def execution_command(self, envelope: TaskExecutionEnvelope) -> TaskOperationResult:
+        from dataclasses import asdict
+
+        from senior_control.tasks.lifecycle import Command
+        from senior_control.tasks.lifecycle_store import RequestConflict, VersionConflict
+
+        service = self.executor.lifecycle
+        assert service is not None
+        await service.start()
+        payload = envelope.payload
+        previous = await service.store.query(payload.request_id)
+        if previous is None and payload.action == "resume":
+            live = await self.state.read()
+            self.executor.context = live.for_tasks(self.executor.context.connected)
+            if await service.store.tasks.execution_route(payload.task_id) is None:
+                raise DomainError(ErrorCode.UNAVAILABLE, "accepted task targets need review")
+        # The durable request identity is nested, so a transport retry may change
+        # its outer session/epoch/id without changing the accepted task command.
+        fingerprint = hashlib.sha256(
+            json.dumps(payload.model_dump(), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        try:
+            result = await service.command(
+                Command(payload.request_id, payload.action, payload.task_id),
+                expected_version=payload.expected_version,
+                operation_fingerprint=fingerprint,
+            )
+        except (VersionConflict, RequestConflict) as exc:
+            raise DomainError(ErrorCode.CONFLICT, "task version or request conflicts") from exc
+        except KeyError as exc:
+            raise DomainError(ErrorCode.VALIDATION, "unknown task execution") from exc
+        assert result.receipt is not None
+        # Commit/receipt means accepted, not completion of the external boundary.
+        # The regular runtime also reconciles if this request is interrupted here.
+        await service.reconcile(payload.task_id)
+        return TaskOperationResult(
+            payload.request_id, OperationStatus.ACCEPTED, asdict(result.receipt)
+        )
+
+    async def accept(self, envelope: OperationEnvelope, fingerprint: str) -> TaskOperationResult:
+        operation_id = envelope.payload.operation_id
+        previous = await self.query(operation_id, acceptance=True)
+        if previous is not None:
+            return previous
+        receiver = _TaskRouteReceiver(self.executor, fingerprint, self.state)
+        validate = DirectNavigation(self.state, self.workspace, self.waypoints, receiver)
+        await asyncio.wait_for(validate(envelope.type, operation_id, envelope.payload.body), 3.0)
+        result = await self.query(operation_id, acceptance=True)
+        assert result is not None
+        return result
+
+    async def __call__(self, kind: str, execution_id: str, body: Mapping[str, Any]) -> None:
+        if kind != "navigation.cancel":
+            raise DomainError(
+                ErrorCode.VALIDATION, "navigation submission requires its operation envelope"
+            )
+        await self.executor.control_current("cancel", execution_id)

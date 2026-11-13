@@ -596,3 +596,34 @@ def test_timed_half_open_heartbeat_revokes_motion_before_sample_deadline():
     delayed = motion.model_copy(update={"seq": 3})
     assert not arbiter.accept(delayed, 1.63, received_at=1.1, local_deadline=1.7).accepted
     assert arbiter.tick(1.63) == Velocity(0.0, 0.0)
+
+
+def test_vehicle_task_source_survives_remote_retirement_but_keeps_local_deadline():
+    arbiter = Arbiter(ROBOT, 0.2, 5.0, 0.3, require_server_heartbeat=True)
+    assert arbiter.server_heartbeat(1, 0.0, 1.0)
+    assert arbiter.begin_navigation("task", 0.0, task_epoch=1)
+    assert arbiter.accept_navigation_sample("task", 1, Velocity(0.2, 0), 0.0, 0.0)
+    arbiter.disconnect(1)
+    assert arbiter.tick(0.1) == Velocity(0.2, 0)
+    assert arbiter.tick(0.31) == Velocity(0, 0)
+    assert arbiter.navigation_source_active("task", 2.0)
+    assert arbiter.server_heartbeat(2, 2.0, 3.0)
+    assert arbiter.accept_navigation_sample("task", 2, Velocity(0.2, 0), 2.0, 2.0)
+    assert arbiter.tick(2.1) == Velocity(0.2, 0)
+    arbiter.end_navigation("task")
+    assert not arbiter.begin_navigation("task", 2.1, task_epoch=1)
+    assert arbiter.begin_navigation("task", 2.1, task_epoch=2)
+
+
+def test_task_requires_retirement_before_manual_prepare_and_estop_still_clears_all():
+    arbiter = Arbiter(ROBOT, 0.2, 5, 0.3, require_server_heartbeat=True)
+    arbiter.server_heartbeat(1, 0, 1)
+    assert arbiter.begin_navigation("task", 0, task_epoch=1)
+    assert not arbiter.accept(command("control.acquire", seq=1), 0).accepted
+    arbiter.end_navigation("task")
+    assert arbiter.accept(command("control.acquire", seq=1), 0).accepted
+    assert arbiter.accept(command("control.release", seq=2), 0).accepted
+    assert arbiter.begin_navigation("task", 0, task_epoch=2)
+    assert arbiter.accept(command("safety.estop", seq=3), 0).accepted
+    assert not arbiter.navigation_source_active("task", 0)
+    assert arbiter.tick(0) == Velocity(0, 0)

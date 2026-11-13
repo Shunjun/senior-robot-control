@@ -4,28 +4,40 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from senior_control.agent.connection import IpcMotion
-from senior_control.agent.direct_navigation import DirectNavigation
-from senior_control.agent.dispatcher import StoreTaskPort
+from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.main import Agent
-from senior_control.agent.ports import IpcHomePort, IpcMapPort, IpcNavigation, IpcState
+from senior_control.agent.manual_control import vehicle_frame
+from senior_control.agent.ports import (
+    IpcHomePort,
+    IpcMapPort,
+    IpcNavigation,
+    IpcState,
+    TaskAwareMotion,
+)
 from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.errors import DomainError
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.workspace_export import load_exported_grid
-from senior_control.models import MapRef
 from senior_control.runtime.ipc import IpcClient, IpcError
+from senior_control.settings.models import simulation_settings_profile
+from senior_control.settings.service import RuntimeGate, SettingsService
+from senior_control.settings.store import SettingsStore
 from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
+from senior_control.tasks.lifecycle import Context
+from senior_control.tasks.lifecycle_service import LifecycleService
+from senior_control.tasks.lifecycle_store import LifecycleStore
+from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.vision.stream import AiortcPeerFactory, VideoSession
@@ -44,6 +56,7 @@ class AgentConfig:
     workspace_map_bundle: Path | None = None
     workspace_map_sha256: str | None = None
     simulation_video_frame: Path | None = None
+    simulation_settings: bool = False
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -81,6 +94,7 @@ class AgentConfig:
                 workspace_map_bundle=Path(bundle) if bundle is not None else None,
                 workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
                 simulation_video_frame=Path(video) if video is not None else None,
+                simulation_settings=environment.get("SENIOR_SIMULATION_SETTINGS") == "1",
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
@@ -99,11 +113,48 @@ class SnapshotState:
         tasks: TaskStore,
         waypoints: WaypointStore,
         workspace: WorkspaceReader | None = None,
+        *,
+        navigation: LifecycleNavigationOperations | None = None,
+        connected: Callable[[], bool] = lambda: True,
+        epoch: Callable[[], int] = lambda: 0,
+        manual_enabled: bool = False,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._state = state
         self._tasks = tasks
         self._waypoints = waypoints
         self._workspace = workspace
+        self._navigation = navigation
+        self._connected, self._epoch = connected, epoch
+        self._manual_enabled = manual_enabled
+        self._clock = clock
+        self._sequence = 0
+        self._safety_frontiers: dict[str, tuple[str, int, int]] = {}
+        self._recovery_tokens: dict[str, tuple[int, int]] = {}
+
+    def _safety_token(self, kind: str, boot: str, revision: int) -> int:
+        previous = self._safety_frontiers.get(kind)
+        if previous is None:
+            counter = revision
+        elif previous[0] != boot:
+            counter = previous[2] + 1
+        else:
+            counter = previous[2] + max(0, revision - previous[1])
+        self._safety_frontiers[kind] = boot, revision, counter
+        token = self._epoch() * 1_000_000_000 + counter
+        self._recovery_tokens[kind] = token, revision
+        return token
+
+    async def recovery_revision(self, kind: str, token: int) -> int:
+        # Read the current T5 boot/version before translating an opaque UI token;
+        # a delayed command cannot reset another boot's equal numeric revision.
+        live = await self.collect()
+        if live.vehicle_ui is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "local motion state is not ready")
+        current = self._recovery_tokens.get(kind)
+        if current is None or current[0] != token:
+            raise DomainError(ErrorCode.CONFLICT, "motion recovery version changed")
+        return current[1]
 
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
@@ -130,6 +181,46 @@ class SnapshotState:
             and state.map_generation is not None
             and state.map_generation == state.localization_generation
         )
+        ui = None
+        if (
+            state.motion_runtime is not None
+            and state.motion_runtime.sampled_steady
+            <= self._clock()
+            < state.motion_runtime.valid_until
+        ):
+            self._sequence += 1
+            task_view = None
+            if self._navigation is not None:
+                self._navigation.executor.context = state.for_tasks(self._connected())
+                latest = await self._tasks.latest_execution()
+                if latest is not None:
+                    try:
+                        task_view = await self._navigation.execution_view(latest.execution_id)
+                    except KeyError:
+                        pass  # //Compatible: unmigrated execution has no lifecycle projection.
+            ui = vehicle_frame(
+                state.motion_runtime,
+                sequence=self._epoch() * 1_000_000_000 + self._sequence,
+                connected=self._connected(),
+                task=task_view,
+                manual=state.manual_authority,
+                manual_enabled=self._manual_enabled and state.manual_protocol_version == 1,
+                tasks_enabled=self._navigation is not None,
+                runtime_enabled=state.manual_protocol_version == 1,
+                safety_revisions=(
+                    self._safety_token(
+                        "estop_reset",
+                        state.motion_runtime.boot_id,
+                        state.motion_runtime.estop_revision,
+                    ),
+                    self._safety_token(
+                        "fault_recover",
+                        state.motion_runtime.boot_id,
+                        state.motion_runtime.fault_revision,
+                    ),
+                ),
+                now=self._clock(),
+            )
         return LiveState(
             localized,
             state.map_ref,
@@ -145,7 +236,33 @@ class SnapshotState:
             robot_pose=state.robot_pose,
             navigation_block_reason=state.navigation_block_reason,
             scan_points=state.scan_points,
+            vehicle_ui=ui,
+            manual_controller_generation=(state.manual_authority or {}).get(
+                "controller_generation"
+            ),
+            manual_agent_epoch=(state.manual_authority or {}).get("connection_epoch"),
         )
+
+
+def build_task_runtime(
+    database: Database,
+    tasks: TaskStore,
+    navigation: TaskNavigation,
+    *,
+    boot_id: str,
+    connected: Callable[[], bool] | None = None,
+) -> tuple[TaskRuntime, TaskExecutor]:
+    """Assembly only; all transitions and effects stay in the task driver/ports."""
+    durable = LifecycleStore(tasks, boot_id=boot_id)
+    effects = NavigationEffects(durable, navigation)
+
+    def current() -> Context:
+        value = executor.current_context()
+        return replace(value, connected=connected()) if connected is not None else value
+
+    service = LifecycleService(durable, effects, context=current)
+    executor = TaskExecutor(database, tasks, None, lifecycle=service)
+    return TaskRuntime(tasks, executor), executor
 
 
 async def run_agent(config: AgentConfig) -> int:
@@ -160,7 +277,7 @@ async def run_agent(config: AgentConfig) -> int:
         except Exception:
             logger.exception("could not initialize persistent agent safety state")
             return 78
-        motion = IpcMotion(
+        motion = TaskAwareMotion(
             IpcClient(config.socket_path),
             heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
@@ -219,28 +336,26 @@ async def run_agent(config: AgentConfig) -> int:
         home = IpcHomePort(state_client, waypoints, robot_id=config.robot_id)
         agent: Agent
         navigation = IpcNavigation(
-            navigation_client, waypoints, connection_epoch=lambda: agent.connection_epoch
+            navigation_client,
+            waypoints,
+            connection_epoch=lambda: agent.connection_epoch,
+            tasks=tasks,
         )
         context = ExecutionContext(False, False, False, False, None)
 
-        def qualified_reference(ref: MapRef, generation: str) -> bool:
-            return (
-                context.localized
-                and context.safety_clear
-                and not context.manual_driving
-                and context.active_map == ref
-                and context.map_generation == context.localization_generation == generation
-            )
-
-        executor = TaskExecutor(
-            database,
-            tasks,
-            navigation,
-            link_up=lambda: agent.eligible_for_motion,
-            generation=lambda: agent.continuity_generation,
-            qualified_reference=qualified_reference,
+        runtime, executor = build_task_runtime(
+            database, tasks, navigation, boot_id=uuid.uuid4().hex, connected=lambda: agent.connected
         )
-        runtime = TaskRuntime(tasks, executor, generation=lambda: agent.continuity_generation)
+        motion.bind_tasks(executor)
+        settings = None
+        if config.simulation_settings:
+            settings = SettingsService(
+                SettingsStore(database), simulation_settings_profile(), RuntimeGate()
+            )
+            await settings.prepare()
+            settings.start_debug_restore()
+        motion.settings = settings
+        navigation_actions = LifecycleNavigationOperations(executor, state, workspace, waypoints)
 
         async def task_loop() -> None:
             nonlocal context
@@ -250,15 +365,7 @@ async def run_agent(config: AgentConfig) -> int:
                 except DomainError:
                     context = ExecutionContext(False, False, False, False, None)
                 else:
-                    context = ExecutionContext(
-                        agent.eligible_for_motion,
-                        live.localized,
-                        live.safety_clear,
-                        live.manual_driving,
-                        live.map_ref,
-                        map_generation=live.map_generation if live.navigation_ready else None,
-                        localization_generation=live.localization_generation,
-                    )
+                    context = live.for_tasks(agent.connected)
                 await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
@@ -289,28 +396,45 @@ async def run_agent(config: AgentConfig) -> int:
                 workspace_client.close(),
                 display_client.close(),
             )
+            if settings is not None:
+                await settings.close()
             if video_factory is not None:
                 await asyncio.to_thread(video_factory.close)
 
         agent = Agent(
             config.robot_id,
-            connector=WebSocketConnector(config.cloud_url, config.device_token, config.robot_id),
+            connector=WebSocketConnector(
+                config.cloud_url,
+                config.device_token,
+                config.robot_id,
+                native_manual=True,
+            ),
             journal=journal,
             tasks=StoreTaskPort(
                 tasks, robot_id=config.robot_id, verify_workspace=workspace.verify_task_edit
             ),
             home=home,
             maps=IpcMapPort(map_client),
-            state=SnapshotState(state, tasks, waypoints, display),
+            state=SnapshotState(
+                state,
+                tasks,
+                waypoints,
+                display,
+                navigation=navigation_actions,
+                connected=lambda: agent.connected,
+                epoch=lambda: agent.connection_epoch,
+                manual_enabled=settings is not None,
+            ),
             workspace=workspace,
-            navigation=DirectNavigation(state, workspace, waypoints, navigation),
+            navigation=navigation_actions,
+            native_manual=True,
             motion=motion,
             video_session=video_session,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
             background={"tasks": task_loop},
             cleanup=cleanup,
-            on_eligibility_lost=tasks.mark_active_cancel_pending,
+            # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
         )
         agent.install_signal_handlers()
         await agent.run()

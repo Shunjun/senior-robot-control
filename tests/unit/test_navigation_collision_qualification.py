@@ -195,6 +195,12 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         get_logger=lambda: SimpleNamespace(warning=logs.append),
         context=SimpleNamespace(get_domain_id=lambda: 73),
         navigation_qualified=lambda: True,
+        task_motion_allowed=lambda *, continuing: (
+            runtime.ref.navigation_evidence_ready() if continuing else runtime.ref.safety_ready()
+        ),
+        motion_runtime=lambda: None,
+        manual_view=lambda: None,
+        manual_request=lambda message: {"ok": False, "error": "unavailable"},
         motion_mode=lambda: "autonomous",
         submit=lambda *a, **k: None,
         disconnect=lambda *a: None,
@@ -204,6 +210,8 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         clear_navigation_source=lambda *a: None,
         navigation_source_matches=lambda *a: True,
         current_navigation_epoch=lambda: 1,
+        navigation_source_retired=lambda *a: False,
+        shutdown_motion=lambda: None,
     )
     runtime.ref.grid = lambda: SimpleNamespace(map_ref=MapRef("map", 1), grid_id="gen")
     runtime.ref.qualified = lambda *args: True
