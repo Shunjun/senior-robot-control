@@ -5,7 +5,8 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.util import find_spec
@@ -38,7 +39,7 @@ from senior_control.storage.database import Database
 from senior_control.tasks import ExecutionContext, TaskExecutor, TaskStore
 from senior_control.tasks.lifecycle import Context
 from senior_control.tasks.lifecycle_service import LifecycleService
-from senior_control.tasks.lifecycle_store import LifecycleStore
+from senior_control.tasks.lifecycle_store import Admission, ContextProvider, LifecycleStore
 from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vehicle_logs.service import VehicleLogService
@@ -265,9 +266,10 @@ def build_task_runtime(
     *,
     boot_id: str,
     connected: Callable[[], bool] | None = None,
+    admission: Admission | None = None,
 ) -> tuple[TaskRuntime, TaskExecutor]:
     """Assembly only; all transitions and effects stay in the task driver/ports."""
-    durable = LifecycleStore(tasks, boot_id=boot_id)
+    durable = LifecycleStore(tasks, boot_id=boot_id, admission=admission)
     effects = NavigationEffects(durable, navigation)
 
     def current() -> Context:
@@ -357,8 +359,54 @@ async def run_agent(config: AgentConfig) -> int:
         )
         context = ExecutionContext(False, False, False, False, None)
 
+        settings_runtime: SettingsRuntime
+        gate = RuntimeGate(
+            lambda: settings_runtime.check(), refresh=lambda: settings_runtime.refresh()
+        )
+
+        @asynccontextmanager
+        async def task_commit() -> AsyncIterator[ContextProvider]:
+            while True:
+                generation = gate.generation
+                # Sample outside the gate; failed reads never reuse an earlier context.
+                try:
+                    sampled = await state.read()
+                except DomainError:
+                    # Withdrawal/recovery still commits; no new motion may use an old sample.
+                    local = ExecutionContext(False, False, False, False, None)
+                else:
+                    local = sampled.for_tasks(agent.connected)
+                    authority = sampled.manual_authority
+                    local = replace(
+                        local,
+                        manual_driving=local.manual_driving
+                        or bool(authority and authority.get("state") in {"prepared", "active"}),
+                    )
+                async with gate.lock:
+                    if gate.generation != generation:
+                        continue
+                    gate.invalidate()
+                    admitted_generation = gate.generation
+
+                    # This provider rechecks the original sample's expiry inside
+                    # the SQLite transaction, even if it waited for a DB writer.
+                    def current(
+                        local: ExecutionContext = local, generation: int = admitted_generation
+                    ) -> Context:
+                        if gate.generation != generation:
+                            return Context(agent.connected, False)
+                        return replace(executor.current_context(local), connected=agent.connected)
+
+                    yield current
+                    return
+
         runtime, executor = build_task_runtime(
-            database, tasks, navigation, boot_id=uuid.uuid4().hex, connected=lambda: agent.connected
+            database,
+            tasks,
+            navigation,
+            boot_id=uuid.uuid4().hex,
+            connected=lambda: agent.connected,
+            admission=task_commit,
         )
         motion.bind_tasks(executor)
         settings = None
@@ -369,7 +417,6 @@ async def run_agent(config: AgentConfig) -> int:
         previous_log_level = logger.level
         assert executor.lifecycle is not None
         settings_runtime = SettingsRuntime(state, executor.lifecycle.store)
-        gate = RuntimeGate(settings_runtime.check, refresh=settings_runtime.refresh)
         if config.simulation_settings:
             settings = SettingsService(SettingsStore(database), simulation_settings_profile(), gate)
             await settings.prepare()
@@ -403,8 +450,7 @@ async def run_agent(config: AgentConfig) -> int:
                     context = ExecutionContext(False, False, False, False, None)
                 else:
                     context = live.for_tasks(agent.connected)
-                async with gate.lock:
-                    await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
+                await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
         video_path = config.simulation_video_frame
@@ -481,6 +527,7 @@ async def run_agent(config: AgentConfig) -> int:
                 logs_enabled=lambda: log_connection is not None and log_connection.connected,
             ),
             settings=settings,
+            runtime_gate=gate,
             workspace=workspace,
             navigation=navigation_actions,
             native_manual=True,
