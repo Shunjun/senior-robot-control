@@ -44,7 +44,12 @@ class VehicleLogStore:
         ):
             raise ValueError("log storage unavailable: unsafe/oversize file")
         fresh = not self._path.exists()
-        connection = await aiosqlite.connect(self._path)
+        try:
+            connection = await aiosqlite.connect(self._path)
+        except sqlite3.OperationalError as exc:
+            # Failed opens allocate no usable connection; aiosqlite stops its worker.
+            # Keep this storage boundary consistent with post-open validation errors.
+            raise ValueError("log storage unavailable: cannot open database") from exc
         self._connection = connection
         try:
             for statement in (

@@ -55,8 +55,14 @@ class RuntimeGate:
     There is no check-then-commit callback or stale MotionState argument.
     """
 
-    def __init__(self, observe: Callable[[], RuntimeCheck] | None = None) -> None:
+    def __init__(
+        self,
+        observe: Callable[[], RuntimeCheck] | None = None,
+        *,
+        refresh: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self._observe = observe
+        self._refresh = refresh
         self.lock = asyncio.Lock()
         self._state = RuntimeCheck()
 
@@ -74,6 +80,13 @@ class RuntimeGate:
         if not self.lock.locked():
             raise RuntimeError("runtime check requires the serialization guard")
         return self._observe() if self._observe is not None else self._state
+
+    async def refresh(self) -> None:
+        """Refresh trusted IPC/task evidence while excluding all motion admissions."""
+        if not self.lock.locked():
+            raise RuntimeError("runtime refresh requires the serialization guard")
+        if self._refresh is not None:
+            await self._refresh()
 
     async def transition(self, operation: Callable[[], Awaitable[RuntimeCheck]]) -> None:
         """Run admission/reducer/output transition and publish under the commit lock.
@@ -223,6 +236,7 @@ class SettingsService:
             async with AsyncExitStack() as guards:
                 if request.group == "driving":
                     await guards.enter_async_context(self.runtime.lock)
+                    await self.runtime.refresh()
                 current = self._current()
                 async with self._store.transaction() as connection:
                     stored = await self._store.lookup(connection, request.request_id)

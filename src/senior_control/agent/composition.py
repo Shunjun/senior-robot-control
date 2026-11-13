@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
+from senior_control.agent.logs_wire import AgentLogConnection, AgentLogHandler, CloudLogGrants
 from senior_control.agent.main import Agent
 from senior_control.agent.manual_control import vehicle_frame
 from senior_control.agent.ports import (
@@ -23,6 +24,7 @@ from senior_control.agent.ports import (
     IpcState,
     TaskAwareMotion,
 )
+from senior_control.agent.settings_wire import SettingsRuntime
 from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
@@ -39,6 +41,8 @@ from senior_control.tasks.lifecycle_service import LifecycleService
 from senior_control.tasks.lifecycle_store import LifecycleStore
 from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
+from senior_control.vehicle_logs.service import VehicleLogService
+from senior_control.vehicle_logs.store import VehicleLogStore
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.vision.stream import AiortcPeerFactory, VideoSession
 from senior_control.waypoints.store import WaypointStore
@@ -119,6 +123,8 @@ class SnapshotState:
         epoch: Callable[[], int] = lambda: 0,
         manual_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
+        settings_enabled: bool = False,
+        logs_enabled: Callable[[], bool] = lambda: False,
     ) -> None:
         self._state = state
         self._tasks = tasks
@@ -127,6 +133,7 @@ class SnapshotState:
         self._navigation = navigation
         self._connected, self._epoch = connected, epoch
         self._manual_enabled = manual_enabled
+        self._settings_enabled, self._logs_enabled = settings_enabled, logs_enabled
         self._clock = clock
         self._sequence = 0
         self._safety_frontiers: dict[str, tuple[str, int, int]] = {}
@@ -221,6 +228,13 @@ class SnapshotState:
                 ),
                 now=self._clock(),
             )
+        if ui is not None:
+            capabilities = ui["capabilities"]
+            assert isinstance(capabilities, list)
+            if self._settings_enabled:
+                capabilities.append("settings.v1")
+            if self._logs_enabled():
+                capabilities.append("logs.v1")
         return LiveState(
             localized,
             state.map_ref,
@@ -348,12 +362,35 @@ async def run_agent(config: AgentConfig) -> int:
         )
         motion.bind_tasks(executor)
         settings = None
+        log_store = None
+        logs = None
+        log_connection = None
+        log_handler = None
+        previous_log_level = logger.level
+        assert executor.lifecycle is not None
+        settings_runtime = SettingsRuntime(state, executor.lifecycle.store)
+        gate = RuntimeGate(settings_runtime.check, refresh=settings_runtime.refresh)
         if config.simulation_settings:
-            settings = SettingsService(
-                SettingsStore(database), simulation_settings_profile(), RuntimeGate()
-            )
+            settings = SettingsService(SettingsStore(database), simulation_settings_profile(), gate)
             await settings.prepare()
             settings.start_debug_restore()
+            candidate = VehicleLogStore(config.database_path.parent / "logs")
+            try:
+                await candidate.__aenter__()
+            except (OSError, ValueError):
+                logger.warning("vehicle log storage unavailable; control remains independent")
+            else:
+                log_store = candidate
+                grants = CloudLogGrants()
+                logs = VehicleLogService(
+                    log_store, config.robot_id, grants, lambda: settings.published_snapshot
+                )
+                await logs.start()
+                log_connection = AgentLogConnection(logs, grants)
+                log_handler = AgentLogHandler(logs)
+                logging.getLogger("senior_control").addHandler(log_handler)
+                logger.setLevel(logging.DEBUG)
+                logger.info("agent_log_source_started", extra={"event": "agent_log_source_started"})
         motion.settings = settings
         navigation_actions = LifecycleNavigationOperations(executor, state, workspace, waypoints)
 
@@ -366,7 +403,8 @@ async def run_agent(config: AgentConfig) -> int:
                     context = ExecutionContext(False, False, False, False, None)
                 else:
                     context = live.for_tasks(agent.connected)
-                await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
+                async with gate.lock:
+                    await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
         video_path = config.simulation_video_frame
@@ -396,10 +434,25 @@ async def run_agent(config: AgentConfig) -> int:
                 workspace_client.close(),
                 display_client.close(),
             )
-            if settings is not None:
-                await settings.close()
-            if video_factory is not None:
-                await asyncio.to_thread(video_factory.close)
+            if log_handler is not None:
+                logging.getLogger("senior_control").removeHandler(log_handler)
+                logger.setLevel(previous_log_level)
+            try:
+                if logs is not None:
+                    await logs.close()
+            finally:
+                try:
+                    if log_store is not None:
+                        await log_store.__aexit__(None, None, None)
+                finally:
+                    if settings is not None:
+                        await settings.close()
+                    if video_factory is not None:
+                        await asyncio.to_thread(video_factory.close)
+
+        async def logs_loop() -> None:
+            if log_connection is not None:
+                await log_connection.run(config.cloud_url, config.device_token)
 
         agent = Agent(
             config.robot_id,
@@ -424,7 +477,10 @@ async def run_agent(config: AgentConfig) -> int:
                 connected=lambda: agent.connected,
                 epoch=lambda: agent.connection_epoch,
                 manual_enabled=settings is not None,
+                settings_enabled=settings is not None,
+                logs_enabled=lambda: log_connection is not None and log_connection.connected,
             ),
+            settings=settings,
             workspace=workspace,
             navigation=navigation_actions,
             native_manual=True,
@@ -432,7 +488,9 @@ async def run_agent(config: AgentConfig) -> int:
             video_session=video_session,
             source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
-            background={"tasks": task_loop},
+            background={"tasks": task_loop, "logs": logs_loop}
+            if logs is not None
+            else {"tasks": task_loop},
             cleanup=cleanup,
             # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
         )

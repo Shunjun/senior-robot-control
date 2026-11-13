@@ -19,6 +19,7 @@ from senior_control.cloud.auth import (
     verify_password_async,
 )
 from senior_control.cloud.limits import CloudLimits
+from senior_control.cloud.logs import LogRelay
 from senior_control.cloud.pairing import PAIRING_STATEMENTS, PairingBusy, PairingService
 from senior_control.cloud.registry import ROBOT_STATEMENTS, RobotRegistry
 from senior_control.cloud.relay import CLOSE_OVERLOAD, CLOSE_POLICY, Hub, serve_connection
@@ -124,6 +125,7 @@ def create_app(
         max_live=limits.max_live_pairing_codes,
     )
     hub = Hub(limits)
+    log_relay = LogRelay()
     login_limiter = FailureLimiter(
         per_client=limits.login_failures_per_client,
         global_limit=limits.login_failures_global,
@@ -147,6 +149,7 @@ def create_app(
             yield
         finally:
             hub.close_all()
+            log_relay.close_all()
             if owned:
                 await database.__aexit__(None, None, None)
 
@@ -293,9 +296,46 @@ def create_app(
             if await registry.get_active(robot_id) is None:
                 await websocket.close(code=CLOSE_POLICY)
                 return
+
+            async def valid() -> bool:
+                return (
+                    await sessions.lookup(websocket.cookies.get(SESSION_COOKIE)) is not None
+                    and await registry.get_active(robot_id) is not None
+                )
+
             await websocket.accept()
-            await serve_connection(websocket, connection, hub)
+            await serve_connection(websocket, connection, hub, valid=valid)
         finally:
             hub.detach(connection)
+
+    @app.websocket("/ws/agent/logs")
+    async def ws_agent_logs(websocket: WebSocket) -> None:
+        token = _bearer(websocket.headers.get("authorization"))
+        robot = await registry.authenticate(token)
+        if robot is None:
+            await websocket.close(code=CLOSE_POLICY)
+            return
+
+        async def valid() -> bool:
+            current = await registry.authenticate(token)
+            return current is not None and current.robot_id == robot.robot_id
+
+        await log_relay.agent(websocket, robot.robot_id, valid)
+
+    @app.websocket("/ws/logs")
+    async def ws_logs(websocket: WebSocket, robot_id: str) -> None:
+        origin = websocket.headers.get("origin")
+        token = websocket.cookies.get(SESSION_COOKIE)
+
+        async def valid() -> bool:
+            return (
+                await sessions.lookup(token) is not None
+                and await registry.get_active(robot_id) is not None
+            )
+
+        if origin is None or origin.rstrip("/") not in origins or not await valid():
+            await websocket.close(code=CLOSE_POLICY)
+            return
+        await log_relay.viewer(websocket, robot_id, valid)
 
     return app

@@ -1,3 +1,4 @@
+import { BrowserVehicleLogs } from "./logs";
 import { IntentBackpressureError, VehicleTransport, VEHICLE_REQUEST_TYPES, type VehiclePort, type VehicleLogPort } from "./vehicleState";
 import {
   MAX_MESSAGE_BYTES,
@@ -315,6 +316,7 @@ function openBrowserSocket(url: string): SocketLike {
 }
 export class RobotClient implements RobotLink {
   readonly vehicle: VehicleTransport;
+  private readonly browserLogs: BrowserVehicleLogs;
   private readonly socketFactory: (url: string) => SocketLike;
   private readonly staleAfterMs: number;
   private readonly requestTimeoutMs: number;
@@ -337,10 +339,11 @@ export class RobotClient implements RobotLink {
     this.socketFactory = options.socketFactory ?? openBrowserSocket;
     this.staleAfterMs = options.staleAfterMs ?? 5000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000;
+    this.browserLogs = new BrowserVehicleLogs(() => this.robotId, this.socketFactory);
     this.vehicle = new VehicleTransport(async (type, payload) => {
       const response = await this.request(type, payload);
       return response.data ?? null;
-    }, options.logs ?? null);
+    }, options.logs ?? this.browserLogs);
   }
   connect(robotId: string): Promise<void> {
     this.teardown();
@@ -506,6 +509,7 @@ export class RobotClient implements RobotLink {
     return () => this.statusListeners.delete(listener);
   }
   private teardown(): void {
+    this.browserLogs.close();
     this.generation++;
     this.vehicle.setConnection(false);
     const socket = this.socket;
