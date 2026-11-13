@@ -524,3 +524,34 @@ def test_numerical_error_squares_preserve_existing_union_behavior(hit, error_m):
     actual = scene(hits=(hit, hit), error_m=error_m).occupied
     assert actual.is_empty == expected.is_empty
     assert Point(x, y).intersects(actual) == Point(x, y).intersects(expected)
+
+
+def test_full_scan_occupied_squares_preserve_exact_coordinates_and_evidence():
+    """720-return ingress keeps every closed error square and its original age."""
+    from math import cos, pi, sin
+
+    hits = tuple(
+        (0.15699 + 20 * cos(-pi + i * 2 * pi / 719), 0.00201 + 20 * sin(-pi + i * 2 * pi / 719))
+        for i in range(720)
+    )
+    perception = prepare_perception(
+        (),
+        hits,
+        error_m=0.02,
+        stamp_steady=100.0,
+        deadline_steady=100.8,
+        source_epoch="original-scan",
+        frame_id="scan_reference",
+        revision=301,
+        forecast_horizon_s=12.0,
+        no_return_policy=NoReturnPolicy.UNKNOWN,
+        basis="synthetic 720-return input",
+        max_patches=2048,
+        max_vertices=8192,
+        max_hits=2048,
+    )
+    expected = GeometryCollection([box(x - 0.02, y - 0.02, x + 0.02, y + 0.02) for x, y in hits])
+    assert perception.occupied.equals_exact(expected, 0)
+    assert perception.free_space.is_empty
+    assert (perception.stamp_steady, perception.deadline_steady) == (100.0, 100.8)
+    assert (perception.source_epoch, perception.revision) == ("original-scan", 301)
