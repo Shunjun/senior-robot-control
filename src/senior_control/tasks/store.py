@@ -34,6 +34,12 @@ WINDOW_SCAN_SQL = (
     "AND e.occurrence_utc <= ? AND e.status NOT IN (?, ?, ?) LIMIT ?"
 )
 _SCAN_LIMIT = 4096
+_LATEST_EXECUTION_SQL = (
+    "SELECT e.execution_id,e.task_id,e.occurrence_utc,e.status,e.navigation_sent,"
+    "e.rollback_confirmed FROM task_execution e "
+    "JOIN task_definition t ON t.task_id=e.task_id "
+    "WHERE t.robot_id=? AND e.status<>'skipped' ORDER BY e.occurrence_utc DESC LIMIT 1"
+)
 
 
 TASK_STATEMENTS: tuple[str, ...] = (
@@ -258,13 +264,37 @@ class TaskStore:
             raise RuntimeError("task scan execution limit exceeded")
         return tuple(_execution(row) for row in rows)
 
+    async def current_execution(self) -> ExecutionRecord | None:
+        """Prefer the exclusive execution/retirement obligation over newer history.
+
+        Resume keeps its original occurrence. Use the existing active index and
+        read at most two owners, rejecting a broken exclusivity invariant rather
+        than arbitrarily choosing one. With no owner, preserve latest semantics.
+        """
+        statuses = (
+            ExecutionStatus.DISPATCHING.value,
+            ExecutionStatus.RUNNING.value,
+            ExecutionStatus.CANCEL_PENDING.value,
+        )
+        async with self._database.write_lock:
+            async with self._database.connection.execute(
+                ACTIVE_SCAN_SQL, (self._robot_id, *statuses, 2)
+            ) as cursor:
+                rows = list(await cursor.fetchall())
+            if len(rows) > 1:
+                raise DomainError(ErrorCode.CONFLICT, "multiple active task executions")
+            if rows:
+                return _execution(rows[0])
+            async with self._database.connection.execute(
+                _LATEST_EXECUTION_SQL, (self._robot_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return _execution(row) if row else None
+
     async def latest_execution(self) -> ExecutionRecord | None:
         async with self._database.write_lock:
             async with self._database.connection.execute(
-                "SELECT e.execution_id,e.task_id,e.occurrence_utc,e.status,e.navigation_sent,"
-                "e.rollback_confirmed FROM task_execution e "
-                "JOIN task_definition t ON t.task_id=e.task_id "
-                "WHERE t.robot_id=? AND e.status<>'skipped' ORDER BY e.occurrence_utc DESC LIMIT 1",
+                _LATEST_EXECUTION_SQL,
                 (self._robot_id,),
             ) as cursor:
                 row = await cursor.fetchone()
