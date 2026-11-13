@@ -5,7 +5,8 @@ import type { ResponsePayload, RobotSnapshot, TaskSummary } from "../../api/prot
 import { getTaskDetails, type TaskDetails, type WorkspaceWaypoint } from "../../api/workspace";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
 import { listCurrentWaypoints } from "../map/useWorkspaceMap";
-import { draftSchedule, NEW_TASK, ScheduleEditor, type TaskDraft } from "./ScheduleEditor";
+import { NEW_TASK, ScheduleEditor } from "./ScheduleEditor";
+import { draftSchedule, scheduleDraft, scheduleSummary, type TaskDraft } from "./schedule";
 import styles from "./Tasks.module.css";
 
 export interface TaskWorkspaceData {
@@ -25,8 +26,10 @@ interface TaskListProps {
 
 export function TaskList({ snapshot, link, workspace, unavailable, map }: TaskListProps): ReactElement {
   const ref = snapshot.map_ref;
+  //Compatible: older snapshots omit map_generation; still require matching map_ref.
   const matches = ref !== null && workspace?.map.map_ref?.map_id === ref.map_id
-    && workspace.map.map_ref.reference_revision === ref.reference_revision;
+    && workspace.map.map_ref.reference_revision === ref.reference_revision
+    && (snapshot.map_generation === undefined || workspace.grid_id === snapshot.map_generation);
   const live = snapshot.connected && !snapshot.stale;
   const scope = JSON.stringify([snapshot.robot_id, ref?.map_id, ref?.reference_revision, matches ? workspace.grid_id : null, live]);
   return <TaskEditor key={scope} snapshot={snapshot} link={link}
@@ -36,6 +39,8 @@ export function TaskList({ snapshot, link, workspace, unavailable, map }: TaskLi
 function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListProps): ReactElement {
   const [draft, setDraft] = useState<TaskDraft>(NEW_TASK);
   const [editing, setEditing] = useState<TaskDetails | null>(null);
+  const [preview, setPreview] = useState<TaskDetails | null>(null);
+  const [routeBlocked, setRouteBlocked] = useState(false);
   const [waypointIds, setWaypointIds] = useState<string[]>([]);
   const [selected, setSelected] = useState("");
   const [highlight, setHighlight] = useState<string | null>(null);
@@ -62,9 +67,13 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const resolved = waypointIds.map((id) => waypoints.get(id));
   const route = resolved.filter((point) => point !== undefined);
   const missingWaypoint = route.length !== waypointIds.length;
+  const previewPoints = preview?.waypoint_ids.map(id => waypoints.get(id));
+  const previewMissing = previewPoints?.some(point => point === undefined) === true;
+  const routeMissing = preview === null ? missingWaypoint : previewMissing;
+  const mapRoute = routeBlocked || routeMissing ? [] : previewPoints ?? route;
   const schedule = draftSchedule(draft);
   const canSubmit = live && workspace !== undefined && schedule !== null && draft.task_id.trim() !== ""
-    && route.length > 0 && !missingWaypoint && !pending && !conflict && !creatingWaypoint;
+    && route.length > 0 && !missingWaypoint && !pending && !conflict && !creatingWaypoint && preview === null;
 
   function clearWaypointDraft(): void {
     setCreatingWaypoint(false);
@@ -141,6 +150,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   function newTask(): void {
     clearWaypointDraft();
     setEditing(null);
+    setPreview(null);
+    setRouteBlocked(false);
     setDraft(NEW_TASK);
     setWaypointIds([]);
     setHighlight(null);
@@ -148,10 +159,13 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
     setConflict(false);
   }
 
-  async function openTask(taskId: string): Promise<void> {
+  async function openTask(taskId: string, mode: "edit" | "view" = "edit"): Promise<void> {
     if (!live || pending || workspace === undefined || snapshot.map_ref === null) return;
     setPending(true);
     setMessage("正在读取车端任务…");
+    setRouteBlocked(true);
+    setPreview(null);
+    clearWaypointDraft();
     try {
       const task = await getTaskDetails(link, snapshot.robot_id, snapshot.map_ref, taskId);
       if (task.grid_id !== workspace.grid_id) {
@@ -159,14 +173,19 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
         setConflict(true);
         return;
       }
+      setRouteBlocked(false);
+      setHighlight(null);
+      setMessage(null);
+      if (mode === "view") {
+        setPreview(task);
+        return;
+      }
       setEditing(task);
       setDraft({
         ...NEW_TASK,
         task_id: task.task_id,
         timezone: task.timezone,
-        kind: task.schedule.kind,
-        interval: task.schedule.kind === "interval" ? String(task.schedule.every_seconds) : NEW_TASK.interval,
-        cron: task.schedule.kind === "cron" ? task.schedule.expression : NEW_TASK.cron,
+        ...scheduleDraft(task.schedule),
       });
       //Compatible: a task stored before route editing still contains a one-item waypoint array.
       setWaypointIds([...task.waypoint_ids]);
@@ -174,7 +193,9 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
       setConflict(false);
       setMessage(null);
     } catch (error) {
-      setMessage(`无法读取任务：${error instanceof CommandError ? describeCommandError(error.code) : "响应无效"}。`);
+      setMessage(error instanceof CommandError && error.code === "conflict"
+        ? "地图或车端版本已变化，请重新读取当前地图与任务。"
+        : `无法读取任务：${error instanceof CommandError ? describeCommandError(error.code) : "响应无效"}。`);
     } finally {
       setPending(false);
     }
@@ -254,13 +275,13 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             <MapCanvas key={workspace?.grid_id ?? "read-only"} map={displayedMap} stale={!live} compact
               robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
               scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
-              taskRoute={missingWaypoint ? [] : route}
+              taskRoute={workspace === undefined ? [] : mapRoute.filter(point => point !== undefined)}
               waypointMarkers={available}
               highlightedWaypoint={highlight}
               draft={waypointDraft}
               pickEnabled={creatingWaypoint && !pending}
               onPick={setWaypointDraft}
-              {...(pending || creatingWaypoint ? {} : { onAddWaypoint: addWaypoint })} />
+              {...(pending || creatingWaypoint || preview !== null ? {} : { onAddWaypoint: addWaypoint })} />
             {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.note}>车辆位置暂不可用</p>}
           </>
         )}
@@ -284,8 +305,10 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
           <div>
             {(snapshot.tasks ?? []).length === 0 && <p>暂无任务</p>}
             {(snapshot.tasks ?? []).map((task) => (
-              <div className={styles.taskRow} key={task.task_id}>
+              <div className={styles.taskRow} key={task.task_id} data-selected={(preview?.task_id ?? editing?.task_id) === task.task_id}>
                 <code>{task.task_id}</code>
+                <button type="button" aria-label={`查看路线 ${task.task_id}`} aria-pressed={preview?.task_id === task.task_id}
+                  disabled={!workspace || pending} onClick={() => void openTask(task.task_id, "view")}>查看路线</button>
                 <button type="button" aria-label={`编辑 ${task.task_id}`} disabled={!workspace || pending}
                   onClick={() => void openTask(task.task_id)}>编辑</button>
                 <button type="button" disabled={!live || pending}
@@ -298,9 +321,16 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             ))}
           </div>
           {workspace === undefined && <p className={styles.warning}>
-            {!live ? "快照已过期或车辆断开，路线编辑已锁定。" : unavailable ?? "缺少当前地图与航点目录，路线编辑已锁定。"}
+            {!live ? "快照已过期或车辆断开，路线编辑已锁定。" : unavailable ?? "当前地图与版本不匹配或缺少航点目录，路线查看与编辑已锁定。"}
           </p>}
-          <fieldset className={styles.fields} disabled={!workspace || pending}>
+          {preview !== null && <section className={styles.routePreview} aria-label="所选任务路线">
+            <h4>任务路线 · {preview.task_id}</h4>
+            <p className={styles.note}>{scheduleSummary({ ...NEW_TASK, ...scheduleDraft(preview.schedule), timezone: preview.timezone })}</p>
+            <ol>{preview.waypoint_ids.map((id, index) => <li key={`${index}:${id}`}>{id}</li>)}</ol>
+            {previewMissing && <p className={styles.warning}>路线含当前目录中不存在的航点，无法显示完整路线。</p>}
+            <button type="button" onClick={() => setPreview(null)}>返回当前草稿</button>
+          </section>}
+          <fieldset className={styles.fields} disabled={!workspace || pending || preview !== null}>
             <legend>{editing === null ? "新建任务" : `编辑任务 · r${editing.revision}`}</legend>
             <ScheduleEditor value={draft} onChange={setDraft} editing={editing !== null} />
             <div className={styles.taskRow}>

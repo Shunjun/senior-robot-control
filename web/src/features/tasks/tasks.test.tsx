@@ -57,10 +57,10 @@ describe("task schedules", () => {
     }
     render(<Editor />);
     fireEvent.change(screen.getByLabelText("任务编号"), { target: { value: "daily" } });
-    expect(draftSchedule(changed.at(-1)!)).toEqual({ kind: "interval", every_seconds: 86400 });
+    expect(draftSchedule(changed.at(-1)!)).toEqual({ kind: "cron", expression: "0 9 * * *" });
     expect(changed.at(-1)?.timezone).toBe("Asia/Shanghai");
 
-    fireEvent.change(screen.getByLabelText("计划类型"), { target: { value: "cron" } });
+    fireEvent.change(screen.getByLabelText("计划类型"), { target: { value: "advanced" } });
     fireEvent.change(screen.getByLabelText("Cron 表达式"), { target: { value: "15 9 * * 1" } });
     expect(draftSchedule(changed.at(-1)!)).toEqual({ kind: "cron", expression: "15 9 * * 1" });
     expect(changed.at(-1)?.timezone).toBe("Asia/Shanghai");
@@ -387,4 +387,91 @@ it("shows current vehicle and laser hits on task maps only for qualified live ge
   expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
   expect(container.querySelector('[data-marker="robot"]')).toBeNull();
   expect(screen.queryByText("车辆位置暂不可用")).not.toBeNull();
+});
+
+
+it('shows a selected task route directly and keeps editing order live on the map', async () => {
+  const robotLink = taskLink(['gate', 'hall', 'dock']);
+  const { container } = render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button', { name: '查看路线 daily' }));
+  await screen.findByText('任务路线 · daily');
+  expect(robotLink.request).toHaveBeenCalledWith('task.get', expect.objectContaining({ task_id: 'daily' }));
+  expect(screen.getByRole('button', { name: '查看路线 daily' }).getAttribute('aria-pressed')).toBe('true');
+  const preview = screen.getByLabelText('任务航点预览');
+  const before = preview.getAttribute('points');
+  expect(container.querySelectorAll('text[data-route-index]')).toHaveLength(3);
+  expect(screen.getByText(/顺序连线.*不代表.*避障/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '编辑 daily' }));
+  await screen.findByRole('button', { name: '上移 dock' });
+  fireEvent.click(screen.getByRole('button', { name: '上移 dock' }));
+  expect(screen.getByLabelText('任务航点预览').getAttribute('points')).not.toBe(before);
+});
+
+it.each(['missing', 'grid'] as const)('does not draw a %s task route on the wrong/current incomplete map', async reason => {
+  const robotLink = taskLink(['gate', 'missing']);
+  if (reason === 'grid') vi.mocked(robotLink.request).mockResolvedValue({ ok: true, data: {
+    ...taskDetails, grid_id: 'old-grid', waypoint_ids: ['gate', 'hall']
+  } } as never);
+  render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button', { name: '查看路线 daily' }));
+  await screen.findByText(reason === 'grid' ? /地图.*变化/ : /路线含.*不存在的航点/);
+  expect(screen.queryByLabelText('任务航点预览')).toBeNull();
+});
+
+it.each(['daily', 'weekly', 'interval'] as const)('creates, saves and reopens a visual %s schedule', async mode => {
+  const robotLink = link();
+  let saved = { ...taskDetails, waypoint_ids: ['gate'] };
+  vi.mocked(robotLink.request).mockImplementation(async (type, payload) => {
+    if (type === 'task.get') return { ok: true, data: saved } as never;
+    if (type === 'task.create' || type === 'task.update') saved = {
+      ...saved, ...(payload as { body: typeof saved }).body
+    };
+    return { ok: true } as never;
+  });
+  const { rerender } = render(<TaskList snapshot={snapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.change(screen.getByLabelText('任务编号'), { target: { value: 'daily' } });
+  fireEvent.change(screen.getByLabelText('计划类型'), { target: { value: mode } });
+  if (mode === 'interval') {
+    fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('间隔单位'), { target: { value: 'hours' } });
+  } else {
+    fireEvent.change(screen.getByLabelText('执行时间'), { target: { value: '08:30' } });
+    if (mode === 'weekly') fireEvent.click(screen.getByLabelText('周三'));
+  }
+  fireEvent.keyDown(screen.getByRole('button', { name: '添加地图航点 gate' }), { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: '提交任务' }));
+  await screen.findByText('车端已确认保存任务。');
+  const expected = mode === 'interval' ? { kind: 'interval', every_seconds: 7200 }
+    : { kind: 'cron', expression: mode === 'daily' ? '30 8 * * *' : '30 8 * * 1,3' };
+  expect(saved.schedule).toEqual(expected);
+  rerender(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button', { name: '编辑 daily' }));
+  await waitFor(() => expect((screen.getByLabelText('计划类型') as HTMLSelectElement).value).toBe(mode));
+  if (mode === 'interval') expect((screen.getByLabelText('间隔数值') as HTMLInputElement).value).toBe('2');
+  else expect((screen.getByLabelText('执行时间') as HTMLInputElement).value).toBe('08:30');
+  fireEvent.change(screen.getByLabelText('时区'), { target: { value: 'Europe/Berlin' } });
+  fireEvent.click(screen.getByRole('button', { name: '提交任务' }));
+  await screen.findByText('车端已确认保存任务。');
+  expect(saved.schedule).toEqual(expected);
+  expect(saved.timezone).toBe('Europe/Berlin');
+});
+
+
+it('keeps an existing complex cron unchanged when saving other task fields', async () => {
+  const robotLink = taskLink(['gate']);
+  const expression = '*/15 9-17 * * 1-5';
+  const fallback = vi.mocked(robotLink.request).getMockImplementation()!;
+  vi.mocked(robotLink.request).mockImplementation(async (type, payload) => type === 'task.get'
+    ? { ok: true, data: { ...taskDetails, waypoint_ids: ['gate'], schedule: { kind: 'cron', expression } } } as never
+    : fallback(type, payload));
+  render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button', { name: '编辑 daily' }));
+  await screen.findByLabelText('Cron 表达式');
+  expect((screen.getByLabelText('Cron 表达式') as HTMLInputElement).value).toBe(expression);
+  fireEvent.change(screen.getByLabelText('时区'), { target: { value: 'Europe/Berlin' } });
+  fireEvent.click(screen.getByRole('button', { name: '提交任务' }));
+  await screen.findByText('车端已确认保存任务。');
+  expect(robotLink.request).toHaveBeenCalledWith('task.update', expect.objectContaining({
+    expected_revision: 4, body: expect.objectContaining({ task_id: 'daily', timezone: 'Europe/Berlin', schedule: { kind: 'cron', expression } })
+  }));
 });

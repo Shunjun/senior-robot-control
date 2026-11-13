@@ -54,3 +54,15 @@
   .drawerToggle { display: block; margin-inline-start: auto; min-height: 34px; }
   .panel[data-open="false"] .body, .panel[data-open="false"] .footer { display: none; }
 }
+
+.fullWidth, .scheduleSummary, .weekdays { grid-column: 1 / -1; }
+.scheduleSummary { margin: 0; padding: var(--space-2); color: var(--teal); background: var(--graphite-950); border-left: 2px solid var(--teal); font-size: 13px; overflow-wrap: anywhere; }
+.weekdays { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 4px 6px; border: 1px solid var(--line); }
+.weekdays legend { color: var(--ink-soft); font-size: 12px; }
+.weekdays label { display: flex; align-items: center; gap: 6px; padding: 2px 6px; min-height: 36px; }
+.weekdays input { min-height: 0; accent-color: var(--teal); }
+.taskRow[data-selected="true"] { padding-inline-start: 6px; border-inline-start: 2px solid var(--teal); background: var(--graphite-950); }
+.taskRow button[aria-pressed="true"] { color: var(--graphite-950); background: var(--teal); }
+.routePreview { padding: var(--space-2); margin-block: var(--space-2); border: 1px solid var(--teal); }
+.routePreview h4 { margin: 0 0 var(--space-2); }
+.routePreview button { min-height: 36px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
