@@ -223,6 +223,51 @@ class RecoveryEnvelope(EnvelopeBase):
     payload: RecoveryPayload
 
 
+class SettingsApplyPayload(StrictModel):
+    request_id: str = Field(min_length=1, max_length=128)
+    expected_version: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    group: Literal["driving", "logging"]
+    values: dict[str, Any]
+    restore_defaults: bool = False
+
+
+class SettingsResultPayload(StrictModel):
+    request_id: str = Field(min_length=1, max_length=128)
+
+
+class SettingsGetPayload(StrictModel):
+    pass
+
+
+class SettingsEnvelopeBase(EnvelopeBase):
+    controller_generation: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_serializer(mode="wrap")
+    def serialize_context(self, handler: Any) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.controller_generation is None:
+            value.pop("controller_generation", None)
+        return value
+
+
+class SettingsGetEnvelope(SettingsEnvelopeBase):
+    type: Literal["settings.get"]
+    payload: SettingsGetPayload
+
+
+class SettingsApplyEnvelope(SettingsEnvelopeBase):
+    type: Literal["settings.apply"]
+    payload: SettingsApplyPayload
+
+
+class SettingsResultEnvelope(SettingsEnvelopeBase):
+    type: Literal["settings.result"]
+    payload: SettingsResultPayload
+
+
+SettingsEnvelope = SettingsGetEnvelope | SettingsApplyEnvelope | SettingsResultEnvelope
+
+
 class TaskExecutionCommandPayload(StrictModel):
     request_id: str = Field(min_length=1, max_length=128)
     expected_version: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
@@ -514,6 +559,9 @@ class ResponsePayload(StrictModel):
         "safety.estop.reset",
         "safety.fault.recover",
         "task.execution.command",
+        "settings.get",
+        "settings.apply",
+        "settings.result",
         "task.create",
         "task.update",
         "task.delete",
@@ -559,6 +607,7 @@ class ResponsePayload(StrictModel):
     def consistent_result(self) -> "ResponsePayload":
         if self.ok == (self.error is not None):
             raise ValueError("response success and error conflict")
+        settings = self.request_type.startswith("settings.")
         workspace = self.request_type in WORKSPACE_REQUEST_TYPES
         task = self.request_type == "task.execution.command"
         if (workspace or task) and (self.data is not None) != self.ok:
@@ -571,7 +620,9 @@ class ResponsePayload(StrictModel):
             "operation.query",
         }
         if self.data is not None:
-            if not self.ok or not (workspace or task or optional_task or optional_manual):
+            if not self.ok or not (
+                workspace or task or optional_task or optional_manual or settings
+            ):
                 raise ValueError("response data does not match its request")
             if optional_task:
                 TaskNavigationState.model_validate(self.data)
@@ -585,7 +636,7 @@ class ResponsePayload(StrictModel):
     def serialize(self, handler: Any) -> dict[str, Any]:
         result: dict[str, Any] = handler(self)
         # //Compatible: strict v1 peers accept the original response fields.
-        if self.data is None:
+        if self.data is None and self.request_type != "settings.result":
             result.pop("data", None)
         return result
 
@@ -642,6 +693,9 @@ Envelope = Annotated[
     VelocityEnvelope
     | SimpleEnvelope
     | TaskExecutionEnvelope
+    | SettingsGetEnvelope
+    | SettingsApplyEnvelope
+    | SettingsResultEnvelope
     | ManualIntentEnvelope
     | RecoveryEnvelope
     | OperationEnvelope
@@ -654,6 +708,9 @@ Frame = Annotated[
     VelocityEnvelope
     | SimpleEnvelope
     | TaskExecutionEnvelope
+    | SettingsGetEnvelope
+    | SettingsApplyEnvelope
+    | SettingsResultEnvelope
     | ManualIntentEnvelope
     | RecoveryEnvelope
     | OperationEnvelope
