@@ -117,13 +117,20 @@ def prepare_perception(
     if not all(math.isfinite(v) for point in hits for v in point):
         raise ValueError("nonfinite hit")
     # Squares circumscribe Euclidean error disks; never use an inscribed circle.
-    occupied = (
-        unary_union([box(x - error_m, y - error_m, x + error_m, y + error_m) for x, y in hits])
-        if error_m and hits
-        else MultiPoint(hits)
-        if hits
-        else GeometryCollection()
-    )
+    # Collision checks only need intersection with any square, including its
+    # boundary. Retain all squares without normalizing their union topology.
+    if error_m and hits:
+        bounds = [(x - error_m, y - error_m, x + error_m, y + error_m) for x, y in hits]
+        squares = [box(*extent) for extent in bounds]
+        # //Compatible: retain union's numerical behavior for degenerate or
+        # overflowing squares, outside the regular finite-area set contract.
+        regular = all(
+            0 < (right - left) * (top - bottom) < math.inf
+            for left, bottom, right, top in bounds
+        )
+        occupied = GeometryCollection(squares) if regular else unary_union(squares)
+    else:
+        occupied = MultiPoint(hits) if hits else GeometryCollection()
     return Perception(
         unary_union(free),
         occupied,
