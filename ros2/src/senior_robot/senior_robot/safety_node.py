@@ -12,12 +12,10 @@ wheel transform to relabel a scan into the body frame.
 
 import math
 import socket
-import struct
 import subprocess
 import time
 from collections import deque
 from pathlib import Path
-from types import SimpleNamespace
 
 import rclpy
 from ament_index_python.packages import get_package_prefix
@@ -79,7 +77,7 @@ from senior_control.vision.egress_receipt import (
 )
 from senior_control.vision.raw_capture import RawCaptureAdmission
 from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
-from senior_robot.motion_lifecycle import run
+from senior_robot.motion_lifecycle import MotionExecutor, run
 
 
 def _positive(value: float) -> float | None:
@@ -144,6 +142,21 @@ class SafetyGate(Node):
         rate = float(self.get_parameter("simulation_rate_hz").value)
         if not self._body or not math.isfinite(rate) or rate <= 0.0:
             raise ValueError("simulation_rate_hz must be positive and body_frame nonempty")
+        self._motion_core = None
+        self.declare_parameter("motion_core_profile", "")
+        candidate = str(self.get_parameter("motion_core_profile").value)
+        candidate_profile = None
+        if candidate:
+            import os
+
+            from senior_robot.simulation_motion_profile import select_simulation_profile
+
+            candidate_profile = select_simulation_profile(
+                candidate,
+                simulated_clock=bool(self.get_parameter("use_sim_time").value),
+                localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
+                domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
+            )
         self._command = Velocity(0.0, 0.0)
         self._command_monotonic: float | None = None
         self._command_deadline = float("-inf")
@@ -256,6 +269,11 @@ class SafetyGate(Node):
             1.0 / rate, self._on_timer, clock=RosClock(clock_type=ClockType.STEADY_TIME)
         )
 
+        if candidate_profile is not None:
+            from senior_robot.motion_core_output import MotionCoreOutput
+
+            self._motion_core = MotionCoreOutput(self, candidate_profile)
+
     def _array_parameter(self, name: str) -> list[float]:
         try:
             return self.get_parameter(name).value or []
@@ -357,6 +375,39 @@ class SafetyGate(Node):
             )
         ):
             return
+        if self._motion_core is not None:
+            accepted = self._motion_core.command(msg)
+            if not accepted:
+                self._motion_core.revoke("target_handoff_failed")
+                self._replace_drive_feedback(None, "", Velocity(0, 0), 0)
+                return
+            key = None
+            if msg.close_reason == "intent" and msg.source_kind == "manual":
+                key = DriveFeedbackKey(
+                    robot_id=msg.robot_id,
+                    session_id=msg.session_id,
+                    connection_epoch=msg.connection_epoch,
+                    request_id=msg.request_id,
+                    seq=msg.sequence,
+                    gesture=msg.gesture,
+                )
+            self._replace_drive_feedback(key, msg.owner_boot_id, velocity, msg.steady_deadline)
+            if (
+                msg.source_kind == "navigation"
+                and msg.close_reason in {"task_revoke", "qualification_lost", "shutdown"}
+                and msg.request_id
+                and msg.sequence == 0
+                and msg.steady_deadline == 0
+                and velocity == Velocity(0, 0)
+            ):
+                # Old source fenced + unique local braking owner installed.
+                # This is neither a zero-Twist ACK nor a body-stationary claim.
+                receipt = DriveFeedbackMessage()
+                receipt.robot_id, receipt.owner_boot_id = msg.robot_id, msg.owner_boot_id
+                receipt.session_id, receipt.request_id = msg.session_id, msg.request_id
+                receipt.sequence, receipt.status = msg.generation, "retired"
+                self._drive_feedback_publisher.publish(receipt)
+            return
         identity = (
             msg.owner_boot_id,
             msg.generation,
@@ -387,6 +438,20 @@ class SafetyGate(Node):
         self._replace_drive_feedback(key, msg.owner_boot_id, velocity, msg.steady_deadline)
         self._command_deadline = msg.steady_deadline
         self._command_monotonic = now
+        if (
+            msg.request_id
+            and msg.sequence == 0
+            and msg.steady_deadline == 0
+            and velocity == Velocity(0, 0)
+        ):
+            # Source/output retirement, NOT body-stationary feedback. The accepted
+            # generation fence also invalidates in-flight nonzero SafetyTickets.
+            self._publish(Velocity(0, 0), "source_retired")
+            receipt = DriveFeedbackMessage()
+            receipt.robot_id, receipt.owner_boot_id = msg.robot_id, msg.owner_boot_id
+            receipt.session_id, receipt.request_id = msg.session_id, msg.request_id
+            receipt.sequence, receipt.status = msg.generation, "retired"
+            self._drive_feedback_publisher.publish(receipt)
 
     def _command_topology_ready(self) -> bool:
         return (
@@ -428,7 +493,9 @@ class SafetyGate(Node):
         channel = self._guard_socket
         if channel is None:
             return
-        layout = struct.Struct("!B24s129s129s129s129sQQQQddd")
+        from senior_robot.final_command_frame import LAYOUT, decode_frame
+
+        layout = LAYOUT
         try:
             for _ in range(64):
                 try:
@@ -437,23 +504,7 @@ class SafetyGate(Node):
                     return
                 if len(packet) != layout.size:
                     raise ValueError("invalid guard frame")
-                (
-                    kind,
-                    gid,
-                    robot,
-                    boot,
-                    session,
-                    request,
-                    generation,
-                    epoch,
-                    sequence,
-                    gesture,
-                    deadline,
-                    vx,
-                    wz,
-                ) = layout.unpack(packet)
-                if kind not in (0, 1, 2):
-                    raise ValueError("invalid guard frame type")
+                kind, gid, msg = decode_frame(packet)
                 publisher = gid if any(gid) else None
                 self._final_fence.set_publisher(publisher)
                 self._guard_seen = time.monotonic()
@@ -469,23 +520,6 @@ class SafetyGate(Node):
                 elif kind == 2:
                     self._guard_ready = publisher is not None
                 else:
-
-                    def decode(value):
-                        return value.split(b"\0", 1)[0].decode("utf-8", errors="strict")
-
-                    msg = SimpleNamespace(
-                        robot_id=decode(robot),
-                        owner_boot_id=decode(boot),
-                        session_id=decode(session),
-                        request_id=decode(request),
-                        gesture=gesture,
-                        generation=generation,
-                        connection_epoch=epoch,
-                        sequence=sequence,
-                        steady_deadline=deadline,
-                        vx=vx,
-                        wz=wz,
-                    )
                     self._on_command(msg, gid)
             raise ValueError("guard queue overflow")
         except (OSError, ValueError, UnicodeError):
@@ -1003,6 +1037,8 @@ class SafetyGate(Node):
     def _publish(
         self, velocity: Velocity, reason: str, *, ticket: SafetyTicket | None = None
     ) -> None:
+        if self._motion_core is not None:
+            return  # Legacy callbacks cannot compete with the selected writer.
         feedback_key = self._feedback.current
         self._poll_command_guard()
         if velocity != Velocity(0.0, 0.0) and (
@@ -1024,6 +1060,16 @@ class SafetyGate(Node):
         self._publisher.publish(twist)
         if self._feedback.current == feedback_key:
             self._publish_drive_feedback(self._feedback.published(velocity, output_at, reason))
+        self._report(reason)
+
+    def _emit_motion_core(self, velocity: Velocity, reason: str) -> None:
+        # Called only by the selected steady core tick, after final proof or
+        # explicit unverified fault-stop handling. The publisher is unchanged.
+        twist = Twist()
+        # //Compatible: ROS float setters reject an internal integer-valued zero.
+        twist.linear.x, twist.angular.z = float(velocity.vx), float(velocity.wz)
+        self._publisher.publish(twist)
+        self._publish_drive_feedback(self._feedback.published(velocity, time.monotonic(), reason))
         self._report(reason)
 
     def _replace_drive_feedback(
@@ -1111,6 +1157,11 @@ class SafetyGate(Node):
         self._status_geometry = {}
         self._poll_command_guard()
         command_ready = self._command_topology_ready()
+        if self._motion_core is not None:
+            if not command_ready:
+                self._motion_core.revoke("command_topology_unqualified")
+            self._motion_core.tick()
+            return
         if not self._topology_ready():
             self._publish(Velocity(0.0, 0.0), "evidence_topology_unqualified")
             return
@@ -1448,6 +1499,8 @@ class SafetyGate(Node):
         self._publish(Velocity(0.0, 0.0), "evaluation_pending")
 
     def destroy_node(self):
+        if self._motion_core is not None:
+            self._motion_core.close()
         self._worker.close()
         if self._guard_socket is not None:
             self._guard_socket.close()
@@ -1463,4 +1516,4 @@ class SafetyGate(Node):
 
 
 def main() -> None:
-    run(SafetyGate, cli=True)
+    run(SafetyGate, cli=True, executor_factory=MotionExecutor)

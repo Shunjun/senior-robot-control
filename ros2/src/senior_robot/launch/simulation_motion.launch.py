@@ -26,17 +26,32 @@ def generate_launch_description():
     qualified = LaunchConfiguration("qualified_reference")
 
     def profile(context):
+        candidate = LaunchConfiguration("motion_core_profile").perform(context)
+        override = LaunchConfiguration("motion_core_world").perform(context)
+        if override and not candidate:
+            raise ValueError("motion_core_world requires explicit simulation candidate")
         use_reference = IfCondition(qualified).evaluate(context)
+        # A manual candidate uses the reviewed no-attachment model even when
+        # map/navigation reference is off for an unpinned calibration world.
+        no_attachment = use_reference or bool(candidate)
         return [
             SetLaunchConfiguration(
                 "motion_world",
-                PathJoinSubstitution(
+                override
+                or PathJoinSubstitution(
                     [sim, "worlds", "motion_qualification.sdf" if use_reference else "baseline.sdf"]
                 ),
             ),
-            SetLaunchConfiguration("motion_rear_attachment", "false" if use_reference else "true"),
+            # Search/kinematic domain only, never matcher quality thresholds.
+            SetLaunchConfiguration("core_matcher_linear", "1.52" if candidate else "0.5"),
+            SetLaunchConfiguration("core_matcher_yaw", "2.0" if candidate else "0.8"),
+            SetLaunchConfiguration("motion_rear_attachment", "false" if no_attachment else "true"),
             # Poll the worker result before another sensor observation invalidates it.
-            SetLaunchConfiguration("motion_gate_rate", "40.0" if use_reference else "20.0"),
+            # The candidate's measured scan-preparation peak exceeds a 25ms
+            # period. Keep the existing 20Hz cadence, not longer evidence TTLs.
+            SetLaunchConfiguration(
+                "motion_gate_rate", "40.0" if use_reference and not candidate else "20.0"
+            ),
             SetLaunchConfiguration(
                 "motion_attachment_profile",
                 PathJoinSubstitution(
@@ -44,7 +59,7 @@ def generate_launch_description():
                         robot,
                         "config",
                         "simulation_motion.yaml"
-                        if use_reference
+                        if no_attachment
                         else "simulation_motion_rear_mask.yaml",
                     ]
                 ),
@@ -93,6 +108,8 @@ def generate_launch_description():
             DeclareLaunchArgument("safety_state_path"),
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("qualified_reference", default_value="false"),
+            DeclareLaunchArgument("motion_core_profile", default_value=""),
+            DeclareLaunchArgument("motion_core_world", default_value=""),
             OpaqueFunction(function=profile),
             DeclareLaunchArgument(
                 "safety_overlay", default_value=LaunchConfiguration("default_safety_overlay")
@@ -131,8 +148,33 @@ def generate_launch_description():
                 ],
             ),
             Node(package="senior_robot", executable="scan_adapter", parameters=[params, rear_mask]),
-            Node(package="senior_scan_matcher", executable="scan_motion_node", parameters=[params]),
-            Node(package="senior_robot", executable="motion_fusion", parameters=[params]),
+            Node(
+                package="senior_scan_matcher",
+                executable="scan_motion_node",
+                parameters=[
+                    params,
+                    {
+                        "max_linear_speed": ParameterValue(
+                            LaunchConfiguration("core_matcher_linear"), value_type=float
+                        ),
+                        "max_yaw_rate": ParameterValue(
+                            LaunchConfiguration("core_matcher_yaw"), value_type=float
+                        ),
+                    },
+                ],
+            ),
+            Node(
+                package="senior_robot",
+                executable="motion_fusion",
+                parameters=[
+                    params,
+                    {
+                        "motion_core_profile": ParameterValue(
+                            LaunchConfiguration("motion_core_profile"), value_type=str
+                        )
+                    },
+                ],
+            ),
             Node(
                 package="senior_sensor_ingress", executable="scan_receipt_node", parameters=[params]
             ),
@@ -144,6 +186,11 @@ def generate_launch_description():
                     params,
                     LaunchConfiguration("safety_overlay"),
                     rear_mask,
+                    {
+                        "motion_core_profile": ParameterValue(
+                            LaunchConfiguration("motion_core_profile"), value_type=str
+                        )
+                    },
                     {
                         "robot_id": robot_id,
                         "simulation_eager_safety": ParameterValue(qualified, value_type=bool),

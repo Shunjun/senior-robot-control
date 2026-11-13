@@ -43,7 +43,7 @@ from senior_control.safety.motion_runtime import (
     stationary_interval,
 )
 from senior_control.safety.slip import SlipMonitor
-from senior_robot.motion_lifecycle import run
+from senior_robot.motion_lifecycle import MotionExecutor, run
 
 
 def seconds(stamp) -> float:
@@ -160,6 +160,23 @@ class MotionFusion(Node):
         self.create_subscription(ScanMotion, "/motion/scan", self._on_scan, 10)
         self.create_service(Trigger, "~/requalify_progress", self._on_progress_requalification)
         self.create_timer(0.02, self._try_pending, clock=RosClock(clock_type=ClockType.STEADY_TIME))
+        # //Compatible: legacy/hardware profiles do not select the candidate adapter.
+        self.declare_parameter("motion_core_profile", "")
+        self._native_motion_bridge = None
+        candidate = str(self.get_parameter("motion_core_profile").value)
+        if candidate:
+            import os
+
+            from senior_robot.motion_observation_adapter import NativeObservationRosBridge
+            from senior_robot.simulation_motion_profile import select_simulation_profile
+
+            profile = select_simulation_profile(
+                candidate,
+                simulated_clock=bool(self.get_parameter("use_sim_time").value),
+                localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
+                domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
+            )
+            self._native_motion_bridge = NativeObservationRosBridge(self, profile)
 
     def _recent_stamp(self, stamp: float) -> bool:
         now = self.get_clock().now().nanoseconds / 1e9
@@ -1261,4 +1278,4 @@ class MotionFusion(Node):
 
 
 def main() -> None:
-    run(MotionFusion, cli=True)
+    run(MotionFusion, cli=True, executor_factory=MotionExecutor)

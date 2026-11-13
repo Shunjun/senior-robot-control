@@ -40,6 +40,8 @@ scan_motion_node:
     min_rays: 100
 motion_fusion:
   ros__parameters:
+    # Explicit launch selection only; no real/hardware implicit activation.
+    motion_core_profile: ""
     use_sim_time: true
     body_frame: base_link
     wheel_frame: odom
@@ -61,6 +63,9 @@ motion_fusion:
     yaw_limit: 0.12
 safety_gate:
   ros__parameters:
+    # fortress-candidate-unvalidated-v1 requires localhost + simulated clock.
+    # See simulation_motion_profile.py for individual evidence vs assumptions.
+    motion_core_profile: ""
     use_sim_time: true
     # This earlier motion-only fixture deliberately does not qualify low obstacles.
     depth_policy: laser_only
