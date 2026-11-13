@@ -106,7 +106,8 @@ class BodyMotion:
     covariance alone does not establish a deterministic current-speed bound.
     """
 
-    average: BodyTwist
+    # //Compatible: masked T3b references do not fabricate an observed lateral component.
+    average: BodyTwist | None
     # //Compatible: pure T3a references may lack a supported current true-speed bound.
     upper: BodyTwist | None
     interval_start_ros: float
@@ -163,3 +164,30 @@ class TaskEvent:
     kind: TaskEventKind
     revision: int
     completed_waypoint: int | None
+
+
+class BrakeKind(str, Enum):
+    CONTROLLED = "controlled_brake"
+    EMERGENCY = "emergency_brake_request"
+
+
+@dataclass(frozen=True)
+class BrakeRequest:
+    kind: BrakeKind
+    reason: str
+    stop_verified: bool
+
+
+@dataclass(frozen=True)
+class MotionPermit:
+    """Exact discrete targets only; T5 must separately validate each ramp output."""
+
+    velocities: tuple[Velocity, ...]
+    created_steady: float
+    deadline_steady: float
+    source_identity: tuple[str, ...]
+
+    def allows(self, velocity: Velocity, now_steady: float) -> bool:
+        return (
+            self.created_steady <= now_steady < self.deadline_steady and velocity in self.velocities
+        )
