@@ -36,11 +36,18 @@ def _nodes(context):
     # Driver topics from the WHEELTEC source: odom and imu/data_raw. Preserve
     # the original DDS publisher identity; a relay would hide the real producer.
     remaps = [("/wheel/odom", profile.wheel_topic), ("/imu/data", profile.imu_topic)]
-    stop = [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
+    shutdown_requested = False
+
+    def stop_required(event, launch_context):
+        nonlocal shutdown_requested
+        if shutdown_requested or launch_context.is_shutdown:
+            return []
+        shutdown_requested = True
+        return [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
     nodes = [
         # All included hardware children belong to this launch process group.
         # A required driver exit shuts down the shared stack as well.
-        RegisterEventHandler(OnProcessExit(on_exit=stop)),
+        RegisterEventHandler(OnProcessExit(on_exit=stop_required)),
         *[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -54,45 +61,38 @@ def _nodes(context):
             for filename in (
                 "turn_on_wheeltec_robot.launch.py",
                 "wheeltec_lidar.launch.py",
-                "wheeltec_camera.launch.py",
             )
         ],
         Node(
             package="senior_sensor_ingress",
             executable="scan_receipt_node",
             parameters=[runtime["scan_receipt"], shared],
-            on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="scan_adapter",
             parameters=[runtime["scan_adapter"], shared],
-            on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="safety_scan_ingress",
             parameters=[runtime["safety_scan_ingress"], shared],
-            on_exit=stop,
         ),
         Node(
             package="senior_scan_matcher",
             executable="scan_motion_node",
             parameters=[runtime["scan_motion_node"], shared],
-            on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="motion_fusion",
             parameters=[runtime["motion_fusion"], selected],
             remappings=remaps,
-            on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="safety_node",
             parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
-            on_exit=stop,
         ),
     ]
 

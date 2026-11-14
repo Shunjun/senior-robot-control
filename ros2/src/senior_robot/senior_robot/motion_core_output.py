@@ -117,12 +117,23 @@ class MotionCoreOutput:
                     namespace=profile.hardware_estop.namespace,
                     qos="reliable",
                     invalidate=self._invalidate_hardware_status,
+                    expired=self._on_expired_hardware_estop,
                 )
 
     def _invalidate_reference(self) -> None:
         self._reference = None
         self.controller.invalidate_limited_rearm()
+        # Do not let a fresh frame in the same drain hide a lost-reference edge.
+        # Retire the old target now; recovery still needs distinct fresh evidence.
+        self._event(K.FEEDBACK_LOST, time.monotonic())
+        self._last_healthy = False
         self._warn_reference("native receipt revoked or unavailable")
+
+    def _on_expired_hardware_estop(self, msg: Any, info: Any) -> None:
+        # A delayed assertion still latches. A delayed release never clears or
+        # refreshes hardware status; the original receipt stays unchanged.
+        if bool(msg.data):
+            self._on_hardware_estop(msg, info)
 
     def _warn_reference(self, reason: str) -> None:
         now = time.monotonic()

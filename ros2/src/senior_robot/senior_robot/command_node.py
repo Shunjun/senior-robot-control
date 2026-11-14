@@ -143,6 +143,7 @@ class CommandNode(Node):
                 writer="safety_gate",
                 qos="reliable",
                 invalidate=self._invalidate_motion_runtime,
+                expired=self._on_expired_motion_runtime,
             )
         else:
             # //Compatible: isolated simulation retains its existing metadata path.
@@ -545,6 +546,17 @@ class CommandNode(Node):
         self._motion_runtime.invalidate()
         self._manual_ingress.revoke(self._monotonic_clock.monotonic())
         self._close_manual("qualification_lost")
+
+    def _on_expired_motion_runtime(self, msg: String, info: dict[str, Any]) -> None:
+        # Preserve a software/hardware ESTOP assertion without admitting expired
+        # runtime evidence or allowing an expired clear to release a latch.
+        value = MotionRuntimeState.model_validate_json(msg.data)
+        if value.robot_id != str(self.get_parameter("robot_id").value):
+            raise ValueError("expired runtime robot identity mismatch")
+        if value.confirmed_estop_status != "clear":
+            self._arbiter.confirm_local_estop(True)
+            self._local_estop_requested = True
+            self._close_manual("estop")
 
     def _invalidate_drive_feedback(self) -> None:
         self._feedback.clear()
