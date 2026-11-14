@@ -1,6 +1,6 @@
 # Full software parameter draft for the real ROS composition, use_sim_time=false.
 # Generated from real_runtime.py software defaults and hardware-motion.json assumptions.
-# Mounting/self-mask confirmations remain false; physical model is unvalidated.
+# Physical response values remain assumptions; mask geometry is checked directly.
 # No measured braking or hardware safety capability is asserted here.
 scan_receipt:
   ros__parameters:
@@ -12,7 +12,6 @@ scan_adapter:
     use_sim_time: false
     body_frame: base_link
     max_age_seconds: 0.5
-    self_mask_calibrated: false
     no_return_clear: false
 safety_scan_ingress:
   ros__parameters:
@@ -63,7 +62,6 @@ safety_gate:
     use_sim_time: false
     body_frame: base_link
     simulation_rate_hz: 20.0
-    self_mask_calibrated: false
     observation_max_age: 0.5
     measurement_max_age: 0.5
     hard_margin: 0.0

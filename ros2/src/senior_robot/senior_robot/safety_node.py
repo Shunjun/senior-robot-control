@@ -109,8 +109,7 @@ class SafetyGate(Node):
         self.declare_parameter("observation_max_age", -1.0)
         self.declare_parameter("footprint_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
-        self.declare_parameter("self_mask_calibrated", False)
-        # //Compatible: unset profiles retain exact-mask filtering, uncalibrated by default.
+        # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.declare_parameter("interpolate", False)
         self.declare_parameter("max_angular_gap", 0.0)
@@ -300,7 +299,6 @@ class SafetyGate(Node):
         return DeviceProfile(
             footprint=footprint,
             self_mask=mask,
-            self_mask_calibrated=bool(self.get_parameter("self_mask_calibrated").value),
             braking_deceleration=_positive(float(self.get_parameter("braking_deceleration").value)),
             lateral_braking_deceleration=_positive(
                 float(self.get_parameter("lateral_braking_deceleration").value)
