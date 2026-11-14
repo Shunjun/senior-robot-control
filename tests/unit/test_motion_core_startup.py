@@ -63,14 +63,14 @@ class Replay:
         self.core.controller._last_now = clock.steady - 0.05
         self.free = False
         self.decisions = []
-        actual_tick = self.core.controller.tick
+        actual_tick = self.core.controller.propose_tick
 
         def tick(*args, **kwargs):
             result = actual_tick(*args, **kwargs)
-            self.decisions.append(result)
+            self.decisions.append(result.decision)
             return result
 
-        self.core.controller.tick = tick
+        self.core.controller.propose_tick = tick
         self.core._observation = self.observation
 
     def observation(self, now):

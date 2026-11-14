@@ -1,7 +1,7 @@
 """Pure closed-loop candidate generator; no actuator or authority side effects."""
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from senior_control.models import Velocity
 from senior_control.motion.constraints import (
@@ -13,7 +13,7 @@ from senior_control.motion.constraints import (
 )
 from senior_control.motion.contracts import BrakeKind
 from senior_control.motion.source_modes import SourceMode
-from senior_control.motion.trajectory import Trajectory, scale_wheels
+from senior_control.motion.trajectory import Trajectory, TrajectoryStep, scale_wheels
 
 
 @dataclass(frozen=True)
@@ -97,6 +97,25 @@ class ControlDecision:
     evidence_deadline: float
 
 
+@dataclass(frozen=True, eq=False)
+class PreparedControl:
+    """One controller-owned, single-use candidate; not an output receipt."""
+
+    owner: object = field(repr=False)
+    decision: ControlDecision
+    context: ConstraintSnapshot
+    sampled_now: float
+    dt: float
+    body: Feedback | None
+    wheel: Feedback | None
+    step: TrajectoryStep | None
+    integral: Velocity
+    braking: bool
+    brake_deadline: float | None
+    limited_complete: bool
+    fallback: bool = False
+
+
 def _bounded(v: Velocity, cap: Velocity) -> Velocity:
     def component(x: float, bound: float) -> float:
         return max(-bound, min(bound, x))
@@ -122,6 +141,7 @@ class MotionController:
         self.engine, self.config = engine, config
         self.trajectory = Trajectory(initial_velocity, initial_acceleration)
         self.integral = Velocity(0, 0)
+        self._prepared: PreparedControl | None = None
         self._last_now: float | None = None
         self._context_key: tuple[str, ...] | None = None
         self._last_feedback: dict[str, tuple[str, int, float]] = {}
@@ -188,8 +208,6 @@ class MotionController:
         emergency: bool,
         ctx: ConstraintSnapshot,
     ) -> ControlDecision:
-        if command is None or emergency or not verified:
-            self.invalidate_limited_rearm()
         deadline = min(
             ctx.motion.valid_until_steady,
             ctx.perception.deadline_steady,
@@ -292,22 +310,23 @@ class MotionController:
             if self._limited_first is None:
                 self._limited_first = stamp
 
-    def _limited_stop_complete(self, now: float) -> bool:
+    def _limited_completion(self, now: float, step: TrajectoryStep, deadline: float | None) -> bool:
         return bool(
             self._limited_epoch is not None
             and now < self._limited_until
-            and self._brake_deadline is not None
-            and now >= self._brake_deadline
+            and deadline is not None
+            and now >= deadline
             and self._limited_count >= self.config.still_samples
             and self._limited_first is not None
             and self._limited_key is not None
             and self._limited_key[2] >= self._limited_first + self.config.still_span_s
-            and self.trajectory.velocity == Velocity(0, 0)
-            and self.trajectory.acceleration == Velocity(0, 0)
+            and step.velocity == Velocity(0, 0)
+            and step.acceleration == Velocity(0, 0)
         )
 
     def reset_at_stillness(self, body: Feedback, wheel: Feedback, now: float) -> bool:
         """Composition calls only after independent state-machine reset acceptance."""
+        self._prepared = None
         b = self._admit_feedback("body", body, now)
         w = self._admit_feedback("wheel", wheel, now)
         self._still(b, w)
@@ -320,14 +339,15 @@ class MotionController:
         self._brake_deadline = None
         return True
 
-    def _brake_supervision(
+    def _check_brake(
         self, proof: BrakingProof, body: Feedback | None, wheel: Feedback | None, now: float
-    ) -> str | None:
-        if self._brake_deadline is None:
+    ) -> tuple[str | None, float | None]:
+        deadline = self._brake_deadline
+        if deadline is None:
             if not proof.brake.stop_verified or proof.deadline_steady is None:
-                return "unverified_brake"
-            self._brake_deadline = proof.deadline_steady
-        if now > self._brake_deadline:
+                return "unverified_brake", deadline
+            deadline = proof.deadline_steady
+        if now > deadline:
             if body is None or wheel is None:
                 if (
                     self._limited_epoch is not None
@@ -337,16 +357,20 @@ class MotionController:
                         or abs(wheel.velocity.wz) > self.config.still_yaw_rps
                     )
                 ):
-                    return "stop_response_failed"
-                if self._limited_stop_complete(now):
-                    return None
-                return "stop_boundary_without_feedback"
+                    return "stop_response_failed", deadline
+                if self._limited_completion(
+                    now,
+                    TrajectoryStep(self.trajectory.velocity, self.trajectory.acceleration),
+                    deadline,
+                ):
+                    return None, deadline
+                return "stop_boundary_without_feedback", deadline
             if (
                 max(abs(body.velocity.vx), abs(wheel.velocity.vx)) > self.config.still_speed_mps
                 or max(abs(body.velocity.wz), abs(wheel.velocity.wz)) > self.config.still_yaw_rps
             ):
-                return "stop_response_failed"
-        return None
+                return "stop_response_failed", deadline
+        return None, deadline
 
     def _raw_pi(self, goal: Velocity, error: Velocity, trial: Velocity) -> Velocity:
         return Velocity(
@@ -365,15 +389,12 @@ class MotionController:
         slip: bool,
     ) -> tuple[Velocity, Velocity, bool]:
         if goal == Velocity(0, 0):
-            self.integral = Velocity(0, 0)
-            return goal, self.integral, False
+            return goal, Velocity(0, 0), False
         error = (
             Velocity(goal.vx - reference.velocity.vx, goal.wz - reference.velocity.wz)
             if reference
             else Velocity(0, 0)
         )
-        if not integrate or slip:
-            self.integral = Velocity(0, 0)
         trial = (
             _bounded(
                 Velocity(
@@ -448,7 +469,7 @@ class MotionController:
             reason = "cap_transition_braking"
         return goal, cap, braking, reason
 
-    def tick(
+    def propose_tick(
         self,
         target: Velocity,
         ctx: ConstraintSnapshot,
@@ -462,24 +483,24 @@ class MotionController:
         imu: Feedback | None = None,
         require_limited_rearm: bool = False,
         evaluation: TickEvaluation | None = None,
-    ) -> ControlDecision:
+    ) -> PreparedControl:
+        """Admit observations once; stage command state until actual selection."""
+        self._prepared = None
         # IMU uses only velocity.wz: its unused vx is NOT body linear evidence.
         if estop:
-            self.integral = Velocity(0, 0)
             self._still(
                 self._admit_feedback("body", body, now), self._admit_feedback("wheel", wheel, now)
             )
             if math.isfinite(now) and (self._last_now is None or now >= self._last_now):
                 self._last_now = now
-            return self._decision(Velocity(0, 0), "user_estop_override", False, False, ctx)
+            return self._failure(ctx, now, "user_estop_override", command=Velocity(0, 0))
         if self._last_now is None:
             self._last_now = now
-            return self._decision(None, "clock_initialized", False, False, ctx)
+            return self._failure(ctx, now, "clock_initialized", keep_integral=True)
         dt = now - self._last_now
         self._last_now = now
         if not math.isfinite(now) or not 0 < dt <= self.config.max_tick_s:
-            self.integral = Velocity(0, 0)
-            return self._decision(None, "invalid_tick", False, True, ctx)
+            return self._failure(ctx, now, "invalid_tick", emergency=True)
         body = self._admit_feedback("body", body, now)
         wheel = self._admit_feedback("wheel", wheel, now)
         imu = self._admit_feedback("imu", imu, now)
@@ -502,8 +523,7 @@ class MotionController:
         stopping = replace(ctx, target=replace(ctx.target, velocity=Velocity(0, 0)))
         stop = evaluation.zero_stop() if evaluation else self.engine.refine(stopping, now)
         if stop.brake is not None and stop.brake.kind is BrakeKind.EMERGENCY:
-            self.integral = Velocity(0, 0)
-            return self._decision(None, stop.brake.reason, False, True, ctx)
+            return self._failure(ctx, now, stop.brake.reason, emergency=True)
         fresh = (
             evaluation.tighten(permission)
             if evaluation
@@ -512,16 +532,59 @@ class MotionController:
         goal, cap, braking, reason = self._goal(target, ctx, fresh, reference)
         if require_limited_rearm and not self.limited_rearm_ready(now):
             goal, braking, reason = Velocity(0, 0), True, "limited_rearm_not_ready"
+        return self._candidate(
+            goal,
+            cap,
+            braking,
+            reason,
+            ctx,
+            fresh,
+            body,
+            wheel,
+            now,
+            dt,
+            integrate_body=body is not None,
+            slip=slip,
+            evaluation=evaluation,
+        )
+
+    def _candidate(
+        self,
+        goal: Velocity,
+        cap: Velocity,
+        braking: bool,
+        reason: str,
+        ctx: ConstraintSnapshot,
+        fresh: ConstraintResult | None,
+        body: Feedback | None,
+        wheel: Feedback | None,
+        now: float,
+        dt: float,
+        *,
+        integrate_body: bool,
+        slip: bool,
+        evaluation: TickEvaluation | None = None,
+        sampled_now: float | None = None,
+        fallback: bool = False,
+    ) -> PreparedControl:
         raw, trial, integrate = self._pi_target(
-            goal, reference, cap, dt, integrate=body is not None, slip=slip
+            goal,
+            body
+            if body is not None
+            else wheel
+            if ctx.mode is SourceMode.WHEEL_IMU_LIMITED
+            else None,
+            cap,
+            dt,
+            integrate=integrate_body,
+            slip=slip,
         )
         if slip:
             reason = "inconsistent_feedback_limited"
         try:
             step = self.trajectory.propose(raw, ctx.response, dt)
         except ValueError as exc:
-            self.integral = Velocity(0, 0)
-            return self._decision(None, str(exc), False, True, ctx)
+            return self._failure(ctx, now, str(exc), emergency=True)
         candidate = scale_wheels(
             step.velocity, self.config.track_width_m, self.config.wheel_speed_mps
         )
@@ -534,7 +597,7 @@ class MotionController:
             max(abs(candidate.vx - step.velocity.vx), abs(candidate.wz - step.velocity.wz))
             > roundoff
         ):
-            return self._decision(None, "wheel_limit_infeasible_step", False, True, ctx)
+            return self._failure(ctx, now, "wheel_limit_infeasible_step", emergency=True)
         # Normalize at most four ULP of wheel-combination arithmetic, not a
         # physical clamp. Larger changes cannot inherit acceleration/jerk.
         step = replace(step, velocity=candidate)
@@ -554,56 +617,209 @@ class MotionController:
             if braking
             else None
         )
+        brake_deadline = None
         stop_verified = brake_proof is not None and brake_proof.brake.stop_verified
         if braking:
             if not stop_verified:
-                self.integral = Velocity(0, 0)
-                return self._decision(
-                    None,
-                    brake_proof.brake.reason if brake_proof else "unverified_brake",
-                    False,
-                    True,
+                return self._failure(
                     ctx,
+                    now,
+                    brake_proof.brake.reason if brake_proof else "unverified_brake",
+                    emergency=True,
                 )
             assert brake_proof is not None
-            failure = self._brake_supervision(brake_proof, body, wheel, now)
+            failure, brake_deadline = self._check_brake(brake_proof, body, wheel, now)
             if failure:
-                self.integral = Velocity(0, 0)
-                return self._decision(None, failure, False, True, ctx)
+                return self._failure(ctx, now, failure, emergency=True)
         elif not permitted:
-            self.integral = Velocity(0, 0)
-            return self._decision(None, "final_candidate_rejected", False, True, ctx)
-        self.trajectory.commit(step)
-        if braking:
-            self._limited_complete = self._limited_stop_complete(now)
-            if self._limited_complete:
-                reason = "limited_drive_settled"
-        else:
-            self.invalidate_limited_rearm()
-        if not braking:
-            self._brake_deadline = None
+            return self._failure(ctx, now, "final_candidate_rejected", emergency=True)
+        limited_complete = braking and self._limited_completion(now, step, brake_deadline)
+        if limited_complete:
+            reason = "limited_drive_settled"
+        integral = (
+            self.integral
+            if goal != Velocity(0, 0) and integrate_body and not slip
+            else Velocity(0, 0)
+        )
         if integrate:
-            # Conditional integration includes rate/jerk saturation, not only
-            # amplitude clamps. Allow an existing integral to unwind.
-            self.integral = Velocity(
+            integral = Velocity(
                 trial.vx
-                if candidate.vx == raw.vx or abs(trial.vx) < abs(self.integral.vx)
-                else self.integral.vx,
+                if candidate.vx == raw.vx or abs(trial.vx) < abs(integral.vx)
+                else integral.vx,
                 trial.wz
-                if candidate.wz == raw.wz or abs(trial.wz) < abs(self.integral.wz)
-                else self.integral.wz,
+                if candidate.wz == raw.wz or abs(trial.wz) < abs(integral.wz)
+                else integral.wz,
             )
-        for component in ("vx", "wz"):
-            value = getattr(candidate, component)
-            if value:
-                self._direction = replace(self._direction, **{component: math.copysign(1, value)})
         decision = self._decision(candidate, reason, permitted or stop_verified, False, ctx)
-        deadline = decision.evidence_deadline
-        if not braking and fresh.permit is not None:
-            deadline = min(
-                deadline,
-                fresh.permit.deadline_steady,
-                ctx.target.deadline_steady,
-                reference.deadline_steady if reference else deadline,
+        if not braking and fresh is not None and fresh.permit is not None:
+            reference = body if body is not None else wheel
+            decision = replace(
+                decision,
+                evidence_deadline=min(
+                    decision.evidence_deadline,
+                    fresh.permit.deadline_steady,
+                    ctx.target.deadline_steady,
+                    reference.deadline_steady if reference else decision.evidence_deadline,
+                ),
             )
-        return replace(decision, evidence_deadline=deadline)
+        prepared = PreparedControl(
+            self,
+            decision,
+            ctx,
+            now if sampled_now is None else sampled_now,
+            dt,
+            body,
+            wheel,
+            step,
+            integral,
+            braking,
+            brake_deadline,
+            limited_complete,
+            fallback,
+        )
+        self._prepared = prepared
+        return prepared
+
+    def _failure(
+        self,
+        ctx: ConstraintSnapshot,
+        now: float,
+        reason: str,
+        *,
+        emergency: bool = False,
+        command: Velocity | None = None,
+        keep_integral: bool = False,
+    ) -> PreparedControl:
+        decision = self._decision(command, reason, False, emergency, ctx)
+        prepared = PreparedControl(
+            self,
+            decision,
+            ctx,
+            now,
+            0,
+            None,
+            None,
+            None,
+            self.integral if keep_integral else Velocity(0, 0),
+            False,
+            None,
+            False,
+        )
+        self._prepared = prepared
+        return prepared
+
+    def _consume(self, prepared: PreparedControl) -> None:
+        if prepared.owner is not self or self._prepared is not prepared:
+            raise ValueError("stale or foreign prepared control")
+        self._prepared = None
+
+    def discard(self, prepared: PreparedControl) -> None:
+        if prepared.owner is self and self._prepared is prepared:
+            self._prepared = None
+
+    def prepare_stop(
+        self,
+        prepared: PreparedControl,
+        ctx: ConstraintSnapshot,
+        body: Feedback | None,
+        wheel: Feedback | None,
+        now: float,
+    ) -> PreparedControl:
+        """Use the uncommitted trajectory; caller requalifies the original packet.
+
+        The fresh context must include current local ROS prediction bounds.
+        No t0 evaluation, feedback admission or second controller tick occurs.
+        """
+        self._consume(prepared)
+        if (
+            prepared.braking
+            or prepared.fallback
+            or not prepared.decision.verified
+            or prepared.decision.emergency
+            or prepared.decision.command in (None, Velocity(0, 0))
+            or not math.isfinite(now)
+            or now < prepared.sampled_now
+            or ctx.target is not prepared.context.target
+            or ctx.mode is not prepared.context.mode
+            or self.engine.identity(ctx) != self.engine.identity(prepared.context)
+            or body != prepared.body
+            or wheel != prepared.wheel
+            or (body is not None and not body.fresh(now))
+            or wheel is None
+            or not wheel.fresh(now)
+        ):
+            raise ValueError("invalid stop fallback")
+        assert ctx.envelope is not None
+        slip = (
+            body is not None
+            and abs(body.velocity.vx - wheel.velocity.vx) > self.config.disagreement_mps
+        )
+        return self._candidate(
+            Velocity(0, 0),
+            Velocity(ctx.envelope.linear_cap_mps, ctx.envelope.yaw_cap_rps),
+            True,
+            "waiting_refinement",
+            ctx,
+            None,
+            body,
+            wheel,
+            now,
+            prepared.dt,
+            integrate_body=body is not None,
+            slip=slip,
+            sampled_now=prepared.sampled_now,
+            fallback=True,
+        )
+
+    def commit(self, prepared: PreparedControl) -> ControlDecision:
+        """Consume once, after the owner successfully delivers the selected output."""
+        self._consume(prepared)
+        decision = prepared.decision
+        self.integral = prepared.integral
+        if decision.command is None or decision.emergency or not decision.verified:
+            self.invalidate_limited_rearm()
+        if prepared.step is not None:
+            self.trajectory.commit(prepared.step)
+            if prepared.braking:
+                self._brake_deadline = prepared.brake_deadline
+                self._limited_complete = prepared.limited_complete
+            else:
+                self.invalidate_limited_rearm()
+                self._brake_deadline = None
+            for component in ("vx", "wz"):
+                value = getattr(prepared.step.velocity, component)
+                if value:
+                    self._direction = replace(
+                        self._direction, **{component: math.copysign(1, value)}
+                    )
+        return decision
+
+    def tick(
+        self,
+        target: Velocity,
+        ctx: ConstraintSnapshot,
+        permission: ConstraintResult | None,
+        body: Feedback | None,
+        wheel: Feedback | None,
+        now: float,
+        *,
+        estop: bool = False,
+        imu: Feedback | None = None,
+        require_limited_rearm: bool = False,
+        evaluation: TickEvaluation | None = None,
+    ) -> ControlDecision:
+        # //Compatible: existing pure callers own delivery and commit immediately.
+        return self.commit(
+            self.propose_tick(
+                target,
+                ctx,
+                permission,
+                body,
+                wheel,
+                now,
+                estop=estop,
+                imu=imu,
+                require_limited_rearm=require_limited_rearm,
+                evaluation=evaluation,
+            )
+        )

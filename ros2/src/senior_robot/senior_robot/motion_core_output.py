@@ -633,9 +633,171 @@ class MotionCoreOutput:
             and self.controller.limited_rearm_ready(now, epochs=(wheel.epoch, imu.epoch))
         )
 
+    def _snapshot(self, ref, body, wheel, imu, imu_current, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if body is None:
+            mode = (
+                SourceMode.WHEEL_IMU_LIMITED
+                if wheel is not None and imu_current
+                else SourceMode.UNAVAILABLE
+            )
+        if wheel is None:
+            raise ValueError("wheel_feedback_missing")
+        chosen = {"wheel", "imu"} if body is None else {"laser", "wheel", "imu"}
+        consumed = [
+            x
+            for x in ref["source_health"]
+            if x["source"] in chosen and x["ready"] and now < x["valid_until_steady"]
+        ]
+        if not consumed:
+            raise ValueError("motion_sources_not_ready")
+        epoch = "|".join(x["epoch"] for x in consumed)
+        average = (
+            BodyTwist(**ref["average"]) if body is not None and ref["average"] is not None else None
+        )
+        motion = BodyMotion(
+            average,
+            None,
+            ref["start_ros"],
+            ref["end_ros"],
+            data_time(self._reference),
+            min(x["valid_until_steady"] for x in consumed),
+            epoch,
+            mode not in {SourceMode.UNAVAILABLE, SourceMode.RECOVERING},
+            "native T3 reference; upper unsupported",
+        )
+        p = self.profile
+        response = ResponseBounds(
+            p.accel,
+            p.decel,
+            p.jerk,
+            p.yaw_accel,
+            p.yaw_decel,
+            p.yaw_jerk,
+            p.lag,
+            self.model_deadline,
+            p.profile_id,
+        )
+        cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        # A conditional drive model, NOT independent measurements. It is
+        # selected only for the isolated, passive flat-floor simulator.
+        if body is None:
+            # Body speed is unknown: use an independent declared mechanical
+            # envelope under the passive flat-scene hypothesis, not wheel +/- error.
+            linear = (-p.assumed_body_cap, p.assumed_body_cap)
+            gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
+            angular = (gyro - p.yaw_error, gyro + p.yaw_error)
+        else:
+            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
+            dv = p.linear_error + p.accel * age
+            dw = p.yaw_error + p.yaw_accel * age
+            linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
+            angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
+        risk = RiskEnvelope(
+            p.profile_id,
+            "unvalidated simulation passive drive/error envelope",
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            self.model_deadline,
+            12.0,
+            linear,
+            angular,
+            Velocity(min(p.accel, abs(a.vx)), min(p.yaw_accel, abs(a.wz))),
+            p.position_error,
+            0.0,
+            0.0,
+            cap,
+            p.yaw_cap,
+            True,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis="simulation-only whole drive stop family; unvalidated",
+        )
+        ctx = ConstraintSnapshot(
+            self.target,
+            motion,
+            mode,
+            response,
+            Footprint(p.length, p.width),
+            perception,
+            pose,
+            "scan_reference",
+            p.profile_id,
+            p.profile_id,
+            risk,
+        )
+        return ctx
+
+    def _imu_state(self, packet, now):
+        live = {
+            x["source"]: x
+            for x in packet["sources"]
+            if x["ready"] and now < x["valid_until_steady"]
+        }
+        imu = live.get("imu")
+        imu_current = (
+            imu is not None
+            and 0
+            <= self.node.get_clock().now().nanoseconds / 1e9 - imu["sample"]["stamp_ros"]
+            <= self.profile.temporal().prediction_horizon_s
+        )
+        return imu, imu_current
+
+    def _stop_fallback(self, prepared, packet, now):
+        if self._reference is not packet:
+            raise ValueError("reference_expired")
+        ref, body, wheel = self._inputs(now)
+        if self._reference is not packet:
+            raise ValueError("reference_expired")
+        imu, imu_current = self._imu_state(packet, now)
+        perception, pose = self._observation(now)
+        ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+        if ctx.mode is not prepared.context.mode:
+            # A prediction leaving its original ROS window cannot become a
+            # different feedback mode just to salvage this same output.
+            raise ValueError("reference_expired")
+        error = self.engine._context_error(ctx, now)
+        if error is not None:
+            raise ValueError(error)
+        return self.controller.prepare_stop(prepared, ctx, body, wheel, now)
+
+    def _decision_output(self, decision, body, ctx, epoch, now):
+        reason = decision.reason
+        output = Velocity(0, 0)
+        if decision.command is not None:
+            output = decision.command
+        # No candidate never holds the previous nonzero Twist. The fallback
+        # is explicitly unverified stop/fault output, not a safe-stop claim.
+        elif decision.emergency and reason in {
+            "stop_envelope_blocked",
+            "stop_response_failed",
+            "infeasible_no_reverse",
+        }:
+            if reason == "stop_envelope_blocked" and self._startup_stop_uncertain(body, ctx):
+                # Keep emergency/unverified STOP and zero output. Missing
+                # initial body evidence is not an observed execution failure.
+                if self.machine.state.mode is not MotionMode.FEEDBACK_STOP:
+                    self._event(K.FEEDBACK_LOST, now)
+            else:
+                condition = (reason, epoch)
+                if condition != self._last_fault_condition:
+                    self._event(K.EXECUTION_FAULT, now)
+                    self._last_fault_condition = condition
+        elif not decision.emergency:
+            self._last_fault_condition = None
+        return output
+
     def tick(self) -> None:
         self._consume_ready_reference()
         now = time.monotonic()
+        event_now = now  # Runtime sampling remains t0; later events follow exit sampling.
         self.sequence += 1
         body = None
         wheel = None
@@ -645,6 +807,7 @@ class MotionCoreOutput:
         deadline = None
         stamp = None
         output = Velocity(0, 0)
+        prepared = None
         try:
             if now >= self.target.deadline_steady and self.target.source != "idle":
                 self.scheduler.stop()
@@ -659,18 +822,7 @@ class MotionCoreOutput:
             packet = self._reference
             if packet is None:
                 raise ValueError("reference_missing")
-            live = {
-                x["source"]: x
-                for x in packet["sources"]
-                if x["ready"] and now < x["valid_until_steady"]
-            }
-            imu = live.get("imu")
-            imu_current = (
-                imu is not None
-                and 0
-                <= self.node.get_clock().now().nanoseconds / 1e9 - imu["sample"]["stamp_ros"]
-                <= self.profile.temporal().prediction_horizon_s
-            )
+            imu, imu_current = self._imu_state(packet, now)
             healthy = (
                 wheel is not None
                 and (body is not None or imu_current)
@@ -692,7 +844,7 @@ class MotionCoreOutput:
                         body.stamp_steady,
                         body.deadline_steady,
                         healthy,
-                        self._stationary(body, wheel, now),
+                        self._stationary(body, wheel, event_now),
                     ),
                     now,
                 )
@@ -705,113 +857,12 @@ class MotionCoreOutput:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
             perception, pose = self._observation(now)
-            mode = SourceMode(ref["mode"])
-            if body is None:
-                mode = (
-                    SourceMode.WHEEL_IMU_LIMITED
-                    if wheel is not None and imu_current
-                    else SourceMode.UNAVAILABLE
-                )
-            if wheel is None:
-                raise ValueError("wheel_feedback_missing")
-            chosen = {"wheel", "imu"} if body is None else {"laser", "wheel", "imu"}
-            consumed = [
-                x
-                for x in ref["source_health"]
-                if x["source"] in chosen and x["ready"] and now < x["valid_until_steady"]
-            ]
-            if not consumed:
-                raise ValueError("motion_sources_not_ready")
-            epoch = "|".join(x["epoch"] for x in consumed)
-            average = (
-                BodyTwist(**ref["average"])
-                if body is not None and ref["average"] is not None
-                else None
-            )
-            motion = BodyMotion(
-                average,
-                None,
-                ref["start_ros"],
-                ref["end_ros"],
-                data_time(self._reference),
-                min(x["valid_until_steady"] for x in consumed),
-                epoch,
-                mode not in {SourceMode.UNAVAILABLE, SourceMode.RECOVERING},
-                "native T3 reference; upper unsupported",
-            )
-            p = self.profile
-            response = ResponseBounds(
-                p.accel,
-                p.decel,
-                p.jerk,
-                p.yaw_accel,
-                p.yaw_decel,
-                p.yaw_jerk,
-                p.lag,
-                self.model_deadline,
-                p.profile_id,
-            )
-            cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
-            a = self.controller.trajectory.acceleration
-            v = self.controller.trajectory.velocity
-            # A conditional drive model, NOT independent measurements. It is
-            # selected only for the isolated, passive flat-floor simulator.
-            if body is None:
-                # Body speed is unknown: use an independent declared mechanical
-                # envelope under the passive flat-scene hypothesis, not wheel +/- error.
-                linear = (-p.assumed_body_cap, p.assumed_body_cap)
-                gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
-                angular = (gyro - p.yaw_error, gyro + p.yaw_error)
-            else:
-                age = (
-                    max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
-                )
-                dv = p.linear_error + p.accel * age
-                dw = p.yaw_error + p.yaw_accel * age
-                linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
-                angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
-            risk = RiskEnvelope(
-                p.profile_id,
-                "unvalidated simulation passive drive/error envelope",
-                epoch,
-                (
-                    SourceMode.LASER_REFERENCE,
-                    SourceMode.FUSED_REFERENCE,
-                    SourceMode.GPS_IMU_REFERENCE,
-                    SourceMode.WHEEL_IMU_LIMITED,
-                ),
-                p.profile_id,
-                self.model_deadline,
-                12.0,
-                linear,
-                angular,
-                Velocity(min(p.accel, abs(a.vx)), min(p.yaw_accel, abs(a.wz))),
-                p.position_error,
-                0.0,
-                0.0,
-                cap,
-                p.yaw_cap,
-                True,
-                brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
-                brake_tracking_basis="simulation-only whole drive stop family; unvalidated",
-            )
-            ctx = ConstraintSnapshot(
-                self.target,
-                motion,
-                mode,
-                response,
-                Footprint(p.length, p.width),
-                perception,
-                pose,
-                "scan_reference",
-                p.profile_id,
-                p.profile_id,
-                risk,
-            )
+            ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+            mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             estop = self.machine.state.mode is MotionMode.ESTOP
-            decision = self.controller.tick(
+            prepared = self.controller.propose_tick(
                 self.target.velocity,
                 ctx,
                 permission,
@@ -828,6 +879,7 @@ class MotionCoreOutput:
                     and self.target.velocity != Velocity(0, 0)
                 ),
             )
+            decision = prepared.decision
             reason = decision.reason
             if self.target.velocity == Velocity(0, 0) and decision.verified:
                 self._event(K.OBSTACLE_CLEAR, now)
@@ -844,39 +896,50 @@ class MotionCoreOutput:
                     self._body_epoch_used = body.epoch
                 if wheel is not None:
                     self._wheel_epoch_used = wheel.epoch
-            if decision.command is not None:
-                output = decision.command
-            # No candidate never holds the previous nonzero Twist. The fallback
-            # is explicitly unverified stop/fault output, not a safe-stop claim.
-            elif decision.emergency and reason in {
-                "stop_envelope_blocked",
-                "stop_response_failed",
-                "infeasible_no_reverse",
-            }:
-                if reason == "stop_envelope_blocked" and self._startup_stop_uncertain(body, ctx):
-                    # Keep emergency/unverified STOP and zero output. Missing
-                    # initial body evidence is not an observed execution failure.
-                    if self.machine.state.mode is not MotionMode.FEEDBACK_STOP:
-                        self._event(K.FEEDBACK_LOST, now)
-                else:
-                    condition = (reason, epoch)
-                    if condition != self._last_fault_condition:
-                        self._event(K.EXECUTION_FAULT, now)
-                        self._last_fault_condition = condition
-            elif not decision.emergency:
-                self._last_fault_condition = None
+            output = self._decision_output(decision, body, ctx, epoch, event_now)
             reason = f"{mode.value}:{reason}"
             if output != Velocity(0, 0):
                 # The decision already selects its applicable drive/brake deadlines.
                 # Check actual output time without renewing that sampled evidence.
-                emit_now = time.monotonic()
-                if not decision.verified or not emit_now < decision.evidence_deadline:
+                emit_now = event_now = time.monotonic()
+                if event_now < now:
+                    raise ValueError("motion_clock_regressed")
+                if (
+                    decision.verified
+                    and not decision.emergency
+                    and not prepared.braking
+                    and emit_now >= decision.evidence_deadline
+                    and self.machine.state.mode
+                    not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+                ):
+                    prepared = self._stop_fallback(prepared, packet, emit_now)
+                    decision = prepared.decision
+                    output = self._decision_output(
+                        decision,
+                        prepared.body,
+                        prepared.context,
+                        prepared.context.motion.source_epoch,
+                        event_now,
+                    )
+                    reason = f"{prepared.context.mode.value}:{decision.reason}"
+                    # One fallback only: expiry during its computation is a
+                    # rejection, never another proposal or renewed evidence.
+                    event_now = time.monotonic()
+                    if event_now < emit_now:
+                        raise ValueError("motion_clock_regressed")
+                    emit_now = event_now
+                    if not emit_now < decision.evidence_deadline:
+                        raise ValueError("motion_expired_or_unqualified")
+                if output != Velocity(0, 0) and (
+                    not decision.verified or not emit_now < decision.evidence_deadline
+                ):
                     raise ValueError("motion_expired_or_unqualified")
             self.node._emit_motion_core(output, reason)
+            self.controller.commit(prepared)
             if self.target.source == "manual" and output != Velocity(0, 0):
                 self._manual_motion_source = self.target.source_id
             if body is None and wheel is not None and imu_point is not None:
-                ready = self._limited_ready(now, wheel, imu_point)
+                ready = self._limited_ready(event_now, wheel, imu_point)
                 readiness_deadline = min(wheel.deadline_steady, imu_point.deadline_steady)
                 if ready:
                     readiness_deadline = min(readiness_deadline, decision.evidence_deadline)
@@ -895,21 +958,23 @@ class MotionCoreOutput:
                         False,
                         manual_rearm_ready=ready,
                     ),
-                    now,
+                    event_now,
                 )
                 if healthy:
-                    self._event(K.FEEDBACK_HEALTHY, now)
+                    self._event(K.FEEDBACK_HEALTHY, event_now)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+            if prepared is not None:
+                self.controller.discard(prepared)
             self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
             self.node._emit_motion_core(Velocity(0, 0), reason)
             if self._last_healthy:
-                self._event(K.FEEDBACK_LOST, now)
+                self._event(K.FEEDBACK_LOST, event_now)
                 self._last_healthy = False
             healthy = False
         state = self.machine.state
         actions = list(state.allowed_actions)
-        actual_stationary = healthy and self._stationary(body, wheel, now)
+        actual_stationary = healthy and self._stationary(body, wheel, event_now)
         if actual_stationary:
             self._startup_motion_unconfirmed = False
         if not actual_stationary:

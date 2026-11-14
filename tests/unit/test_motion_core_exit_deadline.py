@@ -53,17 +53,18 @@ def start(rig, target_span):
 
 
 def delayed_decision(rig, monkeypatch, delay):
-    original = rig.core.controller.tick
+    original = rig.core.controller.propose_tick
     captured = []
 
     def tick(*args, **kwargs):
-        decision = original(*args, **kwargs)
+        prepared = original(*args, **kwargs)
+        decision = prepared.decision
         assert decision.verified and decision.command != Velocity(0, 0)
         captured.append(decision)
         rig.clock.steady = delay(decision)
-        return decision
+        return prepared
 
-    monkeypatch.setattr(rig.core.controller, "tick", tick)
+    monkeypatch.setattr(rig.core.controller, "propose_tick", tick)
     return captured
 
 
@@ -85,11 +86,10 @@ def test_actual_exit_must_precede_original_aggregate_deadline(rig, monkeypatch, 
         assert rig.node.output[-1][0] == decisions[0].command
         assert state["healthy"]
     else:
-        assert rig.node.output[-1][0] == Velocity(0, 0)
-        assert not state["healthy"]
-        assert state["mode"] == "feedback_stop"
-        assert not rig.core._last_healthy
-        assert rig.core.target.source == "idle"
+        assert state["healthy"]
+        assert "waiting_refinement" in state["reason"]
+        assert rig.core._last_healthy
+        assert rig.core.target.source == "navigation"
 
 
 @pytest.mark.parametrize("limiting", ["target", "permit"])
@@ -113,8 +113,8 @@ def test_running_target_and_permit_deadline_are_not_renewed_at_exit(rig, monkeyp
         assert decisions[0].evidence_deadline == target_deadline
     else:
         assert decisions[0].evidence_deadline == permissions[0].deadline_steady < target_deadline
-    assert rig.node.output[-1][0] == Velocity(0, 0)
-    assert not json.loads(rig.node.messages[-1].data)["healthy"]
+    assert json.loads(rig.node.messages[-1].data)["healthy"]
+    assert "waiting_refinement" in json.loads(rig.node.messages[-1].data)["reason"]
 
 
 @pytest.mark.parametrize("expired", [False, True])

@@ -333,17 +333,17 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 
     monkeypatch.setattr(core.scheduler, "update", observe)
     defensive = copy.deepcopy(core.controller)
-    tick = core.controller.tick
+    tick = core.controller.propose_tick
     decisions = []
 
     def compare(*args, **kwargs):
         expected = defensive.tick(*args, **(kwargs | {"evaluation": None}))
         actual = tick(*args, **kwargs)
-        assert actual == expected  # Includes command and original evidence deadline.
+        assert actual.decision == expected  # Includes command and original evidence deadline.
         decisions.append(expected)
         return actual
 
-    monkeypatch.setattr(core.controller, "tick", compare)
+    monkeypatch.setattr(core.controller, "propose_tick", compare)
     core.tick()
     core.executor.shutdown(wait=True)
     assert captured[0].brake.reason == "permit_expired_or_changed"
