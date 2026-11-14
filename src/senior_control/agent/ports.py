@@ -323,6 +323,10 @@ class StateReply(BaseModel):
     map_id: str | None
     reference_revision: int | None
     execution_status: str
+    # //Compatible: old adapters omit configuration diagnostics. These fields
+    # describe configuration only; motion still requires fresh runtime evidence.
+    motion_control_configured: bool | None = None
+    motion_configuration_diagnostic: str | None = Field(default=None, max_length=512)
     # //Compatible: older state replies have no qualified reference or navigation fields.
     map_generation: str | None = None
     localization_generation: str | None = None
