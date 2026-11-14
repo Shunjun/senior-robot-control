@@ -100,7 +100,19 @@ def stamp_seconds(stamp: Any) -> float:
 class NativeObservations:
     """One source admission/recovery owner. Configuration is supplied by ROS profile."""
 
-    def __init__(self, admission: AdmissionConfig, temporal: TemporalConfig, fusion: FusionConfig):
+    def __init__(
+        self,
+        admission: AdmissionConfig,
+        temporal: TemporalConfig,
+        fusion: FusionConfig,
+        *,
+        wheel_frame: str = "odom",
+    ):
+        # //Compatible: isolated simulation and pure callers retain odom.
+        # ROS supplies its actual configured odometry frame for hardware.
+        if not wheel_frame:
+            raise ValueError("wheel_frame must be nonempty")
+        self.wheel_frame = wheel_frame
         self.owner = AdmissionOwner(admission, event_capacity=4096)
         self.resolver = TemporalResolver(temporal)
         self.fusion = NumericalFusion(fusion)
@@ -187,7 +199,7 @@ class NativeObservations:
             Pose2D(0, 0, 0),
         )
         accepted = self.ingest(sample, now_ros, received if now_steady is None else now_steady)
-        if accepted and msg.header.frame_id == "odom" and hasattr(msg, "pose"):
+        if accepted and msg.header.frame_id == self.wheel_frame and hasattr(msg, "pose"):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             if (
@@ -346,7 +358,12 @@ class NativeObservationRosBridge:
         self.node = node
         self.profile = profile
         self.allow_topology_only = bool(profile.simulation_only and profile.unvalidated)
-        self.core = NativeObservations(profile.admission(), profile.temporal(), profile.fusion())
+        self.core = NativeObservations(
+            profile.admission(),
+            profile.temporal(),
+            profile.fusion(),
+            wheel_frame=str(node.get_parameter("wheel_frame").value),
+        )
         self.publisher = node.create_publisher(String, "/motion/core_reference", 10)
         self._message_type = String
         self._warn_at = 0.0
