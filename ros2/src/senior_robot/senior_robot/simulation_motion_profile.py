@@ -43,6 +43,16 @@ class SimulationMotionProfile:
     assumed_body_cap: float = 1.52
     drive_linear_overshoot: float = 0.1
     drive_yaw_overshoot: float = 0.1
+    horizon_s: float = 12.0
+    orientation_error_rad: float = 0.0
+    lateral_drift_mps: float = 0.0
+    lateral_stop_s: float | None = None
+    perception_basis: str = "simulation-only static scene; original raw scan"
+    risk_basis: str = "unvalidated simulation passive drive/error envelope"
+    brake_tracking_basis: str = "simulation-only whole drive stop family; unvalidated"
+    wheel_publisher: str = "drive"
+    imu_publisher: str = "senior_sim_bridge"
+    source_namespace: str = "/"
     simulation_only: bool = True
     unvalidated: bool = True
 
@@ -59,6 +69,10 @@ class SimulationMotionProfile:
         ):
             return NoReturnPolicy.VALIDATED_FREE_TO_RANGE
         return NoReturnPolicy.UNKNOWN
+
+    def reaction_acceleration(self, current: Velocity) -> Velocity:
+        # //Compatible: retain the isolated candidate response hypothesis.
+        return Velocity(min(self.accel, abs(current.vx)), min(self.yaw_accel, abs(current.wz)))
 
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(

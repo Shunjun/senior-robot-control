@@ -1,7 +1,6 @@
-"""Opt-in isolated simulation output composition; safety_gate remains sole writer.
+"""Shared motion output composition; safety_gate remains the sole actuator writer.
 
-No ground truth enters this module. Candidate model assumptions are explicit in
-simulation_motion_profile and must be checked by bounded Linux measurements.
+Deployment profiles supply response evidence; no ground truth enters this module.
 """
 
 import json
@@ -77,6 +76,8 @@ class MotionCoreOutput:
         self._last_fault_condition: tuple[str, str] | None = None
         self._closed = False
         self._hardware = False
+        self._hardware_seen = float("-inf")
+        self._hardware_gid = None
         self._last_healthy = False
         self._body_epoch_used: str | None = None
         self._wheel_epoch_used: str | None = None
@@ -88,6 +89,49 @@ class MotionCoreOutput:
         self._subscription = node.create_subscription(
             String, "/motion/core_reference", self._on_reference, 10
         )
+        if not profile.simulation_only:
+            from std_msgs.msg import Bool
+
+            with_dds_info(type(self)._on_hardware_estop)
+            self._hardware_subscription = node.create_subscription(
+                Bool, profile.hardware_estop_topic, self._on_hardware_estop, 10
+            )
+
+    def _hardware_status_ready(self, now: float) -> bool:
+        if self.profile.simulation_only:
+            return True
+        endpoints = self.node.get_publishers_info_by_topic(self.profile.hardware_estop_topic)
+        return (
+            now - self._hardware_seen <= self.profile.hardware_estop_max_age_s
+            and len(endpoints) == 1
+            and endpoints[0].node_name == self.profile.hardware_estop_publisher
+            and endpoints[0].node_namespace == self.profile.source_namespace
+            and bytes(endpoints[0].endpoint_gid) == self._hardware_gid
+        )
+
+    def _on_hardware_estop(self, msg: Any, info: Any) -> None:
+        origin = observation_origin(
+            info,
+            self.node.get_publishers_info_by_topic(self.profile.hardware_estop_topic),
+            self.profile.hardware_estop_publisher,
+            allow_topology_only=False,
+            expected_namespace=self.profile.source_namespace,
+        )
+        if origin is None:
+            return
+        now = time.monotonic()
+        self._hardware_seen = now
+        self._hardware_gid = origin.topology_gid
+        active = bool(msg.data)
+        if active and not self._hardware:
+            self._hardware = True
+            self._event(K.HARDWARE_ESTOP, now)
+            # Physical release never automatically resumes an old authority.
+            self._event(K.SOFTWARE_ESTOP, now)
+            self.revoke("hardware_estop", now=now)
+        elif not active and self._hardware:
+            self._hardware = False
+            self._event(K.HARDWARE_RELEASE, now)
 
     def _event(self, kind: K, now: float, source: str = "", revision: int = 0) -> None:
         self.event_sequence += 1
@@ -230,6 +274,8 @@ class MotionCoreOutput:
     def _apply_close(self, msg: Any, reason: str, now: float) -> bool:
         self.revoke(reason, now=now)
         if reason in {"estop_reset", "fault_recover"}:
+            if not self._hardware_status_ready(now):
+                return False
             try:
                 _, body, wheel = self._inputs(now)
                 if not self._stationary(body, wheel, now):
@@ -371,13 +417,9 @@ class MotionCoreOutput:
                 source_epoch=m.source_epoch,
                 frame_id="scan_reference",
                 revision=m.sequence,
-                forecast_horizon_s=12.0,
+                forecast_horizon_s=self.profile.horizon_s,
                 no_return_policy=policy,
-                basis=(
-                    "simulation-only static scene; original raw scan; "
-                    + policy.value
-                    + "; ideal GPU lidar sensors6 6.9.0 / rendering6 6.6.4 / bridge 0.244.26"
-                ),
+                basis=(self.profile.perception_basis + "; " + policy.value),
                 max_patches=2048,
                 max_vertices=8192,
                 max_hits=2048,
@@ -489,6 +531,8 @@ class MotionCoreOutput:
         stamp = None
         output = Velocity(0, 0)
         try:
+            if not self._hardware_status_ready(now):
+                raise ValueError("hardware_estop_status_missing_or_expired")
             if now >= self.target.deadline_steady and self.target.source != "idle":
                 self.scheduler.stop()
                 self._event(
@@ -597,11 +641,10 @@ class MotionCoreOutput:
             cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
             a = self.controller.trajectory.acceleration
             v = self.controller.trajectory.velocity
-            # A conditional drive model, NOT independent measurements. It is
-            # selected only for the isolated, passive flat-floor simulator.
+            # Independent deployment response envelope, not wheel truth.
+            # Hardware requires explicit evidence and operating conditions.
             if body is None:
-                # Body speed is unknown: use an independent declared mechanical
-                # envelope under the passive flat-scene hypothesis, not wheel +/- error.
+                # Body speed is unknown: use the independent whole-body envelope.
                 linear = (-p.assumed_body_cap, p.assumed_body_cap)
                 gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
                 angular = (gyro - p.yaw_error, gyro + p.yaw_error)
@@ -609,13 +652,18 @@ class MotionCoreOutput:
                 age = (
                     max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
                 )
-                dv = p.linear_error + p.accel * age
-                dw = p.yaw_error + p.yaw_accel * age
+                predictor_accel = (
+                    Velocity(p.accel, p.yaw_accel)
+                    if p.simulation_only
+                    else p.reaction_acceleration(a)
+                )
+                dv = p.linear_error + predictor_accel.vx * age
+                dw = p.yaw_error + predictor_accel.wz * age
                 linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
                 angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
             risk = RiskEnvelope(
                 p.profile_id,
-                "unvalidated simulation passive drive/error envelope",
+                p.risk_basis,
                 epoch,
                 (
                     SourceMode.LASER_REFERENCE,
@@ -625,18 +673,19 @@ class MotionCoreOutput:
                 ),
                 p.profile_id,
                 self.model_deadline,
-                12.0,
+                p.horizon_s,
                 linear,
                 angular,
-                Velocity(min(p.accel, abs(a.vx)), min(p.yaw_accel, abs(a.wz))),
+                p.reaction_acceleration(a),
                 p.position_error,
-                0.0,
-                0.0,
+                p.orientation_error_rad,
+                p.lateral_drift_mps,
                 cap,
                 p.yaw_cap,
-                True,
+                bool(p.simulation_only and p.unvalidated),
+                lateral_stop_s=p.lateral_stop_s,
                 brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
-                brake_tracking_basis="simulation-only whole drive stop family; unvalidated",
+                brake_tracking_basis=p.brake_tracking_basis,
             )
             ctx = ConstraintSnapshot(
                 self.target,

@@ -280,6 +280,13 @@ def deploy(profile: VehicleProfile, unit: str, *, dry_run: bool) -> int:
 def doctor(profile: VehicleProfile) -> int:
     assert profile.control_dir is not None
     try:
+        from senior_control.real_runtime import validate_real_runtime
+
+        if profile.container is None:
+            validate_real_runtime(profile.motion_profile, profile.safety_parameters)
+            from senior_control.real_runtime import validate_navigation
+
+            validate_navigation(profile.navigation_reference, profile.navigation_parameters)
         private_directory(profile.control_dir)
         read_credentials(profile.credentials)
         root = _runtime_root(profile)
@@ -287,7 +294,12 @@ def doctor(profile: VehicleProfile) -> int:
         argv = [
             str(_project(profile) / ".ros-venv/bin/python"),
             "-c",
-            "import senior_control.agent.main",
+            (
+                "from pathlib import Path; "
+                "from senior_control.docker_start_helper import "
+                "_runtime_profile, _adapter_command; "
+                f"p = _runtime_profile(Path({str(root)!r})); _adapter_command(p, 'doctor')"
+            ),
         ]
         if profile.container is not None:
             argv = ["docker", "exec", profile.container, *argv]
@@ -298,15 +310,19 @@ def doctor(profile: VehicleProfile) -> int:
             timeout=15,
         )
         if result.returncode:
-            raise ValueError("container Python is unavailable")
-    except (OSError, ValueError, subprocess.SubprocessError):
+            detail = result.stderr.decode(errors="replace")[-4000:]
+            raise ValueError("runtime preflight failed: " + detail)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        if isinstance(exc, ValueError):
+            print(str(exc))
         print(
             "Agent unavailable. Check the runtime, bind mount, "
             "private directory and project .ros-venv."
         )
         return 1
     print(
-        "Agent Python and control directory verified. Start manages the ROS adapter and Agent; "
+        "Agent Python and control directory verified. "
+        "Start manages sensors, fusion, safety, ROS adapter and Agent; "
         "ROS readiness is checked at startup."
     )
     return 0

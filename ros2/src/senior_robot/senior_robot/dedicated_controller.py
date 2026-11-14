@@ -14,9 +14,11 @@ from rclpy.node import Node
 
 
 class DedicatedController:
-    def __init__(self, node: Node, params: Path) -> None:
+    def __init__(self, node: Node, params: Path, *, odometry_topic: str = "/wheel/odom") -> None:
         self._node = node
         self._params = params
+        # //Compatible: the default retains the simulation wheel topic.
+        self._odometry_topic = odometry_topic
         self._lock = asyncio.Lock()
         self._standby: tuple[AsyncExitStack, str] | None = None
         self._in_use = False
@@ -99,6 +101,10 @@ class DedicatedController:
             "--ros-args",
             "--params-file",
             str(self._params),
+            "-p",
+            f"use_sim_time:={str(bool(self._node.get_parameter('use_sim_time').value)).lower()}",
+            "-p",
+            f"odom_topic:={self._odometry_topic}",
             *remappings,
             start_new_session=True,
         )
@@ -127,7 +133,7 @@ class DedicatedController:
                 "-r",
                 f"/cmd_vel:={topic}",
                 "-r",
-                "odom:=/wheel/odom",
+                f"odom:={self._odometry_topic}",
             )
             await self._start(stack, "nav2_bt_navigator", "bt_navigator")
             self._standby = stack.pop_all(), topic

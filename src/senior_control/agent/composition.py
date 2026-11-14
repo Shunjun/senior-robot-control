@@ -32,7 +32,7 @@ from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.workspace_export import load_exported_grid
 from senior_control.runtime.ipc import IpcClient, IpcError
-from senior_control.settings.models import simulation_settings_profile
+from senior_control.settings.models import vehicle_settings_profile
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.settings.store import SettingsStore
 from senior_control.storage.database import Database
@@ -61,6 +61,7 @@ class AgentConfig:
     workspace_map_bundle: Path | None = None
     workspace_map_sha256: str | None = None
     simulation_video_frame: Path | None = None
+    # //Compatible: accepted from old simulation environments; no longer gates settings.
     simulation_settings: bool = False
 
     def __post_init__(self) -> None:
@@ -417,27 +418,26 @@ async def run_agent(config: AgentConfig) -> int:
         previous_log_level = logger.level
         assert executor.lifecycle is not None
         settings_runtime = SettingsRuntime(state, executor.lifecycle.store)
-        if config.simulation_settings:
-            settings = SettingsService(SettingsStore(database), simulation_settings_profile(), gate)
-            await settings.prepare()
-            settings.start_debug_restore()
-            candidate = VehicleLogStore(config.database_path.parent / "logs")
-            try:
-                await candidate.__aenter__()
-            except (OSError, ValueError):
-                logger.warning("vehicle log storage unavailable; control remains independent")
-            else:
-                log_store = candidate
-                grants = CloudLogGrants()
-                logs = VehicleLogService(
-                    log_store, config.robot_id, grants, lambda: settings.published_snapshot
-                )
-                await logs.start()
-                log_connection = AgentLogConnection(logs, grants)
-                log_handler = AgentLogHandler(logs)
-                logging.getLogger("senior_control").addHandler(log_handler)
-                logger.setLevel(logging.DEBUG)
-                logger.info("agent_log_source_started", extra={"event": "agent_log_source_started"})
+        settings = SettingsService(SettingsStore(database), vehicle_settings_profile(), gate)
+        await settings.prepare()
+        settings.start_debug_restore()
+        candidate = VehicleLogStore(config.database_path.parent / "logs")
+        try:
+            await candidate.__aenter__()
+        except (OSError, ValueError):
+            logger.warning("vehicle log storage unavailable; control remains independent")
+        else:
+            log_store = candidate
+            grants = CloudLogGrants()
+            logs = VehicleLogService(
+                log_store, config.robot_id, grants, lambda: settings.published_snapshot
+            )
+            await logs.start()
+            log_connection = AgentLogConnection(logs, grants)
+            log_handler = AgentLogHandler(logs)
+            logging.getLogger("senior_control").addHandler(log_handler)
+            logger.setLevel(logging.DEBUG)
+            logger.info("agent_log_source_started", extra={"event": "agent_log_source_started"})
         motion.settings = settings
         navigation_actions = LifecycleNavigationOperations(executor, state, workspace, waypoints)
 

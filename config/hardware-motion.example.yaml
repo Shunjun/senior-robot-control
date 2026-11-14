@@ -1,0 +1,79 @@
+# Incomplete calibration worksheet; null is deliberately rejected.
+# No simulation response, coverage or healthy/stationary defaults.
+scan_receipt:
+  ros__parameters:
+    use_sim_time: false
+    scan_topic: /scan
+    scan_ledger_max_age_s: null
+scan_adapter:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: null
+    max_age_seconds: null
+    self_mask_calibrated: null
+    transform_static: null
+safety_scan_ingress:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: null
+    observation_max_age: null
+    transform_static: null
+scan_motion_node:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: null
+    scan_max_age: null
+    transform_static: null
+    max_interval: null
+    max_linear_speed: null
+    max_yaw_rate: null
+    range_limit: null
+    min_response: null
+    max_residual: null
+    min_inlier_fraction: null
+    min_spread: null
+    min_translation_observability: null
+    min_yaw_observability: null
+    max_variance: null
+    reanchor_distance: null
+    reanchor_yaw: null
+    min_rays: null
+motion_fusion:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: null
+    wheel_frame: null
+    imu_frame: null
+    sensor_max_age: null
+    alignment_max_gap: null
+    pending_wait: null
+    max_variance: null
+    imu_zero_variance: null
+    min_quality: null
+    max_yaw_error: null
+    startup_window: null
+    wheel_motion_limit: null
+    stall_distance: null
+    lateral_limit: null
+    yaw_limit: null
+    progress_stationary_max_linear_speed: null
+    progress_stationary_max_yaw_rate: null
+safety_gate:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: null
+    simulation_rate_hz: null
+    footprint_xy: null
+    self_mask_calibrated: null
+    transform_static: null
+    observation_max_age: null
+    measurement_max_age: null
+    hard_margin: null
+    depth_policy: null
+    command_ttl_seconds: null
+command_node:
+  ros__parameters:
+    use_sim_time: false
+    heartbeat_seconds: null
+    disconnect_seconds: null
+    command_ttl_seconds: null

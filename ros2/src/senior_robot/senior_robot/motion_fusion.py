@@ -160,18 +160,21 @@ class MotionFusion(Node):
         self.create_subscription(ScanMotion, "/motion/scan", self._on_scan, 10)
         self.create_service(Trigger, "~/requalify_progress", self._on_progress_requalification)
         self.create_timer(0.02, self._try_pending, clock=RosClock(clock_type=ClockType.STEADY_TIME))
-        # //Compatible: legacy/hardware profiles do not select the candidate adapter.
+        # //Compatible: legacy profiles may omit both shared-core selections.
         self.declare_parameter("motion_core_profile", "")
         self._native_motion_bridge = None
+        self.declare_parameter("hardware_motion_profile", "")
+        hardware_path = str(self.get_parameter("hardware_motion_profile").value)
         candidate = str(self.get_parameter("motion_core_profile").value)
-        if candidate:
+        if candidate or hardware_path:
             import os
 
             from senior_robot.motion_observation_adapter import NativeObservationRosBridge
-            from senior_robot.simulation_motion_profile import select_simulation_profile
+            from senior_robot.motion_profile import select_motion_profile
 
-            profile = select_simulation_profile(
+            profile = select_motion_profile(
                 candidate,
+                hardware_path=hardware_path,
                 simulated_clock=bool(self.get_parameter("use_sim_time").value),
                 localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
                 domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
