@@ -17,7 +17,7 @@ from senior_control.motion.observations import (
     validate,
 )
 from senior_control.motion.sample_types import MotionSample
-from senior_control.motion.source_modes import MotionAssessment, SourceView, select_reference
+from senior_control.motion.source_modes import SourceView
 
 
 @dataclass(frozen=True)
@@ -313,10 +313,6 @@ class AdmissionOwner:
                     views[source] = SourceView(state.observation, state.ready)
         self._record(before)
         return views
-
-    def assess(self, *, now_ros: float, now_steady: float) -> MotionAssessment:
-        views = self._views(now_ros=now_ros, now_steady=now_steady)
-        return select_reference(views, self.config, now_steady=now_steady)
 
     def snapshot(self, *, after_cursor: int, now_ros: float, now_steady: float) -> SourceSnapshot:
         if self._event_capacity is None or after_cursor < 0 or after_cursor > self._cursor:

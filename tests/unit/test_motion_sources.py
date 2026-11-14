@@ -17,7 +17,6 @@ from senior_control.motion.observations import (
     SourceStatus,
 )
 from senior_control.motion.source_admission import AdmissionOwner
-from senior_control.motion.source_modes import SourceMode
 
 
 def config():
@@ -67,38 +66,41 @@ def ingest(owner, observation, heading=None):
     )
 
 
-def test_recovery_counts_only_distinct_samples_and_has_no_invented_upper():
-    owner = AdmissionOwner(config())
+def views(owner, *, now_ros, now_steady):
+    return dict(owner.snapshot(after_cursor=0, now_ros=now_ros, now_steady=now_steady).sources)
+
+
+def ready(owner, source, *, now_ros, now_steady):
+    view = views(owner, now_ros=now_ros, now_steady=now_steady).get(source)
+    return view is not None and view.ready
+
+
+def test_recovery_counts_only_distinct_samples():
+    owner = AdmissionOwner(config(), event_capacity=128)
     first = sample()
     assert ingest(owner, first).accepted
     for _ in range(10):
-        assert owner.assess(now_ros=10.0, now_steady=20.0).mode is SourceMode.RECOVERING
+        assert not ready(owner, Source.LASER, now_ros=10.0, now_steady=20.0)
     assert not ingest(owner, first).accepted
     assert ingest(owner, sample(seq=2, end=10.1, received=20.1)).accepted
-    result = owner.assess(now_ros=10.1, now_steady=20.1)
-    assert result.mode is SourceMode.LASER_REFERENCE
-    assert result.motion.upper is None
-    assert not result.uncertainty_supported
-    assert result.target_linear_cap_mps == 1.0
+    assert ready(owner, Source.LASER, now_ros=10.1, now_steady=20.1)
 
 
-def test_weak_laser_and_missing_gps_allow_imu_wheel_limited_reference():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+def test_weak_laser_does_not_remove_admitted_wheel_and_imu():
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     assert ingest(owner, sample(Source.WHEEL)).accepted
     assert ingest(owner, sample(Source.IMU)).accepted
     assert not ingest(owner, sample(status=SourceStatus.UNAVAILABLE)).accepted
-    result = owner.assess(now_ros=10.0, now_steady=20.0)
-    assert result.mode is SourceMode.WHEEL_IMU_LIMITED
-    assert result.motion.average.vx == 0.31
-    assert result.motion.average.wz == 0.1
-    assert result.target_linear_cap_mps == 0.2
-    assert result.motion.upper is None
-    assert {item.original.source for item in result.contributors} == {Source.WHEEL, Source.IMU}
-    assert not hasattr(result, "permit")  # Quality is not a T4 motion permission.
+    current = views(owner, now_ros=10.0, now_steady=20.0)
+    assert current[Source.WHEEL].ready and current[Source.IMU].ready
+    assert Source.LASER not in current
+    assert current[Source.WHEEL].observation.body_values == (0.31, 0.0, 0.12)
 
 
 def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_independence():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert not ingest(owner, sample(Source.GPS)).accepted
     heading = Heading(math.pi / 2, 0.02, 10.0, 20.0, "heading-a", "synthetic heading")
     assert ingest(owner, sample(Source.GPS, seq=2), heading).accepted
@@ -109,16 +111,15 @@ def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_indepen
         replace(heading, stamp_ros=10.1, received_steady=20.1),
     ).accepted
     assert ingest(owner, sample(Source.IMU, seq=2, end=10.1, received=20.1)).accepted
-    result = owner.assess(now_ros=10.1, now_steady=20.1)
-    assert result.mode is SourceMode.GPS_IMU_REFERENCE
-    assert result.motion.average.vx == pytest.approx(0.3)
-    assert result.motion.average.vy == pytest.approx(0.0, abs=1e-12)
-    gps = next(x for x in result.contributors if x.original.source is Source.GPS)
+    current = views(owner, now_ros=10.1, now_steady=20.1)
+    assert current[Source.GPS].ready and current[Source.IMU].ready
+    gps = current[Source.GPS].observation
+    assert gps.body_values[0] == pytest.approx(0.3)
+    assert gps.body_values[1] == pytest.approx(0.0, abs=1e-12)
     assert gps.heading_context is not None
     assert gps.heading_context.basis == "synthetic heading"
-    assert gps.body_covariance is None  # Heading/covariance correlation not defined in T3a.
+    assert gps.body_covariance is None  # Heading/covariance correlation is not defined.
     assert gps.original.covariance.kind is CovarianceKind.DIAGONAL_ONLY
-    assert result.motion.upper is None
 
 
 @pytest.mark.parametrize(
@@ -137,31 +138,33 @@ def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_indepen
     ],
 )
 def test_invalid_values_quality_frame_and_covariance_are_rejected(change):
-    assert not ingest(AdmissionOwner(config()), sample(**change)).accepted
+    assert not ingest(AdmissionOwner(config(), event_capacity=128), sample(**change)).accepted
 
 
 def test_expiry_future_replay_epoch_restart_and_ros_rollback_do_not_refresh_health():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
     assert not owner.ingest(sample(seq=2, end=11.0), now_ros=10.0, now_steady=20.0).accepted
     assert not owner.ingest(sample(seq=2), now_ros=10.6, now_steady=20.6).accepted
-    assert owner.assess(now_ros=10.6, now_steady=20.6).motion is None
+    assert not views(owner, now_ros=10.6, now_steady=20.6)
     assert ingest(owner, sample(seq=1, end=10.7, received=20.7, epoch="b")).accepted
     assert not ingest(owner, sample(seq=99, end=10.8, received=20.8)).accepted
-    assert owner.assess(now_ros=1.0, now_steady=21.0).motion is None
+    assert not views(owner, now_ros=1.0, now_steady=21.0)
     assert not owner.ingest(
         sample(seq=2, end=1.0, received=21.0, epoch="b"), now_ros=1.0, now_steady=21.0
     ).accepted
 
 
 def test_loss_drift_and_imu_failure_remove_current_reference_without_reviving_old_data():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     ingest(owner, sample(Source.WHEEL))
     ingest(owner, sample(Source.IMU))
     assert not ingest(
         owner, sample(Source.IMU, seq=2, end=10.1, received=20.1, status=SourceStatus.UNAVAILABLE)
     ).accepted
-    assert owner.assess(now_ros=10.1, now_steady=20.1).mode is SourceMode.UNAVAILABLE
+    assert not ready(owner, Source.IMU, now_ros=10.1, now_steady=20.1)
     assert not ingest(owner, sample(Source.GPS, status=SourceStatus.DRIFT)).accepted
     assert not ingest(
         owner, sample(Source.IMU, values=(0.1, 0.2, 0.3))
@@ -169,27 +172,27 @@ def test_loss_drift_and_imu_failure_remove_current_reference_without_reviving_ol
 
 
 def test_clock_pause_invalidates_without_recounting_repeated_ticks():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     ingest(owner, sample(Source.WHEEL))
     ingest(owner, sample(Source.IMU))
-    assert owner.assess(now_ros=10.0, now_steady=20.31).motion is None
+    assert not views(owner, now_ros=10.0, now_steady=20.31)
 
 
 def test_recovery_after_degradation_uses_configured_sample_span_and_source_identity():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     for seq, end, received in [(1, 9.8, 19.8), (2, 9.9, 19.9)]:
         for source in Source.WHEEL, Source.IMU:
             ingest(owner, sample(source, seq=seq, end=end, received=received))
     ingest(owner, sample())
-    assert owner.assess(now_ros=10.0, now_steady=20.0).mode is SourceMode.WHEEL_IMU_LIMITED
+    assert not ready(owner, Source.LASER, now_ros=10.0, now_steady=20.0)
     ingest(owner, sample(seq=2, end=10.05, received=20.05))
-    assert owner.assess(now_ros=10.05, now_steady=20.05).mode is SourceMode.WHEEL_IMU_LIMITED
+    assert not ready(owner, Source.LASER, now_ros=10.05, now_steady=20.05)
     ingest(owner, sample(seq=3, end=10.11, received=20.11))
-    assert owner.assess(now_ros=10.11, now_steady=20.11).mode is SourceMode.LASER_REFERENCE
+    assert ready(owner, Source.LASER, now_ros=10.11, now_steady=20.11)
 
 
 def test_invalid_fresh_sample_fences_earlier_packets_from_recovery():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
     bad = sample(seq=3, end=10.2, received=20.2, status=SourceStatus.UNAVAILABLE)
     assert not ingest(owner, bad).accepted
@@ -204,50 +207,13 @@ def test_huge_finite_off_diagonal_covariance_is_rejected_without_overflow():
         "invalid correlation",
         None,
     )
-    assert not ingest(AdmissionOwner(config()), sample(covariance=covariance)).accepted
-
-
-def test_legacy_motion_estimate_reuses_full_twist_and_requires_velocity_covariance():
-    from senior_control.models import BodyTwist, Pose2D, Velocity
-    from senior_control.motion.estimate_adapters import from_motion_estimate
-    from senior_control.safety.motion_estimator import MotionEstimate
-
-    estimate = MotionEstimate(
-        Pose2D(0.03, 0.001, 0.01),
-        Velocity(0.3, 0.1),
-        (0.01, 0.01, 0.01),
-        0.9,
-        0.1,
-        "scan_match",
-        10.0,
-        False,
-        True,
-        body_twist=BodyTwist(0.3, 0.01, 0.1),
-    )
-    covariance = Covariance(
-        (0.02, 0.03, 0.04),
-        CovarianceKind.DIAGONAL_ONLY,
-        "caller provided velocity variance; cross terms unknown",
-        "legacy",
-    )
-    observation = from_motion_estimate(
-        estimate, received_steady=20.0, epoch="legacy", sequence=1, velocity_covariance=covariance
-    )
-    assert observation.values == (0.3, 0.01, 0.1)
-    assert observation.covariance is covariance
-    assert ingest(AdmissionOwner(config()), observation).accepted
-    unavailable = from_motion_estimate(
-        replace(estimate, body_twist=None),
-        received_steady=20.0,
-        epoch="legacy",
-        sequence=2,
-        velocity_covariance=covariance,
-    )
-    assert not ingest(AdmissionOwner(config()), unavailable).accepted
+    assert not ingest(
+        AdmissionOwner(config(), event_capacity=128), sample(covariance=covariance)
+    ).accepted
 
 
 def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
     delayed = sample(epoch="late-boot", seq=1, end=10.01, received=19.99)
     assert not owner.ingest(delayed, now_ros=10.1, now_steady=20.1).accepted
@@ -264,7 +230,7 @@ def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference(
 
 
 def test_heading_out_of_order_and_high_uncertainty_are_rejected():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     heading = Heading(0.0, 0.01, 10.0, 20.0, "h1", "synthetic heading")
     assert ingest(owner, sample(Source.GPS), heading).accepted
     assert not ingest(
@@ -279,61 +245,54 @@ def test_heading_out_of_order_and_high_uncertainty_are_rejected():
     ).accepted
 
 
-def test_no_deterministic_bound_or_deadline_refresh_from_rejected_packet():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+def test_rejected_packet_does_not_refresh_source_deadline():
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     observation = sample()
     ingest(owner, observation)
-    first = owner.assess(now_ros=10.0, now_steady=20.0)
-    assert first.motion is not None
-    deadline = first.motion.valid_until_steady
+    first = views(owner, now_ros=10.0, now_steady=20.0)[Source.LASER]
+    deadline = first.observation.valid_until_steady
     assert not owner.ingest(observation, now_ros=10.1, now_steady=20.1).accepted
-    current = owner.assess(now_ros=10.1, now_steady=20.1)
-    assert current.motion is not None
-    assert current.motion.valid_until_steady == deadline
-    assert current.motion.upper is None
+    current = views(owner, now_ros=10.1, now_steady=20.1)[Source.LASER]
+    assert current.ready
+    assert current.observation.valid_until_steady == deadline
 
 
-def test_component_assembly_never_labels_different_intervals_as_one_body_average():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
-    heading = Heading(0.0, 0.01, 10.0, 20.0, "h1", "synthetic heading")
-    ingest(owner, sample(Source.GPS), heading)
-    assert owner.ingest(
-        sample(Source.IMU, end=10.05, received=20.05), now_ros=10.05, now_steady=20.05
-    ).accepted
-    assessment = owner.assess(now_ros=10.05, now_steady=20.05)
-    assert assessment.motion is None
-    assert assessment.reason == "interval_alignment_required"
-
-
-def test_gps_drift_falls_back_without_turning_covariance_into_a_speed_bound():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+def test_gps_drift_does_not_revoke_healthy_wheel_and_imu():
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     for source in Source.WHEEL, Source.IMU:
         ingest(owner, sample(source))
     heading = Heading(0.0, 0.01, 10.0, 20.0, "h1", "synthetic heading")
     ingest(owner, sample(Source.GPS), heading)
-    assert owner.assess(now_ros=10.0, now_steady=20.0).mode is SourceMode.GPS_IMU_REFERENCE
+    assert ready(owner, Source.GPS, now_ros=10.0, now_steady=20.0)
     drift = sample(Source.GPS, seq=2, end=10.1, received=20.1, status=SourceStatus.DRIFT)
     assert not ingest(owner, drift, replace(heading, stamp_ros=10.1, received_steady=20.1)).accepted
-    fallback = owner.assess(now_ros=10.1, now_steady=20.1)
-    assert fallback.mode is SourceMode.WHEEL_IMU_LIMITED
-    assert fallback.motion is not None and fallback.motion.upper is None
-    assert fallback.target_linear_cap_mps == 0.2
+    current = views(owner, now_ros=10.1, now_steady=20.1)
+    assert Source.GPS not in current
+    assert current[Source.WHEEL].ready and current[Source.IMU].ready
 
 
 @pytest.mark.parametrize("source", [Source.IMU, Source.WHEEL])
 def test_nonfinite_auxiliary_removes_limited_reference(source):
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     for item in Source.WHEEL, Source.IMU:
         ingest(owner, sample(item))
     bad_values = (float("nan"),) if source is Source.IMU else (float("nan"), 0.0, 0.0)
     assert not ingest(
         owner, sample(source, seq=2, end=10.1, received=20.1, values=bad_values)
     ).accepted
-    assert owner.assess(now_ros=10.1, now_steady=20.1).motion is None
+    assert not ready(owner, source, now_ros=10.1, now_steady=20.1)
 
 
 def test_full_correlated_covariance_is_retained_without_fusing_precision():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     covariance = Covariance(
         (1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0),
         CovarianceKind.FULL,
@@ -341,16 +300,18 @@ def test_full_correlated_covariance_is_retained_without_fusing_precision():
         "shared",
     )
     assert ingest(owner, sample(covariance=covariance)).accepted
-    result = owner.assess(now_ros=10.0, now_steady=20.0)
-    assert result.contributors[0].body_covariance is covariance
-    assert result.motion is not None and result.motion.upper is None
+    current = views(owner, now_ros=10.0, now_steady=20.0)[Source.LASER]
+    assert current.ready
+    assert current.observation.body_covariance is covariance
 
 
 def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
-    owner = AdmissionOwner(replace(config(), recovery_samples=1, recovery_span_s=0))
+    owner = AdmissionOwner(
+        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+    )
     heading = Heading(0.0, 0.01, 10.0, 20.0, "old-heading", "synthetic heading")
     assert ingest(owner, sample(Source.GPS), heading).accepted
-    assert owner.assess(now_ros=1.0, now_steady=2.0).motion is None
+    assert not views(owner, now_ros=1.0, now_steady=2.0)
     fresh = sample(Source.GPS, epoch="new-clock-source", end=1.0, received=2.0)
     new_heading = Heading(0.0, 0.01, 1.0, 2.0, "new-heading", "synthetic heading")
     assert owner.ingest(fresh, now_ros=1.0, now_steady=2.0, heading=new_heading).accepted
@@ -358,11 +319,11 @@ def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
 
 @pytest.mark.parametrize("sequence", [float("nan"), 1.5, True])
 def test_source_sequence_must_be_a_real_positive_integer(sequence):
-    assert not ingest(AdmissionOwner(config()), sample(seq=sequence)).accepted
+    assert not ingest(AdmissionOwner(config(), event_capacity=128), sample(seq=sequence)).accepted
 
 
 def test_invalid_sequence_cannot_poison_the_replay_watermark():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
     assert not ingest(owner, sample(seq=float("nan"), end=10.1, received=20.1)).accepted
     assert not ingest(owner, sample(seq=1, end=10.2, received=20.2)).accepted
@@ -387,45 +348,38 @@ def test_invalid_sequence_cannot_poison_the_replay_watermark():
     ],
 )
 def test_malformed_structure_after_valid_samples_is_pure_rejection(changes):
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     ingest(owner, sample())
     ingest(owner, sample(seq=2, end=10.1, received=20.1))
-    original = owner.assess(now_ros=10.1, now_steady=20.1)
-    assert original.mode is SourceMode.LASER_REFERENCE
+    original = views(owner, now_ros=10.1, now_steady=20.1)[Source.LASER]
+    assert original.ready
     for _ in range(3):
         bad = replace(sample(seq=999, end=10.2, received=20.2), **changes)
         assert not owner.ingest(bad, now_ros=10.2, now_steady=20.2).accepted
-    current = owner.assess(now_ros=10.2, now_steady=20.2)
-    assert current.mode is SourceMode.LASER_REFERENCE
-    assert current.motion is not None and original.motion is not None
-    assert current.motion.valid_until_steady == original.motion.valid_until_steady
+    current = views(owner, now_ros=10.2, now_steady=20.2)[Source.LASER]
+    assert current.ready
+    assert current.observation.valid_until_steady == original.observation.valid_until_steady
     assert ingest(owner, sample(seq=3, end=10.3, received=20.3)).accepted
 
 
 @pytest.mark.parametrize("end,received", [(11.0, 20.1), (10.1, 20.6)])
-def test_recovery_does_not_bridge_ros_or_steady_expiry_without_assess(end, received):
-    owner = AdmissionOwner(config())
+def test_recovery_does_not_bridge_ros_or_steady_expiry_without_snapshot(end, received):
+    owner = AdmissionOwner(config(), event_capacity=128)
     ingest(owner, sample())
     assert ingest(owner, sample(seq=2, end=end, received=received)).accepted
-    assert owner.assess(now_ros=end, now_steady=received).mode is SourceMode.RECOVERING
+    assert not ready(owner, Source.LASER, now_ros=end, now_steady=received)
     ingest(owner, sample(seq=3, end=end + 0.1, received=received + 0.1))
-    assert (
-        owner.assess(now_ros=end + 0.1, now_steady=received + 0.1).mode
-        is SourceMode.LASER_REFERENCE
-    )
+    assert ready(owner, Source.LASER, now_ros=end + 0.1, now_steady=received + 0.1)
 
 
 @pytest.mark.parametrize("ros_step,steady_step", [(0.1, 0.1), (0.2, 0.1), (0.1, 0.2)])
 def test_continuous_recovery_handles_distinct_real_time_factors(ros_step, steady_step):
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     ingest(owner, sample())
     assert ingest(owner, sample(seq=2, end=10.0 + ros_step, received=20.0 + steady_step)).accepted
-    assert (
-        owner.assess(now_ros=10.0 + ros_step, now_steady=20.0 + steady_step).mode
-        is SourceMode.LASER_REFERENCE
-    )
+    assert ready(owner, Source.LASER, now_ros=10.0 + ros_step, now_steady=20.0 + steady_step)
 
 
 def test_unused_heading_does_not_add_a_laser_admission_gate():
-    owner = AdmissionOwner(config())
+    owner = AdmissionOwner(config(), event_capacity=128)
     assert owner.ingest(sample(), now_ros=10.0, now_steady=20.0, heading=[]).accepted
