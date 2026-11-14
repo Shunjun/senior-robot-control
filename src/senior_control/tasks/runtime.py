@@ -44,6 +44,7 @@ class TaskRuntime:
         service = self._executor.lifecycle
         if service is not None:
             await service.start()
+            metadata = await service.store.metadata_executions(limit=16)
             bound = set(await service.store.instances(active_only=True))
             for previous in await self._store.executions_for_scan(None, now):
                 if previous.execution_id not in bound:
@@ -105,6 +106,12 @@ class TaskRuntime:
         for record in active:
             if record.execution_id not in bound and record.execution_id not in canceling:
                 await self._executor.reconcile(record, current.map_generation)
+
+        # Retain safety-revocation priority. Terminal metadata uses the existing
+        # service and its budgets, without route/health admission or a new owner.
+        if service is not None:
+            for identity in metadata:
+                await service.reconcile(identity)
 
         if self._last_wall is None:
             cursor = await self._store.scan_cursor()

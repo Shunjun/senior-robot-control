@@ -73,6 +73,11 @@ class Guard : public rclcpp::Node {
     if (!topology()) return;
     const auto &source = info.get_rmw_message_info().publisher_gid;
     if (!std::equal(gid_.begin(), gid_.end(), source.data)) return;
+    if (final_command_frame::terminal_identity(m)) {
+      if (!final_command_frame::terminal_identity_authorized(m, robot_, boot_, invalid_boot_, steady())) return;
+      send(m.close_reason == "task_settled" ? 4 : 3, &m);
+      return;
+    }
     const bool is_barrier = final_command_frame::barrier(m);
     if ((m.source_kind != "manual" && m.source_kind != "navigation" && m.source_kind != "idle") ||
         m.source_id.size() > 128 || m.close_reason.size() > 32 ||

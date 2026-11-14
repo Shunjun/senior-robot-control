@@ -65,6 +65,10 @@ class MotionCoreOutput:
         self.machine = MotionStateMachine()
         self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
         self.output_generation = 0
+        self._task_identity: tuple[str, int] | None = None
+        # Proofs are in-flight only; explicit durable collection never recreates identity.
+        self._task_retirements: dict[tuple[str, str, int, str], tuple[int, float, int]] = {}
+        self._terminal_released: set[tuple[str, str, int, str]] = set()
         self._input_boot = ""
         self._input_floor = -1
         self._manual_motion_source: str | None = None
@@ -346,6 +350,8 @@ class MotionCoreOutput:
         if msg.owner_boot_id != self._input_boot:
             self._input_boot = msg.owner_boot_id
             self._input_floor = -1
+            self._task_retirements.clear()
+            self._terminal_released.clear()
         self.output_generation = int(msg.generation)
         if reason != "intent":
             if msg.sequence != 0 or msg.steady_deadline != 0 or msg.vx != 0 or msg.wz != 0:
@@ -364,6 +370,7 @@ class MotionCoreOutput:
             accepted = self._apply_close(msg, reason, now)
             if accepted:
                 self._barrier_complete = True
+                self._remember_task_retirement(msg)
             return accepted
         if (
             msg.generation <= self._input_floor
@@ -398,6 +405,19 @@ class MotionCoreOutput:
         if velocity != Velocity(0, 0):
             self._startup_motion_unconfirmed = False
         self.target = MotionTarget(velocity, msg.source_kind, source_id, float(msg.steady_deadline))
+        if msg.source_kind == "navigation":
+            self._task_identity = (str(msg.source_id), int(msg.source_epoch))
+            # An accepted higher epoch irreversibly supersedes old pause receipts.
+            obsolete = [
+                key
+                for key, proof in self._task_retirements.items()
+                if key[1] == msg.source_id
+                and proof[0] < msg.source_epoch
+                and key not in self._terminal_released
+            ]
+            for key in obsolete:
+                self._task_retirements.pop(key)
+                self._terminal_released.discard(key)
         return True
 
     def _startup_stop_uncertain(self, body: Feedback | None, context: ConstraintSnapshot) -> bool:
@@ -469,9 +489,125 @@ class MotionCoreOutput:
                 K.MANUAL_EXPIRED if reason == "expiry" else K.MANUAL_RELEASE, now, msg.source_id
             )
         elif reason == "task_done":
-            self._event(K.TASK_DONE, now, msg.source_id)
+            # Successful Nav2 completion retires output, not the durable task identity.
+            self._event(K.TASK_PAUSE, now, msg.source_id)
         elif reason in {"task_revoke", "qualification_lost", "shutdown"}:
             self._event(K.TASK_PAUSE, now, msg.source_id)
+        return True
+
+    @staticmethod
+    def _task_retirement_key(msg: Any) -> tuple[str, str, int, str]:
+        return (msg.owner_boot_id, msg.source_id, int(msg.generation), msg.request_id)
+
+    def _remember_task_retirement(self, msg: Any) -> None:
+        if (
+            msg.source_kind != "navigation"
+            or not msg.request_id
+            or msg.source_epoch < 1
+            or msg.close_reason
+            not in {"task_revoke", "task_done", "qualification_lost", "shutdown", "expiry", "fault"}
+        ):
+            return
+        key = self._task_retirement_key(msg)
+        if key in self._task_retirements:
+            return
+        if len(self._task_retirements) >= 256:
+            return  # Output remains revoked; no new identity-release proof is issued.
+        epoch = int(msg.source_epoch)
+        if self.machine.state.task_id == msg.source_id and self._task_identity is None:
+            return  # A retained task with unknown epoch is not an identity-release proof.
+        if self._task_identity is not None and self._task_identity[0] == msg.source_id:
+            if epoch < self._task_identity[1]:
+                return
+            epoch = self._task_identity[1]
+        self._task_retirements[key] = (epoch, float(msg.received_steady), int(msg.connection_epoch))
+
+    def retirement_epoch(self, msg: Any) -> int | None:
+        proof = self._task_retirements.get(self._task_retirement_key(msg))
+        return proof[0] if proof is not None else None
+
+    def collect_terminal(self, msg: Any) -> bool:
+        """Durable settlement only reclaims metadata; it never releases identity.
+
+        Old barriers cannot recreate forgotten proofs: command generation is
+        irreversible, and an identical current barrier returns without minting.
+        Unknown collections are idempotent no-ops, never terminal-release ACKs.
+        """
+        if (
+            self._closed
+            or msg.owner_boot_id != self._input_boot
+            or msg.close_reason != "task_settled"
+            or msg.source_kind != "navigation"
+            or msg.session_id != msg.source_id
+            or not msg.source_id
+            or not msg.request_id
+            or msg.source_epoch < 1
+            or msg.generation != 0
+            or msg.connection_epoch != msg.source_epoch
+            or msg.sequence != 0
+            or msg.steady_deadline != 0
+            or msg.vx != 0
+            or msg.wz != 0
+            or msg.gesture != 0
+        ):
+            return False
+        if self.machine.state.task_id == msg.source_id and (
+            self._task_identity is None or self._task_identity[1] <= msg.source_epoch
+        ):
+            return False
+        keys = [
+            key
+            for key, proof in self._task_retirements.items()
+            if key[0] == msg.owner_boot_id
+            and key[1] == msg.source_id
+            and proof[0] <= msg.source_epoch
+        ]
+        if keys and not any(key in self._terminal_released for key in keys):
+            return False
+        for key in keys:
+            self._task_retirements.pop(key)
+            self._terminal_released.discard(key)
+        return True
+
+    def release_terminal(self, msg: Any) -> bool:
+        """Consume only a proven identity event; never revoke a newer motion owner."""
+        if (
+            self._closed
+            or msg.owner_boot_id != self._input_boot
+            or msg.close_reason != "task_terminal"
+            or msg.source_kind != "navigation"
+            or msg.session_id != msg.source_id
+            or not msg.source_id
+            or not msg.request_id
+            or msg.sequence != 0
+            or msg.steady_deadline != 0
+            or msg.gesture != 0
+            or msg.vx != 0
+            or msg.wz != 0
+        ):
+            return False
+        key = self._task_retirement_key(msg)
+        proof = self._task_retirements.get(key)
+        if proof != (msg.source_epoch, msg.received_steady, msg.connection_epoch):
+            return False
+        if key in self._terminal_released:
+            return True
+        if self.target.source == "navigation":
+            # Even the same epoch must not be released while its navigation source is live.
+            return False
+        identity = (str(msg.source_id), int(msg.source_epoch))
+        if self._task_identity is not None and self._task_identity != identity:
+            return False
+        if self.machine.state.task_id not in {None, msg.source_id} or (
+            self.machine.state.task_id is not None and self._task_identity != identity
+        ):
+            return False
+        revision = self.machine.state.fault_revision
+        self._event(K.TASK_RETIRED, time.monotonic(), msg.source_id)
+        if self.machine.state.task_id is not None or self.machine.state.fault_revision != revision:
+            return False
+        self._task_identity = None
+        self._terminal_released.add(key)
         return True
 
     def revoke(self, reason: str, *, now: float | None = None) -> None:
@@ -741,9 +877,7 @@ class MotionCoreOutput:
         else:
             age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
             predictor_accel = (
-                Velocity(p.accel, p.yaw_accel)
-                if p.simulation_only
-                else p.reaction_acceleration(a)
+                Velocity(p.accel, p.yaw_accel) if p.simulation_only else p.reaction_acceleration(a)
             )
             dv = p.linear_error + predictor_accel.vx * age
             dw = p.yaw_error + predictor_accel.wz * age

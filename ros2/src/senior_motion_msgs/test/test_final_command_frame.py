@@ -44,6 +44,13 @@ class NativeRoundtrip(unittest.TestCase):
             capture_output=True,
         )
 
+        if sys.platform == "darwin":
+            # //Compatible: macOS may verify a new executable on its first launch.
+            # Warm only argc validation; each actual frame still has the original 3s bound.
+            startup = subprocess.run([str(cls.binary)], timeout=10, check=False)
+            if startup.returncode != 2:
+                raise RuntimeError("native sender startup contract")
+
     @classmethod
     def tearDownClass(cls):
         cls.temp.cleanup()
@@ -103,6 +110,21 @@ class NativeRoundtrip(unittest.TestCase):
             (m.source_kind, m.source_id, m.session_id, m.close_reason),
             ("navigation", "execution", "execution", "task_done"),
         )
+        self.assertEqual((m.sequence, m.steady_deadline, m.vx, m.wz), (0, 0, 0, 0))
+
+    def test_terminal_frame_has_an_independent_identity_kind(self):
+        packet = self.send("terminal")
+        self.assertIsNotNone(packet)
+        kind, gid, m = codec.decode_frame(packet)
+        self.assertEqual((kind, gid[0], m.source_kind, m.source_epoch), (3, 17, "navigation", 42))
+        self.assertEqual(
+            (m.close_reason, m.request_id, m.generation), ("task_terminal", "token", 5)
+        )
+        self.assertEqual((m.sequence, m.steady_deadline, m.vx, m.wz), (0, 0, 0, 0))
+
+    def test_durable_collection_has_separate_non_motion_kind(self):
+        kind, _, m = codec.decode_frame(self.send("collected"))
+        self.assertEqual((kind, m.close_reason, m.generation), (4, "task_settled", 0))
         self.assertEqual((m.sequence, m.steady_deadline, m.vx, m.wz), (0, 0, 0, 0))
 
     def test_string_boundary_and_native_overflow_rejection(self):

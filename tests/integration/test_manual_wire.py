@@ -120,6 +120,9 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._last_close_source, value._close_reason = ("idle", "", 0, 0.0), "prepared"
     value._navigation_source, value._drive_sample = None, None
     value._retirements, value._last_server_epoch = {}, 0
+    value._terminal_requests, value._retirement_core = {}, None
+    value._terminal_collections, value._settled_sequence = {}, 0
+    value._retirement_feedback_gid = None
     value._estop_store = None
     value._manual_ingress = ManualIngress("robot", "command-boot", ttl=0.3)
     value._manual_target = None

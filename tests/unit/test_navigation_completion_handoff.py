@@ -43,6 +43,9 @@ def test_completed_motion_task_allows_next_independent_execution(rig):
     assert rig.core.machine.state.task_id == "route"
     done = barrier(rig, "task_done")
     assert rig.core.command(done) and rig.core.command(done)
+    assert rig.core.machine.state.task_id == "route"
+    done.close_reason = "task_terminal"
+    assert rig.core.release_terminal(done)
     assert rig.core.machine.state.task_id is None
     assert rig.core.target.source == "idle"
     assert rig.core.command(
@@ -155,7 +158,7 @@ def test_completion_uses_existing_correlated_retirement_barrier(monkeypatch):
     assert node._navigation_source is None
     assert node._close_reason == "task_done"
     assert not node.navigation_source_retired("private-execution")
-    assert node._retirements["private-execution"][2] is False
+    assert node._retirements["private-execution"].acknowledged is False
 
 
 def test_completion_never_recovers_latched_physical_fault(rig):
@@ -167,4 +170,7 @@ def test_completion_never_recovers_latched_physical_fault(rig):
     assert rig.core.command(barrier(rig, "task_done"))
     assert rig.core.machine.state.mode is MotionMode.EXECUTION_FAULT
     assert rig.core.machine.state.fault_revision == revision
+    done = barrier(rig, "task_terminal")
+    assert rig.core.release_terminal(done)
     assert rig.core.machine.state.task_id is None
+    assert rig.core.machine.state.fault_revision == revision

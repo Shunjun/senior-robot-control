@@ -398,7 +398,7 @@ class SafetyGate(Node):
             if (
                 msg.source_kind == "navigation"
                 and msg.close_reason
-                in {"task_revoke", "task_done", "qualification_lost", "shutdown"}
+                in {"task_revoke", "task_done", "qualification_lost", "shutdown", "expiry", "fault"}
                 and msg.request_id
                 and msg.sequence == 0
                 and msg.steady_deadline == 0
@@ -409,7 +409,12 @@ class SafetyGate(Node):
                 receipt = DriveFeedbackMessage()
                 receipt.robot_id, receipt.owner_boot_id = msg.robot_id, msg.owner_boot_id
                 receipt.session_id, receipt.request_id = msg.session_id, msg.request_id
+                epoch = self._motion_core.retirement_epoch(msg)
+                if epoch is None:
+                    return
+                receipt.connection_epoch = epoch
                 receipt.sequence, receipt.status = msg.generation, "retired"
+                receipt.reason = self._motion_core.boot
                 self._drive_feedback_publisher.publish(receipt)
             return
         identity = (
@@ -455,6 +460,7 @@ class SafetyGate(Node):
             receipt.robot_id, receipt.owner_boot_id = msg.robot_id, msg.owner_boot_id
             receipt.session_id, receipt.request_id = msg.session_id, msg.request_id
             receipt.sequence, receipt.status = msg.generation, "retired"
+            receipt.reason = ""
             self._drive_feedback_publisher.publish(receipt)
 
     def _command_topology_ready(self) -> bool:
@@ -493,6 +499,23 @@ class SafetyGate(Node):
         except (OSError, LookupError):
             self.get_logger().error("final command guard unavailable; motion disabled")
 
+    def _on_task_terminal(self, msg) -> None:
+        if msg.robot_id != str(self.get_parameter("robot_id").value) or self._motion_core is None:
+            return
+        collected = msg.close_reason == "task_settled"
+        operation = (
+            self._motion_core.collect_terminal if collected else self._motion_core.release_terminal
+        )
+        if not operation(msg):
+            return
+        receipt = DriveFeedbackMessage()
+        receipt.robot_id, receipt.owner_boot_id = msg.robot_id, msg.owner_boot_id
+        receipt.session_id, receipt.request_id = msg.source_id, msg.request_id
+        receipt.connection_epoch, receipt.sequence = msg.source_epoch, msg.generation
+        receipt.status = "task_collected" if collected else "task_retired"
+        receipt.reason = self._motion_core.boot
+        self._drive_feedback_publisher.publish(receipt)
+
     def _poll_command_guard(self) -> None:
         channel = self._guard_socket
         if channel is None:
@@ -523,6 +546,8 @@ class SafetyGate(Node):
                     self._replace_drive_feedback(None, "", self._command, self._command_deadline)
                 elif kind == 2:
                     self._guard_ready = publisher is not None
+                elif kind in (3, 4):
+                    self._on_task_terminal(msg)
                 else:
                     self._on_command(msg, gid)
             raise ValueError("guard queue overflow")

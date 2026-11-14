@@ -147,6 +147,10 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 "task_epoch": fields.get("task_epoch", fields.get("plan", {}).get("task_epoch")),
                 "sources_fenced_through_epoch": fields.get("task_epoch", 100),
                 "controller_output_exited": True,
+                "terminal_outcome": fields.get("terminal_outcome"),
+                "identity_released": kind == "navigation.task_terminal"
+                or fields.get("effect_kind") == "terminal_release",
+                "collected": kind == "navigation.task_settled",
                 "progress": None,
             }
         assert kind in {"identity", "disable_motion", "exit", "server_heartbeat"}
@@ -238,7 +242,11 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 Event("completed", state_b.epoch),
                 expected_version=progressed.state.version,
             )
-            assert completed.state.phase == "succeeded"
+            assert completed.state.phase == "revoking"
+            assert completed.state.pending.kind == "terminal_release"
+            await service.reconcile("execution-B")
+            completed_state = await service.store.load("execution-B")
+            assert completed_state.phase == "succeeded"
             state_a = await service.store.load("execution")
             await link.inbox.put(
                 envelope(
@@ -299,14 +307,14 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 assert fallback.vehicle_ui is not None
                 assert fallback.vehicle_ui["task"] == {
                     "task_id": "execution-B",
-                    "version": completed.state.version,
+                    "version": completed_state.version,
                     "phase": "succeeded",
                     "completed": 1,
                     "total": 1,
                     "stopped_for": None,
                     "allowed_actions": [],
                 }
-                assert await service.store.load("execution-B") == completed.state
+                assert await service.store.load("execution-B") == completed_state
                 return
             await link.inbox.put(envelope("control.acquire", {}, request="acquire"))
             await until(lambda: any(r.request_id == "acquire" for r in link.responses))
@@ -314,7 +322,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             assert acquired.payload.ok, acquired.payload
             assert handoff_states == [("paused", "takeover", True)]
             assert len(manual_calls) == 1
-            assert await service.store.load("execution-B") == completed.state
+            assert await service.store.load("execution-B") == completed_state
             historical = await service.store.tasks.current_execution()
             assert historical is not None and historical.execution_id == "execution-B"
             return

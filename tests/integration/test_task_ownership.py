@@ -48,9 +48,20 @@ class Navigation:
                 effect_id=effect.effect_id,
             )
             return self.plan_result
+        if effect.kind == "terminal_release":
+            proof = self.retired or (
+                self.progress is not None and self.progress.controller_output_exited
+            )
+            return True if proof else None
         return self.retired or None
 
     async def task_effect_status(self, effect: Effect) -> bool | None:
+        if effect.kind == "terminal_release":
+            return (
+                True
+                if self.retired or (self.progress and self.progress.controller_output_exited)
+                else None
+            )
         return (self.retired or None) if effect.kind == "revoke" else True
 
     async def status(self, execution_id: str) -> RouteProgress | None:
@@ -95,10 +106,12 @@ async def test_runtime_runs_offline_and_completes_same_identity(tmp_path: Path) 
             }
         )
         await runtime.tick(NOW + timedelta(seconds=60.5), 1, replace(live, connected=False))
+        assert (await executor.lifecycle.store.load(identity)).pending.kind == "terminal_release"
+        await runtime.tick(NOW + timedelta(seconds=60.6), 1.1, replace(live, connected=False))
         state = await executor.lifecycle.store.load(identity)
         assert state.phase == "succeeded" and state.completed == ("0:a", "1:b")
         assert await executor.lifecycle.store.query(f"schedule:{identity}") == receipt
-        assert [effect.kind for effect in nav.effects] == ["plan"]
+        assert [effect.kind for effect in nav.effects] == ["plan", "terminal_release"]
 
 
 async def test_takeover_waits_for_output_ack_then_explicit_resume_uses_remaining(
@@ -174,6 +187,9 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
         clear_source=clear,
         source_active=lambda key: arbiter.navigation_source_active(key, 0),
         source_retired=lambda key: key in retired,
+        release_identity=lambda key, epoch, _effect, outcome, **_wire: (
+            key in retired and epoch == 2 and outcome == "succeeded"
+        ),
         connection_epoch=lambda: 99,
     )
     core = ros_ipc.AdapterCore(
@@ -241,6 +257,7 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
         assert progress.completed_action_ids == ["1:1"]
         assert progress.controller_output_exited
         await runtime.tick(NOW, 0, executor.context)
+        await runtime.tick(NOW, 0.1, executor.context)  # Separate identity-release outbox pass.
         assert executor.lifecycle is not None
         finished = await executor.lifecycle.store.load(identity)
         assert finished.phase == "succeeded" and finished.completed == ("0:0", "1:1")
@@ -409,11 +426,13 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
             }
         )
         await runtime.tick(NOW, 0, replace(executor.context, connected=False))
+        await runtime.tick(NOW, 0.1, replace(executor.context, connected=False))
         completed = await dispatcher.run(
             operation("operation.query", "normal-goal", robot_id="robot")
         )
         assert completed.status is OperationStatus.SUCCEEDED
-        assert len(nav.effects) == 1 and len(await durable.tasks.list_tasks()) == 1
+        assert [effect.kind for effect in nav.effects] == ["plan", "terminal_release"]
+        assert len(await durable.tasks.list_tasks()) == 1
 
 
 async def test_runtime_queries_unknown_plan_without_second_submission(tmp_path: Path) -> None:

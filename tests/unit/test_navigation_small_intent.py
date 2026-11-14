@@ -24,7 +24,7 @@ def rig(monkeypatch):
     node._drive_sample = None
     final, barriers = [], []
     node._final_publisher = N(publish=final.append)
-    node._publish_barrier = lambda *args: barriers.append(args)
+    node._publish_barrier = lambda *args, **kwargs: barriers.append(args)
     node._publish = lambda *args: None
     node.publish_command = type(node).publish_command.__get__(node)
     monkeypatch.setattr(sys.modules["command_clock_under_test"], "FinalCommand", N)

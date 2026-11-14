@@ -31,7 +31,23 @@ def accepted() -> Transition:
 def ack(
     state: Lifecycle, effect: Effect, *, ok: bool = True, context: Context = CONTEXT
 ) -> Transition:
-    return acknowledge(state, effect.effect_id, effect.epoch, ok=ok, context=context)
+    result = acknowledge(state, effect.effect_id, effect.epoch, ok=ok, context=context)
+    return terminal_ack(result, context=context) if ok else result
+
+
+def terminal_ack(result: Transition, *, context: Context = CONTEXT) -> Transition:
+    # Scenario helpers now deliver the distinct terminal boundary ACK explicitly.
+    # test_task_terminal_release tests the intermediate revoking/pending state.
+    effect = result.state.pending
+    if effect is not None and effect.kind == "terminal_release":
+        settled = acknowledge(
+            result.state, effect.effect_id, effect.epoch, ok=True, context=context
+        )
+        # Scenario helpers consume the metadata-only notification. Dedicated outbox
+        # tests assert its durable creation and retry; manual-ready assertions remain.
+        assert settled.effects[0].kind == "terminal_settled"
+        return replace(settled, effects=settled.effects[1:])
+    return result
 
 
 def running() -> Lifecycle:
@@ -40,7 +56,7 @@ def running() -> Lifecycle:
 
 
 def control(state: Lifecycle, action: Action, request: str = "control") -> Transition:
-    return command(state, Command(request, action, "task"), CONTEXT)
+    return terminal_ack(command(state, Command(request, action, "task"), CONTEXT))
 
 
 def test_acceptance_is_immutable_and_start_requires_ack() -> None:
@@ -60,7 +76,7 @@ def test_offline_completion_reconnect_queries_same_identity_without_reexecution(
     assert offline.state == state and offline.effects == ()
     state = event(state, Event("action_completed", state.epoch, "a"), CONTEXT).state
     state = event(state, Event("action_completed", state.epoch, "b"), CONTEXT).state
-    state = event(state, Event("completed", state.epoch), CONTEXT).state
+    state = terminal_ack(event(state, Event("completed", state.epoch), CONTEXT)).state
     assert state.phase == "succeeded" and state.completed == ("a", "b")
     replay = command(state, SUBMIT, replace(CONTEXT, connected=False))
     assert replay.state == state and replay.effects == ()
@@ -198,7 +214,7 @@ def test_cancel_and_completion_race_does_not_resurrect(during_revoke: bool) -> N
         state = ack(state, cancel.effects[0]).state
         assert state.phase == "canceled"
     else:
-        state = event(state, Event("completed", state.epoch), CONTEXT).state
+        state = terminal_ack(event(state, Event("completed", state.epoch), CONTEXT)).state
         assert control(state, "cancel").state.phase == "succeeded"
     actions: tuple[Action, ...] = ("resume", "takeover", "pause", "cancel")
     for action in actions:
@@ -356,7 +372,7 @@ def test_confirmed_completion_before_plan_ack_does_not_leave_or_reopen_pending_s
     state = started.state
     for action in ("a", "b"):
         state = event(state, Event("action_completed", state.epoch, action), CONTEXT).state
-    state = event(state, Event("completed", state.epoch), CONTEXT).state
+    state = terminal_ack(event(state, Event("completed", state.epoch), CONTEXT)).state
     assert state.phase == "succeeded" and state.pending is None
     assert ack(state, started.effects[0]).state == state
 

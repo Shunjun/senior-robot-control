@@ -68,6 +68,38 @@ class _NavigationSource:
     received_steady: float = 0.0
 
 
+@dataclass(frozen=True)
+class _NavigationRetirement:
+    token: str
+    generation: int
+    # Immutable issued source payload: kind/id/scope/receipt/session/connection.
+    source: tuple[str, str, int, float, str, int]
+    reason: str
+    through_epoch: int
+    acknowledged: bool = False
+    # Actual retained-task epoch returned by the core, not the issued fence scope.
+    task_epoch: int = 0
+
+
+@dataclass
+class _TerminalRelease:
+    execution_id: str
+    through_epoch: int
+    outcome: str
+    proof: _NavigationRetirement | None = None
+    acknowledged: bool = False
+    dispatch_sequence: int = 0
+
+
+@dataclass
+class _TerminalCollection:
+    execution_id: str
+    through_epoch: int
+    dispatch_sequence: int
+    frontier: int
+    acknowledged: bool = False
+
+
 class CommandNode(Node):
     def __init__(
         self,
@@ -140,7 +172,12 @@ class CommandNode(Node):
                 qos_profile_sensor_data,
             )
         self._navigation_source: _NavigationSource | None = None
-        self._retirements: dict[str, tuple[str, int, bool]] = {}
+        self._retirements: dict[str, _NavigationRetirement] = {}
+        self._terminal_requests: dict[str, _TerminalRelease] = {}
+        self._terminal_collections: dict[str, _TerminalCollection] = {}
+        self._settled_sequence = 0
+        self._retirement_core: tuple[bytes, str] | None = None
+        self._retirement_feedback_gid: bytes | None = None
         self._generation = 1
         self._estop_requests: dict[str, tuple[FinalCommand, CommandResult, CommandResult]] = {}
         self._last_server_epoch = 0
@@ -381,27 +418,63 @@ class CommandNode(Node):
             )
         )
 
+    def _other_motion_active(self, execution_id: str) -> bool:
+        source = self._navigation_source
+        manual = self._manual_ingress.view(self._monotonic_clock.monotonic())
+        runtime = self._motion_runtime.value
+        foreign = (
+            source is None
+            and runtime is not None
+            and (runtime.mode == "manual" or runtime.task_id not in {None, execution_id})
+        )
+        return (
+            foreign
+            or self._manual_target is not None
+            or (manual is not None and manual.state is not ManualAuthorityState.CLOSED)
+            or (source is not None and source.execution_id != execution_id)
+        )
+
     def navigation_source_retired(self, execution_id: str) -> bool:
         receipt = self._retirements.get(execution_id)
         if receipt is None:
             return False
-        token, generation, acknowledged = receipt
-        if not acknowledged:
-            if generation < self._generation:
-                # A newer safety/source fence already superseded this pending
-                # boundary. Re-issue its token under a fresh output generation.
-                self._generation += 1
-                generation = self._generation
-                self._retirements[execution_id] = (token, generation, False)
-            self._publish_barrier(token, execution_id, generation)
-        return acknowledged
+        if receipt.acknowledged:
+            return self._retirement_incarnation_current()
+        # Missing proof may be reacquired only through the original output boundary;
+        # an old task must never displace a later manual/navigation owner.
+        if self._other_motion_active(execution_id):
+            return False
+        if receipt.generation < self._generation:
+            self._generation += 1
+            receipt = replace(receipt, generation=self._generation)
+            self._retirements[execution_id] = receipt
+        self._publish_barrier(
+            receipt.token,
+            execution_id,
+            receipt.generation,
+            reason=receipt.reason,
+            source_override=receipt.source,
+        )
+        return False
 
     def complete_navigation_source(self, execution_id: str) -> None:
         self.clear_navigation_source(execution_id, reason="completed")
 
-    def clear_navigation_source(self, execution_id: str, *, reason: str = "requested") -> None:
+    def retire_navigation_source(self, execution_id: str, through_epoch: int) -> None:
         source = self._navigation_source
-        if source is not None and source.execution_id != execution_id:
+        if self._scope_collected(execution_id, through_epoch):
+            return
+        if self._other_motion_active(execution_id) or (
+            source is not None and (source.task_epoch or 0) > through_epoch
+        ):
+            return
+        self.clear_navigation_source(execution_id, through_epoch=through_epoch)
+
+    def clear_navigation_source(
+        self, execution_id: str, *, reason: str = "requested", through_epoch: int | None = None
+    ) -> None:
+        source = self._navigation_source
+        if self._other_motion_active(execution_id):
             return
         if source is not None:
             self._last_close_source = (
@@ -423,13 +496,296 @@ class CommandNode(Node):
             self._arbiter.end_navigation(execution_id)
             self.destroy_subscription(source.subscription)
             self.get_logger().warning(f"navigation_source_cleared reason={reason}")
-        if execution_id not in self._retirements:
+        receipt = self._retirements.get(execution_id)
+        if receipt is None:
+            if len(self._retirements) >= 256:
+                # Metadata exhaustion cannot defer the original immediate zero boundary.
+                # No nonce/proof is minted, so identity release still fails closed.
+                self._generation += 1
+                self._active = False
+                self._publish_barrier()
+                self._publish(Velocity(0, 0))
+                return
+            close = self._last_close_source
+            if close[0] != "navigation" or close[1] != execution_id:
+                if through_epoch is None:
+                    return
+                close = (
+                    "navigation",
+                    execution_id,
+                    through_epoch,
+                    self._monotonic_clock.monotonic(),
+                    execution_id,
+                    through_epoch,
+                )
+                self._close_reason = "task_revoke"
+            if close[2] < 1 and through_epoch is not None:
+                close = (close[0], close[1], through_epoch, close[3], close[4], close[5])
             self._generation += 1
             self._active = False
-            token = secrets.token_hex(16)
-            self._retirements[execution_id] = (token, self._generation, False)
+            receipt = _NavigationRetirement(
+                secrets.token_hex(16),
+                self._generation,
+                close,
+                self._close_reason,
+                through_epoch or close[2],
+            )
+        elif through_epoch is not None:
+            if receipt.source[2] < 1:
+                original = receipt.source
+                receipt = replace(
+                    receipt,
+                    token=secrets.token_hex(16),
+                    generation=0,
+                    source=(original[0], original[1], through_epoch, *original[3:]),
+                    acknowledged=False,
+                    task_epoch=0,
+                )
+            receipt = replace(receipt, through_epoch=max(receipt.through_epoch, through_epoch))
+        self._retirements[execution_id] = receipt
         self.navigation_source_retired(execution_id)
         self.publish_command()
+
+    def request_terminal_release(
+        self,
+        execution_id: str,
+        through_epoch: int,
+        effect_id: str,
+        outcome: str,
+        *,
+        dispatch_sequence: int = 0,
+    ) -> bool | None:
+        if (
+            type(through_epoch) is not int
+            or through_epoch < 1
+            or not 1 <= len(execution_id) <= 128
+            or not 1 <= len(effect_id) <= 128
+            or outcome not in {"succeeded", "canceled", "failed"}
+        ):
+            return None
+        if (
+            dispatch_sequence <= self._settled_sequence and self._settled_sequence > 0
+        ) or self._scope_collected(execution_id, through_epoch):
+            return False
+        request = self._terminal_requests.get(effect_id)
+        if request is not None:
+            if (
+                request.execution_id,
+                request.through_epoch,
+                request.outcome,
+                request.dispatch_sequence,
+            ) != (execution_id, through_epoch, outcome, dispatch_sequence):
+                return False
+        else:
+            if len(self._terminal_requests) >= 256:
+                return None
+            self._terminal_requests[effect_id] = _TerminalRelease(
+                execution_id, through_epoch, outcome, dispatch_sequence=dispatch_sequence
+            )
+        return self.terminal_release_status(effect_id)
+
+    def _scope_collected(self, execution_id: str, epoch: int) -> bool:
+        # A settled scope behind an unresolved global gap keeps one bounded
+        # compact marker; it cannot re-handshake while waiting for the frontier.
+        return any(
+            item.acknowledged and item.execution_id == execution_id and epoch <= item.through_epoch
+            for item in self._terminal_collections.values()
+        )
+
+    def _compact_terminal_metadata(self, frontier: int) -> None:
+        self._settled_sequence = max(self._settled_sequence, frontier)
+        for key, request in list(self._terminal_requests.items()):
+            if 0 < request.dispatch_sequence <= self._settled_sequence:
+                self._terminal_requests.pop(key)
+        for key, item in list(self._terminal_collections.items()):
+            if item.acknowledged and item.dispatch_sequence <= self._settled_sequence:
+                self._terminal_collections.pop(key)
+
+    def query_terminal_collection(
+        self,
+        execution_id: str,
+        through_epoch: int,
+        effect_id: str,
+        dispatch_sequence: int,
+        frontier: int,
+    ) -> tuple[bool, bool | None]:
+        """Query only an already issued GC; never allocate a receiver slot."""
+        if (
+            type(dispatch_sequence) is not int
+            or dispatch_sequence < 1
+            or type(through_epoch) is not int
+            or through_epoch < 1
+            or type(frontier) is not int
+            or frontier < 0
+            or not isinstance(execution_id, str)
+            or not 1 <= len(execution_id) <= 128
+            or not isinstance(effect_id, str)
+            or not 1 <= len(effect_id) <= 128
+        ):
+            return False, None
+        if dispatch_sequence <= self._settled_sequence:
+            return True, True  # Previously accepted durable prefix, metadata ACK only.
+        known = self._terminal_collections.get(effect_id)
+        if known is None:
+            return False, None
+        if (known.execution_id, known.through_epoch, known.dispatch_sequence) != (
+            execution_id,
+            through_epoch,
+            dispatch_sequence,
+        ):
+            return True, False
+        return True, self.collect_terminal(
+            execution_id, through_epoch, effect_id, dispatch_sequence, frontier
+        )
+
+    def collect_terminal(
+        self,
+        execution_id: str,
+        through_epoch: int,
+        effect_id: str,
+        dispatch_sequence: int,
+        frontier: int,
+    ) -> bool | None:
+        """Only the durable, post-settlement outbox may call this metadata boundary."""
+        if (
+            type(dispatch_sequence) is not int
+            or dispatch_sequence < 1
+            or type(frontier) is not int
+            or frontier < 0
+            or type(through_epoch) is not int
+            or through_epoch < 1
+        ):
+            return None
+        if dispatch_sequence <= self._settled_sequence:
+            return True
+        if frontier >= dispatch_sequence:
+            return None
+        self._compact_terminal_metadata(frontier)
+        current = self._terminal_collections.get(effect_id)
+        if current is None:
+            if len(self._terminal_collections) >= 256:
+                return None
+            current = _TerminalCollection(execution_id, through_epoch, dispatch_sequence, frontier)
+            self._terminal_collections[effect_id] = current
+        elif (current.execution_id, current.through_epoch, current.dispatch_sequence) != (
+            execution_id,
+            through_epoch,
+            dispatch_sequence,
+        ):
+            return False
+        current.frontier = max(current.frontier, frontier)
+        if not self._retirement_incarnation_current():
+            return None
+        if current.acknowledged:
+            self._compact_terminal_metadata(current.frontier)
+            for key, request in list(self._terminal_requests.items()):
+                if (
+                    0 < request.dispatch_sequence <= self._settled_sequence
+                    or request.execution_id == execution_id
+                    and request.through_epoch <= through_epoch
+                ):
+                    self._terminal_requests.pop(key)
+            proof = self._retirements.get(execution_id)
+            if proof is not None and proof.through_epoch <= through_epoch:
+                self._retirements.pop(execution_id)
+            for key, item in list(self._terminal_collections.items()):
+                if item.acknowledged and item.dispatch_sequence <= self._settled_sequence:
+                    self._terminal_collections.pop(key)
+            return True
+        msg = FinalCommand()
+        msg.robot_id = str(self.get_parameter("robot_id").value)
+        msg.owner_boot_id = self._owner_boot
+        msg.source_kind, msg.source_id, msg.session_id = "navigation", execution_id, execution_id
+        msg.source_epoch, msg.connection_epoch = through_epoch, through_epoch
+        msg.generation, msg.request_id = 0, effect_id
+        msg.received_steady = self._monotonic_clock.monotonic()
+        msg.close_reason = "task_settled"
+        msg.sequence, msg.gesture = 0, 0
+        msg.steady_deadline, msg.vx, msg.wz = 0.0, 0.0, 0.0
+        self._final_publisher.publish(msg)
+        return None
+
+    def terminal_release_status(self, effect_id: str) -> bool | None:
+        request = self._terminal_requests.get(effect_id)
+        if request is None:
+            return None
+        if not self._retirement_incarnation_current():
+            return None
+        if request.acknowledged:
+            return True
+        if request.proof is None:
+            receipt = self._retirements.get(request.execution_id)
+            if receipt is None or not receipt.acknowledged:
+                self.retire_navigation_source(request.execution_id, request.through_epoch)
+                return None
+            if not 0 < receipt.task_epoch <= request.through_epoch:
+                return None
+            request.proof = receipt
+        proof = request.proof
+        # Independent identity frame. Never overwrite _barrier_frame or _generation.
+        msg = FinalCommand()
+        msg.robot_id = str(self.get_parameter("robot_id").value)
+        msg.owner_boot_id = self._owner_boot
+        msg.source_kind, msg.source_id = "navigation", request.execution_id
+        msg.session_id = request.execution_id
+        msg.source_epoch, msg.connection_epoch = proof.task_epoch, proof.source[5]
+        msg.generation, msg.request_id = proof.generation, proof.token
+        msg.received_steady, msg.close_reason = proof.source[3], "task_terminal"
+        msg.sequence, msg.gesture = 0, 0
+        msg.steady_deadline, msg.vx, msg.wz = 0.0, 0.0, 0.0
+        self._final_publisher.publish(msg)
+        return None
+
+    def _invalidate_retirement_proofs(self) -> None:
+        for execution, proof in self._retirements.items():
+            self._retirements[execution] = replace(
+                proof,
+                token=secrets.token_hex(16),
+                generation=0,
+                acknowledged=False,
+                task_epoch=0,
+            )
+        for request in self._terminal_requests.values():
+            request.proof = None
+            request.acknowledged = False
+        for collection in self._terminal_collections.values():
+            collection.acknowledged = False
+
+    def _retirement_incarnation_current(self) -> bool:
+        runtime = self.get_publishers_info_by_topic("/motion/runtime")
+        feedback = self.get_publishers_info_by_topic("/safety/drive_feedback")
+        good = all(
+            len(rows) == 1 and rows[0].node_name == "safety_gate" and rows[0].node_namespace == "/"
+            for rows in (runtime, feedback)
+        )
+        current = self._retirement_core
+        feedback_gid = bytes(feedback[0].endpoint_gid) if good else None
+        if (
+            not good
+            or current is None
+            or bytes(runtime[0].endpoint_gid) != current[0]
+            or (
+                self._retirement_feedback_gid is not None
+                and feedback_gid != self._retirement_feedback_gid
+            )
+        ):
+            self._invalidate_retirement_proofs()
+            self._retirement_core = None
+            self._retirement_feedback_gid = feedback_gid
+            return False
+        self._retirement_feedback_gid = feedback_gid
+        return True
+
+    def _observe_retirement_core(self, publisher: bytes, boot: str) -> None:
+        identity = (publisher, boot)
+        previous = self._retirement_core
+        if previous == identity:
+            return
+        if self._retirements:
+            self._invalidate_retirement_proofs()
+        self._retirement_core = identity
+        # ACK admission checks both endpoint frontiers before matching a nonce.
+        self._retirement_incarnation_current()
 
     def _on_navigation_sample(self, topic: str, msg: Twist, info: dict[str, Any]) -> None:
         received = self._monotonic_clock.monotonic()
@@ -553,6 +909,7 @@ class CommandNode(Node):
             return
         if not self._motion_runtime.accept(value, bytes(endpoint.endpoint_gid), now):
             return
+        self._observe_retirement_core(bytes(endpoint.endpoint_gid), value.boot_id)
         self._settle_local_reset()
         if value.confirmed_estop_status != "clear":
             self._arbiter.confirm_local_estop(True)
@@ -795,11 +1152,39 @@ class CommandNode(Node):
             and (gid is None or bytes(endpoint.endpoint_gid) == bytes(gid))
             and msg.owner_boot_id == self._owner_boot
             and msg.robot_id == str(self.get_parameter("robot_id").value)
-            and msg.status == "retired"
+            and msg.status in {"retired", "task_retired", "task_collected"}
         ):
-            receipt = self._retirements.get(msg.session_id)
-            if receipt is not None and (msg.request_id, msg.sequence) == receipt[:2]:
-                self._retirements[msg.session_id] = (receipt[0], receipt[1], True)
+            if not self._retirement_incarnation_current() or msg.reason != self._retirement_core[1]:
+                return
+            if msg.status == "task_collected":
+                collection = self._terminal_collections.get(msg.request_id)
+                if (
+                    collection is not None
+                    and collection.execution_id == msg.session_id
+                    and collection.through_epoch == msg.connection_epoch
+                    and msg.sequence == 0
+                ):
+                    collection.acknowledged = True
+            elif msg.status == "task_retired":
+                for request in self._terminal_requests.values():
+                    proof = request.proof
+                    if (
+                        proof is not None
+                        and request.execution_id == msg.session_id
+                        and (msg.request_id, msg.sequence, msg.connection_epoch)
+                        == (proof.token, proof.generation, proof.task_epoch)
+                    ):
+                        request.acknowledged = True
+            else:
+                receipt = self._retirements.get(msg.session_id)
+                if (
+                    receipt is not None
+                    and (msg.request_id, msg.sequence) == (receipt.token, receipt.generation)
+                    and 0 < msg.connection_epoch <= receipt.through_epoch
+                ):
+                    self._retirements[msg.session_id] = replace(
+                        receipt, acknowledged=True, task_epoch=msg.connection_epoch
+                    )
             return
         sample = self._awaiting_feedback.get(msg.request_id)
         # //Compatible: Humble's Python subscription metadata omits publisher_gid.
@@ -851,6 +1236,7 @@ class CommandNode(Node):
         *,
         reason: str | None = None,
         revision: int = 0,
+        source_override: tuple[str, str, int, float, str, int] | None = None,
     ) -> None:
         output_generation = self._generation if generation is None else generation
         cached = getattr(self, "_barrier_frame", None)
@@ -867,7 +1253,7 @@ class CommandNode(Node):
         msg.owner_boot_id = self._owner_boot
         msg.generation = output_generation
         msg.sequence, msg.steady_deadline, msg.vx, msg.wz = 0, 0.0, 0.0, 0.0
-        source = getattr(self, "_last_close_source", ("idle", "", 0, 0.0, "", 0))
+        source = source_override or getattr(self, "_last_close_source", ("idle", "", 0, 0.0, "", 0))
         if reason in {"estop_reset", "fault_recover"}:
             source = ("idle", "", 0, self._monotonic_clock.monotonic(), "", 0)
         msg.request_id = request_id

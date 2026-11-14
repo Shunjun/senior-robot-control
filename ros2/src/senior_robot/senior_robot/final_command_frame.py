@@ -60,7 +60,7 @@ def decode_frame(packet: bytes) -> tuple[int, bytes, SimpleNamespace]:
         received,
         reason,
     ) = LAYOUT.unpack(packet)
-    if magic != b"SCF2" or version != 2 or length != LAYOUT.size or kind not in (0, 1, 2):
+    if magic != b"SCF2" or version != 2 or length != LAYOUT.size or kind not in (0, 1, 2, 3, 4):
         raise ValueError("guard frame version/type")
     if not all(math.isfinite(x) for x in (deadline, vx, wz, received)):
         raise ValueError("guard frame number")

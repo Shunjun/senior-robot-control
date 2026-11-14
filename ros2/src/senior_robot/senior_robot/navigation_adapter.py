@@ -203,6 +203,11 @@ class RouteService:
         source_active: Callable[[str], bool] | None = None,
         connection_epoch: Callable[[], int] | None = None,
         source_retired: Callable[[str], bool] | None = None,
+        retire_source: Callable[[str, int], None] | None = None,
+        release_identity: Callable[..., bool | None] | None = None,
+        collect_identity: Callable[[str, int, str, int, int], bool | None] | None = None,
+        query_collection: Callable[[str, int, str, int, int], tuple[bool, bool | None]]
+        | None = None,
     ) -> None:
         self._adapter = adapter
         self._qualified = qualified
@@ -214,7 +219,12 @@ class RouteService:
         self._source_active = source_active
         self._connection_epoch = connection_epoch
         self._source_retired = source_retired
+        self._retire_source = retire_source
+        self._release_identity = release_identity
+        self._collect_identity = collect_identity
+        self._query_collection = query_collection
         self._fences: dict[str, int] = {}
+        self._collection_scopes: dict[int, tuple[str, int, str]] = {}
         self._current: _Route | None = None
         self._terminal: dict[str, RouteProgress] = {}
 
@@ -352,7 +362,9 @@ class RouteService:
     def _revoke(self, route: _Route, *, completed: bool = False) -> None:
         # //Compatible: older compositions retain the same retirement callback.
         close = self._complete_source if completed and self._complete_source else self._clear_source
-        if close is not None:
+        if not completed and self._retire_source is not None and route.plan.task_epoch is not None:
+            self._retire_source(route.plan.execution_id, route.plan.task_epoch)
+        elif close is not None:
             close(route.plan.execution_id)
         if self._goal_enabled is not None:
             self._goal_enabled(False)
@@ -389,12 +401,87 @@ class RouteService:
     def current(self) -> RouteProgress | None:
         return self._current.progress() if self._current is not None else None
 
+    async def release_terminal(
+        self,
+        execution_id: str,
+        task_epoch: int,
+        effect_id: str,
+        outcome: str,
+        *,
+        dispatch_sequence: int = 0,
+    ) -> bool | None:
+        if self._release_identity is None:
+            return None
+        current = self._current
+        if (
+            current is not None
+            and current.plan.execution_id == execution_id
+            and (current.plan.task_epoch is None or current.plan.task_epoch > task_epoch)
+        ):
+            return None
+        if not self.output_retired(execution_id, task_epoch):
+            await self.cancel(execution_id, task_epoch=task_epoch)
+            if not self.output_retired(execution_id, task_epoch):
+                return None
+        if dispatch_sequence:
+            return self._release_identity(
+                execution_id, task_epoch, effect_id, outcome, dispatch_sequence=dispatch_sequence
+            )
+        # //Compatible: isolated old test adapters have no durable wire sequence.
+        return self._release_identity(execution_id, task_epoch, effect_id, outcome)
+
+    def collect_terminal(
+        self, execution_id: str, epoch: int, effect_id: str, sequence: int, frontier: int
+    ) -> bool | None:
+        if self._collect_identity is None:
+            return None
+        self._compact_collections(frontier)
+        identity = (execution_id, epoch, effect_id)
+        known = self._collection_scopes.get(sequence)
+        if known is not None and known != identity:
+            return False
+        if known is None and len(self._collection_scopes) >= 256:
+            # Only an existing receiver obligation can progress without a slot.
+            _, answer = self.query_terminal_collection(
+                execution_id, epoch, effect_id, sequence, frontier
+            )
+            return answer
+        self._collection_scopes[sequence] = identity
+        return self._collect_identity(execution_id, epoch, effect_id, sequence, frontier)
+
+    def query_terminal_collection(
+        self, execution_id: str, epoch: int, effect_id: str, sequence: int, frontier: int
+    ) -> tuple[bool, bool | None]:
+        known = self._collection_scopes.get(sequence)
+        if known is not None:
+            if known != (execution_id, epoch, effect_id):
+                return True, False
+            return True, self.collect_terminal(execution_id, epoch, effect_id, sequence, frontier)
+        # //Compatible: an R2-issued obligation may exist only in CommandNode.
+        # This lookup cannot allocate a scope or start a route at either owner.
+        if self._query_collection is None:
+            return False, None
+        return self._query_collection(execution_id, epoch, effect_id, sequence, frontier)
+
+    def _compact_collections(self, frontier: int) -> None:
+        for sequence, (execution, _, _) in list(self._collection_scopes.items()):
+            if sequence > frontier:
+                continue
+            current = self._current
+            if current is None or current.plan.execution_id != execution:
+                self._fences.pop(execution, None)
+                self._terminal.pop(execution, None)
+            self._collection_scopes.pop(sequence)
+
     async def cancel(self, execution_id: str, *, task_epoch: int | None = None) -> bool:
         if task_epoch is not None:
             self._fences[execution_id] = max(task_epoch, self._fences.get(execution_id, 0))
         route = self._current
         if route is None or route.plan.execution_id != execution_id:
-            if task_epoch is not None and self._clear_source is not None:
+            if task_epoch is not None and self._retire_source is not None:
+                self._retire_source(execution_id, task_epoch)
+            elif task_epoch is not None and self._clear_source is not None:
+                # //Compatible: isolated old adapters have no epoch-aware retirement port.
                 self._clear_source(execution_id)
             # Unknown requests cannot affect the current route.
             return execution_id in self._terminal

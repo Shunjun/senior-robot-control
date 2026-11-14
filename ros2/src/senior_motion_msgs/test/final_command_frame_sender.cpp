@@ -66,6 +66,33 @@ int main(int argc, char** argv) {
       if (final_command_frame::barrier(wrong)) return 17;
     }
   }
+  if (mode == "terminal" || mode == "collected") {
+    zero_barrier(m, "task_terminal");
+    m.source_kind = "navigation";
+    m.source_id = m.session_id = "execution";
+    if (mode == "collected") {
+      m.close_reason = "task_settled"; m.generation = 0; m.connection_epoch = m.source_epoch;
+    }
+    if (final_command_frame::barrier(m)) return 20;
+    if (!final_command_frame::terminal_identity_authorized(m, m.robot_id, m.owner_boot_id, false, 10.3)) return 21;
+    for (int mutation = 0; mutation < 10; ++mutation) {
+      Command wrong = m;
+      if (mutation == 0) wrong.vx = .1;
+      if (mutation == 1) wrong.steady_deadline = 10.55;
+      if (mutation == 2) wrong.sequence = 1;
+      if (mutation == 3) wrong.gesture = 1;
+      if (mutation == 4) wrong.source_epoch = 0;
+      if (mutation == 5) wrong.source_kind = "manual";
+      if (mutation == 6) wrong.session_id = "different";
+      if (mutation == 7) wrong.received_steady = 10.4;
+      if (mutation == 8) wrong.request_id = "";
+      if (mutation == 9) wrong.source_id = std::string(129, 'x');
+      if (final_command_frame::terminal_identity_authorized(wrong, m.robot_id, m.owner_boot_id, false, 10.3)) return 22;
+    }
+    if (final_command_frame::terminal_identity_authorized(m, m.robot_id, "", false, 10.3) ||
+        final_command_frame::terminal_identity_authorized(m, m.robot_id, "other", false, 10.3) ||
+        final_command_frame::terminal_identity_authorized(m, m.robot_id, m.owner_boot_id, true, 10.3)) return 23;
+  }
   if (mode == "boundary") m.source_id = std::string(128, 'x');
   if (mode == "oversize") m.source_id = std::string(129, 'x');
 
@@ -88,7 +115,7 @@ int main(int argc, char** argv) {
   std::array<uint8_t, 24> gid{};
   gid[0] = 17;
   try {
-    const auto frame = final_command_frame::encode(1, gid, m);
+    const auto frame = final_command_frame::encode(mode == "collected" ? 4 : mode == "terminal" ? 3 : 1, gid, m);
     const auto sent = ::send(std::atoi(argv[1]), frame.data(), frame.size(), 0);
     return sent == static_cast<ssize_t>(frame.size()) ? 0 : 3;
   } catch (const std::invalid_argument&) {
