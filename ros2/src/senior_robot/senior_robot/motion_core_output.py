@@ -45,6 +45,7 @@ class MotionCoreOutput:
         from std_msgs.msg import String
 
         self.node, self.profile = node, profile
+        self.acceleration_model = profile.acceleration_model()
         self.boot = uuid4().hex
         self.sequence = 0
         self.event_sequence = 0
@@ -226,23 +227,15 @@ class MotionCoreOutput:
 
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
         c = self.controller.config
-        if not self.profile.simulation_only and body is not None:
-            packet = self._reference
-            if packet is None:
-                return False
-            ref = packet["reference"]
-            # Reset uses consecutive measured near-zero intervals within the
-            # configured freshness window. Reaction acceleration still expands
-            # the driving risk envelope; it is not a second, implicit reset TTL.
-            age = self._reference_age_ros(ref)
-            if (
-                not 0 <= age <= self.profile.temporal().prediction_horizon_s
-                or abs(body.velocity.vx) + self.profile.linear_error
-                > self.profile.stationary_linear_mps
-                or abs(body.velocity.wz) + self.profile.yaw_error
-                > self.profile.stationary_yaw_rps
-            ):
-                return False
+        packet = self._reference
+        if packet is None:
+            return False
+        # Both deployments use original reference time and the shared controller's
+        # consecutive-sample stillness check. Profiles supply numeric tolerances;
+        # hardware's controller() already deducts its base measurement errors.
+        age = self._reference_age_ros(packet["reference"])
+        if not 0 <= age <= self.profile.temporal().prediction_horizon_s:
+            return False
         return bool(
             body is not None
             and wheel is not None
@@ -698,21 +691,12 @@ class MotionCoreOutput:
                 "native T3 reference; upper unsupported",
             )
             p = self.profile
-            # Hardware declares nominal acceleration and a potentially larger
-            # reaction-phase bound. The response upper bound must cover both;
-            # never shrink the risk envelope to fit the nominal value.
-            # //Compatible: simulation retains its existing response model.
-            response_accel = (
-                p.accel if p.simulation_only else max(p.accel, p.reaction_linear_accel)
-            )
-            response_yaw_accel = (
-                p.yaw_accel if p.simulation_only else max(p.yaw_accel, p.reaction_yaw_accel)
-            )
+            acceleration_upper = self.acceleration_model.upper
             response = ResponseBounds(
-                response_accel,
+                acceleration_upper.vx,
                 p.decel,
                 p.jerk,
-                response_yaw_accel,
+                acceleration_upper.wz,
                 p.yaw_decel,
                 p.yaw_jerk,
                 p.lag,
@@ -733,11 +717,7 @@ class MotionCoreOutput:
                 age = (
                     max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
                 )
-                predictor_accel = (
-                    Velocity(p.accel, p.yaw_accel)
-                    if p.simulation_only
-                    else p.reaction_acceleration(a)
-                )
+                predictor_accel = acceleration_upper
                 dv = p.linear_error + predictor_accel.vx * age
                 dw = p.yaw_error + predictor_accel.wz * age
                 linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
@@ -757,7 +737,7 @@ class MotionCoreOutput:
                 p.horizon_s,
                 linear,
                 angular,
-                p.reaction_acceleration(a),
+                self.acceleration_model.reaction(a),
                 p.position_error,
                 p.orientation_error_rad,
                 p.lateral_drift_mps,
