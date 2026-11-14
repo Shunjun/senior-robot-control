@@ -85,7 +85,8 @@ def test_native_plan_uses_one_root_and_ros_venv(control_dir):
     profile = cli.load_profile(config, control_dir=control_dir)
     unit = render_service(profile, "wheeltec", container_root=None)
     assert "/opt/robot/.ros-venv/bin/python" in unit
-    assert "senior_control.agent.main" in unit
+    assert "senior_control.docker_start_helper run" in unit
+    assert "KillMode=mixed" in unit
     assert f"EnvironmentFile={control_dir}/agent.env" in unit
     assert f"ReadWritePaths={control_dir}" in unit
     assert "ProtectHome=read-only" in unit

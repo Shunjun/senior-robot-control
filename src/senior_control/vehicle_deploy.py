@@ -161,7 +161,18 @@ def render_service(profile: VehicleProfile, user: str, *, container_root: Path |
             f"User={user}",
             f"WorkingDirectory={_argument(project)}",
             f"EnvironmentFile={_argument(env_file)}",
-            "ExecStart=" + _command([str(python), "-m", "senior_control.agent.main"]),
+            "ExecStart="
+            + _command(
+                [
+                    str(python),
+                    "-m",
+                    "senior_control.docker_start_helper",
+                    "run",
+                    "--control-dir",
+                    str(root),
+                ]
+            ),
+            "KillMode=mixed",
         ]
     lines += [
         "Restart=on-failure",
@@ -294,5 +305,8 @@ def doctor(profile: VehicleProfile) -> int:
             "private directory and project .ros-venv."
         )
         return 1
-    print("Agent Python and control directory verified. ROS adapter is managed separately.")
+    print(
+        "Agent Python and control directory verified. Start manages the ROS adapter and Agent; "
+        "ROS readiness is checked at startup."
+    )
     return 0
