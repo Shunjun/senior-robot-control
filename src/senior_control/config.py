@@ -34,7 +34,6 @@ class DeviceProfile(ConfigModel):
     mode: Literal["simulation", "hardware"] = "simulation"
     footprint: list[tuple[float, float]] = Field(default_factory=list)
     self_mask: list[list[tuple[float, float]]] = Field(default_factory=list)
-    self_mask_calibrated: bool = False
     topics: dict[str, str] = Field(default_factory=dict)
     frames: dict[str, str] = Field(default_factory=dict)
     sensor_coverage: dict[str, float] = Field(default_factory=dict)
@@ -44,6 +43,16 @@ class DeviceProfile(ConfigModel):
     reaction_time: float | None = None
     hard_margin: float | None = None
     observation_max_age: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_mask_confirmation(cls, value: Any) -> Any:
+        # //Compatible: old hardware/simulation profiles included an operator
+        # confirmation flag. Geometry is validated directly; the flag has no effect.
+        if isinstance(value, Mapping):
+            value = dict(value)
+            value.pop("self_mask_calibrated", None)
+        return value
 
     @field_validator("sensor_coverage", mode="before")
     @classmethod

@@ -9,7 +9,6 @@ scan_adapter:
     use_sim_time: true
     body_frame: base_link
     max_age_seconds: 0.8
-    self_mask_calibrated: true
     no_return_clear: false
 safety_scan_ingress:
   ros__parameters:
@@ -69,7 +68,6 @@ safety_gate:
     body_frame: base_link
     simulation_rate_hz: 20.0
     footprint_xy: [-0.337, -0.276, 0.337, -0.276, 0.337, 0.276, -0.337, 0.276]
-    self_mask_calibrated: true
     interpolate: true
     max_angular_gap: 0.01
     braking_deceleration: 0.3
