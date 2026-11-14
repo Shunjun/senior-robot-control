@@ -236,6 +236,12 @@ def service_status(unit: str, profile: VehicleProfile, *, user: bool) -> int:
     active = properties.get("ActiveState", "unknown")
     print(f"Process: {active}")
     print(f"ROS IPC: {'verified' if asyncio.run(_probe(profile)) else 'unavailable'}")
+    if (
+        profile.kind == "real"
+        and profile.motion_profile is None
+        and profile.safety_parameters is None
+    ):
+        print("Motion: unavailable (hardware motion configuration not selected)")
     invocation = properties.get("InvocationID")
     cloud = "unverified"
     if active == "active" and invocation and invocation != "0" * 32:

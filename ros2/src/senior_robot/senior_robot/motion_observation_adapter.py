@@ -6,6 +6,7 @@ never invented from ROS covariance. ROS/steady timestamps remain separate.
 
 import json
 import math
+import time
 from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -54,6 +55,19 @@ def observation_origin(
     expected_namespace: str = "/",
 ) -> PublisherOrigin | None:
     """Validate real metadata; never label a discovery GID as a sample GID."""
+    if isinstance(info, dict) and info.get("native_receipt_authenticated") is True:
+        # The private inherited channel binds configuration to the native
+        # consumer, which checked sole-writer topology AND this MessageInfo GID.
+        # Python discovery may lag native discovery; it supplies no sample ID.
+        gid = publisher_gid(info)
+        if (
+            gid
+            and any(gid)
+            and info.get("native_writer_name") == expected_name
+            and info.get("native_writer_namespace") == expected_namespace
+        ):
+            return PublisherOrigin(gid, gid, "native_message_info_and_writer_binding")
+        return None
     if (
         len(endpoints) != 1
         or endpoints[0].node_name != expected_name
@@ -87,7 +101,19 @@ def stamp_seconds(stamp: Any) -> float:
 class NativeObservations:
     """One source admission/recovery owner. Configuration is supplied by ROS profile."""
 
-    def __init__(self, admission: AdmissionConfig, temporal: TemporalConfig, fusion: FusionConfig):
+    def __init__(
+        self,
+        admission: AdmissionConfig,
+        temporal: TemporalConfig,
+        fusion: FusionConfig,
+        *,
+        wheel_frame: str = "odom",
+    ):
+        # //Compatible: isolated simulation and pure callers retain odom.
+        # ROS supplies its actual configured odometry frame for hardware.
+        if not wheel_frame:
+            raise ValueError("wheel_frame must be nonempty")
+        self.wheel_frame = wheel_frame
         self.owner = AdmissionOwner(admission, event_capacity=4096)
         self.resolver = TemporalResolver(temporal)
         self.fusion = NumericalFusion(fusion)
@@ -98,6 +124,13 @@ class NativeObservations:
         self._last_ros: float | None = None
         self._clock_epoch = 0
         self.poses: deque[dict[str, Any]] = deque(maxlen=64)
+
+    def invalidate_source(self, source: Source) -> None:
+        self.owner.interrupt_source(source)
+        if source is Source.WHEEL:
+            self.poses.clear()
+        if source is Source.LASER:
+            self._window = None
 
     def identity(
         self, source: Source, gid: bytes | PublisherOrigin, producer_epoch: str, now_ros: float
@@ -135,8 +168,16 @@ class NativeObservations:
             self._window = (sample.start_ros, sample.end_ros)
         return decision.accepted
 
+    # //Compatible: isolated pure callers inject one clock; ROS facades separately
+    # supply handling time so queued native receipts never refresh evidence TTL.
     def wheel(
-        self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float
+        self,
+        msg: Any,
+        gid: bytes | PublisherOrigin,
+        now_ros: float,
+        received: float,
+        *,
+        now_steady: float | None = None,
     ) -> bool:
         if msg.child_frame_id != "base_link":
             raise ValueError("wheel twist is not in body frame")
@@ -158,8 +199,8 @@ class NativeObservations:
             None,
             Pose2D(0, 0, 0),
         )
-        accepted = self.ingest(sample, now_ros, received)
-        if accepted and msg.header.frame_id == "odom" and hasattr(msg, "pose"):
+        accepted = self.ingest(sample, now_ros, received if now_steady is None else now_steady)
+        if accepted and msg.header.frame_id == self.wheel_frame and hasattr(msg, "pose"):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             if (
@@ -180,7 +221,15 @@ class NativeObservations:
                 )
         return accepted
 
-    def imu(self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float) -> bool:
+    def imu(
+        self,
+        msg: Any,
+        gid: bytes | PublisherOrigin,
+        now_ros: float,
+        received: float,
+        *,
+        now_steady: float | None = None,
+    ) -> bool:
         # A non-body IMU must be transformed by the ROS facade before admission.
         if msg.header.frame_id != "base_link":
             raise ValueError("IMU requires explicit body rotation")
@@ -199,10 +248,16 @@ class NativeObservations:
             None,
             Pose2D(0, 0, 0),
         )
-        return self.ingest(sample, now_ros, received)
+        return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
 
     def laser(
-        self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float
+        self,
+        msg: Any,
+        gid: bytes | PublisherOrigin,
+        now_ros: float,
+        received: float,
+        *,
+        now_steady: float | None = None,
     ) -> bool:
         if msg.header.frame_id != "base_link":
             raise ValueError("scan delta is not body-frame")
@@ -223,7 +278,7 @@ class NativeObservations:
                 None,
                 Pose2D(0, 0, 0),
             )
-            return self.ingest(sample, now_ros, received)
+            return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
         covariance = Covariance(
             tuple(float(x) for x in msg.covariance),
             CovarianceKind.FULL,
@@ -245,7 +300,7 @@ class NativeObservations:
             None,
             Pose2D(0, 0, 0),
         )
-        return self.ingest(sample, now_ros, received)
+        return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
 
     def snapshot(self, now_ros: float, now_steady: float) -> dict[str, Any]:
         snapshot = self.owner.snapshot(
@@ -304,32 +359,71 @@ class NativeObservationRosBridge:
         self.node = node
         self.profile = profile
         self.allow_topology_only = bool(profile.simulation_only and profile.unvalidated)
-        self.core = NativeObservations(profile.admission(), profile.temporal(), profile.fusion())
+        self.core = NativeObservations(
+            profile.admission(),
+            profile.temporal(),
+            profile.fusion(),
+            wheel_frame=str(node.get_parameter("wheel_frame").value),
+        )
         self.publisher = node.create_publisher(String, "/motion/core_reference", 10)
         self._message_type = String
         self._warn_at = 0.0
         self._subscriptions = []
         for cls, topic, handler in [
-            (Odometry, "/wheel/odom", self.core.wheel),
+            (Odometry, "/wheel/odom", self.core.wheel if profile.simulation_only else self._wheel),
             (Imu, "/imu/data", self._imu),
-            (ScanMotion, "/motion/scan", self.core.laser),
+            (
+                ScanMotion,
+                "/motion/scan",
+                self.core.laser if profile.simulation_only else self._laser,
+            ),
         ]:
-            self._subscriptions.append(
-                node.create_subscription(
-                    cls, topic, self._callback(handler, topic), qos_profile_sensor_data
+            callback = self._callback(handler, topic)
+            if profile.simulation_only:
+                # //Compatible: keep the isolated simulation subscription path.
+                subscription = node.create_subscription(
+                    cls, topic, callback, qos_profile_sensor_data
                 )
-            )
+            else:
+                from senior_robot.native_receipt import subscribe
+
+                source = {
+                    "/wheel/odom": Source.WHEEL,
+                    "/imu/data": Source.IMU,
+                    "/motion/scan": Source.LASER,
+                }[topic]
+                writer = {
+                    "/wheel/odom": profile.wheel_publisher,
+                    "/imu/data": profile.imu_publisher,
+                    "/motion/scan": "scan_motion_node",
+                }[topic]
+
+                def invalidate(source=source):
+                    self.core.invalidate_source(source)
+
+                subscription = subscribe(
+                    node,
+                    cls,
+                    topic,
+                    callback,
+                    writer=writer,
+                    namespace=profile.source_namespace if source is not Source.LASER else "/",
+                    qos="sensor" if source is not Source.LASER else "reliable",
+                    invalidate=invalidate,
+                )
+            self._subscriptions.append(subscription)
         self._timer = node.create_timer(
             0.05, self._publish, clock=Clock(clock_type=ClockType.STEADY_TIME)
         )
 
     def _callback(self, handler: Any, topic: str) -> Any:
         def receive(msg: Any, info: Any) -> None:
-            import time
 
             from tf2_ros import TransformException
 
-            now = time.monotonic()
+            from senior_robot.native_receipt import received_steady
+
+            now = received_steady(info)
             expected = {
                 "/wheel/odom": self.profile.wheel_publisher,
                 "/imu/data": self.profile.imu_publisher,
@@ -366,13 +460,74 @@ class NativeObservationRosBridge:
 
         return with_dds_info(receive)
 
+    def _laser(
+        self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float
+    ) -> bool:
+        return self.core.laser(msg, gid, now_ros, received, now_steady=time.monotonic())
+
+    def _wheel(
+        self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float
+    ) -> bool:
+        # //Compatible: WHEELTEC defaults to base_footprint; the common core uses
+        # base_link. Transform the actual stamped twist/pose, never relabel it.
+        if msg.child_frame_id == "base_link":
+            return self.core.wheel(msg, gid, now_ros, received, now_steady=time.monotonic())
+        from types import SimpleNamespace as N
+
+        from rclpy.time import Time
+
+        from senior_control.motion.kinematics import compose, inverse
+
+        transform = self.node._tf.lookup_transform(
+            "base_link", msg.child_frame_id, Time.from_msg(msg.header.stamp)
+        )
+        q = transform.transform.rotation
+        if (
+            not all(math.isfinite(x) for x in (q.x, q.y, q.z, q.w))
+            or abs(q.x) > 1e-6
+            or abs(q.y) > 1e-6
+            or abs(q.z * q.z + q.w * q.w - 1) > 1e-6
+        ):
+            raise ValueError("wheel body transform must be planar and normalized")
+        t = transform.transform.translation
+        body_from_child = Pose2D(t.x, t.y, math.atan2(2 * q.w * q.z, 1 - 2 * q.z * q.z))
+        v, w = msg.twist.twist.linear, msg.twist.twist.angular
+        c, sn = math.cos(body_from_child.yaw), math.sin(body_from_child.yaw)
+        vx = c * v.x - sn * v.y + w.z * t.y
+        p, rotation = msg.pose.pose.position, msg.pose.pose.orientation
+        if (
+            not all(math.isfinite(x) for x in (rotation.x, rotation.y, rotation.z, rotation.w))
+            or abs(rotation.x) > 1e-6
+            or abs(rotation.y) > 1e-6
+            or abs(rotation.z * rotation.z + rotation.w * rotation.w - 1) > 1e-6
+        ):
+            raise ValueError("wheel pose must be planar and normalized")
+        odom_child = Pose2D(
+            p.x, p.y, math.atan2(2 * rotation.w * rotation.z, 1 - 2 * rotation.z * rotation.z)
+        )
+        odom_body = compose(odom_child, inverse(body_from_child))
+        normalized = N(
+            header=msg.header,
+            child_frame_id="base_link",
+            twist=N(twist=N(linear=N(x=vx), angular=N(z=w.z))),
+            pose=N(
+                pose=N(
+                    position=N(x=odom_body.x, y=odom_body.y),
+                    orientation=N(
+                        x=0.0, y=0.0, z=math.sin(odom_body.yaw / 2), w=math.cos(odom_body.yaw / 2)
+                    ),
+                )
+            ),
+        )
+        return self.core.wheel(normalized, gid, now_ros, received, now_steady=time.monotonic())
+
     def _imu(self, msg: Any, gid: bytes | PublisherOrigin, now_ros: float, received: float) -> bool:
         from types import SimpleNamespace
 
         from rclpy.time import Time
 
         if msg.header.frame_id == "base_link":
-            return self.core.imu(msg, gid, now_ros, received)
+            return self.core.imu(msg, gid, now_ros, received, now_steady=time.monotonic())
         tf = self.node._tf.lookup_transform(
             "base_link", msg.header.frame_id, Time.from_msg(msg.header.stamp)
         )
@@ -390,7 +545,7 @@ class NativeObservationRosBridge:
             header=SimpleNamespace(stamp=msg.header.stamp, frame_id="base_link"),
             angular_velocity=SimpleNamespace(z=z),
         )
-        return self.core.imu(normalized, gid, now_ros, received)
+        return self.core.imu(normalized, gid, now_ros, received, now_steady=time.monotonic())
 
     def _publish(self, *, laser_update: bool = False) -> None:
         import time

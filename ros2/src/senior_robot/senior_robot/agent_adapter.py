@@ -581,6 +581,13 @@ def main() -> None:
                     "localization_generation": None,
                 }
             )
+            configured = bool(node.get_parameter("motion_control_configured").value)
+            result["motion_control_configured"] = configured
+            result["motion_configuration_diagnostic"] = (
+                None
+                if configured
+                else "real_motion_not_configured: missing motion_profile/safety_parameters"
+            )
             result["task_evidence_ready"] = node.task_motion_allowed(continuing=True)
             runtime = node.motion_runtime()
             result["motion_runtime"] = runtime

@@ -26,6 +26,7 @@ class VehicleProfile(BaseModel):
     kind: Literal["real", "simulation"]
     credentials: Path
     ros_setup: Path | None = None
+    vendor_ros_setup: Path = Path("/home/wheeltec/wheeltec_ros2/install/setup.bash")
     database: Path | None = None
     socket: Path | None = None
     cloud_url: str | None = None

@@ -2,7 +2,7 @@
 
 本页从克隆仓库后的安装开始，分别说明已有 Docker 容器和非容器两种实车部署。云端服务须先按[云端部署](deploy.md)准备；Gazebo 环境使用[仿真部署](simulation.md)，不要把仿真启动命令用于实车。
 
-本页适用于包含 [PR #17](https://github.com/Shunjun/senior-robot-control/pull/17) 联合启停修复与 [PR #18](https://github.com/Shunjun/senior-robot-control/pull/18) 实车控制接入的版本。native 与 Docker 的 `start` 都校验实车参数、加载实际 ROS overlay，启动共享扫描处理、运动融合、安全门和单个 `agent_adapter`，完成身份握手后再启动 Agent。`deploy` 仅生成和注册服务，不启动。厂商驱动、TF 和已有容器仍由现场管理；导航需另外提供有效地图、定位与 Nav2 参数。服务 active 或云端在线都不代表运动能力已就绪。
+本页适用于包含 [PR #17](https://github.com/Shunjun/senior-robot-control/pull/17) 联合启停修复与 [PR #18](https://github.com/Shunjun/senior-robot-control/pull/18) 实车控制接入的版本。native 与 Docker 的 `start` 都校验实车参数、加载实际 ROS overlay，启动共享扫描处理、运动融合、安全门和单个 `agent_adapter`，完成身份握手后再启动 Agent。`deploy` 仅生成和注册服务，不启动。选择实车运动配置后，同一 ROS launch 同时启动厂家底盘（含板载 IMU、EKF、车身 TF）、雷达与相机；已有容器仍由现场管理；导航需另外提供有效地图、定位与 Nav2 参数。服务 active 或云端在线都不代表运动能力已就绪。
 
 ## 1. 确认运行位置与目录
 
@@ -65,11 +65,40 @@ cp config/vehicle-real.example.json "$control_dir/config.json"
   "project_dir": "/home/wheeltec/ros2_shared_dir/senior-robot-control",
   "cloud_url": "wss://robot.example.com/ws/agent",
   "motion_profile": "hardware-motion.json",
-  "safety_parameters": "hardware-motion.yaml"
+  "safety_parameters": "hardware-safety.yaml"
 }
 ```
 
-`motion_profile` 和 `safety_parameters` 必须分别指向已测量的硬件响应 JSON 和已标定的 ROS 参数 YAML；相对路径以统一目录为基准，在实际运行环境中解析。示例文件含未填项，不能直接用于运动。填写要求与尚缺的硬件依据见[实车启动配置](hardware.md#同一运动核心的实车启动配置)。可选导航须同时提供 `navigation_reference` 和 `navigation_parameters`；未配置时为手动模式，导航 unavailable。
+`motion_profile` 指向运动响应和误差参数 JSON，`safety_parameters` 指向 ROS 参数 YAML。
+相对路径以 **config.json 所在的统一目录** 为基准，不是项目目录，也不是启动命令所在目录。
+按上例应把配套文件放成：
+
+```text
+/home/wheeltec/ros2_shared_dir/senior-control/
+├── config.json
+├── hardware-motion.json
+└── hardware-safety.yaml
+```
+
+从项目目录复制配套文件（已有同名文件时先保留自己的配置，不覆盖）：
+
+```sh
+cp -n config/hardware-motion.json config/hardware-safety.yaml \
+  /home/wheeltec/ros2_shared_dir/senior-control/
+```
+
+Docker 模式可在 config.json 添加 `"container": "ros2"`，参照
+[agent.example.json](../../config/agent.example.json)；非 Docker 模式不设置 container。
+保持自己已有的 cloud_url、project_dir 和 ros_domain，不要用示例值覆盖现场配置。
+相对路径会在容器内按已映射的统一目录解析，因此该目录及两个文件也必须被现有 bind mount 覆盖。
+
+两项都不配置时只启动 Agent/IPC，状态显示 Motion unavailable；填入后选择共享实车运动栈。
+文件路径或数值格式错误会明确报错。当前配套 JSON 包含用户要求的假设参数，核对由操作人员负责，
+说明文字不会作为“是否实测”的认证条件；配置加载成功不表示运动运行验收通过。
+更多字段见[逐项参数说明](hardware-motion-parameters.md)。
+可选导航须同时提供 navigation_reference 和 navigation_parameters；未配置时导航 unavailable。
+
+实车运动启动会先加载 `vendor_ros_setup`（默认 `/home/wheeltec/wheeltec_ros2/install/setup.bash`），再加载本项目 `ros_setup`。厂家底盘、雷达和相机分别复用 `turn_on_wheeltec_robot.launch.py`、`wheeltec_lidar.launch.py` 与 `wheeltec_camera.launch.py`，从厂家的 `wheeltec_param.yaml` 读取车型、IMU 和雷达型号，相机型号同样读取厂家配置；不启动键盘控制或独立厂家导航。驱动随服务联合停止；不要同时手动启动相同驱动。当前厂家底盘发布 `/odom`（帧 `odom_combined`）、`/imu/data_raw`，雷达发布 `/scan`。旧配套 YAML 的 `wheel_frame: odom` 自动迁移为 `odom_combined`，话题 `/odom` 不改名。
 
 CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地址。可显式添加 `ros_setup` 指向实际 ROS overlay 的绝对路径；默认推导为 `project_dir/ros2/install/setup.bash`。该 overlay 必须包含构建时正确加载的 ROS 底层及厂商 underlay。若驱动使用特定 ROS 域，添加与驱动实际一致的 `ros_domain` 整数；不要照搬仿真域或假定为 42。`project_dir` 在 Docker 模式下指容器内的路径，必须能找到 `.ros-venv/bin/python` 和已安装的本项目。Python 路径不单独配置。不要逐项添加 `credentials`、`database`、`socket` 或 `estop_state` 的其他路径；CLI 从统一目录推导它们。
 
@@ -143,7 +172,7 @@ source install/setup.bash
 
 ## 6. 准备实车 ROS 适配器和安全链
 
-联合入口负责共享运动栈、适配器和 Agent 的生命周期；现场仍需管理厂商驱动、TF，以及导航所需地图与定位来源，并完成下列核验。不要预先启动另一个适配器占用本服务的 `agent.sock`：
+联合入口负责厂家底盘、雷达、相机、共享运动栈、适配器和 Agent 的生命周期；现场仍需管理导航所需地图与定位来源，并完成下列核验。不要预先启动另一个适配器占用本服务的 `agent.sock`：
 
 - 联合入口从 `device.json` 读取 robot ID 并传给适配器，握手核对身份；不要输出或复制其中的 token。
 - 适配器的 `SENIOR_AGENT_SOCKET` 指向运行环境内统一目录的 `agent.sock`，进程用户可读写该目录并能创建端点。
@@ -206,7 +235,7 @@ sudo .venv/bin/senior-robot stop \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
 
-两种模式都先停止 Agent 和本次适配器，再关闭本次共享运动栈及其子进程；Docker 模式保留已有 `run/stop` 接口，不停止整个容器、厂商驱动或外部独立运行的节点。入口不覆盖活动或未知 socket，只回收身份记录一致、明确属于己方的陈旧 socket；不要盲删 socket、owner 记录或锁文件。
+两种模式都先停止 Agent 和本次适配器，再关闭本次共享运动栈及其子进程；Docker 模式保留已有 `run/stop` 接口，同时停止本次 launch 启动的厂家驱动，不停止整个容器或外部独立运行的节点。入口不覆盖活动或未知 socket，只回收身份记录一致、明确属于己方的陈旧 socket；不要盲删 socket、owner 记录或锁文件。
 
 | 现象 | 先检查 |
 | --- | --- |

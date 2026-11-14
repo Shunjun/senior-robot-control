@@ -170,6 +170,70 @@
       "title": "FusionConfig",
       "type": "object"
     },
+    "HardwareEstopCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "unknown",
+          "enum": [
+            "readable",
+            "independent_unreadable",
+            "unknown"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "basis": {
+          "default": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
+          "title": "Basis",
+          "type": "string"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
+        "publisher": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publisher"
+        },
+        "namespace": {
+          "default": "/",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "max_age_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Age S"
+        }
+      },
+      "title": "HardwareEstopCapability",
+      "type": "object"
+    },
     "Source": {
       "enum": [
         "laser",
@@ -285,12 +349,12 @@
       "type": "string"
     },
     "evidence_basis": {
-      "minLength": 1,
+      "default": "",
       "title": "Evidence Basis",
       "type": "string"
     },
     "operating_conditions": {
-      "minLength": 1,
+      "default": "",
       "title": "Operating Conditions",
       "type": "string"
     },
@@ -299,12 +363,8 @@
       "title": "Simulation Only",
       "type": "boolean"
     },
-    "unvalidated": {
-      "const": false,
-      "title": "Unvalidated",
-      "type": "boolean"
-    },
     "max_age": {
+      "default": 0.5,
       "exclusiveMinimum": 0,
       "title": "Max Age",
       "type": "number"
@@ -344,9 +404,10 @@
       "title": "Lag",
       "type": "number"
     },
-    "cap": {
+    "requested_linear_mps": {
+      "default": 1.3888888888888888,
       "exclusiveMinimum": 0,
-      "title": "Cap",
+      "title": "Requested Linear Mps",
       "type": "number"
     },
     "degraded_cap": {
@@ -355,18 +416,42 @@
       "type": "number"
     },
     "yaw_cap": {
+      "default": 2.0,
       "exclusiveMinimum": 0,
       "title": "Yaw Cap",
       "type": "number"
     },
     "length": {
+      "default": 0.674,
       "exclusiveMinimum": 0,
       "title": "Length",
       "type": "number"
     },
     "width": {
+      "default": 0.552,
       "exclusiveMinimum": 0,
       "title": "Width",
+      "type": "number"
+    },
+    "track_width_m": {
+      "default": 0.481154,
+      "exclusiveMinimum": 0,
+      "title": "Track Width M",
+      "type": "number"
+    },
+    "wheel_speed_mps": {
+      "exclusiveMinimum": 0,
+      "title": "Wheel Speed Mps",
+      "type": "number"
+    },
+    "stationary_linear_mps": {
+      "exclusiveMinimum": 0,
+      "title": "Stationary Linear Mps",
+      "type": "number"
+    },
+    "stationary_yaw_rps": {
+      "exclusiveMinimum": 0,
+      "title": "Stationary Yaw Rps",
       "type": "number"
     },
     "linear_error": {
@@ -390,6 +475,8 @@
       "type": "number"
     },
     "model_seconds": {
+      "default": 3600.0,
+      "description": "Startup model lease budget, seconds; not measured response",
       "exclusiveMinimum": 0,
       "title": "Model Seconds",
       "type": "number"
@@ -410,6 +497,8 @@
       "type": "number"
     },
     "horizon_s": {
+      "default": 12.0,
+      "description": "Software stop-search horizon; physical envelope must cover this horizon",
       "exclusiveMinimum": 0,
       "title": "Horizon S",
       "type": "number"
@@ -439,79 +528,116 @@
       "title": "Reaction Yaw Accel",
       "type": "number"
     },
+    "watchdog_mode": {
+      "default": "unknown",
+      "enum": [
+        "verified",
+        "unknown"
+      ],
+      "title": "Watchdog Mode",
+      "type": "string"
+    },
     "watchdog_basis": {
-      "minLength": 1,
+      "default": "Target firmware watchdog behavior unconfirmed",
       "title": "Watchdog Basis",
       "type": "string"
     },
-    "hardware_estop_topic": {
-      "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
-      "title": "Hardware Estop Topic",
-      "type": "string"
-    },
-    "hardware_estop_publisher": {
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-      "title": "Hardware Estop Publisher",
-      "type": "string"
-    },
-    "hardware_estop_max_age_s": {
-      "exclusiveMinimum": 0,
-      "title": "Hardware Estop Max Age S",
-      "type": "number"
-    },
-    "hardware_estop_basis": {
-      "minLength": 1,
-      "title": "Hardware Estop Basis",
-      "type": "string"
+    "hardware_estop": {
+      "$ref": "#/$defs/HardwareEstopCapability",
+      "default": {
+        "mode": "unknown",
+        "basis": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
+        "topic": null,
+        "publisher": null,
+        "namespace": "/",
+        "max_age_s": null
+      }
     },
     "perception_basis": {
-      "minLength": 1,
+      "default": "original raw lidar; hardware no-return remains unknown",
       "title": "Perception Basis",
       "type": "string"
     },
     "risk_basis": {
-      "minLength": 1,
+      "default": "",
       "title": "Risk Basis",
       "type": "string"
     },
     "brake_tracking_basis": {
-      "minLength": 1,
+      "default": "",
       "title": "Brake Tracking Basis",
       "type": "string"
     },
     "admission_config": {
-      "$ref": "#/$defs/AdmissionConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AdmissionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "temporal_config": {
-      "$ref": "#/$defs/TemporalConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TemporalConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "fusion_config": {
-      "$ref": "#/$defs/FusionConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FusionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "controller_config": {
-      "$ref": "#/$defs/ControllerConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ControllerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "wheel_topic": {
+      "default": "/odom",
       "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
       "title": "Wheel Topic",
       "type": "string"
     },
     "imu_topic": {
+      "default": "/imu/data_raw",
       "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
       "title": "Imu Topic",
       "type": "string"
     },
     "wheel_publisher": {
+      "default": "wheeltec_robot",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
       "title": "Wheel Publisher",
       "type": "string"
     },
     "imu_publisher": {
+      "default": "wheeltec_robot",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
       "title": "Imu Publisher",
       "type": "string"
     },
     "source_namespace": {
+      "default": "/",
       "pattern": "^/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?$",
       "title": "Source Namespace",
       "type": "string"
@@ -520,11 +646,7 @@
   "required": [
     "schema_version",
     "profile_id",
-    "evidence_basis",
-    "operating_conditions",
     "simulation_only",
-    "unvalidated",
-    "max_age",
     "accel",
     "decel",
     "jerk",
@@ -532,42 +654,22 @@
     "yaw_decel",
     "yaw_jerk",
     "lag",
-    "cap",
     "degraded_cap",
-    "yaw_cap",
-    "length",
-    "width",
+    "wheel_speed_mps",
+    "stationary_linear_mps",
+    "stationary_yaw_rps",
     "linear_error",
     "yaw_error",
     "sensor_error",
     "position_error",
-    "model_seconds",
     "assumed_body_cap",
     "drive_linear_overshoot",
     "drive_yaw_overshoot",
-    "horizon_s",
     "orientation_error_rad",
     "lateral_drift_mps",
     "lateral_stop_s",
     "reaction_linear_accel",
-    "reaction_yaw_accel",
-    "watchdog_basis",
-    "hardware_estop_topic",
-    "hardware_estop_publisher",
-    "hardware_estop_max_age_s",
-    "hardware_estop_basis",
-    "perception_basis",
-    "risk_basis",
-    "brake_tracking_basis",
-    "admission_config",
-    "temporal_config",
-    "fusion_config",
-    "controller_config",
-    "wheel_topic",
-    "imu_topic",
-    "wheel_publisher",
-    "imu_publisher",
-    "source_namespace"
+    "reaction_yaw_accel"
   ],
   "title": "HardwareMotionProfile",
   "type": "object"

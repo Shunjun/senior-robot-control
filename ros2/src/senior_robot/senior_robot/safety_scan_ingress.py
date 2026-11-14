@@ -31,11 +31,9 @@ class SafetyScanIngress(Node):
         self.declare_parameter("scan_topic", "/safety/raw/scan")
         self.declare_parameter("bounded_scan_topic", "/safety/scan_candidate")
         self.declare_parameter("observation_max_age", -1.0)
-        self.declare_parameter("transform_static", False)
         self._body = str(self.get_parameter("body_frame").value)
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         self._max_age = float(self.get_parameter("observation_max_age").value)
-        self._static = bool(self.get_parameter("transform_static").value)
         if not self._body or len(self._body.encode()) > MAX_FRAME_BYTES or not self._raw_topic:
             raise ValueError("invalid safety ingress frame or raw topic")
         self._admission = (
@@ -157,6 +155,7 @@ class SafetyScanIngress(Node):
             stamp = stamp_time.nanoseconds / 1e9
             if not 0 <= now - stamp <= self._max_age:
                 raise ValueError("raw_scan_stale")
+            # TF resolves static and dynamic edges at the scan timestamp.
             tf = self._tf_buffer.lookup_transform(self._body, frame, stamp_time)
             q = tf.transform.rotation
             t = tf.transform.translation
@@ -168,7 +167,7 @@ class SafetyScanIngress(Node):
             ):
                 raise ValueError("raw_transform_invalid")
             tf_stamp = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
-            if not self._static and not 0 <= stamp - tf_stamp <= self._max_age:
+            if not 0 <= stamp - tf_stamp <= self._max_age:
                 raise ValueError("raw_transform_stale")
             value.frame_id = frame
             value.angle_min = scan.angle_min
