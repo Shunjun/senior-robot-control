@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from senior_control.models import Velocity
+from senior_control.motion.acceleration_model import AccelerationModel
 from senior_control.motion.constraints import NoReturnPolicy
 from senior_control.motion.controller import ControllerConfig
 from senior_control.motion.fusion import FusionConfig
@@ -148,8 +149,10 @@ class HardwareMotionProfile(BaseModel):
                 )
         return self
 
-    def reaction_acceleration(self, current: Velocity) -> Velocity:
-        return Velocity(self.reaction_linear_accel, self.reaction_yaw_accel)
+    def acceleration_model(self) -> AccelerationModel:
+        return AccelerationModel(
+            self.accel, self.yaw_accel, self.reaction_linear_accel, self.reaction_yaw_accel
+        )
 
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(

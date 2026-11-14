@@ -155,7 +155,7 @@ class NativeReceiptGroup:
                     raise ValueError("invalid native receipt frame")
                 stamp = stamp_ns / 1e9
                 age = time.monotonic() - stamp
-                if not 0 <= age <= _MAX_TRANSPORT_AGE:
+                if age < 0 or (kind == 1 and age > _MAX_TRANSPORT_AGE):
                     raise ValueError(
                         f"native receipt age={age:.6f}s exceeds {_MAX_TRANSPORT_AGE}s "
                         f"on {self.inputs[key].topic} (kind={kind})"
@@ -170,6 +170,13 @@ class NativeReceiptGroup:
                         self._pending.pop(key, None)
                     entry.generation = generation
                     self._last_receipt = stamp
+                    if kind != 1 and age > _MAX_TRANSPORT_AGE:
+                        # Late revocation still revokes. A late positive heartbeat
+                        # cannot qualify anything, but neither corrupts the stream.
+                        # Only a later real sample can supply fresh evidence.
+                        self._invalid.add(key)
+                        self._pending.pop(key, None)
+                        continue
                     if kind == 1:
                         if not any(gid) or sequence <= entry.sequence or not payload:
                             raise ValueError("native receipt sample identity/order invalid")
