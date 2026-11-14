@@ -171,7 +171,12 @@ def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | Non
         return None
     base = _adapter_command(profile, robot_id)
     return base[:5] + [
-        "ros2",
+        # Keep launch-file imports in the same Python environment as the adapter.
+        # The ros2 console script can have a system-Python shebang even when
+        # senior_control is installed only in the service's ROS virtualenv.
+        sys.executable,
+        "-c",
+        "from ros2cli.cli import main; raise SystemExit(main())",
         "launch",
         "senior_robot",
         "safety_motion.launch.py",
