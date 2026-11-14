@@ -231,15 +231,15 @@ class MotionCoreOutput:
             if packet is None:
                 return False
             ref = packet["reference"]
-            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
+            # Reset uses consecutive measured near-zero intervals within the
+            # configured freshness window. Reaction acceleration still expands
+            # the driving risk envelope; it is not a second, implicit reset TTL.
+            age = self._reference_age_ros(ref)
             if (
-                abs(body.velocity.vx)
-                + self.profile.linear_error
-                + self.profile.reaction_linear_accel * age
+                not 0 <= age <= self.profile.temporal().prediction_horizon_s
+                or abs(body.velocity.vx) + self.profile.linear_error
                 > self.profile.stationary_linear_mps
-                or abs(body.velocity.wz)
-                + self.profile.yaw_error
-                + self.profile.reaction_yaw_accel * age
+                or abs(body.velocity.wz) + self.profile.yaw_error
                 > self.profile.stationary_yaw_rps
             ):
                 return False
