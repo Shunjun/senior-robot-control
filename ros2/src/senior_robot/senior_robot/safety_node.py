@@ -112,7 +112,6 @@ class SafetyGate(Node):
         self.declare_parameter("self_mask_calibrated", False)
         # //Compatible: unset profiles retain exact-mask filtering, uncalibrated by default.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
-        self.declare_parameter("transform_static", False)
         self.declare_parameter("interpolate", False)
         self.declare_parameter("max_angular_gap", 0.0)
         self.declare_parameter("no_return_clear", False)
@@ -1286,7 +1285,7 @@ class SafetyGate(Node):
                 ttl,
                 self.get_parameter("interpolate").value,
                 self.get_parameter("max_angular_gap").value,
-                self.get_parameter("transform_static").value,
+                False,
                 self.get_parameter("self_mask_range_uncertainty").value,
                 self._depth_policy,
                 depth_generation,
@@ -1483,7 +1482,7 @@ class SafetyGate(Node):
                 bool(self.get_parameter("interpolate").value),
                 float(self.get_parameter("max_angular_gap").value),
                 bool(self.get_parameter("no_return_clear").value),
-                bool(self.get_parameter("transform_static").value),
+                False,
                 float(self.get_parameter("self_mask_range_uncertainty").value),
                 self._body,
                 self._velocity_interval,

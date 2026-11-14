@@ -13,20 +13,17 @@ scan_adapter:
     body_frame: base_link
     max_age_seconds: 0.5
     self_mask_calibrated: false
-    transform_static: false
     no_return_clear: false
 safety_scan_ingress:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
     observation_max_age: 0.5
-    transform_static: false
 scan_motion_node:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
     scan_max_age: 0.5
-    transform_static: false
     max_interval: 0.4
     max_linear_speed: 1.5
     max_yaw_rate: 1.0
@@ -67,7 +64,6 @@ safety_gate:
     body_frame: base_link
     simulation_rate_hz: 20.0
     self_mask_calibrated: false
-    transform_static: false
     observation_max_age: 0.5
     measurement_max_age: 0.5
     hard_margin: 0.0

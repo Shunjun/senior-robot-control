@@ -33,7 +33,6 @@ public:
     max_age_ = declare_parameter<double>("scan_max_age", -1.0);
     max_speed_ = declare_parameter<double>("max_linear_speed", -1.0);
     max_yaw_rate_ = declare_parameter<double>("max_yaw_rate", -1.0);
-    const bool static_tf = declare_parameter<bool>("transform_static", false);
     MatcherLimits limits;
     limits.max_interval = declare_parameter<double>("max_interval", -1.0);
     limits.range_limit = declare_parameter<double>("range_limit", -1.0);
@@ -47,7 +46,7 @@ public:
     limits.reanchor_distance = declare_parameter<double>("reanchor_distance", -1.0);
     limits.reanchor_yaw = declare_parameter<double>("reanchor_yaw", -1.0);
     const int min_rays = declare_parameter<int>("min_rays", -1);
-    if (body_.empty() || scan_topic.empty() || !static_tf || min_rays < 3 ||
+    if (body_.empty() || scan_topic.empty() || min_rays < 3 ||
         !positive(max_age_) || !positive(max_speed_) || !positive(max_yaw_rate_))
       throw std::invalid_argument("unqualified scan-motion profile");
     limits.min_rays = static_cast<unsigned>(min_rays);
@@ -250,6 +249,8 @@ private:
     }
     last_stamp_ = stamp;
     try {
+      // TF resolves static and dynamic edges at the scan timestamp; the
+      // comparison below detects changes in the mounted sensor extrinsic.
       const auto transform = buffer_.lookupTransform(body_, capture.frame_id,
           rclcpp::Time(capture.stamp), rclcpp::Duration::from_seconds(0.02));
       const auto & q = transform.transform.rotation;

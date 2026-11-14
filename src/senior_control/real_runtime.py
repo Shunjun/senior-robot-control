@@ -12,12 +12,11 @@ from senior_control.motion.hardware_profile import HardwareMotionProfile, load_h
 # belongs in this file, not in a simulation YAML or product driving preferences.
 REQUIRED_PARAMETERS = {
     "scan_receipt": ("scan_topic", "scan_ledger_max_age_s"),
-    "scan_adapter": ("body_frame", "max_age_seconds", "self_mask_calibrated", "transform_static"),
-    "safety_scan_ingress": ("body_frame", "observation_max_age", "transform_static"),
+    "scan_adapter": ("body_frame", "max_age_seconds", "self_mask_calibrated"),
+    "safety_scan_ingress": ("body_frame", "observation_max_age"),
     "scan_motion_node": (
         "body_frame",
         "scan_max_age",
-        "transform_static",
         "max_interval",
         "max_linear_speed",
         "max_yaw_rate",
@@ -57,7 +56,6 @@ REQUIRED_PARAMETERS = {
         "simulation_rate_hz",
         "footprint_xy",
         "self_mask_calibrated",
-        "transform_static",
         "observation_max_age",
         "measurement_max_age",
         "hard_margin",
@@ -89,14 +87,12 @@ def real_parameter_defaults(
             **common,
             "max_age_seconds": age,
             "self_mask_calibrated": False,
-            "transform_static": False,
             "no_return_clear": False,
         },
-        "safety_scan_ingress": {**common, "observation_max_age": age, "transform_static": False},
+        "safety_scan_ingress": {**common, "observation_max_age": age},
         "scan_motion_node": {
             **common,
             "scan_max_age": age,
-            "transform_static": False,
             "max_interval": 0.4,
             "max_linear_speed": profile.assumed_body_cap if profile else None,
             "max_yaw_rate": profile.yaw_cap if profile else None,
@@ -137,7 +133,6 @@ def real_parameter_defaults(
             **common,
             "simulation_rate_hz": 20.0,
             "self_mask_calibrated": False,
-            "transform_static": False,
             "observation_max_age": age,
             "measurement_max_age": age,
             "hard_margin": 0.0,
@@ -184,6 +179,8 @@ def load_real_parameters(
         if not isinstance(params, dict):
             params = {}
         params = {**defaults[node], **params}
+        # //Compatible: old YAML may contain the removed manual TF switch.
+        params.pop("transform_static", None)
         result[node] = params
         # Response-related duplicates must retain the model's single value.
         if profile is not None:
