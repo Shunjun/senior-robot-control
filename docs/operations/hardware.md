@@ -1,17 +1,15 @@
-# 硬件部署与检查
+# 硬件校准与检查
 
 机器人 Linux 宿主机运行 ROS 2、驱动和代理。先把
 `config/hardware.example.yaml` 复制到受管配置目录，逐项校准 footprint、frame、topic
 和传感器覆盖；不要把仿真与硬件配置合并。
 
-安装 `deploy/senior-agent.service` 前创建专用 `senior-control` 用户，以及仅该用户可读的
-`/etc/senior-control/agent.env`。云端 URL 必须使用云主机域名，不能填写机器人宿主机或
-虚拟机的 `localhost`。设备令牌通过配对获得，撤销后必须重新配对。
+实车安装 CLI、创建统一目录、配对、部署和联合启停统一见[实车部署](vehicle-deploy.md)。本页负责硬件校准与上线前检查，不再使用旧 `/etc` 布局作为新部署步骤。Docker 模式应在实际 ROS 容器内核验硬件参数和依赖；宿主机 CLI 不需要 ROS。云端地址使用真实云域名，设备凭据通过网页一次性配对流程获得。
 
-运行只读检查：
+在实际 ROS 运行环境的项目根目录执行只读检查，参数文件路径替换为现场已校准的真实绝对路径（本例名称不是可直接使用的参数）：
 
 ```sh
-uv run python tools/doctor.py /etc/senior-control/hardware.yaml
+.ros-venv/bin/python tools/doctor.py /absolute/path/to/calibrated-hardware.yaml
 ```
 
 doctor 不启动设备、ROS 节点或下载任务，也不加载或获取模型权重。未运行 ROS 图时，
@@ -94,6 +92,8 @@ owner journal 撤销融合证据；core_reference 和定位/急停缓存同步�
 `native_receipt` target，再运行 Python 消费端；缺 target 或通道失败会撤销证据并诊断。
 本机 macOS 无 /opt/ros，不能声称 C++ ROS target 已编译或运行；须负责人审阅后在目标
 Linux 做构建和实测。本次尚未同步代码到车上。
+
+扫描安全路径还要求 `/scan` 恰有一个合格发布者。`scan_receipt_node` 核对原始扫描发布者，再交给过滤和安全接收链；安全门不直接使用原始 `/scan`。重复发布者会撤销资格，已退休的来源即使再次成为唯一来源也不会自动恢复；须先消除重复发布并按现场流程重建相应驱动发布者，再核验新来源。持续无效观测不能证明空间安全。该来源切换、停机与恢复行为仍需在目标环境复验。
 
 ### 硬件急停与 watchdog 能力
 
