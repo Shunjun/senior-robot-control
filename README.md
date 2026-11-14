@@ -37,149 +37,19 @@
 
 ## 各端部署与启动
 
-有两个互不替代的 Python 环境。开发机上的 `.venv` 跑单元测试和类型检查，不包含 ROS。Ubuntu 上的 `.ros-venv` 继承系统里的 `rclpy`，再安装本仓库，供 `colcon` 生成的节点入口使用。用系统自带的 `colcon` 构建时，生成脚本的解释器找不到 `senior_control`。
+| 部署目标 | 当前操作指南 | 范围 |
+| --- | --- | --- |
+| 云主机 | [云端部署](docs/operations/deploy.md) | 网页、Compose、Caddy、可选 TURN、Jenkins、备份与升级 |
+| 实车 Linux 宿主机 / 已有 ROS 容器 | [实车部署](docs/operations/vehicle-deploy.md) | 从克隆、安装 CLI、构建 ROS 环境到配对、部署、联合启停与排障 |
+| Linux 仿真机 | [仿真部署](docs/operations/simulation.md) | Humble / Fortress、统一目录、用户服务、地图与恢复边界 |
 
-### 开发机：控制库
+[部署资产索引](deploy/README.md)说明现有文件用途；[硬件校准与检查](docs/operations/hardware.md)列出实车前置条件。程序启动或云端在线不代表运动资格通过。实车联合启停需要包含 [PR #17](https://github.com/Shunjun/senior-robot-control/pull/17) 修复；[PR #18](https://github.com/Shunjun/senior-robot-control/pull/18) 进一步接入共享运动栈，启动前必须填写已测量的实车参数。
 
-需要 Python 3.10 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。macOS 只做这项，不启动仿真。
+仅克隆不会得到 `senior-robot` 命令。实车宿主机用项目 `.venv` 安装 CLI；实际 ROS / Agent 运行环境用独立 `.ros-venv`。Docker 模式宿主机无需 ROS，不能与容器共用 Python 虚拟环境。各指南先创建 `config.json`，默认位置为当前用户 `~/senior-control/config.json`，并明确何处执行命令。
 
-```sh
-uv sync --frozen --group dev --extra safety
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src/senior_control
-uv run pytest tests/unit tests/integration -q
-```
+### 开发与验收入口
 
-`safety` 额外依赖提供 Shapely，自车过滤和扫掠会用到它。这条命令不启动 ROS，也不连接小车。
-
-环境只读检查不启动仿真、硬件或 ROS 守护进程：
-
-```sh
-python3 tools/detect_environment.py
-```
-
-在已 source ROS 的 Ubuntu 上，它报告已安装的 ament 包和被动可见的话题。未 source 时只报告缺失项。
-
-### 仿真端：Ubuntu 22.04
-
-安装 ROS 2 Humble 和 Gazebo Fortress 的官方二进制，包含 `ros_gz_sim`、`ros_gz_bridge`、`gz_ros2_control`、`controller_manager`、`diff_drive_controller`、`joint_state_broadcaster`、`robot_state_publisher`、`xacro`。无桌面的机器还需要 `xvfb`、`xauth`、`mesa-utils`。已测试环境是 Ubuntu 22.04.5 aarch64、Humble、Fortress 6.18.0。
-
-在仓库根目录：
-
-```sh
-source /opt/ros/humble/setup.bash
-python3.10 -m venv --system-site-packages .ros-venv
-.ros-venv/bin/pip install -e ".[safety,ros]"
-rosdep update --rosdistro humble
-rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
-cd ros2
-../.ros-venv/bin/python -m colcon build --packages-up-to senior_sim senior_robot
-source install/setup.bash
-```
-
-每次开终端都要重新 source Humble 和 `ros2/install/setup.bash`。仿真和测试使用同一个未占用的域，避免接到别的 ROS 图：
-
-```sh
-export ROS_DOMAIN_ID=73
-export IGN_PARTITION=senior_sim
-```
-
-带图形界面的主机：
-
-```sh
-ros2 launch senior_sim simulation.launch.py headless:=false use_sim_time:=true
-```
-
-`headless:=true` 是默认值，Gazebo 以 `-r -s` 运行。在已测试的 Parallels 虚拟机上，没有显示服务器时 Ogre2/EGL 会在初始化时中止。该虚拟机用下面这条命令跑通了传感器契约：
-
-```sh
-LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x720x24' \
-  ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true
-```
-
-默认世界是安装后的 `baseline.sdf`。后部遮挡世界：
-
-```sh
-ros2 launch senior_sim simulation.launch.py headless:=true use_sim_time:=true \
-  world:="$(ros2 pkg prefix senior_sim)/share/senior_sim/worlds/rear_occlusion.sdf"
-```
-
-仿真起来后，传感器话题包括 `/scan`、`/camera/color/image_raw`、`/camera/depth/image_raw`、`/imu/data`、`/wheel/odom`、`/ground_truth/odom`、`/clock`。真实位姿的 TF 不接入定位。看门狗负对照和传感器契约的完整步骤在 `ros2/README.md`。
-
-### 车端 ROS 进程
-
-扫描来源由独立的 `scan_receipt_node` 进程接收 `/scan`，核对每条消息的发布者身份，并将有界原始扫描交给 `scan_adapter` 和 `safety_scan_ingress`。过滤结果与安全扫描经原生来源核验后分别提供给扫描匹配器和安全门；安全门不直接订阅原始 `/scan`。采集时间和首次接收时间贯穿这些环节，不因转发重新计时。
-
-安全路径要求 `/scan` 恰有一个合格发布者。出现多个发布者时立即撤销扫描资格；当前实现会退休原来源，以及歧义期间实际收到回调的来源。歧义消除后，这些已退休的发布者即使重新成为唯一来源也不会自动恢复，须消除重复发布并重建相应驱动发布者，使其获得新的来源身份。持续无效数据不会证明空间安全。来源切换、停机及恢复需在目标部署环境复验。
-
-仿真组合入口 `simulation_motion.launch.py` 包含扫描接收、过滤、匹配、运动融合和安全进程。`simulation_motion.launch.py` 和 `simulation_rgbd.launch.py` 均要求显式传入 `agent_socket`、与车端代理配对一致的 `robot_id`，以及急停状态文件的绝对路径 `safety_state_path`。首次为仿真创建状态文件可执行 `uv run python -m senior_control.safety.initialize_estop --simulation --robot-id <机器人ID> --state <状态文件绝对路径>`。已存在的急停状态会在重启后保留。
-
-`safety_motion.launch.py` 要求显式提供 `robot_id` 和已测量、已标定的 `safety_parameters` 文件。仿真参数只适用于测试。仓库目前没有经过资格化的实车制动、覆盖和相机参数。必需深度覆盖不足时安全门保持停车。
-
-RGB-D 仿真诊断入口 `simulation_rgbd.launch.py` 默认给其子进程设置本地 Fast DDS 传输配置：UDPv4 加 16 MiB 共享内存段。该容量只针对已测的 640×480 仿真相机；实机或其他图像尺寸须重新验证，不适用于 4G 视频传输。使用 `enable_rgbd_transport:=false` 关闭自动配置，或用 `rgbd_transport_profile:=/绝对路径/profile.xml` 选择配置文件。已有非空 Fast DDS 环境变量或工作目录中的默认配置文件优先于启动参数；空环境变量不会关闭自动配置。选择非 Fast DDS RMW 或关闭开关时不加载配置。未指定 RMW 时通过 ROS 查询实际后端，查询失败则报错。所选配置文件必须可读且为格式正确的 XML；Fast DDS 仍负责校验具体配置内容。配置仅针对 Humble 的 Fast DDS 2.x。此设置只影响该启动入口的子进程。
-
-### 导航、建图与定位
-
-这些入口已经在 `senior_robot` 包里，对应逻辑的单元测试在开发机上通过。Humble 上还没有加载 Nav2 lattice 和 `slam_toolbox`，下面的 launch 也没有执行过。
-
-```sh
-ros2 launch senior_robot navigation.launch.py use_sim_time:=true
-```
-
-它启动 Nav2 控制器、规划器、行为树和 `navigation_adapter`，不启动仿真。控制器输出重映射到 `/control/navigation_cmd`，当前仲裁器不会接收其裸速度。`safety_node` 仍然是唯一发布 `/cmd_vel` 的进程，需要另外启动。
-
-```sh
-ros2 launch senior_robot mapping.launch.py use_sim_time:=true
-```
-
-它启动 `slam_toolbox` 和 `slam_adapter`，不发布速度。长期占据层与位姿图分开保存。
-
-```sh
-ros2 run senior_robot localization_node
-```
-
-`localization_node` 不发布速度，也不订阅 NavSatFix。GPS 样本由调用方注入。本地任务没有单独的 ROS 入口；调度规则在 `docs/protocol/scheduling.md`，执行器调用注入的导航端口，不直接发布 `/cmd_vel`。
-
-### 实车
-
-没有实车 launch，也没有 systemd 服务。`config/hardware.example.yaml` 和 `ros2/src/senior_robot/config/hardware.yaml` 只是待核对的话题与外形示例。`tools/detect_environment.py` 只读，不启动驱动。仿真参数、仿真遮挡多边形和上面的制动示例都不能用来驱动真实底盘。厂商底盘、雷达和相机驱动保留，本仓库不替换它们。
-
-### 云端与车端代理
-
-云端认证、配对、多车中转和车端代理已有实现。先配置 HTTPS 云服务、管理员密码和允许的 Origin，按 WebRTC 网络环境选择 TURN。管理员登录后，在设备列表选择「添加设备」并生成一次性配对码。随后在车端用这个配对码兑换身份：
-
-```sh
-python -m senior_control.agent.main --pair \
-  --cloud-url wss://<cloud-domain>/ws/agent --device-name <robot-name> \
-  --credentials-file /etc/senior-control/device.json
-```
-
-命令会交互式读取配对码，通过 HTTPS 兑换并原子创建权限为 `0600` 的凭据文件；文件已存在时拒绝覆盖。凭据文件包含 robot ID 和设备 token，不要写入版本库或日志。安装车端依赖 `pip install '.[safety,agent,ros]'`，设置 `SENIOR_CLOUD_URL`、`SENIOR_DATABASE_PATH`（绝对路径）和 `SENIOR_AGENT_SOCKET`（绝对路径），再运行：
-
-```sh
-python -m senior_control.agent.main --credentials-file /etc/senior-control/device.json
-```
-
-同样支持 `SENIOR_CREDENTIALS_FILE` 指向该文件；也可通过 `SENIOR_ROBOT_ID`、`SENIOR_DEVICE_TOKEN` 提供身份。使用 `deploy/senior-agent.service` 时将环境值放入 `/etc/senior-control/agent.env`，文件由服务用户可读且权限为 `0600`。缺少配置或认证被拒绝时进程退出 78。Agent 在 ROS 状态、地图、导航处理器缺失时返回 unavailable；浏览器时钟尚不能验证，生产远程速度暂不可用。跨页面急停已锁定，安全复位暂不可用，需后续带急停 fence 的协议。任务终态、ROS 全链路、Linux 和实车均未验收；只有 `safety_node` 可以发布 `/cmd_vel`。
-
-### Agent CLI 的配置与运行目录
-
-默认配置为 `~/senior-control/config.json`，通过 `--control-dir` 指定其他统一目录。
-凭据、数据库、急停状态、socket 和生成的部署文件均置于其中，不再分别指定路径。
-程序位置由配置中的 `project_dir` 指定，Python 固定为其下 `.ros-venv/bin/python`。
-实车可以原生部署，或在宿主机使用 `deploy --container [名称]` 生成进入已有容器的
-systemd 服务；省略名称时为 `ros2`。配置例子见 `config/agent.example.json`，完整命令、
-权限与宿主机/容器路径关系见[统一目录部署说明](docs/operations/deploy.md#实车-agent统一目录与-docker-启动)。
-该实车服务只管理 Agent，ROS 适配器的启动仍单独管理；仿真 start 继续管理完整仿真入口。
-
-### 网页
-
-网页工程位于 `web/`，包含登录、选车、驾驶、地图、任务、地图管理和视频界面。单元测试和静态构建可在开发机执行。浏览器端到端测试只连接显式提供的 `PLAYWRIGHT_BASE_URL`，不启动开发服务器；当前浏览器验收仍未执行。
-
-### 任务 21 验收
-
-验收范围、Linux 复现命令和故障注入入口见 `docs/testing/matrix.md`，本次结果见 `docs/testing/results.md`。`pytest --simulation-profile` 使用临时数据库、互异保留端口和固定 seed。Linux、Gazebo 和浏览器检查在不具备对应环境时保持“未执行”，不能写成通过。实车验收使用 `docs/testing/real-robot-checklist.md`，所有项目默认未勾选。
+控制库开发检查使用项目 [pyproject.toml](pyproject.toml) 和 `uv.lock`；网页构建入口见 [web/package.json](web/package.json)。ROS 传感器契约、独立 launch 与 watchdog 负对照见 [ROS 说明](ros2/README.md)，它们不代替当前部署指南。历史验收记录见 [Linux 仿真记录](docs/testing/2026-10-27-linux-simulation.md)，当前未通过项见[阶段索引](docs/testing/2026-11-14-vehicle-stage-index.md)。
 
 ## 任务路线图
 

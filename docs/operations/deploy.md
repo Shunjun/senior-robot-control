@@ -1,4 +1,6 @@
-# 自托管部署
+# 云端部署
+
+本页只部署网页、云服务、HTTPS 和可选 TURN。车端 Agent 见[实车部署](vehicle-deploy.md)，Gazebo 与仿真 CLI 见[仿真部署](simulation.md)。部署资产分类见 [deploy/README.md](../../deploy/README.md)。
 
 FRP、Nginx、Caddy 与证书续期的实际排障记录见[部署复盘与排障手册](deployment-retrospective.md)。
 
@@ -6,21 +8,33 @@ FRP、Nginx、Caddy 与证书续期的实际排障记录见[部署复盘与排�
 
 - **云主机地址**：公网 DNS 指向运行 Compose 的云主机。浏览器和机器人都使用
   `https://<cloud-domain>`，TURN 使用 `<turn-domain>`。
-- **机器人宿主机地址**：运行 ROS 2、硬件驱动和 `senior-agent.service` 的 Linux 地址。
+- **机器人宿主机地址**：实车上的 Linux 地址；Agent 和 ROS 节点可在本机或已有容器内运行，具体以[实车部署](vehicle-deploy.md)为准。
 - **虚拟机地址**：仅用于仿真；它与宿主机、云主机是不同网络端点。跨机器连接时不得填写
   `localhost`，应填写目标机器可达的 DNS 或地址。
 
 Compose 只运行一个云进程（其中包含中继与登录限流器）、Caddy 和 coturn。ROS、DDS
 及机器人代理不进入 Compose，也不向公网发布。
 
-机器人 Agent 入口会打开车端数据库，核对本地 ROS IPC 适配器的机器人 ID，再连接云端
-WebSocket。安装 `senior-agent.service` 前，确认适配器已监听，且服务账号可以连接
-`SENIOR_AGENT_SOCKET` 并写入 `SENIOR_DATABASE_PATH` 所在目录。入口和环境变量见
-[车端配对与启动说明](../../README.md)。目标 Linux 上的 systemd 启停与重启仍需验收。
+云端不负责启动机器人驱动或 ROS 适配器。云端上线后，在网页生成一次性设备配对码，再按[实车部署](vehicle-deploy.md)或[仿真部署](simulation.md)完成设备侧配对。
+
+## 从克隆开始：云主机前置环境
+
+以下手动操作均在部署云主机执行，需要 Git、Python 3.10 或更新版本（含 venv/pip）、Node.js/npm、Docker 和 Compose v2，以及本地 Docker 权限。此处不安装 ROS、Gazebo 或车端 Agent。已有仓库进入根目录即可；手动 Compose 会挂载 `web/dist`，必须先构建网页，cloud Dockerfile 不会代建它：
+
+```sh
+git clone https://github.com/Shunjun/senior-robot-control.git
+cd senior-robot-control
+npm --prefix web ci --include=dev
+VITE_DEMO_DATA=0 npm --prefix web run build
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[cloud]'
+```
+
+本地 `.venv` 在这里用于生成管理员密码哈希，云进程在 Docker 镜像内运行。所有后续 `deploy/...` 命令均以仓库根目录为当前目录。Jenkins 路径由流水线完成网页构建，见下节，不需要重复手工构建。
 
 ## 准备和 TLS
 
-1. 将 `deploy/env.example` 复制为 `deploy/.env`，填写 `DOMAIN`、`ACME_EMAIL`、
+1. 首次安装将 `deploy/env.example` 复制为 `deploy/.env`（已有文件先保留），设为仅运维用户可读，填写 `DOMAIN`、`ACME_EMAIL`、
    `SENIOR_SECRET`、`ADMIN_PASSWORD_HASH`、`HTTP_PORT` 和 `HTTPS_PORT`。保留单引号和哈希中的 `$`。
    云端密钥至少 32 字节，管理员密码使用项目生成的 scrypt 哈希。
 2. 将云域名的 A/AAAA 记录指向云主机。Caddy 为 HTTPS 自动申请和续期证书。
@@ -62,8 +76,7 @@ WebSocket。安装 `senior-agent.service` 前，确认适配器已监听，且�
 
 仓库根目录的 `Jenkinsfile` 在所选 Linux 节点上构建网页和云镜像，并在同一台机器的
 本地 Docker daemon 上部署；不会通过 SSH 部署到其他主机。Jenkins 会从可用执行节点中选取一台。
-仅启用部署目标机上的执行器时，任务会在该机器上运行。默认持久目录为 `/opt/senior-robot-control`，域名固定为
-`rosrouter.doomain.cn`。节点需要 Node.js/npm、Docker Compose v2、curl、flock、
+仅启用部署目标机上的执行器时，任务会在该机器上运行。默认持久目录为 `/opt/senior-robot-control`，域名由 Secret file 的 `DOMAIN` 指定（例如当前部署使用的 `rosrouter.doomain.cn`）。节点需要 Node.js/npm、Docker Compose v2、curl、flock、
 Git、Python 3 和可以访问本地 Docker 的权限；部署目录须由 Jenkins 用户持久读写。确保 DNS 指向
 该节点，并开放 TCP 80/443，让 Caddy 完成证书申请。部署前先备份数据库。
 
@@ -97,10 +110,10 @@ cloud/Caddy 日志，并遮盖凭据文件中的值。流水线不会自动恢�
 停止写入并按经过验证的数据库恢复流程操作。`current` 只是最后一次健康版本的记录，
 并不保证失败后正在运行的版本与它一致。
 
-在已安装本项目 Python 依赖的环境中，可用项目函数交互式生成管理员哈希：
+在云主机仓库根目录，用前面安装的 `.venv` 交互式生成管理员哈希（手动 Compose 和 Jenkins Secret file 都需要）：
 
 ```sh
-python -c 'from getpass import getpass; from senior_control.cloud.auth import hash_password; print(hash_password(getpass("管理员密码: ")))'
+.venv/bin/python -c 'from getpass import getpass; from senior_control.cloud.auth import hash_password; print(hash_password(getpass("管理员密码: ")))'
 ```
 
 将输出的整行放入 Secret file 的 `ADMIN_PASSWORD_HASH='...'`，不要在日志或版本库中
@@ -112,97 +125,6 @@ Caddy 的固定地址 `172.29.231.2`；Caddy 另连默认网络以申请证书�
 已有网络冲突，部署前同步修改 `deploy/compose.jenkins.yaml` 中的子网、网关、cloud 地址、Caddy 地址与
 `TRUSTED_PROXY`，并保证后两者一致。
 
-## 实车 Agent：统一目录与 Docker 启动
+## 源码依据与验收边界
 
-`senior-robot` 默认从当前用户的 `~/senior-control/config.json` 读取配置。
-所有子命令都接受 `--control-dir <目录>`，用于同时选择配置与数据目录。
-例如实车使用 `/home/wheeltec/ros2_shared_dir/senior-control`；容器内路径由已有的
-可写 bind mount 自动推导，不需要逐项填写凭据、数据库或 socket 路径。
-
-先由运行目录的所属用户创建私有目录，将 `config/agent.example.json` 复制为
-其中的 `config.json`，填写实际 `project_dir` 和 `cloud_url`。
-`project_dir` 指运行环境中的项目目录：原生模式是宿主机路径，Docker 模式是容器内路径。
-Python 固定使用 `<project_dir>/.ros-venv/bin/python`，必须事先安装本项目和 Agent 依赖。
-配置中的 `kind` 为 `real`。配置文件不包含设备 token。
-
-```sh
-mkdir -m 700 ~/senior-control
-cp config/agent.example.json ~/senior-control/config.json
-# 编辑 config.json 后，交互式输入一次性配对码：
-senior-robot pair --cloud-url wss://<cloud-domain>/ws/agent --name wheeltec
-```
-
-统一目录内容：
-
-```text
-senior-control/
-├── config.json                    # 部署配置，手工准备
-├── device.json                    # 配对凭据，pair 创建，权限 0600
-├── agent.db                       # Agent 数据库（可能有 -wal/-shm 文件）
-├── estop-state.json                # ROS 适配器的急停状态路径，CLI 不重置
-├── agent.sock                     # ROS 适配器与 Agent 的 IPC
-├── agent.env                      # deploy 生成，无设备 token
-├── senior-agent-<目录哈希>.service # deploy 生成的宿主机服务文件
-├── service.sock                   # 仅 Docker：Agent 停止控制端点
-└── .agent-service.lock             # 仅 Docker：避免重复启动
-```
-
-### 非容器模式
-
-```sh
-senior-robot deploy --dry-run
-sudo senior-robot deploy --control-dir /home/<user>/senior-control
-sudo senior-robot start --control-dir /home/<user>/senior-control
-sudo senior-robot status --control-dir /home/<user>/senior-control
-sudo senior-robot stop --control-dir /home/<user>/senior-control
-```
-
-服务使用数据目录所属用户，直接启动 `.ros-venv/bin/python -m senior_control.agent.main`。
-使用 sudo 时建议显式传 `--control-dir`，避免 HOME 被 sudo 改为 `/root`。
-目录权限应为 0700，凭据权限为 0600，凭据与目录属主一致。
-
-### 现有 Docker 容器模式
-
-在宿主机执行 CLI；只写 `--container` 默认选择 `ros2`，也可以指定其他容器名。
-也可将 `"container": "ros2"` 写进 `config.json`，供 `deploy`、`doctor` 使用。
-命令行 `--container` 优先于配置值。部署模式记录在生成的服务里，后续 start/stop
-使用已部署服务，不必重复指定容器。
-
-```sh
-senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container --dry-run
-sudo senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container ros2
-sudo senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-control
-sudo senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
-sudo senior-robot stop --control-dir /home/wheeltec/ros2_shared_dir/senior-control
-senior-robot doctor --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container
-```
-
-`deploy` 检查现有挂载和容器内 Python，不修改或重建容器；部署时容器须运行。
-`--dry-run` 可以只读 inspect Docker，但不写文件、不启动容器或服务。
-宿主机 systemd 在启动时确保容器运行，通过 `docker exec --env-file` 启动项目内的
-`docker_start_helper`，由它托管 Agent。停止时通过私有控制 socket 结束并回收该 Agent，
-不会停止容器或厂商驱动。容器内无须安装 systemd，宿主机无须安装 ROS。
-宿主机原来的 systemd 隔离选项不等于对 Docker 内进程的隔离。
-
-服务文件和环境文件都保留在统一目录，systemd 只在系统服务目录建立必要的链接。
-部署与启动分开，文件已存在时拒绝覆盖；不自动修改现有凭据、数据库或急停状态。
-切换部署模式需先停止原服务，并由管理员清理旧生成文件和 systemd 链接后重新部署。
-
-**此 CLI 管理的是 Agent。** 容器内/本机的 `agent_adapter` 和其他 ROS 节点仍须通过
-项目的 ROS 启动流程另行管理，并将 `SENIOR_AGENT_SOCKET` 指向统一目录的 `agent.sock`，
-急停状态指向其中的 `estop-state.json`。适配器未运行时，Agent 不会正常连接上线；
-不要将服务 active 等同于完整实车控制可用。
-
-显式 `--profile /path/to/old.json` 保留旧配置的独立路径布局以供已有部署使用；
-新配置使用 `--control-dir`。仿真也默认读取 `~/senior-control/config.json`，将 `kind`
-设为 `simulation`、配置隔离的 `ros_domain` 和 ROS 工作空间，凭据、数据库、急停和
-socket 使用同一目录。仿真容器模式不属于此处的 Docker 实车部署功能。
-
-## 工作台只读地图
-
-车端已有同一车辆导出的地图包时，可以在 Agent 环境配置中设置
-`SENIOR_WORKSPACE_MAP_BUNDLE`（地图包的绝对路径）和
-`SENIOR_WORKSPACE_MAP_SHA256`（确认后的完整文件 SHA-256，小写十六进制）。
-Agent 启动时校验摘要、地图包内容和来源车辆。工作台在缺少实时地图时显示包中的长期
-占据层，文件变化后需要重新配置摘要并重启 Agent。只读图可用于查看，任务编辑、
-定位与导航继续等待实时地图来源。
+手动服务与卷见 [compose.yaml](../../deploy/compose.yaml)，环境校验及 TURN profile 选择见 [compose.sh](../../deploy/compose.sh)，镜像见 [Dockerfile.cloud](../../deploy/Dockerfile.cloud)。Jenkins 行为见 [Jenkinsfile](../../Jenkinsfile) 和 [jenkins-deploy.sh](../../deploy/jenkins-deploy.sh)。DNS、TLS 续期、HTTPS/WebSocket、TURN 网络、备份恢复与升级回退仍需在目标云环境验证；流水线健康探测不代替机器人控制全链路验收。
