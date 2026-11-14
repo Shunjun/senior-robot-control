@@ -91,7 +91,9 @@ class AdapterCore:
         self._pose_provider = pose_provider
         self._take_drive_feedback = take_drive_feedback
         self._routes = routes
-        self._task_effects: dict[str, tuple[str, str, int]] = {}
+        self._settled_sequence = 0
+        self._task_effect_sequences: dict[str, int] = {}
+        self._task_effects: dict[str, tuple[str, str, int] | tuple[str, str, int, str]] = {}
         self._task_plans: dict[str, dict[str, Any]] = {}
         self._navigation_ready = navigation_ready
         self._active_epoch: int | None = None
@@ -115,6 +117,8 @@ class AdapterCore:
             "navigation.task_start",
             "navigation.task_status",
             "navigation.task_cancel",
+            "navigation.task_terminal",
+            "navigation.task_settled",
             "navigation.current",
         }:
             return await self._route_request(kind, message)
@@ -203,6 +207,14 @@ class AdapterCore:
             return {"ok": False, "error": "unsupported"}
         return {"ok": False, "error": "unknown_type"}
 
+    def _compact_task_effects(self, frontier: int) -> None:
+        self._settled_sequence = max(self._settled_sequence, frontier)
+        for key, issued in list(self._task_effect_sequences.items()):
+            if issued <= self._settled_sequence:
+                self._task_effect_sequences.pop(key)
+                self._task_effects.pop(key, None)
+                self._task_plans.pop(key, None)
+
     async def _route_request(self, kind: str, message: dict[str, Any]) -> dict[str, Any]:
         routes = self._routes
         if routes is None:
@@ -213,6 +225,101 @@ class AdapterCore:
         execution_id = message.get("execution_id")
         if not isinstance(execution_id, str) or not 1 <= len(execution_id) <= 128:
             return {"ok": False, "error": "bad_request"}
+        sequence = message.get("effect_sequence", 0)
+        if type(sequence) is not int or sequence < 0:
+            return {"ok": False, "error": "bad_request"}
+        if kind == "navigation.task_settled":
+            epoch, effect_id = message.get("task_epoch"), message.get("effect_id")
+            frontier = message.get("settled_through")
+            if (
+                type(epoch) is not int
+                or epoch < 1
+                or not isinstance(effect_id, str)
+                or not 1 <= len(effect_id) <= 128
+                or sequence < 1
+                or type(frontier) is not int
+                or frontier < 0
+            ):
+                return {"ok": False, "error": "bad_request"}
+            if sequence <= self._settled_sequence:
+                # An old cleanup retry is only an ACK. Never apply its frontier
+                # or scope to newer in-flight records, even with altered payload.
+                return dict(
+                    ok=True,
+                    lifecycle_version=2,
+                    execution_id=execution_id,
+                    effect_id=effect_id,
+                    task_epoch=epoch,
+                    accepted=True,
+                    collected=True,
+                )
+            if frontier >= sequence:
+                return {"ok": False, "error": "bad_request"}
+            self._compact_task_effects(frontier)
+            identity = ("terminal_settled", execution_id, epoch)
+            known = self._task_effects.get(effect_id)
+            if known is not None and (
+                known != identity or self._task_effect_sequences.get(effect_id) != sequence
+            ):
+                return {"ok": False, "error": "conflict"}
+            covered = [
+                key
+                for key, old in self._task_effects.items()
+                if old[1] == execution_id and old[2] <= epoch
+            ]
+            if known is None and len(self._task_effects) >= 256 and not covered:
+                # //Compatible: R2 could issue GC without reserving it here.
+                # At capacity only query an existing downstream obligation;
+                # never create a new scope or discard another tombstone.
+                found, collected = routes.query_terminal_collection(
+                    execution_id, epoch, effect_id, sequence, frontier
+                )
+                if not found:
+                    return {"ok": False, "error": "unavailable"}
+            else:
+                # The business identity is durably settled. Replace its old live
+                # records with one immutable GC reservation BEFORE issuing I/O.
+                for key in covered:
+                    self._task_effects.pop(key, None)
+                    self._task_effect_sequences.pop(key, None)
+                    self._task_plans.pop(key, None)
+                self._task_effects[effect_id] = identity
+                self._task_effect_sequences[effect_id] = sequence
+                collected = routes.collect_terminal(
+                    execution_id, epoch, effect_id, sequence, frontier
+                )
+            return dict(
+                ok=True,
+                lifecycle_version=2,
+                execution_id=execution_id,
+                effect_id=effect_id,
+                task_epoch=epoch,
+                accepted=collected,
+                collected=collected is True,
+            )
+        plan_value = message.get("plan")
+        has_effect = message.get("effect_id") is not None or (
+            kind == "navigation.task_start"
+            and isinstance(plan_value, dict)
+            and plan_value.get("effect_id") is not None
+        )
+        if has_effect:
+            if self._settled_sequence > 0 and sequence <= self._settled_sequence:
+                return {"ok": False, "error": "retired_scope", "execution_id": execution_id}
+            frontier = message.get("settled_through", 0)
+            if type(frontier) is not int or frontier < 0 or (sequence > 0 and frontier >= sequence):
+                return {"ok": False, "error": "bad_request"}
+            self._compact_task_effects(frontier)
+        requested_epoch = (
+            message.get("plan", {}).get("task_epoch")
+            if kind == "navigation.task_start" and isinstance(message.get("plan"), dict)
+            else message.get("task_epoch")
+        )
+        if type(requested_epoch) is int and any(
+            old[0] == "terminal_settled" and old[1] == execution_id and requested_epoch <= old[2]
+            for old in self._task_effects.values()
+        ):
+            return {"ok": False, "error": "retired_scope", "execution_id": execution_id}
         if kind == "navigation.task_start":
             if self._exiting:
                 return {"ok": False, "error": "unavailable"}
@@ -220,15 +327,30 @@ class AdapterCore:
                 plan = RoutePlan.model_validate(message.get("plan"))
             except ValueError:
                 return {"ok": False, "error": "bad_request"}
+            if plan.effect_id is not None and sequence < 1:
+                return {"ok": False, "error": "bad_request"}
             if plan.execution_id != execution_id:
                 return {"ok": False, "error": "bad_request"}
+            retained = sum(
+                not (
+                    old[1] == execution_id
+                    and plan.task_epoch is not None
+                    and old[2] < plan.task_epoch
+                )
+                for old in self._task_effects.values()
+            )
+            if plan.effect_id not in self._task_effects and retained >= 256:
+                return {"ok": False, "error": "unavailable"}
             if plan.effect_id is not None and plan.effect_id in self._task_effects:
-                matched = self._task_plans.get(
-                    plan.effect_id
-                ) == plan.model_dump() and self._task_effects[plan.effect_id] == (
-                    "plan",
-                    execution_id,
-                    plan.task_epoch,
+                matched = (
+                    self._task_effect_sequences.get(plan.effect_id) == sequence
+                    and self._task_plans.get(plan.effect_id) == plan.model_dump()
+                    and self._task_effects[plan.effect_id]
+                    == (
+                        "plan",
+                        execution_id,
+                        plan.task_epoch,
+                    )
                 )
                 return {
                     "ok": matched,
@@ -242,8 +364,14 @@ class AdapterCore:
             if not await routes.start(plan, wait_for_goal=False):
                 return {"ok": False, "error": "rejected", "execution_id": execution_id}
             if plan.effect_id is not None and plan.task_epoch is not None:
+                for key, old in list(self._task_effects.items()):
+                    if old[1] == execution_id and old[2] < plan.task_epoch:
+                        self._task_effects.pop(key)
+                        self._task_effect_sequences.pop(key, None)
+                        self._task_plans.pop(key, None)
                 self._task_effects[plan.effect_id] = ("plan", execution_id, plan.task_epoch)
                 self._task_plans[plan.effect_id] = plan.model_dump()
+                self._task_effect_sequences[plan.effect_id] = sequence
             return {
                 "ok": True,
                 "accepted": True,
@@ -255,17 +383,64 @@ class AdapterCore:
             }
         effect_id, epoch = message.get("effect_id"), message.get("task_epoch")
         if effect_id is not None:
-            if not isinstance(effect_id, str) or type(epoch) is not int or epoch < 1:
+            if (
+                sequence < 1
+                or len(self._task_effects) >= 256
+                and effect_id not in self._task_effects
+            ):
+                return {"ok": False, "error": "unavailable"}
+            if (
+                not isinstance(effect_id, str)
+                or not 1 <= len(effect_id) <= 128
+                or type(epoch) is not int
+                or epoch < 1
+            ):
                 return {"ok": False, "error": "bad_request"}
             effect_kind = (
-                "revoke" if kind == "navigation.task_cancel" else message.get("effect_kind")
+                "revoke"
+                if kind == "navigation.task_cancel"
+                else "terminal_release"
+                if kind == "navigation.task_terminal"
+                else message.get("effect_kind")
             )
-            identity = (effect_kind, execution_id, epoch)
+            outcome = message.get("terminal_outcome")
+            if effect_kind == "terminal_release" and (
+                not isinstance(outcome, str) or outcome not in {"succeeded", "canceled", "failed"}
+            ):
+                return {"ok": False, "error": "bad_request"}
+            identity = (
+                (effect_kind, execution_id, epoch, outcome)
+                if effect_kind == "terminal_release"
+                else (effect_kind, execution_id, epoch)
+            )
             known = self._task_effects.get(effect_id)
+            if known is not None and self._task_effect_sequences.get(effect_id, 0) != sequence:
+                return {"ok": False, "error": "conflict"}
             if known is not None and known != identity:
                 return {"ok": False, "error": "conflict"}
+            if effect_kind == "terminal_release":
+                if kind == "navigation.task_terminal":
+                    self._task_effects[effect_id] = identity
+                    self._task_effect_sequences[effect_id] = sequence
+                released = None
+                if effect_id in self._task_effects:
+                    options = {"dispatch_sequence": sequence} if sequence else {}
+                    released = await routes.release_terminal(
+                        execution_id, epoch, effect_id, outcome, **options
+                    )
+                return dict(
+                    ok=True,
+                    lifecycle_version=2,
+                    execution_id=execution_id,
+                    effect_id=effect_id,
+                    task_epoch=epoch,
+                    terminal_outcome=outcome,
+                    identity_released=released is True,
+                    accepted=released,
+                )
             if kind == "navigation.task_cancel":
                 self._task_effects[effect_id] = identity
+                self._task_effect_sequences[effect_id] = sequence
                 await routes.cancel(execution_id, task_epoch=epoch)
             retired = (
                 routes.output_retired(execution_id, epoch) if effect_kind == "revoke" else False
@@ -282,6 +457,8 @@ class AdapterCore:
                 "sources_fenced_through_epoch": epoch if retired else None,
                 "controller_output_exited": retired,
             }
+        if kind == "navigation.task_terminal":
+            return {"ok": False, "error": "bad_request"}
         if kind == "navigation.task_cancel":
             # //Compatible: old callers get cancellation only, never retirement proof.
             return {"ok": await routes.cancel(execution_id), "execution_id": execution_id}
@@ -513,9 +690,14 @@ def main() -> None:
                     task_epoch=routes.current.task_epoch if routes.current else None,
                 ),
                 clear_source=node.clear_navigation_source,
+                complete_source=node.complete_navigation_source,
                 source_active=node.navigation_source_matches,
                 connection_epoch=node.current_navigation_epoch,
                 source_retired=node.navigation_source_retired,
+                retire_source=node.retire_navigation_source,
+                release_identity=node.request_terminal_release,
+                collect_identity=node.collect_terminal,
+                query_collection=node.query_terminal_collection,
             )
 
         core = AdapterCore(

@@ -240,10 +240,30 @@ async def test_restart_retires_manual_ready_even_for_completed_task(tmp_path: Pa
             lambda: CONTEXT,
             expected_version=stop.state.version,
         )
-        assert result.state.phase == "succeeded" and result.effects[0].kind == "manual_ready"
+        assert result.state.phase == "revoking" and result.effects[0].kind == "terminal_release"
+        identity = result.effects[0]
+        await store.claim_effect("execution", identity.effect_id)
+        result = await store.acknowledge(
+            "execution",
+            identity.effect_id,
+            identity.epoch,
+            True,
+            lambda: CONTEXT,
+            expected_version=result.state.version,
+        )
+        assert result.state.phase == "succeeded"
+        assert [effect.kind for effect in result.effects] == ["terminal_settled", "manual_ready"]
         other, _ = await setup_store(database, "next-boot")
         await other.recover(lambda: CONTEXT)
-        assert all(item.status in {"done", "retired"} for item in await other.effects("execution"))
+        effects = await other.effects("execution")
+        assert all(
+            item.status in {"done", "retired"}
+            for item in effects
+            if item.effect.kind != "terminal_settled"
+        )
+        assert [item.status for item in effects if item.effect.kind == "terminal_settled"] == [
+            "ready"
+        ]
 
 
 async def test_cancellation_during_atomic_acceptance_leaves_one_queryable_result(

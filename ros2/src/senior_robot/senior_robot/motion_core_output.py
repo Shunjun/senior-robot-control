@@ -35,9 +35,12 @@ from senior_control.motion.controller import Feedback, MotionController
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
 from senior_control.protocol import MotionRuntimeState
+from senior_control.safety.motion_runtime import SourceEpochFence
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_observation_adapter import observation_origin
+
+_REFERENCE_DEPTH = 10
 
 
 class MotionCoreOutput:
@@ -63,12 +66,27 @@ class MotionCoreOutput:
         self.machine = MotionStateMachine()
         self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
         self.output_generation = 0
+        self._task_identity: tuple[str, int] | None = None
+        # Proofs are in-flight only; explicit durable collection never recreates identity.
+        self._task_retirements: dict[tuple[str, str, int, str], tuple[int, float, int]] = {}
+        self._terminal_released: set[tuple[str, str, int, str]] = set()
         self._input_boot = ""
         self._input_floor = -1
         self._manual_motion_source: str | None = None
+        # One-way startup phase. Zero commands never establish body stillness;
+        # only independent stillness or an accepted nonzero source ends it.
+        self._startup_motion_unconfirmed = True
         self._reference: dict[str, Any] | None = None
         self._reference_boot = ""
         self._reference_sequence = 0
+        self._pending_reference: dict[str, Any] | None = None
+        capacity = profile.admission().epoch_history_limit
+        self._reference_boot_fence = SourceEpochFence(max_retired=capacity)
+        self._reference_source_fences = {
+            source: SourceEpochFence(max_retired=capacity) for source in ("laser", "wheel", "imu")
+        }
+        self._reference_clock: tuple[float, int] | None = None
+        self._reference_reset_steady = -math.inf
         self._reference_warning_at = float("-inf")
         self._perception_key: tuple[Any, ...] | None = None
         self._perception: Perception | None = None
@@ -91,7 +109,7 @@ class MotionCoreOutput:
         if profile.simulation_only:
             # //Compatible: the isolated candidate keeps its existing transport.
             self._subscription = node.create_subscription(
-                String, "/motion/core_reference", self._on_reference, 10
+                String, "/motion/core_reference", self._on_reference, _REFERENCE_DEPTH
             )
         else:
             from senior_robot.native_receipt import subscribe
@@ -121,7 +139,7 @@ class MotionCoreOutput:
                 )
 
     def _invalidate_reference(self) -> None:
-        self._reference = None
+        self._clear_reference_cache()
         self.controller.invalidate_limited_rearm()
         # Do not let a fresh frame in the same drain hide a lost-reference edge.
         # Retire the old target now; recovery still needs distinct fresh evidence.
@@ -229,28 +247,119 @@ class MotionCoreOutput:
                 and value["sequence"] <= self._reference_sequence
             ):
                 return
-            self._reference_boot = value["boot_id"]
-            self._reference_sequence = value["sequence"]
-            self._reference = value
+            self._offer_reference(value, time.monotonic())
         except (ValueError, KeyError, TypeError) as exc:
             self._warn_reference(f"payload validation: {str(exc)[:256]}")
             return
 
+    def _clear_reference_cache(self) -> None:
+        self._reference = None
+        self._pending_reference = None
+
+    def _sample_reference_clock(self, now: float) -> int:
+        ros = self.node.get_clock().now().nanoseconds
+        if self._reference_clock is not None:
+            previous_steady, previous_ros = self._reference_clock
+            if now < previous_steady or ros < previous_ros:
+                self._clear_reference_cache()
+                self._reference_reset_steady = now
+                # A producer may have seen the reset before this subscriber.
+                # Keep its admitted epoch/watermark; do not retire it twice.
+        self._reference_clock = (now, ros)
+        return ros
+
+    def _reference_domains(self, value: dict[str, Any]) -> dict[str, str]:
+        return {
+            row["source"]: row["sample"]["epoch"]
+            for row in value["sources"]
+            if row["source"] in self._reference_source_fences
+        }
+
+    def _reference_usable(
+        self, value: dict[str, Any] | None, now: float, ros: int, *, future: bool = False
+    ) -> bool:
+        """Only a fully usable same-domain snapshot may survive a future update."""
+        if value is None:
+            return False
+        ref = value["reference"]
+        rows = {row["source"]: row for row in value["sources"]}
+        return bool(
+            0 <= now - value["sampled_steady"] <= self.profile.max_age
+            and ref["mode"] in {SourceMode.LASER_REFERENCE, SourceMode.FUSED_REFERENCE}
+            and ref["average"] is not None
+            and all(math.isfinite(ref["average"][axis]) for axis in ("vx", "vy", "wz"))
+            and not ref.get("conflicts", [])
+            and not any(
+                source in self._reference_source_fences for source, _ in ref.get("failures", [])
+            )
+            and all(
+                source in rows
+                and rows[source]["ready"]
+                and rows[source]["sample"]["status"] == "valid"
+                and now < rows[source]["valid_until_steady"]
+                for source in self._reference_source_fences
+            )
+            and self._reference_time_valid(ref, ros, future=future)
+        )
+
+    def _offer_reference(self, value: dict[str, Any], now: float) -> None:
+        ros = self._sample_reference_clock(now)
+        if value["sampled_steady"] <= self._reference_reset_steady:
+            return
+        if not self._reference_boot_fence.accept(value["boot_id"]):
+            return
+        if self._reference_boot != value["boot_id"]:
+            self._clear_reference_cache()
+        # Received watermarks advance even when the selected packet stays older.
+        self._reference_boot = value["boot_id"]
+        self._reference_sequence = value["sequence"]
+        try:
+            domains = self._reference_domains(value)
+            changed = False
+            for source, epoch in domains.items():
+                fence = self._reference_source_fences[source]
+                changed |= fence.active is not None and fence.active != epoch
+                if not fence.accept(epoch):
+                    self._clear_reference_cache()
+                    return
+            if changed:
+                self._clear_reference_cache()
+            if (
+                self._reference_time_valid(value["reference"], ros, future=True)
+                and self._reference_usable(self._reference, now, ros)
+                and self._reference_usable(value, now, ros, future=True)
+                and domains == self._reference_domains(self._reference)
+            ):
+                self._pending_reference = value
+                return
+        except (ValueError, KeyError, TypeError):
+            # An unclassified update must not hide invalid/negative evidence.
+            pass
+        self._pending_reference = None
+        self._reference = value
+
+    def _select_reference(self, now: float) -> None:
+        ros = self._sample_reference_clock(now)
+        pending = self._pending_reference
+        if pending is not None:
+            if not 0 <= now - pending["sampled_steady"] <= self.profile.max_age:
+                self._pending_reference = None
+            elif not self._reference_time_valid(pending["reference"], ros, future=True):
+                self._reference = pending
+                self._pending_reference = None
+
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
         c = self.controller.config
         packet = self._reference
-        if packet is None:
+        if packet is None or body is None or wheel is None:
             return False
         # Both deployments use original reference time and the shared controller's
         # consecutive-sample stillness check. Profiles supply numeric tolerances;
         # hardware's controller() already deducts its base measurement errors.
-        age = self._reference_age_ros(packet["reference"])
-        if not 0 <= age <= self.profile.temporal().prediction_horizon_s:
+        if not self._reference_time_valid(packet["reference"]):
             return False
         return bool(
-            body is not None
-            and wheel is not None
-            and body.fresh(now)
+            body.fresh(now)
             and wheel.fresh(now)
             and body.epoch == self._body_epoch_used
             and wheel.epoch == self._wheel_epoch_used
@@ -258,6 +367,26 @@ class MotionCoreOutput:
             and max(abs(body.velocity.vx), abs(wheel.velocity.vx)) <= c.still_speed_mps
             and max(abs(body.velocity.wz), abs(wheel.velocity.wz)) <= c.still_yaw_rps
         )
+
+    def _consume_ready_reference(self) -> None:
+        """Sample queued snapshots before control, independent of timer ordering.
+
+        This node uses a single-threaded executor: no reference callback can
+        mutate the frontier during this bounded take. Every sample still goes
+        through the same origin, producer time and sequence admission.
+        """
+        if not self.profile.simulation_only:
+            return  # Native receipts are consumed by their authenticated group timer.
+        for _ in range(_REFERENCE_DEPTH):
+            # //Compatible: Humble exposes metadata through this same take API
+            # used by MotionExecutor; do not replace it with a metadata-less read.
+            with self._subscription.handle:
+                sample = self._subscription.handle.take_message(
+                    self._subscription.msg_type, self._subscription.raw
+                )
+            if sample is None:
+                break
+            self._on_reference(*sample)
 
     def command(self, msg: Any) -> bool:
         """Called only AFTER the existing authenticated FinalCommand generation fence."""
@@ -274,6 +403,7 @@ class MotionCoreOutput:
             "estop",
             "fault",
             "task_revoke",
+            "task_done",
             "shutdown",
             "qualification_lost",
             "estop_reset",
@@ -294,6 +424,8 @@ class MotionCoreOutput:
         if msg.owner_boot_id != self._input_boot:
             self._input_boot = msg.owner_boot_id
             self._input_floor = -1
+            self._task_retirements.clear()
+            self._terminal_released.clear()
         self.output_generation = int(msg.generation)
         if reason != "intent":
             if msg.sequence != 0 or msg.steady_deadline != 0 or msg.vx != 0 or msg.wz != 0:
@@ -312,6 +444,7 @@ class MotionCoreOutput:
             accepted = self._apply_close(msg, reason, now)
             if accepted:
                 self._barrier_complete = True
+                self._remember_task_retirement(msg)
             return accepted
         if (
             msg.generation <= self._input_floor
@@ -343,10 +476,45 @@ class MotionCoreOutput:
         if self.machine.state.mode not in {expected, MotionMode.OBSTACLE_HOLD}:
             self.revoke("state_rejected_target")
             return False
+        if velocity != Velocity(0, 0):
+            self._startup_motion_unconfirmed = False
         self.target = MotionTarget(velocity, msg.source_kind, source_id, float(msg.steady_deadline))
+        if msg.source_kind == "navigation":
+            self._task_identity = (str(msg.source_id), int(msg.source_epoch))
+            # An accepted higher epoch irreversibly supersedes old pause receipts.
+            obsolete = [
+                key
+                for key, proof in self._task_retirements.items()
+                if key[1] == msg.source_id
+                and proof[0] < msg.source_epoch
+                and key not in self._terminal_released
+            ]
+            for key in obsolete:
+                self._task_retirements.pop(key)
+                self._terminal_released.discard(key)
         return True
 
+    def _startup_stop_uncertain(self, body: Feedback | None, context: ConstraintSnapshot) -> bool:
+        """Classify initial unknown motion; never relax the T4 stopping result."""
+        return (
+            self._startup_motion_unconfirmed
+            and body is None
+            and context.mode is SourceMode.WHEEL_IMU_LIMITED
+            and context.motion.average is None
+            and context.motion.upper is None
+            and self.target.source == "idle"
+            and self.target.velocity == Velocity(0, 0)
+            and self.controller.trajectory.velocity == Velocity(0, 0)
+            and self.controller.trajectory.acceleration == Velocity(0, 0)
+            and self.machine.state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+        )
+
     def _apply_close(self, msg: Any, reason: str, now: float) -> bool:
+        if reason == "task_done" and (
+            msg.source_kind != "navigation"
+            or self.machine.state.task_id not in {None, msg.source_id}
+        ):
+            return False
         self.revoke(reason, now=now)
         if reason in {"estop_reset", "fault_recover"}:
             if not self._hardware_status_ready(now):
@@ -394,8 +562,126 @@ class MotionCoreOutput:
             self._event(
                 K.MANUAL_EXPIRED if reason == "expiry" else K.MANUAL_RELEASE, now, msg.source_id
             )
+        elif reason == "task_done":
+            # Successful Nav2 completion retires output, not the durable task identity.
+            self._event(K.TASK_PAUSE, now, msg.source_id)
         elif reason in {"task_revoke", "qualification_lost", "shutdown"}:
             self._event(K.TASK_PAUSE, now, msg.source_id)
+        return True
+
+    @staticmethod
+    def _task_retirement_key(msg: Any) -> tuple[str, str, int, str]:
+        return (msg.owner_boot_id, msg.source_id, int(msg.generation), msg.request_id)
+
+    def _remember_task_retirement(self, msg: Any) -> None:
+        if (
+            msg.source_kind != "navigation"
+            or not msg.request_id
+            or msg.source_epoch < 1
+            or msg.close_reason
+            not in {"task_revoke", "task_done", "qualification_lost", "shutdown", "expiry", "fault"}
+        ):
+            return
+        key = self._task_retirement_key(msg)
+        if key in self._task_retirements:
+            return
+        if len(self._task_retirements) >= 256:
+            return  # Output remains revoked; no new identity-release proof is issued.
+        epoch = int(msg.source_epoch)
+        if self.machine.state.task_id == msg.source_id and self._task_identity is None:
+            return  # A retained task with unknown epoch is not an identity-release proof.
+        if self._task_identity is not None and self._task_identity[0] == msg.source_id:
+            if epoch < self._task_identity[1]:
+                return
+            epoch = self._task_identity[1]
+        self._task_retirements[key] = (epoch, float(msg.received_steady), int(msg.connection_epoch))
+
+    def retirement_epoch(self, msg: Any) -> int | None:
+        proof = self._task_retirements.get(self._task_retirement_key(msg))
+        return proof[0] if proof is not None else None
+
+    def collect_terminal(self, msg: Any) -> bool:
+        """Durable settlement only reclaims metadata; it never releases identity.
+
+        Old barriers cannot recreate forgotten proofs: command generation is
+        irreversible, and an identical current barrier returns without minting.
+        Unknown collections are idempotent no-ops, never terminal-release ACKs.
+        """
+        if (
+            self._closed
+            or msg.owner_boot_id != self._input_boot
+            or msg.close_reason != "task_settled"
+            or msg.source_kind != "navigation"
+            or msg.session_id != msg.source_id
+            or not msg.source_id
+            or not msg.request_id
+            or msg.source_epoch < 1
+            or msg.generation != 0
+            or msg.connection_epoch != msg.source_epoch
+            or msg.sequence != 0
+            or msg.steady_deadline != 0
+            or msg.vx != 0
+            or msg.wz != 0
+            or msg.gesture != 0
+        ):
+            return False
+        if self.machine.state.task_id == msg.source_id and (
+            self._task_identity is None or self._task_identity[1] <= msg.source_epoch
+        ):
+            return False
+        keys = [
+            key
+            for key, proof in self._task_retirements.items()
+            if key[0] == msg.owner_boot_id
+            and key[1] == msg.source_id
+            and proof[0] <= msg.source_epoch
+        ]
+        if keys and not any(key in self._terminal_released for key in keys):
+            return False
+        for key in keys:
+            self._task_retirements.pop(key)
+            self._terminal_released.discard(key)
+        return True
+
+    def release_terminal(self, msg: Any) -> bool:
+        """Consume only a proven identity event; never revoke a newer motion owner."""
+        if (
+            self._closed
+            or msg.owner_boot_id != self._input_boot
+            or msg.close_reason != "task_terminal"
+            or msg.source_kind != "navigation"
+            or msg.session_id != msg.source_id
+            or not msg.source_id
+            or not msg.request_id
+            or msg.sequence != 0
+            or msg.steady_deadline != 0
+            or msg.gesture != 0
+            or msg.vx != 0
+            or msg.wz != 0
+        ):
+            return False
+        key = self._task_retirement_key(msg)
+        proof = self._task_retirements.get(key)
+        if proof != (msg.source_epoch, msg.received_steady, msg.connection_epoch):
+            return False
+        if key in self._terminal_released:
+            return True
+        if self.target.source == "navigation":
+            # Even the same epoch must not be released while its navigation source is live.
+            return False
+        identity = (str(msg.source_id), int(msg.source_epoch))
+        if self._task_identity is not None and self._task_identity != identity:
+            return False
+        if self.machine.state.task_id not in {None, msg.source_id} or (
+            self.machine.state.task_id is not None and self._task_identity != identity
+        ):
+            return False
+        revision = self.machine.state.fault_revision
+        self._event(K.TASK_RETIRED, time.monotonic(), msg.source_id)
+        if self.machine.state.task_id is not None or self.machine.state.fault_revision != revision:
+            return False
+        self._task_identity = None
+        self._terminal_released.add(key)
         return True
 
     def revoke(self, reason: str, *, now: float | None = None) -> None:
@@ -503,10 +789,24 @@ class MotionCoreOutput:
         assert self._perception is not None
         return self._perception, pose
 
+    def _reference_age_ns(self, ref: dict[str, Any], ros: int | None = None) -> int:
+        # The wire carries float seconds: round the serialized endpoint to its
+        # nearest ROS nanosecond. Precision already lost on the wire is not recovered.
+        now = self.node.get_clock().now().nanoseconds if ros is None else ros
+        return now - round(ref["end_ros"] * 1_000_000_000)
+
+    def _reference_time_valid(
+        self, ref: dict[str, Any], ros: int | None = None, *, future: bool = False
+    ) -> bool:
+        age = self._reference_age_ns(ref, ros)
+        horizon = round(self.profile.temporal().prediction_horizon_s * 1_000_000_000)
+        return age < 0 if future else 0 <= age <= horizon
+
     def _reference_age_ros(self, ref: dict[str, Any]) -> float:
-        return float(self.node.get_clock().now().nanoseconds / 1e9) - float(ref["end_ros"])
+        return self._reference_age_ns(ref) / 1_000_000_000
 
     def _inputs(self, now: float) -> tuple[Any, Any, Any]:
+        self._select_reference(now)
         data = self._reference
         if data is None or not 0 <= now - data["sampled_steady"] <= self.profile.max_age:
             raise ValueError("reference_expired")
@@ -533,12 +833,11 @@ class MotionCoreOutput:
         if average is not None and "laser" in live:
             row = live["laser"]
             s = row["sample"]
-            age = self._reference_age_ros(ref)
             # Explicit bounded constant-rate predictor, not a relabelled measured
             # interval. The horizon is in ROS time, not an extra steady TTL;
             # steady expiry remains the original admission owner's deadline.
             # Its physical error is charged to the candidate risk model.
-            if 0 <= age <= self.profile.temporal().prediction_horizon_s:
+            if self._reference_time_valid(ref):
                 body = Feedback(
                     Velocity(average["vx"], average["wz"]),
                     s["received_steady"],
@@ -594,8 +893,173 @@ class MotionCoreOutput:
             and self.controller.limited_rearm_ready(now, epochs=(wheel.epoch, imu.epoch))
         )
 
+    def _snapshot(self, ref, body, wheel, imu, imu_current, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if body is None:
+            mode = (
+                SourceMode.WHEEL_IMU_LIMITED
+                if wheel is not None and imu_current
+                else SourceMode.UNAVAILABLE
+            )
+        if wheel is None:
+            raise ValueError("wheel_feedback_missing")
+        chosen = {"wheel", "imu"} if body is None else {"laser", "wheel", "imu"}
+        consumed = [
+            x
+            for x in ref["source_health"]
+            if x["source"] in chosen and x["ready"] and now < x["valid_until_steady"]
+        ]
+        if not consumed:
+            raise ValueError("motion_sources_not_ready")
+        epoch = "|".join(x["epoch"] for x in consumed)
+        average = (
+            BodyTwist(**ref["average"]) if body is not None and ref["average"] is not None else None
+        )
+        motion = BodyMotion(
+            average,
+            None,
+            ref["start_ros"],
+            ref["end_ros"],
+            data_time(self._reference),
+            min(x["valid_until_steady"] for x in consumed),
+            epoch,
+            mode not in {SourceMode.UNAVAILABLE, SourceMode.RECOVERING},
+            "native T3 reference; upper unsupported",
+        )
+        p = self.profile
+        acceleration_upper = self.acceleration_model.upper
+        response = ResponseBounds(
+            acceleration_upper.vx,
+            p.decel,
+            p.jerk,
+            acceleration_upper.wz,
+            p.yaw_decel,
+            p.yaw_jerk,
+            p.lag,
+            self.model_deadline,
+            p.profile_id,
+        )
+        cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        # Independent deployment response envelope, not wheel truth.
+        # Hardware requires explicit evidence and operating conditions.
+        if body is None:
+            # Body speed is unknown: use the independent whole-body envelope.
+            linear = (-p.assumed_body_cap, p.assumed_body_cap)
+            gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
+            angular = (gyro - p.yaw_error, gyro + p.yaw_error)
+        else:
+            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
+            predictor_accel = acceleration_upper
+            dv = p.linear_error + predictor_accel.vx * age
+            dw = p.yaw_error + predictor_accel.wz * age
+            linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
+            angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            self.model_deadline,
+            p.horizon_s,
+            linear,
+            angular,
+            self.acceleration_model.reaction(a),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        ctx = ConstraintSnapshot(
+            self.target,
+            motion,
+            mode,
+            response,
+            Footprint(p.length, p.width),
+            perception,
+            pose,
+            "scan_reference",
+            p.profile_id,
+            p.profile_id,
+            risk,
+        )
+        return ctx
+
+    def _imu_state(self, packet, now):
+        live = {
+            x["source"]: x
+            for x in packet["sources"]
+            if x["ready"] and now < x["valid_until_steady"]
+        }
+        imu = live.get("imu")
+        imu_current = (
+            imu is not None
+            and 0
+            <= self.node.get_clock().now().nanoseconds / 1e9 - imu["sample"]["stamp_ros"]
+            <= self.profile.temporal().prediction_horizon_s
+        )
+        return imu, imu_current
+
+    def _stop_fallback(self, prepared, packet, now):
+        if self._reference is not packet:
+            raise ValueError("reference_expired")
+        ref, body, wheel = self._inputs(now)
+        if self._reference is not packet:
+            raise ValueError("reference_expired")
+        imu, imu_current = self._imu_state(packet, now)
+        perception, pose = self._observation(now)
+        ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+        if ctx.mode is not prepared.context.mode:
+            # A prediction leaving its original ROS window cannot become a
+            # different feedback mode just to salvage this same output.
+            raise ValueError("reference_expired")
+        error = self.engine._context_error(ctx, now)
+        if error is not None:
+            raise ValueError(error)
+        return self.controller.prepare_stop(prepared, ctx, body, wheel, now)
+
+    def _decision_output(self, decision, body, ctx, epoch, now):
+        reason = decision.reason
+        output = Velocity(0, 0)
+        if decision.command is not None:
+            output = decision.command
+        # No candidate never holds the previous nonzero Twist. The fallback
+        # is explicitly unverified stop/fault output, not a safe-stop claim.
+        elif decision.emergency and reason in {
+            "stop_envelope_blocked",
+            "stop_response_failed",
+            "infeasible_no_reverse",
+        }:
+            if reason == "stop_envelope_blocked" and self._startup_stop_uncertain(body, ctx):
+                # Keep emergency/unverified STOP and zero output. Missing
+                # initial body evidence is not an observed execution failure.
+                if self.machine.state.mode is not MotionMode.FEEDBACK_STOP:
+                    self._event(K.FEEDBACK_LOST, now)
+            else:
+                condition = (reason, epoch)
+                if condition != self._last_fault_condition:
+                    self._event(K.EXECUTION_FAULT, now)
+                    self._last_fault_condition = condition
+        elif not decision.emergency:
+            self._last_fault_condition = None
+        return output
+
     def tick(self) -> None:
+        self._consume_ready_reference()
         now = time.monotonic()
+        event_now = now  # Runtime sampling remains t0; later events follow exit sampling.
         self.sequence += 1
         body = None
         wheel = None
@@ -605,6 +1069,7 @@ class MotionCoreOutput:
         deadline = None
         stamp = None
         output = Velocity(0, 0)
+        prepared = None
         try:
             if not self._hardware_status_ready(now):
                 raise ValueError("hardware_estop_status_missing_or_expired")
@@ -621,18 +1086,7 @@ class MotionCoreOutput:
             packet = self._reference
             if packet is None:
                 raise ValueError("reference_missing")
-            live = {
-                x["source"]: x
-                for x in packet["sources"]
-                if x["ready"] and now < x["valid_until_steady"]
-            }
-            imu = live.get("imu")
-            imu_current = (
-                imu is not None
-                and 0
-                <= self.node.get_clock().now().nanoseconds / 1e9 - imu["sample"]["stamp_ros"]
-                <= self.profile.temporal().prediction_horizon_s
-            )
+            imu, imu_current = self._imu_state(packet, now)
             healthy = (
                 wheel is not None
                 and (body is not None or imu_current)
@@ -654,7 +1108,7 @@ class MotionCoreOutput:
                         body.stamp_steady,
                         body.deadline_steady,
                         healthy,
-                        self._stationary(body, wheel, now),
+                        self._stationary(body, wheel, event_now),
                     ),
                     now,
                 )
@@ -667,114 +1121,12 @@ class MotionCoreOutput:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
             perception, pose = self._observation(now)
-            mode = SourceMode(ref["mode"])
-            if body is None:
-                mode = (
-                    SourceMode.WHEEL_IMU_LIMITED
-                    if wheel is not None and imu_current
-                    else SourceMode.UNAVAILABLE
-                )
-            if wheel is None:
-                raise ValueError("wheel_feedback_missing")
-            chosen = {"wheel", "imu"} if body is None else {"laser", "wheel", "imu"}
-            consumed = [
-                x
-                for x in ref["source_health"]
-                if x["source"] in chosen and x["ready"] and now < x["valid_until_steady"]
-            ]
-            if not consumed:
-                raise ValueError("motion_sources_not_ready")
-            epoch = "|".join(x["epoch"] for x in consumed)
-            average = (
-                BodyTwist(**ref["average"])
-                if body is not None and ref["average"] is not None
-                else None
-            )
-            motion = BodyMotion(
-                average,
-                None,
-                ref["start_ros"],
-                ref["end_ros"],
-                data_time(self._reference),
-                min(x["valid_until_steady"] for x in consumed),
-                epoch,
-                mode not in {SourceMode.UNAVAILABLE, SourceMode.RECOVERING},
-                "native T3 reference; upper unsupported",
-            )
-            p = self.profile
-            acceleration_upper = self.acceleration_model.upper
-            response = ResponseBounds(
-                acceleration_upper.vx,
-                p.decel,
-                p.jerk,
-                acceleration_upper.wz,
-                p.yaw_decel,
-                p.yaw_jerk,
-                p.lag,
-                self.model_deadline,
-                p.profile_id,
-            )
-            cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
-            a = self.controller.trajectory.acceleration
-            v = self.controller.trajectory.velocity
-            # Independent deployment response envelope, not wheel truth.
-            # Hardware requires explicit evidence and operating conditions.
-            if body is None:
-                # Body speed is unknown: use the independent whole-body envelope.
-                linear = (-p.assumed_body_cap, p.assumed_body_cap)
-                gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
-                angular = (gyro - p.yaw_error, gyro + p.yaw_error)
-            else:
-                age = (
-                    max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
-                )
-                predictor_accel = acceleration_upper
-                dv = p.linear_error + predictor_accel.vx * age
-                dw = p.yaw_error + predictor_accel.wz * age
-                linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
-                angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
-            risk = RiskEnvelope(
-                p.profile_id,
-                p.risk_basis or p.profile_id,
-                epoch,
-                (
-                    SourceMode.LASER_REFERENCE,
-                    SourceMode.FUSED_REFERENCE,
-                    SourceMode.GPS_IMU_REFERENCE,
-                    SourceMode.WHEEL_IMU_LIMITED,
-                ),
-                p.profile_id,
-                self.model_deadline,
-                p.horizon_s,
-                linear,
-                angular,
-                self.acceleration_model.reaction(a),
-                p.position_error,
-                p.orientation_error_rad,
-                p.lateral_drift_mps,
-                cap,
-                p.yaw_cap,
-                bool(p.simulation_only and p.unvalidated),
-                lateral_stop_s=p.lateral_stop_s,
-                brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
-                brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
-            )
-            ctx = ConstraintSnapshot(
-                self.target,
-                motion,
-                mode,
-                response,
-                Footprint(p.length, p.width),
-                perception,
-                pose,
-                "scan_reference",
-                p.profile_id,
-                p.profile_id,
-                risk,
-            )
-            permission = self.scheduler.update(ctx, now)
+            ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+            mode, epoch = ctx.mode, ctx.motion.source_epoch
+            evaluation = self.engine.evaluate(ctx, now)
+            permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             estop = self.machine.state.mode is MotionMode.ESTOP
-            decision = self.controller.tick(
+            prepared = self.controller.propose_tick(
                 self.target.velocity,
                 ctx,
                 permission,
@@ -782,6 +1134,7 @@ class MotionCoreOutput:
                 wheel,
                 now,
                 estop=estop,
+                evaluation=evaluation,
                 imu=imu_point,
                 require_limited_rearm=(
                     body is None
@@ -790,6 +1143,7 @@ class MotionCoreOutput:
                     and self.target.velocity != Velocity(0, 0)
                 ),
             )
+            decision = prepared.decision
             reason = decision.reason
             if self.target.velocity == Velocity(0, 0) and decision.verified:
                 self._event(K.OBSTACLE_CLEAR, now)
@@ -806,27 +1160,50 @@ class MotionCoreOutput:
                     self._body_epoch_used = body.epoch
                 if wheel is not None:
                     self._wheel_epoch_used = wheel.epoch
-            if decision.command is not None:
-                output = decision.command
-            # No candidate never holds the previous nonzero Twist. The fallback
-            # is explicitly unverified stop/fault output, not a safe-stop claim.
-            elif decision.emergency and reason in {
-                "stop_envelope_blocked",
-                "stop_response_failed",
-                "infeasible_no_reverse",
-            }:
-                condition = (reason, epoch)
-                if condition != self._last_fault_condition:
-                    self._event(K.EXECUTION_FAULT, now)
-                    self._last_fault_condition = condition
-            elif not decision.emergency:
-                self._last_fault_condition = None
+            output = self._decision_output(decision, body, ctx, epoch, event_now)
             reason = f"{mode.value}:{reason}"
+            if output != Velocity(0, 0):
+                # The decision already selects its applicable drive/brake deadlines.
+                # Check actual output time without renewing that sampled evidence.
+                emit_now = event_now = time.monotonic()
+                if event_now < now:
+                    raise ValueError("motion_clock_regressed")
+                if (
+                    decision.verified
+                    and not decision.emergency
+                    and not prepared.braking
+                    and emit_now >= decision.evidence_deadline
+                    and self.machine.state.mode
+                    not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+                ):
+                    prepared = self._stop_fallback(prepared, packet, emit_now)
+                    decision = prepared.decision
+                    output = self._decision_output(
+                        decision,
+                        prepared.body,
+                        prepared.context,
+                        prepared.context.motion.source_epoch,
+                        event_now,
+                    )
+                    reason = f"{prepared.context.mode.value}:{decision.reason}"
+                    # One fallback only: expiry during its computation is a
+                    # rejection, never another proposal or renewed evidence.
+                    event_now = time.monotonic()
+                    if event_now < emit_now:
+                        raise ValueError("motion_clock_regressed")
+                    emit_now = event_now
+                    if not emit_now < decision.evidence_deadline:
+                        raise ValueError("motion_expired_or_unqualified")
+                if output != Velocity(0, 0) and (
+                    not decision.verified or not emit_now < decision.evidence_deadline
+                ):
+                    raise ValueError("motion_expired_or_unqualified")
             self.node._emit_motion_core(output, reason)
+            self.controller.commit(prepared)
             if self.target.source == "manual" and output != Velocity(0, 0):
                 self._manual_motion_source = self.target.source_id
             if body is None and wheel is not None and imu_point is not None:
-                ready = self._limited_ready(now, wheel, imu_point)
+                ready = self._limited_ready(event_now, wheel, imu_point)
                 readiness_deadline = min(wheel.deadline_steady, imu_point.deadline_steady)
                 if ready:
                     readiness_deadline = min(readiness_deadline, decision.evidence_deadline)
@@ -845,21 +1222,25 @@ class MotionCoreOutput:
                         False,
                         manual_rearm_ready=ready,
                     ),
-                    now,
+                    event_now,
                 )
                 if healthy:
-                    self._event(K.FEEDBACK_HEALTHY, now)
+                    self._event(K.FEEDBACK_HEALTHY, event_now)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+            if prepared is not None:
+                self.controller.discard(prepared)
             self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
             self.node._emit_motion_core(Velocity(0, 0), reason)
             if self._last_healthy:
-                self._event(K.FEEDBACK_LOST, now)
+                self._event(K.FEEDBACK_LOST, event_now)
                 self._last_healthy = False
             healthy = False
         state = self.machine.state
         actions = list(state.allowed_actions)
-        actual_stationary = healthy and self._stationary(body, wheel, now)
+        actual_stationary = healthy and self._stationary(body, wheel, event_now)
+        if actual_stationary:
+            self._startup_motion_unconfirmed = False
         if not actual_stationary:
             actions = [x for x in actions if x not in {"estop_reset", "fault_recover"}]
         if not healthy:

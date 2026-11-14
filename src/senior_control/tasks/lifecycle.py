@@ -90,13 +90,18 @@ class Receipt:
 
 @dataclass(frozen=True)
 class Effect:
-    kind: Literal["plan", "revoke", "manual_ready"]
+    kind: Literal["plan", "revoke", "manual_ready", "terminal_release", "terminal_settled"]
     effect_id: str
     task_id: str
     epoch: int
     remaining: tuple[str, ...] = ()
     pose_ref: str | None = None
     map_ref: str | None = None
+    # Immutable request-time snapshot; later cancel/failure can change settlement.
+    terminal_outcome: Literal["succeeded", "canceled", "failed"] | None = None
+    # Transport-only durable outbox ordering, populated after commit by NavigationEffects.
+    dispatch_sequence: int = 0
+    settled_through: int = 0
 
 
 @dataclass(frozen=True)
@@ -192,7 +197,10 @@ def _can_plan(context: Context) -> bool:
     return context.motion_allowed and bool(context.pose_ref) and bool(context.map_ref)
 
 
-def _effect(state: Lifecycle, kind: Literal["plan", "revoke", "manual_ready"]) -> Effect:
+def _effect(
+    state: Lifecycle,
+    kind: Literal["plan", "revoke", "manual_ready", "terminal_release", "terminal_settled"],
+) -> Effect:
     assert state.task_id is not None
     return Effect(
         kind,
@@ -232,6 +240,21 @@ def _recover(state: Lifecycle, context: Context) -> Transition:
     return Transition(state)
 
 
+def _terminal_phase(state: Lifecycle) -> Literal["succeeded", "canceled", "failed"] | None:
+    if state.stopped_for == "cancel":
+        return "canceled"
+    if state.stopped_for == "failure":
+        return "failed"
+    return "succeeded" if not state.remaining else None
+
+
+def _release_terminal(state: Lifecycle) -> Transition:
+    outcome = _terminal_phase(state)
+    assert outcome is not None
+    effect = replace(_effect(state, "terminal_release"), terminal_outcome=outcome)
+    return Transition(replace(state, phase="revoking", pending=effect), (effect,))
+
+
 def _stop(state: Lifecycle, reason: StopReason) -> Transition:
     reason = _settlement_reason(state.stopped_for, reason)
     state = replace(state, recovery_requested=False)
@@ -239,7 +262,9 @@ def _stop(state: Lifecycle, reason: StopReason) -> Transition:
         # Reuse the existing boundary obligation; duplicate stops never send again.
         return Transition(replace(state, stopped_for=reason))
     if state.phase == "paused":
-        phase: Phase = "canceled" if reason == "cancel" else "paused"
+        if reason == "cancel":
+            return _release_terminal(replace(state, stopped_for=reason))
+        phase: Phase = "paused"
         changed = replace(state, phase=phase, stopped_for=reason)
         effects = (
             (_effect(changed, "manual_ready"),)
@@ -274,15 +299,10 @@ def acknowledge(
     if effect.kind == "revoke":
         if not ok:
             return Transition(state)
-        phase: Phase = (
-            "canceled"
-            if state.stopped_for == "cancel"
-            else "failed"
-            if state.stopped_for == "failure"
-            else "succeeded"
-            if not state.remaining
-            else "paused"
-        )
+        if _terminal_phase(state) is not None:
+            released = _release_terminal(state)
+            return replace(released, state=replace(released.state, version=state.version + 1))
+        phase: Phase = "paused"
         changed = replace(
             state,
             version=state.version + 1,
@@ -292,6 +312,19 @@ def acknowledge(
         )
         effects = (_effect(changed, "manual_ready"),) if state.stopped_for == "takeover" else ()
         return Transition(changed, effects) if effects else _recover(changed, context)
+    if effect.kind == "terminal_release":
+        if not ok:
+            return Transition(state)
+        phase = _terminal_phase(state)
+        assert phase is not None
+        changed = replace(
+            state, version=state.version + 1, phase=phase, pending=None, recovery_requested=False
+        )
+        collection = replace(
+            _effect(changed, "terminal_settled"), terminal_outcome=effect.terminal_outcome
+        )
+        notices = (_effect(changed, "manual_ready"),) if state.stopped_for == "takeover" else ()
+        return Transition(changed, (collection, *notices))
     if not ok:
         result = _stop(state, "fault")
         return replace(result, state=replace(result.state, version=state.version + 1))
@@ -347,5 +380,5 @@ def _event(state: Lifecycle, incoming: Event, context: Context) -> Transition:
         and not state.remaining
         and state.phase in {"starting", "running"}
     ):
-        return Transition(replace(state, phase="succeeded", pending=None))
+        return _release_terminal(state)
     return Transition(state)

@@ -13,7 +13,7 @@ import json
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Literal, TypeVar
 
@@ -211,6 +211,24 @@ class LifecycleStore:
 
         await self._atomic(work)
 
+    async def metadata_executions(self, *, limit: int = 16) -> tuple[str, ...]:
+        """Oldest committed GC obligations, including already terminal executions."""
+        if not 1 <= limit <= MAX_EFFECT_BATCH:
+            raise ValueError("invalid metadata reconciliation limit")
+
+        async def work(connection: aiosqlite.Connection) -> tuple[str, ...]:
+            async with connection.execute(
+                "SELECT e.execution_id FROM task_lifecycle_effect e "
+                "JOIN task_lifecycle l ON l.execution_id=e.execution_id "
+                "WHERE l.robot_id=? AND e.status IN ('ready','sending') "
+                "AND json_extract(e.payload,'$.kind')='terminal_settled' "
+                "GROUP BY e.execution_id ORDER BY MIN(e.rowid) LIMIT ?",
+                (self.robot_id, limit),
+            ) as cursor:
+                return tuple(str(row[0]) for row in await cursor.fetchall())
+
+        return await self._atomic(work, mutation=False)
+
     async def instances(self, *, active_only: bool = False) -> tuple[str, ...]:
         async def work(connection: aiosqlite.Connection) -> tuple[str, ...]:
             suffix = (
@@ -380,6 +398,13 @@ class LifecycleStore:
                 for effect_id, payload in await cursor.fetchall():
                     if _effect(str(payload)).kind == "manual_ready":
                         keep.append(str(effect_id))
+        async with connection.execute(
+            "SELECT effect_id FROM task_lifecycle_effect WHERE execution_id=? "
+            "AND status IN ('ready','sending') "
+            "AND json_extract(payload,'$.kind')='terminal_settled'",
+            (state.task_id,),
+        ) as cursor:
+            keep.extend(str(row[0]) for row in await cursor.fetchall())
         exclusion = " AND effect_id NOT IN (" + ",".join("?" for _ in keep) + ")" if keep else ""
         await connection.execute(
             "UPDATE task_lifecycle_effect SET status='retired' WHERE execution_id=? "
@@ -594,6 +619,38 @@ class LifecycleStore:
 
         return await self._atomic(work, mutation=False)
 
+    async def wire_effect(self, effect: core.Effect) -> tuple[core.Effect, bool]:
+        """Use persisted row ordering; never recreate an already settled operation.
+
+        Deployment premise: the same audit database is not deleted/re-numbered
+        (including VACUUM) or replaced by an older copy under live receivers.
+        No database-incarnation or rollback detection is implemented here.
+        The frontier excludes
+        notifications only. An unacknowledged collection must remain a gap:
+        otherwise a reconnect could skip the native metadata reclamation.
+        """
+
+        async def work(connection: aiosqlite.Connection) -> tuple[core.Effect, bool]:
+            async with connection.execute(
+                "SELECT rowid,payload,status,result FROM task_lifecycle_effect "
+                "WHERE execution_id=? AND effect_id=?",
+                (effect.task_id, effect.effect_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None or _effect(str(row[1])) != effect:
+                raise StaleEffect(effect.effect_id)
+            async with connection.execute(
+                "SELECT COALESCE(MIN(CASE WHEN status IN ('ready','sending') AND "
+                "json_extract(payload,'$.kind') <> 'manual_ready' "
+                "THEN rowid END)-1, MAX(rowid),0) FROM task_lifecycle_effect"
+            ) as cursor:
+                frontier = int((await cursor.fetchone())[0])
+            return replace(effect, dispatch_sequence=int(row[0]), settled_through=frontier), (
+                row[2] == "done" and row[3] == 1
+            )
+
+        return await self._atomic(work, mutation=False)
+
     async def claim_effect(self, execution_id: str, effect_id: str) -> StoredEffect | None:
         async def work(connection: aiosqlite.Connection) -> StoredEffect | None:
             if await self._load(connection, execution_id) is None:
@@ -635,7 +692,7 @@ class LifecycleStore:
                 return core.Transition(state)
             if row[1] != "sending":
                 raise StaleEffect("effect was not claimed for sending")
-            if effect.kind == "manual_ready":
+            if effect.kind in {"manual_ready", "terminal_settled"}:
                 result = core.Transition(state)
             else:
                 if state.pending != effect:
@@ -644,7 +701,11 @@ class LifecycleStore:
                     state, effect_id, epoch, ok=ok, context=self._context(context)
                 )
             await self._save(connection, state, result)
-            status = "sending" if effect.kind == "revoke" and not ok else "done"
+            status = (
+                "sending"
+                if effect.kind in {"revoke", "terminal_release", "terminal_settled"} and not ok
+                else "done"
+            )
             await connection.execute(
                 "UPDATE task_lifecycle_effect SET status=?,result=? WHERE effect_id=?",
                 (status, int(ok), effect_id),
@@ -667,7 +728,8 @@ class LifecycleStore:
                 # terminal and restart is a no-op; never grant old manual authority.
                 await connection.execute(
                     "UPDATE task_lifecycle_effect SET status='retired' WHERE execution_id=? "
-                    "AND status IN ('ready','sending')",
+                    "AND status IN ('ready','sending') "
+                    "AND json_extract(payload,'$.kind')<>'terminal_settled'",
                     (execution_id,),
                 )
                 record = await self.tasks._execution_in(connection, str(execution_id))

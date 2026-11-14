@@ -7,7 +7,12 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from senior_control.models import Velocity
-from senior_control.motion.constraints import ConstraintEngine, ConstraintResult, ConstraintSnapshot
+from senior_control.motion.constraints import (
+    ConstraintEngine,
+    ConstraintResult,
+    ConstraintSnapshot,
+    TickEvaluation,
+)
 from senior_control.motion.contracts import BrakeKind, BrakeRequest
 
 
@@ -106,7 +111,9 @@ class ConstraintScheduler:
             self.stop()
         return valid
 
-    def update(self, snapshot: ConstraintSnapshot, now: float) -> ConstraintResult:
+    def update(
+        self, snapshot: ConstraintSnapshot, now: float, *, evaluation: TickEvaluation | None = None
+    ) -> ConstraintResult:
         if not self._clock_valid(now):
             return self.current
         if (
@@ -126,29 +133,41 @@ class ConstraintScheduler:
                 None, BrakeRequest(BrakeKind.CONTROLLED, "identity_changed", False)
             )
         self._latest = snapshot
+        if evaluation is not None and not evaluation.matches(self.engine, snapshot, now):
+            evaluation = None
         if snapshot.target.velocity == Velocity(0, 0):
             self.stop()
-            self.current = self.engine.refine(snapshot, now)
+            self.current = (
+                evaluation.zero_stop() if evaluation else self.engine.refine(snapshot, now)
+            )
             return self.current
         self._active = True
         self._pending = _Pending(snapshot, now, self._fence)  # replace, never queue every scan
-        return self.poll(now)
+        return self.poll(now, evaluation=evaluation)
 
-    def poll(self, now: float) -> ConstraintResult:
+    def poll(self, now: float, *, evaluation: TickEvaluation | None = None) -> ConstraintResult:
         if not self._clock_valid(now):
             return self.current
         latest = self._latest
         if latest is None:
             return self.current
+        if evaluation is not None and not evaluation.matches(self.engine, latest, now):
+            evaluation = None
         if not self._active:
             # Cancel/zero ends authorization, not physical deceleration. Reuse the
             # engine's original evidence deadlines; never renew or dispatch work.
             stopping = replace(latest, target=replace(latest.target, velocity=Velocity(0, 0)))
-            self.current = self.engine.refine(stopping, now)
+            self.current = (
+                evaluation.zero_stop() if evaluation else self.engine.refine(stopping, now)
+            )
             if self._flight is not None and self._flight.future.done():
                 self._flight = None  # fenced result is discarded, never admitted
             return self.current
-        self.current = self.engine.tighten(self.current, latest, now)
+        self.current = (
+            evaluation.tighten(self.current)
+            if evaluation
+            else self.engine.tighten(self.current, latest, now)
+        )
         flight = self._flight
         if flight is not None and flight.future.done():
             self._flight = None
@@ -171,7 +190,11 @@ class ConstraintScheduler:
                     self._worker_failure("worker_failed")
                     result = None
                 if result is not None:
-                    admitted = self.engine.admit(result, latest, now)
+                    admitted = (
+                        evaluation.tighten(result)
+                        if evaluation
+                        else self.engine.admit(result, latest, now)
+                    )
                     self.current = _merge_refinement(self.current, admitted)
                     if admitted.permit is not None and self.current is admitted:
                         self.worker_diagnostic = None

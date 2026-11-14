@@ -124,12 +124,30 @@ class IpcNavigation:
                 pose_ref=effect.pose_ref,
             )
             reply = await self._call(
-                "navigation.task_start", effect.task_id, plan=plan.model_dump()
+                "navigation.task_start",
+                effect.task_id,
+                plan=plan.model_dump(),
+                effect_sequence=effect.dispatch_sequence,
+                settled_through=effect.settled_through,
+            )
+        elif effect.kind in {"terminal_release", "terminal_settled"}:
+            reply = await self._call(
+                "navigation.task_settled"
+                if effect.kind == "terminal_settled"
+                else "navigation.task_terminal",
+                effect.task_id,
+                effect_id=effect.effect_id,
+                task_epoch=effect.epoch,
+                terminal_outcome=effect.terminal_outcome,
+                effect_sequence=effect.dispatch_sequence,
+                settled_through=effect.settled_through,
             )
         else:
             reply = await self._call(
                 "navigation.task_cancel",
                 effect.task_id,
+                effect_sequence=effect.dispatch_sequence,
+                settled_through=effect.settled_through,
                 effect_id=effect.effect_id,
                 task_epoch=effect.epoch,
             )
@@ -137,11 +155,16 @@ class IpcNavigation:
 
     async def task_effect_status(self, effect: Effect) -> bool | None:
         reply = await self._call(
-            "navigation.task_status",
+            "navigation.task_settled"
+            if effect.kind == "terminal_settled"
+            else "navigation.task_status",
             effect.task_id,
+            effect_sequence=effect.dispatch_sequence,
+            settled_through=effect.settled_through,
             effect_id=effect.effect_id,
             task_epoch=effect.epoch,
             effect_kind=effect.kind,
+            terminal_outcome=effect.terminal_outcome,
         )
         return self._effect_result(reply, effect)
 
@@ -153,6 +176,22 @@ class IpcNavigation:
             or reply.get("task_epoch") != effect.epoch
         ):
             return None
+        if reply.get("execution_id") != effect.task_id:
+            return None
+        if effect.kind == "terminal_settled":
+            return (
+                True if reply.get("collected") is True and reply.get("accepted") is True else None
+            )
+        if effect.kind == "terminal_release":
+            return (
+                True
+                if (
+                    reply.get("terminal_outcome") == effect.terminal_outcome
+                    and reply.get("identity_released") is True
+                    and reply.get("accepted") is True
+                )
+                else None
+            )
         if effect.kind == "revoke":
             return (
                 True

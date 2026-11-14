@@ -232,7 +232,7 @@ class MotionStateMachine:
             self._feedback_task = False
             self.task_paused = True
             self._replan = False
-        elif kind in (K.TASK_DONE,) and self._task == event.source_id:
+        elif kind in (K.TASK_DONE, K.TASK_RETIRED) and self._task == event.source_id:
             self._feedback_task = False
             self._task = None
             self.task_paused = False

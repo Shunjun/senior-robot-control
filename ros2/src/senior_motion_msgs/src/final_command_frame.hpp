@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,7 +34,7 @@ inline void text(std::vector<uint8_t>& out, const std::string& s, size_t bound) 
 
 template<class Command, class Gid>
 std::vector<uint8_t> encode(uint8_t kind, const Gid& gid, const Command& m) {
-  if (kind > 2 || gid.size() != 24) throw std::invalid_argument("frame kind/gid");
+  if (kind > 4 || gid.size() != 24) throw std::invalid_argument("frame kind/gid");
   std::vector<uint8_t> out{'S', 'C', 'F', '2', 2, kind};
   integer(out, size, 2);
   out.insert(out.end(), gid.begin(), gid.end());
@@ -68,6 +69,25 @@ template<class C> bool same_payload(const C& a, const C& b) {
     a.close_reason == b.close_reason;
 }
 
+// Identity notifications cannot enter the actuator generation/sequence frontier.
+template<class C> bool terminal_identity(const C& m) {
+  return m.source_kind == "navigation" && !m.source_id.empty() && m.source_id == m.session_id &&
+    !m.owner_boot_id.empty() && !m.request_id.empty() && m.source_epoch > 0 &&
+    (m.close_reason == "task_terminal" || (m.close_reason == "task_settled" &&
+      m.generation == 0 && m.connection_epoch == m.source_epoch)) && m.sequence == 0 && m.steady_deadline == 0 &&
+    m.vx == 0 && m.wz == 0 && m.gesture == 0;
+}
+
+template<class C> bool terminal_identity_authorized(
+    const C& m, const std::string& robot, const std::string& boot, bool invalid_boot, double now) {
+  if (!terminal_identity(m) || invalid_boot || boot.empty() || boot != m.owner_boot_id ||
+      m.robot_id != robot || !std::isfinite(now) || !std::isfinite(m.received_steady) ||
+      m.received_steady < 0 || m.received_steady > now) return false;
+  for (const auto* text : {&m.robot_id, &m.owner_boot_id, &m.session_id, &m.request_id, &m.source_id})
+    if (text->size() > 128 || text->find('\0') != std::string::npos) return false;
+  return true;
+}
+
 template<class C> bool barrier(const C& m) {
   if (m.vx != 0 || m.wz != 0 || m.sequence != 0 || m.steady_deadline != 0) return false;
   if (m.close_reason == "estop_reset" || m.close_reason == "fault_recover") {
@@ -75,6 +95,7 @@ template<class C> bool barrier(const C& m) {
       m.source_id.empty() && m.source_epoch == 0;
   }
   if (m.gesture != 0) return false;
+  if (m.close_reason == "task_done") return m.source_kind == "navigation";
   return m.close_reason == "prepared" || m.close_reason == "release" ||
     m.close_reason == "expiry" || m.close_reason == "connection_retired" ||
     m.close_reason == "estop" || m.close_reason == "fault" ||

@@ -31,6 +31,7 @@ class MotionEventKind(str, Enum):
     TASK_PAUSE = "task_pause"
     TASK_RESUME = "task_resume"
     TASK_DONE = "task_done"
+    TASK_RETIRED = "task_retired"
     OBSTACLE = "obstacle"
     OBSTACLE_CLEAR = "obstacle_clear"
     FEEDBACK_LOST = "feedback_lost"

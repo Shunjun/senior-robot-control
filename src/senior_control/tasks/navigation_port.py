@@ -29,11 +29,14 @@ class NavigationEffects:
     async def execute(self, effect: Effect) -> bool | None:
         if effect.kind == "manual_ready":
             return await self._handoff(effect)
+        wire, done = await self.store.wire_effect(effect)
+        if done:
+            return True
         task = await self.store.tasks.execution_definition(effect.task_id)
         if task is None:
             return None
         try:
-            result = await asyncio.wait_for(self.navigation.task_effect(effect, task), self.timeout)
+            result = await asyncio.wait_for(self.navigation.task_effect(wire, task), self.timeout)
         except RouteRejected:
             return False
         if effect.kind == "revoke" and result is True:
@@ -43,7 +46,10 @@ class NavigationEffects:
     async def query(self, effect: Effect) -> bool | None:
         if effect.kind == "manual_ready":
             return await self._handoff(effect)
-        result = await asyncio.wait_for(self.navigation.task_effect_status(effect), self.timeout)
+        wire, done = await self.store.wire_effect(effect)
+        if done:
+            return True
+        result = await asyncio.wait_for(self.navigation.task_effect_status(wire), self.timeout)
         if effect.kind == "revoke" and result is True:
             await self._committed_actions(effect)
         return result

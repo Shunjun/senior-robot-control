@@ -7,6 +7,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+from motion_reference_test_support import ReadySubscription
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
 
@@ -29,14 +30,18 @@ class Node:
     def __init__(self):
         self.publishers = {}
         self.emitted = []
+        self.warnings = []
 
     def create_publisher(self, _type, topic, _qos):
         self.publishers[topic] = Publisher()
         return self.publishers[topic]
 
+    def get_logger(self):
+        return N(warning=self.warnings.append)
+
     def create_subscription(self, _type, _topic, callback, _qos):
         assert getattr(callback, "_senior_dds_info", False)
-        return callback
+        return ReadySubscription(_type, callback)
 
     def get_clock(self):
         return N(now=lambda: N(nanoseconds=time.monotonic() * 1e9))
@@ -257,7 +262,8 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
     assert core.target.source == "idle"
 
 
-def test_body_projection_uses_ros_window_and_original_owner_expiry_under_slow_rtf(core):
+@pytest.mark.parametrize("expired", ["prediction_window", "owner_deadline"])
+def test_body_projection_uses_ros_window_and_original_owner_expiry_under_slow_rtf(core, expired):
     core._reference = {
         "sampled_steady": 20.2,
         "sampled_ros": 10.1,
@@ -275,7 +281,9 @@ def test_body_projection_uses_ros_window_and_original_owner_expiry_under_slow_rt
     _, body, _ = core._inputs(20.2)
     assert body is not None
     assert body.stamp_steady == 20.0 and body.deadline_steady == 20.8
-    core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.16e9))
-    assert core._inputs(20.2)[1] is None
-    core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.1e9))
-    assert core._inputs(20.8)[1] is None
+    if expired == "prediction_window":
+        core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.16e9))
+        assert core._inputs(20.2)[1] is None
+    else:
+        # Separate histories: checking steady expiry must not manufacture a ROS rollback.
+        assert core._inputs(20.8)[1] is None

@@ -323,8 +323,11 @@ async def test_failure_priority_and_progress_survive_database_reopen(tmp_path: P
         service = LifecycleService(store, port, context=lambda: CONTEXT)
         await service.reconcile("execution")
         state = await store.load("execution")
+        assert state.pending.kind == "terminal_release"
+        await service.reconcile("execution")
+        state = await store.load("execution")
         assert state.phase == "failed" and state.completed == ("a",)
-        assert [effect.kind for effect in port.sent] == ["revoke"]
+        assert [effect.kind for effect in port.sent] == ["revoke", "terminal_release"]
 
 
 async def test_failed_sending_claim_never_calls_external_port(tmp_path: Path) -> None:
@@ -426,7 +429,8 @@ async def test_explicit_stop_retires_unconsumed_manual_notice(
         state = await store.load("execution")
         await service.command(Command("stop", action, "execution"), expected_version=state.version)
         await service.reconcile("execution")
-        assert [effect.kind for effect in port.sent] == ["plan", "revoke"]
+        expected = ["plan", "revoke"] + (["terminal_release"] if action == "cancel" else [])
+        assert [effect.kind for effect in port.sent] == expected
 
 
 @pytest.mark.parametrize("changed", ["unavailable", "reference"])

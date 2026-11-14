@@ -1,0 +1,114 @@
+{
+  "provenance": "Native R3 ScanMotion1.5/1.6, source received/deadline and snapshot/tick clocks. Ingress ROS1.624 is reconstructed from the original admission deadline with unchanged max_age=.8; handler completion is explicitly controlled, not inferred from ingress. Earlier stationary recovery history is constructed through real admission.",
+  "old_laser": {
+    "header": {
+      "stamp": {
+        "sec": 1,
+        "nanosec": 500000000
+      },
+      "frame_id": "base_link"
+    },
+    "interval_start": {
+      "sec": 1,
+      "nanosec": 400000000
+    },
+    "source_epoch": "30e441905a5b060d57148f9ddf14ea24-1",
+    "valid": true,
+    "reason": "qualified",
+    "body_delta": {
+      "x": 0.0,
+      "y": 0.0,
+      "theta": 0.0
+    },
+    "local_pose": {
+      "x": -1.394717674685353e-20,
+      "y": -5.637851296924623e-18,
+      "theta": -6.938893903907228e-18
+    },
+    "covariance": [
+      0.010242336580734967,
+      0.0,
+      0.0,
+      0.0,
+      0.010242336580734967,
+      0.0,
+      0.0,
+      0.0,
+      4.7395338642507485e-05
+    ],
+    "response": 1.0,
+    "residual": 3.234311063492482e-08,
+    "valid_rays": 720,
+    "startup_reference_valid": false,
+    "startup_reference_stamp": {
+      "sec": 0,
+      "nanosec": 0
+    }
+  },
+  "new_laser": {
+    "header": {
+      "stamp": {
+        "sec": 1,
+        "nanosec": 600000000
+      },
+      "frame_id": "base_link"
+    },
+    "interval_start": {
+      "sec": 1,
+      "nanosec": 500000000
+    },
+    "source_epoch": "30e441905a5b060d57148f9ddf14ea24-1",
+    "valid": true,
+    "reason": "qualified",
+    "body_delta": {
+      "x": 0.0,
+      "y": 0.0,
+      "theta": 0.0
+    },
+    "local_pose": {
+      "x": -1.394717674685353e-20,
+      "y": -5.637851296924623e-18,
+      "theta": -6.938893903907228e-18
+    },
+    "covariance": [
+      0.010242336580734967,
+      0.0,
+      0.0,
+      0.0,
+      0.010242336580734967,
+      0.0,
+      0.0,
+      0.0,
+      4.7395338642507485e-05
+    ],
+    "response": 1.0,
+    "residual": 3.234311063492482e-08,
+    "valid_rays": 720,
+    "startup_reference_valid": false,
+    "startup_reference_stamp": {
+      "sec": 0,
+      "nanosec": 0
+    }
+  },
+  "old_snapshot": {
+    "steady": 128393.121204059,
+    "ros": 1.608
+  },
+  "new_received": {
+    "steady": 128393.130531642,
+    "ros": 1.624
+  },
+  "handler_finished": {
+    "steady": 128393.132,
+    "ros": 1.626
+  },
+  "tick": {
+    "steady": 128393.162739309,
+    "ros": 1.661
+  },
+  "next_periodic": {
+    "steady": 128393.163958684,
+    "ros": 1.66
+  },
+  "new_original_deadline": 128393.906531642
+}

@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,7 +18,7 @@ def navigation(monkeypatch):
         "rclpy.clock": {"Clock": object, "ClockType": object},
         "rclpy.node": {"Node": object},
         "rclpy.parameter": {"Parameter": object},
-        "rclpy.qos": {"qos_profile_sensor_data": object()},
+        "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "rclpy.subscription": {"Subscription": object},
         "senior_motion_msgs.msg": {"DriveExecutionFeedback": object, "FinalCommand": object},
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -38,10 +39,21 @@ def navigation(monkeypatch):
         SimpleNamespace(time=lambda: clock.wall, time_ns=lambda: round(clock.wall * 1e9)),
     )
     node = module.CommandNode.__new__(module.CommandNode)
+    node._consuming_runtime = False
+    node._runtime_subscription = MagicMock(msg_type=object, raw=False)
+    node._runtime_subscription.handle.take_message.return_value = None
     node._retirements = {}
+    node._terminal_requests = {}
+    node._terminal_collections = {}
+    node._settled_sequence = 0
+    node._retirement_core = None
+    node._retirement_feedback_gid = None
+    node._motion_runtime = SimpleNamespace(value=None)
+    node._manual_target = None
+    node._manual_ingress = SimpleNamespace(view=lambda _: None)
     node._generation = 1
     node._active = False
-    node._publish_barrier = lambda *args: None
+    node._publish_barrier = lambda *args, **kwargs: None
     node._monotonic_clock = SimpleNamespace(monotonic=lambda: clock.mono)
     attempts, accepted, ended, published, logs = [], [], [], [], []
 
@@ -145,8 +157,11 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
     node.get_publishers_info_by_topic = lambda _: [
         SimpleNamespace(node_name="safety_gate", node_namespace="/", endpoint_gid=b"gate")
     ]
+    node._retirement_core = (b"gate", "test-core")
+    node._navigation_source.task_epoch = 1
     node.clear_navigation_source("private-execution")
-    token, generation, _ = node._retirements["private-execution"]
+    receipt = node._retirements["private-execution"]
+    token, generation = receipt.token, receipt.generation
     assert not node.navigation_source_retired("private-execution")
     msg = SimpleNamespace(
         robot_id="robot",
@@ -155,6 +170,8 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
         session_id="private-execution",
         sequence=generation,
         status="retired",
+        reason="test-core",
+        connection_epoch=1,
     )
     node._on_drive_feedback(msg, {"publisher_gid": b"gate"})
     assert not node.navigation_source_retired("private-execution")
@@ -163,8 +180,9 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
     assert node.navigation_source_retired("private-execution")
 
 
+@pytest.mark.parametrize("close_reason", ["task_revoke", "task_done"])
 @pytest.mark.parametrize("handoff", [True, False])
-def test_gate_retires_generation_only_after_brake_owner_handoff(handoff):
+def test_gate_retires_generation_only_after_brake_owner_handoff(handoff, close_reason):
     import ast
     import time
 
@@ -191,6 +209,8 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff):
         _motion_core=SimpleNamespace(
             command=lambda message: events.append(("handoff", message.generation)) or handoff,
             revoke=lambda reason: events.append(("closed", reason)),
+            retirement_epoch=lambda _: 1,
+            boot="test-core",
         ),
         _final_identity=None,
         _command_deadline=0,
@@ -218,7 +238,7 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff):
         source_id="task",
         source_epoch=1,
         received_steady=1.0,
-        close_reason="task_revoke",
+        close_reason=close_reason,
     )
     namespace["_on_command"](node, msg, b"gate-input")
     assert events[0] == ("handoff", 4)
