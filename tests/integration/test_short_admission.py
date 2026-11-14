@@ -476,7 +476,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             )
         )
         assert denied.reason == "stop_required"
-        Path(f"/private/tmp/task_b7719c254510-{path}-timing.json").write_text(
+        (tmp_path / f"{path}-timing.json").write_text(
             json.dumps(
                 {
                     "manual_lock_holds_seconds": holds,
