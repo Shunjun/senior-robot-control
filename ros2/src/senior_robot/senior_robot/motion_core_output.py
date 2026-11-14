@@ -698,11 +698,21 @@ class MotionCoreOutput:
                 "native T3 reference; upper unsupported",
             )
             p = self.profile
+            # Hardware declares nominal acceleration and a potentially larger
+            # reaction-phase bound. The response upper bound must cover both;
+            # never shrink the risk envelope to fit the nominal value.
+            # //Compatible: simulation retains its existing response model.
+            response_accel = (
+                p.accel if p.simulation_only else max(p.accel, p.reaction_linear_accel)
+            )
+            response_yaw_accel = (
+                p.yaw_accel if p.simulation_only else max(p.yaw_accel, p.reaction_yaw_accel)
+            )
             response = ResponseBounds(
-                p.accel,
+                response_accel,
                 p.decel,
                 p.jerk,
-                p.yaw_accel,
+                response_yaw_accel,
                 p.yaw_decel,
                 p.yaw_jerk,
                 p.lag,
