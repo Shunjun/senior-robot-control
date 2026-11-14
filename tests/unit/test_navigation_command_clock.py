@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,7 +18,7 @@ def navigation(monkeypatch):
         "rclpy.clock": {"Clock": object, "ClockType": object},
         "rclpy.node": {"Node": object},
         "rclpy.parameter": {"Parameter": object},
-        "rclpy.qos": {"qos_profile_sensor_data": object()},
+        "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "rclpy.subscription": {"Subscription": object},
         "senior_motion_msgs.msg": {"DriveExecutionFeedback": object, "FinalCommand": object},
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -38,6 +39,9 @@ def navigation(monkeypatch):
         SimpleNamespace(time=lambda: clock.wall, time_ns=lambda: round(clock.wall * 1e9)),
     )
     node = module.CommandNode.__new__(module.CommandNode)
+    node._consuming_runtime = False
+    node._runtime_subscription = MagicMock(msg_type=object, raw=False)
+    node._runtime_subscription.handle.take_message.return_value = None
     node._retirements = {}
     node._generation = 1
     node._active = False

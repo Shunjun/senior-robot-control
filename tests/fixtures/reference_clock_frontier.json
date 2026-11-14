@@ -1,0 +1,2536 @@
+{
+  "tick": {
+    "started_steady": 129861.661306509,
+    "ros_before": 6.182,
+    "sampled_steady": 129861.663087134,
+    "reference_sequence": 229,
+    "reference_sampled_steady": 129861.656894634,
+    "projection_clocks": [
+      {
+        "ros_now": 6.182,
+        "end_ros": 6.2,
+        "age_ros": -0.017999999999999794
+      }
+    ],
+    "body": null,
+    "wheel": {
+      "velocity": {
+        "vx": 8.841280632793004e-06,
+        "wz": -4.01986545709686e-17
+      },
+      "stamp_steady": 129861.637351384,
+      "deadline_steady": 129862.437351384,
+      "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+      "sequence": 183,
+      "current_supported": true,
+      "basis": "native wheel point; not body truth"
+    },
+    "perception": {
+      "key": [
+        "f890390f40784995b3b459b792b795e7",
+        63
+      ],
+      "stamp_steady": 129861.529552467,
+      "deadline_steady": 129862.329552467,
+      "source_epoch": "f890390f40784995b3b459b792b795e7",
+      "revision": 63,
+      "pose": {
+        "x": 1.768256194273051e-06,
+        "y": -1.1492847430811767e-20,
+        "yaw": 1.222980050563649e-16
+      }
+    },
+    "finished_steady": 129861.663744634,
+    "ros_after": 6.182,
+    "sequence": 165,
+    "mode": "feedback_stop",
+    "fault_revision": 0,
+    "startup_unconfirmed": false
+  },
+  "old": {
+    "schema": 1,
+    "boot_id": "a6a0af98663d4208b979027a90fad196",
+    "sequence": 227,
+    "sampled_steady": 129861.607539759,
+    "sampled_ros": 6.18,
+    "reference": {
+      "start_ros": 6.0,
+      "end_ros": 6.1,
+      "average": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "wz": -5.437721828264899e-16
+      },
+      "components": [
+        {
+          "value": 0.0,
+          "variance": null,
+          "original_keys": [
+            [
+              "laser",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+              62
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        },
+        {
+          "value": 0.0,
+          "variance": null,
+          "original_keys": [
+            [
+              "laser",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+              62
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        },
+        {
+          "value": -5.437721828264899e-16,
+          "variance": null,
+          "original_keys": [
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              301
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              302
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              303
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              304
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              305
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        }
+      ],
+      "statistical_covariance": null,
+      "supported_components": [
+        true,
+        true,
+        true
+      ],
+      "upper": null,
+      "mode": "laser_reference",
+      "target_cap_mps": 1.3888888888888888,
+      "conflicts": [],
+      "residuals": [
+        [
+          "laser_imu_yaw",
+          5.437721828264899e-16
+        ],
+        [
+          "wheel_independent_vx",
+          0.013526877936131925
+        ],
+        [
+          "wheel_imu_yaw",
+          2.1901262895739782e-14
+        ]
+      ],
+      "failures": [
+        [
+          "gps",
+          "source_unavailable"
+        ]
+      ],
+      "original_covariances": [
+        [
+          [
+            "laser",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+            62
+          ],
+          {
+            "values": [
+              0.03241727905587583,
+              0.0,
+              0.0,
+              0.0,
+              0.03241727905587583,
+              0.0,
+              0.0,
+              0.0,
+              0.00019426500472321902
+            ],
+            "kind": "full",
+            "basis": "native ScanMotion displacement covariance; statistical model unverified",
+            "correlation_group": null
+          }
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            301
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            302
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            303
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            304
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            305
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            176
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            177
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            178
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            179
+          ],
+          null
+        ]
+      ],
+      "current_reference": {
+        "components": [
+          1.76825619427343e-05,
+          null,
+          3.1997569282000713e-19
+        ],
+        "source_times_ros": [
+          6.18,
+          null,
+          6.18
+        ],
+        "requested_ros": 6.18,
+        "predicted_at_ros": null,
+        "reason": "held_points_not_a_current_estimate_no_acceleration_model"
+      },
+      "source_health": [
+        {
+          "source": "laser",
+          "ready": true,
+          "age_ros_s": 0.08000000000000007,
+          "age_steady_s": 0.06653441699745599,
+          "valid_until_steady": 129862.33000534201,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+          "sequence": 62
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "age_ros_s": 0.0,
+          "age_steady_s": 0.0006953340052859858,
+          "valid_until_steady": 129862.406844425,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 310
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "age_ros_s": 0.0,
+          "age_steady_s": 0.0010687500034691766,
+          "valid_until_steady": 129862.406471009,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 182
+        }
+      ]
+    },
+    "poses": [
+      {
+        "stamp_ros": 4.01,
+        "received_steady": 129859.321776758,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.220700876788585e-20,
+        "y": 3.174141354133584e-39,
+        "yaw": 2.7339922989726126e-19
+      },
+      {
+        "stamp_ros": 4.04,
+        "received_steady": 129859.348732216,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -1.890306597691866e-20,
+        "y": 4.0750054098200927e-39,
+        "yaw": 2.7305409673960063e-19
+      },
+      {
+        "stamp_ros": 4.08,
+        "received_steady": 129859.393492383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.8430346167571346e-20,
+        "y": 1.469876404747295e-39,
+        "yaw": 2.7671829982539e-19
+      },
+      {
+        "stamp_ros": 4.11,
+        "received_steady": 129859.433938174,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.175272168312394e-20,
+        "y": 5.426023224282104e-40,
+        "yaw": 2.788167881290673e-19
+      },
+      {
+        "stamp_ros": 4.14,
+        "received_steady": 129859.465215133,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.512163080358663e-20,
+        "y": -3.9975526984904145e-40,
+        "yaw": 2.766173621386849e-19
+      },
+      {
+        "stamp_ros": 4.18,
+        "received_steady": 129859.503936674,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.646339253507209e-20,
+        "y": -3.529113952733564e-39,
+        "yaw": 2.7609416842859016e-19
+      },
+      {
+        "stamp_ros": 4.21,
+        "received_steady": 129859.538305466,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.52736297189271e-20,
+        "y": -3.1942632762412144e-39,
+        "yaw": 2.786381672090387e-19
+      },
+      {
+        "stamp_ros": 4.24,
+        "received_steady": 129859.564201008,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.5403520617668423e-20,
+        "y": -3.233050806503012e-39,
+        "yaw": 2.7999543336738336e-19
+      },
+      {
+        "stamp_ros": 4.28,
+        "received_steady": 129859.605662674,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.0968121431842656e-20,
+        "y": -1.9825572043462954e-39,
+        "yaw": 2.8278232329347144e-19
+      },
+      {
+        "stamp_ros": 4.31,
+        "received_steady": 129859.640773424,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.7329832835053515e-20,
+        "y": -9.483956428617407e-40,
+        "yaw": 2.856941857027876e-19
+      },
+      {
+        "stamp_ros": 4.34,
+        "received_steady": 129859.670008008,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.6409739243651733e-20,
+        "y": -6.832519066850596e-40,
+        "yaw": 2.878271239059795e-19
+      },
+      {
+        "stamp_ros": 4.38,
+        "received_steady": 129859.711248925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.7938210591519435e-20,
+        "y": 1.75721711011823e-39,
+        "yaw": 2.897339330196142e-19
+      },
+      {
+        "stamp_ros": 4.41,
+        "received_steady": 129859.740258633,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.4987980353003027e-20,
+        "y": 2.6091417914503527e-39,
+        "yaw": 2.878379866733614e-19
+      },
+      {
+        "stamp_ros": 4.44,
+        "received_steady": 129859.77038255,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.285372706115334e-20,
+        "y": 3.2472032826656785e-40,
+        "yaw": 2.8917527537091218e-19
+      },
+      {
+        "stamp_ros": 4.48,
+        "received_steady": 129859.8165218,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.727281162738241e-20,
+        "y": -9.521191466283991e-40,
+        "yaw": 2.8743022281091327e-19
+      },
+      {
+        "stamp_ros": 4.51,
+        "received_steady": 129859.849349383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.250356696990836e-20,
+        "y": -2.4603218654239573e-39,
+        "yaw": 2.893557220142833e-19
+      },
+      {
+        "stamp_ros": 4.54,
+        "received_steady": 129859.87811105,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.6087331015258205e-20,
+        "y": -3.501193388100283e-39,
+        "yaw": 2.9180327035420955e-19
+      },
+      {
+        "stamp_ros": 4.58,
+        "received_steady": 129859.919480591,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.232723904167246e-20,
+        "y": -5.319397924080408e-39,
+        "yaw": 2.9119705063124205e-19
+      },
+      {
+        "stamp_ros": 4.61,
+        "received_steady": 129859.9550768,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.109760271005496e-20,
+        "y": -4.962242868528607e-39,
+        "yaw": 2.899606746673126e-19
+      },
+      {
+        "stamp_ros": 4.64,
+        "received_steady": 129859.982202925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.8617790523520176e-20,
+        "y": -4.244198116615033e-39,
+        "yaw": 2.8911137621484714e-19
+      },
+      {
+        "stamp_ros": 4.68,
+        "received_steady": 129860.02446555,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.655988931399013e-20,
+        "y": -3.6490087152779016e-39,
+        "yaw": 2.9075485182590995e-19
+      },
+      {
+        "stamp_ros": 4.71,
+        "received_steady": 129860.0642948,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.447197382697465e-20,
+        "y": -3.040622960504512e-39,
+        "yaw": 2.926249511413647e-19
+      },
+      {
+        "stamp_ros": 4.74,
+        "received_steady": 129860.089643966,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.304772761727501e-20,
+        "y": -2.623634423326048e-39,
+        "yaw": 2.924985481049595e-19
+      },
+      {
+        "stamp_ros": 4.78,
+        "received_steady": 129860.129057675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.780952737015336e-20,
+        "y": -1.0888845391911514e-39,
+        "yaw": 2.931908884837894e-19
+      },
+      {
+        "stamp_ros": 4.84,
+        "received_steady": 129860.191166675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.444836680591087e-20,
+        "y": -1.0595930600948506e-40,
+        "yaw": 2.9169755588863113e-19
+      },
+      {
+        "stamp_ros": 4.88,
+        "received_steady": 129860.233236383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.854093077468395e-20,
+        "y": -1.2990942112718379e-39,
+        "yaw": 2.9137520292250805e-19
+      },
+      {
+        "stamp_ros": 4.91,
+        "received_steady": 129860.267407716,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.272902283299241e-20,
+        "y": -2.5112147870190213e-39,
+        "yaw": 2.9084417436823645e-19
+      },
+      {
+        "stamp_ros": 4.9399999999999995,
+        "received_steady": 129860.296924425,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.4696473651629774e-20,
+        "y": -3.0830332643985234e-39,
+        "yaw": 2.9420863642652673e-19
+      },
+      {
+        "stamp_ros": 4.98,
+        "received_steady": 129860.336927675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.957359306239137e-20,
+        "y": -4.5346526784580996e-39,
+        "yaw": 3.003833995510111e-19
+      },
+      {
+        "stamp_ros": 5.01,
+        "received_steady": 129860.37033255,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.1866004915723935e-20,
+        "y": -5.226409605425872e-39,
+        "yaw": 3.0222392334402817e-19
+      },
+      {
+        "stamp_ros": 5.04,
+        "received_steady": 129860.398755091,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.9507989389729494e-20,
+        "y": -4.512015802133291e-39,
+        "yaw": 3.036148013726426e-19
+      },
+      {
+        "stamp_ros": 5.08,
+        "received_steady": 129860.441917092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.320351878639308e-20,
+        "y": -2.5775834747223474e-39,
+        "yaw": 3.070101919935591e-19
+      },
+      {
+        "stamp_ros": 5.11,
+        "received_steady": 129860.47398755,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.922086716093585e-20,
+        "y": -1.3539790199748517e-39,
+        "yaw": 3.0659614756674957e-19
+      },
+      {
+        "stamp_ros": 5.14,
+        "received_steady": 129860.504746925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.356304528845038e-20,
+        "y": 3.839680934293454e-40,
+        "yaw": 3.0892388242393714e-19
+      },
+      {
+        "stamp_ros": 5.18,
+        "received_steady": 129860.543954508,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.904076944944952e-20,
+        "y": 1.7810763753955658e-39,
+        "yaw": 3.0785845644400876e-19
+      },
+      {
+        "stamp_ros": 5.24,
+        "received_steady": 129860.6062343,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.874747072782338e-20,
+        "y": 1.8684288915179256e-39,
+        "yaw": 3.180995972097685e-19
+      },
+      {
+        "stamp_ros": 5.28,
+        "received_steady": 129860.646075842,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.9900305642725564e-20,
+        "y": 1.4987155840047625e-39,
+        "yaw": 3.2128206022535417e-19
+      },
+      {
+        "stamp_ros": 5.31,
+        "received_steady": 129860.675442717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.94708448286572e-20,
+        "y": 1.6341885797241037e-39,
+        "yaw": 3.223892105319393e-19
+      },
+      {
+        "stamp_ros": 5.34,
+        "received_steady": 129860.712729717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 2.493096470431116e-05,
+        "y": 6.215528511226748e-10,
+        "yaw": 4.9861917164713855e-05
+      },
+      {
+        "stamp_ros": 5.38,
+        "received_steady": 129860.750234758,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0001870748572605931,
+        "y": 2.9305249311732778e-08,
+        "yaw": 0.00029118740082257813
+      },
+      {
+        "stamp_ros": 5.41,
+        "received_steady": 129860.785120508,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0003928942333303435,
+        "y": 1.1879244791011036e-07,
+        "yaw": 0.0005783827504659347
+      },
+      {
+        "stamp_ros": 5.44,
+        "received_steady": 129860.81361105,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0006752286233198774,
+        "y": 3.2443998120999275e-07,
+        "yaw": 0.0008783827320513426
+      },
+      {
+        "stamp_ros": 5.48,
+        "received_steady": 129860.856383092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0010752283880611291,
+        "y": 7.557929826734851e-07,
+        "yaw": 0.00127838270750763
+      },
+      {
+        "stamp_ros": 5.51,
+        "received_steady": 129860.898055133,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0013752280808946122,
+        "y": 1.1843076448533425e-06,
+        "yaw": 0.0015783826890996531
+      },
+      {
+        "stamp_ros": 5.54,
+        "received_steady": 129860.922844217,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.001690698839813585,
+        "y": 1.7344431220527528e-06,
+        "yaw": 0.0019093251507673774
+      },
+      {
+        "stamp_ros": 5.58,
+        "received_steady": 129860.964553967,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.002214414701891963,
+        "y": 2.8855913058337757e-06,
+        "yaw": 0.00250555061709619
+      },
+      {
+        "stamp_ros": 5.61,
+        "received_steady": 129861.00359505,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0026845173323110207,
+        "y": 4.195887543910383e-06,
+        "yaw": 0.003068946355079707
+      },
+      {
+        "stamp_ros": 5.64,
+        "received_steady": 129861.029789717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.003363616577002261,
+        "y": 6.4837451183451115e-06,
+        "yaw": 0.0036689463366492685
+      },
+      {
+        "stamp_ros": 5.68,
+        "received_steady": 129861.07639405,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.004431862191974623,
+        "y": 1.0837642890173138e-05,
+        "yaw": 0.00438668376732277
+      },
+      {
+        "stamp_ros": 5.71,
+        "received_steady": 129861.112850009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.005425852520284067,
+        "y": 1.5380898091945167e-05,
+        "yaw": 0.004689628070877123
+      },
+      {
+        "stamp_ros": 5.74,
+        "received_steady": 129861.139071175,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.006480602551693231,
+        "y": 2.0377250014536145e-05,
+        "yaw": 0.004784303007934816
+      },
+      {
+        "stamp_ros": 5.78,
+        "received_steady": 129861.178900425,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.007886935182114373,
+        "y": 2.7194387811927493e-05,
+        "yaw": 0.004910536257266657
+      },
+      {
+        "stamp_ros": 5.8100000000000005,
+        "received_steady": 129861.216025842,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.008909667073067477,
+        "y": 3.2226315481054827e-05,
+        "yaw": 0.004925029702764442
+      },
+      {
+        "stamp_ros": 5.84,
+        "received_steady": 129861.245673759,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.009867443269567958,
+        "y": 3.6943429836794456e-05,
+        "yaw": 0.0049250297027644396
+      },
+      {
+        "stamp_ros": 5.88,
+        "received_steady": 129861.290141467,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.011144478198235209,
+        "y": 4.323291564444684e-05,
+        "yaw": 0.004925029702764205
+      },
+      {
+        "stamp_ros": 5.91,
+        "received_steady": 129861.323162342,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.012005471526275412,
+        "y": 4.747336764433355e-05,
+        "yaw": 0.0049250297027643355
+      },
+      {
+        "stamp_ros": 5.9399999999999995,
+        "received_steady": 129861.35747155,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.012560858028645719,
+        "y": 5.020868478093548e-05,
+        "yaw": 0.004925029702769387
+      },
+      {
+        "stamp_ros": 5.98,
+        "received_steady": 129861.397854092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.01322351063549277,
+        "y": 5.347229493960373e-05,
+        "yaw": 0.0049250297027694945
+      },
+      {
+        "stamp_ros": 6.01,
+        "received_steady": 129861.432401884,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0135453089490484,
+        "y": 5.5057174006419054e-05,
+        "yaw": 0.004925029702769469
+      },
+      {
+        "stamp_ros": 6.04,
+        "received_steady": 129861.464593967,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.01386710726260406,
+        "y": 5.6642053073234525e-05,
+        "yaw": 0.004925029702769458
+      },
+      {
+        "stamp_ros": 6.08,
+        "received_steady": 129861.505733009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014025096756310489,
+        "y": 5.742016231372561e-05,
+        "yaw": 0.0049250297027696845
+      },
+      {
+        "stamp_ros": 6.11,
+        "received_steady": 129861.540641259,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014025980873718836,
+        "y": 5.742451665342867e-05,
+        "yaw": 0.00492502970276981
+      },
+      {
+        "stamp_ros": 6.14,
+        "received_steady": 129861.566254592,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014026864991058957,
+        "y": 5.7428870992795716e-05,
+        "yaw": 0.00492502970276981
+      },
+      {
+        "stamp_ros": 6.18,
+        "received_steady": 129861.606471009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014026864991059467,
+        "y": 5.742887099279823e-05,
+        "yaw": 0.004925029702769807
+      }
+    ],
+    "sources": [
+      {
+        "source": "laser",
+        "ready": true,
+        "sample": {
+          "source": "laser",
+          "frame": "body",
+          "start_ros": 6.0,
+          "end_ros": 6.1,
+          "received_steady": 129861.541005342,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+          "sequence": 62,
+          "quality": 0.9319722222222222,
+          "status": "valid",
+          "delta": {
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 0.0
+          },
+          "covariance": {
+            "values": [
+              0.03241727905587583,
+              0.0,
+              0.0,
+              0.0,
+              0.03241727905587583,
+              0.0,
+              0.0,
+              0.0,
+              0.00019426500472321902
+            ],
+            "kind": "full",
+            "basis": "native ScanMotion displacement covariance; statistical model unverified",
+            "correlation_group": null
+          },
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.33000534201
+      },
+      {
+        "source": "imu",
+        "ready": true,
+        "sample": {
+          "source": "imu",
+          "frame": "body",
+          "stamp_ros": 6.18,
+          "received_steady": 129861.606844425,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 310,
+          "quality": 1.0,
+          "status": "valid",
+          "values": [
+            3.1997569282000713e-19
+          ],
+          "covariance": null,
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.406844425
+      },
+      {
+        "source": "wheel",
+        "ready": true,
+        "sample": {
+          "source": "wheel",
+          "frame": "body",
+          "stamp_ros": 6.18,
+          "received_steady": 129861.606471009,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 182,
+          "quality": 1.0,
+          "status": "valid",
+          "values": [
+            1.76825619427343e-05,
+            1.2216701371088167e-15
+          ],
+          "covariance": null,
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.406471009
+      }
+    ]
+  },
+  "future": {
+    "schema": 1,
+    "boot_id": "a6a0af98663d4208b979027a90fad196",
+    "sequence": 229,
+    "sampled_steady": 129861.656894634,
+    "sampled_ros": 6.225,
+    "reference": {
+      "start_ros": 6.1,
+      "end_ros": 6.2,
+      "average": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "wz": -7.84798528697257e-19
+      },
+      "components": [
+        {
+          "value": 0.0,
+          "variance": null,
+          "original_keys": [
+            [
+              "laser",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+              63
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        },
+        {
+          "value": 0.0,
+          "variance": null,
+          "original_keys": [
+            [
+              "laser",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+              63
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        },
+        {
+          "value": -7.84798528697257e-19,
+          "variance": null,
+          "original_keys": [
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              306
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              307
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              308
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              309
+            ],
+            [
+              "imu",
+              "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+              310
+            ]
+          ],
+          "numerically_fused": false,
+          "new_information": false,
+          "reason": "insufficient_statistical_model"
+        }
+      ],
+      "statistical_covariance": null,
+      "supported_components": [
+        true,
+        true,
+        true
+      ],
+      "upper": null,
+      "mode": "laser_reference",
+      "target_cap_mps": 1.3888888888888888,
+      "conflicts": [],
+      "residuals": [
+        [
+          "laser_imu_yaw",
+          7.84798528697257e-19
+        ],
+        [
+          "wheel_independent_vx",
+          0.0028862042818424117
+        ],
+        [
+          "wheel_imu_yaw",
+          2.8737003830355968e-15
+        ]
+      ],
+      "failures": [
+        [
+          "gps",
+          "source_unavailable"
+        ]
+      ],
+      "original_covariances": [
+        [
+          [
+            "laser",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+            63
+          ],
+          {
+            "values": [
+              0.032583968115654595,
+              0.0,
+              0.0,
+              0.0,
+              0.032583968115654595,
+              0.0,
+              0.0,
+              0.0,
+              0.0001941864182166344
+            ],
+            "kind": "full",
+            "basis": "native ScanMotion displacement covariance; statistical model unverified",
+            "correlation_group": null
+          }
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            306
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            307
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            308
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            309
+          ],
+          null
+        ],
+        [
+          [
+            "imu",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            310
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            179
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            180
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            181
+          ],
+          null
+        ],
+        [
+          [
+            "wheel",
+            "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+            182
+          ],
+          null
+        ]
+      ],
+      "current_reference": {
+        "components": [
+          8.841280632793004e-06,
+          null,
+          -1.1693336012264145e-18
+        ],
+        "source_times_ros": [
+          6.21,
+          null,
+          6.22
+        ],
+        "requested_ros": 6.225,
+        "predicted_at_ros": null,
+        "reason": "held_points_not_a_current_estimate_no_acceleration_model"
+      },
+      "source_health": [
+        {
+          "source": "laser",
+          "ready": true,
+          "age_ros_s": 0.024999999999999467,
+          "age_steady_s": 0.009383374999742955,
+          "valid_until_steady": 129862.432511259,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+          "sequence": 63
+        },
+        {
+          "source": "imu",
+          "ready": true,
+          "age_ros_s": 0.004999999999999893,
+          "age_steady_s": 0.0054064169962657616,
+          "valid_until_steady": 129862.448488217,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 312
+        },
+        {
+          "source": "wheel",
+          "ready": true,
+          "age_ros_s": 0.01499999999999968,
+          "age_steady_s": 0.01954325000406243,
+          "valid_until_steady": 129862.437351384,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 183
+        }
+      ]
+    },
+    "poses": [
+      {
+        "stamp_ros": 4.04,
+        "received_steady": 129859.348732216,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -1.890306597691866e-20,
+        "y": 4.0750054098200927e-39,
+        "yaw": 2.7305409673960063e-19
+      },
+      {
+        "stamp_ros": 4.08,
+        "received_steady": 129859.393492383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.8430346167571346e-20,
+        "y": 1.469876404747295e-39,
+        "yaw": 2.7671829982539e-19
+      },
+      {
+        "stamp_ros": 4.11,
+        "received_steady": 129859.433938174,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.175272168312394e-20,
+        "y": 5.426023224282104e-40,
+        "yaw": 2.788167881290673e-19
+      },
+      {
+        "stamp_ros": 4.14,
+        "received_steady": 129859.465215133,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.512163080358663e-20,
+        "y": -3.9975526984904145e-40,
+        "yaw": 2.766173621386849e-19
+      },
+      {
+        "stamp_ros": 4.18,
+        "received_steady": 129859.503936674,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.646339253507209e-20,
+        "y": -3.529113952733564e-39,
+        "yaw": 2.7609416842859016e-19
+      },
+      {
+        "stamp_ros": 4.21,
+        "received_steady": 129859.538305466,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.52736297189271e-20,
+        "y": -3.1942632762412144e-39,
+        "yaw": 2.786381672090387e-19
+      },
+      {
+        "stamp_ros": 4.24,
+        "received_steady": 129859.564201008,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.5403520617668423e-20,
+        "y": -3.233050806503012e-39,
+        "yaw": 2.7999543336738336e-19
+      },
+      {
+        "stamp_ros": 4.28,
+        "received_steady": 129859.605662674,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.0968121431842656e-20,
+        "y": -1.9825572043462954e-39,
+        "yaw": 2.8278232329347144e-19
+      },
+      {
+        "stamp_ros": 4.31,
+        "received_steady": 129859.640773424,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.7329832835053515e-20,
+        "y": -9.483956428617407e-40,
+        "yaw": 2.856941857027876e-19
+      },
+      {
+        "stamp_ros": 4.34,
+        "received_steady": 129859.670008008,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.6409739243651733e-20,
+        "y": -6.832519066850596e-40,
+        "yaw": 2.878271239059795e-19
+      },
+      {
+        "stamp_ros": 4.38,
+        "received_steady": 129859.711248925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.7938210591519435e-20,
+        "y": 1.75721711011823e-39,
+        "yaw": 2.897339330196142e-19
+      },
+      {
+        "stamp_ros": 4.41,
+        "received_steady": 129859.740258633,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.4987980353003027e-20,
+        "y": 2.6091417914503527e-39,
+        "yaw": 2.878379866733614e-19
+      },
+      {
+        "stamp_ros": 4.44,
+        "received_steady": 129859.77038255,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.285372706115334e-20,
+        "y": 3.2472032826656785e-40,
+        "yaw": 2.8917527537091218e-19
+      },
+      {
+        "stamp_ros": 4.48,
+        "received_steady": 129859.8165218,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.727281162738241e-20,
+        "y": -9.521191466283991e-40,
+        "yaw": 2.8743022281091327e-19
+      },
+      {
+        "stamp_ros": 4.51,
+        "received_steady": 129859.849349383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.250356696990836e-20,
+        "y": -2.4603218654239573e-39,
+        "yaw": 2.893557220142833e-19
+      },
+      {
+        "stamp_ros": 4.54,
+        "received_steady": 129859.87811105,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.6087331015258205e-20,
+        "y": -3.501193388100283e-39,
+        "yaw": 2.9180327035420955e-19
+      },
+      {
+        "stamp_ros": 4.58,
+        "received_steady": 129859.919480591,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.232723904167246e-20,
+        "y": -5.319397924080408e-39,
+        "yaw": 2.9119705063124205e-19
+      },
+      {
+        "stamp_ros": 4.61,
+        "received_steady": 129859.9550768,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.109760271005496e-20,
+        "y": -4.962242868528607e-39,
+        "yaw": 2.899606746673126e-19
+      },
+      {
+        "stamp_ros": 4.64,
+        "received_steady": 129859.982202925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.8617790523520176e-20,
+        "y": -4.244198116615033e-39,
+        "yaw": 2.8911137621484714e-19
+      },
+      {
+        "stamp_ros": 4.68,
+        "received_steady": 129860.02446555,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.655988931399013e-20,
+        "y": -3.6490087152779016e-39,
+        "yaw": 2.9075485182590995e-19
+      },
+      {
+        "stamp_ros": 4.71,
+        "received_steady": 129860.0642948,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.447197382697465e-20,
+        "y": -3.040622960504512e-39,
+        "yaw": 2.926249511413647e-19
+      },
+      {
+        "stamp_ros": 4.74,
+        "received_steady": 129860.089643966,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.304772761727501e-20,
+        "y": -2.623634423326048e-39,
+        "yaw": 2.924985481049595e-19
+      },
+      {
+        "stamp_ros": 4.78,
+        "received_steady": 129860.129057675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.780952737015336e-20,
+        "y": -1.0888845391911514e-39,
+        "yaw": 2.931908884837894e-19
+      },
+      {
+        "stamp_ros": 4.84,
+        "received_steady": 129860.191166675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.444836680591087e-20,
+        "y": -1.0595930600948506e-40,
+        "yaw": 2.9169755588863113e-19
+      },
+      {
+        "stamp_ros": 4.88,
+        "received_steady": 129860.233236383,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.854093077468395e-20,
+        "y": -1.2990942112718379e-39,
+        "yaw": 2.9137520292250805e-19
+      },
+      {
+        "stamp_ros": 4.91,
+        "received_steady": 129860.267407716,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.272902283299241e-20,
+        "y": -2.5112147870190213e-39,
+        "yaw": 2.9084417436823645e-19
+      },
+      {
+        "stamp_ros": 4.9399999999999995,
+        "received_steady": 129860.296924425,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.4696473651629774e-20,
+        "y": -3.0830332643985234e-39,
+        "yaw": 2.9420863642652673e-19
+      },
+      {
+        "stamp_ros": 4.98,
+        "received_steady": 129860.336927675,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.957359306239137e-20,
+        "y": -4.5346526784580996e-39,
+        "yaw": 3.003833995510111e-19
+      },
+      {
+        "stamp_ros": 5.01,
+        "received_steady": 129860.37033255,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -5.1866004915723935e-20,
+        "y": -5.226409605425872e-39,
+        "yaw": 3.0222392334402817e-19
+      },
+      {
+        "stamp_ros": 5.04,
+        "received_steady": 129860.398755091,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.9507989389729494e-20,
+        "y": -4.512015802133291e-39,
+        "yaw": 3.036148013726426e-19
+      },
+      {
+        "stamp_ros": 5.08,
+        "received_steady": 129860.441917092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -4.320351878639308e-20,
+        "y": -2.5775834747223474e-39,
+        "yaw": 3.070101919935591e-19
+      },
+      {
+        "stamp_ros": 5.11,
+        "received_steady": 129860.47398755,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.922086716093585e-20,
+        "y": -1.3539790199748517e-39,
+        "yaw": 3.0659614756674957e-19
+      },
+      {
+        "stamp_ros": 5.14,
+        "received_steady": 129860.504746925,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -3.356304528845038e-20,
+        "y": 3.839680934293454e-40,
+        "yaw": 3.0892388242393714e-19
+      },
+      {
+        "stamp_ros": 5.18,
+        "received_steady": 129860.543954508,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.904076944944952e-20,
+        "y": 1.7810763753955658e-39,
+        "yaw": 3.0785845644400876e-19
+      },
+      {
+        "stamp_ros": 5.24,
+        "received_steady": 129860.6062343,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.874747072782338e-20,
+        "y": 1.8684288915179256e-39,
+        "yaw": 3.180995972097685e-19
+      },
+      {
+        "stamp_ros": 5.28,
+        "received_steady": 129860.646075842,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.9900305642725564e-20,
+        "y": 1.4987155840047625e-39,
+        "yaw": 3.2128206022535417e-19
+      },
+      {
+        "stamp_ros": 5.31,
+        "received_steady": 129860.675442717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": -2.94708448286572e-20,
+        "y": 1.6341885797241037e-39,
+        "yaw": 3.223892105319393e-19
+      },
+      {
+        "stamp_ros": 5.34,
+        "received_steady": 129860.712729717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 2.493096470431116e-05,
+        "y": 6.215528511226748e-10,
+        "yaw": 4.9861917164713855e-05
+      },
+      {
+        "stamp_ros": 5.38,
+        "received_steady": 129860.750234758,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0001870748572605931,
+        "y": 2.9305249311732778e-08,
+        "yaw": 0.00029118740082257813
+      },
+      {
+        "stamp_ros": 5.41,
+        "received_steady": 129860.785120508,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0003928942333303435,
+        "y": 1.1879244791011036e-07,
+        "yaw": 0.0005783827504659347
+      },
+      {
+        "stamp_ros": 5.44,
+        "received_steady": 129860.81361105,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0006752286233198774,
+        "y": 3.2443998120999275e-07,
+        "yaw": 0.0008783827320513426
+      },
+      {
+        "stamp_ros": 5.48,
+        "received_steady": 129860.856383092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0010752283880611291,
+        "y": 7.557929826734851e-07,
+        "yaw": 0.00127838270750763
+      },
+      {
+        "stamp_ros": 5.51,
+        "received_steady": 129860.898055133,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0013752280808946122,
+        "y": 1.1843076448533425e-06,
+        "yaw": 0.0015783826890996531
+      },
+      {
+        "stamp_ros": 5.54,
+        "received_steady": 129860.922844217,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.001690698839813585,
+        "y": 1.7344431220527528e-06,
+        "yaw": 0.0019093251507673774
+      },
+      {
+        "stamp_ros": 5.58,
+        "received_steady": 129860.964553967,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.002214414701891963,
+        "y": 2.8855913058337757e-06,
+        "yaw": 0.00250555061709619
+      },
+      {
+        "stamp_ros": 5.61,
+        "received_steady": 129861.00359505,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0026845173323110207,
+        "y": 4.195887543910383e-06,
+        "yaw": 0.003068946355079707
+      },
+      {
+        "stamp_ros": 5.64,
+        "received_steady": 129861.029789717,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.003363616577002261,
+        "y": 6.4837451183451115e-06,
+        "yaw": 0.0036689463366492685
+      },
+      {
+        "stamp_ros": 5.68,
+        "received_steady": 129861.07639405,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.004431862191974623,
+        "y": 1.0837642890173138e-05,
+        "yaw": 0.00438668376732277
+      },
+      {
+        "stamp_ros": 5.71,
+        "received_steady": 129861.112850009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.005425852520284067,
+        "y": 1.5380898091945167e-05,
+        "yaw": 0.004689628070877123
+      },
+      {
+        "stamp_ros": 5.74,
+        "received_steady": 129861.139071175,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.006480602551693231,
+        "y": 2.0377250014536145e-05,
+        "yaw": 0.004784303007934816
+      },
+      {
+        "stamp_ros": 5.78,
+        "received_steady": 129861.178900425,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.007886935182114373,
+        "y": 2.7194387811927493e-05,
+        "yaw": 0.004910536257266657
+      },
+      {
+        "stamp_ros": 5.8100000000000005,
+        "received_steady": 129861.216025842,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.008909667073067477,
+        "y": 3.2226315481054827e-05,
+        "yaw": 0.004925029702764442
+      },
+      {
+        "stamp_ros": 5.84,
+        "received_steady": 129861.245673759,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.009867443269567958,
+        "y": 3.6943429836794456e-05,
+        "yaw": 0.0049250297027644396
+      },
+      {
+        "stamp_ros": 5.88,
+        "received_steady": 129861.290141467,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.011144478198235209,
+        "y": 4.323291564444684e-05,
+        "yaw": 0.004925029702764205
+      },
+      {
+        "stamp_ros": 5.91,
+        "received_steady": 129861.323162342,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.012005471526275412,
+        "y": 4.747336764433355e-05,
+        "yaw": 0.0049250297027643355
+      },
+      {
+        "stamp_ros": 5.9399999999999995,
+        "received_steady": 129861.35747155,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.012560858028645719,
+        "y": 5.020868478093548e-05,
+        "yaw": 0.004925029702769387
+      },
+      {
+        "stamp_ros": 5.98,
+        "received_steady": 129861.397854092,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.01322351063549277,
+        "y": 5.347229493960373e-05,
+        "yaw": 0.0049250297027694945
+      },
+      {
+        "stamp_ros": 6.01,
+        "received_steady": 129861.432401884,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.0135453089490484,
+        "y": 5.5057174006419054e-05,
+        "yaw": 0.004925029702769469
+      },
+      {
+        "stamp_ros": 6.04,
+        "received_steady": 129861.464593967,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.01386710726260406,
+        "y": 5.6642053073234525e-05,
+        "yaw": 0.004925029702769458
+      },
+      {
+        "stamp_ros": 6.08,
+        "received_steady": 129861.505733009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014025096756310489,
+        "y": 5.742016231372561e-05,
+        "yaw": 0.0049250297027696845
+      },
+      {
+        "stamp_ros": 6.11,
+        "received_steady": 129861.540641259,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014025980873718836,
+        "y": 5.742451665342867e-05,
+        "yaw": 0.00492502970276981
+      },
+      {
+        "stamp_ros": 6.14,
+        "received_steady": 129861.566254592,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014026864991058957,
+        "y": 5.7428870992795716e-05,
+        "yaw": 0.00492502970276981
+      },
+      {
+        "stamp_ros": 6.18,
+        "received_steady": 129861.606471009,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014026864991059467,
+        "y": 5.742887099279823e-05,
+        "yaw": 0.004925029702769807
+      },
+      {
+        "stamp_ros": 6.21,
+        "received_steady": 129861.637351384,
+        "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+        "x": 0.014026864991059467,
+        "y": 5.742887099279823e-05,
+        "yaw": 0.004925029702769807
+      }
+    ],
+    "sources": [
+      {
+        "source": "laser",
+        "ready": true,
+        "sample": {
+          "source": "laser",
+          "frame": "body",
+          "start_ros": 6.1,
+          "end_ros": 6.2,
+          "received_steady": 129861.647511259,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1adcb54dfe00000000000017030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"e13a6de4d62a7410517de995b9592cf4-1\", 0]",
+          "sequence": 63,
+          "quality": 0.9319722222222222,
+          "status": "valid",
+          "delta": {
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 0.0
+          },
+          "covariance": {
+            "values": [
+              0.032583968115654595,
+              0.0,
+              0.0,
+              0.0,
+              0.032583968115654595,
+              0.0,
+              0.0,
+              0.0,
+              0.0001941864182166344
+            ],
+            "kind": "full",
+            "basis": "native ScanMotion displacement covariance; statistical model unverified",
+            "correlation_group": null
+          },
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.432511259
+      },
+      {
+        "source": "imu",
+        "ready": true,
+        "sample": {
+          "source": "imu",
+          "frame": "body",
+          "stamp_ros": 6.22,
+          "received_steady": 129861.651488217,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa6b5f8ee00000000000014030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 312,
+          "quality": 1.0,
+          "status": "valid",
+          "values": [
+            -1.1693336012264145e-18
+          ],
+          "covariance": null,
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.448488217
+      },
+      {
+        "source": "wheel",
+        "ready": true,
+        "sample": {
+          "source": "wheel",
+          "frame": "body",
+          "stamp_ros": 6.21,
+          "received_steady": 129861.637351384,
+          "epoch": "[\"a6a0af98663d4208b979027a90fad196\", {\"sample_gid\": null, \"topology_gid\": \"010fff1aa2b5bf8a00000000000067030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
+          "sequence": 183,
+          "quality": 1.0,
+          "status": "valid",
+          "values": [
+            8.841280632793004e-06,
+            -4.01986545709686e-17
+          ],
+          "covariance": null,
+          "model_id": null,
+          "body_from_sensor": {
+            "x": 0,
+            "y": 0,
+            "yaw": 0
+          }
+        },
+        "valid_until_steady": 129862.437351384
+      }
+    ]
+  },
+  "scan": {
+    "raw_capture": {
+      "stamp": {
+        "sec": 6,
+        "nanosec": 100000000
+      },
+      "received_ros": {
+        "sec": 6,
+        "nanosec": 105000000
+      },
+      "received_steady": 129861.529552467,
+      "frame_id": "laser_link",
+      "raw_gid": "010fff1aa6b5f8ee00000000000013030000000000000000",
+      "bridge_gid": "010fff1afab5a82200000000000013030000000000000000",
+      "source_epoch": "38624329d101848604c475df8b844533-4",
+      "bridge_boot_id": "1a727ad25dcad0e516e49a3c611330c0-1",
+      "capture_generation": 3,
+      "sequence": 62,
+      "valid": true,
+      "reason": ""
+    },
+    "stamp": {
+      "sec": 6,
+      "nanosec": 100000000
+    },
+    "frame_id": "laser_link",
+    "source_epoch": "f890390f40784995b3b459b792b795e7",
+    "raw_source": "010fff1aa6b5f8ee00000000000013030000000000000000",
+    "sequence": 63,
+    "ingress_steady": 129861.529552467,
+    "ingress_ros": 6.105,
+    "valid": true,
+    "reason": "",
+    "angle_min": -3.1415927410125732,
+    "angle_increment": 0.008738783188164234,
+    "range_min": 0.07999999821186066,
+    "range_max": 20.0,
+    "transform_stamp": 6.1,
+    "sensor_x": 0.15699,
+    "sensor_y": 0.00201,
+    "sensor_yaw": 0.0,
+    "ranges": [
+      3.571096420288086,
+      3.571326971054077,
+      3.572429895401001,
+      3.572429895401001,
+      3.574404001235962,
+      3.574404001235962,
+      3.5772480964660645,
+      3.5772480964660645,
+      3.580960750579834,
+      3.5855393409729004,
+      3.5855393409729004,
+      3.5909814834594727,
+      3.5909814834594727,
+      3.597282886505127,
+      3.597282886505127,
+      3.6044397354125977,
+      3.6124470233917236,
+      3.6124470233917236,
+      3.621299982070923,
+      3.621299982070923,
+      3.6309921741485596,
+      3.6309921741485596,
+      3.6415178775787354,
+      3.652869462966919,
+      3.652869462966919,
+      3.6650397777557373,
+      3.6650397777557373,
+      3.6780214309692383,
+      3.6780214309692383,
+      3.691805839538574,
+      3.70638370513916,
+      3.70638370513916,
+      3.721748113632202,
+      3.721748113632202,
+      3.7378876209259033,
+      3.754793643951416,
+      3.754793643951416,
+      3.7724556922912598,
+      3.7908639907836914,
+      3.7908639907836914,
+      3.8100078105926514,
+      3.8100078105926514,
+      3.829875946044922,
+      3.8504581451416016,
+      3.8504581451416016,
+      3.8717429637908936,
+      3.8937199115753174,
+      3.8937199115753174,
+      3.9163765907287598,
+      3.939702272415161,
+      3.939702272415161,
+      3.9636852741241455,
+      3.988313674926758,
+      3.988313674926758,
+      4.013576984405518,
+      4.039462089538574,
+      4.0659589767456055,
+      4.0659589767456055,
+      4.093055248260498,
+      4.120738983154297,
+      4.148998737335205,
+      4.148998737335205,
+      4.177824020385742,
+      4.207203388214111,
+      4.237124443054199,
+      4.237124443054199,
+      4.267577648162842,
+      4.298550605773926,
+      4.330033302307129,
+      4.3620147705078125,
+      4.3620147705078125,
+      4.394484043121338,
+      4.427431106567383,
+      4.460845470428467,
+      4.494717121124268,
+      4.529036045074463,
+      4.5637922286987305,
+      4.5989766120910645,
+      4.5989766120910645,
+      4.554033279418945,
+      4.50376558303833,
+      4.45570707321167,
+      4.409731864929199,
+      4.365720748901367,
+      4.323564529418945,
+      4.283160209655762,
+      4.244413375854492,
+      4.207235813140869,
+      4.171543598175049,
+      4.104310512542725,
+      4.072510242462158,
+      4.041083335876465,
+      4.0099101066589355,
+      3.9789986610412598,
+      3.9483537673950195,
+      3.9179816246032715,
+      3.887890577316284,
+      3.8580851554870605,
+      3.8285744190216064,
+      3.799363851547241,
+      3.7704617977142334,
+      3.7418739795684814,
+      3.7136096954345703,
+      3.685675621032715,
+      3.6580801010131836,
+      3.630830764770508,
+      3.630830764770508,
+      3.6039350032806396,
+      3.577402114868164,
+      3.5512397289276123,
+      3.525456428527832,
+      3.50006103515625,
+      3.50006103515625,
+      3.475062131881714,
+      3.4504685401916504,
+      3.4262897968292236,
+      3.402534008026123,
+      3.402534008026123,
+      3.379211187362671,
+      3.356330156326294,
+      3.333899736404419,
+      3.333899736404419,
+      3.3119301795959473,
+      3.290431022644043,
+      3.2694108486175537,
+      3.2694108486175537,
+      3.2488796710968018,
+      3.2288479804992676,
+      3.2288479804992676,
+      3.2093238830566406,
+      3.1903176307678223,
+      3.1903176307678223,
+      3.1718385219573975,
+      3.1538970470428467,
+      3.1538970470428467,
+      3.1365017890930176,
+      3.119662284851074,
+      3.119662284851074,
+      3.1033875942230225,
+      3.0876872539520264,
+      3.0876872539520264,
+      3.072570562362671,
+      3.0580456256866455,
+      3.0580456256866455,
+      3.044121742248535,
+      3.044121742248535,
+      3.0308072566986084,
+      3.018110990524292,
+      3.018110990524292,
+      3.006040096282959,
+      3.006040096282959,
+      2.9946036338806152,
+      2.9838082790374756,
+      2.9838082790374756,
+      2.973661184310913,
+      2.973661184310913,
+      2.964169979095459,
+      2.955340623855591,
+      2.955340623855591,
+      2.9471795558929443,
+      2.9471795558929443,
+      2.939692497253418,
+      2.939692497253418,
+      2.9328856468200684,
+      2.926762342453003,
+      2.926762342453003,
+      2.9213292598724365,
+      2.9213292598724365,
+      2.9165890216827393,
+      2.9165890216827393,
+      2.9125454425811768,
+      2.9092025756835938,
+      2.9092025756835938,
+      2.906562089920044,
+      2.906562089920044,
+      2.9046263694763184,
+      2.9046263694763184,
+      2.903397798538208,
+      2.90287709236145,
+      2.90287709236145,
+      2.903064489364624,
+      2.903064489364624,
+      2.903960943222046,
+      2.903960943222046,
+      2.9055652618408203,
+      2.9055652618408203,
+      2.9078776836395264,
+      2.910895824432373,
+      2.910895824432373,
+      2.9146175384521484,
+      2.9146175384521484,
+      2.919041156768799,
+      2.919041156768799,
+      2.924163341522217,
+      2.929980993270874,
+      2.929980993270874,
+      2.936490058898926,
+      2.936490058898926,
+      2.9436864852905273,
+      2.9436864852905273,
+      2.9515650272369385,
+      2.960120916366577,
+      2.960120916366577,
+      2.969348192214966,
+      2.969348192214966,
+      2.9792416095733643,
+      2.9792416095733643,
+      2.9897944927215576,
+      3.0009989738464355,
+      3.0009989738464355,
+      3.012850046157837,
+      3.012850046157837,
+      3.025338888168335,
+      3.038458824157715,
+      3.038458824157715,
+      3.05220103263855,
+      3.05220103263855,
+      3.066558599472046,
+      3.081521987915039,
+      3.081521987915039,
+      3.097083806991577,
+      3.113234043121338,
+      3.113234043121338,
+      3.129964828491211,
+      3.1472673416137695,
+      3.1472673416137695,
+      3.1651315689086914,
+      3.183548927307129,
+      3.183548927307129,
+      3.202509880065918,
+      3.2220048904418945,
+      3.2220048904418945,
+      3.242025136947632,
+      3.262561321258545,
+      3.262561321258545,
+      3.283602714538574,
+      3.3051412105560303,
+      3.3051412105560303,
+      3.32716703414917,
+      3.3496711254119873,
+      3.37264347076416,
+      3.37264347076416,
+      3.3960745334625244,
+      3.4199562072753906,
+      3.4442787170410156,
+      3.4690334796905518,
+      3.4690334796905518,
+      3.494210720062256,
+      3.5198020935058594,
+      3.5457990169525146,
+      3.5721933841705322,
+      3.5721933841705322,
+      3.59897518157959,
+      3.6261374950408936,
+      3.6536710262298584,
+      3.681567668914795,
+      3.709820508956909,
+      3.7384207248687744,
+      3.7673611640930176,
+      3.7966339588165283,
+      3.8262317180633545,
+      3.856147050857544,
+      3.856147050857544,
+      3.886373519897461,
+      3.916902780532837,
+      3.978846311569214,
+      4.010246276855469,
+      4.041923999786377,
+      4.073872089385986,
+      4.106085300445557,
+      4.138686656951904,
+      4.1724677085876465,
+      4.207623481750488,
+      4.244229316711426,
+      4.2823638916015625,
+      4.32211446762085,
+      4.36357307434082,
+      4.4068379402160645,
+      4.4520158767700195,
+      4.49921989440918,
+      4.548573017120361,
+      4.600208759307861,
+      4.654269218444824,
+      4.710908889770508,
+      4.699345588684082,
+      4.664339542388916,
+      4.629788398742676,
+      4.629788398742676,
+      4.595702648162842,
+      4.562093257904053,
+      4.528970718383789,
+      4.496347427368164,
+      4.464232444763184,
+      4.464232444763184,
+      4.432637691497803,
+      4.401576519012451,
+      4.371058940887451,
+      4.341096878051758,
+      4.341096878051758,
+      4.311702728271484,
+      4.282888412475586,
+      4.254665374755859,
+      4.254665374755859,
+      4.227046012878418,
+      4.200042724609375,
+      4.200042724609375,
+      4.173668384552002,
+      4.147933006286621,
+      4.122852325439453,
+      4.122852325439453,
+      4.098435878753662,
+      4.074697494506836,
+      4.074697494506836,
+      4.0516486167907715,
+      4.029301643371582,
+      4.029301643371582,
+      4.007668495178223,
+      3.9867613315582275,
+      3.9867613315582275,
+      3.9665920734405518,
+      3.9665920734405518,
+      3.947171688079834,
+      3.9285125732421875,
+      3.9285125732421875,
+      3.9106252193450928,
+      3.893521308898926,
+      3.893521308898926,
+      3.877210855484009,
+      3.877210855484009,
+      3.8617043495178223,
+      3.8470120429992676,
+      3.8470120429992676,
+      3.833143949508667,
+      3.833143949508667,
+      3.820108652114868,
+      3.807915687561035,
+      3.807915687561035,
+      3.7965729236602783,
+      3.7965729236602783,
+      3.7860891819000244,
+      3.7860891819000244,
+      3.776470899581909,
+      3.767726182937622,
+      3.767726182937622,
+      3.7598605155944824,
+      3.7598605155944824,
+      3.752880334854126,
+      3.752880334854126,
+      3.746790885925293,
+      3.7415964603424072,
+      3.7415964603424072,
+      3.737301826477051,
+      3.737301826477051,
+      3.7339096069335938,
+      3.7339096069335938,
+      3.7314231395721436,
+      3.729844808578491,
+      3.729844808578491,
+      3.7291758060455322,
+      3.7291758060455322,
+      3.729417085647583,
+      3.729417085647583,
+      3.7305684089660645,
+      3.7305684089660645,
+      3.7326295375823975,
+      3.735599994659424,
+      3.735599994659424,
+      3.7394769191741943,
+      3.7394769191741943,
+      3.744257926940918,
+      3.744257926940918,
+      3.7499406337738037,
+      3.756521224975586,
+      3.756521224975586,
+      3.7639951705932617,
+      3.7639951705932617,
+      3.7723569869995117,
+      3.7723569869995117,
+      3.7816014289855957,
+      3.7917227745056152,
+      3.7917227745056152,
+      3.8027143478393555,
+      3.8027143478393555,
+      3.814568281173706,
+      3.814568281173706,
+      3.827277660369873,
+      3.8408334255218506,
+      3.8408334255218506,
+      3.8552279472351074,
+      3.8552279472351074,
+      3.8704519271850586,
+      3.886496067047119,
+      3.886496067047119,
+      3.903350591659546,
+      3.903350591659546,
+      3.9210050106048584,
+      3.939448833465576,
+      3.939448833465576,
+      3.958672285079956,
+      3.978663206100464,
+      3.978663206100464,
+      3.999410629272461,
+      3.999410629272461,
+      4.020903587341309,
+      4.043131351470947,
+      4.043131351470947,
+      2.206975221633911,
+      2.0792057514190674,
+      2.0792057514190674,
+      1.966977596282959,
+      1.8886586427688599,
+      1.8886586427688599,
+      1.8949040174484253,
+      1.9014133214950562,
+      1.9081783294677734,
+      1.9081783294677734,
+      1.9151915311813354,
+      1.9224456548690796,
+      1.9224456548690796,
+      1.9299331903457642,
+      1.937646508216858,
+      1.945578694343567,
+      1.945578694343567,
+      1.953722357749939,
+      1.9620704650878906,
+      1.9706164598464966,
+      1.979353427886963,
+      1.979353427886963,
+      1.9882746934890747,
+      1.9973738193511963,
+      2.0066444873809814,
+      2.016080617904663,
+      2.0256757736206055,
+      2.0256757736206055,
+      2.0354247093200684,
+      2.045320749282837,
+      2.055359125137329,
+      2.0655336380004883,
+      2.0758392810821533,
+      2.086270570755005,
+      2.096822738647461,
+      2.1074907779693604,
+      2.118269443511963,
+      2.1291544437408447,
+      2.140141010284424,
+      2.1512248516082764,
+      2.1624016761779785,
+      4.163588047027588,
+      4.129368782043457,
+      4.09648323059082,
+      4.064741611480713,
+      4.033374309539795,
+      4.002261638641357,
+      3.971407890319824,
+      3.940821647644043,
+      3.8804738521575928,
+      3.8507258892059326,
+      3.8212709426879883,
+      3.8212709426879883,
+      3.792116641998291,
+      3.7632691860198975,
+      3.734736680984497,
+      3.706526279449463,
+      3.6786458492279053,
+      3.651102066040039,
+      3.6239044666290283,
+      3.597059965133667,
+      3.570577621459961,
+      3.5444657802581787,
+      3.5444657802581787,
+      3.5187315940856934,
+      3.493384599685669,
+      3.4684338569641113,
+      3.4438869953155518,
+      3.4438869953155518,
+      3.4197542667388916,
+      3.396043539047241,
+      3.372765302658081,
+      3.3499279022216797,
+      3.3499279022216797,
+      3.327540397644043,
+      3.3056130409240723,
+      3.2841546535491943,
+      3.2841546535491943,
+      3.263174533843994,
+      3.242682695388794,
+      3.242682695388794,
+      3.222688674926758,
+      3.203202247619629,
+      3.203202247619629,
+      3.184232234954834,
+      3.1657888889312744,
+      3.1657888889312744,
+      3.147881269454956,
+      3.130518913269043,
+      3.130518913269043,
+      3.1137115955352783,
+      3.097468376159668,
+      3.097468376159668,
+      3.0817978382110596,
+      3.0667097568511963,
+      3.0667097568511963,
+      3.052212715148926,
+      3.0383150577545166,
+      3.0383150577545166,
+      3.025026321411133,
+      3.025026321411133,
+      3.0123543739318848,
+      3.0003063678741455,
+      3.0003063678741455,
+      2.988891839981079,
+      2.988891839981079,
+      2.978116750717163,
+      2.967989206314087,
+      2.967989206314087,
+      2.9585161209106445,
+      2.9585161209106445,
+      2.9497036933898926,
+      2.9497036933898926,
+      2.9415581226348877,
+      2.9340858459472656,
+      2.9340858459472656,
+      2.9272913932800293,
+      2.9272913932800293,
+      2.921180248260498,
+      2.921180248260498,
+      2.915757179260254,
+      2.9110255241394043,
+      2.9110255241394043,
+      2.9069905281066895,
+      2.9069905281066895,
+      2.903653144836426,
+      2.903653144836426,
+      2.9010181427001953,
+      2.8990859985351562,
+      2.8990859985351562,
+      2.897860050201416,
+      2.897860050201416,
+      2.8973400592803955,
+      2.8973400592803955,
+      2.8975276947021484,
+      2.8975276947021484,
+      2.8984220027923584,
+      2.9000236988067627,
+      2.9000236988067627,
+      2.9023313522338867,
+      2.9023313522338867,
+      2.9053432941436768,
+      2.9053432941436768,
+      2.9090585708618164,
+      2.913473606109619,
+      2.913473606109619,
+      2.918586015701294,
+      2.918586015701294,
+      2.9243929386138916,
+      2.9243929386138916,
+      2.930889129638672,
+      2.9380717277526855,
+      2.9380717277526855,
+      2.9459354877471924,
+      2.9459354877471924,
+      2.954474925994873,
+      2.954474925994873,
+      2.9636847972869873,
+      2.9735591411590576,
+      2.9735591411590576,
+      2.984091281890869,
+      2.984091281890869,
+      2.9952752590179443,
+      3.007103443145752,
+      3.007103443145752,
+      3.019568681716919,
+      3.019568681716919,
+      3.032663345336914,
+      3.046379804611206,
+      3.046379804611206,
+      3.0607097148895264,
+      3.0607097148895264,
+      3.0756444931030273,
+      3.0911765098571777,
+      3.0911765098571777,
+      3.1072964668273926,
+      3.123995304107666,
+      3.123995304107666,
+      3.1412642002105713,
+      3.15909481048584,
+      3.15909481048584,
+      3.177476644515991,
+      3.196401596069336,
+      3.196401596069336,
+      3.2158596515655518,
+      3.235841751098633,
+      3.235841751098633,
+      3.256338596343994,
+      3.2773399353027344,
+      3.2773399353027344,
+      3.298837423324585,
+      3.320821523666382,
+      3.3432819843292236,
+      3.3432819843292236,
+      3.366210460662842,
+      3.3895974159240723,
+      3.413433313369751,
+      3.413433313369751,
+      3.4377098083496094,
+      3.462416887283325,
+      3.48754620552063,
+      3.513089418411255,
+      3.513089418411255,
+      3.539036273956299,
+      3.565380096435547,
+      3.592111349105835,
+      3.6192212104797363,
+      3.646702527999878,
+      3.646702527999878,
+      3.674546480178833,
+      3.702744960784912,
+      3.7312912940979004,
+      3.760175943374634,
+      3.7893929481506348,
+      3.818934679031372,
+      3.848792791366577,
+      3.8789610862731934,
+      3.909433126449585,
+      3.940200090408325,
+      3.9712576866149902,
+      4.002598285675049,
+      4.034215450286865,
+      4.066102981567383,
+      4.0982537269592285,
+      4.130792617797852,
+      4.199597358703613,
+      4.236133098602295,
+      4.274195671081543,
+      4.313869953155518,
+      4.355249881744385,
+      4.398431777954102,
+      4.443522930145264,
+      4.490637302398682,
+      4.539896488189697,
+      4.591433525085449,
+      4.568453311920166,
+      4.568453311920166,
+      4.534089088439941,
+      4.500141143798828,
+      4.466618537902832,
+      4.433532238006592,
+      4.400891304016113,
+      4.368706703186035,
+      4.3369879722595215,
+      4.3369879722595215,
+      4.3057475090026855,
+      4.274993896484375,
+      4.244739055633545,
+      4.214994430541992,
+      4.214994430541992,
+      4.185770511627197,
+      4.157078742980957,
+      4.128930568695068,
+      4.128930568695068,
+      4.10133695602417,
+      4.074310302734375,
+      4.047861576080322,
+      4.047861576080322,
+      4.022003173828125,
+      3.99674654006958,
+      3.9721031188964844,
+      3.9721031188964844,
+      3.948085069656372,
+      3.924703598022461,
+      3.924703598022461,
+      3.9019713401794434,
+      3.879899501800537,
+      3.879899501800537,
+      3.8585000038146973,
+      3.8377838134765625,
+      3.8377838134765625,
+      3.817762851715088,
+      3.7984488010406494,
+      3.7984488010406494,
+      3.7798519134521484,
+      3.7798519134521484,
+      3.761983871459961,
+      3.744854688644409,
+      3.744854688644409,
+      3.7284748554229736,
+      3.7128560543060303,
+      3.7128560543060303,
+      3.6980068683624268,
+      3.6980068683624268,
+      3.6839373111724854,
+      3.67065691947937,
+      3.67065691947937,
+      3.6581742763519287,
+      3.6581742763519287,
+      3.646498203277588,
+      3.646498203277588,
+      3.635636568069458,
+      3.6255970001220703,
+      3.6255970001220703,
+      3.6163864135742188,
+      3.6163864135742188,
+      3.6080124378204346,
+      3.6080124378204346,
+      3.600480079650879,
+      3.5937960147857666,
+      3.5937960147857666,
+      3.5879642963409424,
+      3.5879642963409424,
+      3.5829906463623047,
+      3.5829906463623047,
+      3.5788776874542236,
+      3.575629472732544,
+      3.575629472732544,
+      3.573248863220215,
+      3.573248863220215,
+      3.571737051010132,
+      3.571737051010132,
+      3.571096420288086,
+      3.571096420288086
+    ]
+  }
+}

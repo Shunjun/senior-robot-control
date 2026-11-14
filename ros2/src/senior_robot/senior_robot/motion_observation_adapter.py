@@ -23,6 +23,7 @@ from senior_control.motion.observations import (
 )
 from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
 from senior_control.motion.source_admission import AdmissionOwner
+from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.temporal import TemporalConfig, TemporalResolver
 
 
@@ -337,7 +338,9 @@ class NativeObservationRosBridge:
             if origin is None:
                 return
             try:
-                handler(msg, origin, self.node.get_clock().now().nanoseconds / 1e9, now)
+                accepted = handler(msg, origin, self.node.get_clock().now().nanoseconds / 1e9, now)
+                if accepted and topic == "/motion/scan":
+                    self._publish(laser_update=True)
             except (ValueError, TypeError, AttributeError, OverflowError, TransformException):
                 if now - self._warn_at > 1:
                     self._warn_at = now
@@ -373,10 +376,17 @@ class NativeObservationRosBridge:
         )
         return self.core.imu(normalized, gid, now_ros, received)
 
-    def _publish(self) -> None:
+    def _publish(self, *, laser_update: bool = False) -> None:
         import time
 
         value = self.core.snapshot(self.node.get_clock().now().nanoseconds / 1e9, time.monotonic())
+        # The same serial owner publishes a newly usable laser window without
+        # waiting for the maintenance timer. Recovery/degradation stays periodic.
+        if laser_update and value["reference"]["mode"] not in {
+            SourceMode.LASER_REFERENCE,
+            SourceMode.FUSED_REFERENCE,
+        }:
+            return
         msg = self._message_type()
         msg.data = strict_reference_json(value)
         self.publisher.publish(msg)

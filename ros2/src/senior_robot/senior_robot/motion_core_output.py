@@ -36,9 +36,12 @@ from senior_control.motion.controller import Feedback, MotionController
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
 from senior_control.protocol import MotionRuntimeState
+from senior_control.safety.motion_runtime import SourceEpochFence
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_observation_adapter import observation_origin
+
+_REFERENCE_DEPTH = 10
 
 
 class MotionCoreOutput:
@@ -72,6 +75,14 @@ class MotionCoreOutput:
         self._reference: dict[str, Any] | None = None
         self._reference_boot = ""
         self._reference_sequence = 0
+        self._pending_reference: dict[str, Any] | None = None
+        capacity = profile.admission().epoch_history_limit
+        self._reference_boot_fence = SourceEpochFence(max_retired=capacity)
+        self._reference_source_fences = {
+            source: SourceEpochFence(max_retired=capacity) for source in ("laser", "wheel", "imu")
+        }
+        self._reference_clock: tuple[float, int] | None = None
+        self._reference_reset_steady = -math.inf
         self._perception_key: tuple[Any, ...] | None = None
         self._perception: Perception | None = None
         self._barrier_key: tuple[str, int, int] | None = None
@@ -89,7 +100,7 @@ class MotionCoreOutput:
 
         with_dds_info(type(self)._on_reference)
         self._subscription = node.create_subscription(
-            String, "/motion/core_reference", self._on_reference, 10
+            String, "/motion/core_reference", self._on_reference, _REFERENCE_DEPTH
         )
 
     def _event(self, kind: K, now: float, source: str = "", revision: int = 0) -> None:
@@ -123,11 +134,105 @@ class MotionCoreOutput:
                 and value["sequence"] <= self._reference_sequence
             ):
                 return
-            self._reference_boot = value["boot_id"]
-            self._reference_sequence = value["sequence"]
-            self._reference = value
+            self._offer_reference(value, time.monotonic())
         except (ValueError, KeyError, TypeError):
             return
+
+    def _clear_reference_cache(self) -> None:
+        self._reference = None
+        self._pending_reference = None
+
+    def _sample_reference_clock(self, now: float) -> int:
+        ros = self.node.get_clock().now().nanoseconds
+        if self._reference_clock is not None:
+            previous_steady, previous_ros = self._reference_clock
+            if now < previous_steady or ros < previous_ros:
+                self._clear_reference_cache()
+                self._reference_reset_steady = now
+                # A producer may have seen the reset before this subscriber.
+                # Keep its admitted epoch/watermark; do not retire it twice.
+        self._reference_clock = (now, ros)
+        return ros
+
+    def _reference_domains(self, value: dict[str, Any]) -> dict[str, str]:
+        return {
+            row["source"]: row["sample"]["epoch"]
+            for row in value["sources"]
+            if row["source"] in self._reference_source_fences
+        }
+
+    def _reference_usable(
+        self, value: dict[str, Any] | None, now: float, ros: int, *, future: bool = False
+    ) -> bool:
+        """Only a fully usable same-domain snapshot may survive a future update."""
+        if value is None:
+            return False
+        ref = value["reference"]
+        rows = {row["source"]: row for row in value["sources"]}
+        return bool(
+            0 <= now - value["sampled_steady"] <= self.profile.max_age
+            and ref["mode"] in {SourceMode.LASER_REFERENCE, SourceMode.FUSED_REFERENCE}
+            and ref["average"] is not None
+            and all(math.isfinite(ref["average"][axis]) for axis in ("vx", "vy", "wz"))
+            and not ref.get("conflicts", [])
+            and not any(
+                source in self._reference_source_fences for source, _ in ref.get("failures", [])
+            )
+            and all(
+                source in rows
+                and rows[source]["ready"]
+                and rows[source]["sample"]["status"] == "valid"
+                and now < rows[source]["valid_until_steady"]
+                for source in self._reference_source_fences
+            )
+            and self._reference_time_valid(ref, ros, future=future)
+        )
+
+    def _offer_reference(self, value: dict[str, Any], now: float) -> None:
+        ros = self._sample_reference_clock(now)
+        if value["sampled_steady"] <= self._reference_reset_steady:
+            return
+        if not self._reference_boot_fence.accept(value["boot_id"]):
+            return
+        if self._reference_boot != value["boot_id"]:
+            self._clear_reference_cache()
+        # Received watermarks advance even when the selected packet stays older.
+        self._reference_boot = value["boot_id"]
+        self._reference_sequence = value["sequence"]
+        try:
+            domains = self._reference_domains(value)
+            changed = False
+            for source, epoch in domains.items():
+                fence = self._reference_source_fences[source]
+                changed |= fence.active is not None and fence.active != epoch
+                if not fence.accept(epoch):
+                    self._clear_reference_cache()
+                    return
+            if changed:
+                self._clear_reference_cache()
+            if (
+                self._reference_time_valid(value["reference"], ros, future=True)
+                and self._reference_usable(self._reference, now, ros)
+                and self._reference_usable(value, now, ros, future=True)
+                and domains == self._reference_domains(self._reference)
+            ):
+                self._pending_reference = value
+                return
+        except (ValueError, KeyError, TypeError):
+            # An unclassified update must not hide invalid/negative evidence.
+            pass
+        self._pending_reference = None
+        self._reference = value
+
+    def _select_reference(self, now: float) -> None:
+        ros = self._sample_reference_clock(now)
+        pending = self._pending_reference
+        if pending is not None:
+            if not 0 <= now - pending["sampled_steady"] <= self.profile.max_age:
+                self._pending_reference = None
+            elif not self._reference_time_valid(pending["reference"], ros, future=True):
+                self._reference = pending
+                self._pending_reference = None
 
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
         c = self.controller.config
@@ -142,6 +247,24 @@ class MotionCoreOutput:
             and max(abs(body.velocity.vx), abs(wheel.velocity.vx)) <= c.still_speed_mps
             and max(abs(body.velocity.wz), abs(wheel.velocity.wz)) <= c.still_yaw_rps
         )
+
+    def _consume_ready_reference(self) -> None:
+        """Sample queued snapshots before control, independent of timer ordering.
+
+        This node uses a single-threaded executor: no reference callback can
+        mutate the frontier during this bounded take. Every sample still goes
+        through the same origin, producer time and sequence admission.
+        """
+        for _ in range(_REFERENCE_DEPTH):
+            # //Compatible: Humble exposes metadata through this same take API
+            # used by MotionExecutor; do not replace it with a metadata-less read.
+            with self._subscription.handle:
+                sample = self._subscription.handle.take_message(
+                    self._subscription.msg_type, self._subscription.raw
+                )
+            if sample is None:
+                break
+            self._on_reference(*sample)
 
     def command(self, msg: Any) -> bool:
         """Called only AFTER the existing authenticated FinalCommand generation fence."""
@@ -406,10 +529,24 @@ class MotionCoreOutput:
         assert self._perception is not None
         return self._perception, pose
 
+    def _reference_age_ns(self, ref: dict[str, Any], ros: int | None = None) -> int:
+        # The wire carries float seconds: round the serialized endpoint to its
+        # nearest ROS nanosecond. Precision already lost on the wire is not recovered.
+        now = self.node.get_clock().now().nanoseconds if ros is None else ros
+        return now - round(ref["end_ros"] * 1_000_000_000)
+
+    def _reference_time_valid(
+        self, ref: dict[str, Any], ros: int | None = None, *, future: bool = False
+    ) -> bool:
+        age = self._reference_age_ns(ref, ros)
+        horizon = round(self.profile.temporal().prediction_horizon_s * 1_000_000_000)
+        return age < 0 if future else 0 <= age <= horizon
+
     def _reference_age_ros(self, ref: dict[str, Any]) -> float:
-        return float(self.node.get_clock().now().nanoseconds / 1e9) - float(ref["end_ros"])
+        return self._reference_age_ns(ref) / 1_000_000_000
 
     def _inputs(self, now: float) -> tuple[Any, Any, Any]:
+        self._select_reference(now)
         data = self._reference
         if data is None or not 0 <= now - data["sampled_steady"] <= self.profile.max_age:
             raise ValueError("reference_expired")
@@ -436,12 +573,11 @@ class MotionCoreOutput:
         if average is not None and "laser" in live:
             row = live["laser"]
             s = row["sample"]
-            age = self._reference_age_ros(ref)
             # Explicit bounded constant-rate predictor, not a relabelled measured
             # interval. The horizon is in ROS time, not an extra steady TTL;
             # steady expiry remains the original admission owner's deadline.
             # Its physical error is charged to the candidate risk model.
-            if 0 <= age <= self.profile.temporal().prediction_horizon_s:
+            if self._reference_time_valid(ref):
                 body = Feedback(
                     Velocity(average["vx"], average["wz"]),
                     s["received_steady"],
@@ -498,6 +634,7 @@ class MotionCoreOutput:
         )
 
     def tick(self) -> None:
+        self._consume_ready_reference()
         now = time.monotonic()
         self.sequence += 1
         body = None
@@ -671,7 +808,8 @@ class MotionCoreOutput:
                 p.profile_id,
                 risk,
             )
-            permission = self.scheduler.update(ctx, now)
+            evaluation = self.engine.evaluate(ctx, now)
+            permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             estop = self.machine.state.mode is MotionMode.ESTOP
             decision = self.controller.tick(
                 self.target.velocity,
@@ -681,6 +819,7 @@ class MotionCoreOutput:
                 wheel,
                 now,
                 estop=estop,
+                evaluation=evaluation,
                 imu=imu_point,
                 require_limited_rearm=(
                     body is None
@@ -727,6 +866,12 @@ class MotionCoreOutput:
             elif not decision.emergency:
                 self._last_fault_condition = None
             reason = f"{mode.value}:{reason}"
+            if output != Velocity(0, 0):
+                # The decision already selects its applicable drive/brake deadlines.
+                # Check actual output time without renewing that sampled evidence.
+                emit_now = time.monotonic()
+                if not decision.verified or not emit_now < decision.evidence_deadline:
+                    raise ValueError("motion_expired_or_unqualified")
             self.node._emit_motion_core(output, reason)
             if self.target.source == "manual" and output != Velocity(0, 0):
                 self._manual_motion_source = self.target.source_id

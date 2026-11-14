@@ -9,6 +9,7 @@ from senior_control.motion.constraints import (
     ConstraintEngine,
     ConstraintResult,
     ConstraintSnapshot,
+    TickEvaluation,
 )
 from senior_control.motion.contracts import BrakeKind
 from senior_control.motion.source_modes import SourceMode
@@ -460,6 +461,7 @@ class MotionController:
         # //Compatible: old callers without an IMU never gain conditional rearm.
         imu: Feedback | None = None,
         require_limited_rearm: bool = False,
+        evaluation: TickEvaluation | None = None,
     ) -> ControlDecision:
         # IMU uses only velocity.wz: its unused vx is NOT body linear evidence.
         if estop:
@@ -495,12 +497,18 @@ class MotionController:
             and wheel is not None
             and abs(body.velocity.vx - wheel.velocity.vx) > self.config.disagreement_mps
         )
+        if evaluation is not None and not evaluation.matches(self.engine, ctx, now):
+            evaluation = None
         stopping = replace(ctx, target=replace(ctx.target, velocity=Velocity(0, 0)))
-        stop = self.engine.refine(stopping, now)
+        stop = evaluation.zero_stop() if evaluation else self.engine.refine(stopping, now)
         if stop.brake is not None and stop.brake.kind is BrakeKind.EMERGENCY:
             self.integral = Velocity(0, 0)
             return self._decision(None, stop.brake.reason, False, True, ctx)
-        fresh = self.engine.tighten(permission, ctx, now)
+        fresh = (
+            evaluation.tighten(permission)
+            if evaluation
+            else self.engine.tighten(permission, ctx, now)
+        )
         goal, cap, braking, reason = self._goal(target, ctx, fresh, reference)
         if require_limited_rearm and not self.limited_rearm_ready(now):
             goal, braking, reason = Velocity(0, 0), True, "limited_rearm_not_ready"
@@ -530,7 +538,13 @@ class MotionController:
         # Normalize at most four ULP of wheel-combination arithmetic, not a
         # physical clamp. Larger changes cannot inherit acceleration/jerk.
         step = replace(step, velocity=candidate)
-        permitted = self.engine.validate_output(fresh, ctx, candidate, now)
+        permitted = False
+        if not braking:
+            permitted = (
+                evaluation.validate_output(fresh, candidate)
+                if evaluation
+                else self.engine.validate_output(fresh, ctx, candidate, now)
+            )
         # Braking consumes the separate T4 zero-goal STOP proof. validate_output
         # deliberately rejects motion without a permit; it is not a stop proof.
         brake_proof = (

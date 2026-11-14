@@ -627,8 +627,13 @@ class ConstraintEngine:
             linear[1] < 0 and s.target.velocity.vx > 0
         )
 
+    def evaluate(self, s: ConstraintSnapshot, now: float) -> "TickEvaluation":
+        return TickEvaluation(self, s, now)
+
     def refine(self, s: ConstraintSnapshot, now: float) -> ConstraintResult:
-        stop = self._stop(s, now)
+        return self._refine(s, now, self._stop(s, now))
+
+    def _refine(self, s: ConstraintSnapshot, now: float, stop: BrakeRequest) -> ConstraintResult:
         if not stop.stop_verified:
             return ConstraintResult(None, stop)
         if not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady:
@@ -671,7 +676,11 @@ class ConstraintEngine:
     def tighten(
         self, result: ConstraintResult | None, s: ConstraintSnapshot, now: float
     ) -> ConstraintResult:
-        stop = self._stop(s, now)
+        return self._tighten(result, s, now, self._stop(s, now))
+
+    def _tighten(
+        self, result: ConstraintResult | None, s: ConstraintSnapshot, now: float, stop: BrakeRequest
+    ) -> ConstraintResult:
         if not stop.stop_verified:
             return ConstraintResult(None, stop)
         if not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady:
@@ -831,7 +840,11 @@ class ConstraintEngine:
     def validate_output(
         self, result: ConstraintResult, s: ConstraintSnapshot, velocity: Velocity, now: float
     ) -> bool:
-        latest = self.tighten(result, s, now)
+        return self._validate_checked_output(self.tighten(result, s, now), s, velocity, now)
+
+    def _validate_checked_output(
+        self, latest: ConstraintResult, s: ConstraintSnapshot, velocity: Velocity, now: float
+    ) -> bool:
         if latest.permit is None:
             return False
         if latest.permit.allows(velocity, now):
@@ -852,3 +865,41 @@ class ConstraintEngine:
         except ValueError:
             return False
         return self._clear(proposed, s, now) is None
+
+
+class TickEvaluation:
+    """Main-thread local work for one engine, immutable snapshot and sampled time.
+
+    Never retained by a scheduler or passed to a worker. Public engine entry
+    points remain defensive; only results actually checked here are reusable.
+    """
+
+    def __init__(self, engine: ConstraintEngine, snapshot: ConstraintSnapshot, now: float):
+        self._engine, self._snapshot, self._now = engine, snapshot, now
+        self._stop: BrakeRequest | None = None
+        self._checked: ConstraintResult | None = None
+
+    def matches(self, engine: ConstraintEngine, snapshot: ConstraintSnapshot, now: float) -> bool:
+        return self._engine is engine and self._snapshot is snapshot and self._now == now
+
+    def _base_stop(self) -> BrakeRequest:
+        if self._stop is None:
+            self._stop = self._engine._stop(self._snapshot, self._now)
+        return self._stop
+
+    def zero_stop(self) -> ConstraintResult:
+        stopping = replace(
+            self._snapshot, target=replace(self._snapshot.target, velocity=Velocity(0, 0))
+        )
+        return self._engine._refine(stopping, self._now, self._base_stop())
+
+    def tighten(self, result: ConstraintResult | None) -> ConstraintResult:
+        if result is not None and result.permit is not None and result is self._checked:
+            return result
+        self._checked = self._engine._tighten(result, self._snapshot, self._now, self._base_stop())
+        return self._checked
+
+    def validate_output(self, result: ConstraintResult, velocity: Velocity) -> bool:
+        return self._engine._validate_checked_output(
+            self.tighten(result), self._snapshot, velocity, self._now
+        )

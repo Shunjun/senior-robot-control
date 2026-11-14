@@ -126,7 +126,8 @@ class CommandNode(Node):
         self._estop_clear_future = None
         self._close_reason = "estop" if self._local_estop_requested else "prepared"
         self._last_close_source = ("idle", "", 0, 0.0, "", 0)
-        self.create_subscription(
+        self._consuming_runtime = False
+        self._runtime_subscription = self.create_subscription(
             String, "/motion/runtime", self._on_motion_runtime, qos_profile_sensor_data
         )
         self._drive_sample: VelocityEnvelope | None = None
@@ -281,7 +282,27 @@ class CommandNode(Node):
             return False
         return self._arbiter.task_navigation_allowed(self._monotonic_clock.monotonic())
 
+    def _consume_ready_runtime(self) -> None:
+        """Consume at most the existing QoS depth through the sole runtime ingress."""
+        if self._consuming_runtime:
+            return
+        self._consuming_runtime = True
+        try:
+            subscription = self._runtime_subscription
+            for _ in range(qos_profile_sensor_data.depth):
+                # //Compatible: preserve Humble metadata with MotionExecutor's native take API.
+                with subscription.handle:
+                    sample = subscription.handle.take_message(
+                        subscription.msg_type, subscription.raw
+                    )
+                if sample is None:
+                    break
+                self._on_motion_runtime(*sample)
+        finally:
+            self._consuming_runtime = False
+
     def task_motion_allowed(self, *, continuing: bool) -> bool:
+        self._consume_ready_runtime()
         now = self._monotonic_clock.monotonic()
         runtime = self._motion_runtime.current(now)
         if (

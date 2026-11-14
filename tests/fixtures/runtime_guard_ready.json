@@ -1,0 +1,243 @@
+{
+  "provenance": "R5 original runtime198/199/200, actual admission/guard times and this CommandNode DDS timestamps; controlled ready queue is the already-recorded condition, no TTL or health rewrites.",
+  "guard": {
+    "kind": "task_motion_allowed",
+    "entered_steady": 133255.771737377,
+    "entered_wall_ns": 1794612278814051183,
+    "continuing": true,
+    "predicate_now": 133255.771742336,
+    "current_returned": null,
+    "receiver_value": {
+      "boot": "be566efc011f4bc8ad848d110450c724",
+      "sequence": 198,
+      "sampled_steady": 133255.619642252,
+      "valid_until": 133255.76964225198,
+      "mode": "task",
+      "healthy": true,
+      "stationary": true,
+      "evidence_stamp": 133255.608711294,
+      "evidence_deadline": 133256.40171129396,
+      "fault_revision": 0,
+      "estop_revision": 0
+    },
+    "healthy_now": 133255.771742336,
+    "healthy_result": false,
+    "finished_steady": 133255.771752252,
+    "result": false,
+    "estop_latched": false,
+    "manual_present": false,
+    "predicates": {
+      "runtime_missing": true,
+      "unhealthy": true,
+      "blocked_mode": false,
+      "estop": false,
+      "manual": false,
+      "stationary_required": false
+    }
+  },
+  "packets": [
+    {
+      "robot_id": "route-sim",
+      "boot_id": "be566efc011f4bc8ad848d110450c724",
+      "sequence": 198,
+      "sampled_steady": 133255.619642252,
+      "valid_until": 133255.76964225198,
+      "mode": "task",
+      "reason": "laser_reference:tracking",
+      "stationary": true,
+      "healthy": true,
+      "evidence_stamp_steady": 133255.608711294,
+      "evidence_deadline_steady": 133256.40171129396,
+      "estop_revision": 0,
+      "fault_revision": 0,
+      "confirmed_estop_status": "clear",
+      "allowed_actions": [],
+      "task_id": "ae598a980a925b9aaf10fb1e31ae47bc",
+      "output_generation": 2,
+      "body_reference": {
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 1.5514324341371043e-19
+        },
+        "source": "laser_reference",
+        "computed_steady": 133255.608711294,
+        "valid_until_steady": 133256.40171129396
+      },
+      "wheel_linear_mps": 3.0682921465991698e-18,
+      "schema": 1
+    },
+    {
+      "robot_id": "route-sim",
+      "boot_id": "be566efc011f4bc8ad848d110450c724",
+      "sequence": 199,
+      "sampled_steady": 133255.701138127,
+      "valid_until": 133255.851138127,
+      "mode": "task",
+      "reason": "laser_reference:tracking",
+      "stationary": true,
+      "healthy": true,
+      "evidence_stamp_steady": 133255.608711294,
+      "evidence_deadline_steady": 133256.40171129396,
+      "estop_revision": 0,
+      "fault_revision": 0,
+      "confirmed_estop_status": "clear",
+      "allowed_actions": [],
+      "task_id": "ae598a980a925b9aaf10fb1e31ae47bc",
+      "output_generation": 2,
+      "body_reference": {
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": 1.5514324341371043e-19
+        },
+        "source": "laser_reference",
+        "computed_steady": 133255.608711294,
+        "valid_until_steady": 133256.40171129396
+      },
+      "wheel_linear_mps": 0.0006516810067029738,
+      "schema": 1
+    },
+    {
+      "robot_id": "route-sim",
+      "boot_id": "be566efc011f4bc8ad848d110450c724",
+      "sequence": 200,
+      "sampled_steady": 133255.773251419,
+      "valid_until": 133255.923251419,
+      "mode": "task",
+      "reason": "laser_reference:waiting_refinement",
+      "stationary": true,
+      "healthy": true,
+      "evidence_stamp_steady": 133255.728279336,
+      "evidence_deadline_steady": 133256.522279336,
+      "estop_revision": 0,
+      "fault_revision": 0,
+      "confirmed_estop_status": "clear",
+      "allowed_actions": [],
+      "task_id": "ae598a980a925b9aaf10fb1e31ae47bc",
+      "output_generation": 2,
+      "body_reference": {
+        "average": {
+          "vx": 0.0,
+          "vy": 0.0,
+          "wz": -0.002282538979995332
+        },
+        "source": "laser_reference",
+        "computed_steady": 133255.728279336,
+        "valid_until_steady": 133256.522279336
+      },
+      "wheel_linear_mps": 0.0037921858582085272,
+      "schema": 1
+    }
+  ],
+  "receptions": [
+    {
+      "entered_steady": 133255.699000086,
+      "entered_wall_ns": 1794612278741313683,
+      "dds_source_timestamp": 1794612278740505808,
+      "dds_received_timestamp": 1794612278740539600,
+      "accepted": true,
+      "admission_now": 133255.699158294,
+      "packet": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 198,
+        "sampled_steady": 133255.619642252,
+        "valid_until": 133255.76964225198,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.608711294,
+        "evidence_deadline": 133256.40171129396,
+        "fault_revision": 0,
+        "estop_revision": 0
+      },
+      "finished_steady": 133255.699182461,
+      "receiver_after": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 198,
+        "sampled_steady": 133255.619642252,
+        "valid_until": 133255.76964225198,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.608711294,
+        "evidence_deadline": 133256.40171129396,
+        "fault_revision": 0,
+        "estop_revision": 0
+      }
+    },
+    {
+      "entered_steady": 133255.783320169,
+      "entered_wall_ns": 1794612278825633683,
+      "dds_source_timestamp": 1794612278812504891,
+      "dds_received_timestamp": 1794612278812538766,
+      "accepted": true,
+      "admission_now": 133255.783423502,
+      "packet": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 199,
+        "sampled_steady": 133255.701138127,
+        "valid_until": 133255.851138127,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.608711294,
+        "evidence_deadline": 133256.40171129396,
+        "fault_revision": 0,
+        "estop_revision": 0
+      },
+      "finished_steady": 133255.783444086,
+      "receiver_after": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 199,
+        "sampled_steady": 133255.701138127,
+        "valid_until": 133255.851138127,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.608711294,
+        "evidence_deadline": 133256.40171129396,
+        "fault_revision": 0,
+        "estop_revision": 0
+      },
+      "received_before_guard_s": 0.001512417,
+      "callback_after_guard_s": 0.011582791979890317,
+      "dds_to_callback_s": 0.013094917
+    },
+    {
+      "entered_steady": 133255.801578961,
+      "entered_wall_ns": 1794612278843892600,
+      "dds_source_timestamp": 1794612278841836808,
+      "dds_received_timestamp": 1794612278841861558,
+      "accepted": true,
+      "admission_now": 133255.801722794,
+      "packet": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 200,
+        "sampled_steady": 133255.773251419,
+        "valid_until": 133255.923251419,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.728279336,
+        "evidence_deadline": 133256.522279336,
+        "fault_revision": 0,
+        "estop_revision": 0
+      },
+      "finished_steady": 133255.801744294,
+      "receiver_after": {
+        "boot": "be566efc011f4bc8ad848d110450c724",
+        "sequence": 200,
+        "sampled_steady": 133255.773251419,
+        "valid_until": 133255.923251419,
+        "mode": "task",
+        "healthy": true,
+        "stationary": true,
+        "evidence_stamp": 133255.728279336,
+        "evidence_deadline": 133256.522279336,
+        "fault_revision": 0,
+        "estop_revision": 0
+      }
+    }
+  ]
+}

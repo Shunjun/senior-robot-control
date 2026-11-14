@@ -14,6 +14,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
 from test_navigation_command_clock import navigation  # noqa: F401
@@ -41,8 +42,8 @@ class Node:
     def create_publisher(self, *_args):
         return N(publish=self.messages.append)
 
-    def create_subscription(self, *_args):
-        return None
+    def create_subscription(self, message_type, _topic, callback, _qos):
+        return ReadySubscription(message_type, callback)
 
     def get_clock(self):
         return N(now=lambda: N(nanoseconds=round(self.clock.ros * 1e9)))

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from test_cloud import Cloud, cloud  # noqa: F401
@@ -93,7 +94,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         "rclpy.node": {"Node": object},
         "rclpy.parameter": {"Parameter": object},
         "rclpy.subscription": {"Subscription": object},
-        "rclpy.qos": {"qos_profile_sensor_data": object()},
+        "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "std_msgs.msg": {"String": object},
         "senior_motion_msgs.msg": {
             "DriveExecutionFeedback": object,
@@ -122,6 +123,9 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._estop_store = None
     value._manual_ingress = ManualIngress("robot", "command-boot", ttl=0.3)
     value._manual_target = None
+    value._consuming_runtime = False
+    value._runtime_subscription = MagicMock(msg_type=object, raw=False)
+    value._runtime_subscription.handle.take_message.return_value = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
     value._arbiter = Arbiter("robot", 0.2, 2, 0.3)
