@@ -167,8 +167,9 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
     assert node.navigation_source_retired("private-execution")
 
 
+@pytest.mark.parametrize("close_reason", ["task_revoke", "task_done"])
 @pytest.mark.parametrize("handoff", [True, False])
-def test_gate_retires_generation_only_after_brake_owner_handoff(handoff):
+def test_gate_retires_generation_only_after_brake_owner_handoff(handoff, close_reason):
     import ast
     import time
 
@@ -222,7 +223,7 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff):
         source_id="task",
         source_epoch=1,
         received_steady=1.0,
-        close_reason="task_revoke",
+        close_reason=close_reason,
     )
     namespace["_on_command"](node, msg, b"gate-input")
     assert events[0] == ("handoff", 4)

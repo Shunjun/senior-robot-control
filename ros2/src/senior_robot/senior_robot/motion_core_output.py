@@ -281,6 +281,7 @@ class MotionCoreOutput:
             "estop",
             "fault",
             "task_revoke",
+            "task_done",
             "shutdown",
             "qualification_lost",
             "estop_reset",
@@ -371,6 +372,11 @@ class MotionCoreOutput:
         )
 
     def _apply_close(self, msg: Any, reason: str, now: float) -> bool:
+        if reason == "task_done" and (
+            msg.source_kind != "navigation"
+            or self.machine.state.task_id not in {None, msg.source_id}
+        ):
+            return False
         self.revoke(reason, now=now)
         if reason in {"estop_reset", "fault_recover"}:
             try:
@@ -416,6 +422,8 @@ class MotionCoreOutput:
             self._event(
                 K.MANUAL_EXPIRED if reason == "expiry" else K.MANUAL_RELEASE, now, msg.source_id
             )
+        elif reason == "task_done":
+            self._event(K.TASK_DONE, now, msg.source_id)
         elif reason in {"task_revoke", "qualification_lost", "shutdown"}:
             self._event(K.TASK_PAUSE, now, msg.source_id)
         return True

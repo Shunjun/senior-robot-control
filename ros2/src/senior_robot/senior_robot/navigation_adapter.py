@@ -199,6 +199,7 @@ class RouteService:
         prepare: Callable[[str], AbstractAsyncContextManager[str]] | None = None,
         bind_source: Callable[[str, str, Callable[[], bool]], bool] | None = None,
         clear_source: Callable[[str], None] | None = None,
+        complete_source: Callable[[str], None] | None = None,
         source_active: Callable[[str], bool] | None = None,
         connection_epoch: Callable[[], int] | None = None,
         source_retired: Callable[[str], bool] | None = None,
@@ -209,6 +210,7 @@ class RouteService:
         self._prepare = prepare
         self._bind_source = bind_source
         self._clear_source = clear_source
+        self._complete_source = complete_source
         self._source_active = source_active
         self._connection_epoch = connection_epoch
         self._source_retired = source_retired
@@ -325,7 +327,7 @@ class RouteService:
             # Unknown terminality is retained when the adapter still owns a goal.
             logging.getLogger(__name__).exception("qualified Nav2 route failed")
         finally:
-            self._revoke(route)
+            self._revoke(route, completed=succeeded and not route.cancel_requested)
             changed(None)
             # The dedicated publisher context has exited before this point.
             # The gate must also acknowledge its source-retirement barrier.
@@ -347,9 +349,11 @@ class RouteService:
                     else ("succeeded" if succeeded else "failed"),
                 )
 
-    def _revoke(self, route: _Route) -> None:
-        if self._clear_source is not None:
-            self._clear_source(route.plan.execution_id)
+    def _revoke(self, route: _Route, *, completed: bool = False) -> None:
+        # //Compatible: older compositions retain the same retirement callback.
+        close = self._complete_source if completed and self._complete_source else self._clear_source
+        if close is not None:
+            close(route.plan.execution_id)
         if self._goal_enabled is not None:
             self._goal_enabled(False)
 

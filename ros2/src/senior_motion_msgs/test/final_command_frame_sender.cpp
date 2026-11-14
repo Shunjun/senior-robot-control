@@ -26,14 +26,25 @@ int main(int argc, char** argv) {
     m.generation = 6;
     mode = mode == "manual_release" ? "release" : "intent";
   }
-  if (mode == "release" || mode == "navrelease") {
+  if (mode == "release" || mode == "navrelease" || mode == "navdone") {
     zero_barrier(m, "release");
-    if (mode == "navrelease") {
+    if (mode == "navrelease" || mode == "navdone") {
       m.source_kind = "navigation";
       m.source_id = m.session_id = "execution";
-      m.close_reason = "task_revoke";
+      m.close_reason = mode == "navdone" ? "task_done" : "task_revoke";
     }
     if (!final_command_frame::barrier(m)) return 10;
+    if (mode == "navdone") {
+      for (int mutation = 0; mutation < 5; ++mutation) {
+        Command invalid = m;
+        if (mutation == 0) invalid.vx = .01;
+        if (mutation == 1) invalid.steady_deadline = 10.55;
+        if (mutation == 2) invalid.sequence = 1;
+        if (mutation == 3) invalid.gesture = 1;
+        if (mutation == 4) invalid.source_kind = "manual";
+        if (final_command_frame::barrier(invalid)) return 19;
+      }
+    }
   }
   if (mode == "press1" || mode == "press2" || mode == "echo") {
     zero_barrier(m, "estop");

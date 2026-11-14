@@ -491,6 +491,7 @@ def main() -> None:
                     task_epoch=routes.current.task_epoch if routes.current else None,
                 ),
                 clear_source=node.clear_navigation_source,
+                complete_source=node.complete_navigation_source,
                 source_active=node.navigation_source_matches,
                 connection_epoch=node.current_navigation_epoch,
                 source_retired=node.navigation_source_retired,

@@ -7,7 +7,6 @@ monotonic clock and keeps running when ROS time is frozen. The timer period is
 simulation configuration, not a physical braking guarantee.
 """
 
-import math
 import re
 import secrets
 import time
@@ -397,6 +396,9 @@ class CommandNode(Node):
             self._publish_barrier(token, execution_id, generation)
         return acknowledged
 
+    def complete_navigation_source(self, execution_id: str) -> None:
+        self.clear_navigation_source(execution_id, reason="completed")
+
     def clear_navigation_source(self, execution_id: str, *, reason: str = "requested") -> None:
         source = self._navigation_source
         if source is not None and source.execution_id != execution_id:
@@ -412,6 +414,7 @@ class CommandNode(Node):
             )
             self._close_reason = {
                 "requested": "task_revoke",
+                "completed": "task_done",
                 "qualification_lost": "qualification_lost",
                 "clock_offset_changed": "fault",
                 "navigation_lease_inactive": "expiry",
@@ -456,12 +459,9 @@ class CommandNode(Node):
             return
         if not (abs(msg.linear.x) <= 0.3 and abs(msg.angular.z) <= 0.5):
             return
-        # Keep insignificant controller jitter from superseding identical
-        # safety checks. Truncation never increases either velocity component.
-        velocity = Velocity(
-            math.trunc(msg.linear.x * 100) / 100,
-            math.trunc(msg.angular.z * 100) / 100,
-        )
+        # Preserve the producer's signed intent, including slow goal approach.
+        # Source validation and downstream motion constraints still apply.
+        velocity = Velocity(float(msg.linear.x), float(msg.angular.z))
         # Publisher graph checks may also take time. Check the original DDS
         # sample's lifetime against current time, never callback-entry time.
         now = self._monotonic_clock.monotonic()

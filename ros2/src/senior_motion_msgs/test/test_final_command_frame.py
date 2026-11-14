@@ -97,6 +97,14 @@ class NativeRoundtrip(unittest.TestCase):
             "qualification_lost",
         )
 
+    def test_completed_navigation_has_a_native_zero_retirement_barrier(self):
+        _, _, m = codec.decode_frame(self.send("navdone"))
+        self.assertEqual(
+            (m.source_kind, m.source_id, m.session_id, m.close_reason),
+            ("navigation", "execution", "execution", "task_done"),
+        )
+        self.assertEqual((m.sequence, m.steady_deadline, m.vx, m.wz), (0, 0, 0, 0))
+
     def test_string_boundary_and_native_overflow_rejection(self):
         self.assertEqual(len(codec.decode_frame(self.send("boundary"))[2].source_id), 128)
         self.assertIsNone(self.send("oversize"))

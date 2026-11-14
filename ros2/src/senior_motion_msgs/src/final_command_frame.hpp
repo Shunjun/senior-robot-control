@@ -75,6 +75,7 @@ template<class C> bool barrier(const C& m) {
       m.source_id.empty() && m.source_epoch == 0;
   }
   if (m.gesture != 0) return false;
+  if (m.close_reason == "task_done") return m.source_kind == "navigation";
   return m.close_reason == "prepared" || m.close_reason == "release" ||
     m.close_reason == "expiry" || m.close_reason == "connection_retired" ||
     m.close_reason == "estop" || m.close_reason == "fault" ||

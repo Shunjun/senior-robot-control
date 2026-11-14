@@ -394,7 +394,8 @@ class SafetyGate(Node):
             self._replace_drive_feedback(key, msg.owner_boot_id, velocity, msg.steady_deadline)
             if (
                 msg.source_kind == "navigation"
-                and msg.close_reason in {"task_revoke", "qualification_lost", "shutdown"}
+                and msg.close_reason
+                in {"task_revoke", "task_done", "qualification_lost", "shutdown"}
                 and msg.request_id
                 and msg.sequence == 0
                 and msg.steady_deadline == 0
