@@ -31,6 +31,10 @@ class VehicleProfile(BaseModel):
     cloud_url: str | None = None
     estop_state: Path | None = None
     ros_domain: int | None = None
+    motion_profile: Path | None = None
+    safety_parameters: Path | None = None
+    navigation_reference: Path | None = None
+    navigation_parameters: Path | None = None
     video: bool = False
     control_dir: Path | None = None
     project_dir: Path | None = None
@@ -66,6 +70,15 @@ def load_profile(path: Path, *, control_dir: Path | None = None) -> VehicleProfi
             if not isinstance(values["project_dir"], (str, Path)):
                 raise ValueError("project_dir must be a path")
             values["ros_setup"] = Path(values["project_dir"]) / "ros2/install/setup.bash"
+    for name in (
+        "motion_profile",
+        "safety_parameters",
+        "navigation_reference",
+        "navigation_parameters",
+    ):
+        if values.get(name):
+            selected = Path(values[name])
+            values[name] = selected if selected.is_absolute() else path.parent.absolute() / selected
     if values.get("kind") == "simulation" and values.get("container") is not None:
         raise ValueError("container deployment is only supported for real profiles")
     # //Compatible: explicit legacy --profile files retain their individual paths.

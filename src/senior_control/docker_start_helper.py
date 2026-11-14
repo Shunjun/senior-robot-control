@@ -1,6 +1,7 @@
 """Own the real-vehicle ROS adapter and Agent, in Docker or a native service.
 
-Only the adapter is started: vendor drivers and motion stacks remain externally managed.
+The shared sensor/fusion/safety stack and adapter are supervised together.
+Vendor chassis/lidar/IMU drivers and map/localization remain externally managed.
 The private stop endpoint also works through docker exec without stopping the container.
 """
 
@@ -91,16 +92,34 @@ def _runtime_profile(root: Path) -> "VehicleProfile":
     values["control_dir"] = root
     if values.get("project_dir") and not values.get("ros_setup"):
         values["ros_setup"] = Path(values["project_dir"]) / "ros2/install/setup.bash"
+    for name in (
+        "motion_profile",
+        "safety_parameters",
+        "navigation_reference",
+        "navigation_parameters",
+    ):
+        if values.get(name):
+            selected = Path(values[name])
+            if not selected.is_absolute():
+                values[name] = root / selected
+            elif selected.is_relative_to(configured_root):
+                values[name] = root / selected.relative_to(configured_root)
     return VehicleProfile.model_validate(values)
 
 
 def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+    from senior_control.real_runtime import validate_real_runtime
+
+    hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
     setup = profile.ros_setup
     if setup is None or not setup.is_absolute() or not setup.is_file():
         raise ValueError("ROS workspace setup is missing; build it and configure ros_setup")
     if profile.ros_domain is not None and not 0 <= profile.ros_domain <= 232:
         raise ValueError("ros_domain must be between 0 and 232")
     assert profile.estop_state is not None
+    from senior_control.real_runtime import validate_navigation
+
+    validate_navigation(profile.navigation_reference, profile.navigation_parameters)
     return [
         "/bin/bash",
         "-c",
@@ -113,12 +132,38 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-c",
         "from senior_robot.agent_adapter import main; main()",
         "--ros-args",
+        "--params-file",
+        str(profile.safety_parameters),
+        "-p",
+        "use_sim_time:=false",
         "-p",
         f"robot_id:={robot_id}",
         "-p",
         f"safety_state_path:={profile.estop_state}",
         "-p",
         "ipc_replace_existing_socket:=false",
+        "-p",
+        f"hardware_navigation_reference:={profile.navigation_reference or ''}",
+        "-p",
+        f"navigation_controller_params:={profile.navigation_parameters or ''}",
+        "-p",
+        f"navigation_odometry_topic:={hardware.wheel_topic}",
+    ]
+
+
+def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+    # Use the same sourced overlay/domain as the adapter; the launch contains
+    # no vendor driver and no second CommandNode or actuator publisher.
+    base = _adapter_command(profile, robot_id)
+    return base[:5] + [
+        "ros2",
+        "launch",
+        "senior_robot",
+        "safety_motion.launch.py",
+        f"safety_parameters:={profile.safety_parameters}",
+        f"hardware_motion_profile:={profile.motion_profile}",
+        f"robot_id:={robot_id}",
+        f"navigation_parameters:={profile.navigation_parameters or ''}",
     ]
 
 
@@ -197,6 +242,25 @@ async def _terminate(process: asyncio.subprocess.Process | None, timeout: float)
         await process.wait()
 
 
+async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) -> None:
+    if process is None or process.returncode is not None:
+        return
+    # ros2 launch owns multiple required children. Signal the owned process
+    # group so timeout escalation cannot leave an orphan actuator publisher.
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), 10)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()
+
+
 async def supervise(
     root: Path,
     command: list[str],
@@ -211,6 +275,7 @@ async def supervise(
         stopping = asyncio.Event()
         process: asyncio.subprocess.Process | None = None
         adapter: asyncio.subprocess.Process | None = None
+        motion_stack: asyncio.subprocess.Process | None = None
         adapter_identity: list[int] | None = None
         adapter_command = None
         robot_id = ""
@@ -219,6 +284,12 @@ async def supervise(
             robot_id = read_credentials(root / "device.json").robot_id
             adapter_command = _adapter_command(profile, robot_id)
         environment = dict(environment)
+        if profile is not None:
+            # Hardware deployment must not inherit a simulation identity or clock policy.
+            for key in tuple(environment):
+                if key.startswith("SENIOR_SIMULATION_") or key.startswith("SENIOR_MOTION_CORE_"):
+                    environment.pop(key)
+            environment["ROS_LOCALHOST_ONLY"] = "0"
         environment.update(ROS_HOME=str(root / "ros-home"), ROS_LOG_DIR=str(root / "ros-log"))
         environment.pop("SENIOR_EXPECTED_ROS_DOMAIN", None)
         if profile is not None and profile.ros_domain is not None:
@@ -246,6 +317,10 @@ async def supervise(
             for number in signals:
                 loop.add_signal_handler(number, stopping.set)
             if adapter_command is not None:
+                assert profile is not None
+                motion_stack = await asyncio.create_subprocess_exec(
+                    *_motion_command(profile, robot_id), env=environment, start_new_session=True
+                )
                 adapter = await asyncio.create_subprocess_exec(*adapter_command, env=environment)
                 assert profile is not None
                 adapter_identity = await _wait_for_adapter(
@@ -257,11 +332,15 @@ async def supervise(
             exited = asyncio.create_task(process.wait())
             requested = asyncio.create_task(stopping.wait())
             waiters = [exited, requested]
+            if motion_stack is not None:
+                waiters.append(asyncio.create_task(motion_stack.wait()))
             if adapter is not None:
                 waiters.append(asyncio.create_task(adapter.wait()))
             await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
             if stopping.is_set():
                 return 0
+            if motion_stack is not None and motion_stack.returncode is not None:
+                return 1
             if adapter is not None and adapter.returncode is not None:
                 return 1
             return await exited
@@ -269,7 +348,10 @@ async def supervise(
             try:
                 await _terminate(process, 20)
             finally:
-                await _terminate(adapter, 5)
+                try:
+                    await _terminate(adapter, 5)
+                finally:
+                    await _terminate_motion_stack(motion_stack)
             for task in waiters:
                 if not task.done():
                     task.cancel()

@@ -18,7 +18,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     external_controller = LaunchConfiguration("external_controller")
     params = RewrittenYaml(
-        source_file=PathJoinSubstitution([share, "config", "nav2.yaml"]),
+        source_file=LaunchConfiguration("parameters"),
         root_key="",
         param_rewrites={
             "lattice_filepath": PathJoinSubstitution([share, "config", "lattice_diff.json"]),
@@ -42,6 +42,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            DeclareLaunchArgument(
+                "parameters", default_value=PathJoinSubstitution([share, "config", "nav2.yaml"])
+            ),
             DeclareLaunchArgument("external_controller", default_value="false"),
             Node(
                 condition=UnlessCondition(external_controller),

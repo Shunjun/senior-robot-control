@@ -45,13 +45,18 @@ class PublisherOrigin:
 
 
 def observation_origin(
-    info: Any, endpoints: list[Any], expected_name: str, *, allow_topology_only: bool
+    info: Any,
+    endpoints: list[Any],
+    expected_name: str,
+    *,
+    allow_topology_only: bool,
+    expected_namespace: str = "/",
 ) -> PublisherOrigin | None:
     """Validate real metadata; never label a discovery GID as a sample GID."""
     if (
         len(endpoints) != 1
         or endpoints[0].node_name != expected_name
-        or endpoints[0].node_namespace != "/"
+        or endpoints[0].node_namespace != expected_namespace
     ):
         return None
     topology_gid = bytes(endpoints[0].endpoint_gid)
@@ -296,6 +301,7 @@ class NativeObservationRosBridge:
         from std_msgs.msg import String
 
         self.node = node
+        self.profile = profile
         self.allow_topology_only = bool(profile.simulation_only and profile.unvalidated)
         self.core = NativeObservations(profile.admission(), profile.temporal(), profile.fusion())
         self.publisher = node.create_publisher(String, "/motion/core_reference", 10)
@@ -324,17 +330,27 @@ class NativeObservationRosBridge:
 
             now = time.monotonic()
             expected = {
-                "/wheel/odom": "drive",
-                "/imu/data": "senior_sim_bridge",
+                "/wheel/odom": self.profile.wheel_publisher,
+                "/imu/data": self.profile.imu_publisher,
                 "/motion/scan": "scan_motion_node",
             }
             origin = observation_origin(
                 info,
-                self.node.get_publishers_info_by_topic(topic),
+                self.node.get_publishers_info_by_topic(self.node.resolve_topic_name(topic)),
                 expected[topic],
                 allow_topology_only=self.allow_topology_only,
+                expected_namespace=self.profile.source_namespace
+                if topic != "/motion/scan"
+                else "/",
             )
             if origin is None:
+                if now - self._warn_at > 1:
+                    self._warn_at = now
+                    self.node.get_logger().warning(
+                        f"native motion source rejected on {topic}: expected sole "
+                        f"publisher {expected[topic]} with per-sample DDS identity; "
+                        "topology-only fallback is confined to isolated simulation"
+                    )
                 return
             try:
                 handler(msg, origin, self.node.get_clock().now().nanoseconds / 1e9, now)

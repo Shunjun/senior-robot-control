@@ -1,0 +1,8 @@
+{
+  "kind": "real",
+  "project_dir": "/opt/senior-control",
+  "cloud_url": "wss://your-cloud.example/ws/agent",
+  "ros_domain": 0,
+  "motion_profile": "hardware-motion.json",
+  "safety_parameters": "hardware-motion.yaml"
+}
