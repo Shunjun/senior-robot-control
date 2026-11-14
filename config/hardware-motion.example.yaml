@@ -3,7 +3,6 @@
 # These false values are intentional missing-calibration diagnostics, not null algorithm knobs.
 scan_adapter:
   ros__parameters:
-    self_mask_calibrated: false
     transform_static: false
 safety_scan_ingress:
   ros__parameters:
@@ -13,5 +12,4 @@ scan_motion_node:
     transform_static: false
 safety_gate:
   ros__parameters:
-    self_mask_calibrated: false
     transform_static: false

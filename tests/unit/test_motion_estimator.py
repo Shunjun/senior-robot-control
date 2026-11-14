@@ -3,13 +3,9 @@ import pytest
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.motion_estimator import (
     ImuYaw,
-    MotionEstimate,
     MotionEstimator,
     RelativeMotion,
     WheelOdom,
-    body_displacement,
-    degraded_reverse_gate,
-    supports_degraded_reverse,
 )
 
 
@@ -43,25 +39,22 @@ def sample(
     return wheel, scan, imu, None, now
 
 
-def test_scan_degeneracy_disables_degraded_reverse():
+def test_scan_degeneracy_and_unqualified_sources_are_rejected():
     gate = estimator()
     degenerate = gate.update(*sample(degenerate=True))
-    decision = degraded_reverse_gate(degenerate)
-    assert not supports_degraded_reverse(degenerate)
-    assert not decision.allowed
-    assert decision.velocity == Velocity(0.0, 0.0)
+    assert degenerate.quality == 0.0
+    assert degenerate.velocity == Velocity(0.0, 0.0)
     for source in ("wheel", "ground_truth"):
         disguised = gate.update(*sample(source=source))
-        assert not supports_degraded_reverse(disguised)
-        assert degraded_reverse_gate(disguised).velocity == Velocity(0.0, 0.0)
+        assert disguised.quality == 0.0
+        assert disguised.velocity == Velocity(0.0, 0.0)
     wheel, _scan, imu, visual, now = sample()
     missing = gate.update(wheel, None, imu, visual, now)
-    assert not supports_degraded_reverse(missing)
+    assert missing.quality == 0.0
     qualified = gate.update(*sample())
-    assert supports_degraded_reverse(qualified)
+    assert qualified.quality > 0.0
     assert qualified.pose_delta == Pose2D(0.25, 0.0, 0.0)
     assert qualified.velocity == Velocity(0.5, 0.0)
-    assert body_displacement(qualified) == 0.25
     assert qualified.covariance == (0.25, 0.25, 0.25)
 
 
@@ -69,7 +62,6 @@ def test_nan_imu_yaw_is_not_independent():
     wheel, scan, _imu, visual, now = sample(yaw=0.3)
     estimate = estimator().update(wheel, scan, ImuYaw(float("nan"), now, 0.5), visual, now)
     assert estimate.quality == 0.0
-    assert not supports_degraded_reverse(estimate)
 
 
 def test_imu_and_scan_angles_are_compared_across_pi_boundary():
@@ -109,28 +101,15 @@ def test_source_must_be_scan_match_and_covariance_within_cap():
     gate = MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05, max_covariance=1.0)
     for source in ("wheel_odom", "odom", "ekf"):
         disguised = gate.update(*sample(source=source))
-        assert not supports_degraded_reverse(disguised)
+        assert disguised.quality == 0.0
     loose = gate.update(*sample(covariance=(1.0e6, 1.0e6, 1.0e6)))
-    assert not supports_degraded_reverse(loose)
-
-
-def test_wheel_wrapped_estimate_is_not_independent_motion():
-    wrapped = MotionEstimate(
-        Pose2D(0.2, 0.0, 0.0),
-        Velocity(-0.2, 0.0),
-        (0.01, 0.01, 0.01),
-        0.9,
-        0.1,
-    )
-    assert not supports_degraded_reverse(wrapped)
-    assert degraded_reverse_gate(wrapped).velocity == Velocity(0.0, 0.0)
+    assert loose.quality == 0.0
 
 
 def test_unset_covariance_cap_fails_closed():
     gate = MotionEstimator(max_skew=0.05, min_quality=0.5, max_yaw_error=0.05)
     estimate = gate.update(*sample())
     assert estimate.quality == 0.0
-    assert not supports_degraded_reverse(estimate)
 
 
 def test_loop_jump_not_motion():
@@ -138,4 +117,3 @@ def test_loop_jump_not_motion():
     assert estimate.quality == 0.0
     assert estimate.pose_delta == Pose2D(0.0, 0.0, 0.0)
     assert estimate.velocity == Velocity(0.0, 0.0)
-    assert body_displacement(estimate) == 0.0

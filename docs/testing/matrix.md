@@ -5,7 +5,7 @@
 | 范围 | 验收点 | 自动化入口 | 所需环境 |
 | --- | --- | --- | --- |
 | 驾驶安全链 | 只有 `safety_node` 发布 `/cmd_vel`，停发后停车 | `tests/e2e/test_drive.py`、`tests/ros/test_velocity_chain.py` | Linux、Humble、运行中的完整仿真栈 |
-| 后部遮挡 | 倒车限速、限距，并要求地图自由走廊；实时障碍优先 | `tests/e2e/test_recovery.py` | 本机 Python 断言；实际运动与完整仿真路径未执行 |
+| 后部遮挡 | 无观测空间拒绝方向许可；未接入运行链的地图辅助倒车模块及其专用测试已删除 | `tests/unit/test_directional_constraints.py`、`tests/e2e/test_occlusion.py` | 纯逻辑与场景契约；实际运动与完整仿真路径另行验收 |
 | 长期地图 | 箱体确认、清除后重载仍为空；人不写入 | `tests/e2e/test_maps.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
 | 任务断线 | 运行中暂停，重连不恢复、不补跑 | `tests/e2e/test_tasks.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
 | Home | 数据库重开后仍使用原 Home | `tests/e2e/test_home.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |

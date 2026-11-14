@@ -30,8 +30,7 @@ class ScanAdapter(Node):
         self.declare_parameter("max_age_seconds", 0.5)
         self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("no_return_clear", False)
-        self.declare_parameter("self_mask_calibrated", False)
-        # //Compatible: unset profiles retain exact-mask filtering, uncalibrated by default.
+        # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.body = self.get_parameter("body_frame").value
         self.max_age = self.get_parameter("max_age_seconds").value
@@ -43,7 +42,6 @@ class ScanAdapter(Node):
         if len(coords) % 2 or (coords and len(coords) < 6):
             raise ValueError("self_mask_xy requires at least three coordinate pairs")
         self.profile = DeviceProfile(
-            self_mask_calibrated=self.get_parameter("self_mask_calibrated").value,
             self_mask=[list(zip(coords[::2], coords[1::2], strict=False))] if coords else [],
         )
         self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)

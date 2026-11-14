@@ -31,6 +31,7 @@ export function EmergencyStop({ link, compact = false }: EmergencyStopProps): Re
     }
   }
   const confirmed = frame?.confirmed_estop_status;
+  const resetAllowed = frame?.allowed_actions.includes('estop_reset') === true;
   async function recover(kind: 'estop_reset' | 'fault_recover'): Promise<void> {
     try {
       await link.vehicle?.recover(kind);
@@ -48,7 +49,10 @@ export function EmergencyStop({ link, compact = false }: EmergencyStopProps): Re
       <span className={styles.estopCap}>急停</span>
       <span className={styles.estopTag}>E-STOP</span>
     </button>
-    {confirmed !== 'hardware_latched' && frame?.allowed_actions.includes('estop_reset') && <button className={styles.ghost} disabled={!connected || !available} onClick={() => void recover('estop_reset')}>复位软件急停</button>}
+    {confirmed !== 'hardware_latched' && (confirmed === 'software_latched' || resetAllowed) && <>
+      <button className={styles.ghost} disabled={!connected || !available || !resetAllowed} onClick={() => void recover('estop_reset')}>复位软件急停</button>
+      {confirmed === 'software_latched' && !resetAllowed && <p className={styles.quiet}>车端尚未许可复位，等待运动证据有效并确认停稳。</p>}
+    </>}
     {frame?.allowed_actions.includes('fault_recover') && <button className={styles.ghost} disabled={!connected || !available} onClick={() => void recover('fault_recover')}>恢复执行故障</button>}
   </div>;
 }

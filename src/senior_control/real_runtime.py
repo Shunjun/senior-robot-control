@@ -12,7 +12,7 @@ from senior_control.motion.hardware_profile import HardwareMotionProfile, load_h
 # belongs in this file, not in a simulation YAML or product driving preferences.
 REQUIRED_PARAMETERS = {
     "scan_receipt": ("scan_topic", "scan_ledger_max_age_s"),
-    "scan_adapter": ("body_frame", "max_age_seconds", "self_mask_calibrated"),
+    "scan_adapter": ("body_frame", "max_age_seconds"),
     "safety_scan_ingress": ("body_frame", "observation_max_age"),
     "scan_motion_node": (
         "body_frame",
@@ -55,7 +55,6 @@ REQUIRED_PARAMETERS = {
         "body_frame",
         "simulation_rate_hz",
         "footprint_xy",
-        "self_mask_calibrated",
         "observation_max_age",
         "measurement_max_age",
         "hard_margin",
@@ -86,7 +85,6 @@ def real_parameter_defaults(
         "scan_adapter": {
             **common,
             "max_age_seconds": age,
-            "self_mask_calibrated": False,
             "no_return_clear": False,
         },
         "safety_scan_ingress": {**common, "observation_max_age": age},
@@ -132,7 +130,6 @@ def real_parameter_defaults(
         "safety_gate": {
             **common,
             "simulation_rate_hz": 20.0,
-            "self_mask_calibrated": False,
             "observation_max_age": age,
             "measurement_max_age": age,
             "hard_margin": 0.0,
@@ -181,6 +178,8 @@ def load_real_parameters(
         params = {**defaults[node], **params}
         # //Compatible: old YAML may contain the removed manual TF switch.
         params.pop("transform_static", None)
+        # //Compatible: remove the obsolete operator-confirmation flag.
+        params.pop("self_mask_calibrated", None)
         # //Compatible: the shipped real YAML used odom, but the WHEELTEC
         # base_serial launch publishes /odom with header.frame_id=odom_combined.
         if node == "motion_fusion" and params.get("wheel_frame") == "odom":

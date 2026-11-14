@@ -80,8 +80,6 @@ def filter_self(
     # //Compatible: callers without an explicit range bound retain exact-mask behavior.
     if not isfinite(self_mask_range_uncertainty) or self_mask_range_uncertainty < 0:
         raise ValueError("invalid self-mask range uncertainty")
-    if not profile.self_mask_calibrated:
-        raise ValueError("self-mask is uncalibrated")
     masks = []
     for vertices in profile.self_mask:
         polygon = Polygon(vertices)

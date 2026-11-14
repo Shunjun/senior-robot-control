@@ -48,6 +48,7 @@ class MotionCoreOutput:
         from std_msgs.msg import String
 
         self.node, self.profile = node, profile
+        self.acceleration_model = profile.acceleration_model()
         self.boot = uuid4().hex
         self.sequence = 0
         self.event_sequence = 0
@@ -86,6 +87,7 @@ class MotionCoreOutput:
         }
         self._reference_clock: tuple[float, int] | None = None
         self._reference_reset_steady = -math.inf
+        self._reference_warning_at = float("-inf")
         self._perception_key: tuple[Any, ...] | None = None
         self._perception: Perception | None = None
         self._barrier_key: tuple[str, int, int] | None = None
@@ -133,11 +135,29 @@ class MotionCoreOutput:
                     namespace=profile.hardware_estop.namespace,
                     qos="reliable",
                     invalidate=self._invalidate_hardware_status,
+                    expired=self._on_expired_hardware_estop,
                 )
 
     def _invalidate_reference(self) -> None:
         self._clear_reference_cache()
         self.controller.invalidate_limited_rearm()
+        # Do not let a fresh frame in the same drain hide a lost-reference edge.
+        # Retire the old target now; recovery still needs distinct fresh evidence.
+        self._event(K.FEEDBACK_LOST, time.monotonic())
+        self._last_healthy = False
+        self._warn_reference("native receipt revoked or unavailable")
+
+    def _on_expired_hardware_estop(self, msg: Any, info: Any) -> None:
+        # A delayed assertion still latches. A delayed release never clears or
+        # refreshes hardware status; the original receipt stays unchanged.
+        if bool(msg.data):
+            self._on_hardware_estop(msg, info)
+
+    def _warn_reference(self, reason: str) -> None:
+        now = time.monotonic()
+        if now - self._reference_warning_at >= 2.0:
+            self._reference_warning_at = now
+            self.node.get_logger().warning(f"motion core reference rejected: {reason}")
 
     def _invalidate_hardware_status(self) -> None:
         self._hardware_seen = float("-inf")
@@ -196,13 +216,18 @@ class MotionCoreOutput:
             self.revoke(kind.value, now=now)
 
     def _on_reference(self, msg: Any, info: Any) -> None:
+        endpoints = self.node.get_publishers_info_by_topic("/motion/core_reference")
         origin = observation_origin(
             info,
-            self.node.get_publishers_info_by_topic("/motion/core_reference"),
+            endpoints,
             "motion_fusion",
             allow_topology_only=bool(self.profile.simulation_only and self.profile.unvalidated),
         )
         if origin is None:
+            self._warn_reference(
+                "writer identity unavailable; discovered="
+                + repr([(x.node_namespace, x.node_name) for x in endpoints])
+            )
             return
         try:
             if len(msg.data) > 131072:
@@ -212,14 +237,19 @@ class MotionCoreOutput:
                 value["schema"] != 1
                 or not 0 <= time.monotonic() - value["sampled_steady"] <= self.profile.max_age
             ):
-                raise ValueError("reference time")
+                raise ValueError(
+                    f"reference schema/time: schema={value['schema']}, "
+                    f"age_s={time.monotonic() - value['sampled_steady']:.6f}, "
+                    f"max_age_s={self.profile.max_age}"
+                )
             if (
                 value["boot_id"] == self._reference_boot
                 and value["sequence"] <= self._reference_sequence
             ):
                 return
             self._offer_reference(value, time.monotonic())
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError) as exc:
+            self._warn_reference(f"payload validation: {str(exc)[:256]}")
             return
 
     def _clear_reference_cache(self) -> None:
@@ -320,27 +350,16 @@ class MotionCoreOutput:
 
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
         c = self.controller.config
-        if not self.profile.simulation_only and body is not None:
-            packet = self._reference
-            if packet is None:
-                return False
-            ref = packet["reference"]
-            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
-            if (
-                abs(body.velocity.vx)
-                + self.profile.linear_error
-                + self.profile.reaction_linear_accel * age
-                > self.profile.stationary_linear_mps
-                or abs(body.velocity.wz)
-                + self.profile.yaw_error
-                + self.profile.reaction_yaw_accel * age
-                > self.profile.stationary_yaw_rps
-            ):
-                return False
+        packet = self._reference
+        if packet is None or body is None or wheel is None:
+            return False
+        # Both deployments use original reference time and the shared controller's
+        # consecutive-sample stillness check. Profiles supply numeric tolerances;
+        # hardware's controller() already deducts its base measurement errors.
+        if not self._reference_time_valid(packet["reference"]):
+            return False
         return bool(
-            body is not None
-            and wheel is not None
-            and body.fresh(now)
+            body.fresh(now)
             and wheel.fresh(now)
             and body.epoch == self._body_epoch_used
             and wheel.epoch == self._wheel_epoch_used
@@ -908,11 +927,12 @@ class MotionCoreOutput:
             "native T3 reference; upper unsupported",
         )
         p = self.profile
+        acceleration_upper = self.acceleration_model.upper
         response = ResponseBounds(
-            p.accel,
+            acceleration_upper.vx,
             p.decel,
             p.jerk,
-            p.yaw_accel,
+            acceleration_upper.wz,
             p.yaw_decel,
             p.yaw_jerk,
             p.lag,
@@ -931,9 +951,7 @@ class MotionCoreOutput:
             angular = (gyro - p.yaw_error, gyro + p.yaw_error)
         else:
             age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
-            predictor_accel = (
-                Velocity(p.accel, p.yaw_accel) if p.simulation_only else p.reaction_acceleration(a)
-            )
+            predictor_accel = acceleration_upper
             dv = p.linear_error + predictor_accel.vx * age
             dw = p.yaw_error + predictor_accel.wz * age
             linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
@@ -953,7 +971,7 @@ class MotionCoreOutput:
             p.horizon_s,
             linear,
             angular,
-            p.reaction_acceleration(a),
+            self.acceleration_model.reaction(a),
             p.position_error,
             p.orientation_error_rad,
             p.lateral_drift_mps,

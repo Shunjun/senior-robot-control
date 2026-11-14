@@ -9,6 +9,7 @@ for bounded Linux verification, not measurements or acceptance freezes.
 from dataclasses import dataclass
 
 from senior_control.models import Velocity
+from senior_control.motion.acceleration_model import AccelerationModel
 from senior_control.motion.constraints import NoReturnPolicy
 from senior_control.motion.controller import ControllerConfig
 from senior_control.motion.fusion import FusionConfig
@@ -70,9 +71,10 @@ class SimulationMotionProfile:
             return NoReturnPolicy.VALIDATED_FREE_TO_RANGE
         return NoReturnPolicy.UNKNOWN
 
-    def reaction_acceleration(self, current: Velocity) -> Velocity:
-        # //Compatible: retain the isolated candidate response hypothesis.
-        return Velocity(min(self.accel, abs(current.vx)), min(self.yaw_accel, abs(current.wz)))
+    def acceleration_model(self) -> AccelerationModel:
+        # //Compatible: preserve the simulation's existing numeric limits while
+        # using the same acceleration policy as hardware.
+        return AccelerationModel(self.accel, self.yaw_accel, self.accel, self.yaw_accel)
 
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(

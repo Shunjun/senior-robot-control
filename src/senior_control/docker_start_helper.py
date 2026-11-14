@@ -170,19 +170,13 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
 
 
 def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | None:
-    # Use the same sourced overlay/domain as the adapter; the launch contains
-    # no vendor driver and no second CommandNode or actuator publisher.
+    # Use the same sourced overlay/domain as the adapter; no second authority
+    # owner or actuator publisher is introduced by the hardware launch.
     if profile.motion_profile is None and profile.safety_parameters is None:
         return None
-    base = _adapter_command(profile, robot_id)
-    return base[:6] + [
-        # Keep launch-file imports in the same Python environment as the adapter.
-        # The ros2 console script can have a system-Python shebang even when
-        # senior_control is installed only in the service's ROS virtualenv.
-        sys.executable,
-        "-c",
-        "from ros2cli.cli import main; raise SystemExit(main())",
-        "launch",
+    return _ros_launch_command(
+        profile,
+        robot_id,
         "senior_robot",
         "safety_motion.launch.py",
         f"safety_parameters:={profile.safety_parameters}",
@@ -193,6 +187,24 @@ def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | Non
             if profile.navigation_parameters is not None
             else []
         ),
+    )
+
+
+def _ros_launch_command(
+    profile: "VehicleProfile", robot_id: str, package: str, filename: str, *arguments: str
+) -> list[str]:
+    base = _adapter_command(profile, robot_id)
+    return base[:6] + [
+        # Keep launch-file imports in the same Python environment as the adapter.
+        # The ros2 console script can have a system-Python shebang even when
+        # senior_control is installed only in the service's ROS virtualenv.
+        sys.executable,
+        "-c",
+        "from ros2cli.cli import main; raise SystemExit(main())",
+        "launch",
+        package,
+        filename,
+        *arguments,
     ]
 
 
@@ -272,7 +284,7 @@ async def _terminate(process: asyncio.subprocess.Process | None, timeout: float)
 
 
 async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) -> None:
-    if process is None or process.returncode is not None:
+    if process is None:
         return
     # ros2 launch owns multiple required children. Signal the owned process
     # group so timeout escalation cannot leave an orphan actuator publisher.
@@ -288,6 +300,21 @@ async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) ->
         except ProcessLookupError:
             pass
         await process.wait()
+    # A launcher can exit before its children. Its process group is still ours;
+    # reap/stop survivors instead of leaving camera or actuator children behind.
+    deadline = asyncio.get_running_loop().time() + 2
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        if asyncio.get_running_loop().time() >= deadline:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            return
+        await asyncio.sleep(0.05)
 
 
 async def supervise(
@@ -305,6 +332,7 @@ async def supervise(
         process: asyncio.subprocess.Process | None = None
         adapter: asyncio.subprocess.Process | None = None
         motion_stack: asyncio.subprocess.Process | None = None
+        camera_stack: asyncio.subprocess.Process | None = None
         adapter_identity: list[int] | None = None
         adapter_command = None
         robot_id = ""
@@ -374,7 +402,38 @@ async def supervise(
                 waiters.append(asyncio.create_task(motion_stack.wait()))
             if adapter is not None:
                 waiters.append(asyncio.create_task(adapter.wait()))
-            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            camera_exited = None
+            if motion_stack is not None and profile is not None:
+                # Camera/video is optional for the laser-only motion chain.
+                # Give it a separate launch/process group, started after IPC/Agent
+                # readiness, so camera crashes cannot stop safety state reporting.
+                try:
+                    camera_stack = await asyncio.create_subprocess_exec(
+                        *_ros_launch_command(
+                            profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
+                        ),
+                        env=environment,
+                        start_new_session=True,
+                    )
+                    camera_exited = asyncio.create_task(camera_stack.wait())
+                    waiters.append(camera_exited)
+                except OSError as exc:
+                    print(f"Camera unavailable: {exc}", file=sys.stderr)
+            while True:
+                done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                if camera_exited is not None and camera_exited in done:
+                    print(
+                        f"Camera launch exited ({camera_exited.result()}); "
+                        "video unavailable; motion supervision remains active.",
+                        file=sys.stderr,
+                    )
+                    waiters.remove(camera_exited)
+                    await _terminate_motion_stack(camera_stack)
+                    camera_stack = None
+                    camera_exited = None
+                    if len(done) == 1:
+                        continue
+                break
             if stopping.is_set():
                 return 0
             if motion_stack is not None and motion_stack.returncode is not None:
@@ -389,7 +448,10 @@ async def supervise(
                 try:
                     await _terminate(adapter, 5)
                 finally:
-                    await _terminate_motion_stack(motion_stack)
+                    try:
+                        await _terminate_motion_stack(motion_stack)
+                    finally:
+                        await _terminate_motion_stack(camera_stack)
             for task in waiters:
                 if not task.done():
                     task.cancel()

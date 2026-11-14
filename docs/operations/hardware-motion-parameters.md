@@ -33,7 +33,7 @@
 | sensor_error | 0.05 | 激光几何误差/膨胀量，m | 猜填 |
 | position_error | 0.1 | 预测时域内跟踪/定位的位置误差界，m | 猜填 |
 | orientation_error_rad | 0.05 | 预测时域内姿态/航向角误差界，rad | 猜填，约 2.86° |
-| stationary_linear_mps | 0.05 | 可接受的物理近静止线速度容差，m/s | 猜填；控制器扣除基础误差，恢复时再核算年龄误差 |
+| stationary_linear_mps | 0.05 | 可接受的物理近静止线速度容差，m/s | 猜填；控制器扣除基础误差；复位要求参考在预测时效内且连续停稳，反应加速度用于驾驶风险包络 |
 | stationary_yaw_rps | 0.05 | 可接受的物理近静止角速度容差，rad/s | 猜填 |
 | model_seconds | 3600 | 启动后模型使用期限，s，即一小时 | 软件期限，不代表物理模型已有效一小时 |
 | horizon_s | 12 | 停车搜索/约束预测的最长时域，s | 软件搜索预算；物理包络仍须覆盖该时域 |
@@ -41,8 +41,8 @@
 | drive_yaw_overshoot | 0.15 | 制动/零命令跟踪允许的角速度过冲界，rad/s | 猜填 |
 | lateral_drift_mps | 0.03 | 横向滑移速度界，m/s | 猜填，不假设四驱一定没有侧滑 |
 | lateral_stop_s | 1.0 | 横向滑移收敛/停止的时间界，s | 猜填 |
-| reaction_linear_accel | 0.3 | 反应窗口内可能继续发生的线加速度上界，m/s² | 猜填；必须覆盖 accel |
-| reaction_yaw_accel | 0.5 | 反应窗口内可能继续发生的角加速度上界，rad/s² | 猜填；必须覆盖 yaw_accel |
+| reaction_linear_accel | 0.3 | 反应窗口内已有线加速度的幅值上限，m/s²；共用算法按当前轨迹加速度限幅，零加速度不注入固定值 | 猜填；必须覆盖 accel |
+| reaction_yaw_accel | 0.5 | 反应窗口内已有角加速度的幅值上限，rad/s²；与仿真共用限幅算法 | 猜填；必须覆盖 yaw_accel |
 | watchdog_mode | unknown | 对目标底盘失联独立停车机制的已知程度 | 确定为尚未核实，不等于硬件一定没有 |
 | watchdog_basis | 未取得目标固件证据 | watchdog 能力的来源说明 | 当前事实记录 |
 | hardware_estop.mode | unknown | 物理急停能力：可读、独立不可读、未知三种之一 | 当前尚未核实；不虚构周期 Bool 来源 |

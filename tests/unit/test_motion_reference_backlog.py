@@ -25,6 +25,7 @@ class Node:
     def __init__(self, case, clock):
         self.clock = clock
         self.messages = []
+        self.warnings = []
         self.output = []
         self._depth_policy = "laser_only"
         scan = case["scan"]
@@ -32,6 +33,9 @@ class Node:
 
     def create_publisher(self, *_args):
         return N(publish=self.messages.append)
+
+    def get_logger(self):
+        return N(warning=self.warnings.append)
 
     def create_subscription(self, message_type, _topic, callback, _depth):
         self.sub = ReadySubscription(message_type, callback)

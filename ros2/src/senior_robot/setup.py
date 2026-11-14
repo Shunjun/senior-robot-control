@@ -10,7 +10,6 @@ setup(
         (
             "share/senior_robot/config",
             [
-                "config/hardware.yaml",
                 "config/self_filter.yaml",
                 "config/nav2.yaml",
                 "config/lattice_diff.json",

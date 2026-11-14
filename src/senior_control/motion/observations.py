@@ -272,7 +272,7 @@ def metadata_error(
 def is_current(
     observation: AdaptedObservation, rule: SourceRule, *, now_ros: float, now_steady: float
 ) -> bool:
-    """The same ROS-age and fixed steady-deadline test for ingest and assess."""
+    """The same ROS-age and fixed steady-deadline test for ingest and snapshots."""
     return (
         now_steady < observation.valid_until_steady
         and now_ros - observation.original.end_ros <= rule.max_age_s

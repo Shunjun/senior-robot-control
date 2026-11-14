@@ -30,10 +30,14 @@ class Node:
     def __init__(self):
         self.publishers = {}
         self.emitted = []
+        self.warnings = []
 
     def create_publisher(self, _type, topic, _qos):
         self.publishers[topic] = Publisher()
         return self.publishers[topic]
+
+    def get_logger(self):
+        return N(warning=self.warnings.append)
 
     def create_subscription(self, _type, _topic, callback, _qos):
         assert getattr(callback, "_senior_dds_info", False)
