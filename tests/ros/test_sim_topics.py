@@ -277,3 +277,48 @@ def test_watchdog_stops(node):
             rclpy.spin_once(node, timeout_sec=0.05)
         set_sim_pose(original)
     assert subscriptions
+
+
+def test_sim_camera_subscriptions_resume_with_fresh_frames(node):
+    """Image bridges must recover after every viewer has disconnected."""
+    topics = ("/camera/color/image_raw", "/camera/depth/image_raw")
+    received = {}
+
+    def record(topic, message):
+        stamp = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
+        assert message.width == 640 and message.height == 480
+        assert message.data and stamp > 0
+        received[topic] = stamp
+
+    def subscribe():
+        return [
+            node.create_subscription(
+                Image,
+                topic,
+                lambda message, topic=topic: record(topic, message),
+                qos_profile_sensor_data,
+            )
+            for topic in topics
+        ]
+
+    subscriptions = subscribe()
+    try:
+        wait_for(node, lambda: all(topic in received for topic in topics))
+        previous = dict(received)
+        for subscription in subscriptions:
+            node.destroy_subscription(subscription)
+        subscriptions.clear()
+        # Humble's lazy bridge discovers subscriber changes on a wall timer.
+        until = time.monotonic() + 2.5
+        while time.monotonic() < until:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        received.clear()
+        subscriptions.extend(subscribe())
+        wait_for(
+            node,
+            lambda: all(received.get(topic, 0) > previous[topic] for topic in topics),
+            failure="camera did not resume with new frames after reconnect",
+        )
+    finally:
+        for subscription in subscriptions:
+            node.destroy_subscription(subscription)

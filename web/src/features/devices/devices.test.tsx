@@ -1,3 +1,5 @@
+import { testPort } from "../../api/vehicleState.testUtils";
+import { VEHICLE_REQUEST_TYPES } from "../../api/vehicleState";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -69,7 +71,10 @@ class FakeLink implements RobotLink {
   readonly supportsMotionChallenges = true;
   connects: string[] = [];
   disconnects = 0;
-  requests: Array<{ type: string; payload: unknown }> = [];
+  requests: Array<{
+    type: string;
+    payload: unknown;
+  }> = [];
   requestImpl: (type: string, payload: unknown) => Promise<unknown> = () =>
     Promise.reject(new CommandError("offline", "no link"));
   private snapshotListeners = new Set<(s: RobotSnapshot) => void>();
@@ -115,7 +120,12 @@ class FakeApi implements ControlApi {
   async logout(): Promise<void> {
     this.loggedOut += 1;
   }
-  async createPairingCode() { return { code: "example", expires_in: 30 }; }
+  async revokeRobot(robotId: string): Promise<void> {
+    this.robots = this.robots.filter((robot) => robot.id !== robotId);
+  }
+  async createPairingCode() {
+    return { code: "example", expires_in: 30 };
+  }
   async listRobots(): Promise<RobotSummary[]> {
     if (this.failure !== null) throw this.failure;
     return this.robots;
@@ -139,7 +149,8 @@ describe("robot switching", () => {
     mount("/robots/robot-alpha", api, link);
     await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
     link.emit(snapshot("robot-alpha", { execution_status: "patrolling-alpha" }));
-    expect(screen.getByText("patrolling-alpha")).toBeTruthy();
+    expect(screen.getByText("车端运行状态尚未接通")).toBeTruthy();
+    expect(screen.queryByText("patrolling-alpha")).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: /Beta/ }));
 
@@ -153,7 +164,8 @@ describe("robot switching", () => {
     expect(screen.queryByText("patrolling-alpha")).toBeNull();
 
     link.emit(snapshot("robot-beta", { execution_status: "charging-beta" }));
-    expect(screen.getByText("charging-beta")).toBeTruthy();
+    expect(screen.queryByText("等待车端快照")).toBeNull();
+    expect(screen.getByText("车端运行状态尚未接通")).toBeTruthy();
   });
 });
 
@@ -310,7 +322,7 @@ describe("command errors", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "急停" }));
 
-    await screen.findByText(/急停已确认/);
+    await screen.findByText(/等待车端状态确认/);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
@@ -373,7 +385,10 @@ function reply(status: number, body?: unknown, headers: Record<string, string> =
 
 describe("HttpControlApi", () => {
   it("logs in with the password, keeps the csrf token and sends it on logout", async () => {
-    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const calls: Array<{
+      url: string;
+      init: RequestInit;
+    }> = [];
     const answers = [reply(200, { csrf_token: "csrf-1" }), reply(204)];
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(url), init: init ?? {} });
@@ -424,8 +439,12 @@ class FakeSocket implements SocketLike {
   sent: string[] = [];
   closedWith: number | undefined;
   onopen: (() => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onclose: ((event: { code: number }) => void) | null = null;
+  onmessage: ((event: {
+    data: unknown;
+  }) => void) | null = null;
+  onclose: ((event: {
+    code: number;
+  }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(readonly url: string) {
     FakeSocket.instances.push(this);
@@ -484,7 +503,11 @@ const wirePayload = {
 const AGENT_EPOCH = 3;
 
 async function connected(
-  options: { staleAfterMs?: number; requestTimeoutMs?: number; snapshot?: boolean } = {},
+  options: {
+    staleAfterMs?: number;
+    requestTimeoutMs?: number;
+    snapshot?: boolean;
+  } = {},
 ) {
   FakeSocket.instances = [];
   const { snapshot: deliver = true, ...clientOptions } = options;
@@ -518,7 +541,12 @@ describe("RobotClient", () => {
     const result = client.request<ResponsePayload>("safety.estop", {});
     const sent = socket.lastSent();
     expect(Object.keys(sent).sort()).toEqual([...ENVELOPE_FIELDS, "payload", "type"].sort());
-    expect(sent).toMatchObject({ v: 1, robot_id: "robot-alpha", type: "safety.estop", payload: {} });
+    expect(sent).toMatchObject({
+      v: 1,
+      robot_id: "robot-alpha",
+      type: "safety.estop",
+      payload: {}
+    });
     expect(Number(sent["expires_at"])).toBeGreaterThan(Date.now() / 1000);
     socket.receive(
       frame("response", "robot-alpha", { request_type: "safety.estop", ok: true }, String(sent["request_id"])),
@@ -729,7 +757,7 @@ describe("cached snapshot delivered by the cloud", () => {
 
     expect(screen.getByText("缓存快照 · 非实时")).toBeTruthy();
     expect(screen.queryByText("实时快照")).toBeNull();
-    expect(screen.getByText("cached-idle")).toBeTruthy();
+    expect(screen.queryByText("cached-idle")).toBeNull();
     expect(screen.getByText(/最后同步/).textContent).toContain(
       new Date(1_700_000_000 * 1000).toLocaleTimeString("zh-CN", { hour12: false }),
     );
@@ -779,7 +807,9 @@ function literalOf(text: string): string[] {
 }
 
 function fieldsOf(body: string): string[] {
-  return [...body.matchAll(/^ {4}(\w+): /gm)].map((match) => match[1]!);
+  return [...body.matchAll(/^ {4}(\w+): (.*)$/gm)]
+    .filter((match) => !/=\s*PrivateAttr\(/.test(match[2]!))
+    .map((match) => match[1]!);
 }
 
 describe("protocol parity with src/senior_control/protocol.py", () => {
@@ -790,35 +820,45 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
   it("mirrors the request types", () => {
     const simple = literalOf(pythonClass(protocol, "SimpleEnvelope"));
     const operations = quoted(/OPERATION_TYPES = \(([^)]*)\)/.exec(protocol)![1]!);
-    expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple);
+    expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple.filter(x => x !== "drive.challenge"));
     expect([...OPERATION_REQUEST_TYPES]).toEqual(operations);
     const workspace = literalOf(/WorkspaceRequest = Literal\[[^\]]+\]/.exec(protocol)![0]);
     expect([...WORKSPACE_REQUEST_TYPES]).toEqual(workspace);
-    expect([...REQUEST_TYPES]).toEqual(["drive.velocity", ...simple, ...operations, ...workspace]);
+    expect([...REQUEST_TYPES]).toEqual([...simple.filter(x => x !== "drive.challenge"), ...operations, ...workspace]);
   });
 
   it("mirrors the response request types and error codes", () => {
     const responseBody = pythonClass(protocol, "ResponsePayload");
-    expect([...RESPONSE_REQUEST_TYPES]).toEqual(literalOf(responseBody));
+    const requests = literalOf(responseBody).filter(x => x !== "drive.velocity" && x !== "drive.challenge");
+    expect([...new Set([...RESPONSE_REQUEST_TYPES, ...VEHICLE_REQUEST_TYPES])].sort())
+      .toEqual([...requests].sort());
+    for (const requestType of requests) {
+      expect(parseInbound(JSON.stringify(frame("response", "robot-alpha", {
+        request_type: requestType, ok: false, error: "unavailable",
+      })))?.type).toBe("response");
+    }
     const codes = [...pythonClass(errors, "ErrorCode").matchAll(/= "(\w+)"/g)].map((m) => m[1]!);
     expect([...ERROR_CODES]).toEqual(codes);
   });
 
   it("mirrors the envelope and snapshot fields and the size bound", () => {
     expect([...ENVELOPE_FIELDS]).toEqual(fieldsOf(pythonClass(protocol, "EnvelopeBase")));
-    expect([...SNAPSHOT_FIELDS]).toEqual(fieldsOf(pythonClass(protocol, "SnapshotPayload")));
+    // The UI extension has its own decoder; the two owner fields are relay-only
+    // and are cleared before browser delivery (test_manual_wire covers that boundary).
+    expect([...SNAPSHOT_FIELDS, "vehicle_ui", "manual_controller_generation", "manual_agent_epoch"])
+      .toEqual(fieldsOf(pythonClass(protocol, "SnapshotPayload")));
     expect(MAX_MESSAGE_BYTES).toBe(Number(/MAX_MESSAGE_BYTES = (\d+)/.exec(protocol)![1]));
   });
 });
 
 describe("remote drive admission", () => {
-  it("never sends velocity without a server challenge", async () => {
+  it("refuses the retired velocity route without sending it", async () => {
     const { client, socket } = await connected();
     const attempt = client.request("drive.velocity", { vx: 0.2, wz: 0 });
     const rejection = attempt.catch((error: unknown) => error);
     try {
       expect(socket.sent).toHaveLength(0);
-      expect(await rejection).toMatchObject({ code: "safety_rejected" });
+      expect(await rejection).toMatchObject({ code: "validation" });
     } finally {
       client.disconnect();
     }
@@ -847,221 +887,6 @@ describe("remote drive admission", () => {
   });
 });
 
-function respondTo(socket: FakeSocket, request: Record<string, unknown>, payload: unknown): void {
-  socket.receive({
-    ...frame("response", "robot-alpha", payload, String(request["request_id"])),
-    session_id: request["session_id"],
-    connection_epoch: request["connection_epoch"],
-    seq: request["seq"],
-  });
-}
-
-describe("server motion challenges", () => {
-  it("obtains a challenge only after acquire is acknowledged and consumes it once", async () => {
-    const { client, socket } = await connected();
-    try {
-      const acquire = client.request("control.acquire", {});
-      const acquireFrame = socket.lastSent();
-      expect(socket.sent).toHaveLength(1);
-      respondTo(socket, acquireFrame, { request_type: "control.acquire", ok: true });
-      await acquire;
-      const challenge = socket.lastSent();
-      expect(challenge).toMatchObject({ type: "drive.challenge", payload: {} });
-      respondTo(socket, challenge, {
-        request_type: "drive.challenge", ok: true, challenge_id: "token-one", server_deadline: 12.5,
-      });
-      await Promise.resolve();
-      const velocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
-      const sent = socket.sent.map((item) => JSON.parse(item) as Record<string, unknown>);
-      const motion = sent.find((item) => item["type"] === "drive.velocity");
-      expect(motion).toMatchObject({ payload: { vx: 0.2, wz: 0, challenge_id: "token-one" } });
-      expect(motion?.["payload"]).not.toHaveProperty("server_deadline");
-      const second = client.request("drive.velocity", { vx: 0.2, wz: 0 });
-      await expect(second).rejects.toMatchObject({ code: "safety_rejected" });
-      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(1);
-      void velocity.catch(() => undefined);
-    } finally {
-      client.disconnect();
-    }
-  });
-
-  it("cannot attach an old challenge reply after stop", async () => {
-    const { client, socket } = await connected();
-    try {
-      const acquire = client.request("control.acquire", {});
-      respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-      await acquire;
-      const oldChallenge = socket.lastSent();
-      void client.request("drive.stop", {}).catch(() => undefined);
-      respondTo(socket, oldChallenge, { request_type: "drive.challenge", ok: true, challenge_id: "stale-token", server_deadline: 12.5 });
-      await Promise.resolve();
-      await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
-      expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
-    } finally {
-      client.disconnect();
-    }
-  });
-});
-
-it("uses an acknowledged lease and server challenge for a held gesture, then stops on release", async () => {
-  FakeSocket.instances = [];
-  const link = new RobotClient({ socketFactory: (url) => new FakeSocket(url) });
-  mount("/robots/robot-alpha", new FakeApi(), link);
-  await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
-  const socket = FakeSocket.instances[0]!;
-  act(() => socket.open());
-  act(() => socket.receive(frame("snapshot", "robot-alpha", wirePayload)));
-  fireEvent.click(screen.getByRole("button", { name: "获取控制权" }));
-  const acquire = socket.lastSent();
-  expect(acquire.type).toBe("control.acquire");
-  act(() => respondTo(socket, acquire, { request_type: "control.acquire", ok: true }));
-  await waitFor(() => expect(socket.lastSent().type).toBe("drive.challenge"));
-  const challenge = socket.lastSent();
-  act(() => respondTo(socket, challenge, {
-    request_type: "drive.challenge", ok: true, challenge_id: "observed-token", server_deadline: 123,
-  }));
-  await act(async () => {});
-  const stick = screen.getByRole("group", { name: "前进后退摇杆" });
-  expect(stick.getAttribute("aria-disabled")).toBe("false");
-  fireEvent.keyDown(stick, { key: "ArrowUp" });
-  const frames = socket.sent.map((item) => JSON.parse(item));
-  expect(frames.find((item) => item.type === "drive.velocity")?.payload).toEqual({
-    vx: 0.5, wz: 0, challenge_id: "observed-token",
-  });
-  fireEvent.keyUp(stick, { key: "ArrowUp" });
-  expect(socket.sent.map((item) => JSON.parse(item)).some((item) => item.type === "drive.stop")).toBe(true);
-  link.disconnect();
-});
-
-it("sends emergency stop before notifying the held gesture to stop", async () => {
-  const { client, socket } = await connected();
-  const off = client.subscribeMotionRevoked((lost) => {
-    if (lost) void client.request("drive.stop", {}).catch(() => undefined);
-  });
-  try {
-    void client.request("safety.estop", {}).catch(() => undefined);
-    expect(socket.sent.map((item) => JSON.parse(item).type)).toEqual(["safety.estop", "drive.stop"]);
-  } finally {
-    off();
-    client.disconnect();
-  }
-});
-
-it("does not prefetch another token after a velocity frame fails to send", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    respondTo(socket, socket.lastSent(), {
-      request_type: "drive.challenge", ok: true, challenge_id: "send-fail", server_deadline: 123,
-    });
-    await Promise.resolve();
-    const before = socket.sent.length;
-    const originalSend = socket.send.bind(socket);
-    socket.send = (text) => {
-      if (JSON.parse(text).type === "drive.velocity") throw new Error("send failed");
-      originalSend(text);
-    };
-    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "offline" });
-    expect(socket.sent).toHaveLength(before);
-  } finally {
-    client.disconnect();
-  }
-});
-
-it("does not replay a dropped input when a challenge arrives later", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    const pending = socket.lastSent();
-    await expect(client.request("drive.velocity", { vx: 0.4, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
-    respondTo(socket, pending, { request_type: "drive.challenge", ok: true, challenge_id: "fresh", server_deadline: 123 });
-    await Promise.resolve();
-    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
-  } finally {
-    client.disconnect();
-  }
-});
-
-it("ignores challenge replies for a different session and invalidates them on epoch change", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    const pending = socket.lastSent();
-    socket.receive({ ...frame("response", "robot-alpha", {
-      request_type: "drive.challenge", ok: true, challenge_id: "wrong-session", server_deadline: 123,
-    }, String(pending.request_id)), session_id: "other", connection_epoch: pending.connection_epoch, seq: pending.seq });
-    await Promise.resolve();
-    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
-    socket.receive({ ...frame("snapshot", "robot-alpha", wirePayload), connection_epoch: 4 });
-    respondTo(socket, pending, { request_type: "drive.challenge", ok: true, challenge_id: "old-epoch", server_deadline: 123 });
-    await Promise.resolve();
-    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
-    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
-  } finally {
-    client.disconnect();
-  }
-});
-
-it("does not enqueue velocity behind a congested socket", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    respondTo(socket, socket.lastSent(), { request_type: "drive.challenge", ok: true, challenge_id: "current", server_deadline: 123 });
-    await Promise.resolve();
-    socket.bufferedAmount = 12;
-    const before = socket.sent.length;
-    await expect(client.request("drive.velocity", { vx: 0.2, wz: 0 })).rejects.toMatchObject({ code: "safety_rejected" });
-    expect(socket.sent).toHaveLength(before);
-    const stop = client.request("drive.stop", {});
-    void stop.catch(() => undefined);
-    expect(JSON.parse(socket.sent[before]!).type).toBe("drive.stop");
-  } finally {
-    client.disconnect();
-  }
-});
-
-it("does not carry lease or challenge through a stale and recovered snapshot", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    respondTo(socket, socket.lastSent(), { request_type: "drive.challenge", ok: true, challenge_id: "old", server_deadline: 123 });
-    await Promise.resolve();
-    socket.receive(frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }));
-    socket.receive(frame("snapshot", "robot-alpha", wirePayload));
-    const attempted = client.request("drive.velocity", { vx: 0.2, wz: 0 });
-    const rejected = attempted.catch((error: unknown) => error);
-    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.velocity")).toHaveLength(0);
-    expect(await rejected).toMatchObject({ code: "safety_rejected" });
-  } finally {
-    client.disconnect();
-  }
-});
-
-it("does not report a late acquire acknowledgement after stop", async () => {
-  const { client, socket } = await connected();
-  try {
-    const acquire = client.request("control.acquire", {});
-    const oldAcquire = socket.lastSent();
-    const stop = client.request("drive.stop", {});
-    void stop.catch(() => undefined);
-    respondTo(socket, oldAcquire, { request_type: "control.acquire", ok: true });
-    await expect(acquire).rejects.toMatchObject({ code: "conflict" });
-    expect(socket.sent.map((item) => JSON.parse(item)).filter((item) => item.type === "drive.challenge")).toHaveLength(0);
-  } finally {
-    client.disconnect();
-  }
-});
-
 it("does not repaint a current robot with an older agent epoch after an offline frame", async () => {
   const { client, socket } = await connected({ snapshot: false });
   const seen: RobotSnapshot[] = [];
@@ -1070,7 +895,14 @@ it("does not repaint a current robot with an older agent epoch after an offline 
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "new" }), connection_epoch: 4 });
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old" }), connection_epoch: 3 });
     expect(seen.map((value) => value.execution_status)).toEqual(["new"]);
-    socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true, execution_status: "offline" }), connection_epoch: 0 });
+    socket.receive({
+      ...frame("snapshot", "robot-alpha", {
+        ...wirePayload,
+        connected: false,
+        stale: true,
+        execution_status: "offline"
+      }), connection_epoch: 0
+    });
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old" }), connection_epoch: 3 });
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old-again" }), connection_epoch: 4 });
     expect(seen.map((value) => value.execution_status)).toEqual(["new", "offline"]);
@@ -1106,7 +938,9 @@ describe("device pairing", () => {
 
   it("keeps a new login's CSRF token when an older list refresh answers 401", async () => {
     let resolveRefresh!: (response: Response) => void;
-    const staleRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    const staleRefresh = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ csrf_token: "old-csrf" })))
       .mockReturnValueOnce(staleRefresh)
@@ -1127,8 +961,16 @@ describe("device pairing", () => {
   it("offers pairing on an empty list and ignores repeated and closed requests", async () => {
     const api = new FakeApi();
     api.robots = [];
-    let finish!: (value: { code: string; expires_in: number }) => void;
-    const createPairingCode = vi.fn(() => new Promise<{ code: string; expires_in: number }>((resolve) => { finish = resolve; }));
+    let finish!: (value: {
+      code: string;
+      expires_in: number;
+    }) => void;
+    const createPairingCode = vi.fn(() => new Promise<{
+      code: string;
+      expires_in: number;
+    }>((resolve) => {
+      finish = resolve;
+    }));
     mount("/robots", Object.assign(api, { createPairingCode }), new FakeLink());
     await screen.findByText("尚未配对任何设备");
     fireEvent.click(screen.getByRole("button", { name: "添加设备" }));
@@ -1169,7 +1011,9 @@ describe("device pairing", () => {
   it("clears the code while logout is pending and submits logout only once", async () => {
     const createPairingCode = vi.fn().mockResolvedValue({ code: "pending-code", expires_in: 30 });
     let finishLogout!: () => void;
-    const logout = vi.fn(() => new Promise<void>((resolve) => { finishLogout = resolve; }));
+    const logout = vi.fn(() => new Promise<void>((resolve) => {
+      finishLogout = resolve;
+    }));
     mount("/robots", Object.assign(new FakeApi(), { createPairingCode, logout }), new FakeLink());
     fireEvent.click(await screen.findByRole("button", { name: "添加设备" }));
     fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
@@ -1234,6 +1078,12 @@ describe("operator workspace", () => {
   async function openWorkspace() {
     const link = new FakeLink();
     link.requestImpl = async () => ({ ok: true });
+    Object.assign(link, {
+      vehicle: testPort(async (type, payload) => {
+        link.requests.push({ type, payload });
+        return { authority_id: "prepared", state: "prepared" };
+      })
+    });
     mount("/robots/robot-alpha", new FakeApi(), link);
     await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
     link.emit(snapshot("robot-alpha"));
@@ -1243,10 +1093,10 @@ describe("operator workspace", () => {
   it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
     await openWorkspace();
     const stick = screen.getByRole("group", { name: "前进后退摇杆" });
-    const stop = screen.getByRole("button", { name: "停车" });
+    const stop = screen.getByRole("button", { name: "释放控制权" });
     fireEvent.click(screen.getByRole("button", { name: "地图" }));
     expect(screen.getByRole("group", { name: "前进后退摇杆" })).toBe(stick);
-    expect(screen.getByRole("button", { name: "停车" })).toBe(stop);
+    expect(screen.getByRole("button", { name: "释放控制权" })).toBe(stop);
   });
 
   it("test_leaving_manual_revokes_gesture_without_rearm", async () => {
@@ -1255,13 +1105,13 @@ describe("operator workspace", () => {
     const stick = screen.getByRole("group", { name: "前进后退摇杆" });
     fireEvent.keyDown(stick, { key: "ArrowUp" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "导航与定位" })));
-    expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(1);
+    expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(0);
     expect(link.requests.filter(({ type }) => type === "control.release")).toHaveLength(1);
-    expect(screen.getByText(/停车指令已确认。 控制权已释放。/)).toBeTruthy();
+    expect(screen.getByText("未获取控制")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "手动驾驶" }));
     expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
     fireEvent.keyDown(stick, { key: "ArrowUp" });
-    expect(link.requests.filter(({ type }) => type === "drive.velocity")).toHaveLength(1);
+    expect(link.requests.filter(({ type }) => type === "drive.intent")).toHaveLength(1);
   });
 });
 
@@ -1270,13 +1120,27 @@ it("keeps an exported map read-only and leaves live navigation cancellation avai
   const current = snapshot("robot-alpha");
   const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "export-1" };
   link.requestImpl = async (type) => {
-    if (type === "map.manifest") return { data: {
-      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
-      tile_size: 32, display_only: true,
-    } };
-    if (type === "map.tile") return { data: {
-      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
-    } };
+    if (type === "map.manifest") return {
+      data: {
+        ...identity,
+        width: 1,
+        height: 1,
+        resolution: 1,
+        origin: { x: 0, y: 0, yaw: 0 },
+        tile_size: 32,
+        display_only: true,
+      }
+    };
+    if (type === "map.tile") return {
+      data: {
+        ...identity,
+        tile_x: 0,
+        tile_y: 0,
+        width: 1,
+        height: 1,
+        cells: [0],
+      }
+    };
     return { ok: true };
   };
   mount("/robots/robot-alpha", new FakeApi(), link);
@@ -1295,69 +1159,34 @@ it("keeps an exported map read-only and leaves live navigation cancellation avai
   expect(link.requests.some(({ type }) => type === "waypoint.list")).toBe(false);
 });
 
-it("test_latency_ignores_old_or_unapplied_ack", async () => {
-  const { client, socket } = await connected();
-  const onFeedback = vi.fn();
-  const unsubscribe = client.subscribeDriveFeedback(onFeedback);
-  try {
-    socket.receive({ type: "drive.timing", robot_id: "robot-alpha", connection_epoch: AGENT_EPOCH });
-    const probe = socket.lastSent();
-    socket.receive({
-      type: "drive.clock.reply", nonce: probe["nonce"], t2: 1, t3: 1,
-      connection_epoch: AGENT_EPOCH, ready: true,
-    });
-    const acquire = client.request("control.acquire", {});
-    respondTo(socket, socket.lastSent(), { request_type: "control.acquire", ok: true });
-    await acquire;
-    const velocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
-    const sample = socket.lastSent();
-    respondTo(socket, sample, { request_type: "drive.velocity", ok: true });
-    await velocity;
-    expect(onFeedback).not.toHaveBeenCalled();
-    const feedback = {
-      ...sample, type: "drive.feedback",
-      gesture: (sample["payload"] as { gesture: number }).gesture,
-      status: "applied", vx: 0.1, wz: 0, limited: true,
-    };
-    socket.receive({ ...feedback, connection_epoch: AGENT_EPOCH - 1 });
-    socket.receive({ ...feedback, seq: Number(sample["seq"]) - 1 });
-    socket.receive({ ...feedback, gesture: feedback.gesture + 1 });
-    expect(onFeedback).not.toHaveBeenCalled();
-    socket.receive(feedback);
-    expect(onFeedback).toHaveBeenCalledOnce();
-    expect(onFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      status: "applied", vx: 0.1, limited: true, latencyMs: expect.any(Number),
-    }));
-
-    const lastVelocity = client.request("drive.velocity", { vx: 0.2, wz: 0 });
-    const stoppedSample = socket.lastSent();
-    const stop = client.request("drive.stop", {});
-    respondTo(socket, socket.lastSent(), { request_type: "drive.stop", ok: true });
-    await stop;
-    respondTo(socket, stoppedSample, { request_type: "drive.velocity", ok: true });
-    await lastVelocity;
-    socket.receive({ ...stoppedSample, type: "drive.feedback", gesture: feedback.gesture,
-      status: "applied", vx: 0.2, wz: 0, limited: false });
-    expect(onFeedback).toHaveBeenCalledOnce();
-  } finally {
-    unsubscribe();
-    client.disconnect();
-  }
-});
-
 it("sends an eligible goal and return with the current map fence", async () => {
   const link = new FakeLink();
   const base = snapshot("robot-alpha");
   const current = { ...base, home: { waypoint_id: "home", status: "confirmed", map_ref: base.map_ref! } };
   const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "live-grid" };
   link.requestImpl = async (type) => {
-    if (type === "map.manifest") return { data: {
-      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
-      tile_size: 32, navigation_ready: true, waypoint_writes: true,
-    } };
-    if (type === "map.tile") return { data: {
-      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
-    } };
+    if (type === "map.manifest") return {
+      data: {
+        ...identity,
+        width: 1,
+        height: 1,
+        resolution: 1,
+        origin: { x: 0, y: 0, yaw: 0 },
+        tile_size: 32,
+        navigation_ready: true,
+        waypoint_writes: true,
+      }
+    };
+    if (type === "map.tile") return {
+      data: {
+        ...identity,
+        tile_x: 0,
+        tile_y: 0,
+        width: 1,
+        height: 1,
+        cells: [0],
+      }
+    };
     return { ok: true };
   };
   mount("/robots/robot-alpha", new FakeApi(), link);
@@ -1372,12 +1201,22 @@ it("sends an eligible goal and return with the current map fence", async () => {
   fireEvent.click(screen.getByRole("button", { name: "返航" }));
   await screen.findByText(/车端已受理返航/);
   expect(link.requests).toEqual(expect.arrayContaining([
-    { type: "navigation.goal", payload: expect.objectContaining({
-      body: { ...current.map_ref, grid_id: "live-grid", x: 0.5, y: 0.5, yaw: 0 },
-    }) },
-    { type: "navigation.return_home", payload: expect.objectContaining({
-      body: { ...current.map_ref, grid_id: "live-grid" },
-    }) },
+    {
+      type: "navigation.goal", payload: expect.objectContaining({
+        body: {
+          ...current.map_ref,
+          grid_id: "live-grid",
+          x: 0.5,
+          y: 0.5,
+          yaw: 0
+        },
+      })
+    },
+    {
+      type: "navigation.return_home", payload: expect.objectContaining({
+        body: { ...current.map_ref, grid_id: "live-grid" },
+      })
+    },
   ]));
 });
 
@@ -1403,13 +1242,27 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
   };
   const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: current.map_generation };
   link.requestImpl = async (type) => {
-    if (type === "map.manifest") return { data: {
-      ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 },
-      tile_size: 32, navigation_ready: true,
-    } };
-    if (type === "map.tile") return { data: {
-      ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0],
-    } };
+    if (type === "map.manifest") return {
+      data: {
+        ...identity,
+        width: 1,
+        height: 1,
+        resolution: 1,
+        origin: { x: 0, y: 0, yaw: 0 },
+        tile_size: 32,
+        navigation_ready: true,
+      }
+    };
+    if (type === "map.tile") return {
+      data: {
+        ...identity,
+        tile_x: 0,
+        tile_y: 0,
+        width: 1,
+        height: 1,
+        cells: [0],
+      }
+    };
     return { ok: true };
   };
   mount("/robots/robot-alpha", new FakeApi(), link);
@@ -1425,10 +1278,15 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
   fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
   const goal = () => screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement;
   expect(goal().disabled).toBe(false);
-  link.emit({ ...current, navigation_ready: true, route_progress: {
-    execution_id: "route-1", task_id: null, map_generation: "live-grid",
-    status: "cancel_pending", active_waypoint_index: 0,
-  } });
+  link.emit({
+    ...current, navigation_ready: true, route_progress: {
+      execution_id: "route-1",
+      task_id: null,
+      map_generation: "live-grid",
+      status: "cancel_pending",
+      active_waypoint_index: 0,
+    }
+  });
   expect(returnHome().disabled).toBe(true);
   expect(goal().disabled).toBe(true);
   expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
@@ -1455,8 +1313,27 @@ it.each([false, true])("shows only telemetry qualified for the displayed map (ex
   const current = snapshot("robot-alpha", { map_generation: "live-grid", robot_pose: { x: 0.2, y: 0.4, yaw: 0 }, scan_points: [{ x: 0.5, y: 0.5 }] });
   const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "live-grid" };
   link.requestImpl = async (type) => {
-    if (type === "map.manifest") return { data: { ...identity, width: 1, height: 1, resolution: 1, origin: { x: 0, y: 0, yaw: 0 }, tile_size: 32, display_only: displayOnly } };
-    if (type === "map.tile") return { data: { ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0] } };
+    if (type === "map.manifest") return {
+      data: {
+        ...identity,
+        width: 1,
+        height: 1,
+        resolution: 1,
+        origin: { x: 0, y: 0, yaw: 0 },
+        tile_size: 32,
+        display_only: displayOnly
+      }
+    };
+    if (type === "map.tile") return {
+      data: {
+        ...identity,
+        tile_x: 0,
+        tile_y: 0,
+        width: 1,
+        height: 1,
+        cells: [0]
+      }
+    };
     return { ok: true };
   };
   const { container } = mount("/robots/robot-alpha", new FakeApi(), link);
@@ -1513,4 +1390,94 @@ it("explains the vehicle's concrete navigation blocker", async () => {
     expect(screen.queryByText(`无法导航：${explanation}`)).not.toBeNull();
     expect(screen.queryByText("车端未报告已验证的导航能力，无法开始、继续或返航。")).toBeNull();
   }
+});
+
+// ---------------------------------------------------------------- revoke pairing
+
+describe("device unpairing", () => {
+  it("deletes with session, CSRF and an encoded robot ID", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(reply(200, { csrf_token: "csrf-delete" }))
+      .mockResolvedValueOnce(reply(204)).mockResolvedValueOnce(reply(401));
+    const api = new HttpControlApi(fetchImpl, null);
+    await api.login("pw");
+    await api.revokeRobot("robot/a b");
+    expect(fetchImpl).toHaveBeenLastCalledWith("/api/robots/robot%2Fa%20b", expect.objectContaining({
+      method: "DELETE", credentials: "same-origin", headers: { "X-CSRF-Token": "csrf-delete" },
+    }));
+    await expect(api.revokeRobot("robot-alpha")).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("confirms credential invalidation, prevents duplicates and exits the removed robot", async () => {
+    let finish!: () => void;
+    const revokeRobot = vi.fn(() => new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    const api = Object.assign(new FakeApi(), { revokeRobot });
+    const link = new FakeLink();
+    mount("/robots/robot-alpha", api, link);
+    await waitFor(() => expect(link.connects).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "切换车辆" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    expect(screen.getByText(/车端凭据将失效/)).toBeTruthy();
+    expect(revokeRobot).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "确认删除配对" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(revokeRobot).toHaveBeenCalledExactlyOnceWith("robot-alpha");
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish());
+    await screen.findByRole("heading", { name: "选择一台设备" });
+    expect(screen.queryByRole("link", { name: /Alpha/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Beta/ })).toBeTruthy();
+    expect(link.disconnects).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the device after failure and allows retry or cancellation", async () => {
+    const revokeRobot = vi.fn().mockRejectedValue(new ApiError("failed", 500));
+    mount("/robots", Object.assign(new FakeApi(), { revokeRobot }), new FakeLink());
+    await screen.findByRole("link", { name: /Alpha/ });
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await screen.findByText(/删除配对失败/);
+    expect(screen.getByRole("link", { name: /Alpha/ })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "确认删除配对" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("button", { name: "确认删除配对" })).toBeNull();
+  });
+
+  it("keeps another selected robot and rejects an older refresh that still contains the deleted one", async () => {
+    const api = new FakeApi();
+    const link = new FakeLink();
+    const listRobots = vi.spyOn(api, "listRobots");
+    mount("/robots/robot-alpha", api, link);
+    await waitFor(() => expect(link.connects).toHaveLength(1));
+    let finishRefresh!: (robots: RobotSummary[]) => void;
+    listRobots.mockImplementationOnce(() => new Promise((resolve) => {
+      finishRefresh = resolve;
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "切换车辆" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 Beta 装卸车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Beta/ })).toBeNull());
+    await act(async () => finishRefresh([ALPHA, BETA]));
+    expect(screen.queryByRole("link", { name: /Beta/ })).toBeNull();
+    expect(link.connects).toEqual(["robot-alpha"]);
+    expect(screen.getByRole("heading", { name: ALPHA.name })).toBeTruthy();
+  });
+
+  it("hides deletion in demo mode", async () => {
+    mount("/robots", new FakeApi(), new FakeLink(), true);
+    await screen.findByRole("link", { name: /Alpha/ });
+    expect(screen.queryByRole("button", { name: /删除.*配对/ })).toBeNull();
+  });
+
+  it("returns to login when revocation discovers an expired session", async () => {
+    const revokeRobot = vi.fn().mockRejectedValue(new UnauthorizedError("expired"));
+    mount("/robots", Object.assign(new FakeApi(), { revokeRobot }), new FakeLink());
+    await screen.findByRole("link", { name: /Alpha/ });
+    fireEvent.click(screen.getByRole("button", { name: "删除 Alpha 仓库车 的配对" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
+    await screen.findByRole("heading", { name: "操作员登录" });
+  });
 });

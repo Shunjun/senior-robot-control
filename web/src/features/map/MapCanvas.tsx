@@ -634,7 +634,7 @@ export function MapCanvas({
           })}
           {taskRoute.map((point, index) => {
             const at = worldToScreen(view, point);
-            return <text key={index} x={at.x + 13} y={at.y - 6} className={styles.routeNumber}>{index + 1}</text>;
+            return <text key={index} data-route-index={index + 1} x={at.x + 13} y={at.y - 6} className={styles.routeNumber}>{index + 1}</text>;
           })}
           {home !== null && <Marker kind="home" pose={home} view={view} />}
           {goal !== null && <Marker kind="goal" pose={goal} view={view} />}
@@ -665,7 +665,7 @@ export function MapCanvas({
       </p>
 
       {!stale && scanPoints.length > 0 && <p className={styles.scanLegend}>实时激光命中点 · 独立于静态地图</p>}
-      {taskRoute.length > 0 && <p className={styles.hint}>任务航点预览</p>}
+      {taskRoute.length > 0 && <p className={styles.hint}>任务航点顺序连线 · 不代表车辆实际避障路径</p>}
       {map.grid === undefined && <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
         <span>原始 {counts.raw}</span>
         <span>过滤 {counts.filtered}</span>

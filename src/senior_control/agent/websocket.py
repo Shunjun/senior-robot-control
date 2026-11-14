@@ -265,7 +265,8 @@ class WebSocketLink:
 class WebSocketConnector:
     """Open an authenticated link and read the cloud-assigned connection epoch."""
 
-    def __init__(self, url: str, token: str, robot_id: str) -> None:
+    def __init__(self, url: str, token: str, robot_id: str, *, native_manual: bool = False) -> None:
+        self._native_manual = native_manual
         self._url = url
         self._token = token
         self._robot_id = robot_id
@@ -300,5 +301,7 @@ class WebSocketConnector:
             socket,
             self._robot_id,
             epoch,
-            drive_timing=socket.response.headers.get("x-drive-timing") == "1",
+            # //Compatible: only unmigrated callers negotiate the old drive clock.
+            drive_timing=not self._native_manual
+            and socket.response.headers.get("x-drive-timing") == "1",
         )

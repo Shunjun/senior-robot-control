@@ -11,6 +11,7 @@ only publisher and cannot replay an old lease behind a stop. ``rclpy`` is import
 
 import asyncio
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,26 @@ _ENVELOPE_KINDS = {
 }
 
 
+def _spin_ready_callbacks(executor: Any, *, clock: Callable[[], float] = time.monotonic) -> None:
+    """Drain a bounded callback batch before yielding to the IPC event loop."""
+    deadline = clock() + 0.004
+    for _ in range(16):
+        executor.spin_once(timeout_sec=0.0)
+        if clock() >= deadline:
+            break
+
+
+def _route_safety_ready(reference: Any, routes: Any, *, continuing: bool = True) -> bool:
+    """//Compatible: isolated v1 route callers retain the legacy diagnostic adapter.
+
+    Production qualification consumes CommandNode.task_motion_allowed from T5.
+    """
+    current = routes.current if routes is not None else None
+    if continuing and current is not None and current.status == "running":
+        return bool(reference.navigation_evidence_ready())
+    return bool(reference.safety_ready())
+
+
 class AdapterCore:
     """Maps IPC requests to the arbiter. After ``disable_motion`` nothing drives."""
 
@@ -54,8 +75,12 @@ class AdapterCore:
         take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
         routes: "RouteService | None" = None,
         navigation_ready: Callable[[], bool] | None = None,
+        ros_domain: int | None = None,
+        manual: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self._robot_id = robot_id
+        self._manual = manual
+        self._ros_domain = ros_domain
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
@@ -66,6 +91,8 @@ class AdapterCore:
         self._pose_provider = pose_provider
         self._take_drive_feedback = take_drive_feedback
         self._routes = routes
+        self._task_effects: dict[str, tuple[str, str, int]] = {}
+        self._task_plans: dict[str, dict[str, Any]] = {}
         self._navigation_ready = navigation_ready
         self._active_epoch: int | None = None
         self._heartbeat_epoch: int | None = None
@@ -91,12 +118,20 @@ class AdapterCore:
             "navigation.current",
         }:
             return await self._route_request(kind, message)
+        if kind == "manual":
+            if self._manual is None or self._exiting:
+                return {"ok": False, "error": "unsupported"}
+            return self._manual(message)
         if kind == "drive_feedback":
             if self._take_drive_feedback is None:
                 return {"ok": False, "error": "unsupported"}
             return {"ok": True, "feedback": self._take_drive_feedback()}
         if kind == "identity":
-            return {"ok": message.get("robot_id") == self._robot_id}
+            reply = {"ok": message.get("robot_id") == self._robot_id}
+            # //Compatible: legacy adapters omit their runtime ROS domain.
+            if reply["ok"] and self._ros_domain is not None:
+                return {**reply, "ros_domain": self._ros_domain}
+            return reply
         if kind == "server_heartbeat":
             epoch, deadline = message.get("connection_epoch"), message.get("deadline")
             if (
@@ -117,7 +152,11 @@ class AdapterCore:
             provider = self._state_provider if kind == "state.get" else self._pose_provider
             if provider is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
-            return provider()
+            result = provider()
+            if kind == "state.get":
+                result["task_lifecycle_version"] = 2 if self._routes is not None else 0
+                result["manual_protocol_version"] = 1 if self._manual is not None else 0
+            return result
         if kind in {"map.active", "map.manifest", "map.tile"}:
             if self._workspace_map is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
@@ -183,14 +222,68 @@ class AdapterCore:
                 return {"ok": False, "error": "bad_request"}
             if plan.execution_id != execution_id:
                 return {"ok": False, "error": "bad_request"}
+            if plan.effect_id is not None and plan.effect_id in self._task_effects:
+                matched = self._task_plans.get(
+                    plan.effect_id
+                ) == plan.model_dump() and self._task_effects[plan.effect_id] == (
+                    "plan",
+                    execution_id,
+                    plan.task_epoch,
+                )
+                return {
+                    "ok": matched,
+                    "execution_id": execution_id,
+                    "task_epoch": plan.task_epoch,
+                    "effect_id": plan.effect_id,
+                    "lifecycle_version": 2,
+                    "accepted": matched,
+                    "map_generation": plan.map_generation,
+                }
             if not await routes.start(plan, wait_for_goal=False):
                 return {"ok": False, "error": "rejected", "execution_id": execution_id}
+            if plan.effect_id is not None and plan.task_epoch is not None:
+                self._task_effects[plan.effect_id] = ("plan", execution_id, plan.task_epoch)
+                self._task_plans[plan.effect_id] = plan.model_dump()
             return {
                 "ok": True,
+                "accepted": True,
+                "lifecycle_version": 2,
+                "effect_id": plan.effect_id,
+                "task_epoch": plan.task_epoch,
                 "execution_id": execution_id,
                 "map_generation": plan.map_generation,
             }
+        effect_id, epoch = message.get("effect_id"), message.get("task_epoch")
+        if effect_id is not None:
+            if not isinstance(effect_id, str) or type(epoch) is not int or epoch < 1:
+                return {"ok": False, "error": "bad_request"}
+            effect_kind = (
+                "revoke" if kind == "navigation.task_cancel" else message.get("effect_kind")
+            )
+            identity = (effect_kind, execution_id, epoch)
+            known = self._task_effects.get(effect_id)
+            if known is not None and known != identity:
+                return {"ok": False, "error": "conflict"}
+            if kind == "navigation.task_cancel":
+                self._task_effects[effect_id] = identity
+                await routes.cancel(execution_id, task_epoch=epoch)
+            retired = (
+                routes.output_retired(execution_id, epoch) if effect_kind == "revoke" else False
+            )
+            return {
+                "ok": True,
+                "lifecycle_version": 2,
+                "execution_id": execution_id,
+                "effect_id": effect_id,
+                "task_epoch": epoch,
+                "accepted": (retired if effect_kind == "revoke" else True)
+                if effect_id in self._task_effects
+                else None,
+                "sources_fenced_through_epoch": epoch if retired else None,
+                "controller_output_exited": retired,
+            }
         if kind == "navigation.task_cancel":
+            # //Compatible: old callers get cancellation only, never retirement proof.
             return {"ok": await routes.cancel(execution_id), "execution_id": execution_id}
         progress = routes.status(execution_id)
         return {
@@ -266,9 +359,10 @@ def main() -> None:
     from senior_robot.motion_lifecycle import MotionExecutor, run
     from senior_robot.simulation_reference import SimulationReference
 
-    def spin(node, executor) -> None:
+    def spin(node, executor, should_stop: Callable[[], bool]) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
         path = Path(os.environ[SOCKET_ENV])
+        node.declare_parameter("ipc_replace_existing_socket", True)
         node.declare_parameter("simulation_qualified_reference", False)
         node.declare_parameter("simulation_baseline_world", "")
         reference = None
@@ -279,13 +373,44 @@ def main() -> None:
         exiting = False
 
         def state() -> dict[str, Any]:
-            assert reference is not None
             current = routes.current if routes is not None else None
-            result = reference.state(
-                node.motion_mode(),
-                current.status if current is not None else "idle",
-                navigation_ready=navigation_ready is not None and navigation_ready(),
+            result = (
+                reference.state(
+                    node.motion_mode(),
+                    current.status if current is not None else "idle",
+                    navigation_ready=navigation_ready is not None and navigation_ready(),
+                )
+                if reference is not None
+                else {
+                    "v": 1,
+                    "ok": True,
+                    "sampled_at": time.monotonic(),
+                    "localized": False,
+                    "map_id": None,
+                    "reference_revision": None,
+                    "execution_status": current.status if current is not None else "idle",
+                    "manual_driving": False,
+                    "safety_clear": False,
+                    "navigation_ready": False,
+                }
             )
+            result["task_evidence_ready"] = node.task_motion_allowed(continuing=True)
+            runtime = node.motion_runtime()
+            result["motion_runtime"] = runtime
+            result["motion_runtime_version"] = 1
+            result["manual_authority"] = node.manual_view()
+            if runtime is not None:
+                result["manual_driving"] = runtime["mode"] == "manual" or (
+                    result["manual_authority"] is not None
+                    and result["manual_authority"]["state"] == "active"
+                )
+                result["task_evidence_ready"] = result["task_evidence_ready"] and runtime["healthy"]
+                result["navigation_ready"] = (
+                    result["navigation_ready"]
+                    and runtime["healthy"]
+                    and runtime["stationary"]
+                    and runtime["mode"] in {"idle", "task"}
+                )
             result["navigation_block_reason"] = (
                 None if result["navigation_ready"] else previous_failure or "navigation unavailable"
             )
@@ -295,12 +420,14 @@ def main() -> None:
 
         def request_exit() -> None:
             nonlocal exiting
+            node.shutdown_motion()
             exiting = True
 
         routes = None
         controller = None
         navigation_ready: Callable[[], bool] | None = None
         previous_failure = None
+        previous_route_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
         if reference is not None and nav_params and Path(nav_params).is_file():
@@ -314,8 +441,8 @@ def main() -> None:
             planner_active = create_planner_readiness(node)
             controller = DedicatedController(node, Path(nav_params))
 
-            def qualified(ref, generation):
-                nonlocal previous_failure
+            def qualified(ref, generation, *, continuing=True):
+                nonlocal previous_failure, previous_route_failure
                 failure = None
                 if exiting:
                     failure = "adapter exiting"
@@ -323,16 +450,24 @@ def main() -> None:
                     failure = "map or localization generation changed"
                 elif not planner_active() or not controller.available():
                     failure = "planner state unavailable"
-                elif not reference.safety_ready():
+                elif not node.task_motion_allowed(continuing=continuing):
                     failure = (
                         f"safety status unavailable ({reference.safety_reason} "
                         f"{reference.safety_ages})"
                     )
                 elif not node.navigation_qualified():
-                    failure = "heartbeat or control authority unavailable"
-                if failure != previous_failure:
-                    if failure is not None and routes is not None and routes.current is not None:
-                        node.get_logger().warning(f"Route qualification lost: {failure}")
+                    failure = "local motion authority unavailable"
+                if continuing:
+                    if failure != previous_route_failure:
+                        current = routes.current if routes is not None else None
+                        if (
+                            failure is not None
+                            and current is not None
+                            and current.status == "running"
+                        ):
+                            node.get_logger().warning(f"Route qualification lost: {failure}")
+                        previous_route_failure = failure
+                else:
                     previous_failure = failure
                 return failure is None
 
@@ -342,7 +477,7 @@ def main() -> None:
                 if grid is None:
                     previous_failure = "map or localization unavailable"
                     return False
-                return qualified(grid.map_ref, grid.grid_id)
+                return qualified(grid.map_ref, grid.grid_id, continuing=False)
 
             navigation_ready = can_navigate
             routes = RouteService(
@@ -350,11 +485,15 @@ def main() -> None:
                 qualified=qualified,
                 prepare=controller.open,
                 bind_source=lambda execution_id, topic, guard: node.bind_navigation_source(
-                    execution_id, topic, qualified=guard
+                    execution_id,
+                    topic,
+                    qualified=guard,
+                    task_epoch=routes.current.task_epoch if routes.current else None,
                 ),
                 clear_source=node.clear_navigation_source,
                 source_active=node.navigation_source_matches,
                 connection_epoch=node.current_navigation_epoch,
+                source_retired=node.navigation_source_retired,
             )
 
         core = AdapterCore(
@@ -368,14 +507,20 @@ def main() -> None:
             require_source_deadline=True,
             take_drive_feedback=node.take_drive_feedback,
             workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
-            state_provider=state if reference is not None else None,
+            state_provider=state,
             pose_provider=reference.pose_reply if reference is not None else None,
             routes=routes,
             navigation_ready=navigation_ready,
+            manual=node.manual_request,
+            ros_domain=node.context.get_domain_id(),
         )
 
         async def serve() -> None:
-            server = IpcServer(path, core.handle)
+            server = IpcServer(
+                path,
+                core.handle,
+                replace_existing=node.get_parameter("ipc_replace_existing_socket").value,
+            )
             started = False
             warmer = None
 
@@ -395,15 +540,35 @@ def main() -> None:
                 executor.add_node(node)
                 if controller is not None:
                     warmer = asyncio.create_task(warm_controller())
-                while rclpy.ok() and not exiting:
-                    executor.spin_once(timeout_sec=0.0)
-                    await asyncio.sleep(0.01)
+                yielded_at = time.monotonic()
+                last_stall_log = float("-inf")
+                while rclpy.ok() and not exiting and not should_stop():
+                    resumed_at = time.monotonic()
+                    cpu_at = time.thread_time()
+                    _spin_ready_callbacks(executor)
+                    finished_at = time.monotonic()
+                    callback_wall = finished_at - resumed_at
+                    callback_cpu = time.thread_time() - cpu_at
+                    resume_delay = resumed_at - yielded_at
+                    if (
+                        max(callback_wall, resume_delay) > 0.05
+                        and finished_at - last_stall_log >= 1.0
+                    ):
+                        last_stall_log = finished_at
+                        node.get_logger().warning(
+                            "adapter_loop_stall "
+                            f"callback_wall={callback_wall:.6f} "
+                            f"callback_cpu={callback_cpu:.6f} "
+                            f"resume_delay={resume_delay:.6f}"
+                        )
+                    yielded_at = finished_at
+                    await asyncio.sleep(0.005)
                 if routes is not None and routes.current is not None:
                     cancellation = asyncio.create_task(routes.cancel(routes.current.execution_id))
                     deadline = asyncio.get_running_loop().time() + 3.0
                     while not cancellation.done() and asyncio.get_running_loop().time() < deadline:
                         if rclpy.ok():
-                            executor.spin_once(timeout_sec=0.0)
+                            _spin_ready_callbacks(executor)
                         await asyncio.sleep(0.01)
                     cancellation.cancel()
                     await asyncio.gather(cancellation, return_exceptions=True)

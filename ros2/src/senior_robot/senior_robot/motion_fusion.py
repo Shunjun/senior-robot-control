@@ -43,7 +43,7 @@ from senior_control.safety.motion_runtime import (
     stationary_interval,
 )
 from senior_control.safety.slip import SlipMonitor
-from senior_robot.motion_lifecycle import run
+from senior_robot.motion_lifecycle import MotionExecutor, run
 
 
 def seconds(stamp) -> float:
@@ -160,6 +160,23 @@ class MotionFusion(Node):
         self.create_subscription(ScanMotion, "/motion/scan", self._on_scan, 10)
         self.create_service(Trigger, "~/requalify_progress", self._on_progress_requalification)
         self.create_timer(0.02, self._try_pending, clock=RosClock(clock_type=ClockType.STEADY_TIME))
+        # //Compatible: legacy/hardware profiles do not select the candidate adapter.
+        self.declare_parameter("motion_core_profile", "")
+        self._native_motion_bridge = None
+        candidate = str(self.get_parameter("motion_core_profile").value)
+        if candidate:
+            import os
+
+            from senior_robot.motion_observation_adapter import NativeObservationRosBridge
+            from senior_robot.simulation_motion_profile import select_simulation_profile
+
+            profile = select_simulation_profile(
+                candidate,
+                simulated_clock=bool(self.get_parameter("use_sim_time").value),
+                localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
+                domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
+            )
+            self._native_motion_bridge = NativeObservationRosBridge(self, profile)
 
     def _recent_stamp(self, stamp: float) -> bool:
         now = self.get_clock().now().nanoseconds / 1e9
@@ -353,7 +370,20 @@ class MotionFusion(Node):
             steady = time.monotonic()
             self._progress_requalification.applied(velocity, steady=steady, ros_ns=ros_ns)
             prior_bounds = self._commands.diagnostic_bounds()
-            if not self._commands.add(ros_ns / 1e9, velocity):
+            # Only simulation's discrete /clock may legitimately receive ordered
+            # output changes at one instant. Keep wall-clock conflicts fail closed.
+            # The zero-duration boundary governs only subsequent ROS time.
+            same_instant = (
+                bool(self.get_parameter("use_sim_time").value)
+                and self._last_applied_command is not None
+                and self._last_applied_command[0] == ros_ns
+            )
+            accepted = (
+                self._commands.replace_latest(ros_ns / 1e9, velocity)
+                if same_instant
+                else self._commands.add(ros_ns / 1e9, velocity)
+            )
+            if not accepted:
                 self._last_applied_command = None
                 self._break_progress(
                     "applied_command_timestamp_rejected",
@@ -801,7 +831,16 @@ class MotionFusion(Node):
             if previous_epoch is not None:
                 self._break_progress(
                     "source_epoch_changed",
-                    details={"previous_epoch": previous_epoch, "new_epoch": message.source_epoch},
+                    details={
+                        "previous_epoch": previous_epoch,
+                        "new_epoch": message.source_epoch,
+                        "valid": message.valid,
+                        "reason": message.reason[:120],
+                        "start_ns": message.interval_start.sec * 1_000_000_000
+                        + message.interval_start.nanosec,
+                        "end_ns": message.header.stamp.sec * 1_000_000_000
+                        + message.header.stamp.nanosec,
+                    },
                 )
             self._scan_frontier.reset()
         stamp_ns = Time.from_msg(message.header.stamp).nanoseconds
@@ -1239,4 +1278,4 @@ class MotionFusion(Node):
 
 
 def main() -> None:
-    run(MotionFusion, cli=True)
+    run(MotionFusion, cli=True, executor_factory=MotionExecutor)

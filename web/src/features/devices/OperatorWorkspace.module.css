@@ -78,3 +78,11 @@
     grid-template-rows: minmax(min(28dvh, 240px), 1fr) minmax(0, auto);
   }
 }
+
+/* Keep the existing map/video stage usable above the settings and log panels. */
+.workspace {
+  flex: none;
+  height: min(62dvh, 640px);
+  min-height: 360px;
+  margin-top: 12px;
+}

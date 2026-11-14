@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.tasks.executor import NavigationFailure, QualificationUnavailable, TaskExecutor
+from senior_control.tasks.lifecycle_store import VersionConflict
 from senior_control.tasks.models import ExecutionContext, IntentAction, TaskDefinition, TaskIntent
 from senior_control.tasks.runner import TaskRunner, _scan
 from senior_control.tasks.store import TaskStore
@@ -36,13 +37,24 @@ class TaskRuntime:
         self._pending_ranges: dict[tuple[str, str], _PendingRange] = {}
         # //Compatible: isolated callers without an agent use a fixed generation.
         self._generation = generation if generation is not None else (lambda: 0)
-        self._last_generation: int | None = None
 
     async def tick(self, now: datetime, monotonic: float, context: ExecutionContext) -> None:
         generation = self._generation()
-        if self._last_generation is not None and generation != self._last_generation:
-            await self._store.mark_active_cancel_pending(self._last_generation)
-        self._last_generation = generation
+        self._executor.context = context
+        service = self._executor.lifecycle
+        if service is not None:
+            await service.start()
+            bound = set(await service.store.instances(active_only=True))
+            for previous in await self._store.executions_for_scan(None, now):
+                if previous.execution_id not in bound:
+                    definition = await self._store.get(previous.task_id)
+                    if definition is not None:
+                        await service.store.bind_existing(
+                            previous, definition, self._executor.current_context
+                        )
+                        bound.add(previous.execution_id)
+        else:
+            bound = set()
         tasks = await self._store.list_tasks()
         by_id = {task.task_id: task for task in tasks}
         reference = self._executor.map_reference
@@ -66,7 +78,7 @@ class TaskRuntime:
         safety_intents = TaskRunner(tasks, active).tick(now, monotonic, safety_context)
         safety_failure: Exception | None = None
         for intent in safety_intents:
-            if intent.action is not IntentAction.PAUSE:
+            if intent.action is not IntentAction.PAUSE or intent.execution_id in bound:
                 continue
             try:
                 await self._executor.apply(intent, by_id[intent.task_id])
@@ -80,8 +92,18 @@ class TaskRuntime:
         canceling = {
             intent.execution_id for intent in safety_intents if intent.action is IntentAction.PAUSE
         }
+        for identity in bound:
+            state = await service.store.load(identity) if service is not None else None
+            if state is not None and state.phase not in {"succeeded", "failed", "canceled"}:
+                record = await self._store.execution_by_id(identity)
+                if record is not None:
+                    try:
+                        await self._executor.reconcile(record, current.map_generation)
+                    except VersionConflict:
+                        # A concurrent user command won; reload its state next tick.
+                        continue
         for record in active:
-            if record.execution_id not in canceling:
+            if record.execution_id not in bound and record.execution_id not in canceling:
                 await self._executor.reconcile(record, current.map_generation)
 
         if self._last_wall is None:

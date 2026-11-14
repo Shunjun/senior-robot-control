@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "final_command_frame.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "senior_motion_msgs/msg/final_command.hpp"
 
@@ -40,28 +41,17 @@ class Guard : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr timer_;
 
   static double steady() { timespec t{}; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
-  static void put64(std::vector<uint8_t> &out, uint64_t n) {
-    for (int i = 7; i >= 0; --i) out.push_back(static_cast<uint8_t>(n >> (8 * i)));
-  }
-  static void putdouble(std::vector<uint8_t> &out, double value) {
-    uint64_t bits; std::memcpy(&bits, &value, sizeof(bits)); put64(out, bits);
-  }
-  static void putstring(std::vector<uint8_t> &out, const std::string &value) {
-    std::array<uint8_t, 129> result{};
-    std::copy(value.begin(), value.end(), result.begin());
-    out.insert(out.end(), result.begin(), result.end());
-  }
+  Command last_{};
   void send(uint8_t type, const Command *m = nullptr) {
-    std::vector<uint8_t> data;
-    data.reserve(600); data.push_back(type); data.insert(data.end(), gid_.begin(), gid_.end());
     const Command empty;
-    const auto &x = m ? *m : empty;
-    putstring(data, x.robot_id); putstring(data, x.owner_boot_id); putstring(data, x.session_id);
-    putstring(data, x.request_id);
-    put64(data, x.generation); put64(data, x.connection_epoch); put64(data, x.sequence); put64(data, x.gesture);
-    putdouble(data, x.steady_deadline); putdouble(data, x.vx); putdouble(data, x.wz);
+    std::vector<uint8_t> data;
+    try {
+      data = final_command_frame::encode(type, gid_, m ? *m : empty);
+    } catch (const std::exception &) {
+      _exit(2);
+    }
     if (::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL) != static_cast<ssize_t>(data.size())) {
-      _exit(2);  // Overflow or broken private channel revokes the parent immediately.
+      _exit(2);  // Overflow or broken channel revokes parent; no reliable backlog.
     }
   }
   bool topology() {
@@ -83,30 +73,41 @@ class Guard : public rclcpp::Node {
     if (!topology()) return;
     const auto &source = info.get_rmw_message_info().publisher_gid;
     if (!std::equal(gid_.begin(), gid_.end(), source.data)) return;
-    if (m.robot_id != robot_ || m.owner_boot_id.empty() || m.owner_boot_id.size() > 128 ||
+    const bool is_barrier = final_command_frame::barrier(m);
+    if ((m.source_kind != "manual" && m.source_kind != "navigation" && m.source_kind != "idle") ||
+        m.source_id.size() > 128 || m.close_reason.size() > 32 ||
+        !std::isfinite(m.received_steady) || m.received_steady < 0 || m.received_steady > steady() ||
+        (!is_barrier && (m.source_kind == "idle" || m.close_reason != "intent" || m.source_id.empty())) ||
+        m.robot_id.size()>128 || m.robot_id.find('\0')!=std::string::npos ||
+        m.owner_boot_id.find('\0')!=std::string::npos || m.session_id.find('\0')!=std::string::npos ||
+        m.request_id.find('\0')!=std::string::npos || m.source_id.find('\0')!=std::string::npos ||
+        m.robot_id != robot_ || m.owner_boot_id.empty() || m.owner_boot_id.size() > 128 ||
         m.session_id.size() > 128 || m.request_id.size() > 128 ||
-        (m.gesture == 0) != m.request_id.empty() || !std::isfinite(m.steady_deadline) ||
+        (!is_barrier && (m.gesture == 0) != m.request_id.empty()) || !std::isfinite(m.steady_deadline) ||
         !std::isfinite(m.vx) || !std::isfinite(m.wz) || invalid_boot_) return;
     if (!boot_.empty() && boot_ != m.owner_boot_id) { invalid_boot_ = true; send(0); return; }
     const bool zero = m.vx == 0 && m.wz == 0;
     if (boot_.empty() || m.generation > generation_) {
       // A newer zero barrier supersedes any intermediate barriers missed by DDS.
-      if (!zero || m.sequence != 0 || m.gesture != 0) return;
+      if (!is_barrier) return;
       boot_ = m.owner_boot_id; generation_ = m.generation; sequence_ = 0;
       session_.clear(); request_.clear(); epoch_ = gesture_ = 0;
-      deadline_ = m.steady_deadline; vx_ = m.vx; wz_ = m.wz; send(1, &m); return;
+      deadline_ = m.steady_deadline; vx_ = m.vx; wz_ = m.wz;
+      last_ = m;
+      send(1, &m);
+      return;
     }
     if (m.generation != generation_ || m.sequence < sequence_) return;
     if (!session_.empty() && (session_ != m.session_id || epoch_ != m.connection_epoch)) return;
     if (m.sequence == sequence_) {
-      if (m.steady_deadline == deadline_ && m.vx == vx_ && m.wz == wz_ &&
-          m.request_id == request_ && m.gesture == gesture_) send(1, &m);
+      if (final_command_frame::same_payload(m, last_)) send(1, &m);
       return;
     }
     if (m.steady_deadline <= steady() || (!zero && (m.session_id.empty() || m.connection_epoch == 0))) return;
     sequence_ = m.sequence; deadline_ = m.steady_deadline; vx_ = m.vx; wz_ = m.wz;
     session_ = m.session_id; epoch_ = m.connection_epoch;
     request_ = m.request_id; gesture_ = m.gesture;
+    last_ = m;
     send(1, &m);
   }
 };

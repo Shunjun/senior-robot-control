@@ -10,6 +10,7 @@ hard-clear command.
 import math
 from dataclasses import dataclass
 
+from shapely import intersects_xy
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import split
@@ -32,6 +33,17 @@ class SafetyDecision:
 
 def _stop(reason: str) -> SafetyDecision:
     return SafetyDecision(False, Velocity(0.0, 0.0), reason)
+
+
+def _intersects_hits(geometry: BaseGeometry, hits: tuple[Point2D, ...]) -> bool:
+    """Batch the same GEOS point predicate, including boundary intersections."""
+    if not hits:
+        return False
+    if not all(math.isfinite(x) and math.isfinite(y) for x, y in hits):
+        # //Compatible: retain Point's existing handling of nonfinite legacy endpoints.
+        return any(geometry.intersects(Point(hit)) for hit in hits)
+    xs, ys = zip(*hits, strict=True)
+    return bool(intersects_xy(geometry, xs, ys).any())
 
 
 def command_expired(command_stamp: float | None, now: float, ttl: float | None) -> bool:
@@ -273,12 +285,12 @@ def evaluate_motion(
     except ValueError:
         return _stop("footprint_invalid")
 
-    hits = [
-        Point(ray.endpoint)
+    hits = tuple(
+        ray.endpoint
         for item in observations
         for ray in item.external_hits
         if ray.endpoint is not None
-    ]
+    )
     contact = Polygon(
         (
             (xmin - contact_margin, ymin - contact_margin),
@@ -287,7 +299,7 @@ def evaluate_motion(
             (xmin - contact_margin, ymax + contact_margin),
         )
     )
-    if any(contact.intersects(hit) for hit in hits):
+    if _intersects_hits(contact, hits):
         return _stop("hard_contact")
 
     forward, backward = _directional_distances(command.vx, measured.vx, reaction, braking)
@@ -341,9 +353,9 @@ def evaluate_motion(
             )
         )
     hard_geoms: list[BaseGeometry] = [hard, *spins, *arcs]
-    if any(geom.intersects(hit) for geom in hard_geoms for hit in hits):
+    if any(_intersects_hits(geom, hits) for geom in hard_geoms):
         return _stop("hard_sweep_collision")
-    warning_overlap = any(warning.intersects(hit) for hit in hits)
+    warning_overlap = _intersects_hits(warning, hits)
 
     coverage_cache: dict[tuple[object, ...], tuple[BaseGeometry, ...]] = {}
     for spun in spins:

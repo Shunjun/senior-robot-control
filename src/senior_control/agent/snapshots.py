@@ -3,7 +3,7 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Any, Protocol
 
 from senior_control.models import MapRef
 from senior_control.navigation import RouteProgress
@@ -46,6 +46,9 @@ class LiveState:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    vehicle_ui: dict[str, Any] | None = None
+    manual_controller_generation: int | None = None
+    manual_agent_epoch: int | None = None
 
 
 class StatePort(Protocol):
@@ -79,6 +82,9 @@ class RobotSnapshot:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    vehicle_ui: dict[str, Any] | None = None
+    manual_controller_generation: int | None = None
+    manual_agent_epoch: int | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -131,6 +137,9 @@ def snapshot_envelope(
             runnable_task_ids=list(snapshot.runnable_task_ids),
             execution_status=snapshot.execution_status,
             collected_at=snapshot.collected_at,
+            vehicle_ui=snapshot.vehicle_ui,
+            manual_controller_generation=snapshot.manual_controller_generation,
+            manual_agent_epoch=snapshot.manual_agent_epoch,
             stale=stale,
             last_synced_at=last_synced_at,
             tasks=[
@@ -196,6 +205,9 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         robot_pose=payload.robot_pose,
         navigation_block_reason=payload.navigation_block_reason,
         scan_points=tuple(payload.scan_points),
+        vehicle_ui=payload.vehicle_ui,
+        manual_controller_generation=payload.manual_controller_generation,
+        manual_agent_epoch=payload.manual_agent_epoch,
     )
 
 

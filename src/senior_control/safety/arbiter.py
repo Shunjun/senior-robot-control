@@ -4,7 +4,8 @@ Motion uses a monotonic deadline of the local receive time plus the command TTL.
 ``expires_at`` is not compared with that clock. A lease that has already died can be
 acquired again on the same connection generation. A latched estop outranks
 manual, then recovery, then navigation. Recovery has no remote command yet.
-Disconnect and lease expiry stop motion and do not resume navigation.
+Disconnect and lease expiry retire remote manual authority; accepted task sources
+keep their own local sample deadlines and execution fences.
 """
 
 import fcntl
@@ -122,7 +123,14 @@ class PersistentEstop:
 
     def estop(self) -> None:
         self.latched = True
-        self.revision += 1
+        self._write(True)
+
+    def clear_confirmed(self) -> Future[None]:
+        """Only a trusted local reset confirmation may request durable unlatch."""
+        return self._worker.submit(self._write, False)
+
+    def _write(self, latched: bool) -> None:
+        revision = self.revision + 1
         fd, name = tempfile.mkstemp(prefix=".estop-", dir=self._path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -130,8 +138,8 @@ class PersistentEstop:
                     {
                         "version": 1,
                         "robot_id": self._robot_id,
-                        "latched": True,
-                        "revision": self.revision,
+                        "latched": latched,
+                        "revision": revision,
                     },
                     stream,
                 )
@@ -139,6 +147,7 @@ class PersistentEstop:
                 os.fsync(stream.fileno())
             os.replace(name, self._path)
             self._sync_directory(self._path.parent)
+            self.latched, self.revision = latched, revision
         finally:
             try:
                 os.unlink(name)
@@ -305,6 +314,8 @@ class Arbiter:
         self._navigation = False
         self._navigation_run: str | None = None
         self._navigation_seq = 0
+        self._task_epoch: int | None = None
+        self._task_fences: dict[str, int] = {}
         self._velocity = _ZERO
         self._deadline: float | None = None
         self._strict_deadline = False
@@ -335,6 +346,12 @@ class Arbiter:
             )
         ):
             return _reject(ErrorCode.OFFLINE)
+        if self._task_epoch is not None and command.type in {
+            "control.acquire",
+            "drive.velocity",
+            *_NAV_START,
+        }:
+            return _reject(ErrorCode.CONFLICT)
         lease = self._lease
         if self._require_server_heartbeat and command.type in _SAFETY:
             if self._server_epoch == 0:
@@ -408,16 +425,26 @@ class Arbiter:
             self._server_disabled_epoch = max(self._server_disabled_epoch, self._server_epoch)
             if self._lease is not None:
                 self._lease.alive = False
-            self._clear_motion()
+            self._clear_remote()
         if epoch <= self._server_disabled_epoch or epoch < self._server_epoch:
             return False
         if epoch > self._server_epoch:
             if self._lease is not None:
                 self._lease.alive = False
-            self._clear_motion()
+            self._clear_remote()
             self._server_epoch = epoch
         self._server_deadline = deadline
         return True
+
+    @property
+    def estop_latched(self) -> bool:
+        return self._estop
+
+    def confirm_local_estop(self, latched: bool) -> None:
+        """Local T5 confirmation, never a browser acknowledgement or motion grant."""
+        if latched:
+            self._clear_motion()
+        self._estop = latched
 
     def tick(self, now: float) -> Velocity:
         self._expire(now)
@@ -440,7 +467,7 @@ class Arbiter:
             return (
                 velocity,
                 self._navigation_run,
-                self._server_epoch,
+                self._task_epoch if self._task_epoch is not None else self._server_epoch,
                 self._navigation_seq,
                 self._deadline,
             )
@@ -461,8 +488,18 @@ class Arbiter:
             deadline = min(deadline, self._server_deadline)
         return velocity, lease.session_id, lease.epoch, lease.seq, deadline
 
+    @property
+    def task_navigation_active(self) -> bool:
+        return self._task_epoch is not None and self._navigation_run is not None
+
+    def task_navigation_allowed(self, now: float) -> bool:
+        return math.isfinite(now) and not self._estop and not self._manual
+
     def navigation_qualified(self, now: float) -> bool:
         self._expire(now)
+        if self._task_epoch is not None:
+            return self.task_navigation_allowed(now)
+        # //Compatible: unowned legacy navigation remains tied to its server lease.
         return (
             self._require_server_heartbeat
             and math.isfinite(now)
@@ -475,15 +512,27 @@ class Arbiter:
     def navigation_source_active(self, execution_id: str, now: float) -> bool:
         return self.navigation_qualified(now) and self._navigation_run == execution_id
 
-    def begin_navigation(self, execution_id: str, now: float) -> bool:
+    def begin_navigation(
+        self, execution_id: str, now: float, *, task_epoch: int | None = None
+    ) -> bool:
         if (
             not execution_id
             or len(execution_id) > 128
             or self._navigation_run is not None
-            or not self.navigation_qualified(now)
+            or (
+                task_epoch is not None
+                and (
+                    task_epoch <= self._task_fences.get(execution_id, 0)
+                    or not self.task_navigation_allowed(now)
+                )
+            )
+            or (task_epoch is None and not self.navigation_qualified(now))
         ):
             return False
         self._clear_motion()
+        self._task_epoch = task_epoch
+        if task_epoch is not None and self._lease is not None:
+            self._lease.alive = False
         self._navigation_run = execution_id
         self._navigation = True
         self._strict_deadline = True
@@ -501,12 +550,15 @@ class Arbiter:
             return False
         self._navigation_seq = sequence
         self._velocity = velocity
-        self._deadline = min(sampled + self._command_ttl_seconds, self._server_deadline)
+        deadline = sampled + self._command_ttl_seconds
+        self._deadline = (
+            deadline if self._task_epoch is not None else min(deadline, self._server_deadline)
+        )
         return True
 
     def end_navigation(self, execution_id: str) -> None:
         if self._navigation_run == execution_id:
-            self._clear_motion()
+            self._clear_task_source()
 
     def accept_autonomous(
         self, source: Literal["navigation", "recovery"], velocity: Velocity, now: float
@@ -528,17 +580,17 @@ class Arbiter:
     def disconnect(self, connection_epoch: int) -> None:
         if self._require_server_heartbeat and connection_epoch == self._server_epoch:
             self._server_disabled_epoch = max(connection_epoch, self._server_disabled_epoch)
-            self._clear_motion()
+            self._clear_remote()
         lease = self._lease
         if lease is not None and lease.epoch == connection_epoch:
             lease.alive = False
-            self._clear_motion()
+            self._clear_remote()
 
     def mode(self, now: float) -> ModeName:
         self._expire(now)
         if self._estop:
             return "estop"
-        if not self._connected(now):
+        if not self._connected(now) and self._task_epoch is None:
             return "idle"
         if self._manual:
             return "manual"
@@ -582,7 +634,7 @@ class Arbiter:
             if lease is None:
                 raise RuntimeError("lease missing")
             lease.alive = False
-            self._clear_motion()
+            self._clear_remote()
             return _ok()
         if kind == "drive.stop":
             if self._estop:
@@ -737,27 +789,51 @@ class Arbiter:
         lease.alive = True
 
     def _hold_manual_stop(self) -> None:
+        if self._task_epoch is not None:
+            self._clear_remote()
+            return
         self._manual = True
         self._navigation = False
         self._recovery = False
         self._velocity = _ZERO
         self._deadline = None
 
-    def _clear_motion(self) -> None:
+    def shutdown(self) -> None:
+        if self._lease is not None:
+            self._lease.alive = False
+        self._clear_motion()
+
+    def _clear_remote(self) -> None:
         self._manual = False
         self._recovery = False
+        if self._task_epoch is None:
+            self._clear_task_source()
+
+    def _clear_task_source(self) -> None:
+        if self._navigation_run is not None and self._task_epoch is not None:
+            self._task_fences[self._navigation_run] = max(
+                self._task_epoch, self._task_fences.get(self._navigation_run, 0)
+            )
         self._navigation = False
         self._navigation_run = None
+        self._task_epoch = None
         self._navigation_seq = 0
         self._velocity = _ZERO
         self._deadline = None
 
+    def _clear_motion(self) -> None:
+        self._clear_task_source()
+        self._manual = False
+        self._recovery = False
+
     def _expire(self, now: float) -> None:
-        if self._navigation_run is not None and (
-            not math.isfinite(now) or now >= self._server_deadline
+        if (
+            self._task_epoch is None
+            and self._navigation_run is not None
+            and (not math.isfinite(now) or now >= self._server_deadline)
         ):
             self._server_disabled_epoch = max(self._server_epoch, self._server_disabled_epoch)
-            self._clear_motion()
+            self._clear_remote()
         lease = self._lease
         if lease is None or not lease.alive:
             return
@@ -774,7 +850,7 @@ class Arbiter:
             )
         ):
             lease.alive = False
-            self._clear_motion()
+            self._clear_remote()
 
     def _connected(self, now: float) -> bool:
         lease = self._lease

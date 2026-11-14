@@ -1,75 +1,54 @@
-import { useRef, useState, type ReactElement } from "react";
-
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
-import styles from "./Drive.module.css";
-
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { CommandError, describeCommandError, type RobotLink } from '../../api/client';
+import { useVehicleView } from '../devices/useVehicleView';
+import styles from './Drive.module.css';
 export interface EmergencyStopProps {
   link: RobotLink;
   compact?: boolean;
 }
-
-interface StopState {
-  /** The robot has answered ok to at least one emergency stop. */
-  acknowledged: boolean;
-  /** Presses that have no answer yet. */
-  inFlight: number;
-  /** Why the latest press failed. Only shown while nothing has been acknowledged. */
-  failure: string | null;
-}
-
-/**
- * The one emergency stop. It stays pressable while a request is in flight: a second press is
- * the operator's retry. "Confirmed" appears only after the robot answered ok; a timeout, an
- * error or silence is reported as not confirmed so the operator reaches for the physical stop.
- */
 export function EmergencyStop({ link, compact = false }: EmergencyStopProps): ReactElement {
-  const [state, setState] = useState<StopState>({ acknowledged: false, inFlight: 0, failure: null });
-  const latest = useRef(0);
-
+  const { frame, connected, available } = useVehicleView(link.vehicle);
+  const [pending, setPending] = useState(false), [note, setNote] = useState<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => () => {
+    generation.current++;
+  }, [link]);
   async function press(): Promise<void> {
-    const mine = ++latest.current;
-    setState((current) => ({ ...current, inFlight: current.inFlight + 1, failure: null }));
+    const mine = ++generation.current;
+    setPending(true);
+    setNote(null);
     try {
-      await link.request("safety.estop", {});
-      setState((current) => ({
-        acknowledged: true,
-        inFlight: current.inFlight - 1,
-        failure: null,
-      }));
-    } catch (error) {
-      const reason =
-        error instanceof CommandError ? describeCommandError(error.code) : "无法发送指令";
-      setState((current) => ({
-        ...current,
-        inFlight: current.inFlight - 1,
-        // An older press that fails after a newer one was sent must not speak for it.
-        failure: mine === latest.current ? reason : current.failure,
-      }));
+      const request = link.request('safety.estop', {});
+      link.vehicle?.fenceManual();
+      await request;
+      if (mine === generation.current) setNote('车端已应答，等待车端状态确认');
+    }
+    catch (error) {
+      if (mine === generation.current) setNote(`急停未确认：${error instanceof CommandError ? describeCommandError(error.code) : '无法发送'}。请立即使用车上实体急停`);
+    }
+    finally {
+      if (mine === generation.current) setPending(false);
     }
   }
-
-  const { acknowledged, inFlight, failure } = state;
-  return (
-    <div className={styles.estopDock} data-compact={compact}>
-      {!acknowledged && failure !== null && (
-        <p className={styles.estopFailure} role="alert">
-          急停未确认：{failure}。请立即使用车上的物理急停。
-        </p>
-      )}
-      {inFlight > 0 && <p className={styles.estopFailure} role="status">急停等待确认</p>}
-      {acknowledged && inFlight === 0 && (
-        <p className={styles.estopConfirmed} role="status">
-          急停已确认：车端已应答
-        </p>
-      )}
-      <button type="button" className={styles.estop} aria-label="急停" onClick={() => void press()}>
-        <span aria-hidden="true" className={styles.estopCap}>
-          急停
-        </span>
-        <span aria-hidden="true" className={styles.estopTag}>
-          {inFlight > 0 ? "发送中" : "E-STOP"}
-        </span>
-      </button>
-    </div>
-  );
+  const confirmed = frame?.confirmed_estop_status;
+  async function recover(kind: 'estop_reset' | 'fault_recover'): Promise<void> {
+    try {
+      await link.vehicle?.recover(kind);
+      setNote('恢复请求已应答，等待车端状态确认');
+    } catch (error) {
+      setNote(String(error));
+    }
+  }
+  return <div className={styles.estopDock} data-compact={compact}>
+    {confirmed === 'hardware_latched' && <p className={styles.estopFailure}>实体急停已锁存，请现场释放；网页无法解除</p>}
+    {confirmed === 'software_latched' && <p className={styles.estopConfirmed}>软件急停已锁存</p>}
+    {pending && <p role="status">急停等待确认</p>}
+    {note && <p role={note.startsWith('急停未确认') ? 'alert' : 'status'}>{note}</p>}
+    <button className={styles.estop} aria-label="急停" onClick={() => void press()}>
+      <span className={styles.estopCap}>急停</span>
+      <span className={styles.estopTag}>E-STOP</span>
+    </button>
+    {confirmed !== 'hardware_latched' && frame?.allowed_actions.includes('estop_reset') && <button className={styles.ghost} disabled={!connected || !available} onClick={() => void recover('estop_reset')}>复位软件急停</button>}
+    {frame?.allowed_actions.includes('fault_recover') && <button className={styles.ghost} disabled={!connected || !available} onClick={() => void recover('fault_recover')}>恢复执行故障</button>}
+  </div>;
 }

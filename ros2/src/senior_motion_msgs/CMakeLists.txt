@@ -22,4 +22,12 @@ rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_type
 target_link_libraries(final_command_guard "${cpp_typesupport_target}")
 install(TARGETS final_command_guard DESTINATION lib/${PROJECT_NAME})
 ament_export_dependencies(rosidl_default_runtime)
+if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  enable_testing()
+  add_test(NAME final_command_frame_roundtrip
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_final_command_frame.py)
+  set_tests_properties(final_command_frame_roundtrip PROPERTIES
+    ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}")
+endif()
 ament_package()

@@ -9,14 +9,17 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include <rclcpp/rclcpp.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <senior_motion_msgs/msg/scan_motion.hpp>
 #include <senior_motion_msgs/msg/fenced_filtered_scan.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include "senior_scan_matcher/scan_matcher.hpp"
+#include "senior_scan_matcher/diagnostic_isolation.hpp"
 
 namespace senior_scan_matcher {
 class ScanMotionNode : public rclcpp::Node {
@@ -50,6 +53,8 @@ public:
     limits.min_rays = static_cast<unsigned>(min_rays);
     matcher_ = std::make_unique<LocalMatcher>(limits);
     publisher_ = create_publisher<senior_motion_msgs::msg::ScanMotion>("/motion/scan", 10);
+    //Compatible: add independent diagnostics without changing ScanMotion consumers.
+    diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/motion/scan_diagnostics", rclcpp::SensorDataQoS().keep_last(1));
     subscription_ = create_subscription<senior_motion_msgs::msg::FencedFilteredScan>(
       scan_topic, rclcpp::SensorDataQoS(),
       [this](senior_motion_msgs::msg::FencedFilteredScan::ConstSharedPtr message,
@@ -59,6 +64,19 @@ public:
     new_epoch();
   }
 private:
+  void publish_diagnostics(const senior_motion_msgs::msg::ScanMotion & output) noexcept
+  {
+    const bool published = emit_scan_diagnostics(output, current_diagnostics_,
+      [this](const auto & array) { diagnostics_publisher_->publish(array); });
+    if (!published && !diagnostic_failure_reported_) {
+      diagnostic_failure_reported_ = true;
+      try {
+        RCLCPP_WARN(get_logger(), "Independent scan diagnostics failed; suppressing further warnings");
+      } catch (...) {
+        // Logging is also observational and must not invalidate motion.
+      }
+    }
+  }
   static bool positive(double value) { return std::isfinite(value) && value > 0; }
   void new_epoch()
   {
@@ -86,6 +104,7 @@ private:
     output.valid = false;
     output.reason = reason;
     publisher_->publish(output);
+    publish_diagnostics(output);
   }
   static std::string gid_hex(const uint8_t * data, size_t count)
   {
@@ -97,6 +116,7 @@ private:
   void on_scan(const senior_motion_msgs::msg::FencedFilteredScan & envelope,
                const rclcpp::MessageInfo & info)
   {
+    current_diagnostics_ = {};
     const auto & message = envelope.body;
     const auto & owner = envelope.owner;
     const auto & capture = message.raw_capture;
@@ -254,6 +274,7 @@ private:
       scan.range_max = message.range_max;
       scan.ranges.assign(message.ranges.begin(), message.ranges.end());
       auto match = matcher_->update(scan);
+      current_diagnostics_ = std::move(match.diagnostics);
       if (!match.valid) {
         if (match.reason == "initializing") {
           previous_stamp_ = rclcpp::Time(capture.stamp);
@@ -293,6 +314,7 @@ private:
       output.startup_reference_valid = false;
       published_qualified_ = true;
       publisher_->publish(output);
+      publish_diagnostics(output);
     } catch (const std::exception & e) {
       invalidate(output, std::string("scan_exception: ") + e.what(), true);
     }
@@ -311,6 +333,9 @@ private:
   rclcpp::Time previous_stamp_{static_cast<int64_t>(0), RCL_ROS_TIME};
   bool previous_stamp_valid_ = false;
   std::array<uint8_t, RMW_GID_STORAGE_SIZE> source_gid_{};
+  bool diagnostic_failure_reported_ = false;
+  MatchDiagnostics current_diagnostics_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
   std::unique_ptr<LocalMatcher> matcher_;
   tf2_ros::Buffer buffer_;
   tf2_ros::TransformListener listener_;

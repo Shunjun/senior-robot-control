@@ -1,0 +1,76 @@
+.card {
+  padding: 20px;
+  border: 1px solid var(--line);
+  background: var(--graphite-850);
+  min-width: 0
+}
+.card h3,.card h4 {
+  margin: 0
+}
+.card p {
+  color: var(--ink-soft);
+  font-size: 13px
+}
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px
+}
+.head span,.connection {
+  color: var(--ink-dim);
+  font-size: 12px
+}
+.speed {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0
+}
+.speed strong {
+  font: 48px/1 var(--font-data)
+}
+.speed span {
+  font-size: 12px;
+  color: var(--ink-dim)
+}
+.source {
+  color: var(--teal)!important
+}
+.warning {
+  padding: 12px;
+  border-left: 3px solid var(--amber);
+  background: var(--amber-wash)
+}
+.task {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line)
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px
+}
+.actions button {
+  padding: 10px 14px;
+  min-height: 48px;
+  background: var(--graphite-800);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  cursor: pointer
+}
+.actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed
+}
+.card details {
+  margin-top: 16px;
+  color: var(--ink-dim);
+  font-size: 12px
+}
+.card summary {
+  cursor: pointer;
+  min-height: 32px
+}

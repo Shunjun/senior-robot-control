@@ -217,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "doctor", parents=[simulation_default], help="check the profile without starting services"
     )
+    commands.add_parser(
+        "requalify-motion",
+        parents=[simulation_default],
+        help="request stationary motion requalification for a running simulation",
+    )
     deploy = commands.add_parser("deploy", help="install the selected real vehicle service")
     deploy.add_argument("--profile", required=True, type=Path)
     deploy.add_argument("--dry-run", action="store_true")
@@ -238,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.command == "doctor":
             return _doctor(profile)
+        if args.command == "requalify-motion":
+            from senior_control.simulation_cli import requalify_motion
+
+            return requalify_motion(profile_path, profile)
         if args.command == "deploy":
             return _deploy(profile, profile_path, dry_run=args.dry_run)
         if args.command != "pair":

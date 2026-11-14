@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "isolated_gazebo_calibration",
+  "run_id": "review1",
+  "robot_id": "senior_4wd_dl",
+  "ros_domain_id": 173,
+  "target_topic": "/vehicle_motion_calibration/review1/cmd_vel",
+  "world": "vehicle_motion_calibration",
+  "field_bounds_m": [
+    -20.0,
+    -20.0,
+    20.0,
+    20.0
+  ],
+  "max_linear_mps": 0.3,
+  "max_angular_rps": 0.5,
+  "max_accel_mps2": 0.3,
+  "max_yaw_accel_rps2": 0.5,
+  "segments": [
+    {
+      "seconds": 1.0,
+      "vx": 0.0,
+      "wz": 0.0
+    },
+    {
+      "seconds": 2.0,
+      "vx": 0.3,
+      "wz": 0.0
+    },
+    {
+      "seconds": 2.0,
+      "vx": 0.0,
+      "wz": 0.0
+    }
+  ]
+}

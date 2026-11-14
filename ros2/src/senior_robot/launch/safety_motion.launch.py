@@ -13,6 +13,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("safety_parameters"),
             DeclareLaunchArgument("robot_id"),
+            DeclareLaunchArgument("motion_core_profile", default_value=""),
             Node(
                 package="senior_sensor_ingress",
                 executable="scan_receipt_node",
@@ -25,6 +26,11 @@ def generate_launch_description():
                 executable="safety_node",
                 parameters=[
                     parameters,
+                    {
+                        "motion_core_profile": ParameterValue(
+                            LaunchConfiguration("motion_core_profile"), value_type=str
+                        )
+                    },
                     {"robot_id": ParameterValue(LaunchConfiguration("robot_id"), value_type=str)},
                 ],
             ),

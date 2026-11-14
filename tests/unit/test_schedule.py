@@ -149,7 +149,7 @@ def test_sparse_cron_skips_gap_and_chooses_first_fold_within_day() -> None:
     )
 
 
-def test_offline_skips_no_catchup() -> None:
+def test_offline_skips_new_occurrences_but_continues_accepted_execution() -> None:
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
     task = interval_task(created)
     due = created + timedelta(minutes=30)
@@ -179,7 +179,7 @@ def test_offline_skips_no_catchup() -> None:
         True,
         False,
     )
-    paused = TaskRunner([task], [running]).tick(
+    continued = TaskRunner([task], [running]).tick(
         due + timedelta(seconds=10),
         1010.0,
         context(
@@ -196,7 +196,7 @@ def test_offline_skips_no_catchup() -> None:
                 "exec-1",
                 task.task_id,
                 due,
-                ExecutionStatus.PAUSED,
+                ExecutionStatus.RUNNING,
                 True,
                 False,
             )
@@ -221,15 +221,7 @@ def test_offline_skips_no_catchup() -> None:
             occurrence_utc=due + timedelta(minutes=30),
         )
     ]
-    assert paused == [
-        TaskIntent(
-            task.task_id,
-            IntentAction.PAUSE,
-            "offline",
-            occurrence_utc=due,
-            execution_id="exec-1",
-        )
-    ]
+    assert continued == []
     assert reconnected == []
 
 
@@ -529,7 +521,8 @@ def test_claimed_winner_keeps_the_same_timestamp_loser_from_dispatch() -> None:
     )
 
 
-def test_impossible_cron_does_not_drop_other_pauses() -> None:
+@pytest.mark.parametrize("safety_clear", [True, False])
+def test_impossible_cron_preserves_offline_execution_and_safety_pause(safety_clear: bool) -> None:
     import time
 
     created = datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc)
@@ -559,18 +552,25 @@ def test_impossible_cron_does_not_drop_other_pauses() -> None:
         60.0,
         context(
             connected=False,
+            safety_clear=safety_clear,
             active_map=patrol.map_ref,
-            last_tick_utc=created,
-            last_tick_mono=0.0,
+            last_tick_utc=created + timedelta(seconds=59.8),
+            last_tick_mono=59.8,
         ),
     )
     assert time.monotonic() - started < 0.2
-    assert any(
-        item.task_id == patrol.task_id
-        and item.action is IntentAction.PAUSE
-        and item.reason == "offline"
-        for item in intents
-    )
+    if safety_clear:
+        assert intents == []
+    else:
+        assert intents == [
+            TaskIntent(
+                patrol.task_id,
+                IntentAction.PAUSE,
+                "safety",
+                occurrence_utc=created,
+                execution_id="exec-patrol",
+            )
+        ]
 
 
 def test_monotonic_lead_does_not_reopen_scanned_time() -> None:

@@ -21,12 +21,21 @@ def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     script = """
 from senior_control.runtime.ipc import IpcServer
 from senior_robot.agent_adapter import main
+from senior_robot.command_node import CommandNode
 
 start = IpcServer.start
 async def ready(self):
     await start(self)
     print("SOCKET_READY", flush=True)
 IpcServer.start = ready
+shutdown = CommandNode.shutdown_motion
+def revoke_while_live(self):
+    assert self.context.ok(), "context closed before motion revocation"
+    generation = self._generation
+    shutdown(self)
+    assert self._generation > generation
+    print("MOTION_REVOKED_LIVE", flush=True)
+CommandNode.shutdown_motion = revoke_while_live
 main()
 print("STOPPED", flush=True)
 """
@@ -50,6 +59,7 @@ print("STOPPED", flush=True)
         stdout, stderr = proc.communicate(timeout=10)
         assert proc.returncode == 0, stdout + stderr
         assert "STOPPED" in stdout
+        assert "MOTION_REVOKED_LIVE" in stdout
         assert "Traceback" not in stderr and "Exception ignored" not in stderr
         assert not socket_path.exists()
     finally:
@@ -114,6 +124,7 @@ def test_adapter_live_failure_propagates_and_removes_socket(tmp_path, failure):
     socket_path = tmp_path / "adapter.sock"
     script = """
 import os
+import signal
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from senior_control.runtime.ipc import IpcServer
@@ -127,7 +138,8 @@ else:
     start = IpcServer.start
     async def stop_after_start(self):
         await start(self)
-        rclpy.try_shutdown()
+        # Exercise a live cleanup failure through the CLI's orderly stop path.
+        os.kill(os.getpid(), signal.SIGINT)
     IpcServer.start = stop_after_start
     def fail_release(self):
         raise ValueError("release failure")

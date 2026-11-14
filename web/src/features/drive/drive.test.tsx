@@ -1,780 +1,163 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { useEffect, type ReactElement } from "react";
-import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { App } from "../../App";
-import {
-  CommandError,
-  MotionNotReadyError,
-  type ControlApi,
-  type DriveFeedback,
-  type RobotLink,
-} from "../../api/client";
-import type { LinkStatus, ResponsePayload, RobotSnapshot, RobotSummary } from "../../api/protocol";
-import {
-  ASSIST_SCALE,
-  DriveController,
-  DriveView,
-  MAX_ANGULAR,
-  MAX_LINEAR,
-  type DriveEvent,
-} from "./DriveView";
-import { EmergencyStop } from "./EmergencyStop";
-
-// jsdom has no PointerEvent, so testing-library would send a plain Event without coordinates.
-if (typeof window.PointerEvent === "undefined") {
-  class TestPointerEvent extends MouseEvent {
-    readonly pointerId: number;
-    constructor(type: string, init: PointerEventInit = {}) {
-      super(type, init);
-      this.pointerId = init.pointerId ?? 0;
-    }
-  }
-  Object.defineProperty(window, "PointerEvent", { configurable: true, value: TestPointerEvent });
-}
+import { StrictMode } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { testPort } from '../../api/vehicleState.testUtils';
+import { ManualController } from './ManualController';
+import { DriveView } from './DriveView';
+import { EmergencyStop } from './EmergencyStop';
+import type { RobotLink } from '../../api/client';
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
-
-// ---------------------------------------------------------------- fakes
-
-function snapshot(robotId: string, overrides: Partial<RobotSnapshot> = {}): RobotSnapshot {
+function link(port = testPort()): RobotLink {
   return {
-    robot_id: robotId,
-    connected: true,
-    localized: true,
-    map_ref: { map_id: "map-1", reference_revision: 2 },
-    home: null,
-    task_revision: 7,
-    runnable_task_ids: [],
-    execution_status: "idle",
-    collected_at: 1_000,
-    last_synced_at: 1_000,
-    stale: false,
-    home_revision: 0,
-    ...overrides,
-  };
-}
-
-interface Sent {
-  type: string;
-  payload: unknown;
-  /** The robot the link pointed at when the frame left. */
-  robot: string | null;
-}
-
-class FakeLink implements RobotLink {
-  readonly supportsMotionChallenges = true;
-  private motionListeners = new Set<(authorityLost: boolean) => void>();
-  subscribeMotionRevoked(listener: (authorityLost: boolean) => void): () => void {
-    this.motionListeners.add(listener);
-    return () => this.motionListeners.delete(listener);
-  }
-  revokeMotion(authorityLost: boolean): void {
-    act(() => this.motionListeners.forEach((listener) => listener(authorityLost)));
-  }
-  current: string | null = "robot-alpha";
-  sent: Sent[] = [];
-  requestImpl: (type: string, payload: unknown) => Promise<unknown> = async (type) => ({
-    request_type: type,
-    ok: true,
-  });
-  async connect(robotId: string): Promise<void> {
-    this.current = robotId;
-  }
-  disconnect(): void {
-    this.current = null;
-  }
-  request<T = ResponsePayload>(type: string, payload: unknown): Promise<T> {
-    this.sent.push({ type, payload, robot: this.current });
-    return this.requestImpl(type, payload) as Promise<T>;
-  }
-  private listeners = new Set<(snapshot: RobotSnapshot) => void>();
-  subscribe(listener: (snapshot: RobotSnapshot) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  subscribeStatus(_listener: (status: LinkStatus) => void): () => void {
-    return () => undefined;
-  }
-  emit(value: RobotSnapshot): void {
-    act(() => this.listeners.forEach((listener) => listener(value)));
-  }
-  types(): string[] {
-    return this.sent.map((entry) => entry.type);
-  }
-  velocities(): Array<{ vx: number; wz: number }> {
-    return this.sent
-      .filter((entry) => entry.type === "drive.velocity")
-      .map((entry) => entry.payload as { vx: number; wz: number });
-  }
-}
-
-const flush = async (): Promise<void> => {
-  await act(async () => {});
-};
-
-const tick = async (ms: number): Promise<void> => {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-};
-
-function stick(name: string): HTMLElement {
-  const element = screen.getByRole("group", { name });
-  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
-    left: 0,
-    top: 0,
-    right: 200,
-    bottom: 200,
-    width: 200,
-    height: 200,
-    x: 0,
-    y: 0,
-    toJSON: () => ({}),
-  });
-  return element;
-}
-
-const FORWARD = "前进后退摇杆";
-const TURN = "左转右转摇杆";
-
-async function acquire(): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "获取控制权" }));
-  await flush();
-}
-
-async function mountDrive(link: FakeLink, snap: RobotSnapshot = snapshot("robot-alpha")) {
-  const view = render(<DriveView robotId="robot-alpha" link={link} snapshot={snap} />);
-  await acquire();
-  return view;
-}
-
-/** Full forward: the top edge of a 200px stick. */
-function pushForward(element: HTMLElement, pointerId = 1): void {
-  fireEvent.pointerDown(element, { pointerId, clientX: 100, clientY: 0 });
-}
-
-// ---------------------------------------------------------------- stop paths
-
-describe("hold-to-drive stops", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("test_pointer_cancel_and_blur_stop", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    const forward = stick(FORWARD);
-
-    // Cancel (the browser took the pointer, e.g. a system gesture).
-    pushForward(forward);
-    await flush();
-    expect(link.velocities()[0]).toEqual({ vx: MAX_LINEAR, wz: 0 });
-    fireEvent.pointerCancel(forward, { pointerId: 1 });
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-    const afterCancel = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(afterCancel);
-
-    // The window loses focus while held.
-    pushForward(forward);
-    await flush();
-    fireEvent.blur(window);
-    await flush();
-    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
-    const afterBlur = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(afterBlur);
-
-    // The page is hidden while held, after an explicit reacquire.
-    await acquire();
-    pushForward(forward);
-    await flush();
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    fireEvent(document, new Event("visibilitychange"));
-    await flush();
-    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
-    const afterHide = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(afterHide);
-  });
-
-  it("stops when the stick loses focus and when the pointer lifts", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    const forward = stick(FORWARD);
-
-    fireEvent.keyDown(forward, { key: "ArrowUp" });
-    await flush();
-    expect(link.velocities()).toHaveLength(1);
-    fireEvent.blur(forward);
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-
-    pushForward(forward);
-    await flush();
-    fireEvent.pointerUp(forward, { pointerId: 1 });
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-    expect(link.types().filter((type) => type === "drive.stop")).toHaveLength(2);
-  });
-
-  it("stops when the view unmounts while held", async () => {
-    const link = new FakeLink();
-    const { unmount } = await mountDrive(link);
-    pushForward(stick(FORWARD));
-    await flush();
-    unmount();
-    expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
-    const after = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(after);
-  });
-
-  it("resends the held command every interval, as short-lived commands", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    pushForward(stick(FORWARD));
-    await flush();
-    await tick(450);
-    expect(link.velocities().length).toBeGreaterThanOrEqual(4);
-    for (const velocity of link.velocities()) expect(velocity).toEqual({ vx: MAX_LINEAR, wz: 0 });
-  });
-
-  it("combines both thumbs and keeps moving when only one lifts", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    const forward = stick(FORWARD);
-    const turn = stick(TURN);
-
-    pushForward(forward, 1);
-    // Left edge of the turn stick: positive angular velocity (counter-clockwise).
-    fireEvent.pointerDown(turn, { pointerId: 2, clientX: 0, clientY: 100 });
-    await flush();
-    expect(link.velocities().at(-1)).toEqual({ vx: MAX_LINEAR, wz: MAX_ANGULAR });
-
-    fireEvent.pointerUp(turn, { pointerId: 2 });
-    await flush();
-    expect(link.velocities().at(-1)).toEqual({ vx: MAX_LINEAR, wz: 0 });
-    expect(link.types()).not.toContain("drive.stop");
-
-    fireEvent.pointerUp(forward, { pointerId: 1 });
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-  });
-
-  it("reports a stop the robot did not acknowledge", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    pushForward(stick(FORWARD));
-    await flush();
-    link.requestImpl = async (type) => {
-      if (type === "drive.stop") throw new CommandError("timeout", "no answer");
-      return { request_type: type, ok: true };
-    };
-    fireEvent.pointerUp(stick(FORWARD), { pointerId: 1 });
-    await flush();
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("停止未确认");
-    expect(alert.textContent).toContain("急停");
-  });
-});
-
-// ---------------------------------------------------------------- switching
-
-describe("robot switching", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  /** Mirrors RobotPanel: the parent disconnects in a passive effect cleanup. */
-  function Panel({ robotId, link }: { robotId: string; link: FakeLink }): ReactElement {
-    useEffect(() => {
-      void link.connect(robotId);
-      return () => link.disconnect();
-    }, [link, robotId]);
-    return <DriveView robotId={robotId} link={link} snapshot={snapshot(robotId)} />;
-  }
-
-  it("test_switch_robot_stops_old_robot", async () => {
-    const link = new FakeLink();
-    const { rerender } = render(<Panel key="robot-alpha" robotId="robot-alpha" link={link} />);
-    await acquire();
-    fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
-    await flush();
-    expect(link.velocities()).toHaveLength(1);
-
-    // The shell remounts the panel with a new key.
-    rerender(<Panel key="robot-beta" robotId="robot-beta" link={link} />);
-    await flush();
-
-    const stops = link.sent.filter((entry) => entry.type === "drive.stop");
-    expect(stops).toHaveLength(1);
-    // The stop left while the socket still pointed at the old robot.
-    expect(stops[0]?.robot).toBe("robot-alpha");
-    const count = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(count);
-    // The new robot starts without a lease: nothing is taken back on its behalf.
-    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-    expect(link.types().filter((type) => type === "control.acquire")).toHaveLength(1);
-  });
-
-  it("stops the old robot when the same view is pointed at another robot", async () => {
-    const link = new FakeLink();
-    const { rerender } = render(
-      <DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha")} />,
-    );
-    await acquire();
-    fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
-    await flush();
-
-    rerender(<DriveView robotId="robot-beta" link={link} snapshot={snapshot("robot-beta")} />);
-    await flush();
-
-    const stops = link.sent.filter((entry) => entry.type === "drive.stop");
-    expect(stops).toHaveLength(1);
-    expect(stops[0]?.robot).toBe("robot-alpha");
-    const count = link.sent.length;
-    await tick(1_000);
-    expect(link.sent).toHaveLength(count);
-    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-  });
-});
-
-// ---------------------------------------------------------------- gating
-
-describe("when driving is not allowed", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("sends nothing before the lease is held", async () => {
-    const link = new FakeLink();
-    render(<DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha")} />);
-    pushForward(stick(FORWARD));
-    await flush();
-    expect(link.sent).toEqual([]);
-    expect(screen.getByRole("group", { name: FORWARD }).getAttribute("aria-disabled")).toBe("true");
-  });
-
-  it("blocks and stops on a stale snapshot", async () => {
-    const link = new FakeLink();
-    const view = await mountDrive(link);
-    pushForward(stick(FORWARD));
-    await flush();
-    view.rerender(
-      <DriveView
-        robotId="robot-alpha"
-        link={link}
-        snapshot={snapshot("robot-alpha", { stale: true, connected: false })}
-      />,
-    );
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-    expect(screen.getByText(/缓存快照/)).toBeTruthy();
-    const count = link.sent.length;
-    pushForward(stick(FORWARD), 3);
-    await flush();
-    await tick(500);
-    expect(link.sent).toHaveLength(count);
-  });
-
-  it("blocks when no snapshot has arrived", () => {
-    const link = new FakeLink();
-    render(<DriveView robotId="robot-alpha" link={link} snapshot={null} />);
-    expect(screen.getByText(/等待车端快照/)).toBeTruthy();
-    expect(
-      (screen.getByRole("button", { name: "获取控制权" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-
-  it("locks driving until the operator explicitly enters limited assisted mode", async () => {
-    const link = new FakeLink();
-    const lost = snapshot("robot-alpha", { localized: false });
-    render(<DriveView robotId="robot-alpha" link={link} snapshot={lost} />);
-    await acquire();
-    pushForward(stick(FORWARD));
-    await flush();
-    expect(link.velocities()).toEqual([]);
-    expect(screen.getByText(/定位未完成/)).toBeTruthy();
-
-    const enter = screen.getByRole("button", { name: /进入定位辅助遥控/ });
-    expect(enter.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(enter);
-    expect(enter.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText(/限速/)).toBeTruthy();
-
-    pushForward(stick(FORWARD), 2);
-    await flush();
-    const { vx } = link.velocities()[0]!;
-    expect(vx).toBeCloseTo(MAX_LINEAR * ASSIST_SCALE);
-    expect(vx).toBeLessThan(MAX_LINEAR);
-  });
-
-  it("does not take the lease back after a command is rejected", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    link.requestImpl = async (type) => {
-      if (type === "drive.velocity") throw new CommandError("offline", "lease gone");
-      return { request_type: type, ok: true };
-    };
-    pushForward(stick(FORWARD));
-    await flush();
-    await tick(1_000);
-    expect(screen.getByRole("alert").textContent).toContain("离线");
-    expect(screen.getByText(/vx 0\.00 m\/s/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-    expect(link.types().filter((type) => type === "control.acquire")).toHaveLength(1);
-    expect(link.velocities()).toHaveLength(1);
-  });
-
-  it("releases the lease only when asked", async () => {
-    const link = new FakeLink();
-    await mountDrive(link);
-    fireEvent.click(screen.getByRole("button", { name: "释放控制权" }));
-    await flush();
-    expect(link.types()).toEqual(["control.acquire", "control.release"]);
-    expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-  });
-});
-
-// ---------------------------------------------------------------- controller
-
-describe("DriveController", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("sends at once, repeats, and stops once", async () => {
-    const link = new FakeLink();
-    const events: DriveEvent[] = [];
-    const controller = new DriveController(link, { intervalMs: 100, onEvent: (e) => events.push(e) });
-    controller.start({ vx: 0.2, wz: 0 });
-    expect(link.velocities()).toEqual([{ vx: 0.2, wz: 0 }]);
-    await tick(250);
-    expect(link.velocities()).toHaveLength(3);
-    controller.start({ vx: 0.1, wz: 0.3 });
-    expect(link.velocities().at(-1)).toEqual({ vx: 0.1, wz: 0.3 });
-    controller.stop("release");
-    controller.stop("blur");
-    await flush();
-    expect(link.types().filter((type) => type === "drive.stop")).toHaveLength(1);
-    expect(events).toEqual([{ type: "stopped", reason: "release" }]);
-    expect(controller.holding).toBe(false);
-  });
-
-  it("sends nothing when stopped while idle", () => {
-    const link = new FakeLink();
-    const controller = new DriveController(link);
-    controller.stop("unmount");
-    expect(link.sent).toEqual([]);
-  });
-
-  it("refuses non-finite and oversized input", () => {
-    const link = new FakeLink();
-    const controller = new DriveController(link);
-    controller.start({ vx: Number.NaN, wz: 0 });
-    controller.start({ vx: MAX_LINEAR * 3, wz: 0 });
-    expect(link.velocities()).toEqual([{ vx: MAX_LINEAR, wz: 0 }]);
-  });
-});
-
-// ---------------------------------------------------------------- emergency stop
-
-describe("EmergencyStop", () => {
-  it("stays pressable while a request is in flight", async () => {
-    const link = new FakeLink();
-    link.requestImpl = () => new Promise(() => undefined);
-    render(<EmergencyStop link={link} />);
-    const button = screen.getByRole("button", { name: "急停" }) as HTMLButtonElement;
-    fireEvent.click(button);
-    expect(button.disabled).toBe(false);
-    fireEvent.click(button);
-    expect(link.types()).toEqual(["safety.estop", "safety.estop"]);
-    expect(screen.queryByText(/急停已确认/)).toBeNull();
-  });
-
-  it("does not show success for a stop the robot has not acknowledged", async () => {
-    const link = new FakeLink();
-    link.requestImpl = () => Promise.reject(new CommandError("timeout", "no answer"));
-    render(<EmergencyStop link={link} />);
-    fireEvent.click(screen.getByRole("button", { name: "急停" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("急停未确认");
-    expect(alert.textContent).toContain("物理急停");
-    expect(screen.queryByText(/急停已确认/)).toBeNull();
-  });
-
-  it("confirms only after an ok response, and a later failed retry does not erase it", async () => {
-    const link = new FakeLink();
-    render(<EmergencyStop link={link} />);
-    fireEvent.click(screen.getByRole("button", { name: "急停" }));
-    await screen.findByText(/急停已确认/);
-    expect(screen.queryByRole("alert")).toBeNull();
-
-    link.requestImpl = () => Promise.reject(new CommandError("offline", "gone"));
-    fireEvent.click(screen.getByRole("button", { name: "急停" }));
-    await flush();
-    expect(screen.getByText(/急停已确认/)).toBeTruthy();
-  });
-
-  it("is the only emergency stop in the app shell", async () => {
-    const api: ControlApi = {
-      createPairingCode: async () => ({ code: "example", expires_in: 30 }),
-      login: async () => undefined,
-      logout: async () => undefined,
-      listRobots: async (): Promise<RobotSummary[]> => [
-        { id: "robot-alpha", name: "Alpha 仓库车", online: true },
-      ],
-    };
-    render(
-      <MemoryRouter initialEntries={["/robots/robot-alpha"]}>
-        <App api={api} link={new FakeLink()} />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "急停" })).toHaveLength(1));
-    const panel = readFileSync(resolve(__dirname, "../devices/RobotPanel.tsx"), "utf8");
-    expect(panel).not.toMatch(/function EmergencyStop/);
-    expect(panel).toMatch(/drive\/EmergencyStop/);
-  });
-});
-
-// ---------------------------------------------------------------- landscape and keyboard
-
-describe("test_landscape_controls_accessible", () => {
-  const styles = readFileSync(resolve(__dirname, "Drive.module.css"), "utf8");
-
-  it("labels both thumbs' sticks and makes them keyboard operable", async () => {
-    vi.useFakeTimers();
-    const link = new FakeLink();
-    await mountDrive(link);
-    for (const name of [FORWARD, TURN]) {
-      const element = screen.getByRole("group", { name });
-      expect(element.getAttribute("tabindex")).toBe("0");
-      const hintId = element.getAttribute("aria-describedby");
-      expect(hintId).toBeTruthy();
-      expect(document.getElementById(hintId as string)?.textContent).toMatch(/方向键/);
-    }
-    fireEvent.keyDown(stick(TURN), { key: "ArrowLeft" });
-    await flush();
-    expect(link.velocities().at(-1)).toEqual({ vx: 0, wz: MAX_ANGULAR });
-    fireEvent.keyDown(stick(TURN), { key: "ArrowLeft", repeat: true });
-    await flush();
-    expect(link.velocities()).toHaveLength(1);
-    fireEvent.keyUp(stick(TURN), { key: "ArrowLeft" });
-    await flush();
-    expect(link.types().at(-1)).toBe("drive.stop");
-  });
-
-  it("lays the sticks out for two thumbs in landscape and keeps targets large", () => {
-    expect(styles).toMatch(/@media[^{]*orientation:\s*landscape/);
-    expect(styles).toMatch(/touch-action:\s*none/);
-    expect(styles).toMatch(/\.estopDock\s*\{[^}]*position:\s*fixed/);
-    expect(styles).toMatch(/min-height:\s*var\(--touch\)/);
-    expect(styles).toMatch(/:focus-visible/);
-  });
-
-  it("exposes the stop as a named button", () => {
-    render(<EmergencyStop link={new FakeLink()} />);
-    expect(screen.getByRole("button", { name: "急停" })).toBeTruthy();
-  });
-});
-
-// ---------------------------------------------------------------- the selected-robot screen
-
-describe("selected-robot route", () => {
-  const api: ControlApi = {
-    createPairingCode: async () => ({ code: "example", expires_in: 30 }),
-    login: async () => undefined,
-    logout: async () => undefined,
-    listRobots: async (): Promise<RobotSummary[]> => [
-      { id: "robot-alpha", name: "Alpha 仓库车", online: true },
-    ],
-  };
-
-  beforeEach(() => {
-    // jsdom has no canvas; the map's drawing path is covered by the coordinate tests.
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-  });
-
-  async function openRoute(link: FakeLink) {
-    render(
-      <MemoryRouter initialEntries={["/robots/robot-alpha"]}>
-        <App api={api} link={link} />
-      </MemoryRouter>,
-    );
-    await screen.findByText("等待车端快照");
-  }
-
-  it("test_route_renders_drive_and_map_with_one_stop", async () => {
-    const link = new FakeLink();
-    await openRoute(link);
-    link.emit(snapshot("robot-alpha"));
-
-    expect(screen.getByRole("group", { name: FORWARD })).toBeTruthy();
-    expect(screen.getByRole("group", { name: TURN })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
-    expect(screen.getByRole("application", { name: "地图" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "确认目标" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "开始导航" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "急停" })).toHaveLength(1);
-  });
-
-  it("drives the selected robot through the screen's own client", async () => {
-    const link = new FakeLink();
-    await openRoute(link);
-    link.emit(snapshot("robot-alpha"));
-    await acquire();
-    fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
-    await flush();
-    expect(link.velocities()).toEqual([{ vx: MAX_LINEAR, wz: 0 }]);
-    expect(link.sent.every((entry) => entry.robot === "robot-alpha")).toBe(true);
-  });
-
-  it("shows a cached snapshot as a cached map that cannot produce a goal", async () => {
-    const link = new FakeLink();
-    await openRoute(link);
-    link.emit(snapshot("robot-alpha", { stale: true, connected: false }));
-
-    expect((screen.getByRole("button", { name: "获取控制权" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
-    expect(screen.getByText(/缓存地图 · 非实时/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
-    fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
-    expect((screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("does not claim a goal was sent, since the protocol has no goal command", async () => {
-    const link = new FakeLink();
-    const current = snapshot("robot-alpha");
-    const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "active-grid" };
-    link.requestImpl = async (type) => ({
-      ok: true,
-      data: type === "map.manifest"
-        ? { ...identity, width: 1, height: 1, origin: { x: 0, y: 0, yaw: 0 }, resolution: 1, tile_size: 32 }
-        : { ...identity, tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0] },
-    });
-    await openRoute(link);
-    link.emit(current);
-    fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
-    await waitFor(() => expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("true"));
-    fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "1" } });
-    fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
-    expect(screen.getByText(/未发送/)).toBeTruthy();
-    expect(link.types()).toEqual(["map.manifest", "map.tile"]);
-  });
-});
-
-it("requires control authority to be acquired again after live state is lost", async () => {
-  const link = new FakeLink();
-  const view = await mountDrive(link);
-  expect(screen.getByText("已持有控制权")).toBeTruthy();
-  view.rerender(<DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha", { stale: true, connected: false })} />);
-  view.rerender(<DriveView robotId="robot-alpha" link={link} snapshot={snapshot("robot-alpha")} />);
-  expect(screen.queryByText("已持有控制权")).toBeNull();
-  expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-});
-
-
-it("drops a sample without a challenge and samples a still-held input later", async () => {
-  vi.useFakeTimers();
-  const link = new FakeLink();
-  let attempts = 0;
-  link.requestImpl = async (type) => {
-    if (type === "drive.velocity" && attempts++ === 0) throw new MotionNotReadyError();
-    return { request_type: type, ok: true };
-  };
-  await mountDrive(link);
-  pushForward(stick(FORWARD));
-  await flush();
-  expect(link.types()).not.toContain("drive.stop");
-  await tick(110);
-  expect(link.velocities()).toHaveLength(2);
-});
-
-it("revoking authority ends the active gesture and requires a new lease", async () => {
-  const link = new FakeLink();
-  await mountDrive(link);
-  pushForward(stick(FORWARD));
-  await flush();
-  link.revokeMotion(true);
-  await flush();
-  expect(link.types()).toContain("drive.stop");
-  expect(screen.queryByText("已持有控制权")).toBeNull();
-  expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
-});
-
-it("requires a new pointer press after a remote stop invalidates the gesture", async () => {
-  const link = new FakeLink();
-  await mountDrive(link);
-  const forward = stick(FORWARD);
-  pushForward(forward);
-  await flush();
-  link.revokeMotion(false);
-  await flush();
-  const sent = link.velocities().length;
-  fireEvent.pointerMove(screen.getByRole("group", { name: FORWARD }), { pointerId: 1, clientX: 100, clientY: 0 });
-  await flush();
-  expect(link.velocities()).toHaveLength(sent);
-});
-
-it("never sends a remaining axis when the window blurs with both sticks held", async () => {
-  const link = new FakeLink();
-  await mountDrive(link);
-  fireEvent.keyDown(stick(FORWARD), { key: "ArrowUp" });
-  fireEvent.keyDown(stick(TURN), { key: "ArrowLeft" });
-  await flush();
-  const velocityCount = link.velocities().length;
-  fireEvent.blur(window);
-  await flush();
-  expect(link.velocities()).toHaveLength(velocityCount);
-  expect(link.types().slice(-2)).toEqual(["drive.stop", "control.release"]);
-});
-
-it("samples negotiated motion every 100 ms without waiting for acknowledgements", async () => {
-  vi.useFakeTimers();
-  const link = Object.assign(new FakeLink(), { timedMotion: true });
-  link.requestImpl = () => new Promise(() => {});
-  const controller = new DriveController(link);
-  controller.start({ vx: 0.1, wz: 0 });
-  controller.start({ vx: 0.2, wz: 0 });
-  expect(link.velocities()).toEqual([{ vx: 0.1, wz: 0 }]);
-  await tick(300);
-  expect(link.velocities()).toEqual([
-    { vx: 0.1, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 }, { vx: 0.2, wz: 0 },
-  ]);
-  controller.stop("unmount");
-});
-
-it("marks the last applied latency stale two seconds after actual output", async () => {
-  vi.useFakeTimers();
-  let feedbackListener: ((feedback: DriveFeedback) => void) | null = null;
-  const link = Object.assign(new FakeLink(), {
-    subscribeDriveFeedback(listener: (feedback: DriveFeedback) => void) {
-      feedbackListener = listener;
-      return () => { feedbackListener = null; };
+    vehicle: port,
+    connect: async () => {
     },
+    disconnect() {
+    },
+    request: vi.fn(async () => ({ ok: true })) as RobotLink['request'],
+    subscribe: () => () => {
+    },
+    subscribeStatus: () => () => {
+    }
+  };
+}
+describe('normalized manual ownership', () => {
+  it('prepared authority stays still until a fresh press and sends normalized gear intent', async () => {
+    vi.useFakeTimers();
+    const sent: [string, unknown][] = [];
+    const port = testPort(async (type, value) => {
+      sent.push([type, value]);
+      return { authority_id: 'a', state: 'prepared' };
+    });
+    const controller = new ManualController(port, () => {
+    });
+    await controller.prepare();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(sent.map(x => x[0])).toEqual(['control.acquire']);
+    controller.begin(1, 0.5, 'high');
+    await Promise.resolve();
+    expect(sent[1]).toEqual(['drive.intent', {
+      authority_id: 'a',
+      gesture: 1,
+      sequence: 1,
+      linear: 1,
+      turn: 0.5,
+      gear: 'high'
+    }]);
+    controller.release();
+    expect(sent.map(x => x[0])).not.toContain('drive.velocity');
   });
-  await mountDrive(link);
-  expect(screen.getByText(/控制反馈延迟 无样本/)).toBeTruthy();
-  act(() => feedbackListener?.({
-    status: "applied", latencyMs: 120, vx: 0.1, wz: 0, limited: true,
-  }));
-  expect(screen.getByText(/控制反馈延迟 120 ms/)).toBeTruthy();
-  act(() => feedbackListener?.({ status: "blocked", reason: "test" }));
-  expect(screen.getByText(/120 ms.*安全门拦截/)).toBeTruthy();
-  await tick(1_999);
-  expect(screen.queryByText(/样本已过期/)).toBeNull();
-  await tick(1);
-  expect(screen.getByText(/样本已过期/)).toBeTruthy();
+  it('late acquire cannot revive a released press', async () => {
+    let finish!: (value: unknown) => void;
+    const sent: string[] = [];
+    const port = testPort(async type => {
+      sent.push(type);
+      return type === 'control.acquire' ? new Promise(r => {
+        finish = r;
+      }) : null;
+    });
+    const controller = new ManualController(port, () => {
+    });
+    const preparing = controller.prepare();
+    controller.begin(1, 0, 'low');
+    controller.release();
+    finish({ authority_id: 'late', state: 'prepared' });
+    await preparing;
+    controller.update(1, 0, 'low');
+    expect(sent).not.toContain('drive.intent');
+    expect(controller.phase).toBe('none');
+  });
+  it('holds one unconfirmed and one latest sample and fences both on release', async () => {
+    const resolve: (() => void)[] = [];
+    const intents: unknown[] = [];
+    const port = testPort(async (type, value) => {
+      if (type === 'drive.intent') {
+        intents.push(value);
+        return new Promise<void>(r => resolve.push(r));
+      }
+      return { authority_id: 'a', state: 'prepared' };
+    });
+    const controller = new ManualController(port, () => {
+    });
+    await controller.prepare();
+    controller.begin(0.1, 0, 'low');
+    controller.update(0.2, 0, 'low');
+    controller.update(0.9, 0, 'low');
+    expect(intents).toHaveLength(1);
+    resolve[0]!();
+    await new Promise(r => setTimeout(r, 0));
+    expect(intents).toHaveLength(2);
+    expect(intents[1]).toMatchObject({ linear: 0.9 });
+    controller.release();
+    resolve[1]!();
+    await Promise.resolve();
+    expect(intents).toHaveLength(2);
+  });
+});
+it('shows unavailable instead of enabling old velocity controls', () => {
+  const old = link();
+  delete (old as {
+    vehicle?: unknown;
+  }).vehicle;
+  render(<DriveView robotId="robot" link={old} snapshot={null} />);
+  expect(screen.getByText(/方向力度控制尚未接通/)).toBeTruthy();
+  expect((screen.getByRole('button', { name: '获取控制权' }) as HTMLButtonElement).disabled).toBe(true);
+});
+it('a request acknowledgement does not claim confirmed emergency stop', async () => {
+  const l = link();
+  render(<EmergencyStop link={l} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '急停' })));
+  expect(screen.getByText(/等待车端状态确认/)).toBeTruthy();
+  expect(screen.queryByText('软件急停已锁存')).toBeNull();
+});
+
+it('actual controls send full high-gear effort, then close the authority on key release', async () => {
+  const sent: [string, unknown][] = [];
+  const port = testPort(async (type, value) => {
+    sent.push([type, value]);
+    return { authority_id: 'a', state: 'prepared' };
+  });
+  render(<DriveView robotId="robot" link={link(port)} snapshot={null} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
+  fireEvent.click(screen.getByRole('button', { name: '高档' }));
+  const stick = screen.getByRole('group', { name: '前进后退摇杆' });
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp' }));
+  expect(sent.find(item => item[0] === 'drive.intent')?.[1]).toMatchObject({ linear: 1, turn: 0, gear: 'high' });
+  await act(async () => fireEvent.keyUp(stick, { key: 'ArrowUp' }));
+  expect(sent.at(-1)).toEqual(['control.release', { authority_id: 'a' }]);
+  expect(screen.getByText('未获取控制')).toBeTruthy();
+});
+it('sends emergency stop before fencing a held input, and keeps hardware reset absent', async () => {
+  const sent: string[] = [];
+  const port = testPort(async type => {
+    sent.push(type);
+    return { authority_id: 'a', state: 'prepared' };
+  });
+  const l = link(port);
+  l.request = (async () => {
+    sent.push('safety.estop');
+    return { ok: true };
+  }) as RobotLink['request'];
+  render(<StrictMode>
+    <DriveView robotId="robot" link={l} snapshot={null} />
+    <EmergencyStop link={l} />
+  </StrictMode>);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
+  await act(async () => fireEvent.keyDown(screen.getByRole('group', { name: '前进后退摇杆' }), { key: 'ArrowUp' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '急停' })));
+  expect(sent.slice(-2)).toEqual(['safety.estop', 'control.release']);
+  const old = port.getSnapshot().frame!;
+  act(() => port.update({
+    ...old,
+    sequence: 2,
+    mode: 'estop',
+    confirmed_estop_status: 'hardware_latched',
+    estop_revision: 8,
+    allowed_actions: []
+  }, true));
+  expect(screen.queryByRole('button', { name: '复位软件急停' })).toBeNull();
 });

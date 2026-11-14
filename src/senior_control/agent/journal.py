@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import aiosqlite
 
-from senior_control.errors import ErrorCode
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationStatus
 from senior_control.storage.database import Database
 
@@ -24,6 +24,15 @@ AGENT_JOURNAL_STATEMENTS: tuple[str, ...] = (
         status TEXT NOT NULL,
         error TEXT,
         revision INTEGER
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_safety_receipt (
+        robot_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+        PRIMARY KEY (robot_id, request_id)
     )
     """,
     """
@@ -78,6 +87,47 @@ class SafetyIntentStore:
                 await connection.execute(
                     "INSERT OR IGNORE INTO agent_safety_intent (robot_id) VALUES (?)",
                     (self._robot_id,),
+                )
+
+    async def admit(self, request_id: str, fingerprint: str) -> bool:
+        """Atomically register an ESTOP obligation, or return its completed receipt.
+
+        Completed event identities survive reset; replay never creates a new latch.
+        An unfinished event retains the existing fail-closed safety obligation.
+        """
+        async with self._database.write_lock:
+            async with _transaction(self._database) as connection:
+                async with connection.execute(
+                    "SELECT fingerprint, completed FROM agent_safety_receipt "
+                    "WHERE robot_id = ? AND request_id = ?",
+                    (self._robot_id, request_id),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row is not None:
+                    if row[0] != fingerprint:
+                        raise DomainError(ErrorCode.CONFLICT, "safety request content changed")
+                    if row[1]:
+                        return True
+                else:
+                    await connection.execute(
+                        "INSERT INTO agent_safety_receipt (robot_id, request_id, fingerprint) "
+                        "VALUES (?, ?, ?)",
+                        (self._robot_id, request_id, fingerprint),
+                    )
+                await connection.execute(
+                    "INSERT OR IGNORE INTO agent_safety_intent (robot_id) VALUES (?)",
+                    (self._robot_id,),
+                )
+        return False
+
+    async def complete(self, request_id: str) -> None:
+        """Persist only after the actual local port acknowledges this event."""
+        async with self._database.write_lock:
+            async with _transaction(self._database) as connection:
+                await connection.execute(
+                    "UPDATE agent_safety_receipt SET completed = 1 "
+                    "WHERE robot_id = ? AND request_id = ?",
+                    (self._robot_id, request_id),
                 )
 
     async def clear_rejected(self) -> None:

@@ -58,9 +58,9 @@ std::vector<Point> points(const LaserScan & scan, const MatcherLimits & limits)
   return result;
 }
 
-bool well_spread(const std::vector<Point> & pts, double minimum)
+double spread(const std::vector<Point> & pts)
 {
-  if (pts.empty()) return false;
+  if (pts.empty()) return 0;
   double mx = 0, my = 0, xx = 0, xy = 0, yy = 0;
   for (const auto & p : pts) { mx += p.first; my += p.second; }
   mx /= pts.size(); my /= pts.size();
@@ -69,7 +69,7 @@ bool well_spread(const std::vector<Point> & pts, double minimum)
     xx += x*x; xy += x*y; yy += y*y;
   }
   xx /= pts.size(); xy /= pts.size(); yy /= pts.size();
-  return 0.5 * (xx + yy - std::hypot(xx - yy, 2 * xy)) >= minimum;
+  return 0.5 * (xx + yy - std::hypot(xx - yy, 2 * xy));
 }
 
 // Point-to-line information rejects geometry that cannot constrain a body
@@ -78,7 +78,7 @@ bool well_spread(const std::vector<Point> & pts, double minimum)
 // original valid beams and reject windows that do not form one local surface;
 // gaps and object edges must not manufacture a line normal. Thresholds
 // qualify geometry, not pose accuracy.
-bool observable(const LaserScan & scan, const MatcherLimits & limits)
+bool observable(const LaserScan & scan, const MatcherLimits & limits, MatchDiagnostics & diagnostics)
 {
   double xx = 0, xy = 0, yy = 0, xr = 0, yr = 0, rr = 0;
   unsigned count = 0;
@@ -114,15 +114,25 @@ bool observable(const LaserScan & scan, const MatcherLimits & limits)
       }
     }
   }
-  if (count < std::max(10u, limits.min_rays / 4)) return false;
+  auto & geometry = *diagnostics.geometry;
+  geometry.normal_windows = count;
+  if (count < std::max(10u, limits.min_rays / 4)) {
+    diagnostics.failures.push_back("geometry.normal_windows"); return false;
+  }
   const double min_translation = 0.5 * (xx + yy - std::hypot(xx - yy, 2 * xy)) / count;
   const double determinant = xx * yy - xy * xy;
-  if (min_translation < limits.min_translation_observability || determinant <= 1e-12) return false;
+  geometry.translation_information = min_translation; geometry.determinant = determinant;
+  if (min_translation < limits.min_translation_observability || determinant <= 1e-12) {
+    diagnostics.failures.push_back("geometry.translation_information"); return false;
+  }
   // Eliminate translation from the 3x3 information matrix; this rejects a
   // circular surface whose apparent yaw is indistinguishable from no motion.
   const double independent_yaw =
     (rr - (yy*xr*xr - 2*xy*xr*yr + xx*yr*yr) / determinant) / count;
-  return std::isfinite(independent_yaw) && independent_yaw >= limits.min_yaw_observability;
+  geometry.yaw_information = independent_yaw;
+  const bool qualified = std::isfinite(independent_yaw) && independent_yaw >= limits.min_yaw_observability;
+  if (!qualified) diagnostics.failures.push_back("geometry.yaw_information");
+  return qualified;
 }
 }
 
@@ -212,10 +222,23 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   if (!valid_scan(scan, m.limits)) { m.clear(); out.reason = "invalid_scan"; return out; }
   auto query_points = points(scan, m.limits);
   out.valid_rays = static_cast<unsigned>(query_points.size());
-  if (query_points.size() < m.limits.min_rays || !well_spread(query_points, m.limits.min_spread)) {
-    m.clear(); out.reason = "insufficient_geometry"; return out;
+  out.diagnostics.geometry.emplace();
+  out.diagnostics.geometry->valid_rays = static_cast<unsigned>(query_points.size());
+  if (query_points.size() < m.limits.min_rays) {
+    out.diagnostics.failures.push_back("geometry.valid_rays");
+    m.clear();
+    out.reason = "insufficient_geometry";
+    return out;
   }
-  if (!observable(scan, m.limits)) {
+  const double point_spread = spread(query_points);
+  out.diagnostics.geometry->spread = point_spread;
+  if (!(point_spread >= m.limits.min_spread)) {
+    out.diagnostics.failures.push_back("geometry.spread");
+    m.clear();
+    out.reason = "insufficient_geometry";
+    return out;
+  }
+  if (!observable(scan, m.limits, out.diagnostics)) {
     m.clear(); out.reason = "unobservable_geometry"; return out;
   }
   if (!m.sensor) m.configure(scan);
@@ -276,15 +299,11 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
     if (best <= m.limits.max_residual * 2) { squared += best*best; ++inliers; }
   }
   out.residual = inliers ? std::sqrt(squared / inliers) : std::numeric_limits<double>::infinity();
-  bool covariance_ok = true;
-  for (double value : out.covariance) covariance_ok &= std::isfinite(value);
-  for (unsigned i : {0u, 4u, 8u})
-    covariance_ok &= std::isfinite(out.covariance[i]) && out.covariance[i] > 0 && out.covariance[i] <= m.limits.max_variance;
-  out.valid = std::isfinite(out.response) && out.response >= m.limits.min_response &&
-    covariance_ok && std::isfinite(out.residual) && out.residual <= m.limits.max_residual &&
-    static_cast<double>(inliers) / query_points.size() >= m.limits.min_inlier_fraction &&
-    std::abs(anchor_to_current.x) < 0.19 && std::abs(anchor_to_current.y) < 0.19 &&
-    std::abs(anchor_to_current.yaw) < 0.19;
+  out.diagnostics.match = MatchMetrics{out.response, out.residual,
+    static_cast<double>(inliers) / query_points.size(), inliers,
+    static_cast<unsigned>(query_points.size()), anchor_to_current, out.covariance};
+  out.diagnostics.failures = qualification_failures(*out.diagnostics.match, m.limits);
+  out.valid = out.diagnostics.failures.empty();
   if (!out.valid) { m.clear(); out.reason = "match_unqualified"; return out; }
   // Difference consecutive estimates against one fixed scan; replacing the
   // reference on every frame otherwise discards sub-grid physical motion.
@@ -304,9 +323,12 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
     out.covariance[8] = yaw_sigma * yaw_sigma;
     out.covariance[1] = out.covariance[3] = out.covariance[0];
     out.covariance[2] = out.covariance[5] = out.covariance[6] = out.covariance[7] = 0;
-    for (unsigned i : {0u, 4u, 8u})
-      covariance_ok &= std::isfinite(out.covariance[i]) && out.covariance[i] <= m.limits.max_variance;
-    if (!covariance_ok) { m.clear(); out.valid = false; out.reason = "relative_covariance_unqualified"; return out; }
+    const bool covariance_ok = relative_covariance_qualified(out.covariance, m.limits.max_variance);
+    out.diagnostics.relative_covariance = out.covariance;
+    if (!covariance_ok) {
+      out.diagnostics.failures.push_back("relative_covariance");
+      m.clear(); out.valid = false; out.reason = "relative_covariance_unqualified"; return out;
+    }
   }
   out.reason = "qualified";
   m.previous = scan;

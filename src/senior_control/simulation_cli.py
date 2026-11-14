@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import errno
 import fcntl
 import hashlib
 import json
@@ -94,6 +95,134 @@ def lifecycle(command: str, profile: Path, config: VehicleProfile, *, headless: 
     return subprocess.run(argv, check=False, timeout=50).returncode
 
 
+_REQUALIFICATION_REJECTIONS = {
+    b"progress_history_not_broken": "Progress history is not broken; no requalification was armed. "
+    "Check live safety state for other blockers.",
+    b"motion_anomaly_latched": "A motion anomaly remains latched; requalification cannot clear it.",
+    b"stationary_profile_unqualified": "Stationary calibration is unavailable or unqualified; "
+    "check the simulation profile.",
+    b"clock_unqualified": "The simulation clock is unqualified; restore valid clock observations.",
+}
+
+
+# The helper only requests the existing coordinator check; it publishes no motion commands.
+_REQUALIFY_MOTION = """
+import sys
+import rclpy
+from std_srvs.srv import Trigger
+
+rclpy.init(args=[])
+node = rclpy.create_node("senior_sim_requalify_motion")
+try:
+    client = node.create_client(Trigger, "/motion_fusion/requalify_progress")
+    accepted = False
+    if client.wait_for_service(timeout_sec=5.0):
+        future = client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(node, future, timeout_sec=10.0)
+        if future.done() and not future.cancelled() and future.exception() is None:
+            response = future.result()
+            accepted = response is not None and response.success is True
+            if response is not None and not accepted:
+                reason = {
+                    "progress history is not broken": "progress_history_not_broken",
+                    "motion anomaly remains latched": "motion_anomaly_latched",
+                    "stationary profile unqualified": "stationary_profile_unqualified",
+                    "clock unqualified": "clock_unqualified",
+                }.get(response.message)
+                if reason is not None:
+                    print(reason)
+    sys.exit(0 if accepted else 1)
+finally:
+    node.destroy_node()
+    rclpy.shutdown()
+"""
+
+
+def requalify_motion(profile_path: Path, profile: VehicleProfile) -> int:
+    """Arm the simulation's existing stationary requalification, without clearing faults."""
+    if profile.kind != "simulation":
+        print("Motion requalification is available only for simulation profiles.", file=sys.stderr)
+        return 1
+    try:
+        if sys.platform != "linux":
+            raise ValueError("simulation requires Linux")
+        validate_simulation_profile(profile)
+        active = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", _unit(profile_path)],
+            check=False,
+            timeout=10,
+        )
+        if active.returncode != 0:
+            print("Motion requalification requires a running simulation service.", file=sys.stderr)
+            return 1
+
+        async def verified_adapter() -> bool:
+            return await asyncio.wait_for(_probe(profile, require_domain=True), timeout=5)
+
+        if not asyncio.run(verified_adapter()):
+            print(
+                "Motion requalification requires a verified live ROS adapter in the configured "
+                "ROS domain. Rebuild/restart older adapters or restore the running profile domain.",
+                file=sys.stderr,
+            )
+            return 1
+        env = dict(os.environ)
+        env.pop("NOTIFY_SOCKET", None)
+        env.update(
+            ROS_DOMAIN_ID=str(profile.ros_domain),
+            ROS_LOCALHOST_ONLY="1",
+            ROS_HOME=str(profile.credentials.parent / "ros-home"),
+            ROS_LOG_DIR=str(profile.credentials.parent / "ros-home" / "log"),
+        )
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                'source "$1" || exit; shift; export ROS_DOMAIN_ID="$1" ROS_LOCALHOST_ONLY=1; '
+                'shift; exec "$@"',
+                "senior-requalify-motion",
+                str(profile.ros_setup),
+                str(profile.ros_domain),
+                "/usr/bin/python3",
+                "-c",
+                _REQUALIFY_MOTION,
+            ],
+            env=env,
+            check=False,
+            capture_output=True,
+            timeout=25,
+        )
+        if result.returncode != 0:
+            reason = result.stdout.strip()
+            if result.returncode == 1 and reason in _REQUALIFICATION_REJECTIONS:
+                print(
+                    f"Motion requalification rejected ({reason.decode('ascii')}): "
+                    f"{_REQUALIFICATION_REJECTIONS[reason]}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                "Motion requalification request failed or was rejected. "
+                "Check the running simulation and motion fusion service.",
+                file=sys.stderr,
+            )
+            return 1
+    except (OSError, ValueError, IpcError, asyncio.TimeoutError, subprocess.SubprocessError):
+        print(
+            "Motion requalification request failed. "
+            "Check the simulation profile, live adapter and ROS service; retry after recovery.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        "Motion requalification request accepted (armed), not yet qualified. "
+        "Release movement controls and keep the robot stationary: fresh requested/applied zero "
+        "commands and two contiguous stationary observation intervals are required. "
+        "Check live safety state before driving."
+    )
+    return 0
+
+
 def service_status(unit: str, profile: VehicleProfile, *, user: bool) -> int:
     scope = ["--user"] if user else []
     result = subprocess.run(
@@ -139,7 +268,7 @@ def service_status(unit: str, profile: VehicleProfile, *, user: bool) -> int:
     return 0 if active == "active" else 1
 
 
-async def _probe(profile: VehicleProfile) -> bool:
+async def _probe(profile: VehicleProfile, *, require_domain: bool = False) -> bool:
     if profile.socket is None:
         return False
     try:
@@ -147,7 +276,13 @@ async def _probe(profile: VehicleProfile) -> bool:
         client = IpcClient(profile.socket)
         try:
             reply = await client.request("identity", robot_id=credentials.robot_id)
-            return reply.get("ok") is True
+            if reply.get("ok") is not True:
+                return False
+            # //Compatible: legacy status needs no domain; recovery verifies the live domain.
+            if not require_domain:
+                return True
+            domain = reply.get("ros_domain")
+            return type(domain) is int and domain == profile.ros_domain
         finally:
             await client.close()
     except (OSError, ValueError, IpcError):
@@ -328,6 +463,29 @@ async def supervise(
                     camera.cleanup()
 
 
+def _remove_stale_socket(path: Path) -> None:
+    """Remove an owned, refused socket only while both simulation locks are held."""
+    try:
+        original = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(original.st_mode) or original.st_uid != os.getuid():
+        raise ValueError("simulator IPC path is not an owned socket")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.setblocking(False)
+        result = probe.connect_ex(os.fspath(path))
+    if result != errno.ECONNREFUSED:
+        raise ValueError("simulator IPC socket is live or cannot be safely checked")
+    current = path.lstat()
+    if (
+        not stat.S_ISSOCK(current.st_mode)
+        or current.st_uid != os.getuid()
+        or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
+    ):
+        raise ValueError("simulator IPC socket changed during stale check")
+    path.unlink()
+
+
 def main(path: Path, *, headless: bool = True) -> int:
     try:
         profile = VehicleProfile.model_validate_json(path.read_bytes())
@@ -345,8 +503,7 @@ def main(path: Path, *, headless: bool = True) -> int:
                 fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
                 lock = stack.enter_context(os.fdopen(fd, "wb"))
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if os.path.lexists(profile.socket):
-                raise ValueError("socket path is already occupied")
+            _remove_stale_socket(profile.socket)
             _initialize_estop(profile.estop_state, credentials.robot_id)
             return asyncio.run(supervise(profile, credentials, headless=headless))
     except DisplayUnavailableError as error:

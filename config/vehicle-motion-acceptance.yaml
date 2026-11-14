@@ -1,0 +1,341 @@
+# T1 instrument/environment substage only. No measured acceptance bounds are frozen.
+schema: 1
+status: unfrozen
+vehicle_model: senior_4wd_dl
+design: docs/superpowers/specs/2026-11-12-vehicle-motion-redesign.md
+units: {linear: m/s, angular: rad/s, distance: m, duration: s}
+requirements:
+  low_linear_mps: 0.5555555555555556 # Exact target: 5/9.
+  high_linear_mps: 1.3888888888888888 # Exact target: 25/18.
+  low_angular_default_rps: 1.0
+  high_angular_default_rps: 1.0
+  geometry_scale_xy: 1.05
+  feedback_recovery_min_samples: 5
+  feedback_recovery_min_span_s: 0.5 # Approved simulation initial value; verify frequency.
+model_declarations_unverified:
+  wheel_radius_m: 0.076
+  wheel_speed_limit_rps: 20.0
+  track_width_m: 0.481154
+  note: URDF/config declarations, not measured actuator performance.
+measured_bounds:
+  body_speed_error_mps: null
+  body_yaw_error_rps: null
+  stationary_linear_mps: null
+  stationary_angular_rps: null
+  stationary_window_s: null
+  steady_tracking_error_mps: null
+  steady_window_s: null
+  speed_numeric_resolution_mps: null
+  settling_time_s: null
+  accel_mps2: null
+  conservative_braking_decel_mps2: null
+  jerk_mps3: null
+  yaw_accel_rps2: null
+  yaw_braking_decel_rps2: null
+  yaw_jerk_rps3: null
+  actuator_lag_s: null
+  slip_detection_window_s: null
+  stall_detection_window_s: null
+  manual_liveness_s: null
+  sensor_age_s: null
+  permit_age_s: null
+  control_period_s: null
+  control_wiring_budget_s: null
+  fast_path_budget_s: null
+  async_relaxation_budget_s: null
+  max_stopping_distance_m: null
+  minimum_field_clearance_m: null
+  navigation_goal_tolerance_m: null
+  navigation_progress_window_s: null
+freeze:
+  approved_by: null
+  approved_at: null
+  raw_evidence: []
+  source_sha256: null
+  install_sha256: null
+  web_sha256: null
+  model_applicability: null
+  negative_controls: []
+  holdout_evidence: []
+  rule: Freeze applicable measured response/error and budgets before claiming validated quantitative capability or enabling real hardware; approved pure modules and explicit isolated simulation-only/unvalidated candidate wiring and bounded normal debugging may proceed while fields remain null, without promoting assumptions to measured bounds or changing acceptance criteria.
+
+# Descriptive candidates only; owner must audit raw data before any freeze.
+candidates:
+  status: pending_owner_review
+  report: docs/testing/2026-11-13-vehicle-motion-expanded-calibration.md
+  scope:
+    model: senior_4wd_dl
+    simulator: Humble/Fortress frozen r3 product
+    friction: ground/wheels mu=mu2=1 synthetic
+    calibration_path: dedicated diff_drive topic, no product gate/controller/Nav2
+    clocks: 'command schedule/age: monotonic; odometry and interval comparisons: ROS
+      source; Twist receipt is not application time'
+    no_capacity_claim: Observed ramp response is not maximum acceleration or a conservative
+      braking guarantee; reverse tested only -0.3 and turn only +0.25,+0.5.
+  product_identity:
+    head: 4dd9da0212f0faa759d495af571056a9b5ec2992
+    source_manifest_sha256: 6f8e9971f7d9778cfa292d2e0d3114f05635a8ef4b8d447b883b7d4bf854c4ef
+    install_manifest_sha256: 7ac9b6b2be894d1261fe3c72bec822d36d3d278584be5015c21866c82df7219b
+    generator_sha256: 1c5440b605efdbc9e8ad868923f03d2883240f6472d69c6415b8ff676cdb2e40
+    calibrator_sha256: c7ef918fe9977e04db4a8326b98129625678ba59a0524eb87461fe9242b00765
+  measurements_sha256: aa910bc68646dcb0c5eb6d839afce61014a47218bac9ad05c8ba5eb6f6181d6d
+  groups:
+    straight_forward_2kmh:
+      status: observed_candidate_only
+      requested_vx_mps: 0.5555555555555556
+      requested_wz_rps: 0.0
+      independent_runs:
+      - evidence_run: low_forward-4
+        plateau_ros_s:
+        - 8.888
+        - 12.77
+        body_vx_mean_mps: 0.5555555555559281
+        body_vy_mean_mps: 1.271522788398182e-15
+        body_wz_mean_rps: 2.55951166667068e-15
+        wheel_vx_mean_mps: 0.5555555555555667
+        wheel_wz_mean_rps: 7.533618612695095e-15
+        joint_peak_rps: 7.309941520484366
+        clock_receive_age_observed_max_s: 0.05448400000022957
+        normal_final_zero_receipt_ros_s: 14.686
+        truth_speed_interpolated_at_zero_mps: 0.00038888874185348933
+        truth_wz_interpolated_at_zero_rps: -2.3165601038765876e-17
+        subsequent_body_stationary_sample_ros_s: 14.7
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.3000000011017523
+          max: 0.3750000004333337
+        scan_valid_samples: 0
+        scan_total_samples: 353
+        scan_motion_error_abs_observed_max_mps: null
+        scan_yaw_error_abs_observed_max_rps: null
+        raw_bag_sha256: 3b6850e8d72d7284c5c83368d6d3ed7cc1a39efc95d32d700ac3c5eefa8ee9ec
+      - evidence_run: low_forward-5
+        plateau_ros_s:
+        - 9.41
+        - 13.176
+        body_vx_mean_mps: 0.5555555555560732
+        body_vy_mean_mps: 6.258383453406571e-16
+        body_wz_mean_rps: 1.8376341294317136e-15
+        wheel_vx_mean_mps: 0.5555555555555681
+        wheel_wz_mean_rps: -6.2484041507601475e-15
+        joint_peak_rps: 7.309941520509399
+        clock_receive_age_observed_max_s: 0.029976750003697816
+        normal_final_zero_receipt_ros_s: 14.909
+        truth_speed_interpolated_at_zero_mps: 0.00030555543961251116
+        truth_wz_interpolated_at_zero_rps: 5.207335026679444e-18
+        subsequent_body_stationary_sample_ros_s: 14.92
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.5250000014371814
+          max: 0.4500000008707536
+        scan_valid_samples: 0
+        scan_total_samples: 338
+        scan_motion_error_abs_observed_max_mps: null
+        scan_yaw_error_abs_observed_max_rps: null
+        raw_bag_sha256: ccaf9f7d615db172e04d639f63e7cdcafc9e4cb3e0e2ff3f15c336d3948348c4
+    reverse_0_3_mps:
+      status: observed_candidate_only
+      requested_vx_mps: -0.3
+      requested_wz_rps: 0.0
+      independent_runs:
+      - evidence_run: reverse-1
+        plateau_ros_s:
+        - 10.362
+        - 12.115
+        body_vx_mean_mps: -0.3000000000014214
+        body_vy_mean_mps: 1.1243654574045074e-15
+        body_wz_mean_rps: -3.540060780944027e-15
+        wheel_vx_mean_mps: -0.299999999999997
+        wheel_wz_mean_rps: 3.689690741816729e-15
+        joint_peak_rps: 3.94736842111444
+        clock_receive_age_observed_max_s: 0.0028262080013519153
+        normal_final_zero_receipt_ros_s: 13.119
+        truth_speed_interpolated_at_zero_mps: 0.014999999809459652
+        truth_wz_interpolated_at_zero_rps: 2.6794912195542447e-16
+        subsequent_body_stationary_sample_ros_s: 13.14
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.3000000009978658
+          max: 0.3000000011021964
+        scan_valid_samples: 0
+        scan_total_samples: 307
+        scan_motion_error_abs_observed_max_mps: null
+        scan_yaw_error_abs_observed_max_rps: null
+        raw_bag_sha256: db902fd16c6d7d572b8afb99157695238557ba16544533a643d6fd622c520dd3
+      - evidence_run: reverse-2
+        plateau_ros_s:
+        - 7.8
+        - 9.546
+        body_vx_mean_mps: -0.30000000000178945
+        body_vy_mean_mps: 2.537201277828519e-15
+        body_wz_mean_rps: -4.090199429379347e-15
+        wheel_vx_mean_mps: -0.30000000000000154
+        wheel_wz_mean_rps: -1.4421357619186404e-16
+        joint_peak_rps: 3.947368421115403
+        clock_receive_age_observed_max_s: 0.003657957997347694
+        normal_final_zero_receipt_ros_s: 10.555
+        truth_speed_interpolated_at_zero_mps: 0.014999999801415531
+        truth_wz_interpolated_at_zero_rps: 1.352642563340041e-16
+        subsequent_body_stationary_sample_ros_s: 10.58
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.37500000045513626
+          max: 0.30000000100455226
+        scan_valid_samples: 0
+        scan_total_samples: 301
+        scan_motion_error_abs_observed_max_mps: null
+        scan_yaw_error_abs_observed_max_rps: null
+        raw_bag_sha256: 66ef4e2cb4d99e7945491e28883f794e2c37042ca61170e8723d459dc63f5e3b
+    combined_positive_turn:
+      status: observed_candidate_only
+      requested_vx_mps: 0.25
+      requested_wz_rps: 0.5
+      independent_runs:
+      - evidence_run: turn-1
+        plateau_ros_s:
+        - 8.876
+        - 11.615
+        body_vx_mean_mps: 0.24685205803209376
+        body_vy_mean_mps: -0.018057017153536553
+        body_wz_mean_rps: 0.2947807384240203
+        wheel_vx_mean_mps: 0.24999999999972308
+        wheel_wz_mean_rps: 0.4999999994744868
+        joint_peak_rps: 4.872217105031489
+        clock_receive_age_observed_max_s: 0.0016183330008061603
+        normal_final_zero_receipt_ros_s: 12.617
+        truth_speed_interpolated_at_zero_mps: 0.0028820100673520393
+        truth_wz_interpolated_at_zero_rps: 0.01759598275384633
+        subsequent_body_stationary_sample_ros_s: 12.64
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.37565677755655336
+          max: 0.3008974081947733
+        scan_valid_samples: 319
+        scan_total_samples: 319
+        scan_motion_error_abs_observed_max_mps: 0.24969017074358055
+        scan_yaw_error_abs_observed_max_rps: 0.08509757146089941
+        raw_bag_sha256: f46f5661be04f501d0592b4f4cde09da89be0923ab52c59da63b6c4a31d943b9
+      - evidence_run: turn-3
+        plateau_ros_s:
+        - 10.472
+        - 13.219
+        body_vx_mean_mps: 0.24686913466759217
+        body_vy_mean_mps: -0.018040899766106417
+        body_wz_mean_rps: 0.29475424975330133
+        wheel_vx_mean_mps: 0.24999999999972053
+        wheel_wz_mean_rps: 0.49999999947462653
+        joint_peak_rps: 4.872217105030302
+        clock_receive_age_observed_max_s: 0.0026819999984581955
+        normal_final_zero_receipt_ros_s: 14.225
+        truth_speed_interpolated_at_zero_mps: 0.002181827687729373
+        truth_wz_interpolated_at_zero_rps: 0.0132344098346956
+        subsequent_body_stationary_sample_ros_s: 14.24
+        observed_dvx_over_0_2_ros_s_mps2:
+          min: -0.33476843923895916
+          max: 0.30089740819473676
+        scan_valid_samples: 307
+        scan_total_samples: 307
+        scan_motion_error_abs_observed_max_mps: 0.2884575099388875
+        scan_yaw_error_abs_observed_max_rps: 0.08831546571533705
+        raw_bag_sha256: a9a66672fb7c3643964f911b6ac30e13859bdf7ee32a55800d84d9715630ab8f
+      imu_confirmation:
+        turn-1:
+          plateau_imu_wz_mean_rps: 0.2947014218615041
+          n_aligned_scan_intervals: 318
+          imu_vs_truth_delta_abs_max_rad: 0.00025657070783985034
+        turn-3:
+          plateau_imu_wz_mean_rps: 0.29467507608271476
+          n_aligned_scan_intervals: 306
+          imu_vs_truth_delta_abs_max_rad: 0.00030226505283994544
+    source_cadence:
+      status: observed_candidate_only
+      median_ros_period_s:
+        /clock: 0.001000000000000334
+        /scan: 0.10000000000000009
+        /motion/scan: 0.10000000000000009
+        /ground_truth/odom: 0.019999999999999574
+        /imu/data: 0.019999999999999574
+        /wheel/odom: 0.030000000000001137
+        /joint_states: 0.009999999999999787
+      observed_ros_gap_max_s:
+        /clock: 0.0900000000000003
+        /scan: 0.10000000000000142
+        /motion/scan: 0.10000000000000142
+        /ground_truth/odom: 0.020000000000003126
+        /imu/data: 0.020000000000003126
+        /wheel/odom: 0.04000000000000625
+        /joint_states: 0.010000000000005116
+      note: Publication/receipt observations only; missing clock packets and receiver
+        losses are not a pause or a healthy-age guarantee.
+    legacy_manual_0_08_mps:
+      status: legacy_regression_passed_not_new_motion_acceptance
+      legacy_tests_passed: 3
+      actual_acquire_and_drive_assertions_passed: true
+      command_peak_mps: 0.08
+      truth_peak_speed_mps: 0.08000000046280639
+      truth_net_dx_m: 0.11839999991241482
+      fixture_robot_id: route-sim
+      physical_stop_test_observed_s: 0.019
+      physical_stop_test_near_zero_hold_s: 0.22
+      note: Recorded test observations at 20 ms truth cadence; not an actuator-lag bound,
+        high-speed result, or new protocol verification.
+    high_forward_5kmh:
+      status: not_run_dependency_failed
+      target_mps: 1.3888888888888888
+      reason: Reviewed corridor returned unobservable_geometry on every recorded low/reverse
+        scan; dependent high measurement stopped as instructed.
+    corridor_observability:
+      status: failed_measurement_condition
+      evidence_run: low_forward-4
+      filtered_frames_replayed: 353
+      normal_window_count_observed_range:
+      - 11
+      - 23
+      normal_window_requirement_existing: 25
+      translation_information_observed_range:
+      - 6.846192195229234e-05
+      - 0.0008462937667240489
+      translation_information_requirement_existing: 0.05
+
+observable_corridor_candidates:
+  status: candidate_observations_not_frozen
+  report: docs/testing/2026-11-13-vehicle-motion-observable-corridor.md
+  scope: Dedicated synthetic mu=1 straight fixture, not product closed loop or wheel-degraded
+    qualification
+  world_sha256: 1a61a757a1d6aa6c0badc8e733011b85d3fe092b7cd9efbdbfd5b4216587e974
+  fixture_manifest_sha256: 38a51d064e2a428d58a1d30700615275bcb8f24f67c6667e15429971a3c4f122
+  runs:
+  - name: low_forward-1
+    bag_sha256: 24e5aa5b7844b4f0863cb056996fbc1ed382e1f3cca3c8d9dd92e46ef087776f
+    truth_plateau_median_mps: 0.5555555555556091
+    joint_peak_rps: 7.309941520479798
+    final_zero_ros_s: 14.444
+    first_sub_0_001_mps_truth_sample_ros_s: 14.46
+    max_command_steady_gap_s: 0.06492399999842746
+    scan_valid_count: 240
+    scan_total_count: 382
+    moving_scan_valid_count: 3
+    moving_scan_total_count: 78
+    max_valid_moving_interval_error_mps: 0.14015956402366797
+  - name: low_forward-2
+    bag_sha256: afba203cbf01e74bc6b77fda7bc09125bad405ef8b09e964c08533939c3725f9
+    truth_plateau_median_mps: 0.5555555555556313
+    joint_peak_rps: 7.309941520516036
+    final_zero_ros_s: 14.548
+    first_sub_0_001_mps_truth_sample_ros_s: 14.56
+    max_command_steady_gap_s: 0.054463333006424364
+    scan_valid_count: 238
+    scan_total_count: 381
+    moving_scan_valid_count: 3
+    moving_scan_total_count: 78
+    max_valid_moving_interval_error_mps: 0.1431595640329158
+  high_status: not_run_low_scan_measurement_dependency_failed
+  speed_error_bound_supported: false
+multisource_policy_pending_measurement:
+  user_revision: '2026-11-13'
+  sources:
+  - laser_motion
+  - qualified_gps_velocity
+  - imu
+  - wheel_odometry
+  wheel_degraded_driving_allowed: true
+  wheel_degraded_internal_cap_mps: null
+  obstacle_perception_required_for_supported_direction: true
+  wheel_slip_true_speed_bound_supported: false
+  gps_hardware_model_verified: false
+  source_recovery_no_speed_step: true

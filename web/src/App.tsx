@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import styles from "./App.module.css";
 import { UnauthorizedError, type ControlApi, type RobotLink } from "./api/client";
@@ -38,10 +38,14 @@ interface ShellProps {
   loggingOut: boolean;
   notice: string | null;
   pairing: PairingPanelProps | null;
+  onRevoke: ((robotId: string) => Promise<void>) | null;
 }
 
-function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice, pairing }: ShellProps): ReactElement {
+function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice, pairing, onRevoke }: ShellProps): ReactElement {
   const { robotId } = useParams();
+  const navigate = useNavigate();
+  const currentRobotId = useRef(robotId);
+  currentRobotId.current = robotId;
   const [openDeviceList, setOpenDeviceList] = useState<string | null>(null);
   const devicesOpen = robotId !== undefined && openDeviceList === robotId;
   const selected: RobotSummary | undefined = list.robots.find((robot) => robot.id === robotId);
@@ -96,7 +100,11 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
         </p>
       )}
       <aside id="device-switcher" className={styles.side} data-open={devicesOpen}>
-        <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} pairing={pairing} />
+        <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} pairing={pairing}
+          onRevoke={onRevoke === null ? null : async (id) => {
+            await onRevoke(id);
+            if (currentRobotId.current === id) navigate("/robots", { replace: true });
+          }} />
       </aside>
       <main className={styles.main}>{main}</main>
     </div>
@@ -170,6 +178,18 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
     expireSession();
   }, [api, expireSession]);
 
+  const revokeRobot = useCallback(async (robotId: string): Promise<void> => {
+    try {
+      await api.revokeRobot(robotId);
+    } catch (error) {
+      if (error instanceof UnauthorizedError) expireSession();
+      throw error;
+    }
+    // A list request started before deletion must not restore the removed device.
+    latestLoad.current += 1;
+    setList((previous) => ({ ...previous, robots: previous.robots.filter((robot) => robot.id !== robotId) }));
+  }, [api, expireSession]);
+
   const from = (location.state as { from?: unknown } | null)?.from;
   const returnTo = typeof from === "string" && from.startsWith("/robots") ? from : "/robots";
 
@@ -189,6 +209,7 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
       onLogout={() => void logout()}
       loggingOut={loggingOut}
       notice={notice}
+      onRevoke={demo || loggingOut ? null : revokeRobot}
       pairing={demo || loggingOut ? null : {
         createCode: (signal) => api.createPairingCode(signal),
         onReauthenticate: expireSession,

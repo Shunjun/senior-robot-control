@@ -1,5 +1,8 @@
 # 单页驾驶台、多航点任务与遥控时序 Implementation Plan
 
+> **本轮改版优先级说明（2026-11-12）**：本文保留历史设计/计划。与[新版运动控制设计](../specs/2026-11-12-vehicle-motion-redesign.md)及用户最新要求冲突的内容不再作为本轮开发依据，尤其是非手动任务断网暂停、网页延迟资格与旧速度目标。未冲突部分仍供参考；新版设计已于 2026-11-12 获用户批准，后续修订按用户最新明确要求执行；批准不代表新功能已实现或验收通过。历史正文保持原样，当前阶段见[阶段索引](../../testing/2026-11-14-vehicle-stage-index.md)。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在一个车辆页面完成驾驶、导航和多航点任务管理，并提供可实测的遥控时序和车端反馈。

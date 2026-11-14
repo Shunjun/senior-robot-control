@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement } from "react";
+import { useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { NavLink } from "react-router-dom";
 
 import type { RobotSummary } from "../../api/protocol";
@@ -17,6 +17,7 @@ export interface DeviceListProps {
   selectedId: string | null;
   onRefresh: () => void;
   pairing: PairingPanelProps | null;
+  onRevoke: ((robotId: string) => Promise<void>) | null;
 }
 
 function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean }): ReactElement {
@@ -33,7 +34,27 @@ function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean })
   );
 }
 
-export function DeviceList({ list, selectedId, onRefresh, pairing }: DeviceListProps): ReactElement {
+export function DeviceList({ list, selectedId, onRefresh, pairing, onRevoke }: DeviceListProps): ReactElement {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState(false);
+  const pending = useRef(false);
+
+  async function revoke(robotId: string): Promise<void> {
+    if (pending.current || onRevoke === null) return;
+    pending.current = true;
+    setBusy(true);
+    setFailure(false);
+    try {
+      await onRevoke(robotId);
+      setConfirmId(null);
+    } catch {
+      setFailure(true);
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
   const empty = list.status === "ready" && !list.failed && list.robots.length === 0;
   return (
     <nav className={styles.deviceList} aria-label="设备列表">
@@ -75,6 +96,28 @@ export function DeviceList({ list, selectedId, onRefresh, pairing }: DeviceListP
               <span className={styles.itemId}>{robot.id}</span>
               <Presence robot={robot} unknown={list.failed} />
             </NavLink>
+            {onRevoke !== null && (
+              <div className={styles.unpair}>
+                {confirmId === robot.id ? (
+                  <div className={styles.unpairConfirm}>
+                    <p>确定删除「{robot.name}」的配对？车端凭据将失效，现有连接将断开，需重新配对后才能连接。</p>
+                    {failure && <p role="alert" className={styles.failure}>删除配对失败，请检查网络或会话后重试。</p>}
+                    <div className={styles.unpairActions}>
+                      <button type="button" className={styles.removePairing} disabled={busy}
+                        aria-label="确认删除配对" onClick={() => void revoke(robot.id)}>
+                        {busy ? "正在删除…" : "确认删除配对"}
+                      </button>
+                      <button type="button" className={styles.ghost} disabled={busy} onClick={() => setConfirmId(null)}>取消</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className={styles.removePairing} disabled={busy}
+                    aria-label={`删除 ${robot.name} 的配对`} onClick={() => { setFailure(false); setConfirmId(robot.id); }}>
+                    删除配对
+                  </button>
+                )}
+              </div>
+            )}
           </li>
         ))}
       </ul>

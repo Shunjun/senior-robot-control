@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from senior_control.models import MapRef
 from senior_control.tasks.schedule import Schedule
@@ -49,6 +50,11 @@ class ExecutionContext:
     # //Compatible: legacy context without both reference nonces cannot qualify motion.
     map_generation: str | None = None
     localization_generation: str | None = None
+    pose_ref: str | None = None
+    valid_until: float | None = None
+    task_lifecycle_version: int = 0
+    admission_ready: bool = True
+    motion_halt_reason: Literal["fault", "estop", "feedback_lost"] | None = None
 
 
 @dataclass(frozen=True)

@@ -400,6 +400,19 @@ class BoundedSafetyWorker:
                     channel.cancel_join_thread()
                     channel.close()
 
+    def warmup(self) -> bool:
+        """Start process setup in the supervisor without submitting or qualifying work."""
+        if self._closed.is_set() or self._failed.is_set():
+            return False
+        if self._supervisor is None:
+            self._supervisor = threading.Thread(target=self._supervise, daemon=True)
+            try:
+                self._supervisor.start()
+            except RuntimeError:
+                self._failed.set()
+                return False
+        return True
+
     def submit(self, ticket: SafetyTicket, work: Any) -> bool:
         if self._closed.is_set() or self._failed.is_set() or self._pending:
             return False
@@ -408,14 +421,9 @@ class BoundedSafetyWorker:
         except queue.Full:
             return False
         self._pending = True
-        if self._supervisor is None:
-            self._supervisor = threading.Thread(target=self._supervise, daemon=True)
-            try:
-                self._supervisor.start()
-            except RuntimeError:
-                self._failed.set()
-                self._pending = False
-                return False
+        if not self.warmup():
+            self._pending = False
+            return False
         return True
 
     def poll(self) -> WorkerReply | None:

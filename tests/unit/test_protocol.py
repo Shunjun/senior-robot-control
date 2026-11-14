@@ -25,6 +25,25 @@ def test_valid_velocity():
     assert validate_envelope(message(), "r1").payload.vx == 0.2
 
 
+def test_receipt_clock_is_private_and_does_not_extend_the_wire_envelope():
+    from senior_control.protocol import EnvelopeBase, serialize_envelope
+
+    envelope = validate_envelope(message(), "r1")
+    envelope._received_steady = 42.0
+    assert list(EnvelopeBase.model_fields) == [
+        "v",
+        "robot_id",
+        "session_id",
+        "connection_epoch",
+        "request_id",
+        "seq",
+        "expires_at",
+    ]
+    assert "_received_steady" not in json.loads(serialize_envelope(envelope))
+    with pytest.raises(ValueError):
+        validate_envelope(message(_received_steady=42.0), "r1")
+
+
 @pytest.mark.parametrize(
     "changes",
     [

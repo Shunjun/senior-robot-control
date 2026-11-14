@@ -175,8 +175,40 @@ class IpcMotion:
             "estop", client=self._safety_client, envelope=serialize_envelope(envelope).decode()
         )
 
+    async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None:
+        await self._ok(
+            "estop",
+            client=self._safety_client,
+            envelope=serialize_envelope(envelope).decode(),
+            received_at=received_steady,
+        )
+
     async def forward(self, envelope: Envelope) -> None:
         await self._ok("command", envelope=serialize_envelope(envelope).decode())
+
+    async def manual(
+        self,
+        envelope: Envelope,
+        *,
+        received_steady: float | None = None,
+        deadline_steady: float | None = None,
+        **fields: Any,
+    ) -> dict[str, Any]:
+        try:
+            return await self._ok(
+                "manual",
+                client=self._safety_client if envelope.type == "control.release" else None,
+                envelope=serialize_envelope(envelope).decode(),
+                received_steady=received_steady,
+                deadline_steady=deadline_steady,
+                **fields,
+            )
+        except MotionRejected as exc:
+            raise DomainError(
+                exc.code or ErrorCode.SAFETY_REJECTED, "manual request was refused"
+            ) from exc
+        except (IpcError, OSError) as exc:
+            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "manual IPC outcome is unknown") from exc
 
     async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
         await self._ok(

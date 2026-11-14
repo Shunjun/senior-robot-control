@@ -47,9 +47,9 @@ def construct():
 
 setattr(module, class_name, construct)
 from senior_robot import motion_lifecycle
-real_owned_spin = motion_lifecycle.rclpy.spin
+real_owned_spin = motion_lifecycle._spin_cli
 
-def owned_spin(node, *, executor):
+def owned_spin(node, executor, should_stop):
     shutdown = executor.shutdown
     def traced_shutdown(*args, **kwargs):
         print("EXECUTOR_SHUTDOWN_START", flush=True)
@@ -71,9 +71,9 @@ def owned_spin(node, *, executor):
         assert node._worker._process is not None and node._worker._process.is_alive()
         worker_pid = node._worker._process.pid
     print("READY", worker_pid, flush=True)
-    return real_owned_spin(node, executor=executor)
+    return real_owned_spin(node, executor, should_stop)
 
-motion_lifecycle.rclpy.spin = owned_spin
+motion_lifecycle._spin_cli = owned_spin
 module.main()
 """
 
@@ -83,10 +83,10 @@ _ACTIVE_CHILD = (
 import json
 from senior_robot import motion_lifecycle
 
-real_spin = motion_lifecycle.rclpy.spin
-def audited_spin(node, *, executor):
+real_spin = motion_lifecycle._spin_cli
+def audited_spin(node, executor, should_stop):
     try:
-        return real_spin(node, executor=executor)
+        return real_spin(node, executor, should_stop)
     except RuntimeError as exc:
         frames = []
         tb = exc.__traceback__
@@ -97,7 +97,7 @@ def audited_spin(node, *, executor):
             "context_ok": motion_lifecycle.rclpy.ok(), "message": str(exc), "frames": frames,
         }), flush=True)
         raise
-motion_lifecycle.rclpy.spin = audited_spin
+motion_lifecycle._spin_cli = audited_spin
 module.main()
 """
 )
@@ -110,7 +110,7 @@ module.main()
 def test_owned_nodes_handle_signal_and_repeated_interrupt(entry, first_signal, monkeypatch):
     pytest.importorskip("rclpy")
     domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
-    assert domain.isdecimal() and 0 <= int(domain) <= 101, "choose an isolated ROS domain"
+    assert domain.isdecimal() and 0 <= int(domain) <= 232, "choose an isolated ROS domain"
     monkeypatch.setenv("ROS_DOMAIN_ID", domain)
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
@@ -307,7 +307,7 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
     from senior_motion_msgs.msg import FinalCommand
 
     domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
-    assert domain.isdecimal() and 0 <= int(domain) <= 101, "choose an isolated ROS domain"
+    assert domain.isdecimal() and 0 <= int(domain) <= 232, "choose an isolated ROS domain"
     monkeypatch.setenv("ROS_DOMAIN_ID", domain)
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
@@ -364,12 +364,20 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
         statuses, outputs = [], []
         node.create_subscription(DiagnosticArray, "/safety/status", statuses.append, 10)
         node.create_subscription(Twist, "/cmd_vel", outputs.append, 10)
-        barrier = FinalCommand(robot_id="robot", owner_boot_id="shutdown-test", generation=1)
+        barrier = FinalCommand(
+            robot_id="robot",
+            owner_boot_id="shutdown-test",
+            generation=1,
+            source_kind="idle",
+            received_steady=time.monotonic(),
+            close_reason="prepared",
+        )
         sequence = 0
 
         def publish_command():
             nonlocal sequence
             sequence += 1
+            received = time.monotonic()
             publisher.publish(
                 FinalCommand(
                     robot_id="robot",
@@ -378,7 +386,14 @@ def test_safety_shutdown_with_active_command_publisher(monkeypatch):
                     generation=1,
                     connection_epoch=1,
                     sequence=sequence,
-                    steady_deadline=time.monotonic() + 0.3,
+                    steady_deadline=received + 0.3,
+                    received_steady=received,
+                    source_kind="manual",
+                    source_id="shutdown-fixture",
+                    source_epoch=1,
+                    close_reason="intent",
+                    gesture=1,
+                    request_id=f"shutdown-{sequence}",
                     vx=0.05,
                 )
             )
