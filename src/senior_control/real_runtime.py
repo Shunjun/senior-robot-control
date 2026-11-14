@@ -110,7 +110,7 @@ def real_parameter_defaults(
         },
         "motion_fusion": {
             **common,
-            "wheel_frame": "odom",
+            "wheel_frame": "odom_combined",
             "imu_frame": "gyro_link",
             "sensor_max_age": age,
             "alignment_max_gap": 0.25,
@@ -181,6 +181,10 @@ def load_real_parameters(
         params = {**defaults[node], **params}
         # //Compatible: old YAML may contain the removed manual TF switch.
         params.pop("transform_static", None)
+        # //Compatible: the shipped real YAML used odom, but the WHEELTEC
+        # base_serial launch publishes /odom with header.frame_id=odom_combined.
+        if node == "motion_fusion" and params.get("wheel_frame") == "odom":
+            params["wheel_frame"] = "odom_combined"
         result[node] = params
         # Response-related duplicates must retain the model's single value.
         if profile is not None:

@@ -42,7 +42,7 @@ motion_fusion:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
-    wheel_frame: odom
+    wheel_frame: odom_combined
     imu_frame: gyro_link
     sensor_max_age: 0.5
     alignment_max_gap: 0.25
