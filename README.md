@@ -163,6 +163,16 @@ python -m senior_control.agent.main --credentials-file /etc/senior-control/devic
 
 同样支持 `SENIOR_CREDENTIALS_FILE` 指向该文件；也可通过 `SENIOR_ROBOT_ID`、`SENIOR_DEVICE_TOKEN` 提供身份。使用 `deploy/senior-agent.service` 时将环境值放入 `/etc/senior-control/agent.env`，文件由服务用户可读且权限为 `0600`。缺少配置或认证被拒绝时进程退出 78。Agent 在 ROS 状态、地图、导航处理器缺失时返回 unavailable；浏览器时钟尚不能验证，生产远程速度暂不可用。跨页面急停已锁定，安全复位暂不可用，需后续带急停 fence 的协议。任务终态、ROS 全链路、Linux 和实车均未验收；只有 `safety_node` 可以发布 `/cmd_vel`。
 
+### Agent CLI 的配置与运行目录
+
+默认配置为 `~/senior-control/config.json`，通过 `--control-dir` 指定其他统一目录。
+凭据、数据库、急停状态、socket 和生成的部署文件均置于其中，不再分别指定路径。
+程序位置由配置中的 `project_dir` 指定，Python 固定为其下 `.ros-venv/bin/python`。
+实车可以原生部署，或在宿主机使用 `deploy --container [名称]` 生成进入已有容器的
+systemd 服务；省略名称时为 `ros2`。配置例子见 `config/agent.example.json`，完整命令、
+权限与宿主机/容器路径关系见[统一目录部署说明](docs/operations/deploy.md#实车-agent统一目录与-docker-启动)。
+该实车服务只管理 Agent，ROS 适配器的启动仍单独管理；仿真 start 继续管理完整仿真入口。
+
 ### 网页
 
 网页工程位于 `web/`，包含登录、选车、驾驶、地图、任务、地图管理和视频界面。单元测试和静态构建可在开发机执行。浏览器端到端测试只连接显式提供的 `PLAYWRIGHT_BASE_URL`，不启动开发服务器；当前浏览器验收仍未执行。
