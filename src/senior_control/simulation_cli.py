@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 from senior_control.agent.pairing import Credentials, read_credentials
-from senior_control.cli import VehicleProfile
+from senior_control.cli import VehicleProfile, load_profile
 from senior_control.runtime.ipc import MAX_PATH, IpcClient, IpcError
 from senior_control.safety.arbiter import PersistentEstop
 
@@ -488,7 +488,7 @@ def _remove_stale_socket(path: Path) -> None:
 
 def main(path: Path, *, headless: bool = True) -> int:
     try:
-        profile = VehicleProfile.model_validate_json(path.read_bytes())
+        profile = load_profile(path)
         validate_simulation_profile(profile)
         credentials = read_credentials(profile.credentials)
         assert profile.estop_state is not None and profile.socket is not None

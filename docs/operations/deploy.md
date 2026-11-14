@@ -112,24 +112,91 @@ Caddy 的固定地址 `172.29.231.2`；Caddy 另连默认网络以申请证书�
 已有网络冲突，部署前同步修改 `deploy/compose.jenkins.yaml` 中的子网、网关、cloud 地址、Caddy 地址与
 `TRUSTED_PROXY`，并保证后两者一致。
 
-## 实车服务配置档
+## 实车 Agent：统一目录与 Docker 启动
 
-`senior-robot` 接受显式 JSON 配置档。档名以小写字母、数字和短横线组成，例如
-`unit-a.json`。实车档将 `kind` 设为 `real`，用 `cloud_url` 指定 WSS 地址。
-`credentials` 和 `database` 位于 `/var/lib/senior-control/unit-a/`，
-`socket` 位于 `/run/senior-control/unit-a/`。由现场管理员准备这些目录，归属服务账号
-`senior-control`，并按现有流程配置实车 ROS 和急停状态。配对文件归属服务账号，权限为
-0600。命令复用 `/opt/senior-control/deploy/senior-agent.service` 和同目录的 Agent 环境。
+`senior-robot` 默认从当前用户的 `~/senior-control/config.json` 读取配置。
+所有子命令都接受 `--control-dir <目录>`，用于同时选择配置与数据目录。
+例如实车使用 `/home/wheeltec/ros2_shared_dir/senior-control`；容器内路径由已有的
+可写 bind mount 自动推导，不需要逐项填写凭据、数据库或 socket 路径。
+
+先由运行目录的所属用户创建私有目录，将 `config/agent.example.json` 复制为
+其中的 `config.json`，填写实际 `project_dir` 和 `cloud_url`。
+`project_dir` 指运行环境中的项目目录：原生模式是宿主机路径，Docker 模式是容器内路径。
+Python 固定使用 `<project_dir>/.ros-venv/bin/python`，必须事先安装本项目和 Agent 依赖。
+配置中的 `kind` 为 `real`。配置文件不包含设备 token。
 
 ```sh
-senior-robot deploy --profile unit-a.json --dry-run
-sudo senior-robot deploy --profile unit-a.json
-sudo senior-robot start --profile unit-a.json
-sudo senior-robot status --profile unit-a.json
-sudo senior-robot stop --profile unit-a.json
+mkdir -m 700 ~/senior-control
+cp config/agent.example.json ~/senior-control/config.json
+# 编辑 config.json 后，交互式输入一次性配对码：
+senior-robot pair --cloud-url wss://<cloud-domain>/ws/agent --name wheeltec
 ```
 
-部署命令仅创建该档的配置与服务文件，重名时保留已有文件。正式部署和启动是独立操作。
+统一目录内容：
+
+```text
+senior-control/
+├── config.json                    # 部署配置，手工准备
+├── device.json                    # 配对凭据，pair 创建，权限 0600
+├── agent.db                       # Agent 数据库（可能有 -wal/-shm 文件）
+├── estop-state.json                # ROS 适配器的急停状态路径，CLI 不重置
+├── agent.sock                     # ROS 适配器与 Agent 的 IPC
+├── agent.env                      # deploy 生成，无设备 token
+├── senior-agent-<目录哈希>.service # deploy 生成的宿主机服务文件
+├── service.sock                   # 仅 Docker：Agent 停止控制端点
+└── .agent-service.lock             # 仅 Docker：避免重复启动
+```
+
+### 非容器模式
+
+```sh
+senior-robot deploy --dry-run
+sudo senior-robot deploy --control-dir /home/<user>/senior-control
+sudo senior-robot start --control-dir /home/<user>/senior-control
+sudo senior-robot status --control-dir /home/<user>/senior-control
+sudo senior-robot stop --control-dir /home/<user>/senior-control
+```
+
+服务使用数据目录所属用户，直接启动 `.ros-venv/bin/python -m senior_control.agent.main`。
+使用 sudo 时建议显式传 `--control-dir`，避免 HOME 被 sudo 改为 `/root`。
+目录权限应为 0700，凭据权限为 0600，凭据与目录属主一致。
+
+### 现有 Docker 容器模式
+
+在宿主机执行 CLI；只写 `--container` 默认选择 `ros2`，也可以指定其他容器名。
+也可将 `"container": "ros2"` 写进 `config.json`，供 `deploy`、`doctor` 使用。
+命令行 `--container` 优先于配置值。部署模式记录在生成的服务里，后续 start/stop
+使用已部署服务，不必重复指定容器。
+
+```sh
+senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container --dry-run
+sudo senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container ros2
+sudo senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+sudo senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+sudo senior-robot stop --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+senior-robot doctor --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container
+```
+
+`deploy` 检查现有挂载和容器内 Python，不修改或重建容器；部署时容器须运行。
+`--dry-run` 可以只读 inspect Docker，但不写文件、不启动容器或服务。
+宿主机 systemd 在启动时确保容器运行，通过 `docker exec --env-file` 启动项目内的
+`docker_start_helper`，由它托管 Agent。停止时通过私有控制 socket 结束并回收该 Agent，
+不会停止容器或厂商驱动。容器内无须安装 systemd，宿主机无须安装 ROS。
+宿主机原来的 systemd 隔离选项不等于对 Docker 内进程的隔离。
+
+服务文件和环境文件都保留在统一目录，systemd 只在系统服务目录建立必要的链接。
+部署与启动分开，文件已存在时拒绝覆盖；不自动修改现有凭据、数据库或急停状态。
+切换部署模式需先停止原服务，并由管理员清理旧生成文件和 systemd 链接后重新部署。
+
+**此 CLI 管理的是 Agent。** 容器内/本机的 `agent_adapter` 和其他 ROS 节点仍须通过
+项目的 ROS 启动流程另行管理，并将 `SENIOR_AGENT_SOCKET` 指向统一目录的 `agent.sock`，
+急停状态指向其中的 `estop-state.json`。适配器未运行时，Agent 不会正常连接上线；
+不要将服务 active 等同于完整实车控制可用。
+
+显式 `--profile /path/to/old.json` 保留旧配置的独立路径布局以供已有部署使用；
+新配置使用 `--control-dir`。仿真也默认读取 `~/senior-control/config.json`，将 `kind`
+设为 `simulation`、配置隔离的 `ros_domain` 和 ROS 工作空间，凭据、数据库、急停和
+socket 使用同一目录。仿真容器模式不属于此处的 Docker 实车部署功能。
 
 ## 工作台只读地图
 

@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -30,9 +32,51 @@ class VehicleProfile(BaseModel):
     estop_state: Path | None = None
     ros_domain: int | None = None
     video: bool = False
+    control_dir: Path | None = None
+    project_dir: Path | None = None
+    container: str | None = None
+
+
+def load_profile(path: Path, *, control_dir: Path | None = None) -> VehicleProfile:
+    values = json.loads(path.read_bytes())
+    if not isinstance(values, dict):
+        raise ValueError("profile must be an object")
+    if control_dir is None and path.name == "config.json":
+        candidate = path.parent.absolute()
+        if "credentials" not in values or values.get("credentials") == str(
+            candidate / "device.json"
+        ):
+            control_dir = candidate
+    if control_dir is not None:
+        if not control_dir.is_absolute():
+            raise ValueError("control directory must be absolute")
+        paths = {
+            "control_dir": control_dir,
+            "credentials": control_dir / "device.json",
+            "database": control_dir / "agent.db",
+            "socket": control_dir / "agent.sock",
+            "estop_state": control_dir / "estop-state.json",
+        }
+        for name, value in paths.items():
+            if name in values:
+                if not isinstance(values[name], (str, Path)) or Path(values[name]) != value:
+                    raise ValueError("data paths must stay in the control directory")
+            values[name] = value
+        if values.get("project_dir") and not values.get("ros_setup"):
+            if not isinstance(values["project_dir"], (str, Path)):
+                raise ValueError("project_dir must be a path")
+            values["ros_setup"] = Path(values["project_dir"]) / "ros2/install/setup.bash"
+    if values.get("kind") == "simulation" and values.get("container") is not None:
+        raise ValueError("container deployment is only supported for real profiles")
+    # //Compatible: explicit legacy --profile files retain their individual paths.
+    return VehicleProfile.model_validate(values)
 
 
 def _pair(profile: VehicleProfile, cloud_url: str, name: str) -> None:
+    if profile.control_dir is not None:
+        from senior_control.vehicle_deploy import private_directory
+
+        private_directory(profile.control_dir)
     if not profile.credentials.is_absolute():
         raise ValueError("credential path must be absolute")
     if os.path.lexists(profile.credentials):
@@ -47,6 +91,10 @@ def _pair(profile: VehicleProfile, cloud_url: str, name: str) -> None:
 
 
 def _doctor(profile: VehicleProfile) -> int:
+    if profile.control_dir is not None and profile.kind == "real":
+        from senior_control.vehicle_deploy import doctor
+
+        return doctor(profile)
     problems: list[str] = []
     try:
         if not profile.credentials.is_absolute():
@@ -106,6 +154,9 @@ UNIT_ROOT = Path("/etc/systemd/system")
 
 
 def _unit(profile_path: Path) -> str:
+    if profile_path.name == "config.json":
+        key = hashlib.sha256(os.fsencode(profile_path.parent)).hexdigest()[:16]
+        return f"senior-agent-{key}.service"
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", profile_path.stem):
         raise ValueError("profile filename must be a lowercase service name")
     return f"senior-agent-{profile_path.stem}.service"
@@ -127,6 +178,11 @@ def _install_once(path: Path, contents: str, mode: int) -> None:
 
 
 def _deploy(profile: VehicleProfile, profile_path: Path, *, dry_run: bool) -> int:
+    if profile.control_dir is not None:
+        from senior_control.vehicle_deploy import deploy
+
+        return deploy(profile, _unit(profile_path), dry_run=dry_run)
+    # //Compatible: explicitly selected older profiles keep their deployment layout.
     if profile.kind != "real":
         raise ValueError("deploy requires a real vehicle profile")
     unit = _unit(profile_path)
@@ -180,7 +236,7 @@ def _deploy(profile: VehicleProfile, profile_path: Path, *, dry_run: bool) -> in
     if credential.st_uid != account.pw_uid or stat.S_IMODE(credential.st_mode) != 0o600:
         raise ValueError("credential must belong to senior-control with mode 0600")
     read_credentials(profile.credentials)
-    if not os.access(SERVICE_ROOT / ".venv/bin/python", os.X_OK):
+    if not os.access(SERVICE_ROOT / ".ros-venv/bin/python", os.X_OK):
         raise ValueError("service Python is unavailable")
     template = (SERVICE_ROOT / "deploy/senior-agent.service").read_text(encoding="utf-8")
     unit_contents = template.replace("/etc/senior-control/agent.env", str(env_file))
@@ -206,25 +262,37 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="senior-robot")
     commands = parser.add_subparsers(dest="command", required=True)
     simulation_default = argparse.ArgumentParser(add_help=False)
-    simulation_default.add_argument(
-        "--profile", type=Path, help="JSON profile (default: ~/senior-sim/simulation.json)"
+    selection = simulation_default.add_mutually_exclusive_group()
+    selection.add_argument("--profile", type=Path, help="Explicit legacy JSON profile")
+    selection.add_argument(
+        "--control-dir",
+        type=Path,
+        help="Configuration and state directory (default: ~/senior-control)",
     )
     pair = commands.add_parser(
         "pair", parents=[simulation_default], help="exchange a one-time code over HTTPS"
     )
     pair.add_argument("--cloud-url", required=True)
     pair.add_argument("--name", required=True)
-    commands.add_parser(
+    doctor = commands.add_parser(
         "doctor", parents=[simulation_default], help="check the profile without starting services"
     )
+    doctor.add_argument("--container", nargs="?", const="ros2", help="Check a Docker container")
     commands.add_parser(
         "requalify-motion",
         parents=[simulation_default],
         help="request stationary motion requalification for a running simulation",
     )
-    deploy = commands.add_parser("deploy", help="install the selected real vehicle service")
-    deploy.add_argument("--profile", required=True, type=Path)
+    deploy = commands.add_parser(
+        "deploy", parents=[simulation_default], help="install the selected real vehicle service"
+    )
     deploy.add_argument("--dry-run", action="store_true")
+    deploy.add_argument(
+        "--container",
+        nargs="?",
+        const="ros2",
+        help="Run inside an existing Docker container (default: ros2)",
+    )
     for command in ("start", "stop", "status"):
         lifecycle_parser = commands.add_parser(command, parents=[simulation_default])
         if command == "start":
@@ -236,11 +304,23 @@ def main(argv: list[str] | None = None) -> int:
             )
     args = parser.parse_args(argv)
     try:
-        profile_path = args.profile or Path.home() / "senior-sim" / "simulation.json"
-        profile = VehicleProfile.model_validate_json(profile_path.read_bytes())
-        if args.profile is None and profile.kind != "simulation":
-            print("Real vehicles require an explicit --profile.", file=sys.stderr)
-            return 1
+        control_dir = (
+            (args.control_dir or Path.home() / "senior-control").expanduser().absolute()
+            if args.profile is None
+            else None
+        )
+        if args.profile is not None:
+            profile_path = args.profile
+        else:
+            assert control_dir is not None
+            profile_path = control_dir / "config.json"
+        profile = load_profile(profile_path, control_dir=control_dir)
+        if getattr(args, "container", None) is not None:
+            if control_dir is None:
+                raise ValueError("container deployment requires --control-dir")
+            if profile.kind != "real":
+                raise ValueError("container deployment requires a real profile")
+            profile = profile.model_copy(update={"container": args.container})
         if args.command == "doctor":
             return _doctor(profile)
         if args.command == "requalify-motion":
@@ -287,7 +367,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(message, file=sys.stderr)
         if args.profile is None:
-            print("Check ~/senior-sim/simulation.json or pass --profile.", file=sys.stderr)
+            print(
+                "Check <control-dir>/config.json (default: ~/senior-control/config.json).",
+                file=sys.stderr,
+            )
         return 1
     print("Device paired.")
     return 0
