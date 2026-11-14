@@ -33,7 +33,6 @@ class ScanAdapter(Node):
         self.declare_parameter("self_mask_calibrated", False)
         # //Compatible: unset profiles retain exact-mask filtering, uncalibrated by default.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
-        self.declare_parameter("transform_static", False)
         self.body = self.get_parameter("body_frame").value
         self.max_age = self.get_parameter("max_age_seconds").value
         self._raw_topic = str(self.get_parameter("scan_topic").value)
@@ -47,7 +46,6 @@ class ScanAdapter(Node):
             self_mask_calibrated=self.get_parameter("self_mask_calibrated").value,
             self_mask=[list(zip(coords[::2], coords[1::2], strict=False))] if coords else [],
         )
-        self.transform_static = self.get_parameter("transform_static").value
         self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)
         self.no_return_clear = self.get_parameter("no_return_clear").value
         if (
@@ -137,6 +135,7 @@ class ScanAdapter(Node):
             age = (ros_ns - stamp.nanoseconds) / 1e9
             if not 0 <= age <= self.max_age or not capture.frame_id:
                 raise ValueError("stale scan or missing frame")
+            # TF resolves static and dynamic edges at the scan timestamp.
             tf = self.buffer.lookup_transform(self.body, capture.frame_id, stamp)
             q = tf.transform.rotation
             if (
@@ -149,7 +148,7 @@ class ScanAdapter(Node):
             yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
             seconds = stamp.nanoseconds / 1e9
             tf_seconds = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
-            if not self.transform_static and not 0 <= seconds - tf_seconds <= self.max_age:
+            if not 0 <= seconds - tf_seconds <= self.max_age:
                 raise ValueError("stale dynamic transform")
             observation = ScanObservation(
                 tuple(msg.ranges),
@@ -164,7 +163,6 @@ class ScanAdapter(Node):
                 self.body,
                 seconds,
                 no_return_clear=self.no_return_clear,
-                transform_static=self.transform_static,
             )
             filtered = filter_self(
                 observation, self.profile, self_mask_range_uncertainty=self.mask_range_uncertainty
