@@ -53,6 +53,7 @@ class NativeReceiptGroup:
         self._last_receipt = float("-inf")
         self._started_at: float | None = None
         self._failed = False
+        self._failure_reason = ""
         self._closed = False
         self._process: subprocess.Popen[bytes] | None = None
         self._socket: socket.socket | None = None
@@ -153,8 +154,12 @@ class NativeReceiptGroup:
                 ):
                     raise ValueError("invalid native receipt frame")
                 stamp = stamp_ns / 1e9
-                if not 0 <= time.monotonic() - stamp <= _MAX_TRANSPORT_AGE:
-                    raise ValueError("native receipt exceeded transport age budget")
+                age = time.monotonic() - stamp
+                if not 0 <= age <= _MAX_TRANSPORT_AGE:
+                    raise ValueError(
+                        f"native receipt age={age:.6f}s exceeds {_MAX_TRANSPORT_AGE}s "
+                        f"on {self.inputs[key].topic} (kind={kind})"
+                    )
                 payload = self._read(size) if size else b""
                 with self._lock:
                     entry = self.inputs[key]
@@ -192,9 +197,10 @@ class NativeReceiptGroup:
                             )
                         )
 
-        except (OSError, ValueError, struct.error):
+        except (OSError, ValueError, struct.error) as exc:
             with self._lock:
                 self._failed = True
+                self._failure_reason = f"{type(exc).__name__}: {exc}"
                 self._pending.clear()
                 self._invalid.update(range(len(self.inputs)))
 
@@ -207,6 +213,7 @@ class NativeReceiptGroup:
             except (OSError, ValueError, LookupError) as exc:
                 self.node.get_logger().error(f"native DDS receipt unavailable: {exc}")
                 self._failed = True
+                self._failure_reason = f"startup: {exc}"
                 self._invalid.update(range(len(self.inputs)))
         from rclpy.serialization import deserialize_message
 
@@ -217,9 +224,12 @@ class NativeReceiptGroup:
         for key in sorted(invalid):
             self.inputs[key].invalidate()
         if failed:
+            returncode = self._process.poll() if self._process is not None else None
             self.close()
             self.node.get_logger().error(
-                "native DDS receipt failed; all dependent evidence revoked"
+                "native DDS receipt failed; all dependent evidence revoked; "
+                f"reason={self._failure_reason}; child_exit={returncode}; "
+                f"topics={[entry.topic for entry in self.inputs]}"
             )
             return
         for key, packets in pending.items():

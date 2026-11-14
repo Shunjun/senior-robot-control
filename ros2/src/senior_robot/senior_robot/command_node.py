@@ -160,7 +160,7 @@ class CommandNode(Node):
                     "/safety/drive_feedback",
                     self._on_drive_feedback,
                     writer="safety_gate",
-                    qos="reliable",
+                    qos="sensor",
                     invalidate=self._invalidate_drive_feedback,
                 )
             else:

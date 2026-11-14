@@ -68,6 +68,7 @@ class MotionCoreOutput:
         self._reference: dict[str, Any] | None = None
         self._reference_boot = ""
         self._reference_sequence = 0
+        self._reference_warning_at = float("-inf")
         self._perception_key: tuple[Any, ...] | None = None
         self._perception: Perception | None = None
         self._barrier_key: tuple[str, int, int] | None = None
@@ -120,6 +121,13 @@ class MotionCoreOutput:
     def _invalidate_reference(self) -> None:
         self._reference = None
         self.controller.invalidate_limited_rearm()
+        self._warn_reference("native receipt revoked or unavailable")
+
+    def _warn_reference(self, reason: str) -> None:
+        now = time.monotonic()
+        if now - self._reference_warning_at >= 2.0:
+            self._reference_warning_at = now
+            self.node.get_logger().warning(f"motion core reference rejected: {reason}")
 
     def _invalidate_hardware_status(self) -> None:
         self._hardware_seen = float("-inf")
@@ -178,13 +186,18 @@ class MotionCoreOutput:
             self.revoke(kind.value, now=now)
 
     def _on_reference(self, msg: Any, info: Any) -> None:
+        endpoints = self.node.get_publishers_info_by_topic("/motion/core_reference")
         origin = observation_origin(
             info,
-            self.node.get_publishers_info_by_topic("/motion/core_reference"),
+            endpoints,
             "motion_fusion",
             allow_topology_only=bool(self.profile.simulation_only and self.profile.unvalidated),
         )
         if origin is None:
+            self._warn_reference(
+                "writer identity unavailable; discovered="
+                + repr([(x.node_namespace, x.node_name) for x in endpoints])
+            )
             return
         try:
             if len(msg.data) > 131072:
@@ -194,7 +207,11 @@ class MotionCoreOutput:
                 value["schema"] != 1
                 or not 0 <= time.monotonic() - value["sampled_steady"] <= self.profile.max_age
             ):
-                raise ValueError("reference time")
+                raise ValueError(
+                    f"reference schema/time: schema={value['schema']}, "
+                    f"age_s={time.monotonic() - value['sampled_steady']:.6f}, "
+                    f"max_age_s={self.profile.max_age}"
+                )
             if (
                 value["boot_id"] == self._reference_boot
                 and value["sequence"] <= self._reference_sequence
@@ -203,7 +220,8 @@ class MotionCoreOutput:
             self._reference_boot = value["boot_id"]
             self._reference_sequence = value["sequence"]
             self._reference = value
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError) as exc:
+            self._warn_reference(f"payload validation: {str(exc)[:256]}")
             return
 
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
