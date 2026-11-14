@@ -140,7 +140,7 @@ ImmortalWrt 在 OpenClash 停用时，公网 IP 可达，直查公网 DNS 可用
 
 ## 参考
 
-- [项目部署手册](deploy.md)
+- [当前云端部署手册](deploy.md)
 - [FRP HTTP 与 HTTPS 转发](https://gofrp.org/en/docs/features/http-https/)
 - [Nginx HTTPS 上游配置](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ssl_verify_depth)
 - [Let’s Encrypt 验证方式](https://letsencrypt.org/docs/challenge-types/)
