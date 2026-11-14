@@ -114,15 +114,23 @@ composition 仍需启动其 start_debug_restore，并在数据库关闭前关闭
 ```python
 async with VehicleLogStore(private_log_directory) as store:
     logs = VehicleLogService(
-        store, local_vehicle_id, real_session_authorizer,
+        store,
+        local_vehicle_id,
+        real_session_authorizer,
         lambda: settings_service.published_snapshot,
     )
     await logs.start()
     try:
-        logs.enqueue(LogInput(
-            level="INFO", module="navigation", summary="task accepted",
-            source_utc=event_utc, task_id=task_id, request_id=request_id,
-        ))
+        logs.enqueue(
+            LogInput(
+                level="INFO",
+                module="navigation",
+                summary="task accepted",
+                source_utc=event_utc,
+                task_id=task_id,
+                request_id=request_id,
+            )
+        )
         # 日志源 handler 只调用 enqueue，不 await flush/query。
     finally:
         await logs.close()
@@ -131,9 +139,15 @@ async with VehicleLogStore(private_log_directory) as store:
 T9/transport 查询与导出：
 
 ```python
-page = await logs.query(session_credential, vehicle_id, LogQuery(
-    after=last_cursor, levels=("WARNING", "ERROR"), task_id=task_id,
-))
+page = await logs.query(
+    session_credential,
+    vehicle_id,
+    LogQuery(
+        after=last_cursor,
+        levels=("WARNING", "ERROR"),
+        task_id=task_id,
+    ),
+)
 # 显示 entries、gaps；保存 (vehicle_id, page.next_cursor)，page.has_more 时继续。
 # 即便 entries 为空，只要 has_more=True 也应续读，不能把过滤扫描预算当成没有更多日志。
 

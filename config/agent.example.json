@@ -1,0 +1,5 @@
+{
+  "kind": "real",
+  "project_dir": "/home/wheeltec/ros2_shared_dir/senior-robot-control",
+  "cloud_url": "wss://example.com/ws/agent"
+}

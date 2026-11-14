@@ -1,0 +1,574 @@
+{
+  "$defs": {
+    "AdmissionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/SourceRule"
+          },
+          "title": "Rules",
+          "type": "array"
+        },
+        "recovery_samples": {
+          "title": "Recovery Samples",
+          "type": "integer"
+        },
+        "recovery_span_s": {
+          "title": "Recovery Span S",
+          "type": "number"
+        },
+        "normal_cap_mps": {
+          "title": "Normal Cap Mps",
+          "type": "number"
+        },
+        "degraded_cap_mps": {
+          "title": "Degraded Cap Mps",
+          "type": "number"
+        },
+        "heading_max_age_s": {
+          "title": "Heading Max Age S",
+          "type": "number"
+        },
+        "alignment_max_skew_s": {
+          "title": "Alignment Max Skew S",
+          "type": "number"
+        },
+        "heading_max_variance_rad2": {
+          "title": "Heading Max Variance Rad2",
+          "type": "number"
+        },
+        "clock_pause_s": {
+          "title": "Clock Pause S",
+          "type": "number"
+        },
+        "epoch_history_limit": {
+          "title": "Epoch History Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rules",
+        "recovery_samples",
+        "recovery_span_s",
+        "normal_cap_mps",
+        "degraded_cap_mps",
+        "heading_max_age_s",
+        "alignment_max_skew_s",
+        "heading_max_variance_rad2",
+        "clock_pause_s",
+        "epoch_history_limit"
+      ],
+      "title": "AdmissionConfig",
+      "type": "object"
+    },
+    "ControllerConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "kp": {
+          "$ref": "#/$defs/Velocity"
+        },
+        "ki": {
+          "$ref": "#/$defs/Velocity"
+        },
+        "integral_limit": {
+          "$ref": "#/$defs/Velocity"
+        },
+        "track_width_m": {
+          "title": "Track Width M",
+          "type": "number"
+        },
+        "wheel_speed_mps": {
+          "title": "Wheel Speed Mps",
+          "type": "number"
+        },
+        "max_tick_s": {
+          "title": "Max Tick S",
+          "type": "number"
+        },
+        "still_speed_mps": {
+          "title": "Still Speed Mps",
+          "type": "number"
+        },
+        "still_yaw_rps": {
+          "title": "Still Yaw Rps",
+          "type": "number"
+        },
+        "still_samples": {
+          "title": "Still Samples",
+          "type": "integer"
+        },
+        "still_span_s": {
+          "title": "Still Span S",
+          "type": "number"
+        },
+        "disagreement_mps": {
+          "title": "Disagreement Mps",
+          "type": "number"
+        },
+        "basis": {
+          "title": "Basis",
+          "type": "string"
+        },
+        "synthetic": {
+          "title": "Synthetic",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kp",
+        "ki",
+        "integral_limit",
+        "track_width_m",
+        "wheel_speed_mps",
+        "max_tick_s",
+        "still_speed_mps",
+        "still_yaw_rps",
+        "still_samples",
+        "still_span_s",
+        "disagreement_mps",
+        "basis",
+        "synthetic"
+      ],
+      "title": "ControllerConfig",
+      "type": "object"
+    },
+    "FusionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "trusted_statistical_models": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Trusted Statistical Models",
+          "type": "array"
+        },
+        "normal_cap_mps": {
+          "title": "Normal Cap Mps",
+          "type": "number"
+        },
+        "degraded_cap_mps": {
+          "title": "Degraded Cap Mps",
+          "type": "number"
+        },
+        "conflict_linear_mps": {
+          "title": "Conflict Linear Mps",
+          "type": "number"
+        },
+        "conflict_yaw_rps": {
+          "title": "Conflict Yaw Rps",
+          "type": "number"
+        }
+      },
+      "required": [
+        "trusted_statistical_models",
+        "normal_cap_mps",
+        "degraded_cap_mps",
+        "conflict_linear_mps",
+        "conflict_yaw_rps"
+      ],
+      "title": "FusionConfig",
+      "type": "object"
+    },
+    "Source": {
+      "enum": [
+        "laser",
+        "gps",
+        "imu",
+        "wheel"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "SourceRule": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "max_age_s": {
+          "title": "Max Age S",
+          "type": "number"
+        },
+        "max_interval_s": {
+          "title": "Max Interval S",
+          "type": "number"
+        },
+        "min_quality": {
+          "title": "Min Quality",
+          "type": "number"
+        },
+        "max_variance": {
+          "title": "Max Variance",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source",
+        "max_age_s",
+        "max_interval_s",
+        "min_quality",
+        "max_variance"
+      ],
+      "title": "SourceRule",
+      "type": "object"
+    },
+    "TemporalConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "history_s": {
+          "title": "History S",
+          "type": "number"
+        },
+        "max_samples": {
+          "title": "Max Samples",
+          "type": "integer"
+        },
+        "max_hold_s": {
+          "title": "Max Hold S",
+          "type": "number"
+        },
+        "max_gap_s": {
+          "title": "Max Gap S",
+          "type": "number"
+        },
+        "prediction_horizon_s": {
+          "title": "Prediction Horizon S",
+          "type": "number"
+        },
+        "assume_nonholonomic": {
+          "title": "Assume Nonholonomic",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "history_s",
+        "max_samples",
+        "max_hold_s",
+        "max_gap_s",
+        "prediction_horizon_s",
+        "assume_nonholonomic"
+      ],
+      "title": "TemporalConfig",
+      "type": "object"
+    },
+    "Velocity": {
+      "additionalProperties": false,
+      "properties": {
+        "vx": {
+          "title": "Vx",
+          "type": "number"
+        },
+        "wz": {
+          "title": "Wz",
+          "type": "number"
+        }
+      },
+      "required": [
+        "vx",
+        "wz"
+      ],
+      "title": "Velocity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "profile_id": {
+      "minLength": 1,
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "evidence_basis": {
+      "minLength": 1,
+      "title": "Evidence Basis",
+      "type": "string"
+    },
+    "operating_conditions": {
+      "minLength": 1,
+      "title": "Operating Conditions",
+      "type": "string"
+    },
+    "simulation_only": {
+      "const": false,
+      "title": "Simulation Only",
+      "type": "boolean"
+    },
+    "unvalidated": {
+      "const": false,
+      "title": "Unvalidated",
+      "type": "boolean"
+    },
+    "max_age": {
+      "exclusiveMinimum": 0,
+      "title": "Max Age",
+      "type": "number"
+    },
+    "accel": {
+      "exclusiveMinimum": 0,
+      "title": "Accel",
+      "type": "number"
+    },
+    "decel": {
+      "exclusiveMinimum": 0,
+      "title": "Decel",
+      "type": "number"
+    },
+    "jerk": {
+      "exclusiveMinimum": 0,
+      "title": "Jerk",
+      "type": "number"
+    },
+    "yaw_accel": {
+      "exclusiveMinimum": 0,
+      "title": "Yaw Accel",
+      "type": "number"
+    },
+    "yaw_decel": {
+      "exclusiveMinimum": 0,
+      "title": "Yaw Decel",
+      "type": "number"
+    },
+    "yaw_jerk": {
+      "exclusiveMinimum": 0,
+      "title": "Yaw Jerk",
+      "type": "number"
+    },
+    "lag": {
+      "minimum": 0,
+      "title": "Lag",
+      "type": "number"
+    },
+    "cap": {
+      "exclusiveMinimum": 0,
+      "title": "Cap",
+      "type": "number"
+    },
+    "degraded_cap": {
+      "exclusiveMinimum": 0,
+      "title": "Degraded Cap",
+      "type": "number"
+    },
+    "yaw_cap": {
+      "exclusiveMinimum": 0,
+      "title": "Yaw Cap",
+      "type": "number"
+    },
+    "length": {
+      "exclusiveMinimum": 0,
+      "title": "Length",
+      "type": "number"
+    },
+    "width": {
+      "exclusiveMinimum": 0,
+      "title": "Width",
+      "type": "number"
+    },
+    "linear_error": {
+      "minimum": 0,
+      "title": "Linear Error",
+      "type": "number"
+    },
+    "yaw_error": {
+      "minimum": 0,
+      "title": "Yaw Error",
+      "type": "number"
+    },
+    "sensor_error": {
+      "minimum": 0,
+      "title": "Sensor Error",
+      "type": "number"
+    },
+    "position_error": {
+      "minimum": 0,
+      "title": "Position Error",
+      "type": "number"
+    },
+    "model_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Model Seconds",
+      "type": "number"
+    },
+    "assumed_body_cap": {
+      "exclusiveMinimum": 0,
+      "title": "Assumed Body Cap",
+      "type": "number"
+    },
+    "drive_linear_overshoot": {
+      "minimum": 0,
+      "title": "Drive Linear Overshoot",
+      "type": "number"
+    },
+    "drive_yaw_overshoot": {
+      "minimum": 0,
+      "title": "Drive Yaw Overshoot",
+      "type": "number"
+    },
+    "horizon_s": {
+      "exclusiveMinimum": 0,
+      "title": "Horizon S",
+      "type": "number"
+    },
+    "orientation_error_rad": {
+      "minimum": 0,
+      "title": "Orientation Error Rad",
+      "type": "number"
+    },
+    "lateral_drift_mps": {
+      "minimum": 0,
+      "title": "Lateral Drift Mps",
+      "type": "number"
+    },
+    "lateral_stop_s": {
+      "minimum": 0,
+      "title": "Lateral Stop S",
+      "type": "number"
+    },
+    "reaction_linear_accel": {
+      "minimum": 0,
+      "title": "Reaction Linear Accel",
+      "type": "number"
+    },
+    "reaction_yaw_accel": {
+      "minimum": 0,
+      "title": "Reaction Yaw Accel",
+      "type": "number"
+    },
+    "watchdog_basis": {
+      "minLength": 1,
+      "title": "Watchdog Basis",
+      "type": "string"
+    },
+    "hardware_estop_topic": {
+      "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
+      "title": "Hardware Estop Topic",
+      "type": "string"
+    },
+    "hardware_estop_publisher": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "title": "Hardware Estop Publisher",
+      "type": "string"
+    },
+    "hardware_estop_max_age_s": {
+      "exclusiveMinimum": 0,
+      "title": "Hardware Estop Max Age S",
+      "type": "number"
+    },
+    "hardware_estop_basis": {
+      "minLength": 1,
+      "title": "Hardware Estop Basis",
+      "type": "string"
+    },
+    "perception_basis": {
+      "minLength": 1,
+      "title": "Perception Basis",
+      "type": "string"
+    },
+    "risk_basis": {
+      "minLength": 1,
+      "title": "Risk Basis",
+      "type": "string"
+    },
+    "brake_tracking_basis": {
+      "minLength": 1,
+      "title": "Brake Tracking Basis",
+      "type": "string"
+    },
+    "admission_config": {
+      "$ref": "#/$defs/AdmissionConfig"
+    },
+    "temporal_config": {
+      "$ref": "#/$defs/TemporalConfig"
+    },
+    "fusion_config": {
+      "$ref": "#/$defs/FusionConfig"
+    },
+    "controller_config": {
+      "$ref": "#/$defs/ControllerConfig"
+    },
+    "wheel_topic": {
+      "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
+      "title": "Wheel Topic",
+      "type": "string"
+    },
+    "imu_topic": {
+      "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
+      "title": "Imu Topic",
+      "type": "string"
+    },
+    "wheel_publisher": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "title": "Wheel Publisher",
+      "type": "string"
+    },
+    "imu_publisher": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "title": "Imu Publisher",
+      "type": "string"
+    },
+    "source_namespace": {
+      "pattern": "^/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?$",
+      "title": "Source Namespace",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "profile_id",
+    "evidence_basis",
+    "operating_conditions",
+    "simulation_only",
+    "unvalidated",
+    "max_age",
+    "accel",
+    "decel",
+    "jerk",
+    "yaw_accel",
+    "yaw_decel",
+    "yaw_jerk",
+    "lag",
+    "cap",
+    "degraded_cap",
+    "yaw_cap",
+    "length",
+    "width",
+    "linear_error",
+    "yaw_error",
+    "sensor_error",
+    "position_error",
+    "model_seconds",
+    "assumed_body_cap",
+    "drive_linear_overshoot",
+    "drive_yaw_overshoot",
+    "horizon_s",
+    "orientation_error_rad",
+    "lateral_drift_mps",
+    "lateral_stop_s",
+    "reaction_linear_accel",
+    "reaction_yaw_accel",
+    "watchdog_basis",
+    "hardware_estop_topic",
+    "hardware_estop_publisher",
+    "hardware_estop_max_age_s",
+    "hardware_estop_basis",
+    "perception_basis",
+    "risk_basis",
+    "brake_tracking_basis",
+    "admission_config",
+    "temporal_config",
+    "fusion_config",
+    "controller_config",
+    "wheel_topic",
+    "imu_topic",
+    "wheel_publisher",
+    "imu_publisher",
+    "source_namespace"
+  ],
+  "title": "HardwareMotionProfile",
+  "type": "object"
+}

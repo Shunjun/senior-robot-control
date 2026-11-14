@@ -31,6 +31,7 @@ T3a commit `0959041f3a4e82ac495b3a9ebc50b7456f358062`：仅 `motion/{contracts,o
 
 ```python
 from tools.motion_fusion_replay import ReplayChain, replay_policy
+
 chain = ReplayChain(replay_policy())
 # sample为保留原时间/epoch/协方差依据的Point/RateInterval/Delta，不含truth。
 decision = chain.ingest(sample, now_ros, now_steady, heading=known_heading_or_none)

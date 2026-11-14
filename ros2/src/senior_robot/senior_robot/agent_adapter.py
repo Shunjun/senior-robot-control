@@ -365,11 +365,19 @@ def main() -> None:
         node.declare_parameter("ipc_replace_existing_socket", True)
         node.declare_parameter("simulation_qualified_reference", False)
         node.declare_parameter("simulation_baseline_world", "")
+        node.declare_parameter("hardware_navigation_reference", "")
+        hardware_reference = str(node.get_parameter("hardware_navigation_reference").value)
         reference = None
         if node.get_parameter("simulation_qualified_reference").value:
             world = Path(str(node.get_parameter("simulation_baseline_world").value))
             reference = SimulationReference(node, world)
             node.simulation_reference = reference
+        elif hardware_reference:
+            if node.get_parameter("use_sim_time").value:
+                raise ValueError("hardware navigation requires use_sim_time=false")
+            from senior_robot.hardware_reference import HardwareReference
+
+            reference = HardwareReference(node, Path(hardware_reference))
         exiting = False
 
         def state() -> dict[str, Any]:
@@ -392,6 +400,8 @@ def main() -> None:
                     "manual_driving": False,
                     "safety_clear": False,
                     "navigation_ready": False,
+                    "map_generation": None,
+                    "localization_generation": None,
                 }
             )
             result["task_evidence_ready"] = node.task_motion_allowed(continuing=True)
@@ -430,6 +440,7 @@ def main() -> None:
         previous_route_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
+        node.declare_parameter("navigation_odometry_topic", "/wheel/odom")
         if reference is not None and nav_params and Path(nav_params).is_file():
             from senior_robot.dedicated_controller import DedicatedController
             from senior_robot.navigation_adapter import (
@@ -439,7 +450,10 @@ def main() -> None:
             )
 
             planner_active = create_planner_readiness(node)
-            controller = DedicatedController(node, Path(nav_params))
+            controller = DedicatedController(
+                node, Path(nav_params),
+                odometry_topic=str(node.get_parameter("navigation_odometry_topic").value),
+            )
 
             def qualified(ref, generation, *, continuing=True):
                 nonlocal previous_failure, previous_route_failure

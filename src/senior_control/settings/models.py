@@ -120,11 +120,10 @@ class SettingsResult(FrozenModel):
     capabilities: SettingsCapabilities
 
 
-def simulation_settings_profile() -> SettingsProfile:
-    """Explicit simulation product policy, never measured hardware capability.
+def vehicle_settings_profile() -> SettingsProfile:
+    """Product preference bounds; these never establish physical capability.
 
-    Composition must opt in to this profile. The controller still constrains
-    combined wheel requests and physical execution; real vehicles need a profile.
+    Hardware response and wheel limits independently constrain every output.
     """
     defaults = DrivingSettings(
         low_linear_mps=5 / 9,
@@ -141,3 +140,8 @@ def simulation_settings_profile() -> SettingsProfile:
         reverse_linear_mps=0.3,
     )
     return SettingsProfile(defaults, maximum)
+
+
+def simulation_settings_profile() -> SettingsProfile:
+    # //Compatible: older simulation callers share the product preference policy.
+    return vehicle_settings_profile()

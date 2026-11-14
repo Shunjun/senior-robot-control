@@ -1,58 +1,88 @@
-# 仿真运行说明
+# Linux 仿真部署与运行
 
-仿真使用 `config/simulation.yaml`，只在虚拟机或开发宿主机运行 ROS 仿真栈。云服务仍位于
-云主机；虚拟机连接云端时使用云域名，不使用虚拟机自己的 `localhost`。若浏览器在另一台
-机器，也必须通过云域名访问。
+本页只面向 Linux 仿真机。云服务先按[云端部署](deploy.md)配置；实车用[实车部署](vehicle-deploy.md)，不要把本页的 Gazebo 真值、仿真急停初始化或运动恢复操作用于实车。浏览器与仿真机都连接真实云域名，跨机器不使用各自的 `localhost`。
 
-启动任何仿真进程前可执行只读检查：
+## 1. 准备 Linux 环境与仓库
+
+需要带 systemd 用户会话的 Ubuntu 22.04、ROS 2 Humble 和 Gazebo Fortress。历史传感器契约环境为 Ubuntu 22.04.5 aarch64 / Fortress 6.18.0，该记录不代表当前完整安全、导航链已通过。需要预先安装对应官方 ROS / Gazebo 二进制及 `ros_gz_sim`、`ros_gz_bridge`、`gz_ros2_control`、`controller_manager`、`diff_drive_controller`、`joint_state_broadcaster`、`robot_state_publisher`、`xacro`，并提供 Python 3.10 venv/pip、rosdep、colcon 和本机构建工具。无窗口模式还需要 `xvfb`、`xauth`、`mesa-utils` 与可用的渲染环境。
+
+下列命令供操作者在仿真机执行，从项目根目录开始。只有克隆仓库还没有 CLI；本页使用 ROS 运行环境 `.ros-venv` 安装并执行 CLI，因为仿真监督进程和 Agent 使用启动 CLI 的 Python。不要用实车宿主机那份不含 ROS 的 `.venv` 代替它。
 
 ```sh
-uv run python tools/doctor.py config/simulation.yaml
+git clone https://github.com/Shunjun/senior-robot-control.git
+cd senior-robot-control
+source /opt/ros/humble/setup.bash
+python3.10 -m venv --system-site-packages .ros-venv
+.ros-venv/bin/python -m pip install -e '.[agent,safety,ros]'
+rosdep update --rosdistro humble
+rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
+cd ros2
+../.ros-venv/bin/python -m colcon build --packages-up-to senior_sim senior_robot
+source install/setup.bash
+cd ..
 ```
 
-没有正在运行的 ROS 图时，doctor 会把实时项记录为 `not_run`，不会为了完成检查启动
-Gazebo、设备、ROS 节点或模型下载。仿真与硬件 profile 必须保持为两个文件；不得添加重复
-`mode` 或将两种模式拼接。仿真仍遵守唯一速度出口：导航和命令节点发布
-`/safety/command_in`，只有 `safety_node` 发布 `/cmd_vel`。
+ROS 的 `rclpy` 由已安装的 ROS 提供，`--system-site-packages` 使该环境可访问它。用 `.ros-venv` 的解释器构建，避免系统 colcon 生成的入口找不到项目模块。每个新终端加载 ROS 底层与本项目 `ros2/install/setup.bash`。具体 ROS 传感器契约与手动独立 launch 见 [ros2/README.md](../../ros2/README.md)；不要与下文 CLI 管理的同一实例重复启动。
 
-需要 GPU 加速的仿真或视觉推理，虚拟机必须启用经过验证的 GPU 直通或虚拟 GPU，并安装
-匹配驱动；否则使用 CPU 配置并降低负载。模型权重应预先校验并放在明确路径，构建和检查
-过程不会联网获取。
+## 2. 先创建统一目录与配置
 
-## 使用车端命令管理隔离仿真
+仍在仿真机项目根目录，以当前普通用户执行，后续 pair/start/stop/status 都不要 sudo。默认读取当前用户 `~/senior-control/config.json`，CLI 不会自动生成它。多实例必须有独立私有目录、配对身份与未占用 ROS 域；下列 73 只是仿真示例，需核对未占用。
 
-在已安装 Agent 依赖、ROS 2 Humble、Gazebo Fortress 和 Xvfb 的 Linux 用户会话中，
-为每个实例准备独立的私有目录（权限 0700）。选用现场未使用的 ROS 域。
-将下面的配置保存为 `~/senior-sim/simulation.json`，并把绝对路径换成该实例的路径。
-省略 `--profile` 时，命令会读取此文件，并要求 `kind` 为 `simulation`。其他配置位置可用
-`--profile` 指定，实车配置仍须显式指定。
+```sh
+mkdir -p "$HOME/senior-control"
+chmod 700 "$HOME/senior-control"
+```
+
+在该目录手工创建 `config.json`，例如（将 `/home/sim` 改为本用户实际绝对路径，域名改为实际 WSS 地址）：
 
 ```json
 {
   "kind": "simulation",
-  "credentials": "/home/toby/senior-sim/credentials.json",
-  "database": "/home/toby/senior-sim/state.db",
-  "socket": "/home/toby/senior-sim/adapter.sock",
-  "estop_state": "/home/toby/senior-sim/estop.json",
-  "ros_setup": "/home/toby/ros-workspace/install/setup.bash",
+  "project_dir": "/home/sim/senior-robot-control",
+  "ros_setup": "/home/sim/senior-robot-control/ros2/install/setup.bash",
   "cloud_url": "wss://robot.example.com/ws/agent",
   "ros_domain": 73
 }
 ```
 
+`ros_setup` 可省略，默认由 `project_dir/ros2/install/setup.bash` 推导。不要逐项配置其他目录的 credentials/database/socket/estop_state，不要将 `config/simulation.yaml` 的硬件/运动参数当成此 JSON。前者供 ROS/Python 配置读取，后者才是 CLI 运行配置。仿真与硬件参数必须分开。
+
+统一目录保存 `device.json`（凭据 0600）、`agent.db`（含可能的 WAL/SHM）、`estop-state.json`、`agent.sock`、仿真锁和 `ros-home/`（ROS 日志在 `ros-home/log/`）。仿真 start 只在首次缺失时按仿真规则初始化急停状态；已存在状态跨重启保留，无效状态不能靠删除来绕过。目录应为 0700，备份也要保护凭据与数据库。
+
+## 3. 配对、检查与启停
+
+先在云端网页为此仿真实例生成一次性配对码，再在仿真机项目根目录执行，按交互提示输入；不要将配对码或 token 写进命令行或文档。已有凭据拒绝覆盖；旧凭据被删除且无备份时要重新配对。
+
 ```sh
-senior-robot pair --cloud-url https://robot.example.com --name "隔离仿真"
-senior-robot doctor
-senior-robot start
-senior-robot status
-senior-robot stop
+.ros-venv/bin/senior-robot pair --cloud-url wss://robot.example.com/ws/agent --name '隔离仿真'
+.ros-venv/bin/senior-robot doctor
+.ros-venv/bin/senior-robot start
+.ros-venv/bin/senior-robot status
+.ros-venv/bin/senior-robot stop
 ```
+
+以上默认使用 `~/senior-control`。自选目录时，每条命令都显式追加 `--control-dir /home/sim/another-sim`，并先在该目录创建 `config.json`。仿真无需执行实车 `deploy`；`start` 通过 `simulation_cli.py` 创建 systemd 用户服务，先启动 ROS 仿真入口并完成适配器握手，随后启动 Agent，停止先 Agent 后本次仿真。它不管理其他实例或厂商进程。
+
+`doctor` 不启动 Gazebo、设备或 ROS 节点。另需检查 ROS 参数文件时，可在项目根目录执行 `.ros-venv/bin/python tools/doctor.py config/simulation.yaml`；没有运行 ROS 图时实时项为 `not_run`，不代表通过。检查和构建不会自动下载模型权重。
+
+查看日志也在仿真宿主机，以同一普通用户执行：
+
+```sh
+# 先列出实际用户服务，再把名称替换为该实例的真实 unit：
+systemctl --user list-units --all 'senior-sim-*'
+unit='senior-sim-替换为实际实例哈希.service'
+journalctl --user -u "$unit" -n 100 --no-pager
+```
+
+`status` 的 Process、ROS IPC、Cloud 分别表示进程、身份探测与本次运行最近连接事件；`last event connected` 不是持续在线、地图有效或运动资格证明。启动失败先检查构建、overlay、用户会话、独立域、凭据、私有目录权限和显示环境，不盲删 socket 或急停文件。
+
+## 4. 图形窗口与实例隔离
 
 `start` 默认等同于 `start --headless true`，通过 Xvfb 无窗口运行。要打开本机 Gazebo
 窗口，在 Linux 图形桌面的终端执行：
 
 ```sh
-senior-robot start --headless false
+.ros-venv/bin/senior-robot start --headless false
 ```
 
 窗口模式绕过 Xvfb，将当前终端的 `DISPLAY`、`XAUTHORITY` 及相关桌面会话环境传入
@@ -70,7 +100,7 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 
 ### 工作台实时地图
 
-`senior-robot start` 的仿真档启动 Gazebo 的运动校验场景，并启用带引用的地图和 Nav2。
+`.ros-venv/bin/senior-robot start` 的仿真档启动 Gazebo 的运动校验场景，并以 `qualified_reference:=true` 请求带引用的地图和 Nav2；只有参考与运行资格满足时才可用，不保证导航通过。默认不自动启动 `slam_toolbox`。
 栅格由启动使用的 SDF 碰撞几何生成，网页图块和 Nav2 的 `/map` 来自同一份栅格。
 定位参考使用该隔离实例的 Gazebo 真值里程计和轮式里程计，任一来源过期、重复或切换时
 停止提供定位资格。手动调试此链路时，应在同一隔离域的
@@ -97,9 +127,9 @@ Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点�
 先确认仿真稳定、车辆静止，并松开移动控件，再在仿真宿主机执行：
 
 ```sh
-senior-robot requalify-motion
-# 使用其他仿真档时：
-senior-robot requalify-motion --profile /home/toby/another-sim/simulation.json
+.ros-venv/bin/senior-robot requalify-motion
+# 使用另一个独立统一目录时：
+.ros-venv/bin/senior-robot requalify-motion --control-dir /home/sim/another-sim
 ```
 
 命令验证仿真档、该档的运行中用户服务和 ROS 适配器身份后，加载该档的 ROS 环境，
@@ -117,7 +147,7 @@ senior-robot requalify-motion --profile /home/toby/another-sim/simulation.json
 并通过两个连续、独立对齐的扫描、轮速和 IMU 静止观测区间。持续非零请求、证据再次中断
 或不满足静止阈值时，安全门继续停车；命令不会伪造观测或降低判断条件。
 
-`senior-robot status` 只报告进程、IPC 和云端连接，不能证明运动资格恢复。
+`.ros-venv/bin/senior-robot status` 只报告进程、IPC 和云端连接，不能证明运动资格恢复。
 通过同一 ROS 域的 `/motion/evidence` 实时运动证据检查 `valid` 恢复且不再报告
 `progress_history_unqualified`；再检查 `/safety/status` 的新鲜 `evidence_ready=true`
 以及工作台中当前车辆的安全许可与拦截原因。保持零速时，安全门仍可能显示
@@ -130,3 +160,7 @@ senior-robot requalify-motion --profile /home/toby/another-sim/simulation.json
 要在浏览器查看仿真车辆的 RGB 摄像头，在仿真档 JSON 中设置 `"video": true`，
 并让运行 Agent 的 Python 环境安装项目的 `video` 可选依赖。仿真和 Agent 共享
 本次运行专用的私有最新帧，视频继续经现有 WebRTC 通道协商。
+
+## 源码依据与验收边界
+
+配置解析见 [cli.py](../../src/senior_control/cli.py)，用户服务、握手、隔离与恢复见 [simulation_cli.py](../../src/senior_control/simulation_cli.py)，场景/参考入口见 [simulation_motion.launch.py](../../ros2/src/senior_robot/launch/simulation_motion.launch.py) 和 [simulation_reference.py](../../ros2/src/senior_robot/senior_robot/simulation_reference.py)。地图栅格来自 SDF 的 `baseline_grid` / `SimulationReference` 固定场景链路，不是已经完成在线 SLAM 的证明。完整 Linux 渲染、启停、地图、导航、视频与运动恢复仍需对应运行环境验收，静态文档更新不增加通过结论。

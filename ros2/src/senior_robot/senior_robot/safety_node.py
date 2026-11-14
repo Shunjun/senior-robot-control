@@ -144,15 +144,18 @@ class SafetyGate(Node):
             raise ValueError("simulation_rate_hz must be positive and body_frame nonempty")
         self._motion_core = None
         self.declare_parameter("motion_core_profile", "")
+        self.declare_parameter("hardware_motion_profile", "")
+        hardware_path = str(self.get_parameter("hardware_motion_profile").value)
         candidate = str(self.get_parameter("motion_core_profile").value)
         candidate_profile = None
-        if candidate:
+        if candidate or hardware_path:
             import os
 
-            from senior_robot.simulation_motion_profile import select_simulation_profile
+            from senior_robot.motion_profile import select_motion_profile
 
-            candidate_profile = select_simulation_profile(
+            candidate_profile = select_motion_profile(
                 candidate,
+                hardware_path=hardware_path,
                 simulated_clock=bool(self.get_parameter("use_sim_time").value),
                 localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
                 domain_id=os.environ.get("ROS_DOMAIN_ID", ""),

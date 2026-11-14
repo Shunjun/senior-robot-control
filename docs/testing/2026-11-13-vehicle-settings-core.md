@@ -107,13 +107,19 @@ T9 提交/回读示例：
 
 ```python
 current = await service.get()
-receipt = await service.apply(SettingsRequest(
-    request_id="settings-request-123", expected_version=current.logging_version,
-    group="logging", values={
-        "level": "INFO", "retention_seconds": 604800,
-        "debug_enabled": True, "debug_restore_seconds": 300,
-    },
-))
+receipt = await service.apply(
+    SettingsRequest(
+        request_id="settings-request-123",
+        expected_version=current.logging_version,
+        group="logging",
+        values={
+            "level": "INFO",
+            "retention_seconds": 604800,
+            "debug_enabled": True,
+            "debug_restore_seconds": 300,
+        },
+    )
+)
 # receipt.reason == "applied" 才展示本次成功；超时则 await service.result(id)。
 # 展示 receipt.snapshot.logging、logging_version 和 receipt.capabilities；刷新用 get。
 ```

@@ -9,9 +9,9 @@ from senior_control import cli
 @pytest.fixture
 def default_profile(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    profile = tmp_path / "senior-sim" / "simulation.json"
+    profile = tmp_path / "senior-control" / "config.json"
     profile.parent.mkdir()
-    profile.write_text(json.dumps({"kind": "simulation", "credentials": "/test/credentials.json"}))
+    profile.write_text(json.dumps({"kind": "simulation"}))
     return profile
 
 
@@ -27,13 +27,10 @@ def test_explicit_profile_overrides_simulation_default(default_profile, tmp_path
     assert cli.main(["doctor", "--profile", str(profile)]) == 0
 
 
-def test_real_profile_requires_explicit_selection(default_profile, monkeypatch, capsys):
-    default_profile.write_text(
-        json.dumps({"kind": "real", "credentials": "/test/credentials.json"})
-    )
-    monkeypatch.setattr(cli, "_doctor", lambda _: pytest.fail("real profile was loaded by default"))
-    assert cli.main(["doctor"]) == 1
-    assert "--profile" in capsys.readouterr().err
+def test_default_directory_can_select_real_profile(default_profile, monkeypatch):
+    default_profile.write_text(json.dumps({"kind": "real"}))
+    monkeypatch.setattr(cli, "_doctor", lambda profile: 0 if profile.kind == "real" else 1)
+    assert cli.main(["doctor"]) == 0
 
 
 @pytest.mark.parametrize("command", ["start", "stop", "status"])
@@ -50,9 +47,7 @@ def test_lifecycle_uses_default_simulation_profile(default_profile, monkeypatch,
 
 def test_deploy_requires_explicit_real_profile(default_profile, monkeypatch):
     monkeypatch.setattr(cli, "_install_once", lambda *_: pytest.fail("installed a service"))
-    with pytest.raises(SystemExit) as error:
-        cli.main(["deploy"])
-    assert error.value.code == 2
+    assert cli.main(["deploy"]) == 1
     assert cli.main(["deploy", "--profile", str(default_profile)]) == 1
 
 

@@ -296,6 +296,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
     lifecycle.run = lambda factory, **kwargs: kwargs["spin"](
         factory(),
         SimpleNamespace(add_node=lambda _: None),
+        lambda: False,
     )
     monkeypatch.setattr(runtime.adapter, "AdapterCore", Core)
     monkeypatch.setattr(ipc, "IpcServer", Server)

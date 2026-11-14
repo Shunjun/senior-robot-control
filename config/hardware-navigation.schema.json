@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "Pose2D": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "yaw": {
+          "title": "Yaw",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "yaw"
+      ],
+      "title": "Pose2D",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "grid_path": {
+      "format": "path",
+      "title": "Grid Path",
+      "type": "string"
+    },
+    "grid_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Grid Sha256",
+      "type": "string"
+    },
+    "map_publisher": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "title": "Map Publisher",
+      "type": "string"
+    },
+    "pose_publisher": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "title": "Pose Publisher",
+      "type": "string"
+    },
+    "source_namespace": {
+      "pattern": "^/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?$",
+      "title": "Source Namespace",
+      "type": "string"
+    },
+    "pose_topic": {
+      "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
+      "title": "Pose Topic",
+      "type": "string"
+    },
+    "max_age_s": {
+      "exclusiveMinimum": 0,
+      "maximum": 5,
+      "title": "Max Age S",
+      "type": "number"
+    },
+    "max_position_variance": {
+      "exclusiveMinimum": 0,
+      "title": "Max Position Variance",
+      "type": "number"
+    },
+    "max_yaw_variance": {
+      "exclusiveMinimum": 0,
+      "title": "Max Yaw Variance",
+      "type": "number"
+    },
+    "anchor_id": {
+      "minLength": 1,
+      "title": "Anchor Id",
+      "type": "string"
+    },
+    "anchor_pose": {
+      "$ref": "#/$defs/Pose2D"
+    },
+    "evidence_basis": {
+      "minLength": 1,
+      "title": "Evidence Basis",
+      "type": "string"
+    }
+  },
+  "required": [
+    "grid_path",
+    "grid_sha256",
+    "map_publisher",
+    "pose_publisher",
+    "source_namespace",
+    "pose_topic",
+    "max_age_s",
+    "max_position_variance",
+    "max_yaw_variance",
+    "anchor_id",
+    "anchor_pose",
+    "evidence_basis"
+  ],
+  "title": "NavigationReferenceConfig",
+  "type": "object"
+}
