@@ -178,7 +178,11 @@ def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | Non
         f"safety_parameters:={profile.safety_parameters}",
         f"hardware_motion_profile:={profile.motion_profile}",
         f"robot_id:={robot_id}",
-        f"navigation_parameters:={profile.navigation_parameters or ''}",
+        *(
+            [f"navigation_parameters:={profile.navigation_parameters}"]
+            if profile.navigation_parameters is not None
+            else []
+        ),
     ]
 
 

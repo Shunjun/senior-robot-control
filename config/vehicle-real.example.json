@@ -4,5 +4,5 @@
   "cloud_url": "wss://your-cloud.example/ws/agent",
   "ros_domain": 0,
   "motion_profile": "hardware-motion.json",
-  "safety_parameters": "hardware-motion.yaml"
+  "safety_parameters": "hardware-safety.yaml"
 }
