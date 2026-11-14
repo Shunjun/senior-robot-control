@@ -1,7 +1,8 @@
 """Own the real-vehicle ROS adapter and Agent, in Docker or a native service.
 
 The shared sensor/fusion/safety stack and adapter are supervised together.
-Vendor chassis/lidar/IMU drivers and map/localization remain externally managed.
+WHEELTEC chassis/IMU/lidar drivers share the motion launch lifecycle.
+Map/localization remain externally managed.
 The private stop endpoint also works through docker exec without stopping the container.
 """
 
@@ -120,6 +121,9 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         raise ValueError("ROS workspace setup is missing; build it and configure ros_setup")
     if profile.ros_domain is not None and not 0 <= profile.ros_domain <= 232:
         raise ValueError("ros_domain must be between 0 and 232")
+    vendor = profile.vendor_ros_setup if hardware is not None else setup
+    if not vendor.is_absolute() or not vendor.is_file():
+        raise ValueError("vendor_ros_setup: WHEELTEC install/setup.bash is missing")
     assert profile.estop_state is not None
     from senior_control.real_runtime import validate_navigation
 
@@ -127,10 +131,11 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     return [
         "/bin/bash",
         "-c",
-        'source "$1" || exit; shift; '
+        'source "$1" || exit; source "$2" || exit; shift 2; '
         'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
         'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$@"',
         "senior-vehicle-ros",
+        str(vendor),
         str(setup),
         sys.executable,
         "-c",
@@ -170,7 +175,7 @@ def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | Non
     if profile.motion_profile is None and profile.safety_parameters is None:
         return None
     base = _adapter_command(profile, robot_id)
-    return base[:5] + [
+    return base[:6] + [
         # Keep launch-file imports in the same Python environment as the adapter.
         # The ros2 console script can have a system-Python shebang even when
         # senior_control is installed only in the service's ROS virtualenv.

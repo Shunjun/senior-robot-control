@@ -4,5 +4,6 @@
   "cloud_url": "wss://example.com/ws/agent",
   "container": "ros2",
   "motion_profile": "hardware-motion.json",
-  "safety_parameters": "hardware-safety.yaml"
+  "safety_parameters": "hardware-safety.yaml",
+  "vendor_ros_setup": "/home/wheeltec/wheeltec_ros2/install/setup.bash"
 }

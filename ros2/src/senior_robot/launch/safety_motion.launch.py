@@ -1,4 +1,4 @@
-"""Shared hardware motion stack; vendor drivers and mapping/localization are external.
+"""WHEELTEC drivers and shared hardware motion stack; mapping remains external.
 
 The supervisor starts exactly one agent_adapter/CommandNode separately, preserving
 its Unix peer identity. This launch owns the sole safety_gate /cmd_vel output.
@@ -6,13 +6,16 @@ its Unix peer identity. This launch owns the sole safety_gate /cmd_vel output.
 
 from pathlib import Path
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
     IncludeLaunchDescription,
     OpaqueFunction,
+    RegisterEventHandler,
 )
+from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -35,6 +38,25 @@ def _nodes(context):
     remaps = [("/wheel/odom", profile.wheel_topic), ("/imu/data", profile.imu_topic)]
     stop = [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
     nodes = [
+        # All included hardware children belong to this launch process group.
+        # A required driver exit shuts down the shared stack as well.
+        RegisterEventHandler(OnProcessExit(on_exit=stop)),
+        *[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    str(
+                        Path(get_package_share_directory("turn_on_wheeltec_robot"))
+                        / "launch"
+                        / filename
+                    )
+                ),
+            )
+            for filename in (
+                "turn_on_wheeltec_robot.launch.py",
+                "wheeltec_lidar.launch.py",
+                "wheeltec_camera.launch.py",
+            )
+        ],
         Node(
             package="senior_sensor_ingress",
             executable="scan_receipt_node",

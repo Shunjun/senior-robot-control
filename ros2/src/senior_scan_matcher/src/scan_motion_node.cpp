@@ -47,8 +47,15 @@ public:
     limits.reanchor_yaw = declare_parameter<double>("reanchor_yaw", -1.0);
     const int min_rays = declare_parameter<int>("min_rays", -1);
     if (body_.empty() || scan_topic.empty() || min_rays < 3 ||
-        !positive(max_age_) || !positive(max_speed_) || !positive(max_yaw_rate_))
-      throw std::invalid_argument("unqualified scan-motion profile");
+        !positive(max_age_) || !positive(max_speed_) || !positive(max_yaw_rate_)) {
+      std::ostringstream detail;
+      detail << "invalid scan-motion parameters: body_frame='" << body_
+             << "', scan_topic='" << scan_topic << "', min_rays=" << min_rays
+             << ", scan_max_age=" << max_age_ << ", max_linear_speed=" << max_speed_
+             << ", max_yaw_rate=" << max_yaw_rate_
+             << "; frames/topics must be nonempty, min_rays >= 3, limits finite and > 0";
+      throw std::invalid_argument(detail.str());
+    }
     limits.min_rays = static_cast<unsigned>(min_rays);
     matcher_ = std::make_unique<LocalMatcher>(limits);
     publisher_ = create_publisher<senior_motion_msgs::msg::ScanMotion>("/motion/scan", 10);
