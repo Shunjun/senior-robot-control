@@ -44,34 +44,58 @@ MotionAssessment 包含 contributors/available_sources、原始质量/协方差/
 
 ```python
 from senior_control.motion.observations import (
-    AdmissionConfig, Covariance, CovarianceKind, Frame, Observation,
-    Source, SourceRule, SourceStatus,
+    AdmissionConfig,
+    Covariance,
+    CovarianceKind,
+    Frame,
+    Observation,
+    Source,
+    SourceRule,
+    SourceStatus,
 )
 from senior_control.motion.source_admission import AdmissionOwner
 
 # Synthetic values demonstrate the API; none is a frozen vehicle limit.
 config = AdmissionConfig(
-    rules=tuple(SourceRule(source, .5, .3, .3, 2.) for source in Source),
-    recovery_samples=1, recovery_span_s=0., normal_cap_mps=1.,
-    degraded_cap_mps=.2, heading_max_age_s=.2, alignment_max_skew_s=.1,
-    heading_max_variance_rad2=.05, clock_pause_s=.3, epoch_history_limit=8,
+    rules=tuple(SourceRule(source, 0.5, 0.3, 0.3, 2.0) for source in Source),
+    recovery_samples=1,
+    recovery_span_s=0.0,
+    normal_cap_mps=1.0,
+    degraded_cap_mps=0.2,
+    heading_max_age_s=0.2,
+    alignment_max_skew_s=0.1,
+    heading_max_variance_rad2=0.05,
+    clock_pause_s=0.3,
+    epoch_history_limit=8,
 )
 owner = AdmissionOwner(config)
-for source, values in [(Source.WHEEL, (.31, 0., .12)), (Source.IMU, (.1,))]:
+for source, values in [(Source.WHEEL, (0.31, 0.0, 0.12)), (Source.IMU, (0.1,))]:
     observation = Observation(
-        source, Frame.BODY, 10., 10.1, 20., "demo-epoch", 1, .9,
-        SourceStatus.VALID, values,
-        Covariance((.01,)*len(values), CovarianceKind.DIAGONAL_ONLY,
-                   "synthetic variance; correlation unknown", None),
+        source,
+        Frame.BODY,
+        10.0,
+        10.1,
+        20.0,
+        "demo-epoch",
+        1,
+        0.9,
+        SourceStatus.VALID,
+        values,
+        Covariance(
+            (0.01,) * len(values),
+            CovarianceKind.DIAGONAL_ONLY,
+            "synthetic variance; correlation unknown",
+            None,
+        ),
     )
-    assert owner.ingest(observation, now_ros=10.1, now_steady=20.).accepted
-result = owner.assess(now_ros=10.1, now_steady=20.)
+    assert owner.ingest(observation, now_ros=10.1, now_steady=20.0).accepted
+result = owner.assess(now_ros=10.1, now_steady=20.0)
 assert result.mode.value == "wheel_imu_limited"
 assert result.motion is not None
-assert result.motion.average.vx == .31       # Never clip the measured reference to the cap.
-assert result.motion.average.wz == .1        # Same-window IMU yaw component.
-assert result.motion.upper is None          # No invented true-speed bound.
-assert result.target_linear_cap_mps == .2   # Target constraint only; not a permit/output.
+assert result.motion.average.vx == 0.31  # Never clip the measured reference to the cap.
+assert result.motion.average.wz == 0.1  # Same-window IMU yaw component.
+assert result.motion.upper is None  # No invented true-speed bound.
+assert result.target_linear_cap_mps == 0.2  # Target constraint only; not a permit/output.
 ```
 
 ## 验证与当前边界

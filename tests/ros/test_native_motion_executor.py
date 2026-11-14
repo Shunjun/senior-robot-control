@@ -109,7 +109,8 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
                     "DDS_SMOKE "
                     + json.dumps(
                         dict(
-                            entrypoint=filename, rclpy_path=rclpy.__file__,
+                            entrypoint=filename,
+                            rclpy_path=rclpy.__file__,
                             executor=type(executor).__name__,
                             metadata_keys=keys,
                             source_epoch=sources[0]["sample"]["epoch"],

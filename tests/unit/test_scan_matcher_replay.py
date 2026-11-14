@@ -7,20 +7,26 @@ def envelope(stamp, epoch="source-a", valid=True):
     return {
         "owner": {"valid": valid, "owner_epoch": epoch, "owner_gid": "gid"},
         "body": {
-            "valid": valid, "source_epoch": epoch,
-            "raw_capture": {"valid": valid, "stamp": {"sec": stamp, "nanosec": 0},
-                            "source_epoch": "raw", "raw_gid": "raw-gid"},
-            "angle_min": -1., "angle_increment": .1, "range_min": .08,
-            "range_max": 20., "ranges": [1., "nan", 2.],
+            "valid": valid,
+            "source_epoch": epoch,
+            "raw_capture": {
+                "valid": valid,
+                "stamp": {"sec": stamp, "nanosec": 0},
+                "source_epoch": "raw",
+                "raw_gid": "raw-gid",
+            },
+            "angle_min": -1.0,
+            "angle_increment": 0.1,
+            "range_min": 0.08,
+            "range_max": 20.0,
+            "ranges": [1.0, "nan", 2.0],
         },
     }
 
 
 def test_replay_retains_source_order_and_marks_real_source_changes():
     stream = io.StringIO()
-    frames = write_scan_records(
-        [envelope(3), envelope(2), envelope(4, "source-b")], stream
-    )
+    frames = write_scan_records([envelope(3), envelope(2), envelope(4, "source-b")], stream)
     lines = stream.getvalue().splitlines()
     assert [frame["stamp_ns"] for frame in frames] == [3_000_000_000, 2_000_000_000, 4_000_000_000]
     assert lines[0].startswith("S 3.0 ")
