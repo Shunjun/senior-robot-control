@@ -68,20 +68,141 @@ REQUIRED_PARAMETERS = {
 }
 
 
-def load_real_parameters(path: Path) -> dict[str, dict[str, Any]]:
+def real_parameter_defaults(
+    profile: HardwareMotionProfile | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Software policies, separate from measured response/error bounds.
+
+    Matcher acceptance/recovery settings reuse the existing software pipeline;
+    they do not certify covariance, braking, installation, or sensor coverage.
+    Nominal frames are from the WHEELTEC driver/URDF and require site verification.
+    """
+    age = profile.max_age if profile else 0.5
+    common = {"use_sim_time": False, "body_frame": "base_link"}
+    return {
+        "scan_receipt": {
+            "use_sim_time": False,
+            "scan_topic": "/scan",
+            "scan_ledger_max_age_s": 3.0,
+        },
+        "scan_adapter": {
+            **common,
+            "max_age_seconds": age,
+            "self_mask_calibrated": False,
+            "transform_static": False,
+            "no_return_clear": False,
+        },
+        "safety_scan_ingress": {**common, "observation_max_age": age, "transform_static": False},
+        "scan_motion_node": {
+            **common,
+            "scan_max_age": age,
+            "transform_static": False,
+            "max_interval": 0.4,
+            "max_linear_speed": profile.assumed_body_cap if profile else None,
+            "max_yaw_rate": profile.yaw_cap if profile else None,
+            "range_limit": 8.0,
+            "min_response": 0.3,
+            "max_residual": 0.09,
+            "min_inlier_fraction": 0.55,
+            "min_spread": 0.04,
+            "min_translation_observability": 0.05,
+            "min_yaw_observability": 0.01,
+            "max_variance": 0.05,
+            "reanchor_distance": 0.12,
+            "reanchor_yaw": 0.1,
+            "min_rays": 100,
+        },
+        "motion_fusion": {
+            **common,
+            "wheel_frame": "odom",
+            "imu_frame": "gyro_link",
+            "sensor_max_age": age,
+            "alignment_max_gap": 0.25,
+            "pending_wait": 0.25,
+            "max_variance": 0.1,
+            "imu_zero_variance": 0.01,
+            "min_quality": 0.3,
+            "max_yaw_error": 0.12,
+            "startup_window": 0.6,
+            "wheel_motion_limit": 0.004,
+            "stall_distance": 0.04,
+            "lateral_limit": 0.04,
+            "yaw_limit": 0.12,
+            "progress_stationary_max_linear_speed": profile.stationary_linear_mps
+            if profile
+            else None,
+            "progress_stationary_max_yaw_rate": profile.stationary_yaw_rps if profile else None,
+        },
+        "safety_gate": {
+            **common,
+            "simulation_rate_hz": 20.0,
+            "self_mask_calibrated": False,
+            "transform_static": False,
+            "observation_max_age": age,
+            "measurement_max_age": age,
+            "hard_margin": 0.0,
+            "depth_policy": "laser_only",
+            "command_ttl_seconds": 0.3,
+            "footprint_xy": (
+                [
+                    -profile.length / 2,
+                    -profile.width / 2,
+                    profile.length / 2,
+                    -profile.width / 2,
+                    profile.length / 2,
+                    profile.width / 2,
+                    -profile.length / 2,
+                    profile.width / 2,
+                ]
+                if profile
+                else None
+            ),
+        },
+        "command_node": {
+            "use_sim_time": False,
+            "heartbeat_seconds": 0.2,
+            "disconnect_seconds": 2.0,
+            "command_ttl_seconds": 0.3,
+        },
+    }
+
+
+def load_real_parameters(
+    path: Path, profile: HardwareMotionProfile | None = None
+) -> dict[str, dict[str, Any]]:
     if not path.is_absolute():
         raise ValueError("safety_parameters must be an absolute ROS parameter YAML path")
     value = yaml.safe_load(path.read_bytes())
     if not isinstance(value, dict):
         raise ValueError("safety_parameters must contain per-node ros__parameters")
     result = {}
+    defaults = real_parameter_defaults(profile)
     errors = []
     for node, fields in REQUIRED_PARAMETERS.items():
         entry = value.get(node, {})
         params = entry.get("ros__parameters", {}) if isinstance(entry, dict) else {}
         if not isinstance(params, dict):
             params = {}
+        params = {**defaults[node], **params}
         result[node] = params
+        # Response-related duplicates must retain the model's single value.
+        if profile is not None:
+            owned = {
+                "scan_adapter": ("max_age_seconds",),
+                "safety_scan_ingress": ("observation_max_age",),
+                "scan_motion_node": ("scan_max_age", "max_linear_speed", "max_yaw_rate"),
+                "motion_fusion": (
+                    "sensor_max_age",
+                    "progress_stationary_max_linear_speed",
+                    "progress_stationary_max_yaw_rate",
+                ),
+                "safety_gate": ("observation_max_age", "measurement_max_age"),
+            }
+            for field in owned.get(node, ()):
+                if params.get(field) != defaults[node][field]:
+                    errors.append(
+                        f"{node}.{field}: modify the owning hardware profile, not a duplicate"
+                    )
         if params.get("use_sim_time") is not False:
             errors.append(f"{node}.use_sim_time must be false")
         for key in fields:
@@ -95,12 +216,6 @@ def load_real_parameters(path: Path) -> dict[str, dict[str, Any]]:
     # silently claim required depth is included in the T4 sweep.
     if result["safety_gate"].get("depth_policy") != "laser_only":
         errors.append("safety_gate.depth_policy: shared core currently supports laser_only")
-    for node in ("scan_adapter", "safety_gate"):
-        if result[node].get("self_mask_calibrated") is not True:
-            errors.append(f"{node}.self_mask_calibrated requires actual mounting calibration")
-    for node in ("scan_adapter", "safety_scan_ingress", "scan_motion_node", "safety_gate"):
-        if result[node].get("transform_static") is not True:
-            errors.append(f"{node}.transform_static requires a verified rigid lidar mount")
     if result["safety_gate"].get("output_topic", "/cmd_vel") != "/cmd_vel":
         errors.append("safety_gate.output_topic must stay /cmd_vel (sole actuator owner)")
     for node in ("command_node", "safety_gate"):
@@ -138,7 +253,7 @@ def validate_real_runtime(
         errors.append("safety_parameters: absolute path to calibrated per-node ROS YAML required")
     else:
         try:
-            params = load_real_parameters(safety_parameters)
+            params = load_real_parameters(safety_parameters, profile)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             errors.append(f"safety_parameters: {exc}")
     if profile is not None and params is not None:

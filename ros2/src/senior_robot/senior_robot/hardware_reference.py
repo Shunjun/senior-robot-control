@@ -19,7 +19,6 @@ class HardwareReference:
     def __init__(self, node: Any, path: Path):
         from geometry_msgs.msg import PoseWithCovarianceStamped
         from nav_msgs.msg import OccupancyGrid
-        from rclpy.qos import DurabilityPolicy, QoSProfile
 
         self._node = node
         self.config = load_navigation_reference(path)
@@ -34,15 +33,37 @@ class HardwareReference:
         self._pose_map_serial = -1
         self.safety_reason = "motion runtime qualification required"
         self.safety_ages = ""
-        node.create_subscription(
+        from senior_robot.native_receipt import subscribe
+
+        subscribe(
+            node,
             OccupancyGrid,
             "/map",
             self._on_map,
-            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            writer=self.config.map_publisher,
+            namespace=self.config.source_namespace,
+            qos="latched",
+            invalidate=self._invalidate_map,
         )
-        node.create_subscription(
-            PoseWithCovarianceStamped, self.config.pose_topic, self._on_pose, 10
+        subscribe(
+            node,
+            PoseWithCovarianceStamped,
+            self.config.pose_topic,
+            self._on_pose,
+            writer=self.config.pose_publisher,
+            namespace=self.config.source_namespace,
+            qos="reliable",
+            invalidate=self._invalidate_pose,
         )
+
+    def _invalidate_map(self):
+        self._map_gid = None
+        self._pose = None
+        self._map_serial += 1
+
+    def _invalidate_pose(self):
+        self._pose = None
+        self._pose_gid = None
 
     def _source(self, topic, name, info=None):
         endpoints = self._node.get_publishers_info_by_topic(topic)
@@ -132,7 +153,9 @@ class HardwareReference:
         except (ValueError, TypeError, OverflowError):
             return
         self._pose, self._pose_gid = pose, gid
-        self._pose_ros, self._pose_at = stamp, time.monotonic()
+        from senior_robot.native_receipt import received_steady
+
+        self._pose_ros, self._pose_at = stamp, received_steady(info)
         self._pose_map_serial = self._map_serial
 
     def pose(self):

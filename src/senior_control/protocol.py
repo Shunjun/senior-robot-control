@@ -493,6 +493,10 @@ class MotionRuntimeState(StrictModel):
     estop_revision: int = Field(ge=0)
     fault_revision: int = Field(ge=0)
     confirmed_estop_status: Literal["clear", "software_latched", "hardware_latched"]
+    # //Compatible: older producers omitted physical observation; omission is unknown.
+    hardware_estop_observation: Literal[
+        "not_configured", "clear", "latched", "independent_unreadable", "unknown", "unavailable"
+    ] = "unknown"
     allowed_actions: list[
         Literal["acquire", "estop_reset", "fault_recover", "replan_task", "resume_task"]
     ]

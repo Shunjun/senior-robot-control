@@ -283,7 +283,8 @@ def doctor(profile: VehicleProfile) -> int:
         from senior_control.real_runtime import validate_real_runtime
 
         if profile.container is None:
-            validate_real_runtime(profile.motion_profile, profile.safety_parameters)
+            if profile.motion_profile is not None or profile.safety_parameters is not None:
+                validate_real_runtime(profile.motion_profile, profile.safety_parameters)
             from senior_control.real_runtime import validate_navigation
 
             validate_navigation(profile.navigation_reference, profile.navigation_parameters)
@@ -320,9 +321,12 @@ def doctor(profile: VehicleProfile) -> int:
             "private directory and project .ros-venv."
         )
         return 1
-    print(
-        "Agent Python and control directory verified. "
-        "Start manages sensors, fusion, safety, ROS adapter and Agent; "
-        "ROS readiness is checked at startup."
-    )
+    print("Agent Python and control directory verified; ROS IPC is checked at startup.")
+    if profile.motion_profile is None and profile.safety_parameters is None:
+        print("Motion unavailable: no hardware model selected; Agent/IPC can still start.")
+    else:
+        print(
+            "Explicit hardware motion configuration passed preflight; "
+            "physical runtime is unverified."
+        )
     return 0
