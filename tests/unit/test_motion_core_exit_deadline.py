@@ -39,6 +39,9 @@ def start(rig, target_span):
             sequence=1,
             received_steady=rig.clock.steady,
             steady_deadline=target_deadline,
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             vx=0.01,
             wz=0.01,
         )

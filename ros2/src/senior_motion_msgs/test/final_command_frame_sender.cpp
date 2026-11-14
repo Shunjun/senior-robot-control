@@ -8,11 +8,13 @@ struct Command {
   std::string session_id = "session", request_id = "token";
   uint64_t generation = 5, connection_epoch = 7, sequence = 9, gesture = 1, source_epoch = 42;
   double steady_deadline = 10.55, vx = .4, wz = .2, received_steady = 10.25;
+  double manual_linear = .5, manual_linear_limit = .8, degraded_linear_limit = .3;
   std::string source_kind = "manual", source_id = "authority", close_reason = "intent";
 };
 
 void zero_barrier(Command& m, const std::string& reason) {
   m.vx = m.wz = 0;
+  m.manual_linear = m.manual_linear_limit = m.degraded_linear_limit = 0;
   m.sequence = m.gesture = 0;
   m.steady_deadline = 0;
   m.close_reason = reason;
@@ -95,6 +97,26 @@ int main(int argc, char** argv) {
   }
   if (mode == "boundary") m.source_id = std::string(128, 'x');
   if (mode == "oversize") m.source_id = std::string(129, 'x');
+
+  // Metadata participates in duplicate identity just like velocity and time.
+  for (int field = 0; field < 3; ++field) {
+    Command changed = m;
+    if (field == 0) changed.manual_linear += .01;
+    if (field == 1) changed.manual_linear_limit += .01;
+    if (field == 2) changed.degraded_linear_limit += .01;
+    if (final_command_frame::same_payload(m, changed)) return 24;
+  }
+  Command valid;
+  if (!final_command_frame::manual_metadata(valid)) return 25;
+  for (int field = 0; field < 5; ++field) {
+    Command invalid = valid;
+    if (field == 0) invalid.manual_linear = 1.1;
+    if (field == 1) invalid.manual_linear_limit = -.1;
+    if (field == 2) invalid.degraded_linear_limit = -.1;
+    if (field == 3) invalid.vx += .01;
+    if (field == 4) invalid.degraded_linear_limit = std::nan("");
+    if (final_command_frame::manual_metadata(invalid)) return 26;
+  }
 
   Command changed = m;
   changed.source_epoch++;

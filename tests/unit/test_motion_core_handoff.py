@@ -90,6 +90,9 @@ def barrier(reason="release", generation=2, request=""):
         source_epoch=42,
         received_steady=9.9,
         close_reason=reason,
+        manual_linear=0.0,
+        manual_linear_limit=0.0,
+        degraded_linear_limit=0.0,
     )
 
 
@@ -244,7 +247,7 @@ def test_explicit_idle_estop_uses_original_request_without_inventing_authority(c
     message.request_id = "next-explicit-press"
     assert core.command(message)
     assert core.machine.state.estop_revision == first + 1
-    assert core._barrier_payload[-2] == 9.25
+    assert core._barrier_payload[14] == 9.25
 
 
 def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, monkeypatch):

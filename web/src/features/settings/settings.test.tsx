@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { testPort, settingsFixture } from '../../api/vehicleState.testUtils';
 import type { SettingsRequest } from '../../api/vehicleState';
@@ -23,11 +23,17 @@ it('converts only displayed km/h to SI, submits one group and reads effective va
   render(<VehicleSettings port={port} enabled />);
   const field = await screen.findByLabelText('低档线速度上限');
   expect((field as HTMLInputElement).value).toBe('2');
+  const degraded = screen.getByLabelText('退化模式线速度上限') as HTMLInputElement;
+  expect(degraded.value).toBe('1.08');
+  fireEvent.change(degraded, { target: { value: '0.72' } });
+  expect(within(degraded.closest('label')!).getByText(/已保存上限 1.08/)).toBeTruthy();
   fireEvent.change(field, { target: { value: '4' } });
   fireEvent.click(screen.getByRole('button', { name: '保存驾驶设置' }));
   await screen.findByText(/车端已确认配置生效/);
-  expect(submitted[0]).toMatchObject({ group: 'driving', expected_version: 2, values: { low_linear_mps: 4 / 3.6, high_angular_rps: 1 } });
+  expect(submitted[0]).toMatchObject({ group: 'driving', expected_version: 2, values: { low_linear_mps: 4 / 3.6, high_angular_rps: 1, degraded_linear_mps: 0.72 / 3.6 } });
   await screen.findByText('驾驶设置 · 生效版本 3');
+  const readback = screen.getByLabelText('退化模式线速度上限');
+  expect(within(readback.closest('label')!).getByText(/已保存上限 0.72/)).toBeTruthy();
 });
 it('keeps unknown request identity through disconnect and queries instead of creating another apply', async () => {
   let request: SettingsRequest | null = null;

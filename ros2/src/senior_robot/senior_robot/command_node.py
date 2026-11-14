@@ -1193,6 +1193,9 @@ class CommandNode(Node):
         message.source_epoch = target.source_epoch
         message.close_reason = "intent"
         message.vx, message.wz = target.velocity.vx, target.velocity.wz
+        message.manual_linear = target.sample.intent.linear
+        message.manual_linear_limit = target.linear_limit_mps
+        message.degraded_linear_limit = target.degraded_linear_mps
         message.gesture = target.sample.intent.gesture
         message.request_id = target.request_id
         self._final_publisher.publish(message)

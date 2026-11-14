@@ -7,6 +7,7 @@ import json
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +33,7 @@ from senior_control.motion.contracts import (
     MotionEventKind as K,
 )
 from senior_control.motion.controller import Feedback, MotionController
+from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
 from senior_control.protocol import MotionRuntimeState
@@ -419,6 +421,19 @@ class MotionCoreOutput:
             or not 0 <= msg.received_steady <= now
         ):
             return False
+        manual_linear = None
+        try:
+            metadata = ManualLinearTarget(
+                msg.manual_linear, msg.manual_linear_limit, msg.degraded_linear_limit
+            )
+        except (ValueError, AttributeError):
+            return False
+        if msg.source_kind == "manual" and reason == "intent":
+            if msg.vx != metadata.fraction * metadata.full_stick_mps:
+                return False
+            manual_linear = metadata
+        elif metadata != ManualLinearTarget(0, 0, 0):
+            return False
         if msg.owner_boot_id == self._input_boot and msg.generation < self.output_generation:
             return False
         if msg.owner_boot_id != self._input_boot:
@@ -478,7 +493,9 @@ class MotionCoreOutput:
             return False
         if velocity != Velocity(0, 0):
             self._startup_motion_unconfirmed = False
-        self.target = MotionTarget(velocity, msg.source_kind, source_id, float(msg.steady_deadline))
+        self.target = MotionTarget(
+            velocity, msg.source_kind, source_id, float(msg.steady_deadline), manual_linear
+        )
         if msg.source_kind == "navigation":
             self._task_identity = (str(msg.source_id), int(msg.source_epoch))
             # An accepted higher epoch irreversibly supersedes old pause receipts.
@@ -939,7 +956,21 @@ class MotionCoreOutput:
             self.model_deadline,
             p.profile_id,
         )
-        cap = p.degraded_cap if mode is SourceMode.WHEEL_IMU_LIMITED else p.cap
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
         a = self.controller.trajectory.acceleration
         v = self.controller.trajectory.velocity
         # Independent deployment response envelope, not wheel truth.
@@ -983,7 +1014,7 @@ class MotionCoreOutput:
             brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
         )
         ctx = ConstraintSnapshot(
-            self.target,
+            target,
             motion,
             mode,
             response,
@@ -1127,7 +1158,7 @@ class MotionCoreOutput:
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             estop = self.machine.state.mode is MotionMode.ESTOP
             prepared = self.controller.propose_tick(
-                self.target.velocity,
+                ctx.target.velocity,
                 ctx,
                 permission,
                 body,

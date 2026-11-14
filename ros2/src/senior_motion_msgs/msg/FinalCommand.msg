@@ -20,3 +20,10 @@ float64 received_steady
 string<=32 close_reason
 # Explicit user ESTOP: non-navigation source, request_id preserved, gesture=0.
 # Recovery controls: idle source, request_id preserved, gesture=expected T5 revision.
+
+# Manual intent remains normalized until the output owner knows its source mode.
+# Full-stick limit already includes the selected gear and reverse preference.
+# Zero for non-manual commands and barriers; same-build SCF3 transport required.
+float64 manual_linear
+float64 manual_linear_limit
+float64 degraded_linear_limit

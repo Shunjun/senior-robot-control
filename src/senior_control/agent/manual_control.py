@@ -23,6 +23,8 @@ class ManualTarget:
     velocity: Velocity
     source_epoch: int
     session_id: str
+    linear_limit_mps: float
+    degraded_linear_mps: float
     request_id: str = ""
     agent_epoch: int = 0
 
@@ -87,6 +89,8 @@ class ManualIngress:
             self.context.controller_generation,
             self.context.session_id,
             agent_epoch=self.context.agent_epoch,
+            linear_limit_mps=linear_limit,
+            degraded_linear_mps=settings.degraded_linear_mps,
         )
 
     def release(self, authority_id: str, now: float) -> bool:

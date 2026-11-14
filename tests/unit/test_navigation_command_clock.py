@@ -39,6 +39,7 @@ def navigation(monkeypatch):
         SimpleNamespace(time=lambda: clock.wall, time_ns=lambda: round(clock.wall * 1e9)),
     )
     node = module.CommandNode.__new__(module.CommandNode)
+    node._motion_control_configured = True
     node._consuming_runtime = False
     node._runtime_subscription = MagicMock(msg_type=object, raw=False)
     node._runtime_subscription.handle.take_message.return_value = None

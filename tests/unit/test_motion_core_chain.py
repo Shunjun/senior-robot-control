@@ -113,6 +113,9 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     msg.sequence = 1
     msg.gesture = 1
     msg.vx = 0.2
+    msg.manual_linear = 1.0
+    msg.manual_linear_limit = 0.2
+    msg.degraded_linear_limit = 0.3
     msg.steady_deadline = 13.0
     msg.received_steady = now[0]
     assert core.command(msg)

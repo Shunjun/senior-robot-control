@@ -85,6 +85,9 @@ class NativeRoundtrip(unittest.TestCase):
             (m.received_steady, m.steady_deadline, m.vx, m.wz), (10.25, 10.55, 0.4, 0.2)
         )
         self.assertEqual((m.generation, m.sequence, m.gesture), (5, 9, 1))
+        self.assertEqual(
+            (m.manual_linear, m.manual_linear_limit, m.degraded_linear_limit), (0.5, 0.8, 0.3)
+        )
 
     def test_token_retirement_keeps_identity_not_a_stationary_claim(self):
         _, _, m = codec.decode_frame(self.send("release"))
@@ -133,7 +136,13 @@ class NativeRoundtrip(unittest.TestCase):
 
     def test_truncation_wrong_version_and_legacy_do_not_default_fields(self):
         packet = self.send("intent")
-        for invalid in [packet[:-1], packet + b"x", packet[:4] + b"\x01" + packet[5:], bytes(597)]:
+        for invalid in [
+            packet[:-1],
+            packet + b"x",
+            packet[:4] + b"\x01" + packet[5:],
+            bytes(597),
+            bytes(799),
+        ]:
             with self.assertRaises(ValueError):
                 codec.decode_frame(invalid)
 

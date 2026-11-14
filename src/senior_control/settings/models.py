@@ -19,6 +19,8 @@ class DrivingSettings(FrozenModel):
     low_angular_rps: float = Field(ge=0)
     high_angular_rps: float = Field(ge=0)
     reverse_linear_mps: float = Field(ge=0)
+    # //Compatible: pre-degraded-setting callers use the new product default.
+    degraded_linear_mps: float = Field(default=0.3, ge=0)
 
     @model_validator(mode="after")
     def ordered(self) -> "DrivingSettings":
@@ -48,6 +50,7 @@ class SettingsProfile:
         low_angular_rps=0,
         high_angular_rps=0,
         reverse_linear_mps=0,
+        degraded_linear_mps=0,
     )
 
     def __post_init__(self) -> None:
@@ -131,6 +134,7 @@ def vehicle_settings_profile() -> SettingsProfile:
         low_angular_rps=1,
         high_angular_rps=1,
         reverse_linear_mps=0.3,
+        degraded_linear_mps=0.3,
     )
     maximum = DrivingSettings(
         low_linear_mps=25 / 18,
@@ -138,6 +142,7 @@ def vehicle_settings_profile() -> SettingsProfile:
         low_angular_rps=2,
         high_angular_rps=2,
         reverse_linear_mps=0.3,
+        degraded_linear_mps=25 / 18,
     )
     return SettingsProfile(defaults, maximum)
 
