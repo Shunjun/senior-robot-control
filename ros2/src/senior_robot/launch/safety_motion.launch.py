@@ -19,7 +19,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-from senior_control.real_runtime import validate_real_runtime
+from senior_control.real_runtime import load_real_parameters, validate_real_runtime
 
 
 def _nodes(context):
@@ -27,6 +27,7 @@ def _nodes(context):
     hardware = LaunchConfiguration("hardware_motion_profile").perform(context)
     robot_id = LaunchConfiguration("robot_id").perform(context)
     profile = validate_real_runtime(Path(hardware), Path(parameters))
+    runtime = load_real_parameters(Path(parameters), profile)
     shared = {"use_sim_time": False}
     selected = {**shared, "hardware_motion_profile": hardware, "motion_core_profile": ""}
     # Driver topics from the WHEELTEC source: odom and imu/data_raw. Preserve
@@ -37,38 +38,38 @@ def _nodes(context):
         Node(
             package="senior_sensor_ingress",
             executable="scan_receipt_node",
-            parameters=[parameters, shared],
+            parameters=[runtime["scan_receipt"], shared],
             on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="scan_adapter",
-            parameters=[parameters, shared],
+            parameters=[runtime["scan_adapter"], shared],
             on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="safety_scan_ingress",
-            parameters=[parameters, shared],
+            parameters=[runtime["safety_scan_ingress"], shared],
             on_exit=stop,
         ),
         Node(
             package="senior_scan_matcher",
             executable="scan_motion_node",
-            parameters=[parameters, shared],
+            parameters=[runtime["scan_motion_node"], shared],
             on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="motion_fusion",
-            parameters=[parameters, selected],
+            parameters=[runtime["motion_fusion"], selected],
             remappings=remaps,
             on_exit=stop,
         ),
         Node(
             package="senior_robot",
             executable="safety_node",
-            parameters=[parameters, selected, {"robot_id": robot_id}],
+            parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
             on_exit=stop,
         ),
     ]

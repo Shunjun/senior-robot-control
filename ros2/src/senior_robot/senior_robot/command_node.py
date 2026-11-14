@@ -80,6 +80,12 @@ class CommandNode(Node):
     ) -> None:
         super().__init__("command_node", parameter_overrides=parameter_overrides or [])
         self.declare_parameter("robot_id", "robot")
+        self.declare_parameter("native_writer_receipts", False)
+        self.declare_parameter("motion_control_configured", True)
+        self._motion_control_configured = bool(
+            self.get_parameter("motion_control_configured").value
+        )
+        self._native_writer_receipts = bool(self.get_parameter("native_writer_receipts").value)
         self.declare_parameter("safety_state_path", "")
         self.declare_parameter("heartbeat_seconds", 0.2)
         self.declare_parameter("disconnect_seconds", 2.0 if require_server_heartbeat else 1.0)
@@ -126,19 +132,44 @@ class CommandNode(Node):
         self._estop_clear_future = None
         self._close_reason = "estop" if self._local_estop_requested else "prepared"
         self._last_close_source = ("idle", "", 0, 0.0, "", 0)
-        self.create_subscription(
-            String, "/motion/runtime", self._on_motion_runtime, qos_profile_sensor_data
-        )
+        if self._native_writer_receipts:
+            from senior_robot.native_receipt import subscribe
+
+            subscribe(
+                self,
+                String,
+                "/motion/runtime",
+                self._on_motion_runtime,
+                writer="safety_gate",
+                qos="reliable",
+                invalidate=self._invalidate_motion_runtime,
+            )
+        else:
+            # //Compatible: isolated simulation retains its existing metadata path.
+            self.create_subscription(
+                String, "/motion/runtime", self._on_motion_runtime, qos_profile_sensor_data
+            )
         self._drive_sample: VelocityEnvelope | None = None
         self._feedback: deque[ExecutionFeedback] = deque(maxlen=24)
         self._awaiting_feedback: dict[str, VelocityEnvelope] = {}
         if require_server_heartbeat:
-            self.create_subscription(
-                DriveExecutionFeedback,
-                "/safety/drive_feedback",
-                self._on_drive_feedback,
-                qos_profile_sensor_data,
-            )
+            if self._native_writer_receipts:
+                subscribe(
+                    self,
+                    DriveExecutionFeedback,
+                    "/safety/drive_feedback",
+                    self._on_drive_feedback,
+                    writer="safety_gate",
+                    qos="reliable",
+                    invalidate=self._invalidate_drive_feedback,
+                )
+            else:
+                self.create_subscription(
+                    DriveExecutionFeedback,
+                    "/safety/drive_feedback",
+                    self._on_drive_feedback,
+                    qos_profile_sensor_data,
+                )
         self._navigation_source: _NavigationSource | None = None
         self._retirements: dict[str, tuple[str, int, bool]] = {}
         self._generation = 1
@@ -292,7 +323,7 @@ class CommandNode(Node):
             or self._manual_target is not None
         ):
             return False
-        return continuing or runtime.stationary
+        return self._motion_control_configured and (continuing or runtime.stationary)
 
     def bind_navigation_source(
         self,
@@ -510,6 +541,15 @@ class CommandNode(Node):
         self._active = True
         self._publish(velocity)
 
+    def _invalidate_motion_runtime(self) -> None:
+        self._motion_runtime.invalidate()
+        self._manual_ingress.revoke(self._monotonic_clock.monotonic())
+        self._close_manual("qualification_lost")
+
+    def _invalidate_drive_feedback(self) -> None:
+        self._feedback.clear()
+        # No retirement acknowledgement or successful execution is fabricated.
+
     @with_dds_info
     def _on_motion_runtime(self, msg: String, info: dict[str, Any] | None = None) -> None:
         endpoints = self.get_publishers_info_by_topic("/motion/runtime")
@@ -598,6 +638,15 @@ class CommandNode(Node):
             envelope = validate_envelope(
                 message["envelope"].encode(), str(self.get_parameter("robot_id").value)
             )
+            if not self._motion_control_configured and envelope.type in {
+                "control.acquire",
+                "drive.intent",
+            }:
+                return {
+                    "ok": False,
+                    "error": "unavailable",
+                    "reason": "real_motion_not_configured: missing hardware model/ROS parameters",
+                }
             now = self._monotonic_clock.monotonic()
             runtime = self._motion_runtime.current(now)
             if isinstance(envelope, RecoveryEnvelope):

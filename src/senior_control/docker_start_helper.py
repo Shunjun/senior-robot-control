@@ -110,7 +110,11 @@ def _runtime_profile(root: Path) -> "VehicleProfile":
 def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     from senior_control.real_runtime import validate_real_runtime
 
-    hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
+    hardware = None
+    if profile.motion_profile is not None or profile.safety_parameters is not None:
+        hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
+    # //Compatible: old real profiles still start the Agent/IPC adapter.
+    # An absent model withdraws motion capability; it never selects a fallback controller.
     setup = profile.ros_setup
     if setup is None or not setup.is_absolute() or not setup.is_file():
         raise ValueError("ROS workspace setup is missing; build it and configure ros_setup")
@@ -132,28 +136,39 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-c",
         "from senior_robot.agent_adapter import main; main()",
         "--ros-args",
-        "--params-file",
-        str(profile.safety_parameters),
+        *(["--params-file", str(profile.safety_parameters)] if hardware is not None else []),
         "-p",
         "use_sim_time:=false",
+        "-p",
+        f"native_writer_receipts:={str(hardware is not None).lower()}",
+        "-p",
+        f"motion_control_configured:={str(hardware is not None).lower()}",
         "-p",
         f"robot_id:={robot_id}",
         "-p",
         f"safety_state_path:={profile.estop_state}",
         "-p",
         "ipc_replace_existing_socket:=false",
+        *(
+            [
+                "-p",
+                f"hardware_navigation_reference:={profile.navigation_reference}",
+                "-p",
+                f"navigation_controller_params:={profile.navigation_parameters}",
+            ]
+            if profile.navigation_reference is not None
+            else []
+        ),
         "-p",
-        f"hardware_navigation_reference:={profile.navigation_reference or ''}",
-        "-p",
-        f"navigation_controller_params:={profile.navigation_parameters or ''}",
-        "-p",
-        f"navigation_odometry_topic:={hardware.wheel_topic}",
+        f"navigation_odometry_topic:={hardware.wheel_topic if hardware is not None else '/odom'}",
     ]
 
 
-def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | None:
     # Use the same sourced overlay/domain as the adapter; the launch contains
     # no vendor driver and no second CommandNode or actuator publisher.
+    if profile.motion_profile is None and profile.safety_parameters is None:
+        return None
     base = _adapter_command(profile, robot_id)
     return base[:5] + [
         "ros2",
@@ -318,9 +333,18 @@ async def supervise(
                 loop.add_signal_handler(number, stopping.set)
             if adapter_command is not None:
                 assert profile is not None
-                motion_stack = await asyncio.create_subprocess_exec(
-                    *_motion_command(profile, robot_id), env=environment, start_new_session=True
-                )
+                motion_command = _motion_command(profile, robot_id)
+                if motion_command is not None:
+                    motion_stack = await asyncio.create_subprocess_exec(
+                        *motion_command, env=environment, start_new_session=True
+                    )
+                else:
+                    print(
+                        "Real motion unavailable: motion_profile and safety_parameters are not "
+                        "configured; starting Agent/IPC only, "
+                        "no motion stack or fallback controller.",
+                        file=sys.stderr,
+                    )
                 adapter = await asyncio.create_subprocess_exec(*adapter_command, env=environment)
                 assert profile is not None
                 adapter_identity = await _wait_for_adapter(
@@ -389,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("run", "stop"))
     parser.add_argument("--control-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    preflight_complete = False
     try:
         if args.action == "stop":
             return asyncio.run(stop(args.control_dir))
@@ -404,6 +429,9 @@ def main(argv: list[str] | None = None) -> int:
         for key, name in expected.items():
             if env.get(key) != str(args.control_dir / name):
                 raise ValueError("Agent paths must use the selected directory")
+        # Validate immutable configuration before opening service/ROS sockets.
+        _adapter_command(profile, read_credentials(args.control_dir / "device.json").robot_id)
+        preflight_complete = True
         return asyncio.run(
             supervise(
                 args.control_dir,
@@ -420,7 +448,9 @@ def main(argv: list[str] | None = None) -> int:
             "Check the private directory, configuration and service owner.",
             file=sys.stderr,
         )
-        return 1
+        # systemd already declares RestartPreventExitStatus=78. Configuration
+        # errors require an operator correction; retrying cannot repair them.
+        return 78 if args.action == "run" and not preflight_complete else 1
 
 
 if __name__ == "__main__":

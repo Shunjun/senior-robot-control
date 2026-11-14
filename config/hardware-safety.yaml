@@ -1,0 +1,90 @@
+# Full software parameter draft for the real ROS composition, use_sim_time=false.
+# Generated from real_runtime.py software defaults and hardware-motion.json assumptions.
+# Mounting/self-mask confirmations remain false; physical model is unvalidated.
+# No measured braking or hardware safety capability is asserted here.
+scan_receipt:
+  ros__parameters:
+    use_sim_time: false
+    scan_topic: /scan
+    scan_ledger_max_age_s: 3.0
+scan_adapter:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: base_link
+    max_age_seconds: 0.5
+    self_mask_calibrated: false
+    transform_static: false
+    no_return_clear: false
+safety_scan_ingress:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: base_link
+    observation_max_age: 0.5
+    transform_static: false
+scan_motion_node:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: base_link
+    scan_max_age: 0.5
+    transform_static: false
+    max_interval: 0.4
+    max_linear_speed: 1.5
+    max_yaw_rate: 1.0
+    range_limit: 8.0
+    min_response: 0.3
+    max_residual: 0.09
+    min_inlier_fraction: 0.55
+    min_spread: 0.04
+    min_translation_observability: 0.05
+    min_yaw_observability: 0.01
+    max_variance: 0.05
+    reanchor_distance: 0.12
+    reanchor_yaw: 0.1
+    min_rays: 100
+motion_fusion:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: base_link
+    wheel_frame: odom
+    imu_frame: gyro_link
+    sensor_max_age: 0.5
+    alignment_max_gap: 0.25
+    pending_wait: 0.25
+    max_variance: 0.1
+    imu_zero_variance: 0.01
+    min_quality: 0.3
+    max_yaw_error: 0.12
+    startup_window: 0.6
+    wheel_motion_limit: 0.004
+    stall_distance: 0.04
+    lateral_limit: 0.04
+    yaw_limit: 0.12
+    progress_stationary_max_linear_speed: 0.05
+    progress_stationary_max_yaw_rate: 0.05
+safety_gate:
+  ros__parameters:
+    use_sim_time: false
+    body_frame: base_link
+    simulation_rate_hz: 20.0
+    self_mask_calibrated: false
+    transform_static: false
+    observation_max_age: 0.5
+    measurement_max_age: 0.5
+    hard_margin: 0.0
+    depth_policy: laser_only
+    command_ttl_seconds: 0.3
+    footprint_xy:
+    - -0.337
+    - -0.276
+    - 0.337
+    - -0.276
+    - 0.337
+    - 0.276
+    - -0.337
+    - 0.276
+command_node:
+  ros__parameters:
+    use_sim_time: false
+    heartbeat_seconds: 0.2
+    disconnect_seconds: 2.0
+    command_ttl_seconds: 0.3

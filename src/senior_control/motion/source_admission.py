@@ -293,6 +293,16 @@ class AdmissionOwner:
         self._record(before)
         return decision
 
+    def interrupt_source(self, source: Source) -> None:
+        """Revoke a native writer/channel without creating a replacement observation.
+
+        Preserve the sequence/time frontier; recovery still needs distinct real
+        samples. Export the interruption through this owner's existing journal.
+        """
+        before = self._markers()
+        self._states[source].interrupt()
+        self._record(before)
+
     def _views(self, *, now_ros: float, now_steady: float) -> dict[Source, SourceView]:
         before = self._markers()
         views = {}

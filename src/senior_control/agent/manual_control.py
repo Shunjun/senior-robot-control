@@ -113,6 +113,7 @@ class MotionRuntimeReceiver:
 
         self._sources = SourceEpochFence(max_retired=32)
         self.value: MotionRuntimeState | None = None
+        self._available = False
 
     def accept(self, value: "MotionRuntimeState", publisher: bytes, now: float) -> bool:
         if not value.sampled_steady <= now < value.valid_until:
@@ -130,12 +131,21 @@ class MotionRuntimeReceiver:
             ):
                 return False
         self.value = value
+        self._available = True
         return True
+
+    def invalidate(self) -> None:
+        """Withdraw availability without losing the replay/revision frontier."""
+        self._available = False
 
     def current(self, now: float) -> "MotionRuntimeState | None":
         value = self.value
         return (
-            value if value is not None and value.sampled_steady <= now < value.valid_until else None
+            value
+            if self._available
+            and value is not None
+            and value.sampled_steady <= now < value.valid_until
+            else None
         )
 
 

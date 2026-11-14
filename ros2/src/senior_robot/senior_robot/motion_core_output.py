@@ -86,41 +86,77 @@ class MotionCoreOutput:
         from senior_robot.motion_lifecycle import with_dds_info
 
         with_dds_info(type(self)._on_reference)
-        self._subscription = node.create_subscription(
-            String, "/motion/core_reference", self._on_reference, 10
-        )
-        if not profile.simulation_only:
-            from std_msgs.msg import Bool
-
-            with_dds_info(type(self)._on_hardware_estop)
-            self._hardware_subscription = node.create_subscription(
-                Bool, profile.hardware_estop_topic, self._on_hardware_estop, 10
+        if profile.simulation_only:
+            # //Compatible: the isolated candidate keeps its existing transport.
+            self._subscription = node.create_subscription(
+                String, "/motion/core_reference", self._on_reference, 10
             )
+        else:
+            from senior_robot.native_receipt import subscribe
+
+            self._subscription = subscribe(
+                node,
+                String,
+                "/motion/core_reference",
+                self._on_reference,
+                writer="motion_fusion",
+                qos="reliable",
+                invalidate=self._invalidate_reference,
+            )
+            if profile.hardware_estop.mode == "readable":
+                from std_msgs.msg import Bool
+
+                self._hardware_subscription = subscribe(
+                    node,
+                    Bool,
+                    profile.hardware_estop.topic,
+                    self._on_hardware_estop,
+                    writer=profile.hardware_estop.publisher,
+                    namespace=profile.hardware_estop.namespace,
+                    qos="reliable",
+                    invalidate=self._invalidate_hardware_status,
+                )
+
+    def _invalidate_reference(self) -> None:
+        self._reference = None
+        self.controller.invalidate_limited_rearm()
+
+    def _invalidate_hardware_status(self) -> None:
+        self._hardware_seen = float("-inf")
+        self._hardware_gid = None
 
     def _hardware_status_ready(self, now: float) -> bool:
         if self.profile.simulation_only:
             return True
-        endpoints = self.node.get_publishers_info_by_topic(self.profile.hardware_estop_topic)
+        capability = self.profile.hardware_estop
+        if capability.mode != "readable":
+            # No physical state channel selected: keep observation unknown,
+            # without turning missing operator confirmation into a motion gate.
+            return True
+        endpoints = self.node.get_publishers_info_by_topic(capability.topic)
         return (
-            now - self._hardware_seen <= self.profile.hardware_estop_max_age_s
+            now - self._hardware_seen <= capability.max_age_s
             and len(endpoints) == 1
-            and endpoints[0].node_name == self.profile.hardware_estop_publisher
-            and endpoints[0].node_namespace == self.profile.source_namespace
+            and endpoints[0].node_name == capability.publisher
+            and endpoints[0].node_namespace == capability.namespace
             and bytes(endpoints[0].endpoint_gid) == self._hardware_gid
         )
 
     def _on_hardware_estop(self, msg: Any, info: Any) -> None:
+        from senior_robot.native_receipt import received_steady
+
+        capability = self.profile.hardware_estop
         origin = observation_origin(
             info,
-            self.node.get_publishers_info_by_topic(self.profile.hardware_estop_topic),
-            self.profile.hardware_estop_publisher,
+            self.node.get_publishers_info_by_topic(capability.topic),
+            capability.publisher,
             allow_topology_only=False,
-            expected_namespace=self.profile.source_namespace,
+            expected_namespace=capability.namespace,
         )
         if origin is None:
             return
         now = time.monotonic()
-        self._hardware_seen = now
+        self._hardware_seen = received_steady(info)
         self._hardware_gid = origin.topology_gid
         active = bool(msg.data)
         if active and not self._hardware:
@@ -172,6 +208,23 @@ class MotionCoreOutput:
 
     def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
         c = self.controller.config
+        if not self.profile.simulation_only and body is not None:
+            packet = self._reference
+            if packet is None:
+                return False
+            ref = packet["reference"]
+            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
+            if (
+                abs(body.velocity.vx)
+                + self.profile.linear_error
+                + self.profile.reaction_linear_accel * age
+                > self.profile.stationary_linear_mps
+                or abs(body.velocity.wz)
+                + self.profile.yaw_error
+                + self.profile.reaction_yaw_accel * age
+                > self.profile.stationary_yaw_rps
+            ):
+                return False
         return bool(
             body is not None
             and wheel is not None
@@ -663,7 +716,7 @@ class MotionCoreOutput:
                 angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
             risk = RiskEnvelope(
                 p.profile_id,
-                p.risk_basis,
+                p.risk_basis or p.profile_id,
                 epoch,
                 (
                     SourceMode.LASER_REFERENCE,
@@ -685,7 +738,7 @@ class MotionCoreOutput:
                 bool(p.simulation_only and p.unvalidated),
                 lateral_stop_s=p.lateral_stop_s,
                 brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
-                brake_tracking_basis=p.brake_tracking_basis,
+                brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
             )
             ctx = ConstraintSnapshot(
                 self.target,
@@ -814,6 +867,19 @@ class MotionCoreOutput:
                 else "software_latched"
                 if state.mode is MotionMode.ESTOP
                 else "clear",
+                "hardware_estop_observation": (
+                    "not_configured"
+                    if self.profile.simulation_only
+                    else "unknown"
+                    if self.profile.hardware_estop.mode == "unknown"
+                    else "independent_unreadable"
+                    if self.profile.hardware_estop.mode == "independent_unreadable"
+                    else "unavailable"
+                    if not self._hardware_status_ready(now)
+                    else "latched"
+                    if self._hardware
+                    else "clear"
+                ),
                 "allowed_actions": actions,
                 "task_id": state.task_id,
                 "output_generation": self.output_generation,
