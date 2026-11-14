@@ -166,7 +166,7 @@ class HardwareMotionProfile(BaseModel):
         )
 
     def temporal(self) -> TemporalConfig:
-        return TemporalConfig(2.0, 512, 0.15, 0.15, 0.15, True)
+        return TemporalConfig(2.0, 512, 0.15, 0.15, 0.25, True)
 
     def fusion(self) -> FusionConfig:
         return FusionConfig(
