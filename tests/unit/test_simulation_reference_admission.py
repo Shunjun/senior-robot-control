@@ -11,7 +11,7 @@ import pytest
 
 from senior_control.mapping.simulation import baseline_grid
 from senior_control.models import Pose2D
-from senior_control.safety.motion_runtime import DeferredSourceQueue
+from senior_control.motion.source_fences import DeferredSourceQueue
 
 
 @pytest.fixture

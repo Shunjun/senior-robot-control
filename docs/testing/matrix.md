@@ -4,10 +4,10 @@
 
 | 范围 | 验收点 | 自动化入口 | 所需环境 |
 | --- | --- | --- | --- |
-| 驾驶安全链 | 只有 `safety_node` 发布 `/cmd_vel`，停发后停车 | `tests/e2e/test_drive.py`、`tests/ros/test_velocity_chain.py` | Linux、Humble、运行中的完整仿真栈 |
+| 驾驶安全链 | 只有 `safety_node` 发布 `/cmd_vel`，停发后停车 | `tests/unit/test_motion_core_chain.py`、`tests/integration/test_manual_wire.py`；Linux 同版运行待补 | Linux、Humble、运行中的完整仿真栈 |
 | 后部遮挡 | 无观测空间拒绝方向许可；未接入运行链的地图辅助倒车模块及其专用测试已删除 | `tests/unit/test_directional_constraints.py`、`tests/e2e/test_occlusion.py` | 纯逻辑与场景契约；实际运动与完整仿真路径另行验收 |
 | 长期地图 | 箱体确认、清除后重载仍为空；人不写入 | `tests/e2e/test_maps.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
-| 任务断线 | 运行中暂停，重连不恢复、不补跑 | `tests/e2e/test_tasks.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
+| 任务断线 | 已接受任务离线继续，接管暂停且明确继续后重规划 | `tests/integration/test_task_ownership.py::test_runtime_runs_offline_and_completes_same_identity` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
 | Home | 数据库重开后仍使用原 Home | `tests/e2e/test_home.py` | 本机 Python 断言；完整仿真、车端与云端路径未执行 |
 | GPS/航向 | 只产生定位信息，不发布速度 | `tests/e2e/test_gps.py` | 本机 Python 断言；ROS 话题与完整仿真路径未执行 |
 | 地图导入 | 无 GPS 可用人工提示；有 GPS 也须匹配确认；跨车 Home 待确认 | `tests/e2e/test_maps.py`、`tests/integration/test_map_operations.py::test_cross_robot_home_requires_confirmation` | 本机 Python 断言；完整仿真、车端与云端导入路径未执行 |
@@ -37,10 +37,13 @@ npm --prefix web run test:e2e -- --project=chromium
 
 以下注入要在同一完整 Linux 栈中记录开始、故障发生、停止确认和恢复后的状态。开发机测试只覆盖其纯逻辑护栏，不等同于全链路注入。
 
-- 半开连接：停止心跳但保持 TCP；参考 `tests/unit/test_arbiter.py::test_half_open_connection_expires`。
+- 半开连接：停止心跳但保持 TCP；参考 `tests/integration/test_manual_wire.py` 的断流/退役 authority 场景。
 - 进程重启：在已接受操作后重启车端代理；参考 `tests/integration/test_task_runner.py::test_crash_after_dispatch_never_redispatches_unknown`。
-- 时钟暂停与回退：暂停 `/clock` 后回退；参考 `tests/ros/test_velocity_chain.py` 和 `tests/unit/test_schedule.py::test_backward_clock_jump_skips_without_dispatch`。
+- 时钟暂停与回退：暂停 `/clock` 后回退；参考 `tests/unit/test_relative_interval_regressions.py` 和 `tests/unit/test_schedule.py::test_backward_clock_jump_skips_without_dispatch`。
 - 损坏上传：篡改地图包成员但保留旧哈希；参考 `tests/integration/test_map_operations.py::test_corrupt_bundle_preserves_active_map`。
 - GPS 跳点：注入 jump 标记并保持本地定位健康；参考 `tests/unit/test_localization.py::test_reverse_curve_slip_jump_rejected`。
-- 感知过期：停止新扫描直至超过最大年龄；参考 `tests/unit/test_guard.py::test_stale_sensor_stops`。
+- 感知过期：停止新扫描直至超过最大年龄；参考 `tests/unit/test_motion_core_event_time.py`、`tests/unit/test_sensor_timing.py`。
 - 视频拥塞：限制发送缓冲并确认控制心跳继续；参考 `tests/integration/test_video.py` 的 congestion 测试组。
+
+
+运动路径已收敛：标准实车与仿真均使用共享 MotionCoreOutput；旧网页挑战/校时、旧租约速度仲裁、MotionEvidence 安全门与进展恢复入口已退休。当前清理映射与精确回归见 [路径收敛记录](2026-11-15-motion-path-convergence.md)。完整 Linux 同版重建与运行验收仍 Draft。

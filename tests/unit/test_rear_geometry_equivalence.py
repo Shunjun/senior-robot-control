@@ -3,19 +3,16 @@
 import json
 import math
 import random
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self, legacy_visible_areas
+from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
 from senior_control.config import DeviceProfile
-from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.models import Pose2D
 from senior_control.safety import coverage, self_filter
-from senior_control.safety.coverage import SweptRegion
-from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation
 
 
@@ -128,99 +125,6 @@ def _boundary_cases():
         )
         result.append((scan, _profile(masks), 0.1))
     return result
-
-
-@pytest.mark.parametrize("case", [_captured_case(), *_random_cases(), *_boundary_cases()])
-def test_filter_coverage_and_decisions_match_frozen_c12_oracle(case, monkeypatch):
-    scan, profile, margin = case
-    expected = legacy_filter_self(scan, profile, self_mask_range_uncertainty=0.01)
-    actual = self_filter.filter_self(scan, profile, self_mask_range_uncertainty=0.01)
-    assert actual == expected  # Includes every ray's origin, endpoint, index and class.
-    sweep = SweptRegion(
-        ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)), "base_link", scan.stamp
-    )
-    for fallback in (False, True):
-        before = expected
-        after = actual
-        if fallback:
-            # Invalid beam indexing forces the original per-triangle fallback.
-            before = replace(before, rays=(replace(before.rays[0], index=99), *before.rays[1:]))
-            after = replace(after, rays=(replace(after.rays[0], index=99), *after.rays[1:]))
-        old_areas = legacy_visible_areas(sweep, [before], scan.stamp, "ros", 0.8)
-        new_areas = coverage._visible_areas(sweep, [after], scan.stamp, "ros", 0.8)
-        assert len(old_areas) == len(new_areas)
-        assert all(old.equals(new) for old, new in zip(old_areas, new_areas, strict=True))
-    with monkeypatch.context() as patch:
-        patch.setattr(coverage, "_visible_areas", legacy_visible_areas)
-        old_decision = evaluate_motion(
-            Velocity(0.05, 0.0),
-            BodyTwist(0.0, 0.0, 0.0),
-            [expected],
-            profile,
-            scan.stamp,
-            uncertainty_margin=margin,
-        )
-    new_decision = evaluate_motion(
-        Velocity(0.05, 0.0),
-        BodyTwist(0.0, 0.0, 0.0),
-        [actual],
-        profile,
-        scan.stamp,
-        uncertainty_margin=margin,
-    )
-    assert new_decision == old_decision
-
-
-def test_legacy_and_candidate_agree_on_allowed_and_known_or_unknown_stops(monkeypatch):
-    count = 720
-    profile = _profile([])
-    clear = ScanObservation(
-        (5.0,) * count,
-        -math.pi,
-        2 * math.pi / count,
-        0.08,
-        20.0,
-        10.0,
-        "ros",
-        Pose2D(0.0, 0.0, 0.0),
-        0.0,
-        "base_link",
-        10.0,
-        True,
-        0.01,
-        False,
-        True,
-    )
-    ranges = list(clear.ranges)
-    ranges[count // 2] = 0.2
-    cases = [
-        (clear, profile, 0.0, True, "hard_sweep_clear"),
-        (replace(clear, ranges=tuple(ranges)), profile, 0.0, False, "hard_contact"),
-        (*_captured_case(), False, "required area contains unknown space"),
-    ]
-    for scan, case_profile, margin, allowed, reason in cases:
-        old = legacy_filter_self(scan, case_profile, self_mask_range_uncertainty=0.01)
-        new = self_filter.filter_self(scan, case_profile, self_mask_range_uncertainty=0.01)
-        with monkeypatch.context() as patch:
-            patch.setattr(coverage, "_visible_areas", legacy_visible_areas)
-            old_decision = evaluate_motion(
-                Velocity(0.05, 0.0),
-                BodyTwist(0.0, 0.0, 0.0),
-                [old],
-                case_profile,
-                scan.stamp,
-                uncertainty_margin=margin,
-            )
-        new_decision = evaluate_motion(
-            Velocity(0.05, 0.0),
-            BodyTwist(0.0, 0.0, 0.0),
-            [new],
-            case_profile,
-            scan.stamp,
-            uncertainty_margin=margin,
-        )
-        assert new_decision == old_decision
-        assert new_decision.allowed is allowed and new_decision.reason == reason
 
 
 @pytest.mark.parametrize("overflow", ["endpoint", "uncertainty_extension"])

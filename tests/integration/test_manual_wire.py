@@ -113,7 +113,6 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     value = module.CommandNode.__new__(module.CommandNode)
-    value._motion_control_configured = True
     clock = SimpleNamespace(now=10.0)
     value._monotonic_clock = SimpleNamespace(monotonic=lambda: clock.now)
     value._owner_boot = "command-boot"
@@ -132,7 +131,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._runtime_subscription.handle.take_message.return_value = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
-    value._arbiter = Arbiter("robot", 0.2, 2, 0.3)
+    value._arbiter = Arbiter("robot", 0.3)
     output: list[Any] = []
     value._final_publisher = SimpleNamespace(publish=output.append)
     value._publish = lambda velocity: None
@@ -248,7 +247,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
     assert await browser.connect() and await other.connect()
     node.value.get_parameter = lambda name: SimpleNamespace(value=robot_id)
     node.value._manual_ingress = ManualIngress(robot_id, "command-boot", ttl=0.3)
-    node.value._arbiter = Arbiter(robot_id, 0.2, 2, 0.3)
+    node.value._arbiter = Arbiter(robot_id, 0.3)
     node.value._motion_runtime = MotionRuntimeReceiver()
     node.value._motion_runtime.accept(runtime(10, robot_id=robot_id), b"t5", 10)
 
@@ -338,7 +337,6 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             maps=FakeMaps(),
             state=snapshots,
             motion=motion,
-            native_manual=True,
             clock=cast(Any, SimpleNamespace(monotonic=lambda: node.clock.now)),
         )
         link = Link()
@@ -754,9 +752,7 @@ async def test_native_websocket_connector_does_not_negotiate_old_motion_clock(
         return Socket()
 
     monkeypatch.setattr(websockets.asyncio.client, "connect", connect)
-    link = await WebSocketConnector(
-        "wss://control.test", "trusted-device", "robot", native_manual=True
-    )()
+    link = await WebSocketConnector("wss://control.test", "trusted-device", "robot")()
     await link.send_heartbeat()
     assert "drive_t1" not in json.loads(sent[-1])
     assert "drive_confirmation" not in json.loads(sent[-1])
@@ -911,7 +907,6 @@ async def test_agent_receive_settles_queued_intents_on_replace_and_close(
             maps=FakeMaps(),
             state=FakeState(),
             motion=FakeMotion(),
-            native_manual=True,
         )
         link = FakeLink(1)
         entered, release = asyncio.Event(), asyncio.Event()

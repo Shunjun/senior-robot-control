@@ -72,12 +72,10 @@ class IpcNavigation:
         client: Requester,
         waypoints: WaypointStore | None = None,
         *,
-        connection_epoch: Callable[[], int] | None = None,
         tasks: TaskStore | None = None,
     ) -> None:
         self._client = client
         self._waypoints = waypoints
-        self._connection_epoch = connection_epoch
         self._tasks = tasks
 
     async def _call(self, kind: str, execution_id: str, **fields: Any) -> dict[str, Any]:
@@ -204,61 +202,6 @@ class IpcNavigation:
         result = reply.get("accepted")
         return result if isinstance(result, bool) else None
 
-    async def start(self, execution_id: str, task: TaskDefinition) -> None:
-        # //Compatible: legacy task IPC cannot fence an accepted reference generation.
-        del execution_id, task
-        raise DomainError(ErrorCode.UNAVAILABLE, "qualified ROS navigation unavailable")
-
-    async def start_qualified(
-        self, execution_id: str, task: TaskDefinition, map_generation: str
-    ) -> None:
-        epoch = self._connection_epoch() if self._connection_epoch is not None else None
-        if self._waypoints is None:
-            raise RouteRejected()
-        try:
-            poses = await self._waypoints.route_poses(task.map_ref, task.waypoint_ids)
-        except DomainError as exc:
-            raise RouteRejected() from exc
-        await self.start_poses(
-            execution_id,
-            task.map_ref,
-            map_generation,
-            poses,
-            task_id=task.task_id,
-            connection_epoch=epoch,
-        )
-
-    async def start_poses(
-        self,
-        execution_id: str,
-        map_ref: MapRef,
-        map_generation: str,
-        poses: tuple[Pose2D, ...],
-        *,
-        task_id: str | None = None,
-        connection_epoch: int | None = None,
-    ) -> None:
-        if connection_epoch is None and self._connection_epoch is not None:
-            connection_epoch = self._connection_epoch()
-        try:
-            plan = RoutePlan(
-                execution_id=execution_id,
-                map_id=map_ref.map_id,
-                task_id=task_id,
-                reference_revision=map_ref.reference_revision,
-                map_generation=map_generation,
-                poses=[[pose.x, pose.y, pose.yaw] for pose in poses],
-                connection_epoch=connection_epoch,
-            )
-        except ValidationError as exc:
-            raise RouteRejected() from exc
-        reply = await self._call("navigation.task_start", execution_id, plan=plan.model_dump())
-        if reply.get("map_generation") != map_generation:
-            raise DomainError(ErrorCode.CONFLICT, "ROS accepted a different reference generation")
-
-    async def cancel(self, execution_id: str) -> None:
-        await self._call("navigation.task_cancel", execution_id)
-
     async def status(self, execution_id: str) -> RouteProgress | None:
         reply = await self._call("navigation.task_status", execution_id)
         return self._progress(reply)
@@ -271,11 +214,6 @@ class IpcNavigation:
         if reply.get("ok") is not True:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS navigation unavailable")
         return self._progress(reply)
-
-    async def cancel_current(self) -> None:
-        current = await self.current()
-        if current is not None:
-            await self.cancel(current.execution_id)
 
     @staticmethod
     def _progress(reply: dict[str, Any]) -> RouteProgress | None:
@@ -362,10 +300,6 @@ class StateReply(BaseModel):
     map_id: str | None
     reference_revision: int | None
     execution_status: str
-    # //Compatible: old adapters omit configuration diagnostics. These fields
-    # describe configuration only; motion still requires fresh runtime evidence.
-    motion_control_configured: bool | None = None
-    motion_configuration_diagnostic: str | None = Field(default=None, max_length=512)
     # //Compatible: older state replies have no qualified reference or navigation fields.
     map_generation: str | None = None
     localization_generation: str | None = None
@@ -555,19 +489,3 @@ class TaskAwareMotion(IpcMotion):
                     driving_version=snapshot.driving_version,
                 )
         raise DomainError(ErrorCode.UNAVAILABLE, "task ownership changed before manual handoff")
-
-    async def forward(self, envelope: Envelope) -> None:
-        # //Compatible: native Agent acquire uses manual(), not this legacy forwarded command.
-        if envelope.type == "control.acquire":
-            for attempt in range(5):
-                try:
-                    await self.tasks.control_current("takeover", envelope.request_id)
-                    break
-                except DomainError as exc:
-                    if exc.code is not ErrorCode.UNAVAILABLE or attempt == 4:
-                        raise
-                    await asyncio.sleep(0.05)
-        elif envelope.type in {"navigation.start", "navigation.resume"}:
-            await self.tasks.control_current("resume", envelope.request_id)
-            return
-        await super().forward(envelope)

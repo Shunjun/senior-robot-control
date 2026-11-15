@@ -30,23 +30,18 @@ class ScanAdapter(Node):
         self.declare_parameter("filtered_candidate_topic", "/perception/scan_candidate")
         self.declare_parameter("max_age_seconds", 0.5)
         self.declare_parameter("no_return_clear", False)
-        # //Compatible: omitted range uncertainty retains exact-mask filtering.
-        self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.body = self.get_parameter("body_frame").value
         self.max_age = default_policy().hard_age_s
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         # Self-return models belong to the motion output owner; transport never
         # trusts operator masks or labels all body-interior points as learned.
         self.profile = DeviceProfile()
-        self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)
         self.no_return_clear = self.get_parameter("no_return_clear").value
         if (
             not self.body
             or not self._raw_topic
             or not math.isfinite(self.max_age)
             or not 0 < self.max_age <= 5.0
-            or not math.isfinite(self.mask_range_uncertainty)
-            or self.mask_range_uncertainty < 0
         ):
             raise ValueError("invalid body frame or max age")
         self._admission = RawCaptureAdmission(max_age_s=self.max_age, hard_limit_s=5.0)
@@ -156,9 +151,7 @@ class ScanAdapter(Node):
                 seconds,
                 no_return_clear=self.no_return_clear,
             )
-            filtered = filter_self(
-                observation, self.profile, self_mask_range_uncertainty=self.mask_range_uncertainty
-            )
+            filtered = filter_self(observation, self.profile)
             claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
             if claim:
                 from senior_control.safety.external_motion_features import external_feature_ranges

@@ -16,8 +16,9 @@ def test_old_age_copies_migrate_in_memory_to_shared_policy_not_command_ttl():
     assert p.temporal().prediction_horizon_s == sim.temporal().prediction_horizon_s == 1.0
     loaded = load_real_parameters(Path("config/hardware-safety.yaml").resolve(), p)
     assert loaded["scan_motion_node"]["scan_max_age"] == 1.0
-    assert loaded["safety_gate"]["measurement_max_age"] == 1.0
-    assert loaded["safety_gate"]["command_ttl_seconds"] == 0.3
+    assert "measurement_max_age" not in loaded["safety_gate"]
+    assert loaded["command_node"]["command_ttl_seconds"] == 0.3
+    assert "disconnect_seconds" not in loaded["command_node"]
 
 
 def test_nested_legacy_sensor_policy_migrates_without_changing_response_limits():

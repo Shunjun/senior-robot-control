@@ -7,10 +7,8 @@ from types import SimpleNamespace as N
 import pytest
 
 
-@pytest.mark.parametrize(
-    "candidate,rear", [("", "true"), ("fortress-candidate-unvalidated-v1", "false")]
-)
-def test_manual_candidate_world_does_not_add_unreviewed_rear_attachment(candidate, rear):
+@pytest.mark.parametrize("candidate", ["fortress-candidate-unvalidated-v1"])
+def test_standard_simulation_uses_shared_core_profile(candidate):
     p = (
         Path(__file__).resolve().parents[2]
         / "ros2/src/senior_robot/launch/simulation_motion.launch.py"
@@ -44,8 +42,12 @@ def test_manual_candidate_world_does_not_add_unreviewed_rear_attachment(candidat
             }
         )
     )
-    assert values["motion_rear_attachment"] == rear
+    assert values["core_matcher_linear"] == "1.52"
+    assert values["core_matcher_yaw"] == "2.0"
     if candidate:
-        assert values["motion_gate_rate"] == "20.0"
         assert values["motion_world"] == "/world/straight.sdf"
-        assert values["motion_attachment_profile"] == "robot/config/simulation_motion.yaml"
+
+    text = p.read_text()
+    assert 'default_value="fortress-candidate-unvalidated-v1"' in text
+    assert '"rear_attachment": "false"' in text
+    assert "safety_overlay" not in text

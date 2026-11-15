@@ -1,6 +1,6 @@
 """Future source samples retain their source and receipt identities."""
 
-from senior_control.safety.motion_runtime import (
+from senior_control.motion.source_fences import (
     DeferredSample,
     DeferredSourceQueue,
     SourceEpochFence,

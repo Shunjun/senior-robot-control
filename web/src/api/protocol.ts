@@ -23,10 +23,6 @@ export const SIMPLE_REQUEST_TYPES = [
   "control.release",
   "drive.stop",
   "safety.estop",
-  "safety.reset",
-  "navigation.start",
-  "navigation.cancel",
-  "navigation.resume",
 ] as const;
 
 export const OPERATION_REQUEST_TYPES = [
@@ -71,10 +67,6 @@ export const RESPONSE_REQUEST_TYPES = [
   "control.release",
   "drive.stop",
   "safety.estop",
-  "safety.reset",
-  "navigation.start",
-  "navigation.cancel",
-  "navigation.resume",
   "video.offer",
   "video.answer",
   "video.candidate",

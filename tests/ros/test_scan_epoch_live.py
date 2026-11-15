@@ -20,7 +20,7 @@ from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, Scan
 from sensor_msgs.msg import LaserScan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
-from senior_control.safety.motion_runtime import SourceEpochFence  # noqa: E402
+from senior_control.motion.source_fences import SourceEpochFence  # noqa: E402
 
 
 def _room_scan():

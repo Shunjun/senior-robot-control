@@ -2,10 +2,10 @@
 
 The agent process owns the cloud link and the robot database. It owns no rclpy executor and
 publishes no ``/cmd_vel``. This process takes its requests over a local Unix socket and
-hands every motion request to the arbiter through ``CommandNode``: drive, stop, and estop
-arrive as validated envelopes and go through ``submit``; disable and exit go through
-``disconnect``. Nothing here writes a velocity of its own, so the arbiter's timer is the
-only publisher and cannot replay an old lease behind a stop. ``rclpy`` is imported inside
+hands native manual requests to ``CommandNode.manual_request`` and emergency stops to
+``submit``. Disconnect and exit retire the original connection's authority; accepted tasks
+keep their local execution lifetime. This adapter never writes an actuator velocity.
+``rclpy`` is imported inside
 ``main`` so the request handling below can be tested without ROS.
 """
 
@@ -20,7 +20,6 @@ from senior_control.mapping.workspace import WorkspaceMap
 from senior_control.navigation import RoutePlan
 from senior_control.protocol import (
     SimpleEnvelope,
-    VelocityEnvelope,
     validate_envelope,
 )
 from senior_control.safety.arbiter import CommandResult
@@ -31,7 +30,6 @@ if TYPE_CHECKING:
 SOCKET_ENV = "SENIOR_AGENT_SOCKET"
 
 _ENVELOPE_KINDS = {
-    "drive": "drive.velocity",
     "stop": "drive.stop",
     "estop": "safety.estop",
 }
@@ -67,12 +65,9 @@ class AdapterCore:
         submit: Callable[..., CommandResult],
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
-        server_heartbeat: Callable[[int, float], bool] | None = None,
-        require_source_deadline: bool = False,
         workspace_map: WorkspaceMap | None = None,
         state_provider: Callable[[], dict[str, Any]] | None = None,
         pose_provider: Callable[[], dict[str, Any]] | None = None,
-        take_drive_feedback: Callable[[], list[dict[str, Any]]] | None = None,
         routes: "RouteService | None" = None,
         navigation_ready: Callable[[], bool] | None = None,
         ros_domain: int | None = None,
@@ -84,30 +79,22 @@ class AdapterCore:
         self._submit = submit
         self._disconnect = disconnect
         self._request_exit = request_exit
-        self._server_heartbeat = server_heartbeat
-        self._require_source_deadline = require_source_deadline
         self._workspace_map = workspace_map
         self._state_provider = state_provider
         self._pose_provider = pose_provider
-        self._take_drive_feedback = take_drive_feedback
         self._routes = routes
         self._settled_sequence = 0
         self._task_effect_sequences: dict[str, int] = {}
         self._task_effects: dict[str, tuple[str, str, int] | tuple[str, str, int, str]] = {}
         self._task_plans: dict[str, dict[str, Any]] = {}
         self._navigation_ready = navigation_ready
-        self._active_epoch: int | None = None
-        self._heartbeat_epoch: int | None = None
-        self._highest_epoch = -1
+        self._connection_epoch: int | None = None
         self._disabled_through_epoch = -1
-        # //Compatible: legacy isolated adapter tests do not have a heartbeat callback.
-        self.motion_disabled = server_heartbeat is not None
         self._exiting = False
 
     def release(self) -> None:
         """End the active epoch only. Safe to repeat."""
-        epoch = self._heartbeat_epoch if self._heartbeat_epoch is not None else self._active_epoch
-        self._heartbeat_epoch = self._active_epoch = None
+        epoch, self._connection_epoch = self._connection_epoch, None
         if epoch is not None:
             self._disconnect(epoch)
 
@@ -125,33 +112,25 @@ class AdapterCore:
         if kind == "manual":
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unsupported"}
-            return self._manual(message)
-        if kind == "drive_feedback":
-            if self._take_drive_feedback is None:
-                return {"ok": False, "error": "unsupported"}
-            return {"ok": True, "feedback": self._take_drive_feedback()}
+            raw = message.get("envelope")
+            if not isinstance(raw, str):
+                return {"ok": False, "error": "bad_request"}
+            try:
+                envelope = validate_envelope(raw.encode(), self._robot_id)
+            except ValueError:
+                return {"ok": False, "error": "bad_request"}
+            if envelope.connection_epoch <= self._disabled_through_epoch:
+                return {"ok": False, "error": "offline"}
+            reply = self._manual(message)
+            if reply.get("ok"):
+                self._connection_epoch = max(self._connection_epoch or 0, envelope.connection_epoch)
+            return reply
         if kind == "identity":
             reply = {"ok": message.get("robot_id") == self._robot_id}
             # //Compatible: legacy adapters omit their runtime ROS domain.
             if reply["ok"] and self._ros_domain is not None:
                 return {**reply, "ros_domain": self._ros_domain}
             return reply
-        if kind == "server_heartbeat":
-            epoch, deadline = message.get("connection_epoch"), message.get("deadline")
-            if (
-                self._exiting
-                or self._server_heartbeat is None
-                or not isinstance(epoch, int)
-                or isinstance(epoch, bool)
-                or isinstance(deadline, bool)
-                or not isinstance(deadline, (int, float))
-                or epoch <= self._disabled_through_epoch
-            ):
-                return {"ok": False, "error": "bad_request"}
-            accepted = self._server_heartbeat(epoch, float(deadline))
-            if accepted:
-                self._heartbeat_epoch = epoch
-            return {"ok": accepted}
         if kind in {"state.get", "pose.get"}:
             provider = self._state_provider if kind == "state.get" else self._pose_provider
             if provider is None or self._exiting:
@@ -179,30 +158,19 @@ class AdapterCore:
             epoch = message.get("connection_epoch")
             if not isinstance(epoch, int) or isinstance(epoch, bool):
                 return {"ok": False, "error": "bad_request"}
-            if epoch < max(
-                self._highest_epoch, self._disabled_through_epoch, self._heartbeat_epoch or 0
-            ):
+            if epoch < max(self._disabled_through_epoch, self._connection_epoch or 0):
                 return {"ok": True}
             self._disabled_through_epoch = epoch
-            self.motion_disabled = True
-            self.release()
+            self._connection_epoch = None
+            self._disconnect(epoch)
             return {"ok": True}
         if kind == "exit":
             self._exiting = True
-            self.motion_disabled = True
             self.release()
             self._request_exit()
             return {"ok": True}
         if kind in {"stop", "estop"}:
             return self._send(message, kind, safety=True)
-        if self.motion_disabled:
-            if kind == "command" and not self._exiting:
-                return self._reenable(message)
-            return {"ok": False, "error": "motion_disabled"}
-        if kind == "drive":
-            return self._send(message, kind, safety=False)
-        if kind == "command":
-            return self._send(message, None, safety=False)
         if kind == "ros_call":
             return {"ok": False, "error": "unsupported"}
         return {"ok": False, "error": "unknown_type"}
@@ -327,21 +295,17 @@ class AdapterCore:
                 plan = RoutePlan.model_validate(message.get("plan"))
             except ValueError:
                 return {"ok": False, "error": "bad_request"}
-            if plan.effect_id is not None and sequence < 1:
+            if sequence < 1:
                 return {"ok": False, "error": "bad_request"}
             if plan.execution_id != execution_id:
                 return {"ok": False, "error": "bad_request"}
             retained = sum(
-                not (
-                    old[1] == execution_id
-                    and plan.task_epoch is not None
-                    and old[2] < plan.task_epoch
-                )
+                not (old[1] == execution_id and old[2] < plan.task_epoch)
                 for old in self._task_effects.values()
             )
             if plan.effect_id not in self._task_effects and retained >= 256:
                 return {"ok": False, "error": "unavailable"}
-            if plan.effect_id is not None and plan.effect_id in self._task_effects:
+            if plan.effect_id in self._task_effects:
                 matched = (
                     self._task_effect_sequences.get(plan.effect_id) == sequence
                     and self._task_plans.get(plan.effect_id) == plan.model_dump()
@@ -363,15 +327,14 @@ class AdapterCore:
                 }
             if not await routes.start(plan, wait_for_goal=False):
                 return {"ok": False, "error": "rejected", "execution_id": execution_id}
-            if plan.effect_id is not None and plan.task_epoch is not None:
-                for key, old in list(self._task_effects.items()):
-                    if old[1] == execution_id and old[2] < plan.task_epoch:
-                        self._task_effects.pop(key)
-                        self._task_effect_sequences.pop(key, None)
-                        self._task_plans.pop(key, None)
-                self._task_effects[plan.effect_id] = ("plan", execution_id, plan.task_epoch)
-                self._task_plans[plan.effect_id] = plan.model_dump()
-                self._task_effect_sequences[plan.effect_id] = sequence
+            for key, old in list(self._task_effects.items()):
+                if old[1] == execution_id and old[2] < plan.task_epoch:
+                    self._task_effects.pop(key)
+                    self._task_effect_sequences.pop(key, None)
+                    self._task_plans.pop(key, None)
+            self._task_effects[plan.effect_id] = ("plan", execution_id, plan.task_epoch)
+            self._task_plans[plan.effect_id] = plan.model_dump()
+            self._task_effect_sequences[plan.effect_id] = sequence
             return {
                 "ok": True,
                 "accepted": True,
@@ -457,34 +420,14 @@ class AdapterCore:
                 "sources_fenced_through_epoch": epoch if retired else None,
                 "controller_output_exited": retired,
             }
-        if kind == "navigation.task_terminal":
+        if kind in {"navigation.task_terminal", "navigation.task_cancel"}:
             return {"ok": False, "error": "bad_request"}
-        if kind == "navigation.task_cancel":
-            # //Compatible: old callers get cancellation only, never retirement proof.
-            return {"ok": await routes.cancel(execution_id), "execution_id": execution_id}
         progress = routes.status(execution_id)
         return {
             "ok": True,
             "execution_id": execution_id,
             "progress": progress.model_dump() if progress is not None else None,
         }
-
-    def _reenable(self, message: dict[str, Any]) -> dict[str, Any]:
-        raw = message.get("envelope")
-        if not isinstance(raw, str):
-            return {"ok": False, "error": "motion_disabled"}
-        try:
-            envelope = validate_envelope(raw.encode(), self._robot_id)
-        except ValueError:
-            return {"ok": False, "error": "motion_disabled"}
-        if envelope.type != "control.acquire" or envelope.connection_epoch <= max(
-            self._highest_epoch, self._disabled_through_epoch
-        ):
-            return {"ok": False, "error": "motion_disabled"}
-        result = self._send(message, None, safety=False)
-        if result.get("ok"):
-            self.motion_disabled = False
-        return result
 
     def _send(self, message: dict[str, Any], kind: str | None, *, safety: bool) -> dict[str, Any]:
         del safety
@@ -497,34 +440,15 @@ class AdapterCore:
             return {"ok": False, "error": "bad_request"}
         if kind is not None and envelope.type != _ENVELOPE_KINDS[kind]:
             return {"ok": False, "error": "bad_request"}
-        if not isinstance(envelope, (VelocityEnvelope, SimpleEnvelope)):
+        if not isinstance(envelope, SimpleEnvelope):
             return {"ok": False, "error": "bad_request"}
-        if self._server_heartbeat is not None and (
-            envelope.type.startswith("navigation.") or envelope.type == "safety.reset"
-        ):
-            return {"ok": False, "error": "unavailable"}
         received_at = message.get("received_at")
         if isinstance(received_at, bool) or not isinstance(received_at, (int, float)):
             received_at = None
-        local_deadline = message.get("local_deadline")
-        if isinstance(local_deadline, bool) or not isinstance(local_deadline, (int, float)):
-            local_deadline = None
-        if isinstance(envelope, VelocityEnvelope) and self._require_source_deadline:
-            if local_deadline is None:
-                return {"ok": False, "error": "bad_request"}
-        if local_deadline is not None:
-            result = self._submit(envelope, received_at, float(local_deadline))
-        else:
-            # //Compatible: isolated legacy adapter callers do not carry an absolute deadline.
-            result = self._submit(envelope, received_at)
+        result = self._submit(envelope, received_at)
         if not result.accepted:
             # The agent distinguishes stale frames from an unconfirmed safety request.
             return {"ok": False, "accepted": False, "error": result.error.value}
-        if envelope.type not in {"safety.estop", "safety.reset"}:
-            self._highest_epoch = max(self._highest_epoch, envelope.connection_epoch)
-            self._active_epoch = (
-                None if envelope.type == "control.release" else envelope.connection_epoch
-            )
         return {"ok": True, "accepted": True}
 
 
@@ -580,13 +504,6 @@ def main() -> None:
                     "map_generation": None,
                     "localization_generation": None,
                 }
-            )
-            configured = bool(node.get_parameter("motion_control_configured").value)
-            result["motion_control_configured"] = configured
-            result["motion_configuration_diagnostic"] = (
-                None
-                if configured
-                else "real_motion_not_configured: missing motion_profile/safety_parameters"
             )
             result["task_evidence_ready"] = node.task_motion_allowed(continuing=True)
             runtime = node.motion_runtime()
@@ -687,12 +604,11 @@ def main() -> None:
                     execution_id,
                     topic,
                     qualified=guard,
-                    task_epoch=routes.current.task_epoch if routes.current else None,
+                    task_epoch=routes.current.task_epoch if routes.current else 0,
                 ),
                 clear_source=node.clear_navigation_source,
                 complete_source=node.complete_navigation_source,
                 source_active=node.navigation_source_matches,
-                connection_epoch=node.current_navigation_epoch,
                 source_retired=node.navigation_source_retired,
                 retire_source=node.retire_navigation_source,
                 release_identity=node.request_terminal_release,
@@ -702,14 +618,9 @@ def main() -> None:
 
         core = AdapterCore(
             robot_id=robot_id,
-            submit=lambda envelope, received_at=None, local_deadline=None: node.submit(
-                envelope, received_at, local_deadline=local_deadline
-            ),
+            submit=node.submit,
             disconnect=node.disconnect,
             request_exit=request_exit,
-            server_heartbeat=node.server_heartbeat,
-            require_source_deadline=True,
-            take_drive_feedback=node.take_drive_feedback,
             workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
             state_provider=state,
             pose_provider=reference.pose_reply if reference is not None else None,
@@ -793,7 +704,7 @@ def main() -> None:
 
     # //Compatible: use the same Humble signal lifecycle as the synchronous CLIs.
     run(
-        lambda: CommandNode(require_server_heartbeat=True),
+        lambda: CommandNode(),
         cli=True,
         spin=spin,
         executor_factory=MotionExecutor,

@@ -15,8 +15,6 @@ setup(
                 "config/lattice_diff.json",
                 "config/slam.yaml",
                 "config/simulation_motion.yaml",
-                "config/simulation_motion_flat_lateral.yaml",
-                "config/simulation_motion_rear_mask.yaml",
                 "config/simulation_rgbd.yaml",
                 "config/rgbd_transport.xml",
             ],

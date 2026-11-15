@@ -121,39 +121,11 @@ Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点�
 和 Web，以便整条链路识别新增的状态字段。导航不可用时，快照携带车端检查未通过的
 原因，网页分别提示地图定位、规划控制器、传感器证据或心跳权限问题。
 
-### 运动连续性中断后的显式恢复
+### 运动状态与恢复
 
-若扫描等运动证据源曾中断，源恢复后仍可能因 `progress_history_unqualified` 保持停车。
-先确认仿真稳定、车辆静止，并松开移动控件，再在仿真宿主机执行：
+标准仿真入口默认选择 `fortress-candidate-unvalidated-v1` 共享运动核心，要求本地 ROS 域与模拟时钟。此名称保留其未验证的参数假设，不表示仿真或实车验收通过。未选择有效 profile 时启动失败，不进入旧安全门。
 
-```sh
-.ros-venv/bin/senior-robot requalify-motion
-# 使用另一个独立统一目录时：
-.ros-venv/bin/senior-robot requalify-motion --control-dir /home/sim/another-sim
-```
-
-命令验证仿真档、该档的运行中用户服务和 ROS 适配器身份后，加载该档的 ROS 环境，
-在对应隔离域请求现有 `/motion_fusion/requalify_progress` 服务。适配器身份必须报告实际
-运行的 ROS 域，并与当前配置一致；修改配置中的域号后需重启对应仿真，不能沿用旧进程。
-旧版适配器缺少域信息时此命令拒绝执行，请重新构建 ROS 工作区并重启仿真。未运行、身份核验失败、
-服务拒绝或超时均返回失败；实车档不提供此操作。此命令不重启仿真、不发送速度命令，
-也不清除急停或真实运动异常锁存。拒绝时终端区分无需重新核验
-（`progress_history_not_broken`）、运动异常仍锁存（`motion_anomaly_latched`）、
-静止校准未就绪（`stationary_profile_unqualified`）和时钟未就绪（`clock_unqualified`）。
-未知服务错误只显示通用失败信息。
-
-终端返回 `accepted (armed), not yet qualified` 只表示请求已受理，尚未恢复运动资格。
-保留正常控制会话的零速请求，保持静止；请求后必须有新鲜的请求零速、实际输出零速，
-并通过两个连续、独立对齐的扫描、轮速和 IMU 静止观测区间。持续非零请求、证据再次中断
-或不满足静止阈值时，安全门继续停车；命令不会伪造观测或降低判断条件。
-
-`.ros-venv/bin/senior-robot status` 只报告进程、IPC 和云端连接，不能证明运动资格恢复。
-通过同一 ROS 域的 `/motion/evidence` 实时运动证据检查 `valid` 恢复且不再报告
-`progress_history_unqualified`；再检查 `/safety/status` 的新鲜 `evidence_ready=true`
-以及工作台中当前车辆的安全许可与拦截原因。保持零速时，安全门仍可能显示
-`zero_requested`，这是正常停车状态；历史 `count.*` 计数不会因恢复而清零。
-全部实时安全条件满足后再尝试驾驶；若仍被拦截，按当前原因检查，不能把请求受理当作
-解除所有安全限制。
+通过 `/motion/core_reference` 查看原生来源与统一估计，`/motion/runtime` 查看当前运动模式、急停和恢复条件。传感器时效、原始来源身份和本地指令 TTL 各自保持有效；普通障碍和估计退化按当前核心状态处理。急停与执行故障使用工作台明确恢复操作，收到确认后重新准备手动 authority；不会恢复旧杆量或自动续跑手动输入。
 
 ### 仿真视频
 

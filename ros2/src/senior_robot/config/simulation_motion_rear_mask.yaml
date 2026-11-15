@@ -1,8 +1,0 @@
-# Simulation sensor uncertainty only; no manually configured self-filter area.
-scan_adapter:
-  ros__parameters:
-    # Simulation-only bound based on the lidar's 0.01 m range resolution.
-    self_mask_range_uncertainty: 0.01
-safety_gate:
-  ros__parameters:
-    self_mask_range_uncertainty: 0.01

@@ -8,11 +8,9 @@ from senior_control.agent.snapshots import RobotSnapshot
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
-    DriveExecutionFeedback,
     Envelope,
     ResponseEnvelope,
     SimpleEnvelope,
-    VelocityEnvelope,
     VideoEnvelope,
     serialize_envelope,
 )
@@ -35,8 +33,6 @@ class Link(Protocol):
     async def recv(self) -> Envelope | VideoEnvelope | HeartbeatFrame:
         """Next frame. A dropped socket raises ``ConnectionError``."""
         ...
-
-    def command_clock_valid(self) -> bool: ...
 
     async def send_response(self, envelope: ResponseEnvelope) -> None: ...
 
@@ -80,21 +76,20 @@ class HeartbeatLedger:
 class MotionPort(Protocol):
     """The only way the agent reaches motion: through the ROS-side adapter."""
 
-    async def drive(
+    async def manual(
         self,
-        envelope: VelocityEnvelope,
+        envelope: Envelope,
         *,
-        received_at: float | None = None,
-        local_deadline: float | None = None,
-    ) -> None: ...
+        received_steady: float | None = None,
+        deadline_steady: float | None = None,
+        **fields: Any,
+    ) -> dict[str, Any]: ...
+
+    async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None: ...
 
     async def stop(self, envelope: SimpleEnvelope) -> None: ...
 
     async def estop(self, envelope: SimpleEnvelope) -> None: ...
-
-    async def forward(self, envelope: Envelope) -> None: ...
-
-    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None: ...
 
     async def disable(self, connection_epoch: int) -> None: ...
 
@@ -120,16 +115,12 @@ class IpcMotion:
         self,
         client: IpcClient,
         *,
-        heartbeat_client: IpcClient | None = None,
         disable_client: IpcClient | None = None,
-        feedback_client: IpcClient | None = None,
         safety_client: IpcClient | None = None,
     ) -> None:
         self._client = client
         # //Compatible: isolated callers can still supply one serialized IPC client.
-        self._heartbeat_client = heartbeat_client if heartbeat_client is not None else client
         self._disable_client = disable_client if disable_client is not None else client
-        self._feedback_client = feedback_client
         self._safety_client = safety_client if safety_client is not None else client
 
     async def _ok(
@@ -147,20 +138,6 @@ class IpcMotion:
                 raise MotionRejected(kind, code)
             raise IpcError(f"ros side refused {kind}")
         return reply
-
-    async def drive(
-        self,
-        envelope: VelocityEnvelope,
-        *,
-        received_at: float | None = None,
-        local_deadline: float | None = None,
-    ) -> None:
-        fields: dict[str, Any] = {"envelope": serialize_envelope(envelope).decode()}
-        if received_at is not None:
-            fields["received_at"] = received_at
-        if local_deadline is not None:
-            fields["local_deadline"] = local_deadline
-        await self._ok("drive", **fields)
 
     async def verify_robot(self, robot_id: str) -> None:
         await self._ok("identity", robot_id=robot_id)
@@ -182,9 +159,6 @@ class IpcMotion:
             envelope=serialize_envelope(envelope).decode(),
             received_at=received_steady,
         )
-
-    async def forward(self, envelope: Envelope) -> None:
-        await self._ok("command", envelope=serialize_envelope(envelope).decode())
 
     async def manual(
         self,
@@ -210,14 +184,6 @@ class IpcMotion:
         except (IpcError, OSError) as exc:
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "manual IPC outcome is unknown") from exc
 
-    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
-        await self._ok(
-            "server_heartbeat",
-            client=self._heartbeat_client,
-            connection_epoch=connection_epoch,
-            deadline=deadline,
-        )
-
     async def disable(self, connection_epoch: int) -> None:
         await self._ok(
             "disable_motion", client=self._disable_client, connection_epoch=connection_epoch
@@ -229,21 +195,10 @@ class IpcMotion:
     async def call(self, name: str) -> Any:
         return (await self._ok("ros_call", name=name)).get("result")
 
-    async def take_drive_feedback(self) -> list[DriveExecutionFeedback]:
-        if self._feedback_client is None:
-            return []
-        reply = await self._ok("drive_feedback", client=self._feedback_client)
-        raw = reply.get("feedback")
-        if not isinstance(raw, list) or len(raw) > 8:
-            raise ValueError("invalid drive feedback batch")
-        return [DriveExecutionFeedback.model_validate(item) for item in raw]
-
     async def close(self) -> None:
         for client in {
             self._client,
-            self._heartbeat_client,
             self._disable_client,
-            self._feedback_client,
             self._safety_client,
         }:
             if client is not None:

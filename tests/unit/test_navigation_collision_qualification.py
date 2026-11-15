@@ -137,6 +137,9 @@ async def test_running_route_can_replan_collision_but_stops_on_lost_evidence(
         reference_revision=1,
         map_generation="gen",
         poses=[[1.0, 0.0, 0.0]],
+        task_epoch=1,
+        effect_id="plan",
+        action_ids=[str(i) for i in range(len([[1.0, 0.0, 0.0]]))],
     )
     runtime.status("hard_sweep_clear")
     try:
@@ -204,12 +207,9 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         motion_mode=lambda: "autonomous",
         submit=lambda *a, **k: None,
         disconnect=lambda *a: None,
-        server_heartbeat=lambda *a: True,
-        take_drive_feedback=lambda: None,
         bind_navigation_source=lambda *a, **k: True,
         clear_navigation_source=lambda *a: None,
         navigation_source_matches=lambda *a: True,
-        current_navigation_epoch=lambda: 1,
         navigation_source_retired=lambda *a: False,
         shutdown_motion=lambda: None,
     )

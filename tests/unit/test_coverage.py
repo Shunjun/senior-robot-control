@@ -5,9 +5,8 @@ from pathlib import Path
 import pytest
 
 from senior_control.config import DeviceProfile
-from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.models import Pose2D
 from senior_control.safety.coverage import SweptRegion, supports
-from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.self_filter import ScanObservation, filter_self
 
 
@@ -114,63 +113,6 @@ def test_actual_fortress_full_circle_wrap_is_observed():
     assert 0 < gap <= scan.max_angular_gap
     assert obs.rays[0].kind == obs.rays[-1].kind == "hit"
     assert supports(sweep, [obs], scan.stamp, "ros", 0.8).supported
-
-
-def test_actual_fortress_scan_allows_measured_forward_candidate():
-    scan, obs, _ = _captured_fortress_seam()
-    profile = DeviceProfile(
-        mode="simulation",
-        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
-        self_mask_calibrated=True,
-        braking_deceleration=0.3,
-        yaw_braking_deceleration=0.5,
-        reaction_time=0.2,
-        hard_margin=0.02,
-        observation_max_age=0.8,
-    )
-    decision = evaluate_motion(
-        Velocity(0.05, 0.0),
-        BodyTwist(-1.3947176746853806e-19, 0.0, -6.938893903907376e-17),
-        [obs],
-        profile,
-        scan.stamp,
-        uncertainty_margin=0.1778164193973488,
-    )
-    assert decision.allowed, decision.reason
-
-
-def test_gate_reuses_visible_area_across_all_required_polygons(monkeypatch):
-    from senior_control.safety import coverage
-
-    scan, obs, _ = _captured_fortress_seam()
-    profile = DeviceProfile(
-        mode="simulation",
-        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
-        self_mask_calibrated=True,
-        braking_deceleration=0.3,
-        yaw_braking_deceleration=0.5,
-        reaction_time=0.2,
-        hard_margin=0.02,
-        observation_max_age=0.8,
-    )
-    original = coverage.unary_union
-    calls = []
-
-    def counted(geometries):
-        calls.append(1)
-        return original(geometries)
-
-    monkeypatch.setattr(coverage, "unary_union", counted)
-    decision = evaluate_motion(
-        Velocity(0.05, 0.0),
-        BodyTwist(-1.3947176746853806e-19, 0.0, -6.938893903907376e-17),
-        [obs],
-        profile,
-        scan.stamp,
-        uncertainty_margin=0.1778164193973488,
-    )
-    assert decision.allowed
-    assert len(calls) <= 1
 
 
 def test_full_fan_fast_path_equals_union_of_real_beam_triangles():

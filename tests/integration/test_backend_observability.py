@@ -129,7 +129,7 @@ def test_metrics_labels_are_bounded() -> None:
     assert not any("user-" in label for key in series for label in key)
 
     worst = Metrics()
-    for kind in (*OPERATION_TYPES, "drive.stop", "drive.velocity", "other", "bogus"):
+    for kind in (*OPERATION_TYPES, "drive.stop", "drive.intent", "other", "bogus"):
         for result in ("succeeded", "failed", "needs_review", "offline", "conflict", "zzz"):
             worst.inc("agent_operations_total", operation=kind, result=result)
     assert len(worst.series()) <= 40 * 12

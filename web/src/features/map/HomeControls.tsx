@@ -2,6 +2,8 @@ import { useState, type ReactElement } from "react";
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { MapRef, ResponsePayload, RobotSnapshot } from "../../api/protocol";
+import { useVehicleView } from "../devices/useVehicleView";
+import type { TaskAction } from "../../api/vehicleState";
 import styles from "./Map.module.css";
 
 export interface HomeControlsProps {
@@ -18,10 +20,9 @@ export interface HomeControlsProps {
 
 type Outcome = { kind: "ok"; text: string } | { kind: "error"; text: string };
 
-type ActionName = "start" | "resume" | "cancel" | "home";
+type ActionName = "resume" | "cancel" | "home";
 
 const ACTION_LABEL: Record<ActionName, string> = {
-  start: "开始导航",
   resume: "继续导航",
   cancel: "取消导航",
   home: "设为 Home",
@@ -66,6 +67,27 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
   const [confirmReplace, setConfirmReplace] = useState(false);
 
   const live = isLive(snapshot);
+  const vehicle = useVehicleView(link.vehicle);
+  const task = vehicle.frame?.task;
+  const canTask = (action: TaskAction): boolean => live && vehicle.connected && vehicle.available
+    && vehicle.frame?.capabilities.includes("task.execution.v1") === true
+    && task?.allowed_actions.includes(action) === true;
+
+  async function runTask(action: "resume" | "cancel"): Promise<void> {
+    if (!link.vehicle || !task || !canTask(action) || pending !== null) return;
+    const current = link.vehicle.getSnapshot().frame?.task;
+    if (current?.task_id !== task.task_id || current.version !== task.version) return;
+    setPending(action);
+    setOutcome(null);
+    try {
+      await link.vehicle.taskCommand(action);
+      setOutcome({ kind: "ok", text: `车端已应答：${ACTION_LABEL[action]}` });
+    } catch (error) {
+      setOutcome({ kind: "error", text: `${ACTION_LABEL[action]}未完成：${String(error)}` });
+    } finally {
+      setPending(null);
+    }
+  }
   const blocks = navigationBlocks(snapshot);
   if (navigationUnavailable !== undefined) blocks.push(navigationUnavailable);
   const canNavigate = blocks.length === 0;
@@ -140,44 +162,23 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
       )}
 
       <div className={styles.actions}>
-        {directNavigation === undefined ? (
-          <>
-            <button
-              type="button"
-              className={styles.primary}
-              disabled={!canNavigate || pending === "start"}
-              onClick={() => void run("start", "navigation.start", {})}
-            >
-              开始导航
-            </button>
-            <button
-              type="button"
-              className={styles.tool}
-              disabled={!canNavigate || pending === "resume"}
-              onClick={() => void run("resume", "navigation.resume", {})}
-            >
-              继续导航
-            </button>
-          </>
-        ) : (
-          <button type="button" className={styles.primary}
-            disabled={!canNavigate || directNavigation.pending}
-            onClick={directNavigation.onReturnHome}>返航</button>
-        )}
+        <button type="button" className={styles.primary}
+          disabled={!canNavigate || directNavigation === undefined || directNavigation.pending}
+          onClick={directNavigation?.onReturnHome}>返航</button>
+        <button type="button" className={styles.tool}
+          disabled={!canTask("resume") || pending !== null}
+          onClick={() => void runTask("resume")}>继续导航</button>
         <button
           type="button"
           className={styles.tool}
-          disabled={!live || pending === "cancel"}
-          onClick={() => void run("cancel", "navigation.cancel", {})}
+          disabled={!canTask("cancel") || pending !== null}
+          onClick={() => void runTask("cancel")}
         >
           取消导航
         </button>
       </div>
 
       <div className={styles.actions}>
-        {navigationUnavailable !== undefined && (
-          <button type="button" className={styles.tool} disabled>返航</button>
-        )}
         {confirmReplace ? (
           <>
             <button type="button" className={styles.primary} disabled={!canSetHome} onClick={setHome}>

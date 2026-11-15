@@ -1,8 +1,6 @@
-"""Agent supervisor: heartbeat, latest-only drive forwarding, background watch, uplink retry.
+"""Agent connection supervisor: socket heartbeat, background watch and uplink retry.
 
-Nothing here imports ROS. Every ROS-facing call is injected. The supervisor never
-publishes `/cmd_vel`; drive values leave only through `drive_sink`, and the safety chain
-behind that sink owns the topic.
+No ROS import or motion-sample queue is owned by this supervisor.
 """
 
 import asyncio
@@ -25,8 +23,6 @@ class Supervisor:
         *,
         send_heartbeat: Callable[[], Awaitable[None]],
         call_ros: Callable[[str], Awaitable[Any]],
-        drive_sink: Callable[[float, float], Awaitable[None]],
-        publish_cmd_vel: Callable[[float, float], Awaitable[None]],
         connect: Callable[[], Awaitable[bool | None]] | None = None,
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         heartbeat_seconds: float = 0.2,
@@ -44,9 +40,6 @@ class Supervisor:
             raise ValueError("heartbeat and retry delay must be positive")
         self._send_heartbeat = send_heartbeat
         self._call_ros = call_ros
-        self._drive_sink = drive_sink
-        # Accepted so the owner can prove the topic stays untouched; deliberately never called.
-        self._publish_cmd_vel = publish_cmd_vel
         self._connect = connect
         self._background = dict(background or {})
         self._heartbeat_seconds = heartbeat_seconds
@@ -56,16 +49,10 @@ class Supervisor:
         self._max_retry_delay = (
             max_retry_delay if max_retry_delay is not None else max(retry_delay * 30, retry_delay)
         )
-        self._pending: tuple[float, float] | None = None
-        self._wake = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
         self.state = "idle"
         self.revoked_reason: str | None = None
-
-    @property
-    def pending(self) -> int:
-        return 0 if self._pending is None else 1
 
     @property
     def motion_allowed(self) -> bool:
@@ -77,7 +64,6 @@ class Supervisor:
         self._running = True
         self.state = "running"
         self._spawn(self._heartbeat_loop())
-        self._spawn(self._drain_loop())
         for name, factory in self._background.items():
             self._spawn(self._watch(name, factory))
         if self._connect is not None:
@@ -91,8 +77,6 @@ class Supervisor:
         tb: TracebackType | None,
     ) -> None:
         self._running = False
-        self._pending = None
-        self._wake.set()
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
@@ -113,14 +97,6 @@ class Supervisor:
         """Run the injected ROS call in the caller's task; the heartbeat has its own task."""
         return await self._call_ros(name)
 
-    def submit_drive(self, vx: float, wz: float) -> bool:
-        """Keep one pending velocity. A newer value, a stop included, replaces it."""
-        if not self._running or self.revoked_reason is not None:
-            return False
-        self._pending = (vx, wz)
-        self._wake.set()
-        return True
-
     def revoke(self, reason: str) -> None:
         """Stop accepting and draining motion now. Safe to call from a signal handler."""
         self._revoke(reason)
@@ -129,7 +105,6 @@ class Supervisor:
         if self.revoked_reason is None:
             self.revoked_reason = reason
             logger.error("motion revoked: %s", reason)
-        self._pending = None
 
     def _fault(self, reason: str) -> None:
         self._revoke(reason)
@@ -153,21 +128,6 @@ class Supervisor:
             if deadline < now:
                 deadline = now
             await asyncio.sleep(deadline - now)
-
-    async def _drain_loop(self) -> None:
-        while self._running:
-            await self._wake.wait()
-            if not self._running:
-                return
-            while self._running and self._pending is not None and self.revoked_reason is None:
-                vx, wz = self._pending
-                self._pending = None
-                try:
-                    await self._drive_sink(vx, wz)
-                except Exception:
-                    logger.exception("drive sink failed")
-                    self._fault("drive sink failed")
-            self._wake.clear()
 
     async def _watch(self, name: str, factory: Callable[[], Awaitable[None]]) -> None:
         try:

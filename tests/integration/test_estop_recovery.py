@@ -16,7 +16,7 @@ from agent_fakes import (
     FakeTasks,
     until,
 )
-from test_shutdown import ArbiterRig, RosSide, _load_adapter
+from test_shutdown import ArbiterRig, RosSide
 from test_shutdown import socket_path as socket_path
 
 from senior_control.agent import Agent
@@ -47,18 +47,7 @@ async def test_received_estop_survives_epoch_invalidation(
     from senior_control.safety.arbiter import Arbiter
 
     rig = ArbiterRig()
-    rig.arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
-    rig.core = _load_adapter().AdapterCore(
-        robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: rig.arbiter.accept(
-            envelope, rig.now, received_at=received_at
-        ),
-        disconnect=rig.arbiter.disconnect,
-        request_exit=lambda: None,
-        server_heartbeat=lambda epoch, deadline: rig.arbiter.server_heartbeat(
-            epoch, rig.now, deadline
-        ),
-    )
+    rig.arbiter = Arbiter(ROBOT, 0.3)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def handle(message: dict[str, Any]) -> dict[str, Any]:
@@ -80,7 +69,6 @@ async def test_received_estop_survives_epoch_invalidation(
             await journal.prepare()
             motion = IpcMotion(
                 IpcClient(socket_path),
-                heartbeat_client=IpcClient(socket_path),
                 disable_client=IpcClient(socket_path),
             )
             agent = Agent(
@@ -106,10 +94,9 @@ async def test_received_estop_survives_epoch_invalidation(
                 await asyncio.wait_for(entered.wait(), 1)
                 if invalidate == "expired_heartbeat":
                     rig.now = 100.9
-                    response = await control.request(
-                        "server_heartbeat", connection_epoch=1, deadline=101.7
-                    )
-                    assert not response["ok"]
+                    # Explicit retirement may arrive while the admitted emergency IPC waits.
+                    response = await control.request("disable_motion", connection_epoch=1)
+                    assert response["ok"]
                 else:
                     assert (await control.request("disable_motion", connection_epoch=1))["ok"]
                 release.set()
@@ -165,7 +152,6 @@ async def test_unresolved_estop_prevents_agent_restart_after_ipc_timeout(
                 state=FakeState(),
                 motion=IpcMotion(
                     IpcClient(socket_path),
-                    heartbeat_client=IpcClient(socket_path),
                     disable_client=IpcClient(socket_path),
                 ),
                 deadlines=Deadlines(safety=0.1),
@@ -209,22 +195,7 @@ async def test_unresolved_estop_prevents_agent_restart_after_ipc_timeout(
 
 
 def heartbeat_arbiter_rig() -> ArbiterRig:
-    from senior_control.safety.arbiter import Arbiter
-
-    rig = ArbiterRig()
-    rig.arbiter = Arbiter(ROBOT, 0.2, 1.0, 0.3, require_server_heartbeat=True)
-    rig.core = _load_adapter().AdapterCore(
-        robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: rig.arbiter.accept(
-            envelope, rig.now, received_at=received_at
-        ),
-        disconnect=rig.arbiter.disconnect,
-        request_exit=lambda: None,
-        server_heartbeat=lambda epoch, deadline: rig.arbiter.server_heartbeat(
-            epoch, rig.now, deadline
-        ),
-    )
-    return rig
+    return ArbiterRig()
 
 
 def ipc_agent(
@@ -248,7 +219,6 @@ def ipc_agent(
         state=FakeState(),
         motion=IpcMotion(
             IpcClient(socket_path),
-            heartbeat_client=IpcClient(socket_path),
             disable_client=IpcClient(socket_path),
         ),
         clock=Clock(),
@@ -256,55 +226,6 @@ def ipc_agent(
         retry_delay=0.01,
         **extra,
     )
-
-
-async def test_replay_is_resolved_and_old_epoch_cannot_disrupt_new_session(
-    tmp_path: Path, socket_path: Path
-) -> None:
-    from agent_fakes import simple
-
-    from senior_control.agent.connection import HeartbeatFrame
-    from senior_control.errors import ErrorCode
-
-    rig = heartbeat_arbiter_rig()
-    server = IpcServer(socket_path, rig.core.handle)
-    await server.start()
-    first, second = FakeLink(1), FakeLink(2)
-    try:
-        async with Database(tmp_path / "robot.db") as database:
-            journal = AgentJournal(database, robot_id=ROBOT)
-            await journal.prepare()
-            agent = ipc_agent(journal, FakeConnector(first, second), socket_path, rig)
-            runner = asyncio.create_task(agent.run())
-            try:
-                await until(lambda: agent.connected)
-                first.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
-                await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=5))
-                first.inbox.put_nowait(simple("safety.estop", seq=4))
-                await until(lambda: bool(first.responses))
-                assert first.responses[-1].payload.error is ErrorCode.CONFLICT
-                # The conflict response is sent before durable replay cleanup completes.
-                assert agent._safety_task is not None
-                await asyncio.wait_for(asyncio.shield(agent._safety_task), 2)
-                assert not await journal.safety.pending()
-                assert not agent.recovery_required
-                first.drop()
-                await until(lambda: first.closed and agent._link is second)
-                second.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
-                await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=1, epoch=2))
-                second.inbox.put_nowait(simple("safety.estop", seq=6, epoch=1))
-                await until(lambda: bool(second.responses))
-                assert second.responses[-1].payload.error is ErrorCode.CONFLICT
-                assert agent.eligible_for_motion
-                assert not await journal.safety.pending()
-                assert rig.arbiter.mode(rig.now) == "idle"
-            finally:
-                agent.request_shutdown()
-                await asyncio.wait_for(runner, 3)
-    finally:
-        await server.close()
 
 
 @pytest.mark.parametrize(
@@ -362,7 +283,9 @@ async def test_burst_of_64_safety_requests_with_blocked_ipc_retains_recovery_obl
                 assert not entered.is_set()
                 for index in range(MAX_SAFETY_PENDING):
                     link.inbox.put_nowait(
-                        simple(kind, seq=1).model_copy(update={"session_id": f"burst-{index}"})
+                        simple(kind, seq=1).model_copy(
+                            update={"session_id": f"burst-{index}", "request_id": f"burst-{index}"}
+                        )
                     )
                 await until(lambda: len(agent._safety_pending) == MAX_SAFETY_PENDING)
                 allow_dispatch.set()
@@ -414,11 +337,11 @@ async def test_storage_timeout_revokes_motion_and_disables_ros(
             journal = AgentJournal(database, robot_id=ROBOT)
             await journal.prepare()
 
-            async def blocked_write() -> None:
+            async def blocked_write(*args) -> None:
                 entered.set()
                 await release.wait()
 
-            journal.safety.mark = blocked_write  # type: ignore[method-assign]
+            journal.safety.admit = blocked_write  # type: ignore[method-assign]
             first, second = FakeLink(1), FakeLink(2)
             agent = ipc_agent(
                 journal,
@@ -437,7 +360,7 @@ async def test_storage_timeout_revokes_motion_and_disables_ros(
                 await asyncio.wait_for(entered.wait(), 1)
                 assert not agent.eligible_for_motion
                 await asyncio.wait_for(runner, 2)
-                assert rig.core.motion_disabled
+                assert rig.core._disabled_through_epoch >= 1
                 assert agent.auth_rejected and agent.runtime_failed
                 assert not second.closed and agent._last_epoch == 1
                 assert not any(response.payload.ok for response in first.responses)
@@ -558,8 +481,10 @@ async def test_replay_clear_racing_new_estop_cannot_erase_its_intent(
                 await until(lambda: agent.connected)
                 link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
                 await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=5))
-                link.inbox.put_nowait(simple("safety.estop", seq=4))
+                replayed = simple("safety.estop", seq=4)
+                assert rig.arbiter.accept(replayed, rig.now).accepted
+                rig.arbiter.confirm_local_estop(False)
+                link.inbox.put_nowait(replayed)
                 await asyncio.wait_for(clear_started.wait(), 1)
                 link.inbox.put_nowait(
                     simple("safety.estop", seq=1).model_copy(update={"session_id": "page-b"})
@@ -607,8 +532,10 @@ async def test_canceled_replay_clear_cannot_erase_new_estop_obligation(
                 await until(lambda: agent.connected)
                 link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
                 await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=5))
-                link.inbox.put_nowait(simple("safety.estop", seq=4))
+                replayed = simple("safety.estop", seq=4)
+                assert rig.arbiter.accept(replayed, rig.now).accepted
+                rig.arbiter.confirm_local_estop(False)
+                link.inbox.put_nowait(replayed)
                 await asyncio.wait_for(cleared.wait(), 1)
                 link.inbox.put_nowait(
                     simple("safety.estop", seq=1).model_copy(update={"session_id": "page-b"})
@@ -651,7 +578,7 @@ async def test_replay_clear_lock_counts_toward_new_estop_deadline(
         async with Database(tmp_path / "robot.db") as database:
             journal = AgentJournal(database, robot_id=ROBOT)
             await journal.prepare()
-            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.admit
             marks = 0
 
             async def late_clear() -> None:
@@ -662,15 +589,15 @@ async def test_replay_clear_lock_counts_toward_new_estop_deadline(
                     await release.wait()
                 await original_clear()
 
-            async def delayed_mark() -> None:
+            async def delayed_mark(*args) -> None:
                 nonlocal marks
                 marks += 1
-                if marks > 1:
+                if args and args[0] == "new-estop":
                     await release.wait()
-                await original_mark()
+                return await original_mark(*args)
 
             journal.safety.clear_rejected = late_clear  # type: ignore[method-assign]
-            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            journal.safety.admit = delayed_mark  # type: ignore[method-assign]
             first, second = FakeLink(1), FakeLink(2)
             agent = ipc_agent(
                 journal,
@@ -684,8 +611,10 @@ async def test_replay_clear_lock_counts_toward_new_estop_deadline(
                 await until(lambda: agent.connected)
                 first.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
                 await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=5))
-                first.inbox.put_nowait(simple("safety.estop", seq=4))
+                replayed = simple("safety.estop", seq=4)
+                assert rig.arbiter.accept(replayed, rig.now).accepted
+                rig.arbiter.confirm_local_estop(False)
+                first.inbox.put_nowait(replayed)
                 await asyncio.wait_for(clear_started.wait(), 1)
                 new_estop = simple("safety.estop", seq=1, request_id="new-estop").model_copy(
                     update={"session_id": "page-b"}
@@ -749,7 +678,7 @@ async def test_estop_mark_uses_only_time_left_after_replay_clear(
         async with Database(tmp_path / "robot.db") as database:
             journal = AgentJournal(database, robot_id=ROBOT)
             await journal.prepare()
-            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.mark
+            original_clear, original_mark = journal.safety.clear_rejected, journal.safety.admit
             marks = 0
 
             async def delayed_clear() -> None:
@@ -757,16 +686,16 @@ async def test_estop_mark_uses_only_time_left_after_replay_clear(
                 await release_clear.wait()
                 await original_clear()
 
-            async def delayed_mark() -> None:
+            async def delayed_mark(*args) -> None:
                 nonlocal marks
                 marks += 1
-                if marks > 1:
+                if args and args[0] == "new-estop":
                     mark_started.set()
                     await release_mark.wait()
-                await original_mark()
+                return await original_mark(*args)
 
             journal.safety.clear_rejected = delayed_clear  # type: ignore[method-assign]
-            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            journal.safety.admit = delayed_mark  # type: ignore[method-assign]
             link = FakeLink(1)
             agent = ipc_agent(
                 journal,
@@ -780,8 +709,10 @@ async def test_estop_mark_uses_only_time_left_after_replay_clear(
                 await until(lambda: agent.connected)
                 link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
                 await until(lambda: agent.eligible_for_motion)
-                await agent.dispatch(simple("control.acquire", seq=5))
-                link.inbox.put_nowait(simple("safety.estop", seq=4))
+                replayed = simple("safety.estop", seq=4)
+                assert rig.arbiter.accept(replayed, rig.now).accepted
+                rig.arbiter.confirm_local_estop(False)
+                link.inbox.put_nowait(replayed)
                 await asyncio.wait_for(clear_started.wait(), 1)
                 link.inbox.put_nowait(
                     simple("safety.estop", seq=1, request_id="new-estop").model_copy(
@@ -939,14 +870,14 @@ async def test_estop_actual_mark_uses_remaining_lock_budget(
         async with Database(tmp_path / "robot.db") as database:
             journal = AgentJournal(database, robot_id=ROBOT)
             await journal.prepare()
-            original_mark = journal.safety.mark
+            original_mark = journal.safety.admit
 
-            async def delayed_mark() -> None:
+            async def delayed_mark(*args) -> None:
                 mark_started.set()
                 await release_mark.wait()
-                await original_mark()
+                return await original_mark(*args)
 
-            journal.safety.mark = delayed_mark  # type: ignore[method-assign]
+            journal.safety.admit = delayed_mark  # type: ignore[method-assign]
             link = FakeLink(1)
             agent = ipc_agent(
                 journal,

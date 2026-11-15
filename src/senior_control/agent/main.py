@@ -8,7 +8,6 @@ import os
 import signal
 import sys
 import time
-from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,7 +40,6 @@ from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.observability import Metrics
 from senior_control.protocol import (
-    DriveExecutionFeedback,
     Envelope,
     ManualIntentEnvelope,
     OperationEnvelope,
@@ -55,7 +53,6 @@ from senior_control.protocol import (
     SimpleEnvelope,
     SnapshotEnvelope,
     TaskExecutionEnvelope,
-    VelocityEnvelope,
     VideoEnvelope,
     WorkspaceEnvelope,
 )
@@ -65,7 +62,6 @@ from senior_control.runtime.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
-from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
@@ -78,8 +74,6 @@ MAX_INFLIGHT = 64
 MAX_SAFETY_PENDING = 64
 # Browser commands may be admitted for this long. The vehicle does not execute for that long:
 # a velocity older than command_ttl_seconds is refused on the local clock.
-ADMISSION_SECONDS = 5.0
-MAX_COMMAND_CLOCK_ERROR = 0.05
 
 
 def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
@@ -108,10 +102,6 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
         snapshot.navigation_block_reason,
         repr(snapshot.vehicle_ui),
     )
-
-
-async def _never_publish(vx: float, wz: float) -> None:
-    raise AssertionError("the agent must not publish /cmd_vel")
 
 
 @dataclass(frozen=True)
@@ -145,8 +135,6 @@ class Agent:
         retry_delay: float = 1.0,
         heartbeat_window: float = 2.0,
         command_ttl_seconds: float = 0.3,
-        source_clock_verified: bool = False,
-        native_manual: bool = False,
         snapshot_seconds: float = 2.0,
         state_poll_seconds: float = 0.25,
         metrics: Metrics | None = None,
@@ -159,10 +147,8 @@ class Agent:
         self._settings = settings
         # //Compatible: callers injecting only settings still share that owner's gate.
         self._runtime_gate = runtime_gate or (settings.runtime if settings is not None else None)
-        self._native_manual = native_manual
         self._native_reset_token: int | None = None
         self._intent_queue = PendingCounter("agent.manual_intent", 1)
-        self._velocity_queue = PendingCounter("agent.velocity", 1)
         self._queued_intent: tuple[Link, ManualIntentEnvelope, float, float] | None = None
         self._intent_task: asyncio.Task[None] | None = None
         self.metrics = metrics if metrics is not None else Metrics()
@@ -187,7 +173,6 @@ class Agent:
         if command_ttl_seconds <= 0:
             raise ValueError("command ttl must be positive")
         self._command_ttl_seconds = command_ttl_seconds
-        self._source_clock_verified = source_clock_verified
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
         # //Compatible: isolated/non-native MotionPort implementations have no admission clock.
@@ -212,11 +197,8 @@ class Agent:
         )
         self._link: Link | None = None
         self._revoked_link: Link | None = None
-        self._clock_revoked = False
         self._epoch = 0
         self._last_epoch = 0
-        self._heartbeat_generation = 0
-        self._latest_velocity: VelocityEnvelope | None = None
         self._supervisor: Supervisor | None = None
         self._stopping = False
         self.auth_rejected = False
@@ -225,9 +207,6 @@ class Agent:
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
-        self._velocity_task: asyncio.Task[None] | None = None
-        self._queued_velocity: tuple[Link, VelocityEnvelope, int] | None = None
-        self._replaced_velocity: deque[DriveExecutionFeedback] = deque(maxlen=16)
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = DiagnosticPending(
             "agent.safety_pending", MAX_SAFETY_PENDING
         )
@@ -264,7 +243,6 @@ class Agent:
         self._expire_eligibility()
         return (
             self._link is not None
-            and self._link.command_clock_valid()
             and self.motion_allowed
             and not self._safety_blocked
             and self._ledger.eligible(self.robot_id)
@@ -300,7 +278,6 @@ class Agent:
         self._was_eligible = False
         lost_generation = self._continuity_generation
         self._continuity_generation += 1
-        self._heartbeat_generation += 1
         self._revoked_link = self._link
         self._ledger.forget(self.robot_id)
         if self._on_eligibility_lost is not None:
@@ -332,8 +309,6 @@ class Agent:
         supervisor = Supervisor(
             send_heartbeat=self._beat,
             call_ros=self._motion.call,
-            drive_sink=self._drive,
-            publish_cmd_vel=_never_publish,
             connect=self._session,
             background=self._background,
             heartbeat_seconds=self._heartbeat_seconds,
@@ -365,7 +340,6 @@ class Agent:
         """Synchronous and signal-safe: motion is revoked before anything else happens."""
         self._stopping = True
         self._lose_eligibility()
-        self._heartbeat_generation += 1
         if self._supervisor is not None:
             self._supervisor.revoke("shutdown requested")
         self._stop.set()
@@ -448,10 +422,10 @@ class Agent:
 
     async def _beat(self) -> None:
         link = self._link
-        if link is None or (not self._native_manual and not self.motion_allowed):
+        if link is None:
             return
         self._expire_eligibility()
-        if self._revoked_link is link and not self._clock_revoked:
+        if self._revoked_link is link:
             await self._quietly(self._motion.disable(link.epoch))
             await self._quietly(link.close())
             return
@@ -460,7 +434,6 @@ class Agent:
         except Exception:
             if self._link is not link:
                 raise
-            self._heartbeat_generation += 1
             self._revoked_link = link
             self._lose_eligibility()
             self._ledger.forget(self.robot_id)
@@ -477,69 +450,25 @@ class Agent:
             self.auth_rejected = True
             self.request_shutdown()
             raise
-        self._heartbeat_generation += 1
-        if self._queued_velocity is not None:
-            self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
-        self._queued_velocity = None
-        self._replaced_velocity.clear()
         self._revoked_link = None
-        self._clock_revoked = False
         self._link, self._epoch, self._last_epoch = link, link.epoch, link.epoch
         self.metrics.inc("agent_reconnects_total")
         self._log("connection_opened")
         received_heartbeat = False
         # Snapshot collection is independent of heartbeat and control reception.
         keepalive = asyncio.ensure_future(self._keep_snapshot_fresh(link))
-        feedback = asyncio.ensure_future(self._forward_drive_feedback(link))
         video: VideoSignaling | None = None
         try:
             while True:
                 frame = await link.recv()
                 if isinstance(frame, HeartbeatFrame):
-                    if self._native_manual:
-                        if frame.robot_id != self.robot_id:
-                            raise ConnectionError("heartbeat identity mismatch")
-                        received_heartbeat = True
-                        await self._motion.server_heartbeat(
-                            link.epoch, self._clock.monotonic() + self._heartbeat_window
-                        )
-                        continue
-                    if frame.robot_id != self.robot_id or frame.deadline <= self._clock.monotonic():
+                    if (
+                        frame.robot_id != self.robot_id
+                        or frame.deadline <= self._clock.monotonic()
+                        or self._revoked_link is link
+                    ):
                         raise ConnectionError("invalid heartbeat")
                     received_heartbeat = True
-                    if not link.command_clock_valid():
-                        if self._was_eligible:
-                            self._clock_revoked = True
-                            self._lose_eligibility()
-                            await self._quietly(self._motion.disable(link.epoch))
-                        continue
-                    if self._clock_revoked:
-                        # The old epoch was disabled. Recover motion only on a new epoch.
-                        raise ConnectionError("command clock recovered")
-                    if self._safety_blocked:
-                        continue
-                    was_eligible = self._was_eligible
-                    self._expire_eligibility()
-                    if was_eligible and not self._was_eligible:
-                        raise ConnectionError("heartbeat continuity expired")
-                    if not self.motion_allowed or self._revoked_link is link:
-                        raise ConnectionError("motion is revoked")
-                    generation = self._heartbeat_generation
-                    await asyncio.wait_for(
-                        self._motion.server_heartbeat(link.epoch, frame.deadline),
-                        timeout=self._deadlines.safety,
-                    )
-                    was_eligible = self._was_eligible
-                    self._expire_eligibility()
-                    if (
-                        (was_eligible and not self._was_eligible)
-                        or frame.deadline <= self._clock.monotonic()
-                        or self._link is not link
-                        or self._revoked_link is link
-                        or generation != self._heartbeat_generation
-                        or not self.motion_allowed
-                    ):
-                        raise ConnectionError("heartbeat expired before ROS acknowledgement")
                     self._ledger.note(frame.robot_id, deadline=frame.deadline)
                     self._was_eligible = self._ledger.eligible(frame.robot_id)
                 elif isinstance(frame, VideoEnvelope):
@@ -569,36 +498,16 @@ class Agent:
             if video is not None:
                 video.retire()
             keepalive.cancel()
-            feedback.cancel()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
                     task.cancel()
             await self._quietly(self._motion.disable(epoch))
             await self._settle_safety()
-            await self._wait_inflight([keepalive, feedback, *inflight])
+            await self._wait_inflight([keepalive, *inflight])
             if video is not None:
                 await self._quietly(video.close())
             await self._quietly(link.close())
-
-    async def _forward_drive_feedback(self, link: Link) -> None:
-        take = getattr(self._motion, "take_drive_feedback", None)
-        send = getattr(link, "send_drive_feedback", None)
-        if take is None or send is None:
-            return
-        while self._link is link:
-            await asyncio.sleep(0.05)
-            try:
-                results = list(self._replaced_velocity)
-                self._replaced_velocity.clear()
-                for result in (*results, *(await take())):
-                    if self._link is link and result.robot_id == self.robot_id:
-                        await send(result)
-            except (ConnectionError, OSError):
-                return
-            except (DomainError, IpcError, ValueError):
-                # //Compatible: feedback is optional when the local adapter is older.
-                await asyncio.sleep(0.5)
 
     async def _keep_snapshot_fresh(self, link: Link) -> None:
         """Push on a state change, and at least every ``snapshot_seconds``.
@@ -690,7 +599,7 @@ class Agent:
 
     def _safety_key(self, envelope: Envelope) -> tuple[str, int, str]:
         identity = envelope.session_id
-        if self._native_manual and envelope.type == "safety.estop":
+        if envelope.type == "safety.estop":
             # Distinct user events require distinct durable receipts, even when
             # queued in the same session. Only identical transport retries merge.
             identity = json.dumps((envelope.request_id, envelope.seq))
@@ -726,7 +635,7 @@ class Agent:
         try:
             await self._acquire_safety_lock(deadline)
             try:
-                if self._native_manual and envelope.type == "safety.estop":
+                if envelope.type == "safety.estop":
                     try:
                         replay = await self._admit_native_estop(envelope, deadline)
                     except DomainError as exc:
@@ -737,7 +646,6 @@ class Agent:
                         return
                 else:
                     await self._safety_storage(self._journal.safety.mark(), deadline)
-                self._latest_velocity = None
                 if overflow:
                     self.recovery_required = True
                     self._native_reset_token = None
@@ -856,7 +764,7 @@ class Agent:
             if self._workspace_request is None or self._workspace_request.done():
                 self._workspace_request = self._spawn(self._answer_workspace(link, envelope))
             return
-        if self._native_manual and isinstance(envelope, ManualIntentEnvelope):
+        if isinstance(envelope, ManualIntentEnvelope):
             now = (
                 envelope._received_steady
                 if envelope._received_steady is not None
@@ -871,9 +779,6 @@ class Agent:
         if envelope.type in HALT_TYPES or envelope.type == "control.release":
             self._settle_queued_intent()
         if envelope.type in HALT_TYPES:
-            if self._queued_velocity is not None:
-                self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
-            self._queued_velocity = None
             key = self._safety_key(envelope)
             existing = self._safety_pending.get(key)
             if existing is not None:
@@ -890,32 +795,11 @@ class Agent:
                 self._safety_task = self._spawn(self._drain_safety())
                 self._safety_task.add_done_callback(self._safety_finished)
             return
-        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
-            if self._queued_velocity is not None:
-                previous = self._queued_velocity[1]
-                self._velocity_queue.discard(id(previous), time.monotonic(), overwritten=True)
-                self._replaced_velocity.append(DriveExecutionFeedback.superseded(previous))
-            self._queued_velocity = (link, envelope, self.continuity_generation)
-            self._velocity_queue.enqueue(id(envelope), time.monotonic())
-            if self._velocity_task is None or self._velocity_task.done():
-                self._velocity_task = self._spawn(self._drain_velocity())
-            return
-        if envelope.type in {"control.acquire", "control.release"}:
-            if self._queued_velocity is not None:
-                self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
-            self._queued_velocity = None
         safety_active = self._safety_task is not None and not self._safety_task.done()
         workspace_active = self._workspace_request in self._inflight
         if len(self._inflight) - int(safety_active) - int(workspace_active) >= MAX_INFLIGHT:
             raise ConnectionError("agent command capacity exceeded")
-        if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
-            # //Compatible: only legacy grants use the wall-anchored conversion.
-            convert = getattr(link, "local_command_deadline", None)
-            deadline = convert(envelope.payload.server_deadline) if convert is not None else None
-            generation = self.continuity_generation
-            self._spawn(self._answer(link, envelope, deadline, generation))
-        else:
-            self._spawn(self._answer(link, envelope))
+        self._spawn(self._answer(link, envelope))
 
     def _settle_queued_intent(self, *, overwritten: bool = False) -> None:
         pending, self._queued_intent = self._queued_intent, None
@@ -939,16 +823,6 @@ class Agent:
             finally:
                 self._intent_queue.finish(id(envelope), time.monotonic())
 
-    async def _drain_velocity(self) -> None:
-        while self._queued_velocity is not None:
-            link, envelope, generation = self._queued_velocity
-            self._queued_velocity = None
-            self._velocity_queue.start(id(envelope), time.monotonic())
-            try:
-                await self._answer(link, envelope, generation=generation)
-            finally:
-                self._velocity_queue.finish(id(envelope), time.monotonic())
-
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
         if task.cancelled() or task.exception() is not None:
             self._safety_fault()
@@ -970,7 +844,7 @@ class Agent:
                 # Native success may be a durable replay admitted while the
                 # original event was still pending. Resolve only if recovery and
                 # all other safety obligations are already clear.
-                replay = self._native_manual
+                replay = True
             except DomainError as exc:
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))
@@ -1041,17 +915,9 @@ class Agent:
         task.add_done_callback(lambda _: self._report_queues())
         return task
 
-    async def _answer(
-        self,
-        link: Link,
-        envelope: Envelope,
-        deadline: float | None = None,
-        generation: int | None = None,
-    ) -> None:
+    async def _answer(self, link: Link, envelope: Envelope) -> None:
         try:
-            result = await self.dispatch(
-                envelope, deadline=deadline, link=link, generation=generation
-            )
+            result = await self.dispatch(envelope)
         except OperationNotCommitted as exc:
             await self._reply(link, envelope, error=exc.code, status=exc.status)
             return
@@ -1062,7 +928,6 @@ class Agent:
             result.status is not OperationStatus.SUCCEEDED
             and envelope.type != "operation.query"
             and not isinstance(result, TaskOperationResult)
-            and envelope.type not in {"navigation.start", "navigation.resume"}
         ):
             # Only a query may report a status that is not committed, and it says so honestly.
             await self._reply(link, envelope, error=ErrorCode.CONFLICT, status=result.status)
@@ -1164,14 +1029,7 @@ class Agent:
 
     # ------------------------------------------------------------------ commands
 
-    async def dispatch(
-        self,
-        envelope: Envelope,
-        *,
-        deadline: float | None = None,
-        link: Link | None = None,
-        generation: int | None = None,
-    ) -> OperationResult:
+    async def dispatch(self, envelope: Envelope) -> OperationResult:
         if envelope.type in HALT_TYPES | {
             "control.release",
             "safety.estop.reset",
@@ -1180,22 +1038,9 @@ class Agent:
             self._invalidate_gate()
         # Native manual admission lives at TaskAwareMotion's physical handoff;
         # task mutations serialize inside LifecycleStore, never around port I/O.
-        admission = not self._native_manual and envelope.type == "drive.velocity"
-        if admission and self._settings is not None:
-            async with self._settings.runtime.admission():
-                return await self._dispatch(
-                    envelope, deadline=deadline, link=link, generation=generation
-                )
-        return await self._dispatch(envelope, deadline=deadline, link=link, generation=generation)
+        return await self._dispatch(envelope)
 
-    async def _dispatch(
-        self,
-        envelope: Envelope,
-        *,
-        deadline: float | None = None,
-        link: Link | None = None,
-        generation: int | None = None,
-    ) -> OperationResult:
+    async def _dispatch(self, envelope: Envelope) -> OperationResult:
         if isinstance(
             envelope,
             (
@@ -1210,20 +1055,16 @@ class Agent:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
-        if self._native_manual and (
-            isinstance(envelope, (ManualIntentEnvelope, RecoveryEnvelope))
-            or envelope.type in {"control.acquire", "control.release"}
-        ):
-            now = self._clock.monotonic()
-            return await self._manual_control(envelope, now, now + self._command_ttl_seconds)
-        if isinstance(envelope, (ManualIntentEnvelope, RecoveryEnvelope)):
-            raise DomainError(ErrorCode.UNAVAILABLE, "native manual protocol is not configured")
-        if self._native_manual and envelope.type in {
-            "drive.velocity",
-            "drive.challenge",
-            "safety.reset",
+        if isinstance(envelope, (ManualIntentEnvelope, RecoveryEnvelope)) or envelope.type in {
+            "control.acquire",
+            "control.release",
         }:
-            raise DomainError(ErrorCode.VALIDATION, "legacy velocity is not a native intent")
+            received = envelope._received_steady
+            if received is None:
+                received = self._clock.monotonic()
+            return await self._manual_control(
+                envelope, received, received + self._command_ttl_seconds
+            )
         if isinstance(envelope, TaskExecutionEnvelope):
             self._admit(envelope)
             if not isinstance(self._navigation, LifecycleNavigationOperations):
@@ -1232,9 +1073,7 @@ class Agent:
         if isinstance(envelope, OperationEnvelope):
             return await self._dispatcher.run(envelope)
         try:
-            result = await self._control(
-                envelope, deadline=deadline, link=link, generation=generation
-            )
+            result = await self._control(envelope)
         except DomainError as exc:
             self.metrics.inc(
                 "agent_operations_total", operation=envelope.type, result=exc.code.value
@@ -1275,12 +1114,9 @@ class Agent:
                     "payload": envelope.payload.model_copy(update={"revision": revision}),
                 }
             )
-        manual = getattr(self._motion, "manual", None)
-        if manual is None:
-            raise DomainError(ErrorCode.UNAVAILABLE, "native manual IPC is not configured")
         try:
             reply = await asyncio.wait_for(
-                manual(envelope, received_steady=received, deadline_steady=deadline),
+                self._motion.manual(envelope, received_steady=received, deadline_steady=deadline),
                 timeout=self._deadlines.edit
                 if envelope.type == "control.acquire"
                 else self._deadlines.safety,
@@ -1299,41 +1135,26 @@ class Agent:
             )
         return OperationResult(envelope.request_id, OperationStatus.SUCCEEDED)
 
-    async def _control(
-        self,
-        envelope: VelocityEnvelope | SimpleEnvelope,
-        *,
-        deadline: float | None = None,
-        link: Link | None = None,
-        generation: int | None = None,
-    ) -> OperationResult:
+    async def _control(self, envelope: SimpleEnvelope) -> OperationResult:
         request_id = envelope.request_id
-        if self._native_manual and envelope.type == "safety.estop":
+        if envelope.type == "safety.estop":
             if await self._admit_native_estop(envelope):
                 return OperationResult(request_id, OperationStatus.SUCCEEDED)
         if isinstance(envelope, SimpleEnvelope) and envelope.type in HALT_TYPES:
             # A stop is honored whatever the epoch, expiry, or link state: it only removes motion.
             supervisor = self._supervisor
-            self._latest_velocity = None
-            if supervisor is not None:
-                supervisor.submit_drive(0.0, 0.0)
             try:
                 if envelope.type == "safety.estop":
-                    local_estop = getattr(self._motion, "estop_received", None)
-                    if self._native_manual and local_estop is not None:
-                        received = envelope._received_steady
-                        if received is None:
-                            received = envelope._received_steady = self._clock.monotonic()
-                        await asyncio.wait_for(
-                            local_estop(envelope, received_steady=received),
-                            self._deadlines.safety,
-                        )
-                    else:
-                        await asyncio.wait_for(self._motion.estop(envelope), self._deadlines.safety)
+                    received = envelope._received_steady
+                    if received is None:
+                        received = envelope._received_steady = self._clock.monotonic()
+                    await asyncio.wait_for(
+                        self._motion.estop_received(envelope, received_steady=received),
+                        self._deadlines.safety,
+                    )
                     self.recovery_required = True
                     self._native_reset_token = None
-                    if self._native_manual:
-                        await self._safety_storage(self._journal.safety.complete(request_id))
+                    await self._safety_storage(self._journal.safety.complete(request_id))
                 else:
                     await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
             except MotionRejected as exc:
@@ -1345,106 +1166,16 @@ class Agent:
                     self._supervisor_fault("stop was not acknowledged")
                 raise DomainError(ErrorCode.TIMEOUT, "stop was not acknowledged") from exc
             return OperationResult(request_id, OperationStatus.SUCCEEDED)
-        if isinstance(envelope, SimpleEnvelope) and envelope.type == "navigation.cancel":
-            if self._navigation is not None:
-                self._admit(envelope)
-                await self._navigation("navigation.cancel", request_id, {})
-                return OperationResult(request_id, OperationStatus.SUCCEEDED)
-        if isinstance(envelope, SimpleEnvelope) and envelope.type in {
-            "navigation.start",
-            "navigation.resume",
-        }:
-            self._admit(envelope)
-            await asyncio.wait_for(self._motion.forward(envelope), self._deadlines.edit)
-            return OperationResult(request_id, OperationStatus.ACCEPTED)
-        received_at = None
-        if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
-            convert_timing = getattr(link, "local_drive_timing", None)
-            issued = envelope.payload.server_issued_at
-            remote_deadline = envelope.payload.server_deadline
-            timing = (
-                convert_timing(issued, remote_deadline)
-                if convert_timing is not None and issued is not None and remote_deadline is not None
-                else None
-            )
-            if timing is None:
-                raise DomainError(ErrorCode.TIMEOUT, "motion clock evidence expired")
-            received_at, deadline = timing
-        if isinstance(envelope, VelocityEnvelope) and envelope.payload.server_deadline is not None:
-            if (
-                deadline is None
-                or deadline <= self._clock.monotonic()
-                or self._link is not link
-                or generation != self.continuity_generation
-            ):
-                raise DomainError(ErrorCode.TIMEOUT, "motion authority expired")
-        self._admit(envelope)
-        if not self.eligible_for_motion:
-            raise DomainError(ErrorCode.SAFETY_REJECTED, "robot is not eligible to move")
-        if isinstance(envelope, VelocityEnvelope):
-            if not self._source_clock_verified and (
-                envelope.payload.server_deadline is None
-                or (envelope.payload.gesture is None and not envelope.payload.challenge_id)
-            ):
-                raise DomainError(ErrorCode.UNAVAILABLE, "controller clock is not verified")
-            if self._link is None or not self._link.command_clock_valid():
-                raise DomainError(ErrorCode.TIMEOUT, "command clock is not synchronized")
-            if envelope.payload.server_deadline is None:
-                # //Compatible: isolated older tests inject a verified source clock.
-                implied_send = envelope.expires_at - ADMISSION_SECONDS
-                age = self._wall_clock() - implied_send
-                if (
-                    age < -MAX_COMMAND_CLOCK_ERROR
-                    or age + MAX_COMMAND_CLOCK_ERROR > self._command_ttl_seconds
-                ):
-                    raise DomainError(
-                        ErrorCode.TIMEOUT, "command time is outside the motion window"
-                    )
-                received_at = self._clock.monotonic() - max(0.0, age + MAX_COMMAND_CLOCK_ERROR)
-            try:
-                await asyncio.wait_for(
-                    self._motion.drive(envelope, received_at=received_at, local_deadline=deadline)
-                    if envelope.payload.server_deadline is not None
-                    else self._motion.drive(envelope, received_at=received_at),
-                    self._deadlines.safety,
-                )
-            except Exception as exc:
-                raise DomainError(ErrorCode.SAFETY_REJECTED, "motion was not accepted") from exc
-            if envelope.payload.gesture is None:
-                # //Compatible: isolated legacy supervisor users may resubmit local samples.
-                self._latest_velocity = envelope
-            return OperationResult(request_id, OperationStatus.SUCCEEDED)
-        try:
-            timeout = (
-                self._deadlines.edit
-                if envelope.type == "control.acquire"
-                else self._deadlines.safety
-            )
-            await asyncio.wait_for(self._motion.forward(envelope), timeout)
-        except DomainError:
-            raise
-        except Exception as exc:
-            raise DomainError(ErrorCode.TIMEOUT, "ros side did not accept the command") from exc
-        return OperationResult(request_id, OperationStatus.SUCCEEDED)
-
-    async def _drive(self, vx: float, wz: float) -> None:
-        """Supervisor sink. The arbiter gets the controller's own validated envelope."""
-        if self._safety_blocked:
-            return
-        latest = self._latest_velocity
-        if latest is None or (latest.payload.vx, latest.payload.wz) != (vx, wz):
-            return
-        await self._motion.drive(latest)
+        raise DomainError(ErrorCode.VALIDATION, "unsupported control request")
 
     def _admit(self, envelope: Envelope) -> None:
         """A first-time command needs a live link, the current epoch, and an unexpired deadline."""
-        if self._link is None:
+        if self._link is None or self._revoked_link is self._link:
             raise DomainError(ErrorCode.OFFLINE, "robot is not connected to the server")
         if envelope.connection_epoch != self._epoch:
             raise DomainError(ErrorCode.CONFLICT, "command belongs to an earlier connection")
         if (
-            envelope.type
-            not in {"control.acquire", "control.release", "drive.velocity", "drive.intent"}
+            envelope.type not in {"control.acquire", "control.release", "drive.intent"}
             and envelope.expires_at < self._wall_clock()
         ):
             raise DomainError(ErrorCode.TIMEOUT, "command expired")
@@ -1470,8 +1201,7 @@ class Agent:
             deleted = await self._journal.deleted_task_ids()
         home = live.home
         if (
-            self._native_manual
-            and live.vehicle_ui is not None
+            live.vehicle_ui is not None
             and live.vehicle_ui.get("confirmed_estop_status") == "clear"
             and "acquire" in live.vehicle_ui.get("allowed_actions", ())
             and self._native_reset_token is not None

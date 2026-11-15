@@ -17,9 +17,7 @@ from test_motion_core_chain import feed
 from test_motion_core_handoff import Publisher, core  # noqa: F401
 
 from senior_control.models import Velocity
-from senior_control.protocol import DriveFeedbackKey
 from senior_control.safety.arbiter import FinalCommandFence
-from senior_control.safety.drive_feedback import OutputFeedback
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,7 +45,6 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
         "time": time,
         "Velocity": Velocity,
         "DriveFeedbackMessage": lambda: N(),
-        "DriveFeedbackKey": DriveFeedbackKey,
     }
     exec(compile(ast.fix_missing_locations(module), "<actual safety gate handlers>", "exec"), scope)
     g = scope["Gate"]()
@@ -56,8 +53,6 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
     g.get_parameter = core.node.get_parameter
     g._drive_feedback_publisher = Publisher()
     g._guard_process = None
-    g._feedback = OutputFeedback()
-    g._publish_drive_feedback = lambda _: None
     parent, child = socket.socketpair(
         socket.AF_UNIX, socket.SOCK_SEQPACKET if sys.platform == "linux" else socket.SOCK_DGRAM
     )
@@ -124,7 +119,6 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
         assert core.target.source_id == "authority:42"
         assert core.target.deadline_steady == 10.55
         assert core.target.velocity == Velocity(0.4, 0.2)
-        assert g._feedback.current.request_id == "token"
         revisions = []
         for mode in ("press1", "press1", "press2", "echo", "echo"):
             subprocess.run(

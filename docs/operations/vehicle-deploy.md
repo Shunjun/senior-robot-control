@@ -92,7 +92,7 @@ Docker 模式可在 config.json 添加 `"container": "ros2"`，参照
 保持自己已有的 cloud_url、project_dir 和 ros_domain，不要用示例值覆盖现场配置。
 相对路径会在容器内按已映射的统一目录解析，因此该目录及两个文件也必须被现有 bind mount 覆盖。
 
-两项都不配置时只启动 Agent/IPC，状态显示 Motion unavailable；填入后选择共享实车运动栈。
+标准实车启动必须同时提供有效运动 profile 与安全参数，缺失时启动前报错；使用共享运动核心。
 文件路径或数值格式错误会明确报错。当前配套 JSON 包含用户要求的假设参数，核对由操作人员负责，
 说明文字不会作为“是否实测”的认证条件；配置加载成功不表示运动运行验收通过。
 更多字段见[逐项参数说明](hardware-motion-parameters.md)。

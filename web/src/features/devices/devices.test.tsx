@@ -556,10 +556,10 @@ describe("RobotClient", () => {
 
   it("rejects an ok=false response with its error code", async () => {
     const { client, socket } = await connected();
-    const result = client.request("navigation.start", {});
+    const result = client.request("drive.stop", {});
     const id = String(socket.lastSent()["request_id"]);
     socket.receive(
-      frame("response", "robot-alpha", { request_type: "navigation.start", ok: false, error: "conflict" }, id),
+      frame("response", "robot-alpha", { request_type: "drive.stop", ok: false, error: "conflict" }, id),
     );
     await expect(result).rejects.toMatchObject({ code: "conflict" });
   });
@@ -667,7 +667,7 @@ describe("RobotClient", () => {
   it("allows an urgent stop on a stale snapshot while rejecting ordinary commands", async () => {
     const { client, socket } = await connected({ snapshot: false });
     socket.receive(frame("snapshot", "robot-alpha", { ...wirePayload, connected: false, stale: true }));
-    await expect(client.request("navigation.start", {})).rejects.toMatchObject({ code: "offline" });
+    await expect(client.request("home.set", {})).rejects.toMatchObject({ code: "offline" });
     const stop = client.request("drive.stop", {});
     expect(socket.lastSent()["type"]).toBe("drive.stop");
     client.disconnect();
@@ -677,7 +677,7 @@ describe("RobotClient", () => {
   it("still permits urgent stop after the cached snapshot times out", async () => {
     const { client, socket } = await connected({ staleAfterMs: 5_000 });
     await vi.advanceTimersByTimeAsync(5_001);
-    await expect(client.request("navigation.start", {})).rejects.toMatchObject({ code: "offline" });
+    await expect(client.request("home.set", {})).rejects.toMatchObject({ code: "offline" });
     const stop = client.request("drive.stop", {});
     expect(socket.lastSent()["type"]).toBe("drive.stop");
     client.disconnect();
@@ -820,16 +820,16 @@ describe("protocol parity with src/senior_control/protocol.py", () => {
   it("mirrors the request types", () => {
     const simple = literalOf(pythonClass(protocol, "SimpleEnvelope"));
     const operations = quoted(/OPERATION_TYPES = \(([^)]*)\)/.exec(protocol)![1]!);
-    expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple.filter(x => x !== "drive.challenge"));
+    expect([...SIMPLE_REQUEST_TYPES]).toEqual(simple);
     expect([...OPERATION_REQUEST_TYPES]).toEqual(operations);
     const workspace = literalOf(/WorkspaceRequest = Literal\[[^\]]+\]/.exec(protocol)![0]);
     expect([...WORKSPACE_REQUEST_TYPES]).toEqual(workspace);
-    expect([...REQUEST_TYPES]).toEqual([...simple.filter(x => x !== "drive.challenge"), ...operations, ...workspace]);
+    expect([...REQUEST_TYPES]).toEqual([...simple, ...operations, ...workspace]);
   });
 
   it("mirrors the response request types and error codes", () => {
     const responseBody = pythonClass(protocol, "ResponsePayload");
-    const requests = literalOf(responseBody).filter(x => x !== "drive.velocity" && x !== "drive.challenge");
+    const requests = literalOf(responseBody);
     expect([...new Set([...RESPONSE_REQUEST_TYPES, ...VEHICLE_REQUEST_TYPES])].sort())
       .toEqual([...requests].sort());
     for (const requestType of requests) {
@@ -1115,7 +1115,7 @@ describe("operator workspace", () => {
   });
 });
 
-it("keeps an exported map read-only and leaves live navigation cancellation available", async () => {
+it("keeps an exported map read-only and requires task runtime before cancellation", async () => {
   const link = new FakeLink();
   const current = snapshot("robot-alpha");
   const identity = { robot_id: current.robot_id, map_ref: current.map_ref, grid_id: "export-1" };
@@ -1149,10 +1149,10 @@ it("keeps an exported map read-only and leaves live navigation cancellation avai
   fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
   await screen.findByText("地图导出副本 · 仅供查看");
   expect(screen.getByRole("application", { name: "地图" }).getAttribute("data-picking")).toBe("false");
-  for (const name of ["开始导航", "设为 Home", "返航", "确认目标"]) {
+  for (const name of ["设为 Home", "返航", "确认目标"]) {
     expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
   }
-  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "任务管理" }));
   await screen.findByText("地图导出副本 · 仅供查看");
   expect((screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement).disabled).toBe(true);
@@ -1289,7 +1289,7 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
   });
   expect(returnHome().disabled).toBe(true);
   expect(goal().disabled).toBe(true);
-  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement).disabled).toBe(true);
   link.emit({ ...current, navigation_ready: false });
   expect(returnHome().disabled).toBe(true);
   expect(link.requests.map(({ type }) => type)).toEqual(["map.manifest", "map.tile"]);

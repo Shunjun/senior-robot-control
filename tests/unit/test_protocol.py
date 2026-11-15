@@ -8,21 +8,28 @@ from senior_control.protocol import validate_envelope
 def message(**changes):
     data = {
         "v": 1,
-        "type": "drive.velocity",
+        "type": "drive.intent",
         "robot_id": "r1",
         "session_id": "s",
         "connection_epoch": 1,
         "request_id": "q",
         "seq": 1,
         "expires_at": 123.0,
-        "payload": {"vx": 0.2, "wz": 0.1},
+        "payload": {
+            "authority_id": "authority",
+            "gesture": 1,
+            "sequence": 1,
+            "linear": 0.2,
+            "turn": 0.1,
+            "gear": "low",
+        },
     }
     data.update(changes)
     return json.dumps(data).encode()
 
 
 def test_valid_velocity():
-    assert validate_envelope(message(), "r1").payload.vx == 0.2
+    assert validate_envelope(message(), "r1").payload.linear == 0.2
 
 
 def test_receipt_clock_is_private_and_does_not_extend_the_wire_envelope():
@@ -70,7 +77,7 @@ def test_response_round_trip_and_typed_payload():
 
     raw = message(
         type="response",
-        payload={"request_type": "drive.velocity", "ok": False, "error": "safety_rejected"},
+        payload={"request_type": "drive.intent", "ok": False, "error": "safety_rejected"},
     )
     result = validate_envelope(raw, "r1")
     assert isinstance(result, ResponseEnvelope)
@@ -103,14 +110,16 @@ def test_shared_values_reject_invalid_values():
 
 
 def test_serialization_rejects_mutated_and_constructed_nonfinite_payloads():
-    from senior_control.protocol import VelocityPayload, serialize_envelope
+    from senior_control.protocol import ManualIntentPayload, serialize_envelope
 
     envelope = validate_envelope(message(), "r1")
-    assert envelope.type == "drive.velocity"
-    envelope.payload.vx = float("nan")
+    assert envelope.type == "drive.intent"
+    envelope.payload.linear = float("nan")
     with pytest.raises(ValueError):
         serialize_envelope(envelope)
-    envelope.payload = VelocityPayload.model_construct(vx=float("inf"), wz=0.0)
+    envelope.payload = ManualIntentPayload.model_construct(
+        authority_id="a", gesture=1, sequence=1, linear=float("inf"), turn=0.0, gear="low"
+    )
     with pytest.raises(ValueError):
         serialize_envelope(envelope)
 
@@ -134,7 +143,7 @@ def test_video_frames_validate_and_round_trip():
         "r1",
     )
     assert candidate.payload.candidate.startswith("candidate:")
-    assert validate_frame(message(), "r1").payload.vx == 0.2  # commands still validate
+    assert validate_frame(message(), "r1").payload.linear == 0.2  # commands still validate
 
 
 @pytest.mark.parametrize(

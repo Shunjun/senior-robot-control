@@ -98,7 +98,16 @@ def real_profile(root, *, domain=None):
     setup = root / "setup.bash"
     setup.write_text("")
     (root / "config.json").write_text(
-        json.dumps({"kind": "real", "ros_setup": str(setup), "ros_domain": domain})
+        json.dumps(
+            {
+                "kind": "real",
+                "ros_setup": str(setup),
+                "ros_domain": domain,
+                "vendor_ros_setup": str(setup),
+                "motion_profile": str(Path("config/hardware-motion.json").resolve()),
+                "safety_parameters": str(Path("config/hardware-safety.yaml").resolve()),
+            }
+        )
     )
     credentials = root / "device.json"
     credentials.write_text('{"robot_id":"robot-a","device_token":"private-token"}')
@@ -169,12 +178,26 @@ async def test_verified_adapter_precedes_agent_and_agent_stops_first(
             self.returncode = 0
             self.done.set()
 
+    camera = Child("camera")
+    motion = Child("motion")
     adapter = Child("adapter")
     agent = Child("agent")
 
-    async def spawn(*args, env):
+    async def stop_motion(child):
+        if child is not None:
+            child.terminate()
+
+    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
+
+    async def spawn(*args, env, **kwargs):
         environments.append(env)
+        if any("wheeltec_camera" in str(arg) for arg in args):
+            events.append("start-camera")
+            return camera
         if len(environments) == 1:
+            events.append("start-motion")
+            return motion
+        if len(environments) == 2:
             events.append("start-adapter")
             return adapter
         events.append("start-agent")
@@ -197,7 +220,17 @@ async def test_verified_adapter_precedes_agent_and_agent_stops_first(
         await helper.supervise(service_root, ["agent"], {"ROS_DOMAIN_ID": "42"}, profile=profile)
         == 0
     )
-    assert events == ["start-adapter", "verified", "start-agent", "stop-agent", "stop-adapter"]
+    assert events == [
+        "start-motion",
+        "start-adapter",
+        "verified",
+        "start-agent",
+        "start-camera",
+        "stop-agent",
+        "stop-adapter",
+        "stop-motion",
+        "stop-camera",
+    ]
     assert all(env["ROS_DOMAIN_ID"] == expected_domain for env in environments)
     assert not (service_root / "estop-state.json").exists()
 
@@ -273,7 +306,6 @@ async def test_handshake_failure_reaps_adapter_without_starting_agent(service_ro
 
     async def spawn(*args, **kwargs):
         events.append("start-adapter")
-        assert events == ["start-adapter"]
         return Adapter()
 
     async def not_ready(*args):
@@ -281,9 +313,15 @@ async def test_handshake_failure_reaps_adapter_without_starting_agent(service_ro
 
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(helper, "_wait_for_adapter", not_ready)
+
+    async def stop_motion(child):
+        if child is not None:
+            events.append("stop-motion")
+
+    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
     with pytest.raises(ValueError, match="identity mismatch"):
         await helper.supervise(service_root, ["agent"], {}, profile=profile)
-    assert events == ["start-adapter", "terminate-adapter"]
+    assert events == ["start-adapter", "start-adapter", "terminate-adapter", "stop-motion"]
     assert not (service_root / "service.sock").exists()
     assert not (service_root / "estop-state.json").exists()
 

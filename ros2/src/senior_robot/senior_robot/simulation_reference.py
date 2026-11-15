@@ -12,7 +12,7 @@ from typing import Any
 from senior_control.mapping.simulation import baseline_grid, map_to_odom, project_scan
 from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
-from senior_control.safety.motion_runtime import DeferredSample, DeferredSourceQueue
+from senior_control.motion.source_fences import DeferredSample, DeferredSourceQueue
 from senior_robot.motion_lifecycle import with_dds_info
 
 _MAX_AGE = 0.5

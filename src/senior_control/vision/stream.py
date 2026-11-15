@@ -5,7 +5,7 @@ Signaling rides the sockets the cloud has already authenticated (`/ws/agent` and
 control connection that asked for video, and every call re-checks it against the robot.
 
 Video never touches the drive path. Frames flow camera -> one latest-only slot -> peer. They
-do not call `Supervisor.submit_drive` and never wait on it, so a congested peer drops frames
+use an independent bounded queue, so a congested peer drops frames
 and leaves heartbeat and stop alone.
 
 `aiortc` is an optional extra. It is imported only inside `AiortcPeerFactory`, never at

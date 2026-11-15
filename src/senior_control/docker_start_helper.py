@@ -111,17 +111,13 @@ def _runtime_profile(root: Path) -> "VehicleProfile":
 def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     from senior_control.real_runtime import validate_real_runtime
 
-    hardware = None
-    if profile.motion_profile is not None or profile.safety_parameters is not None:
-        hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
-    # //Compatible: old real profiles still start the Agent/IPC adapter.
-    # An absent model withdraws motion capability; it never selects a fallback controller.
+    hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
     setup = profile.ros_setup
     if setup is None or not setup.is_absolute() or not setup.is_file():
         raise ValueError("ROS workspace setup is missing; build it and configure ros_setup")
     if profile.ros_domain is not None and not 0 <= profile.ros_domain <= 232:
         raise ValueError("ros_domain must be between 0 and 232")
-    vendor = profile.vendor_ros_setup if hardware is not None else setup
+    vendor = profile.vendor_ros_setup
     if not vendor.is_absolute() or not vendor.is_file():
         raise ValueError("vendor_ros_setup: WHEELTEC install/setup.bash is missing")
     assert profile.estop_state is not None
@@ -141,13 +137,12 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-c",
         "from senior_robot.agent_adapter import main; main()",
         "--ros-args",
-        *(["--params-file", str(profile.safety_parameters)] if hardware is not None else []),
+        "--params-file",
+        str(profile.safety_parameters),
         "-p",
         "use_sim_time:=false",
         "-p",
-        f"native_writer_receipts:={str(hardware is not None).lower()}",
-        "-p",
-        f"motion_control_configured:={str(hardware is not None).lower()}",
+        "native_writer_receipts:=true",
         "-p",
         f"robot_id:={robot_id}",
         "-p",
@@ -165,15 +160,13 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
             else []
         ),
         "-p",
-        f"navigation_odometry_topic:={hardware.wheel_topic if hardware is not None else '/odom'}",
+        f"navigation_odometry_topic:={hardware.wheel_topic}",
     ]
 
 
-def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str] | None:
+def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     # Use the same sourced overlay/domain as the adapter; no second authority
     # owner or actuator publisher is introduced by the hardware launch.
-    if profile.motion_profile is None and profile.safety_parameters is None:
-        return None
     return _ros_launch_command(
         profile,
         robot_id,
@@ -378,17 +371,9 @@ async def supervise(
             if adapter_command is not None:
                 assert profile is not None
                 motion_command = _motion_command(profile, robot_id)
-                if motion_command is not None:
-                    motion_stack = await asyncio.create_subprocess_exec(
-                        *motion_command, env=environment, start_new_session=True
-                    )
-                else:
-                    print(
-                        "Real motion unavailable: motion_profile and safety_parameters are not "
-                        "configured; starting Agent/IPC only, "
-                        "no motion stack or fallback controller.",
-                        file=sys.stderr,
-                    )
+                motion_stack = await asyncio.create_subprocess_exec(
+                    *motion_command, env=environment, start_new_session=True
+                )
                 adapter = await asyncio.create_subprocess_exec(*adapter_command, env=environment)
                 assert profile is not None
                 adapter_identity = await _wait_for_adapter(

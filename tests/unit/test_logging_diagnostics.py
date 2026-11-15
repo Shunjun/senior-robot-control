@@ -154,8 +154,6 @@ async def test_supervisor_failure_logs_diagnostic_and_revocation():
         async with Supervisor(
             send_heartbeat=noop,
             call_ros=noop,
-            drive_sink=noop,
-            publish_cmd_vel=noop,
             background={"tasks": task_loop},
             on_fault=lambda reason: fault.set(),
         ):

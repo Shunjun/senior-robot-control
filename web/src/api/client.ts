@@ -406,7 +406,7 @@ export class RobotClient implements RobotLink {
 
 
   request<T = ResponsePayload>(type: string, payload: unknown): Promise<T> {
-    if (type === "drive.velocity" || type === "drive.challenge" || (!isRequestType(type) && !VEHICLE_REQUEST_TYPES.includes(type))) return Promise.reject(new CommandError("validation", "unsupported request type"));
+    if (!isRequestType(type) && !VEHICLE_REQUEST_TYPES.includes(type)) return Promise.reject(new CommandError("validation", "unsupported request type"));
     const urgent = type === "safety.estop" || type === "drive.stop";
     const safety = urgent || type === "control.release";
     const socket = this.socket, robotId = this.robotId;

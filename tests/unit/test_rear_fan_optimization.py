@@ -11,79 +11,10 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union as geometric_union
 
 from senior_control.config import DeviceProfile
-from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.models import Pose2D
 from senior_control.safety import coverage
 from senior_control.safety.coverage import SweptRegion
-from senior_control.safety.guard import evaluate_motion
-from senior_control.safety.motion_runtime import reframe_observation
 from senior_control.safety.self_filter import ScanObservation, filter_self
-
-
-def make_observation(scenario):
-    fixture = json.loads((Path(__file__).parents[1] / "fixtures/fortress_c4_rear.json").read_text())
-    raw = fixture["scan"]
-    values = [float("nan") if value is None else value for value in raw["ranges"]]
-    if scenario == "partial_fov":
-        values = values[:-60]
-    if scenario == "edge_nan":
-        values[0] = float("nan")
-    if scenario == "interior_nan":
-        values[350] = float("nan")
-    if scenario == "multiple_gaps":
-        values[150:153] = [float("nan")] * 3
-        values[410:413] = [float("nan")] * 3
-    stamp = raw["stamp"]
-    profile = DeviceProfile(
-        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
-        self_mask=[[(-0.33, -0.24), (-0.23, -0.24), (-0.23, 0.24), (-0.33, 0.24)]],
-        self_mask_calibrated=True,
-        braking_deceleration=0.3,
-        lateral_braking_deceleration=0.3,
-        yaw_braking_deceleration=0.5,
-        reaction_time=0.2,
-        hard_margin=0.02,
-        observation_max_age=0.8,
-    )
-    if scenario == "multiple_masks":
-        profile = profile.model_copy(
-            update={
-                "self_mask": [
-                    *profile.self_mask,
-                    [(0.8, -0.1), (0.9, -0.1), (0.9, 0.1), (0.8, 0.1)],
-                ]
-            }
-        )
-    scan = ScanObservation(
-        tuple(values),
-        raw["angle_min"],
-        raw["angle_increment"],
-        raw["range_min"],
-        raw["range_max"],
-        stamp,
-        "ros",
-        Pose2D(*fixture["sensor_origin"]),
-        0.0,
-        "base_link",
-        stamp,
-        True,
-        0.01,
-        False,
-        True,
-    )
-    observation = filter_self(scan, profile, self_mask_range_uncertainty=0.01)
-    if scenario == "reframed":
-        observation = reframe_observation(
-            observation, Pose2D(0, 0, 0), Pose2D(0.03, 0.02, 0.2), stamp + 0.1
-        )
-    if scenario in {"different_origin", "reversed_rays"}:
-        rays = list(observation.rays)
-        if scenario == "different_origin":
-            rays[340] = replace(rays[340], origin=(0.2, 0.1))
-        else:
-            a, b = rays[300], rays[301]
-            rays[300], rays[301] = replace(a, endpoint=b.endpoint), replace(b, endpoint=a.endpoint)
-        observation = replace(observation, rays=tuple(rays))
-    return profile, observation
 
 
 def original_visible(observation):
@@ -177,25 +108,66 @@ def test_seeded_gaps_and_unordered_rays_preserve_the_original_observed_set():
         assert result[0].equals(expected)
 
 
-def test_actual_rear_partial_fan_avoids_hundreds_of_union_inputs(monkeypatch):
-    profile, observation = make_observation("actual")
-    assert len(observation.occluded_regions) == 64
-    assert sum(ray.kind == "ambiguous_self_overlap" for ray in observation.rays) == 64
-    calls = []
-    original = coverage.unary_union
-
-    def counted(items):
-        calls.append(len(items))
-        return original(items)
-
-    monkeypatch.setattr(coverage, "unary_union", counted)
-    decision = evaluate_motion(
-        Velocity(0.05, 0),
-        BodyTwist(0, 0, 0),
-        [observation],
-        profile,
-        observation.scan.stamp,
-        uncertainty_margin=0.8666,
+def make_observation(scenario):
+    fixture = json.loads((Path(__file__).parents[1] / "fixtures/fortress_c4_rear.json").read_text())
+    raw = fixture["scan"]
+    values = [float("nan") if value is None else value for value in raw["ranges"]]
+    if scenario == "partial_fov":
+        values = values[:-60]
+    if scenario == "edge_nan":
+        values[0] = float("nan")
+    if scenario == "interior_nan":
+        values[350] = float("nan")
+    if scenario == "multiple_gaps":
+        values[150:153] = [float("nan")] * 3
+        values[410:413] = [float("nan")] * 3
+    stamp = raw["stamp"]
+    profile = DeviceProfile(
+        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)],
+        self_mask=[[(-0.33, -0.24), (-0.23, -0.24), (-0.23, 0.24), (-0.33, 0.24)]],
+        self_mask_calibrated=True,
+        braking_deceleration=0.3,
+        lateral_braking_deceleration=0.3,
+        yaw_braking_deceleration=0.5,
+        reaction_time=0.2,
+        hard_margin=0.02,
+        observation_max_age=0.8,
     )
-    assert not decision.allowed and decision.reason == "required area contains unknown space"
-    assert not calls or max(calls) <= 8, f"per-beam union remains: {calls!r}"
+    if scenario == "multiple_masks":
+        profile = profile.model_copy(
+            update={
+                "self_mask": [
+                    *profile.self_mask,
+                    [(0.8, -0.1), (0.9, -0.1), (0.9, 0.1), (0.8, 0.1)],
+                ]
+            }
+        )
+    scan = ScanObservation(
+        tuple(values),
+        raw["angle_min"],
+        raw["angle_increment"],
+        raw["range_min"],
+        raw["range_max"],
+        stamp,
+        "ros",
+        Pose2D(*fixture["sensor_origin"]),
+        0.0,
+        "base_link",
+        stamp,
+        True,
+        0.01,
+        False,
+        True,
+    )
+    if scenario == "reframed":
+        scan = replace(scan, sensor_to_body=Pose2D(-0.03, -0.02, -0.2))
+    observation = filter_self(scan, profile, self_mask_range_uncertainty=0.01)
+    if scenario in {"different_origin", "reversed_rays"}:
+        rays = list(observation.rays)
+        if scenario == "different_origin":
+            rays[340] = replace(rays[340], origin=(0.2, 0.1))
+        else:
+            a, b = rays[300], rays[301]
+            rays[300], rays[301] = replace(a, endpoint=b.endpoint), replace(b, endpoint=a.endpoint)
+        observation = replace(observation, rays=tuple(rays))
+    return profile, observation

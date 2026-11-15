@@ -304,9 +304,7 @@ async def run_agent(config: AgentConfig) -> int:
             return 78
         motion = TaskAwareMotion(
             IpcClient(config.socket_path),
-            heartbeat_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
-            feedback_client=IpcClient(config.socket_path),
             safety_client=IpcClient(config.socket_path),
         )
         try:
@@ -363,7 +361,6 @@ async def run_agent(config: AgentConfig) -> int:
         navigation = IpcNavigation(
             navigation_client,
             waypoints,
-            connection_epoch=lambda: agent.connection_epoch,
             tasks=tasks,
         )
         context = ExecutionContext(False, False, False, False, None)
@@ -514,7 +511,6 @@ async def run_agent(config: AgentConfig) -> int:
                 config.cloud_url,
                 config.device_token,
                 config.robot_id,
-                native_manual=True,
             ),
             journal=journal,
             tasks=StoreTaskPort(
@@ -538,10 +534,8 @@ async def run_agent(config: AgentConfig) -> int:
             runtime_gate=gate,
             workspace=workspace,
             navigation=navigation_actions,
-            native_manual=True,
             motion=motion,
             video_session=video_session,
-            source_clock_verified=False,
             map_root=config.database_path.parent / "map-transfer",
             background={"tasks": task_loop, "logs": logs_loop}
             if logs is not None

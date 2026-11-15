@@ -128,6 +128,7 @@ class SimulationMotionProfile:
 def select_simulation_profile(
     name: str, *, simulated_clock: bool, localhost_only: str, domain_id: str
 ) -> SimulationMotionProfile:
-    if name != PROFILE_ID or not simulated_clock or localhost_only != "1" or domain_id != "173":
-        raise ValueError("motion core candidate requires explicit isolated simulation context")
+    valid_domain = not domain_id or (domain_id.isdecimal() and 0 <= int(domain_id) <= 232)
+    if name != PROFILE_ID or not simulated_clock or localhost_only != "1" or not valid_domain:
+        raise ValueError("motion core candidate requires explicit local simulation context")
     return SimulationMotionProfile()

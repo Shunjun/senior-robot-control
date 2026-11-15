@@ -11,6 +11,51 @@ from senior_control.sensors.policy import default_policy
 
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
+RETIRED_PARAMETERS = {
+    "scan_adapter": {"self_mask_range_uncertainty"},
+    "motion_fusion": {
+        "max_yaw_error",
+        "startup_window",
+        "progress_stationary_max_yaw_rate",
+        "sensor_max_age",
+        "alignment_max_gap",
+        "imu_frame",
+        "pending_wait",
+        "wheel_motion_limit",
+        "stall_distance",
+        "progress_stationary_max_linear_speed",
+        "imu_zero_variance",
+        "yaw_limit",
+        "max_variance",
+        "lateral_limit",
+        "min_quality",
+    },
+    "safety_gate": {
+        "motion_max_variance",
+        "evidence_topic",
+        "simulation_eager_safety",
+        "motion_max_interval",
+        "motion_min_quality",
+        "max_reference_lag",
+        "command_ttl_seconds",
+        "physical_cap_context",
+        "measurement_max_age",
+        "max_yaw_rate",
+        "self_mask_range_uncertainty",
+        "braking_deceleration",
+        "hard_margin",
+        "observation_max_age",
+        "interpolate",
+        "lateral_braking_deceleration",
+        "max_angular_gap",
+        "no_return_clear",
+        "reaction_time",
+        "yaw_braking_deceleration",
+        "max_linear_speed",
+    },
+    "command_node": {"disconnect_seconds", "heartbeat_seconds", "command_topic"},
+}
+
 REQUIRED_PARAMETERS = {
     "scan_receipt": ("scan_topic", "scan_ledger_max_age_s"),
     "scan_adapter": ("body_frame", "max_age_seconds"),
@@ -33,36 +78,14 @@ REQUIRED_PARAMETERS = {
         "reanchor_yaw",
         "min_rays",
     ),
-    "motion_fusion": (
-        "body_frame",
-        "wheel_frame",
-        "imu_frame",
-        "sensor_max_age",
-        "alignment_max_gap",
-        "pending_wait",
-        "max_variance",
-        "imu_zero_variance",
-        "min_quality",
-        "max_yaw_error",
-        "startup_window",
-        "wheel_motion_limit",
-        "stall_distance",
-        "lateral_limit",
-        "yaw_limit",
-        "progress_stationary_max_linear_speed",
-        "progress_stationary_max_yaw_rate",
-    ),
+    "motion_fusion": ("body_frame", "wheel_frame"),
     "safety_gate": (
         "body_frame",
         "simulation_rate_hz",
         "footprint_xy",
-        "observation_max_age",
-        "measurement_max_age",
-        "hard_margin",
         "depth_policy",
-        "command_ttl_seconds",
     ),
-    "command_node": ("heartbeat_seconds", "disconnect_seconds", "command_ttl_seconds"),
+    "command_node": ("command_rate_hz", "command_ttl_seconds"),
 }
 
 
@@ -110,32 +133,11 @@ def real_parameter_defaults(
         "motion_fusion": {
             **common,
             "wheel_frame": "odom_combined",
-            "imu_frame": "gyro_link",
-            "sensor_max_age": age,
-            "alignment_max_gap": age,
-            "pending_wait": age,
-            "max_variance": 0.1,
-            "imu_zero_variance": 0.01,
-            "min_quality": 0.3,
-            "max_yaw_error": 0.12,
-            "startup_window": 0.6,
-            "wheel_motion_limit": 0.004,
-            "stall_distance": 0.04,
-            "lateral_limit": 0.04,
-            "yaw_limit": 0.12,
-            "progress_stationary_max_linear_speed": profile.stationary_linear_mps
-            if profile
-            else None,
-            "progress_stationary_max_yaw_rate": profile.stationary_yaw_rps if profile else None,
         },
         "safety_gate": {
             **common,
             "simulation_rate_hz": 20.0,
-            "observation_max_age": age,
-            "measurement_max_age": age,
-            "hard_margin": 0.0,
             "depth_policy": "laser_only",
-            "command_ttl_seconds": 0.3,
             "footprint_xy": (
                 [
                     -profile.length / 2,
@@ -153,8 +155,7 @@ def real_parameter_defaults(
         },
         "command_node": {
             "use_sim_time": False,
-            "heartbeat_seconds": 0.2,
-            "disconnect_seconds": 2.0,
+            "command_rate_hz": 10.0,
             "command_ttl_seconds": 0.3,
         },
     }
@@ -177,6 +178,10 @@ def load_real_parameters(
         if not isinstance(params, dict):
             params = {}
         params = {**defaults[node], **params}
+        # //Compatible: persisted YAML may still include retired controller settings.
+        # Ignore them during migration; no launch parameter can select that path.
+        for retired in RETIRED_PARAMETERS.get(node, ()):
+            params.pop(retired, None)
         # //Compatible: old YAML may contain the removed manual TF switch.
         params.pop("transform_static", None)
         # //Compatible: remove the obsolete operator-confirmation flag.
@@ -206,12 +211,6 @@ def load_real_parameters(
                 "scan_adapter": ("max_age_seconds",),
                 "safety_scan_ingress": ("observation_max_age",),
                 "scan_motion_node": ("scan_max_age", "max_linear_speed", "max_yaw_rate"),
-                "motion_fusion": (
-                    "sensor_max_age",
-                    "progress_stationary_max_linear_speed",
-                    "progress_stationary_max_yaw_rate",
-                ),
-                "safety_gate": ("observation_max_age", "measurement_max_age"),
             }
             for field in owned.get(node, ()):
                 if params.get(field) != defaults[node][field]:
@@ -235,10 +234,7 @@ def load_real_parameters(
         errors.append("safety_gate.output_topic must stay /cmd_vel (sole actuator owner)")
     for node in ("command_node", "safety_gate"):
         p = result[node]
-        for key, expected in (
-            ("command_topic", "/safety/command_in"),
-            ("final_command_topic", "/safety/final_command"),
-        ):
+        for key, expected in (("final_command_topic", "/safety/final_command"),):
             if p.get(key, expected) != expected:
                 errors.append(f"{node}.{key} must stay {expected}")
     result["safety_gate"]["wheel_frame"] = result["motion_fusion"]["wheel_frame"]
