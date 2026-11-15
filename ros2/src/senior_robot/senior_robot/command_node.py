@@ -13,7 +13,6 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 from geometry_msgs.msg import Twist
@@ -44,7 +43,7 @@ from senior_control.protocol import (
     RecoveryEnvelope,
     SimpleEnvelope,
 )
-from senior_control.safety.arbiter import Arbiter, CommandResult, PersistentEstop
+from senior_control.safety.arbiter import Arbiter, CommandResult
 from senior_control.settings.models import DrivingSettings
 from senior_robot.motion_lifecycle import with_dds_info
 
@@ -108,21 +107,14 @@ class CommandNode(Node):
         self.declare_parameter("robot_id", "robot")
         self.declare_parameter("native_writer_receipts", False)
         self._native_writer_receipts = bool(self.get_parameter("native_writer_receipts").value)
-        self.declare_parameter("safety_state_path", "")
         self.declare_parameter("command_rate_hz", 10.0)
         self.declare_parameter("command_ttl_seconds", 0.3)
         self.declare_parameter("final_command_topic", "/safety/final_command")
         self._monotonic_clock = clock if clock is not None else SystemClock()
-        self._estop_store = None
-        path = str(self.get_parameter("safety_state_path").value)
-        if not path:
-            raise ValueError("command node requires safety_state_path")
-        self._estop_store = PersistentEstop(Path(path), str(self.get_parameter("robot_id").value))
         if arbiter is None:
             self._arbiter = Arbiter(
                 robot_id=str(self.get_parameter("robot_id").value),
                 command_ttl_seconds=float(self.get_parameter("command_ttl_seconds").value),
-                initial_estop=self._estop_store.latched if self._estop_store else False,
             )
         else:
             self._arbiter = arbiter
@@ -137,10 +129,9 @@ class CommandNode(Node):
         )
         self._manual_target: ManualTarget | None = None
         self._motion_runtime = MotionRuntimeReceiver()
-        self._local_estop_requested = self._arbiter.estop_latched
-        self._pending_recovery: tuple[str, int, str] | None = None
-        self._estop_clear_future = None
-        self._close_reason = "estop" if self._local_estop_requested else "prepared"
+        # Request delivery frontier only; the output state machine owns the latch.
+        self._pending_estop_request: FinalCommand | None = None
+        self._close_reason = "prepared"
         self._last_close_source = ("idle", "", 0, 0.0, "", 0)
         self._consuming_runtime = False
         self._runtime_subscription = None
@@ -155,7 +146,6 @@ class CommandNode(Node):
                 writer="safety_gate",
                 qos="reliable",
                 invalidate=self._invalidate_motion_runtime,
-                expired=self._on_expired_motion_runtime,
             )
         else:
             # //Compatible: isolated simulation retains its existing metadata path.
@@ -187,7 +177,7 @@ class CommandNode(Node):
         self._retirement_core: tuple[bytes, str] | None = None
         self._retirement_feedback_gid: bytes | None = None
         self._generation = 1
-        self._estop_requests: dict[str, tuple[FinalCommand, CommandResult, CommandResult]] = {}
+        self._estop_requests: dict[str, tuple[FinalCommand, CommandResult]] = {}
         self._active = False
         rate = float(self.get_parameter("command_rate_hz").value)
         ttl = float(self.get_parameter("command_ttl_seconds").value)
@@ -208,18 +198,8 @@ class CommandNode(Node):
         if requests is None:
             requests = self._estop_requests = {}
         if envelope.type == "safety.estop" and envelope.request_id in requests:
-            frame, original, receipt = requests[envelope.request_id]
+            frame, receipt = requests[envelope.request_id]
             self._final_publisher.publish(frame)
-            # Once a later reset/source generation won, this is only a replay of
-            # the old event. Never write a new latch or revoke the new authority.
-            if (
-                not receipt.accepted
-                and frame.generation == self._generation
-                and self._local_estop_requested
-                and self._estop_store is not None
-            ):
-                receipt = self._estop_store.commit(envelope, original)
-                requests[envelope.request_id] = frame, original, receipt
             return receipt
         source_closed = False
         if envelope.type == "drive.stop" and hasattr(self, "_manual_ingress"):
@@ -232,27 +212,20 @@ class CommandNode(Node):
             result = self._arbiter.accept(envelope, self._monotonic_clock.monotonic())
         estop_frame = None
         if envelope.type == "safety.estop":
-            self._local_estop_requested = True
             estop_frame = self._explicit_estop(envelope, received_at)
+            self._pending_estop_request = estop_frame
             source_closed = True
         if result.accepted and not source_closed:
             self._generation += 1
             self._active = False
             self._publish_barrier()
         self.publish_command()
-        receipt = (
-            self._estop_store.commit(envelope, result)
-            if (estop_frame is not None and self._estop_store is not None)
-            else result
-        )
         if estop_frame is not None:
-            requests[envelope.request_id] = estop_frame, result, receipt
-        return receipt
+            requests[envelope.request_id] = estop_frame, result
+        return result
 
     def _explicit_estop(self, envelope: Envelope, received: float | None) -> FinalCommand:
         now = self._monotonic_clock.monotonic()
-        self._pending_recovery = None
-        self._estop_clear_future = None
         target, self._manual_target = getattr(self, "_manual_target", None), None
         if hasattr(self, "_manual_ingress"):
             self._manual_ingress.revoke(now)
@@ -271,9 +244,8 @@ class CommandNode(Node):
         return self._barrier_frame
 
     def motion_mode(self) -> str:
-        if getattr(self, "_manual_target", None) is not None:
-            return "manual"
-        return self._arbiter.mode(self._monotonic_clock.monotonic())
+        runtime = self._motion_runtime.current(self._monotonic_clock.monotonic())
+        return runtime.mode if runtime is not None else "unknown"
 
     def disconnect(self, connection_epoch: int) -> None:
         if hasattr(self, "_manual_ingress"):
@@ -290,7 +262,7 @@ class CommandNode(Node):
     def navigation_qualified(self) -> bool:
         if getattr(self, "_manual_target", None) is not None:
             return False
-        return self._arbiter.task_navigation_allowed(self._monotonic_clock.monotonic())
+        return self.task_motion_allowed(continuing=True)
 
     def _consume_ready_runtime(self) -> None:
         """Consume at most the existing QoS depth through the sole runtime ingress."""
@@ -319,7 +291,7 @@ class CommandNode(Node):
             not runtime_healthy(runtime, now)
             or runtime is None
             or runtime.mode in {"estop", "execution_fault", "feedback_stop"}
-            or self._arbiter.estop_latched
+            or getattr(self, "_pending_estop_request", None) is not None
             or self._manual_target is not None
         ):
             return False
@@ -809,7 +781,11 @@ class CommandNode(Node):
             self.publish_command()
 
     def publish_command(self) -> None:
-        self._settle_local_reset()
+        if getattr(self, "_pending_estop_request", None) is not None:
+            # Retransmit the original request until the output owner confirms it.
+            # Source cleanup must not supersede an emergency event still in transit.
+            self._publish_barrier()
+            return
         if self._publish_manual_target():
             return
         source = self._navigation_source
@@ -855,17 +831,6 @@ class CommandNode(Node):
         self._manual_ingress.revoke(self._monotonic_clock.monotonic())
         self._close_manual("qualification_lost")
 
-    def _on_expired_motion_runtime(self, msg: String, info: dict[str, Any]) -> None:
-        # Preserve a software/hardware ESTOP assertion without admitting expired
-        # runtime evidence or allowing an expired clear to release a latch.
-        value = MotionRuntimeState.model_validate_json(msg.data)
-        if value.robot_id != str(self.get_parameter("robot_id").value):
-            raise ValueError("expired runtime robot identity mismatch")
-        if value.confirmed_estop_status != "clear":
-            self._arbiter.confirm_local_estop(True)
-            self._local_estop_requested = True
-            self._close_manual("estop")
-
     def _invalidate_drive_feedback(self) -> None:
         self._invalidate_retirement_proofs()
         self._retirement_core = None
@@ -894,47 +859,22 @@ class CommandNode(Node):
         if not self._motion_runtime.accept(value, bytes(endpoint.endpoint_gid), now):
             return
         self._observe_retirement_core(bytes(endpoint.endpoint_gid), value.boot_id)
-        self._settle_local_reset()
-        if value.confirmed_estop_status != "clear":
-            self._arbiter.confirm_local_estop(True)
+        pending = getattr(self, "_pending_estop_request", None)
+        if (
+            pending is not None
+            and value.output_generation >= pending.generation
+            and value.confirmed_estop_status == "software_latched"
+        ):
+            self._pending_estop_request = None
         if value.mode in {"feedback_stop", "execution_fault", "estop"}:
             self._manual_ingress.revoke(now)
             self._close_manual(
-                "estop"
+                "qualification_lost"
                 if value.mode == "estop"
                 else "expiry"
                 if value.mode == "feedback_stop"
                 else "fault"
             )
-
-    def _settle_local_reset(self) -> None:
-        if not hasattr(self, "_motion_runtime"):
-            return  # //Compatible: isolated legacy callback fixtures.
-        value = self._motion_runtime.current(self._monotonic_clock.monotonic())
-        if value is None or value.confirmed_estop_status != "clear":
-            return
-        if not getattr(self, "_local_estop_requested", False):
-            self._arbiter.confirm_local_estop(False)
-            return
-        pending = getattr(self, "_pending_recovery", None)
-        if (
-            pending is None
-            or pending[0] != "estop_reset"
-            or value.estop_revision <= pending[1]
-            or value.boot_id != pending[2]
-        ):
-            return
-        store = self._estop_store
-        if store is not None and store.latched:
-            future = getattr(self, "_estop_clear_future", None)
-            if future is None:
-                self._estop_clear_future = store.clear_confirmed()
-                return
-            if not future.done() or future.exception() is not None:
-                return
-        self._local_estop_requested = False
-        self._pending_recovery = None
-        self._arbiter.confirm_local_estop(False)
 
     def runtime_observation(self) -> dict[str, Any]:
         return self._motion_runtime.observation(
@@ -976,6 +916,7 @@ class CommandNode(Node):
                 )
                 if (
                     runtime is None
+                    or getattr(self, "_pending_estop_request", None) is not None
                     or key not in runtime.allowed_actions
                     or envelope.payload.revision != current
                 ):
@@ -983,7 +924,6 @@ class CommandNode(Node):
                 self._manual_ingress.revoke(now)
                 self._close_manual("fault")
                 self._generation += 1
-                self._pending_recovery = (key, current, runtime.boot_id)
                 self._publish_barrier(envelope.request_id, reason=key, revision=current)
                 return {"ok": True, "accepted": True}
             if not isinstance(envelope, (ManualIntentEnvelope, SimpleEnvelope)):
@@ -1011,7 +951,7 @@ class CommandNode(Node):
                         self._close_manual("release")
                 return {"ok": True, "accepted": True}
             if (
-                getattr(self, "_local_estop_requested", False)
+                getattr(self, "_pending_estop_request", None) is not None
                 or runtime is None
                 or not runtime_healthy(runtime, now)
                 or runtime.mode in {"estop", "execution_fault", "feedback_stop"}
@@ -1189,6 +1129,10 @@ class CommandNode(Node):
         revision: int = 0,
         source_override: tuple[str, str, int, float, str, int] | None = None,
     ) -> None:
+        pending = getattr(self, "_pending_estop_request", None)
+        if pending is not None and not (reason == "estop" and request_id):
+            self._final_publisher.publish(pending)
+            return
         output_generation = self._generation if generation is None else generation
         cached = getattr(self, "_barrier_frame", None)
         if (
@@ -1229,8 +1173,6 @@ class CommandNode(Node):
 
     def destroy_node(self):
         self.shutdown_motion()
-        if self._estop_store is not None:
-            self._estop_store.close()
         return super().destroy_node()
 
 

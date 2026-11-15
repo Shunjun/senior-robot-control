@@ -17,7 +17,6 @@ def rig(monkeypatch):
     node = r.node
     node._arbiter = Arbiter("robot", 0.3)
     assert node._arbiter.begin_navigation("private-execution", r.clock.mono, task_epoch=1)
-    node._settle_local_reset = lambda: None
     node._publish_manual_target = lambda: False
     node.get_parameter = lambda _: N(value="robot")
     node._owner_boot = "command-owner"

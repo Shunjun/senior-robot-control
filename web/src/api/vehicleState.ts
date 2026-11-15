@@ -43,7 +43,7 @@ export interface VehicleFrame {
   reason: string;
   estop_revision: number;
   fault_revision: number;
-  confirmed_estop_status: 'unknown' | 'clear' | 'software_latched' | 'hardware_latched';
+  confirmed_estop_status: 'unknown' | 'clear' | 'software_latched';
   body_reference: BodyReference | null;
   wheel_linear_mps: number | null;
   task: TaskExecution | null;
@@ -290,7 +290,7 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
     reason: text(r.reason, 512),
     estop_revision: count(r.estop_revision),
     fault_revision: count(r.fault_revision),
-    confirmed_estop_status: oneOf(r.confirmed_estop_status, ['unknown', 'clear', 'software_latched', 'hardware_latched']),
+    confirmed_estop_status: oneOf(r.confirmed_estop_status, ['unknown', 'clear', 'software_latched']),
     body_reference: nullable(r.body_reference, body),
     wheel_linear_mps: nullable(r.wheel_linear_mps, number),
     task: nullable(r.task, task),
@@ -315,7 +315,7 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
     return result;
   }
   if (result.confirmed_estop_status === 'unknown' || (result.observation && result.observation.status !== 'current')) throw new VehicleDecodeError();
-  if ((result.mode === 'estop') !== (result.confirmed_estop_status !== 'clear') || (result.confirmed_estop_status === 'hardware_latched' && result.allowed_actions.includes('estop_reset'))) throw new VehicleDecodeError();
+  if ((result.mode === 'estop') !== (result.confirmed_estop_status !== 'clear')) throw new VehicleDecodeError();
   return result;
 }
 export function decodeDriving(value: unknown): DrivingSettings {

@@ -124,7 +124,6 @@ def test_adapter_command_sources_runtime_overlay_without_motion_launch(service_r
     assert str(profile.ros_setup) in command
     assert "from senior_robot.agent_adapter import main; main()" in command
     assert "ipc_replace_existing_socket:=false" in command
-    assert f"safety_state_path:={service_root / 'estop-state.json'}" in command
     assert "robot_id:=robot-a" in command
     assert not (service_root / "estop-state.json").exists()
     assert "launch" not in command

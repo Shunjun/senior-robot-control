@@ -191,70 +191,6 @@
       "title": "FusionConfig",
       "type": "object"
     },
-    "HardwareEstopCapability": {
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "default": "unknown",
-          "enum": [
-            "readable",
-            "independent_unreadable",
-            "unknown"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "basis": {
-          "default": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
-          "title": "Basis",
-          "type": "string"
-        },
-        "topic": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Topic"
-        },
-        "publisher": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Publisher"
-        },
-        "namespace": {
-          "default": "/",
-          "title": "Namespace",
-          "type": "string"
-        },
-        "max_age_s": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Age S"
-        }
-      },
-      "title": "HardwareEstopCapability",
-      "type": "object"
-    },
     "OptionalMotionInput": {
       "additionalProperties": false,
       "properties": {
@@ -651,17 +587,6 @@
       "default": "Target firmware watchdog behavior unconfirmed",
       "title": "Watchdog Basis",
       "type": "string"
-    },
-    "hardware_estop": {
-      "$ref": "#/$defs/HardwareEstopCapability",
-      "default": {
-        "mode": "unknown",
-        "basis": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
-        "topic": null,
-        "publisher": null,
-        "namespace": "/",
-        "max_age_s": null
-      }
     },
     "perception_basis": {
       "default": "original raw lidar; hardware no-return remains unknown",

@@ -131,7 +131,7 @@ it('actual controls send full high-gear effort, then close the authority on key 
   expect(sent.at(-1)).toEqual(['control.release', { authority_id: 'a' }]);
   expect(screen.getByText('未获取控制')).toBeTruthy();
 });
-it('sends emergency stop before fencing a held input, and keeps hardware reset absent', async () => {
+it('sends emergency stop before fencing a held input, and requires owner permission for software reset', async () => {
   const sent: string[] = [];
   const port = testPort(async type => {
     sent.push(type);
@@ -155,9 +155,9 @@ it('sends emergency stop before fencing a held input, and keeps hardware reset a
     ...old,
     sequence: 2,
     mode: 'estop',
-    confirmed_estop_status: 'hardware_latched',
+    confirmed_estop_status: 'software_latched',
     estop_revision: 8,
     allowed_actions: []
   }, true));
-  expect(screen.queryByRole('button', { name: '复位软件急停' })).toBeNull();
+  expect((screen.getByRole('button', { name: '复位软件急停' }) as HTMLButtonElement).disabled).toBe(true);
 });

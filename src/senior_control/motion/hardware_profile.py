@@ -24,30 +24,6 @@ from senior_control.sensors.input_config import OptionalMotionInput
 from senior_control.sensors.policy import default_policy
 
 
-class HardwareEstopCapability(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    mode: Literal["readable", "independent_unreadable", "unknown"] = "unknown"
-    basis: str = "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit"
-    topic: str | None = None
-    publisher: str | None = None
-    namespace: str = "/"
-    max_age_s: float | None = Field(default=None, gt=0)
-
-    @model_validator(mode="after")
-    def capability(self) -> "HardwareEstopCapability":
-        if self.mode == "readable":
-            if (
-                not self.topic
-                or not self.topic.startswith("/")
-                or not self.publisher
-                or self.max_age_s is None
-            ):
-                raise ValueError("readable ESTOP requires actual topic, publisher and age budget")
-        elif any(x is not None for x in (self.topic, self.publisher, self.max_age_s)):
-            raise ValueError("unreadable/unknown ESTOP must not invent a ROS state source")
-        return self
-
-
 class HardwareMotionProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
@@ -151,7 +127,6 @@ class HardwareMotionProfile(BaseModel):
     reaction_yaw_accel: float = Field(ge=0)
     watchdog_mode: Literal["verified", "unknown"] = "unknown"
     watchdog_basis: str = "Target firmware watchdog behavior unconfirmed"
-    hardware_estop: HardwareEstopCapability = HardwareEstopCapability()
     perception_basis: str = "original raw lidar; hardware no-return remains unknown"
     risk_basis: str = ""
     brake_tracking_basis: str = ""
@@ -271,8 +246,4 @@ def load_hardware_profile(path: Path) -> HardwareMotionProfile:
     if isinstance(value, dict):
         for key in ("unvalidated", "geometry_confirmed"):
             value.pop(key, None)
-        capability = value.get("hardware_estop")
-        if isinstance(capability, dict):
-            capability.pop("release_requires_controller_restart", None)
-            capability.pop("release_interlock_basis", None)
     return HardwareMotionProfile.model_validate(value)

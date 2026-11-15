@@ -130,7 +130,6 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
             g._poll_command_guard()
             revisions.append(core.machine.state.estop_revision)
         assert revisions == [1, 1, 2, 2, 2]
-        assert not core._hardware  # software request never invents hardware evidence
 
     finally:
         parent.close()

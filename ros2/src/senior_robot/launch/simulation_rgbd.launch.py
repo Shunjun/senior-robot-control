@@ -41,7 +41,6 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("robot_id"),
-            DeclareLaunchArgument("safety_state_path"),
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("enable_rgbd_transport", default_value="true"),
             DeclareLaunchArgument(
@@ -59,7 +58,6 @@ def generate_launch_description():
                         launch_arguments={
                             "agent_socket": LaunchConfiguration("agent_socket"),
                             "robot_id": LaunchConfiguration("robot_id"),
-                            "safety_state_path": LaunchConfiguration("safety_state_path"),
                             "headless": LaunchConfiguration("headless"),
                             "safety_overlay": profile,
                         }.items(),

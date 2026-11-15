@@ -189,23 +189,10 @@ def _simulation_profile(tmp_path):
         ros_setup=tmp_path / "setup.bash",
         database=tmp_path / "state.db",
         socket=tmp_path / "adapter.sock",
-        estop_state=tmp_path / "estop.json",
         cloud_url="wss://example.test/ws/agent",
         ros_domain=73,
     )
     return profile, Credentials(robot_id="robot-a", device_token="secret")
-
-
-def test_restart_preserves_estop_state(tmp_path: Path):
-    from senior_control.simulation_cli import _initialize_estop
-
-    path = tmp_path / "estop.json"
-    _initialize_estop(path, "robot-a")
-    state = json.loads(path.read_text())
-    state.update(latched=True, revision=3)
-    path.write_text(json.dumps(state))
-    _initialize_estop(path, "robot-a")
-    assert json.loads(path.read_text()) == state
 
 
 async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
@@ -631,7 +618,6 @@ def test_main_only_cleans_stale_socket_after_both_locks(
 
     monkeypatch.setattr(simulation_cli, "validate_simulation_profile", lambda _: None)
     monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
-    monkeypatch.setattr(simulation_cli, "_initialize_estop", lambda *_: None)
     monkeypatch.setattr(simulation_cli.os, "open", open_lock)
     monkeypatch.setattr(simulation_cli.fcntl, "flock", lock)
     monkeypatch.setattr(simulation_cli, "_remove_stale_socket", cleanup)

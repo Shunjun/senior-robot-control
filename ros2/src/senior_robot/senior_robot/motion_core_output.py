@@ -279,6 +279,8 @@ class MotionCoreOutput:
             return False
         if msg.source_kind not in {"manual", "navigation", "idle"}:
             return False
+        if reason == "estop" and (not msg.request_id or msg.source_kind == "navigation"):
+            return False
         if (
             not all(
                 math.isfinite(x) for x in (msg.received_steady, msg.steady_deadline, msg.vx, msg.wz)
@@ -430,9 +432,7 @@ class MotionCoreOutput:
             except (ValueError, KeyError, TypeError):
                 return False
         elif reason == "estop":
-            explicit = bool(msg.request_id) and msg.source_kind != "navigation"
-            if self.machine.state.mode is not MotionMode.ESTOP or explicit:
-                self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
+            self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
         elif reason == "fault":
             # Producer fault close is a latch reflection, not a new detector event.
             state = self.machine.state

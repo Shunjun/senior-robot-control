@@ -1100,7 +1100,11 @@ async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
         await store.save_scan_cursor(created)
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         # Emulate a pre-versioned database containing the existing continuity tables.
         await database.connection.execute("DROP TABLE IF EXISTS core_schema_version")
         await database.connection.execute("DROP TABLE IF EXISTS home_execution_guard")
@@ -1111,7 +1115,8 @@ async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
         await store.prepare()
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         assert await store.scan_cursor() == created
         loaded = await store.execution_by_id(execution.execution_id)
         assert loaded is not None and loaded.status is ExecutionStatus.CANCEL_PENDING
@@ -1153,9 +1158,14 @@ async def test_domain_versions_upgrade_without_touching_agent_safety(
         await migrate(database, list(DOMAIN_MIGRATIONS[:version]))
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         await TaskStore(database, robot_id="robot-a").prepare()
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         async with database.connection.execute("PRAGMA user_version") as cursor:
             assert await cursor.fetchone() == (3,)
         async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
@@ -1171,11 +1181,16 @@ async def test_core_migration_failure_rolls_back_and_preserves_safety(tmp_path: 
         await TaskStore(database, robot_id="robot-a").prepare()
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         failing = Migration(5, ("CREATE TABLE partial_upgrade (id INTEGER)", "INVALID SQL"))
         with pytest.raises(sqlite3.OperationalError):
             await migrate_core(database, (*CORE_MIGRATIONS, failing))
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
             assert await cursor.fetchone() == (4,)
         async with database.connection.execute(

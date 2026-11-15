@@ -123,7 +123,6 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._terminal_requests, value._retirement_core = {}, None
     value._terminal_collections, value._settled_sequence = {}, 0
     value._retirement_feedback_gid = None
-    value._estop_store = None
     value._manual_ingress = ManualIngress("robot", "command-boot", ttl=0.3)
     value._manual_target = None
     value._consuming_runtime = False
@@ -430,6 +429,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             reason="software_estop",
             confirmed_estop_status="software_latched",
             estop_revision=1,
+            output_generation=node.value._generation,
             allowed_actions=["estop_reset"],
         )
         node.value._on_motion_runtime(
@@ -445,25 +445,22 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
         reset = await request("safety.estop.reset", {"revision": token}, 5)
         assert reset.payload.ok and node.output[-1].close_reason == "estop_reset"
         assert node.output[-1].gesture == 1
-        assert agent.recovery_required  # Acceptance never clears the confirmed latch.
+        assert node.value._motion_runtime.value.mode == "estop"
         recovered = runtime(10, 3, robot_id=robot_id, estop_revision=2)
         node.value._on_motion_runtime(
             SimpleNamespace(data=recovered.model_dump_json()), {"publisher_gid": b"t5"}
         )
         await agent.publish_snapshot(robot_id)
         assert await browser.receive() is not None
-        assert not agent.recovery_required
         again = await request("control.acquire", {}, 6)
         assert again.payload.ok and again.payload.data is not None
         assert again.payload.data["authority_id"] != authority
         replayed = await request("safety.estop", {}, 4, received=10)
         assert replayed.payload.ok
-        assert not agent.recovery_required
-        assert not await journal.safety.pending()
         assert node.value.manual_view()["state"] == "prepared"
         fresh = await request("safety.estop", {}, 7, received=10)
-        assert fresh.payload.ok and agent.recovery_required
-        assert await journal.safety.pending()
+        assert fresh.payload.ok
+        assert node.value._pending_estop_request is not None
         await browser.send(
             serialize_envelope(
                 envelope(
@@ -537,6 +534,7 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
         reason="software_estop",
         confirmed_estop_status="software_latched",
         estop_revision=1,
+        output_generation=node.value._generation,
         allowed_actions=["estop_reset"],
     )
     node.value._on_motion_runtime(
@@ -559,7 +557,7 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
     node.clock.now += 0.01
     node.value.submit(envelope("safety.estop", {}, generation=None), received_at=node.clock.now)
     assert vars(node.output[-1]) == original_fields
-    assert not node.value._arbiter.estop_latched
+    assert node.value._motion_runtime.value.confirmed_estop_status == "clear"
     assert node.value.manual_view()["state"] == "prepared"
     node.value.submit(
         envelope("safety.estop", {}, generation=None, request="new-estop", seq=10),
@@ -960,3 +958,38 @@ async def test_agent_receive_settles_queued_intents_on_replace_and_close(
         await agent._intent_task
         if agent._safety_task is not None:
             await agent._safety_task
+
+
+def test_inflight_estop_retransmits_original_event_until_output_owner_confirms(node):
+    def cannot_cleanup_yet():
+        raise AssertionError("navigation cleanup must not supersede the in-flight estop")
+
+    node.value._navigation_source = SimpleNamespace(qualified=cannot_cleanup_yet)
+    request = envelope("safety.estop", {}, generation=None, request="inflight", seq=9)
+    assert node.value.submit(request, received_at=10).accepted
+    original = node.output[-1]
+    node.value.disconnect(1)
+    node.value.publish_command()
+    assert node.output[-1] is original
+    assert node.value._pending_estop_request is original
+    node.value.get_publishers_info_by_topic = lambda _: [
+        SimpleNamespace(node_name="safety_gate", node_namespace="/", endpoint_gid=b"t5")
+    ]
+    clear = runtime(10, 2, output_generation=original.generation + 1)
+    node.value._on_motion_runtime(SimpleNamespace(data=clear.model_dump_json()), {})
+    assert node.value._pending_estop_request is original
+    assert not node.value.task_motion_allowed(continuing=True)
+    stopped = runtime(
+        10,
+        3,
+        output_generation=original.generation,
+        mode="estop",
+        confirmed_estop_status="software_latched",
+        estop_revision=1,
+        allowed_actions=[],
+    )
+    node.value._on_motion_runtime(SimpleNamespace(data=stopped.model_dump_json()), {})
+    assert node.value._pending_estop_request is None
+    assert node.value.motion_mode() == "estop"
+    assert not node.value.navigation_qualified()
+    assert not node.value.task_motion_allowed(continuing=True)

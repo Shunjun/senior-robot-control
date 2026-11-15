@@ -1,6 +1,6 @@
 # Linux 仿真部署与运行
 
-本页只面向 Linux 仿真机。云服务先按[云端部署](deploy.md)配置；实车用[实车部署](vehicle-deploy.md)，不要把本页的 Gazebo 真值、仿真急停初始化或运动恢复操作用于实车。浏览器与仿真机都连接真实云域名，跨机器不使用各自的 `localhost`。
+本页只面向 Linux 仿真机。云服务先按[云端部署](deploy.md)配置；实车用[实车部署](vehicle-deploy.md)，不要把本页的 Gazebo 真值或运动恢复操作用于实车。浏览器与仿真机都连接真实云域名，跨机器不使用各自的 `localhost`。
 
 ## 1. 准备 Linux 环境与仓库
 
@@ -47,9 +47,9 @@ chmod 700 "$HOME/senior-control"
 }
 ```
 
-`ros_setup` 可省略，默认由 `project_dir/ros2/install/setup.bash` 推导。不要逐项配置其他目录的 credentials/database/socket/estop_state，不要将 `config/simulation.yaml` 的硬件/运动参数当成此 JSON。前者供 ROS/Python 配置读取，后者才是 CLI 运行配置。仿真与硬件参数必须分开。
+`ros_setup` 可省略，默认由 `project_dir/ros2/install/setup.bash` 推导。不要逐项配置其他目录的 credentials/database/socket，不要将 `config/simulation.yaml` 的硬件/运动参数当成此 JSON。前者供 ROS/Python 配置读取，后者才是 CLI 运行配置。仿真与硬件参数必须分开。
 
-统一目录保存 `device.json`（凭据 0600）、`agent.db`（含可能的 WAL/SHM）、`estop-state.json`、`agent.sock`、仿真锁和 `ros-home/`（ROS 日志在 `ros-home/log/`）。仿真 start 只在首次缺失时按仿真规则初始化急停状态；已存在状态跨重启保留，无效状态不能靠删除来绕过。目录应为 0700，备份也要保护凭据与数据库。
+统一目录保存 `device.json`（凭据 0600）、`agent.db`（含可能的 WAL/SHM）、`agent.sock`、仿真锁和 `ros-home/`（ROS 日志在 `ros-home/log/`）。软件急停仅当前进程内锁存，完整 start 不恢复或写入急停文件；旧文件保持原样。启动不恢复旧手动授权或旧任务运动。目录应为 0700，备份也要保护凭据与数据库。
 
 ## 3. 配对、检查与启停
 
@@ -94,8 +94,7 @@ JSON 配置。若同一配置已经启动，命令只提示正在运行；切换
 不会额外启动第二套仿真。
 
 `start` 需要可用的 systemd 用户会话。仿真启动后，命令先核对 ROS 适配器身份，再启动
-Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服务的仿真进程。复用同一档的
-急停文件。状态分别显示进程、IPC 身份核验和该次运行最新的云端连接事件。
+Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服务的仿真进程。软件急停仅本次运行有效。状态分别显示进程、IPC 身份核验和该次运行最新的云端连接事件。
 若强制停止遗留 IPC socket，下一次启动只会在取得实例目录和 ROS 域两把锁后，清理
 当前用户拥有且明确拒绝连接、检查期间身份未变化的旧 socket。活动连接、权限问题、
 超时、非 socket 路径或路径被替换时仍拒绝启动；不会直接覆盖占用路径。

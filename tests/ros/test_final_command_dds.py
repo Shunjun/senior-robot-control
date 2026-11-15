@@ -16,7 +16,6 @@ from senior_control.agent.manual_control import ManualIngress
 from senior_control.models import Velocity
 from senior_control.motion.contracts import ManualIntent
 from senior_control.protocol import EmptyPayload, SimpleEnvelope
-from senior_control.safety.arbiter import PersistentEstop
 from senior_control.settings.models import DrivingSettings
 
 COMMAND_TTL = 3.0  # Test-only: distinguish identity rejection from expiry during DDS discovery.
@@ -48,11 +47,8 @@ def dds(tmp_path, monkeypatch):
     monkeypatch.setenv("ROS_DOMAIN_ID", domain)
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     rclpy.init()
-    path = tmp_path / "estop.json"
-    PersistentEstop.initialize(path, "paired-car")
     parameters = [
         Parameter("robot_id", value="paired-car"),
-        Parameter("safety_state_path", value=str(path)),
         Parameter("command_ttl_seconds", value=COMMAND_TTL),
     ]
     nodes = []

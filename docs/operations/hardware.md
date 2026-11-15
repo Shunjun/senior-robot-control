@@ -101,17 +101,9 @@ Linux 做构建和实测。本次尚未同步代码到车上。
 不是已证实的物理急停状态发布者。教学 C30D 停机/使能逻辑不等于目标固件能力；
 当前目标独立 watchdog/急停回路仍未知，不新增所有车型必需的周期 Bool 接口。
 
-`hardware_estop.mode` 区分：
+车载实体急停由车辆独立控制，本项目不订阅其状态，不把按下、释放或缺流转换为软件急停、故障或网页复位许可。软件状态 `clear` 只表示本项目软件急停未锁存，不能证明硬件已释放，也不是运动许可。车辆物理急停、驱动保护和 watchdog 不由本次软件改动操作或绕过。
 
-- readable：仅硬件确有可读状态时，配置实际 topic/writer/namespace/age；缺流不可恢复，
-  物理 true 优先，物理 release 后保留软件锁存，仍需显式复位且不续跑旧 authority。
-- independent_unreadable：不创建 ROS 心跳订阅；必须有独立切断及释放要求控制器重启的联锁依据，
-  以避免硬件释放后恢复旧速度。网页不能操作该硬件回路，也不宣称实体状态 clear。
-- unknown：不伪造 clear 或虚构接口，运行诊断明确能力未知；运动/恢复不获准，基本 Agent 仍能运行。
-
-runtime 另带 hardware_estop_observation 表达 unknown/unreadable/unavailable，不能将
-软件 latch 的 confirmed_estop_status=clear 当作硬件状态证明。watchdog_mode 保留 unknown/verified，
-实际超时切断机制仍须依据目标固件与独立现场验证。
+软件急停唯一权威是最终输出侧 `MotionStateMachine`，仅在当前进程内保存。网页 `safety.estop` 经命令链到达该 owner；回传状态只供读取，不触发反向锁存。运行中需显式、版本匹配且满足静止证据的复位，复位不恢复旧手动或任务指令。完整启动默认未软件锁存，不读取、创建或删除旧急停文件；已有凭据、任务数据库及历史文件保持原样。`watchdog_mode` 的 unknown/verified 仅记录独立机制的核实程度。
 
 真实导航仍需固定 WorkspaceGrid+SHA、map/localization 真实来源及唯一 TF 链；
 共享 core 当前 laser_only，不声称已纳入相机低障碍 sweep。已有 mapping/navigation launch

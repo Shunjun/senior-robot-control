@@ -212,7 +212,7 @@ def test_captured_startup_recovers_to_real_navigation_admission(replay, navigati
     assert receiver.accept(state, b"real-core-test-output", replay.clock.steady)
     navigation.node._motion_runtime = receiver
     navigation.node._monotonic_clock = N(monotonic=lambda: replay.clock.steady)
-    navigation.node._arbiter = N(estop_latched=False)
+    navigation.node._arbiter = N()
     navigation.node._manual_target = None
     assert navigation.node.task_motion_allowed(continuing=False)
 

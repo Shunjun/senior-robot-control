@@ -85,7 +85,6 @@ def _runtime_profile(root: Path) -> "VehicleProfile":
         ("credentials", "device.json"),
         ("database", "agent.db"),
         ("socket", "agent.sock"),
-        ("estop_state", "estop-state.json"),
     ):
         if name in values and Path(values[name]) != configured_root / filename:
             raise ValueError("data paths must stay in the control directory")
@@ -120,7 +119,6 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     vendor = profile.vendor_ros_setup
     if not vendor.is_absolute() or not vendor.is_file():
         raise ValueError("vendor_ros_setup: WHEELTEC install/setup.bash is missing")
-    assert profile.estop_state is not None
     from senior_control.real_runtime import validate_navigation
 
     validate_navigation(profile.navigation_reference, profile.navigation_parameters)
@@ -146,7 +144,6 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-p",
         f"robot_id:={robot_id}",
         "-p",
-        f"safety_state_path:={profile.estop_state}",
         "-p",
         "ipc_replace_existing_socket:=false",
         *(

@@ -45,8 +45,6 @@
 | reaction_yaw_accel | 0.5 | 反应窗口内已有角加速度的幅值上限，rad/s²；与仿真共用限幅算法 | 猜填；必须覆盖 yaw_accel |
 | watchdog_mode | unknown | 对目标底盘失联独立停车机制的已知程度 | 确定为尚未核实，不等于硬件一定没有 |
 | watchdog_basis | 未取得目标固件证据 | watchdog 能力的来源说明 | 当前事实记录 |
-| hardware_estop.mode | unknown | 物理急停能力：可读、独立不可读、未知三种之一 | 当前尚未核实；不虚构周期 Bool 来源 |
-| hardware_estop.basis | 未取得状态/联锁证据 | 急停回路、状态和释放联锁的依据 | 当前事实记录 |
 | perception_basis | 原始激光，无回波未知，安装未确认 | 感知输入/无回波处理/安装状态说明 | 软件策略与当前确认状态；不是雷达型号精度证据 |
 | risk_basis | ASSUMED… | 风险包络的来源说明 | 明确为假设，非资格证明 |
 | brake_tracking_basis | ASSUMED… | 零命令/制动跟踪模型的来源说明 | 明确为假设，未实测 |

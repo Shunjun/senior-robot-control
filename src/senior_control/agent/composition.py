@@ -326,7 +326,7 @@ async def run_agent(config: AgentConfig) -> int:
         try:
             await journal.prepare()
         except Exception:
-            logger.exception("could not initialize persistent agent safety state")
+            logger.exception("could not initialize agent operation journal")
             return 78
         motion = TaskAwareMotion(
             IpcClient(config.socket_path),
@@ -571,6 +571,6 @@ async def run_agent(config: AgentConfig) -> int:
         )
         agent.install_signal_handlers()
         await agent.run()
-        if agent.auth_rejected or agent.recovery_required:
+        if agent.auth_rejected or agent.runtime_failed:
             return 78
         return 1 if agent.runtime_failed else 0

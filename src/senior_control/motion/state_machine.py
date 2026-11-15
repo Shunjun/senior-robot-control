@@ -37,7 +37,6 @@ class MotionStateMachine:
 
     def __init__(self) -> None:
         self._software = False
-        self._hardware = False
         self._fault = False
         self._feedback_lost = False
         self._feedback_task = False
@@ -125,7 +124,7 @@ class MotionStateMachine:
         self._feedback_task = False
 
     def _project(self, now: float, reason: str) -> MotionState:
-        if self._software or self._hardware:
+        if self._software:
             mode = M.ESTOP
         elif self._fault:
             mode = M.EXECUTION_FAULT
@@ -142,11 +141,11 @@ class MotionStateMachine:
         else:
             mode = M.BRAKING
         actions = []
-        if mode is M.ESTOP and not self._hardware:
+        if mode is M.ESTOP:
             actions.append("estop_reset")
-        if self._fault and not self._software and not self._hardware:
+        if self._fault and not self._software:
             actions.append("fault_recover")
-        runnable = not (self._software or self._hardware or self._fault or self._feedback_lost)
+        runnable = not (self._software or self._fault or self._feedback_lost)
         if self._replan and runnable:
             actions.append("replan_task")
         if mode is M.IDLE or (
@@ -170,20 +169,13 @@ class MotionStateMachine:
         return self.state
 
     def _recovery_event(self, event: MotionEvent, now: float) -> None:
-        if event.kind is K.HARDWARE_RELEASE:
-            self._hardware = False
-        elif event.kind is K.ESTOP_RESET:
-            if (
-                event.revision == self._estop_revision
-                and not self._hardware
-                and self._stationary(now)
-            ):
+        if event.kind is K.ESTOP_RESET:
+            if event.revision == self._estop_revision and self._stationary(now):
                 self._software = False
                 self._pause_sources()
         elif event.kind is K.FAULT_RECOVER:
             if (
                 event.revision == self._fault_revision
-                and not self._hardware
                 and not self._software
                 and self._healthy(now, recovered=True)
                 and self._stationary(now)
@@ -193,7 +185,7 @@ class MotionStateMachine:
         elif event.kind is K.FEEDBACK_HEALTHY:
             if self._healthy(now, recovered=True):
                 self._feedback_lost = False
-                if self._feedback_task and not (self._software or self._hardware or self._fault):
+                if self._feedback_task and not (self._software or self._fault):
                     self._replan = True
                 self._feedback_task = False
             elif self._manual_ready(now):
@@ -201,7 +193,7 @@ class MotionStateMachine:
                 self._feedback_lost = False
 
     def _source_event(self, event: MotionEvent, now: float) -> None:
-        blocked = self._software or self._hardware or self._fault or self._feedback_lost
+        blocked = self._software or self._fault or self._feedback_lost
         kind = event.kind
         if (
             kind is K.MANUAL_START
@@ -258,11 +250,8 @@ class MotionStateMachine:
             return self._project(now_steady, "duplicate_event")
         self._last_sequence = event.sequence
         kind = event.kind
-        if kind in (K.SOFTWARE_ESTOP, K.HARDWARE_ESTOP):
-            if kind is K.SOFTWARE_ESTOP:
-                self._software = True
-            else:
-                self._hardware = True
+        if kind is K.SOFTWARE_ESTOP:
+            self._software = True
             self._estop_revision += 1
             self._pause_sources()
         elif kind is K.EXECUTION_FAULT:
@@ -286,7 +275,7 @@ class MotionStateMachine:
             self._obstacle = True
         elif kind is K.OBSTACLE_CLEAR:
             self._obstacle = False
-        elif kind in (K.HARDWARE_RELEASE, K.ESTOP_RESET, K.FAULT_RECOVER, K.FEEDBACK_HEALTHY):
+        elif kind in (K.ESTOP_RESET, K.FAULT_RECOVER, K.FEEDBACK_HEALTHY):
             self._recovery_event(event, now_steady)
         else:
             self._source_event(event, now_steady)

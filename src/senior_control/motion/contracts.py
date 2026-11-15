@@ -41,8 +41,6 @@ class MotionEventKind(str, Enum):
     FAULT_RECOVER = "fault_recover"
     SOFTWARE_ESTOP = "software_estop"
     ESTOP_RESET = "estop_reset"
-    HARDWARE_ESTOP = "hardware_estop"
-    HARDWARE_RELEASE = "hardware_release"
 
 
 class TaskStatus(str, Enum):

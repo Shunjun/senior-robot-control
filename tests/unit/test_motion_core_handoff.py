@@ -116,13 +116,13 @@ def test_release_installs_local_owner_without_emitting_hard_zero_or_resetting_tr
     "reason,attribute", [("estop", "estop_revision"), ("fault", "fault_revision")]
 )
 def test_identical_close_and_latched_source_echo_are_not_new_events(core, reason, attribute):
-    message = barrier(reason)
+    message = barrier(reason, request="explicit" if reason == "estop" else "")
     assert core.command(message)
     revision = getattr(core.machine.state, attribute)
     for _ in range(10):
         assert core.command(message)
     assert getattr(core.machine.state, attribute) == revision
-    assert core.command(barrier(reason, generation=3))
+    assert core.command(barrier(reason, generation=3)) is (reason != "estop")
     assert getattr(core.machine.state, attribute) == revision
     changed = barrier(reason, generation=3)
     changed.source_epoch = 999
@@ -243,12 +243,12 @@ def test_explicit_idle_estop_uses_original_request_without_inventing_authority(c
     assert core.command(message)
     first = core.machine.state.estop_revision
     assert core.command(message)
-    assert core.machine.state.estop_revision == first and not core._hardware
+    assert core.machine.state.estop_revision == first
     echo = barrier("estop", generation=3)
     echo.source_kind = "idle"
     echo.source_id = ""
     echo.source_epoch = 0
-    assert core.command(echo)
+    assert not core.command(echo)
     assert core.machine.state.estop_revision == first
     message.generation = 4
     message.request_id = "next-explicit-press"

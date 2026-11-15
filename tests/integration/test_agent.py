@@ -1172,33 +1172,6 @@ async def test_control_acquire_ignores_browser_clock(rig: Rig) -> None:
         await finish(task, rig)
 
 
-async def test_recovery_channel_keeps_authenticated_heartbeat_without_motion(rig: Rig) -> None:
-    link = FakeLink(epoch=1)
-    task = await start(rig, link)
-    try:
-        rig.agent.recovery_required = True
-        before = link.heartbeats
-        await rig.agent._beat()
-        assert link.heartbeats == before + 1
-        assert not rig.agent.eligible_for_motion
-    finally:
-        await finish(task, rig)
-
-
-async def test_pending_safety_intent_starts_restricted_status_channel(rig: Rig) -> None:
-    await rig.journal.safety.mark()
-    link = FakeLink(epoch=1)
-    task = await start(rig, link)
-    try:
-        assert rig.agent.recovery_required
-        await rig.agent._beat()
-        assert link.heartbeats > 0
-        assert not rig.agent.eligible_for_motion
-        assert await rig.journal.safety.pending()
-    finally:
-        await finish(task, rig)
-
-
 async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Rig) -> None:
     from senior_control.agent.connection import HeartbeatFrame
 

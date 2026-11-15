@@ -246,9 +246,7 @@ def vehicle_frame(
         tuple(runtime.allowed_actions) if runtime_healthy(runtime, now) else (),
     )
     view = project_vehicle_state(
-        RuntimeSnapshot(
-            sequence, motion, hardware_estop=runtime.confirmed_estop_status == "hardware_latched"
-        ),
+        RuntimeSnapshot(sequence, motion),
         ConnectionState(connected),
         now_steady=now,
     )

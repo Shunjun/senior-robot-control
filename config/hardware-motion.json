@@ -37,10 +37,6 @@
   "reaction_yaw_accel": 0.5,
   "watchdog_mode": "unknown",
   "watchdog_basis": "No verified target-firmware watchdog evidence",
-  "hardware_estop": {
-    "mode": "unknown",
-    "basis": "No verified physical ESTOP status or release interlock evidence"
-  },
   "perception_basis": "Original raw lidar; no-return remains unknown; mounting not confirmed",
   "risk_basis": "ASSUMED numeric envelope only; not qualified for physical motion",
   "brake_tracking_basis": "ASSUMED passive zero-command response; not measured or guaranteed",

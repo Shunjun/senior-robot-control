@@ -297,7 +297,6 @@ def test_full_retirement_book_still_revokes_output_immediately_without_minting_a
         str(i): record_type("token", 3, ("navigation", str(i), 1, 0.0, str(i), 1), "task_revoke", 1)
         for i in range(256)
     }
-    node._settle_local_reset = lambda: None
     node._publish_manual_target = lambda: False
     node._arbiter = N(end_navigation=lambda _: None, final_command=lambda _: None)
     node._publish = lambda _: None

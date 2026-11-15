@@ -9,9 +9,8 @@ import pytest
 
 
 def adapter_command(script, tmp_path):
-    # Missing latch state starts fail-closed, which is sufficient for IPC lifecycle tests.
-    state = tmp_path / "estop.json"
-    return [sys.executable, "-c", script, "--ros-args", "-p", f"safety_state_path:={state}"]
+    return [sys.executable, "-c", script]
+
 
 
 @pytest.mark.parametrize("signal_name", ["SIGINT", "SIGTERM"])

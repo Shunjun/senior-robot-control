@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 from senior_control.agent.pairing import Credentials, read_credentials
 from senior_control.cli import VehicleProfile, load_profile
 from senior_control.runtime.ipc import MAX_PATH, IpcClient, IpcError
-from senior_control.safety.arbiter import PersistentEstop
 
 
 def _unit(profile: Path) -> str:
@@ -170,7 +169,7 @@ async def _probe(profile: VehicleProfile, *, require_domain: bool = False) -> bo
 def validate_simulation_profile(profile: VehicleProfile) -> None:
     root = profile.credentials.parent
     info = root.stat()
-    paths = (profile.credentials, profile.database, profile.socket, profile.estop_state)
+    paths = (profile.credentials, profile.database, profile.socket)
     if (
         profile.kind != "simulation"
         or not root.is_absolute()
@@ -194,16 +193,6 @@ def validate_simulation_profile(profile: VehicleProfile) -> None:
         raise ValueError("simulation requires an isolated ROS domain")
     if not stat.S_ISREG(profile.credentials.lstat().st_mode):
         raise ValueError("credentials must be a regular file")
-
-
-def _initialize_estop(path: Path, robot_id: str) -> None:
-    if os.path.lexists(path):
-        return
-    try:
-        PersistentEstop.initialize(path, robot_id)
-    except FileExistsError:
-        # The concurrent initializer owns the file and its latch.
-        pass
 
 
 async def _wait_for_adapter(
@@ -307,7 +296,6 @@ async def supervise(
             *video_args,
             f"agent_socket:={profile.socket}",
             f"robot_id:={credentials.robot_id}",
-            f"safety_state_path:={profile.estop_state}",
             env=env,
         )
         await _wait_for_adapter(profile.socket, credentials.robot_id, ros, stop)
@@ -371,7 +359,7 @@ def main(path: Path, *, headless: bool = True) -> int:
         profile = load_profile(path)
         validate_simulation_profile(profile)
         credentials = read_credentials(profile.credentials)
-        assert profile.estop_state is not None and profile.socket is not None
+        assert profile.socket is not None
         from contextlib import ExitStack
 
         lock_paths = (
@@ -384,7 +372,6 @@ def main(path: Path, *, headless: bool = True) -> int:
                 lock = stack.enter_context(os.fdopen(fd, "wb"))
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             _remove_stale_socket(profile.socket)
-            _initialize_estop(profile.estop_state, credentials.robot_id)
             return asyncio.run(supervise(profile, credentials, headless=headless))
     except DisplayUnavailableError as error:
         print(str(error), file=sys.stderr)

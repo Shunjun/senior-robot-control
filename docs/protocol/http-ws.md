@@ -74,7 +74,7 @@
 - 浏览器通过 `control.acquire` 准备车端手动 authority；`drive.intent` 只发送 authority_id、gesture、sequence、linear、turn 和 gear。车端在本地收包时绑定 TTL，过期或退役 authority 的迟到数据不能复活。
 - 云端认证并按原始 socket 分配 controller_generation，回执按原 socket/会话/请求关联。浏览器不能提交可信来源代次。断开控制 socket 时清除待发意图并向车端发送该来源的 release。
 - 浏览器时钟不参与驾驶资格。心跳用于连接活性与状态；自主任务继续使用自己的执行代次及本地 Nav2 样本 TTL，断网不取消已接受任务。
-- `safety.estop` 可在浏览器还未收到状态快照时发送，使用已认证的当前车端代次。急停持久化、实体急停优先和车端确认恢复继续有效；新版恢复使用带 revision 的 `safety.estop.reset` / `safety.fault.recover`。
+- `safety.estop` 可在浏览器还未收到状态快照时发送，使用已认证的当前车端代次。软件急停仅由最终输出侧 owner 在当前进程内锁存，命令回执表示请求受理，实际状态由新鲜 `/motion/runtime` 单向发布；完整启动不读取或写入旧状态文件，硬件状态不参与软件锁存或复位许可，恢复使用带 revision 的 `safety.estop.reset` / `safety.fault.recover`。
 
 ### 有界队列
 
@@ -101,3 +101,5 @@ UI 增加 `observation`：`status` 为 `current / missing / expired / revoked / 
 报告的 sequence 与心跳不改变 runtime `valid_until`、运动证据 deadline、来源隔离或复位 revision。有效期内但运动证据已过期的报告仍可显示模式，不能恢复 acquire / reset / recover。新可信样本正常恢复实时状态，操作仍需原有证据与车端许可。前端拒绝的旧帧不能将重连后的历史状态重新标为可用。
 
 发布顺序：先部署网页，再更新 Agent 与 ROS 适配器；网页兼容省略 observation 的旧帧，旧网页的严格解码器不能读取新增字段。该变更不宣称现场 DDS 接收故障已修复，也不改变 150 ms 期限。
+
+软件急停状态仅为 `clear` / `software_latched`（展示断流可为 `unknown`）。退役的 `hardware_latched` 或硬件观察字段不是操作许可，不接入软件急停；旧格式状态包拒绝解析。重复请求保留请求级幂等，复位后不重放旧请求；Agent 的在途请求和 CommandNode 的交付确认不是第二份急停状态。

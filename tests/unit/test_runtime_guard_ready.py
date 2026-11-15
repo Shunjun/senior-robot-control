@@ -122,7 +122,8 @@ def negative(mode):
 
 
 @pytest.mark.parametrize(
-    "mode,reason", [("feedback_stop", "expiry"), ("execution_fault", "fault"), ("estop", "estop")]
+    "mode,reason",
+    [("feedback_stop", "expiry"), ("execution_fault", "fault"), ("estop", "qualification_lost")],
 )
 def test_negative_runtime_executes_original_revocation_and_barrier(ready, mode, reason):
     authority = manual_target(ready)
@@ -134,7 +135,7 @@ def test_negative_runtime_executes_original_revocation_and_barrier(ready, mode, 
     assert ready.barriers[-1].source_id == authority
     assert ready.node._motion_runtime.value.mode == mode
     if mode == "estop":
-        assert ready.node._arbiter.estop_latched
+        assert ready.node._motion_runtime.value.mode == "estop"
 
 
 def test_reentrant_guard_does_not_drain_past_negative_callback(ready):
@@ -172,13 +173,13 @@ def test_continuous_arrival_is_bounded_by_original_qos_depth(ready):
 
 
 def test_predicate_time_is_sampled_after_original_callback_work(ready):
-    original = ready.node._settle_local_reset
+    original = ready.node._observe_retirement_core
 
-    def settle():
-        original()
+    def settle(*args):
+        original(*args)
         ready.clock.mono = CASE["packets"][1]["valid_until"] + 0.001
 
-    ready.node._settle_local_reset = settle
+    ready.node._observe_retirement_core = settle
     enqueue(ready, CASE["packets"][1])
     assert not ready.node.task_motion_allowed(continuing=True)
     assert ready.node._motion_runtime.value.sequence == 199

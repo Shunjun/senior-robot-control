@@ -85,8 +85,7 @@ def test_estop_retires_task_and_rejects_wrong_robot_or_replayed_request():
     assert not owner.accept(stop, 10).accepted
     stop = stop.model_copy(update={"robot_id": "robot"})
     assert owner.accept(stop, 10).accepted
-    assert owner.estop_latched and owner.final_command(10) is None
+    assert owner.final_command(10) is None
     assert not owner.task_navigation_active
-    owner.confirm_local_estop(False)
     assert not owner.accept(stop, 10.1).accepted
     assert not owner.begin_navigation("route", 10.1, task_epoch=1)

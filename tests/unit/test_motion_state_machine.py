@@ -29,15 +29,11 @@ def test_recovery_requires_five_distinct_observations_and_half_second():
     assert m.reduce(event(K.FEEDBACK_HEALTHY, 3), now_steady=0.7).mode is MotionMode.IDLE
 
 
-def test_estop_reset_revision_hardware_and_fault_are_independent():
+def test_estop_reset_revision_and_fault_are_independent():
     m = MotionStateMachine()
     recover(m)
     m.reduce(event(K.EXECUTION_FAULT, 1), now_steady=0.5)
     m.reduce(event(K.SOFTWARE_ESTOP, 2), now_steady=0.5)
-    rev = m.state.estop_revision
-    m.reduce(event(K.HARDWARE_ESTOP, 3), now_steady=0.5)
-    assert m.reduce(event(K.ESTOP_RESET, 4, rev), now_steady=0.5).mode is MotionMode.ESTOP
-    m.reduce(event(K.HARDWARE_RELEASE, 5), now_steady=0.5)
     rev = m.state.estop_revision
     assert m.reduce(event(K.ESTOP_RESET, 6, rev - 1), now_steady=0.5).mode is MotionMode.ESTOP
     m.observe(evidence(0.6, 700), 0.6)

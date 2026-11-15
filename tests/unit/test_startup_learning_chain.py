@@ -14,7 +14,7 @@ def test_core_preserves_unmoved_learning_on_estop(core, tmp_path):  # noqa: F811
     core._startup_target(10)
     assert core.target.source == "startup_learning"
     assert core.target.velocity == Velocity(0.05, 0)
-    assert core.command(barrier("estop"))
+    assert core.command(barrier("estop", request="explicit-stop"))
     from senior_control.motion.contracts import MotionMode
 
     assert core.machine.state.mode is MotionMode.ESTOP
