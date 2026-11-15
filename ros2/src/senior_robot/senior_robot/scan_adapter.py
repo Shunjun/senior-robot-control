@@ -1,13 +1,13 @@
 """Self-filter a native bounded scan without changing original beam identities."""
 
 import math
+import os
 import time
 import uuid
+from pathlib import Path
 
-import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from rclpy.clock import Clock, ClockType
-from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -17,6 +17,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
 from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_robot.motion_lifecycle import run
 
@@ -28,22 +29,15 @@ class ScanAdapter(Node):
         self.declare_parameter("scan_topic", "/safety/raw/scan")
         self.declare_parameter("filtered_candidate_topic", "/perception/scan_candidate")
         self.declare_parameter("max_age_seconds", 0.5)
-        self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("no_return_clear", False)
         # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.body = self.get_parameter("body_frame").value
-        self.max_age = self.get_parameter("max_age_seconds").value
+        self.max_age = default_policy().hard_age_s
         self._raw_topic = str(self.get_parameter("scan_topic").value)
-        try:
-            coords = self.get_parameter("self_mask_xy").value or []
-        except ParameterUninitializedException:
-            coords = []
-        if len(coords) % 2 or (coords and len(coords) < 6):
-            raise ValueError("self_mask_xy requires at least three coordinate pairs")
-        self.profile = DeviceProfile(
-            self_mask=[list(zip(coords[::2], coords[1::2], strict=False))] if coords else [],
-        )
+        # Self-return models belong to the motion output owner; transport never
+        # trusts operator masks or labels all body-interior points as learned.
+        self.profile = DeviceProfile()
         self.mask_range_uncertainty = float(self.get_parameter("self_mask_range_uncertainty").value)
         self.no_return_clear = self.get_parameter("no_return_clear").value
         if (
@@ -165,7 +159,13 @@ class ScanAdapter(Node):
             filtered = filter_self(
                 observation, self.profile, self_mask_range_uncertainty=self.mask_range_uncertainty
             )
-            ranges = list(msg.ranges)
+            claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+            if claim:
+                from senior_control.safety.external_motion_features import external_feature_ranges
+
+                ranges = list(external_feature_ranges(filtered, Path(claim)))
+            else:
+                ranges = list(msg.ranges)
             for ray in filtered.rays:
                 if ray.kind in ("self", "ambiguous_self_overlap", "invalid"):
                     ranges[ray.index] = float("nan")

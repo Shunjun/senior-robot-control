@@ -9,6 +9,12 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from typing import Literal, Protocol
 
+from senior_control.runtime.diagnostics import (
+    DiagnosticAsyncQueue,
+    DiagnosticLock,
+    PendingCounter,
+    process_diagnostics,
+)
 from senior_control.settings.models import SettingsSnapshot
 from senior_control.vehicle_logs.models import (
     DOWNLOAD_BYTES,
@@ -53,7 +59,9 @@ class LogSubscription:
         self._credential = credential
         self.query = query
         self._live_after = query.after
-        self._outbox: asyncio.Queue[LogPage | None] = asyncio.Queue(maxsize=4)
+        self._outbox: DiagnosticAsyncQueue[LogPage | None] = DiagnosticAsyncQueue(
+            "logs.subscription_outbox", maxsize=4
+        )
         self._closed = False
 
     @property
@@ -81,7 +89,7 @@ class LogSubscription:
         if self._outbox.full():
             earliest = page.next_cursor
             while not self._outbox.empty():
-                discarded = self._outbox.get_nowait()
+                discarded = self._outbox.discard_nowait()
                 if discarded is not None:
                     for gap in discarded.gaps:
                         if gap.after is not None:
@@ -115,7 +123,7 @@ class LogSubscription:
         self._closed = True
         self._service._subscriptions.discard(self)
         while not self._outbox.empty():
-            self._outbox.get_nowait()
+            self._outbox.discard_nowait()
         self._outbox.put_nowait(None)
 
 
@@ -144,6 +152,7 @@ class VehicleLogService:
         self._settings = settings
         self._utc_now = utc_now
         self._queue: queue.Queue[LogEntry] = queue.Queue(maxsize=QUEUE_LIMIT)
+        self._queue_diagnostic = PendingCounter("logs.writer", QUEUE_LIMIT)
         self._mutex = threading.Lock()
         self._losses: dict[LossReason, int] = {}
         self._signalled = False
@@ -153,7 +162,7 @@ class VehicleLogService:
         self._loop: asyncio.AbstractEventLoop
         self._writer: asyncio.Task[None] | None = None
         self._cleaner: asyncio.Task[None] | None = None
-        self._publication_lock = asyncio.Lock()
+        self._publication_lock = DiagnosticLock("logs.publication_wait")
         self._inflight: dict[LossReason, int] = {}
         self._subscriptions: set[LogSubscription] = set()
         self._queries = 0
@@ -169,6 +178,7 @@ class VehicleLogService:
         return self._queue.qsize()
 
     async def start(self) -> None:
+        process_diagnostics().bind_async()
         if self._writer is not None:
             raise RuntimeError("log service already started")
         self._loop = asyncio.get_running_loop()
@@ -208,6 +218,7 @@ class VehicleLogService:
                 return False  # intentional policy filtering, not lost data
             with self._mutex:
                 if self._queue.full():
+                    self._queue_diagnostic.reject(time.monotonic())
                     self._losses["queue_full"] = min(
                         2**63 - 1,
                         self._losses.get("queue_full", 0) + 1,
@@ -227,7 +238,9 @@ class VehicleLogService:
                 return False
             try:
                 self._queue.put_nowait(entry)
+                self._queue_diagnostic.enqueue(id(entry), time.monotonic())
             except queue.Full:
+                self._queue_diagnostic.reject(time.monotonic())
                 self._losses["queue_full"] = min(
                     2**63 - 1,
                     self._losses.get("queue_full", 0) + 1,
@@ -257,7 +270,10 @@ class VehicleLogService:
         ]
         while len(entries) < 64:
             try:
-                entries.append(self._queue.get_nowait())
+                entry = self._queue.get_nowait()
+                self._queue_diagnostic.start(id(entry), time.monotonic())
+                self._queue_diagnostic.finish(id(entry), time.monotonic())
+                entries.append(entry)
             except queue.Empty:
                 break
         return tuple(entries), losses

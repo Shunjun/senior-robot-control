@@ -1,7 +1,6 @@
-"""Pure bounded reachability certificates; no actuator, authority or task side effects.
+"""Pure reachability checks over caller-declared response/risk assumptions.
 
-The caller supplies independently supported mode/scene envelopes. Statistical
-covariance and wheel references alone never establish these physical bounds.
+Software deployment assumptions are not measured physical guarantees.
 """
 
 import math
@@ -154,18 +153,38 @@ def prepare_perception(
 class Footprint:
     length_m: float
     width_m: float
+    physical_polygon: tuple[Point, ...] | None = None
 
     def __post_init__(self) -> None:
         if not all(math.isfinite(x) and x > 0 for x in (self.length_m, self.width_m)):
             raise ValueError("invalid body geometry")
+        if self.physical_polygon is not None:
+            shape = Polygon(self.physical_polygon)
+            if (
+                len(self.physical_polygon) > 64
+                or not shape.is_valid
+                or shape.area <= 0
+                or not all(math.isfinite(v) for p in self.physical_polygon for v in p)
+            ):
+                raise ValueError("invalid physical polygon")
 
     @property
     def physical_vertices(self) -> tuple[Point, ...]:
+        if self.physical_polygon is not None:
+            return self.physical_polygon
         x, y = self.length_m / 2, self.width_m / 2
         return ((-x, -y), (x, -y), (x, y), (-x, y))
 
     @property
     def vertices(self) -> tuple[Point, ...]:
+        if self.physical_polygon is not None:
+            # Preserve the configured collision outline, including concavities;
+            # a geometric outward margin cannot shrink a concave indentation.
+            return tuple(
+                Polygon(self.physical_polygon)
+                .buffer(0.025 * max(self.length_m, self.width_m), join_style=2)
+                .exterior.coords
+            )[:-1]
         x, y = self.length_m * 1.05 / 2, self.width_m * 1.05 / 2
         return ((-x, -y), (x, -y), (x, y), (-x, y))
 
@@ -282,6 +301,16 @@ class AxisStop:
     phases: tuple[StopPhase, ...]
 
 
+@dataclass(frozen=True)
+class StopPrediction:
+    linear: AxisStop
+    yaw: AxisStop
+    horizon_s: float
+    peak: Velocity
+    linear_domain: tuple[float, float]
+    yaw_domain: tuple[float, float]
+
+
 def stop_axis(speed: float, accel_upper: float, decel: float, jerk: float, lag: float) -> AxisStop:
     """Exact positive-speed S-curve upper profile, including reaction and jerk release.
 
@@ -364,6 +393,7 @@ def _identity(s: ConstraintSnapshot) -> tuple[str, ...]:
         s.config_version,
         str(s.footprint.length_m),
         str(s.footprint.width_m),
+        repr(s.footprint.physical_polygon),
         s.response.profile_id,
         s.target.source,
         s.target.source_id,
@@ -437,6 +467,8 @@ def _reachable_shape(
 class BrakingProof:
     brake: BrakeRequest
     deadline_steady: float | None
+    # //Compatible: existing standalone brake callers need no prediction payload.
+    prediction: StopPrediction | None = None
 
 
 class ConstraintEngine:
@@ -513,25 +545,23 @@ class ConstraintEngine:
         return ((linear[0] - dv, linear[1] + dv), (yaw[0] - dw, yaw[1] + dw))
 
     def _sweep(
-        self, s: ConstraintSnapshot, target: Velocity, *, stop_only: bool, coarse: bool
+        self,
+        s: ConstraintSnapshot,
+        target: Velocity,
+        *,
+        stop_only: bool,
+        coarse: bool,
+        prediction: StopPrediction | None = None,
     ) -> SweepCertificate:
         e = s.envelope
         assert e is not None
-        linear, yaw = self._effective_bounds(s)
-        # Braking already integrates reaction/release: don't add it twice.
-        speed_linear, speed_yaw = self._bounds(s) if stop_only else (linear, yaw)
+        prediction = prediction or self.stop_prediction(s, target, stop_only=stop_only)
+        linear, yaw = prediction.linear_domain, prediction.yaw_domain
+        v, w = prediction.peak.vx, prediction.peak.wz
         r = s.response
-        v = max(abs(speed_linear[0]), abs(speed_linear[1]), abs(target.vx))
-        w = max(abs(speed_yaw[0]), abs(speed_yaw[1]), abs(target.wz))
-        a = (
-            e.reaction_accel_upper
-            if stop_only
-            else Velocity(r.accel if v else 0, r.yaw_accel if w else 0)
-        )
-        stop_v = stop_axis(v, a.vx, r.decel, r.jerk, r.actuator_lag)
-        stop_w = stop_axis(w, a.wz, r.yaw_decel, r.yaw_jerk, r.actuator_lag)
+        stop_v, stop_w = prediction.linear, prediction.yaw
         drive = 0.0 if stop_only else self.config.lease_s
-        horizon = max(stop_v.duration, stop_w.duration, e.lateral_stop_s or 0.0) + drive
+        horizon = prediction.horizon_s
         if horizon > e.max_horizon_s:
             raise ValueError("model_horizon_exceeded")
         length = stop_v.distance + v * drive
@@ -573,6 +603,38 @@ class ConstraintEngine:
             target, sweep, physical, domain_v, domain_w, horizon, e, _response_key(r)
         )
 
+    def stop_prediction(
+        self, s: ConstraintSnapshot, target: Velocity | None = None, *, stop_only: bool = True
+    ) -> StopPrediction:
+        """The same reaction/jerk model used by geometry, before horizon rejection."""
+        e = s.envelope
+        assert e is not None
+        target = target or Velocity(0, 0)
+        raw_linear, raw_yaw = self._bounds(s)
+        dv, dw = self._release(s)
+        linear = raw_linear[0] - dv, raw_linear[1] + dv
+        yaw = raw_yaw[0] - dw, raw_yaw[1] + dw
+        speed_linear, speed_yaw = (raw_linear, raw_yaw) if stop_only else (linear, yaw)
+        v = max(abs(speed_linear[0]), abs(speed_linear[1]), abs(target.vx))
+        w = max(abs(speed_yaw[0]), abs(speed_yaw[1]), abs(target.wz))
+        r = s.response
+        a = (
+            e.reaction_accel_upper
+            if stop_only
+            else Velocity(r.accel if v else 0, r.yaw_accel if w else 0)
+        )
+        stop_v = stop_axis(v, a.vx, r.decel, r.jerk, r.actuator_lag)
+        stop_w = stop_axis(w, a.wz, r.yaw_decel, r.yaw_jerk, r.actuator_lag)
+        horizon = max(stop_v.duration, stop_w.duration, e.lateral_stop_s or 0.0)
+        return StopPrediction(
+            stop_v,
+            stop_w,
+            horizon + (0.0 if stop_only else self.config.lease_s),
+            Velocity(v, w),
+            linear,
+            yaw,
+        )
+
     def _clear(self, c: SweepCertificate, s: ConstraintSnapshot, now: float) -> str | None:
         assert s.envelope is not None
         if (
@@ -600,19 +662,25 @@ class ConstraintEngine:
         error = self._context_error(s, now)
         if error:
             return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, error, False), None)
+        prediction = None
         try:
-            c = self._sweep(s, Velocity(0, 0), stop_only=True, coarse=True)
+            prediction = self.stop_prediction(s)
+            c = self._sweep(s, Velocity(0, 0), stop_only=True, coarse=True, prediction=prediction)
             reason = self._clear(c, s, now)
         except ValueError as error:
-            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, str(error), False), None)
+            return BrakingProof(
+                BrakeRequest(BrakeKind.CONTROLLED, str(error), False), None, prediction
+            )
         if reason == "sweep_obstructed":
             return BrakingProof(
-                BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False), None
+                BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False), None, prediction
             )
         if reason:
-            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, reason, False), None)
+            return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, reason, False), None, prediction)
         return BrakingProof(
-            BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True), now + c.horizon_s
+            BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True),
+            now + c.horizon_s,
+            prediction,
         )
 
     def _stop(self, s: ConstraintSnapshot, now: float) -> BrakeRequest:
@@ -876,16 +944,22 @@ class TickEvaluation:
 
     def __init__(self, engine: ConstraintEngine, snapshot: ConstraintSnapshot, now: float):
         self._engine, self._snapshot, self._now = engine, snapshot, now
-        self._stop: BrakeRequest | None = None
+        self._proof: BrakingProof | None = None
         self._checked: ConstraintResult | None = None
 
     def matches(self, engine: ConstraintEngine, snapshot: ConstraintSnapshot, now: float) -> bool:
         return self._engine is engine and self._snapshot is snapshot and self._now == now
 
     def _base_stop(self) -> BrakeRequest:
-        if self._stop is None:
-            self._stop = self._engine._stop(self._snapshot, self._now)
-        return self._stop
+        if self._proof is None:
+            self._proof = self._engine._stop_certificate(self._snapshot, self._now)
+        return self._proof.brake
+
+    @property
+    def stop_prediction(self) -> StopPrediction | None:
+        self._base_stop()
+        assert self._proof is not None
+        return self._proof.prediction
 
     def zero_stop(self) -> ConstraintResult:
         stopping = replace(

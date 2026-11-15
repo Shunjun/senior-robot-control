@@ -29,6 +29,9 @@ def test_real_core_shares_one_base_stop_but_keeps_independent_tracking(replay, m
     assert core.command(
         N(
             close_reason="intent",
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             source_kind="navigation",
             source_id="captured-route",
             source_epoch=1,
@@ -303,6 +306,9 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
     assert core.command(
         N(
             close_reason="intent",
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             source_kind="navigation",
             source_id="route",
             source_epoch=1,
@@ -348,9 +354,48 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
     core.executor.shutdown(wait=True)
     assert captured[0].brake.reason == "permit_expired_or_changed"
     state = json.loads(replay.node.messages[-1].data)
-    assert state["reason"] == "laser_reference:" + decisions[0].reason
-    assert state["reason"] == "laser_reference:waiting_refinement"
+    assert state["reason"] == "fused_reference:" + decisions[0].reason
+    assert state["reason"] == "fused_reference:waiting_refinement"
     assert replay.node.output[-1][0] == decisions[0].command
     assert state["sampled_steady"] == replay.clock.steady
     assert state["valid_until"] == replay.clock.steady + 0.15
     assert state["healthy"] and state["fault_revision"] == 0
+
+
+@pytest.mark.parametrize("perception_failure", [False, True])
+def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_response(
+    replay, perception_failure
+):
+    from test_unified_motion_runtime import point
+
+    from senior_control.motion.observations import Source
+
+    core, clock = replay.core, replay.clock
+
+    def observation(now):
+        if perception_failure:
+            raise ValueError("synthetic_observation_unavailable")
+        return replace(scene(now, hits=((1.0, 0),)), frame_id="scan_reference"), Pose2D(0, 0, 0)
+
+    core._observation = observation
+    t = clock.ns / 1e9
+    core.sensors.ingest(point(Source.WHEEL, t, clock.steady, (0.8, 0.0)), t, clock.steady, t)
+    core.sensors.ingest(point(Source.IMU, t, clock.steady, (0.0,)), t, clock.steady, t)
+    core.tick()
+    assert core.stopping.linear.interval[1] >= 0.8
+    assert core.stopping.linear.brake is None
+    deadline = core.sensors.latest.vx.deadline_steady
+    perception_failure = False
+    clock.steady = deadline
+    clock.ns = round((t + 1.0) * 1e9)
+    core.sensors.ingest(
+        point(Source.IMU, t + 1, clock.steady, (0.0,), 2), t + 1, clock.steady, t + 1
+    )
+    core.tick()
+    assert core.sensors.latest.vx.value is None
+    assert core.sensors.latest.wz.observed
+    assert core.stopping.linear.interval[1] >= 0.8
+    assert core.stopping.linear.brake is not None
+    assert core.stopping.linear.at == deadline
+    assert core.stopping.linear.support_deadline == deadline
+    assert replay.node.output[-1][0] == Velocity(0, 0)

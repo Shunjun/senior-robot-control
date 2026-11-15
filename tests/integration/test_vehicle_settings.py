@@ -445,3 +445,69 @@ async def test_published_image_is_immutable_and_io_free_during_pending_commit(tm
         await task
         assert service.published_snapshot.logging.level == "WARNING"
         assert previous.logging.level == "INFO"
+
+
+async def test_degraded_preference_migrates_saves_reads_and_survives_restart(tmp_path):
+    import json
+
+    from senior_control.settings.models import vehicle_settings_profile
+
+    path = tmp_path / "old-settings.db"
+    policy = vehicle_settings_profile()
+    async with Database(path) as db:
+        service = SettingsService(SettingsStore(db), policy, RuntimeGate())
+        await service.prepare()
+        old = (await service.get()).model_dump()
+        del old["driving"]["degraded_linear_mps"]
+        await db.connection.execute("UPDATE vehicle_settings SET payload = ?", (json.dumps(old),))
+        await db.connection.commit()
+    async with Database(path) as db:
+        service = SettingsService(SettingsStore(db), policy, RuntimeGate())
+        await service.runtime.update(stationary=True, executing_motion_task=False)
+        await service.prepare()
+        migrated = await service.get()
+        assert migrated.driving.degraded_linear_mps == 0.3
+        assert migrated.driving_version == 0
+        async with db.connection.execute("SELECT payload FROM vehicle_settings") as cursor:
+            stored = json.loads((await cursor.fetchone())[0])
+        assert stored["driving"]["degraded_linear_mps"] == 0.3
+        values = migrated.driving.model_dump()
+        values["degraded_linear_mps"] = 0.12
+        saved = await service.apply(SettingsRequest("custom-degraded", 0, "driving", values))
+        assert saved.reason == "applied"
+        assert (await service.get()).driving.degraded_linear_mps == 0.12
+        # Old receipts remain queryable with the new default; they do not
+        # overwrite the newer durable preference.
+        receipt = saved.model_dump()
+        del receipt["snapshot"]["driving"]["degraded_linear_mps"]
+        for group in ("driving_defaults", "driving_minimum", "driving_maximum"):
+            del receipt["capabilities"][group]["degraded_linear_mps"]
+        await db.connection.execute(
+            "UPDATE vehicle_settings_request SET receipt = ? WHERE request_id = ?",
+            (json.dumps(receipt), "custom-degraded"),
+        )
+        await db.connection.commit()
+        assert (await service.result("custom-degraded")).snapshot.driving.degraded_linear_mps == 0.3
+        assert (await service.get()).driving.degraded_linear_mps == 0.12
+    async with Database(path) as db:
+        service = SettingsService(SettingsStore(db), policy, RuntimeGate())
+        await service.prepare()
+        assert (await service.get()).driving.degraded_linear_mps == 0.12
+        assert (await service.get()).driving_version == 1
+
+
+@pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf"), True, "0.2", 2])
+async def test_degraded_preference_rejects_invalid_or_out_of_policy_values(tmp_path, value):
+    from senior_control.settings.models import vehicle_settings_profile
+
+    policy = vehicle_settings_profile()
+    async with Database(tmp_path / "settings.db") as db:
+        service = SettingsService(SettingsStore(db), policy, RuntimeGate())
+        await service.runtime.update(stationary=True, executing_motion_task=False)
+        await service.prepare()
+        values = policy.driving_defaults.model_dump()
+        values["degraded_linear_mps"] = value
+        assert (
+            await service.apply(SettingsRequest("bad", 0, "driving", values))
+        ).reason == "invalid_values"
+        assert (await service.get()).driving.degraded_linear_mps == 0.3

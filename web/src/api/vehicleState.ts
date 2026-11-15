@@ -68,6 +68,7 @@ export interface DrivingSettings {
   low_angular_rps: number;
   high_angular_rps: number;
   reverse_linear_mps: number;
+  degraded_linear_mps: number;
 }
 export interface LoggingSettings {
   level: Level;
@@ -199,7 +200,7 @@ const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings
 const LEVELS: readonly Level[] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 const ACTIONS: readonly Action[] = ['acquire', 'estop_reset', 'fault_recover'];
 const TASK_ACTIONS: readonly TaskAction[] = ['pause', 'resume', 'cancel', 'takeover'];
-const DRIVING = ['low_linear_mps', 'high_linear_mps', 'low_angular_rps', 'high_angular_rps', 'reverse_linear_mps'] as const;
+const DRIVING = ['low_linear_mps', 'high_linear_mps', 'low_angular_rps', 'high_angular_rps', 'reverse_linear_mps', 'degraded_linear_mps'] as const;
 export class VehicleDecodeError extends Error {
   constructor() {
     super('车端数据格式不合法');

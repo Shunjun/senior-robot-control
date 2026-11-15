@@ -7,6 +7,7 @@ current graph authentication. This coordinator is not a DDS admission fence.
 from dataclasses import replace
 from typing import Any
 
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.independent_motion import Profile
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_frame_builder import (
@@ -148,8 +149,11 @@ class RgbdCoordinator:
             self._tickets.clear()
             self._preprocessing.clear()
             return False
-        ros_deadline = min(min(h.stamp_ns, h.received_ros_ns) + 300_000_000 for h in headers)
-        steady_deadline = min(h.received_steady + 0.3 for h in headers)
+        ros_deadline = min(h.stamp_ns + round(default_policy().hard_age_s * 1e9) for h in headers)
+        steady_deadline = min(
+            h.received_steady + default_policy().hard_age_s - (h.received_ros_ns - h.stamp_ns) / 1e9
+            for h in headers
+        )
         if not self.worker.submit(
             built.frame,
             now_ros_ns=now_ros_ns,

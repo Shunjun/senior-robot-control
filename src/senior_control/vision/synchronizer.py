@@ -1,9 +1,10 @@
 """Image and depth frames, plus the RGB/depth time and size pairing rule."""
 
 import math
-from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+from senior_control.runtime.diagnostics import DiagnosticDeque
 
 
 class FrameSyncError(ValueError):
@@ -76,8 +77,12 @@ class RgbdSynchronizer:
         if not math.isfinite(max_skew_s) or max_skew_s < 0.0:
             raise ValueError("max_skew_s must be finite and non-negative")
         self._max_skew_s = max_skew_s
-        self._rgb: deque[ImageFrame] = deque(maxlen=capacity)
-        self._depth: deque[DepthFrame] = deque(maxlen=capacity)
+        self._rgb: DiagnosticDeque[ImageFrame] = DiagnosticDeque(
+            "vision.rgb_depth_pair.rgb", maxlen=capacity
+        )
+        self._depth: DiagnosticDeque[DepthFrame] = DiagnosticDeque(
+            "vision.rgb_depth_pair.depth", maxlen=capacity
+        )
         self.rejected = 0
 
     def offer_rgb(self, frame: ImageFrame) -> AlignedRgbdFrame | None:
@@ -109,7 +114,17 @@ class RgbdSynchronizer:
 
     def _consume(self, pair: AlignedRgbdFrame) -> None:
         """Frames at or before the matched stamps can no longer pair with newer data."""
-        self._rgb = deque((f for f in self._rgb if f.stamp > pair.rgb.stamp), self._rgb.maxlen)
-        self._depth = deque(
-            (f for f in self._depth if f.stamp > pair.depth.stamp), self._depth.maxlen
-        )
+        # Offers need not be monotonic. Inspect the entire bounded queue;
+        # removing only its head can leave the matched object behind newer data.
+        for queue, matched in ((self._rgb, pair.rgb), (self._depth, pair.depth)):
+            consumed = False
+            for index in range(len(queue) - 1, -1, -1):
+                frame = queue[index]
+                # Preserve the original strict keep predicate, including its
+                # handling of unusable NaN stamps (not a newer frame).
+                if not frame.stamp > matched.stamp:
+                    if frame is matched and not consumed:
+                        queue.take_index(index)
+                        consumed = True
+                    else:
+                        queue.discard_index(index)

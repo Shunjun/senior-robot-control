@@ -59,9 +59,12 @@ class Replay:
     def __init__(self, capture, clock):
         self.capture, self.clock = capture, clock
         self.node = Node(clock)
-        self.core = module.MotionCoreOutput(self.node, SimulationMotionProfile())
+        self.core = module.MotionCoreOutput(
+            self.node, SimulationMotionProfile(), ingress_factory=None
+        )
         self.core.controller._last_now = clock.steady - 0.05
         self.free = False
+        self.collision = False
         self.decisions = []
         actual_tick = self.core.controller.propose_tick
 
@@ -85,7 +88,8 @@ class Replay:
         )
         perception = prepare_perception(
             patches,
-            tuple(tuple(p) for p in self.capture["hit_witnesses"]),
+            tuple(tuple(p) for p in self.capture["hit_witnesses"])
+            + (((0.0, 0.0),) if self.collision else ()),
             error_m=0.02,
             stamp_steady=now - 0.01,
             deadline_steady=now + 0.79,
@@ -108,7 +112,36 @@ class Replay:
             self.clock.ros = packet["sampled_ros"]
         else:
             self.clock.ros = ros
-        self.core._reference = copy.deepcopy(packet)
+        self.core.sensors.ingest_packet(copy.deepcopy(packet))
+        if self.free:
+            # Synthetic raw interval: the capture retained fused output only.
+            # It proves controller composition, never a physical laser replay.
+            from senior_control.motion.estimator import MotionObservation, Origin
+
+            ref = packet["reference"]
+            row = next(r["sample"] for r in packet["sources"] if r["source"] == "laser")
+            roots = tuple(
+                Origin(
+                    "laser",
+                    row["epoch"],
+                    row["sequence"],
+                    stamp,
+                    packet["sampled_ros"],
+                    row["received_steady"],
+                )
+                for stamp in (ref["start_ros"], ref["end_ros"])
+            )
+            avg = ref["average"]
+            if avg is not None:
+                self.core.sensors.estimator.ingest(
+                    MotionObservation(
+                        "laser",
+                        (avg["vx"], avg["vy"], avg["wz"]),
+                        sum((ref["start_ros"], ref["end_ros"])) / 2,
+                        roots,
+                        independent=(True, True, True),
+                    )
+                )
         self.core.tick()
         return MotionRuntimeState.model_validate_json(self.node.messages[-1].data)
 
@@ -119,7 +152,10 @@ class Replay:
     def blocked_again(self):
         self.clock.steady += 0.05
         packet = copy.deepcopy(self.capture["recovery_references"][-1])
-        packet["reference"]["end_ros"] = packet["sampled_ros"] - 0.16
+        self.core.sensors.estimator.invalidate("laser")
+        self.free = False
+        self.collision = True
+        packet["reference"]["end_ros"] = packet["sampled_ros"] - 1.0
         packet["reference"]["start_ros"] = packet["reference"]["end_ros"] - 0.1
         return self.step(packet, ros=packet["sampled_ros"])
 
@@ -142,16 +178,19 @@ def replay(monkeypatch):
 
 def test_captured_startup_unknown_stop_denies_motion_without_fault(replay):
     state = replay.step(ros=1.46)
-    assert replay.decisions[-1].reason == "stop_envelope_blocked"
+    # Original captured witnesses stay unchanged. Removing the fictitious
+    # maximum-speed inertia exposes the actual remaining unknown-space reason.
+    assert replay.decisions[-1].reason == "sweep_unknown"
     assert replay.decisions[-1].emergency and not replay.decisions[-1].verified
     assert replay.decisions[-1].command is None
     assert replay.core.scheduler.current.permit is None
-    assert replay.core.scheduler.current.brake.kind is BrakeKind.EMERGENCY
+    assert replay.core.scheduler.current.brake.kind is BrakeKind.CONTROLLED
     assert not replay.core.scheduler.current.brake.stop_verified
     assert replay.node.output[-1][0] == Velocity(0, 0)
     assert not state.stationary and state.body_reference is None
-    assert state.mode == "feedback_stop"
-    assert state.fault_revision == 0 and "acquire" not in state.allowed_actions
+    assert state.mode == "braking"
+    assert state.healthy and state.fault_revision == 0
+    assert "acquire" in state.allowed_actions
 
 
 def test_captured_startup_recovers_to_real_navigation_admission(replay, navigation):  # noqa: F811
@@ -163,7 +202,7 @@ def test_captured_startup_recovers_to_real_navigation_admission(replay, navigati
         if row["source"] == "laser"
     )
     early = [s for s in states if s.sampled_steady < first_body_stamp + 0.5]
-    assert early and all(not s.stationary and "acquire" not in s.allowed_actions for s in early)
+    assert early  # Sensor admission no longer adds a five-sample/.5-second gate.
     state = states[-1]
     assert state.mode == "idle" and state.stationary and state.healthy
     assert state.fault_revision == 0 and state.body_reference is not None
@@ -205,7 +244,7 @@ def test_source_intent_then_release_preserves_one_way_startup(
     # Use captured current body/wheel evidence for the real 9555 ingress check,
     # without claiming independent stillness or bypassing conditional recovery.
     replay.clock.ros = 1.44
-    core._reference = copy.deepcopy(replay.capture["reference"])
+    core.sensors.ingest_packet(copy.deepcopy(replay.capture["reference"]))
     _, body, wheel = core._inputs(now)
     assert body is not None and wheel is not None
     core.machine.observe(
@@ -228,6 +267,9 @@ def test_source_intent_then_release_preserves_one_way_startup(
         source_epoch=1,
         received_steady=now,
         steady_deadline=now + 0.3,
+        manual_linear=1.0 if source == "manual" else 0.0,
+        manual_linear_limit=velocity.vx if source == "manual" else 0.0,
+        degraded_linear_limit=0.3 if source == "manual" else 0.0,
         vx=velocity.vx,
         wz=velocity.wz,
         close_reason="intent",
@@ -248,11 +290,18 @@ def test_source_intent_then_release_preserves_one_way_startup(
         vx=0.0,
         wz=0.0,
         close_reason="release",
+        manual_linear=0.0,
+        manual_linear_limit=0.0,
+        degraded_linear_limit=0.0,
         request_id="release",
         gesture=0,
     )
     assert core.command(close)
     assert core.target.source == "idle" and core.controller.trajectory.velocity == Velocity(0, 0)
+    # A real synthetic occupied point in the current body isolates the
+    # one-way fault classification; missing independent body no longer creates
+    # a fictitious long sweep into the captured distant wall.
+    replay.collision = True
     state = replay.step(ros=1.46)
     assert state.mode == expected_mode and state.fault_revision == expected_fault
 
@@ -274,5 +323,6 @@ def test_startup_classification_does_not_clear_preexisting_fault_or_estop(replay
 )
 def test_nonzero_trajectory_is_not_startup_waiting(replay, velocity, acceleration):
     replay.core.controller.trajectory = Trajectory(velocity, acceleration)
+    replay.collision = True
     state = replay.step(ros=1.46)
     assert state.mode == "execution_fault" and state.fault_revision == 1

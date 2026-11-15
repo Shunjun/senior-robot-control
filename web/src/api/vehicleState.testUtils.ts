@@ -29,6 +29,7 @@ export const settingsFixture = {
       high_linear_mps: 25 / 18,
       low_angular_rps: 1,
       high_angular_rps: 1,
+      degraded_linear_mps: 0.3,
       reverse_linear_mps: 0.3
     },
     logging: {
@@ -48,6 +49,7 @@ export const settingsFixture = {
       high_linear_mps: 25 / 18,
       low_angular_rps: 1,
       high_angular_rps: 1,
+      degraded_linear_mps: 0.3,
       reverse_linear_mps: 0.3
     },
     driving_minimum: {
@@ -55,6 +57,7 @@ export const settingsFixture = {
       high_linear_mps: 0,
       low_angular_rps: 0,
       high_angular_rps: 0,
+      degraded_linear_mps: 0,
       reverse_linear_mps: 0
     },
     driving_maximum: {
@@ -62,6 +65,7 @@ export const settingsFixture = {
       high_linear_mps: 2,
       low_angular_rps: 2,
       high_angular_rps: 2,
+      degraded_linear_mps: 25 / 18,
       reverse_linear_mps: 1
     },
     logging_defaults: {

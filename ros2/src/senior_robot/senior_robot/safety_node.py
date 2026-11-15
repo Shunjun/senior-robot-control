@@ -69,6 +69,7 @@ from senior_control.safety.velocity_uncertainty import (
     IntervalVelocityBounds,
     interval_velocity_bounds,
 )
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
@@ -108,7 +109,6 @@ class SafetyGate(Node):
         self.declare_parameter("hard_margin", -1.0)
         self.declare_parameter("observation_max_age", -1.0)
         self.declare_parameter("footprint_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
-        self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.declare_parameter("interpolate", False)
@@ -207,8 +207,8 @@ class SafetyGate(Node):
         self._worker_last_result = ""
         self._history = self._new_history()
         self._reference_admission: tuple[float, float, float] | None = None
-        scan_age = _positive(float(self.get_parameter("observation_max_age").value))
-        measured_age = _positive(float(self.get_parameter("measurement_max_age").value))
+        scan_age = default_policy().hard_age_s
+        measured_age = default_policy().hard_age_s
         self._freshness = (
             SafetyFreshness(min(scan_age, measured_age)) if scan_age and measured_age else None
         )
@@ -283,22 +283,15 @@ class SafetyGate(Node):
 
     def _profile(self) -> DeviceProfile:
         footprint_xy = self._array_parameter("footprint_xy")
-        mask_xy = self._array_parameter("self_mask_xy")
-        if len(footprint_xy) > 128 or len(mask_xy) > 128:
+        if len(footprint_xy) > 128:
             raise ValueError("footprint or self-mask exceeds safety geometry complexity limit")
         footprint = (
             list(zip(footprint_xy[::2], footprint_xy[1::2], strict=False))
             if len(footprint_xy) >= 6 and len(footprint_xy) % 2 == 0
             else []
         )
-        mask = (
-            [list(zip(mask_xy[::2], mask_xy[1::2], strict=False))]
-            if len(mask_xy) >= 6 and len(mask_xy) % 2 == 0
-            else []
-        )
         return DeviceProfile(
             footprint=footprint,
-            self_mask=mask,
             braking_deceleration=_positive(float(self.get_parameter("braking_deceleration").value)),
             lateral_braking_deceleration=_positive(
                 float(self.get_parameter("lateral_braking_deceleration").value)
@@ -308,9 +301,7 @@ class SafetyGate(Node):
             ),
             reaction_time=_nonnegative(float(self.get_parameter("reaction_time").value)),
             hard_margin=_nonnegative(float(self.get_parameter("hard_margin").value)),
-            observation_max_age=_nonnegative(
-                float(self.get_parameter("observation_max_age").value)
-            ),
+            observation_max_age=default_policy().hard_age_s,
         )
 
     def _velocity(self, msg: Twist) -> Velocity | None:

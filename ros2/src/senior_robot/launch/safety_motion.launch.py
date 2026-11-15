@@ -23,6 +23,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 from senior_control.real_runtime import load_real_parameters, validate_real_runtime
+from senior_control.sensors.policy import ros_sensor_parameters
 
 
 def _nodes(context):
@@ -31,7 +32,7 @@ def _nodes(context):
     robot_id = LaunchConfiguration("robot_id").perform(context)
     profile = validate_real_runtime(Path(hardware), Path(parameters))
     runtime = load_real_parameters(Path(parameters), profile)
-    shared = {"use_sim_time": False}
+    shared = {"use_sim_time": False, **ros_sensor_parameters(profile.diagnostics)}
     selected = {**shared, "hardware_motion_profile": hardware, "motion_core_profile": ""}
     # Driver topics from the WHEELTEC source: odom and imu/data_raw. Preserve
     # the original DDS publisher identity; a relay would hide the real producer.
@@ -44,6 +45,7 @@ def _nodes(context):
             return []
         shutdown_requested = True
         return [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
+
     nodes = [
         # All included hardware children belong to this launch process group.
         # A required driver exit shuts down the shared stack as well.

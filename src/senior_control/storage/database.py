@@ -8,13 +8,14 @@ from types import TracebackType
 import aiosqlite
 
 from senior_control.models import OperationResult
+from senior_control.runtime.diagnostics import DiagnosticLock
 
 
 class HomeExecutionCoordination:
     """Shared same-robot connection continuity and execution serialization."""
 
     def __init__(self) -> None:
-        self.lock = asyncio.Lock()
+        self.lock = DiagnosticLock("storage.transaction_wait")
         self.connected = True
         self.disconnect_generation = 0
         self.cancel_required = False
@@ -29,7 +30,7 @@ class Database:
             raise ValueError("busy timeout must be between 1 and 60000 milliseconds")
         self.path = path
         self.busy_timeout_ms = busy_timeout_ms
-        self.write_lock = asyncio.Lock()
+        self.write_lock = DiagnosticLock("storage.write_wait")
         self._home_target_locks: dict[str, asyncio.Lock] = {}
         self._home_execution: dict[str, HomeExecutionCoordination] = {}
         self.connection: aiosqlite.Connection
@@ -37,7 +38,9 @@ class Database:
 
     def home_target_lock(self, robot_id: str) -> asyncio.Lock:
         """Serialize one robot's Home target edits and acceptance across services."""
-        return self._home_target_locks.setdefault(robot_id, asyncio.Lock())
+        return self._home_target_locks.setdefault(
+            robot_id, DiagnosticLock("storage.home_target_wait")
+        )
 
     def home_execution(self, robot_id: str) -> HomeExecutionCoordination:
         return self._home_execution.setdefault(robot_id, HomeExecutionCoordination())

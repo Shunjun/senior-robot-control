@@ -247,7 +247,7 @@ def test_bound_result_requires_original_fresh_receipts_and_current_epoch(tmp_pat
             result, now_ros_ns=1_000_000_000, now_steady=10.2, max_age_s=0.3
         )
         assert not worker.result_qualified(
-            result, now_ros_ns=1_100_000_000, now_steady=10.4, max_age_s=1.0
+            result, now_ros_ns=1_100_000_000, now_steady=11.1, max_age_s=1.0
         )
         worker.invalidate()
         assert not worker.result_qualified(

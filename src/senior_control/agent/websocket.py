@@ -23,6 +23,7 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_frame,
 )
+from senior_control.runtime.diagnostics import DiagnosticLock, QueueSnapshot, process_diagnostics
 from senior_control.runtime.supervisor import AuthRejected
 
 
@@ -63,7 +64,12 @@ class WebSocketLink:
         self._heartbeat_expired: asyncio.Future[None] | None = None
         self._clock_anchor: tuple[float, float] | None = None
         self._server_anchor: tuple[float, float] | None = None
-        self._send_lock = asyncio.Lock()
+        self._send_lock = DiagnosticLock("websocket.send_wait")
+        process_diagnostics().queue(
+            QueueSnapshot("websocket.receive", None, 16, depth_basis="library_depth_unavailable"),
+            time.monotonic(),
+            owner=self,
+        )
         self._drive_timing = drive_timing
         self._drive_clock = ClockWindow()
         self._drive_confirmation: dict[str, str | float] | None = None

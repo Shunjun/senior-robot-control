@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_motion_msgs)
 find_package(ament_cmake REQUIRED)
+install(DIRECTORY include/ DESTINATION include)
+ament_export_include_directories(include)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)

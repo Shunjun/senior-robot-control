@@ -56,6 +56,12 @@ class Node:
         assert period == 0.05
         return N(callback=callback)
 
+    def resolve_topic_name(self, topic):
+        return topic
+
+    def get_parameter(self, name):
+        return N(value="odom")
+
     def get_clock(self):
         return N(now=lambda: N(nanoseconds=round(self.clock.ros * 1e9)))
 
@@ -92,6 +98,10 @@ def phase(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setitem(sys.modules, "time", N(monotonic=lambda: clock.steady))
     monkeypatch.setattr(motion_core_output, "time", N(monotonic=lambda: clock.steady))
+    monkeypatch.setattr("senior_robot.native_receipt.time", N(monotonic=lambda: clock.steady))
+    monkeypatch.setattr(
+        "senior_robot.motion_observation_adapter.time", N(monotonic=lambda: clock.steady)
+    )
     node = Node(clock)
     bridge = NativeObservationRosBridge(node, SimulationMotionProfile())
 
@@ -105,7 +115,7 @@ def phase(monkeypatch):
         node.callbacks["/wheel/odom"](wheel, {"publisher_gid": b"wheel"})
         node.callbacks["/imu/data"](imu, {"publisher_gid": b"imu"})
 
-    # Explicit recovery history; real admission still requires five samples/0.5s.
+    # History for the legacy progress/diagnostic publisher; driving owns raw ingress.
     for index in range(4, 16):
         end = index / 10
         clock.steady, clock.ros = 128391.498658892 + end, end + 0.02
@@ -117,7 +127,9 @@ def phase(monkeypatch):
     bridge._timer.callback()
     assert node.packets[-1]["reference"]["end_ros"] == 1.5
     assert node.packets[-1]["reference"]["average"] is not None
-    consumer = motion_core_output.MotionCoreOutput(node, SimulationMotionProfile())
+    consumer = motion_core_output.MotionCoreOutput(
+        node, SimulationMotionProfile(), ingress_factory=None
+    )
     consumer._on_reference(N(data=json.dumps(node.packets[-1])), {"publisher_gid": b"fusion"})
     node.events.clear()
     clock.steady, clock.ros = case["new_received"].values()
@@ -161,17 +173,19 @@ def test_accepted_laser_is_published_after_handler_return_before_next_timer(phas
     )
     # Sample actual core inputs at captured tick, without invoking the later producer timer.
     phase.clock.steady, phase.clock.ros = phase.case["tick"].values()
-    phase.consumer._consume_ready_reference()
+    # Explicit offline raw replay: production has no fused-snapshot subscription.
+    phase.consumer._on_reference(
+        N(data=json.dumps(phase.node.packets[-1])), {"publisher_gid": b"fusion"}
+    )
     _, body, _ = phase.consumer._inputs(phase.clock.steady)
     assert body is not None, "handler accepted; consumer still has old end_ros=1.5 at ROS1.661"
     assert len(phase.node.packets) == before + 1
     assert phase.node.events[1][0] == "publish"
     assert phase.node.packets[-1]["reference"]["end_ros"] == 1.6
     assert body.stamp_steady == phase.case["new_received"]["steady"]
-    laser = next(s for s in phase.node.packets[-1]["sources"] if s["source"] == "laser")
-    assert body.deadline_steady == laser["valid_until_steady"]
-    assert body.deadline_steady == pytest.approx(
-        phase.case["new_original_deadline"], rel=0, abs=1e-9
+    roots = phase.consumer.sensors.latest.vx.roots
+    assert body.deadline_steady <= min(
+        r.received_steady + 1 - (r.received_ros - r.stamp_ros) for r in roots
     )
     assert phase.node.publisher_count == 1
 
@@ -211,19 +225,16 @@ def test_wheel_and_imu_updates_leave_snapshot_work_to_periodic_timer(phase):
     assert (len(phase.node.packets), phase.bridge.core._sequence) == (before[0] + 1, before[1] + 1)
 
 
-def test_new_laser_epoch_must_recover_before_immediate_publication(phase):
+def test_new_laser_epoch_does_not_add_old_five_sample_recovery_gate(phase):
     message = copy.deepcopy(phase.case["new_laser"])
     message["source_epoch"] = "new-laser-epoch"
     before = len(phase.node.packets)
     phase.callback(native(message), {"publisher_gid": b"laser"})
     assert phase.accepted == [True]
-    assert len(phase.node.packets) == before
-    # Recovery is still observable through the unchanged periodic publisher.
-    phase.bridge._timer.callback()
     assert len(phase.node.packets) == before + 1
     laser = next(s for s in phase.node.packets[-1]["sources"] if s["source"] == "laser")
-    assert not laser["ready"]
-    assert phase.node.packets[-1]["reference"]["average"] is None
+    assert laser["ready"]
+    assert phase.node.packets[-1]["reference"]["average"] is not None
 
 
 def test_completion_after_control_sample_cannot_retroactively_supply_body(phase):
@@ -238,10 +249,15 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
 
     phase.before_return.append(independent_consumer_tick)
     phase.callback(native(phase.case["new_laser"]), {"publisher_gid": b"laser"})
-    assert phase.accepted == [True] and earlier_body == [None]
+    assert phase.accepted == [True] and earlier_body[0] is not None
+    old_sequence = phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence
+    assert old_sequence < phase.node.packets[-1]["sources"][0]["sample"]["sequence"]
     assert phase.node.events[-1] == ("publish", phase.case["handler_finished"]["steady"])
-    phase.consumer._consume_ready_reference()
+    phase.consumer._on_reference(
+        N(data=json.dumps(phase.node.packets[-1])), {"publisher_gid": b"fusion"}
+    )
     assert phase.consumer._inputs(phase.clock.steady)[1] is not None
+    assert phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence > old_sequence
 
 
 def test_periodic_and_immediate_publications_share_sequence_and_original_deadline(phase):

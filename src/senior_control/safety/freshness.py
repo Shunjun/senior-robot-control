@@ -31,7 +31,7 @@ class SafetyFreshness:
             math.isfinite(stamp)
             and math.isfinite(steady)
             and stamp > 0
-            and 0 <= ros - stamp <= self.max_age
+            and 0 <= ros - stamp < self.max_age
             and (previous is None or stamp > previous)
         )
         if not valid:
@@ -52,9 +52,9 @@ class SafetyFreshness:
             return False
         return all(
             received is not None
-            and 0 <= steady - received <= self.max_age
+            and 0 <= steady - received < self.max_age
             and stamp is not None
-            and 0 <= ros - stamp <= self.max_age
+            and 0 <= ros - stamp < self.max_age
             for received, stamp in (
                 (self.scan_received, self.scan_stamp),
                 (self.measured_received, self.measured_stamp),

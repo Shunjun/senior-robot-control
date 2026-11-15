@@ -1,0 +1,41 @@
+{
+  "review_base_commit": "bc46ac32490fa6b8b20af99f1a8847975d58361d",
+  "source_and_tests_sha256": "5d261e5ebec229b0643decd1bea0f62dfb2767c5ea7e4aa255bc3c7f7e7d2142",
+  "fingerprint_files": [
+    "ros2/src/senior_motion_msgs/include/senior_motion_msgs/sensor_timing.hpp",
+    "ros2/src/senior_sensor_ingress/include/senior_sensor_ingress/rgbd_candidate_receipt.hpp",
+    "ros2/src/senior_sensor_ingress/src/rgbd_candidate_receipt.cpp",
+    "ros2/src/senior_sensor_ingress/test/test_rgbd_candidate_receipt.cpp",
+    "tests/unit/test_native_sensor_age_boundary.py"
+  ],
+  "python": "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python",
+  "environment": {
+    "PYTHONPATH": "src"
+  },
+  "pytest_argv": [
+    "python",
+    "-m",
+    "pytest",
+    "tests/unit/test_native_sensor_age_boundary.py",
+    "tests/unit/test_shared_sensor_cpp.py",
+    "-q",
+    "--tb=short"
+  ],
+  "pytest_stdout": "..                                                                       [100%]\n2 passed in 1.38s\n",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.0.123.102)\nTarget: arm64-apple-darwin25.4.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+  "new_test_compile_flags": [
+    "-std=c++17",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fsanitize=undefined,float-cast-overflow",
+    "-fno-sanitize-recover=all"
+  ],
+  "red_summary": "1 failed in 0.30s",
+  "cpp_callsite_audit": "ros2/src/senior_motion_msgs/include/senior_motion_msgs/sensor_timing.hpp:22:  std::optional<int64_t> try_age_ns(int64_t stamp, int64_t received_ros,\nros2/src/senior_motion_msgs/include/senior_motion_msgs/sensor_timing.hpp:38:  int64_t age_ns(int64_t stamp, int64_t received_ros, double received_steady,\nros2/src/senior_motion_msgs/include/senior_motion_msgs/sensor_timing.hpp:40:    const auto age = try_age_ns(stamp, received_ros, received_steady, now_ros, now_steady);\nros2/src/senior_sensor_ingress/src/rgbd_candidate_receipt.cpp:366:  const auto age = sensor_policy_.try_age_ns(nanos(header.stamp), nanos(header.received_ros),\n",
+  "ros_tests": "Source added for actual RawCaptureHeader adapter; NOT BUILT OR RUN on this host",
+  "static_checks": [
+    "ruff check/format --check tests/unit/test_native_sensor_age_boundary.py",
+    "git diff --check"
+  ]
+}

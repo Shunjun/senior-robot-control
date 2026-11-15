@@ -1,5 +1,6 @@
 """Bounded, research-only RGB-D relative motion; never a safety qualification.
 
+
 No dependency on a map, laser or wheel motion.  Imports of NumPy/OpenCV are
 local so installations that do not use this experimental path remain usable.
 """
@@ -9,6 +10,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import (
     RawCaptureAdmission,
     RawCaptureHeader,
@@ -315,7 +317,7 @@ def _headers_valid(
     for h in headers:
         if not _finite(h.received_steady):
             return False
-        admission = RawCaptureAdmission(max_age_s=0.3)
+        admission = RawCaptureAdmission(max_age_s=default_policy().hard_age_s)
         if not admission.offer(
             h, bridge_gid=h.bridge_gid, now_ros_ns=now_ros_ns, now_steady=now_steady
         ):
@@ -327,9 +329,9 @@ def _headers_valid(
             or h.sequence <= 0
             or not math.isfinite(h.received_steady)
             or not math.isfinite(now_steady)
-            or not 0 <= now_ros_ns - h.stamp_ns <= 300_000_000
-            or not 0 <= now_ros_ns - h.received_ros_ns <= 300_000_000
-            or not 0 <= now_steady - h.received_steady <= 0.3
+            or not 0 <= now_ros_ns - h.stamp_ns < round(default_policy().hard_age_s * 1e9)
+            or not 0 <= now_ros_ns - h.received_ros_ns < round(default_policy().hard_age_s * 1e9)
+            or not 0 <= now_steady - h.received_steady < default_policy().hard_age_s
         ):
             return False
     return True

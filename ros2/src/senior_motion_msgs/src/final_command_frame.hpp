@@ -1,5 +1,5 @@
 #pragma once
-// Private same-build seqpacket v2. The actual guard and native roundtrip tests
+// Private same-build seqpacket v3. The actual guard and native roundtrip tests
 // share this codec; no old-frame/default-field compatibility is accepted.
 #include <array>
 #include <cmath>
@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace final_command_frame {
-constexpr size_t size = 799;
+constexpr size_t size = 823;
 
 inline void integer(std::vector<uint8_t>& out, uint64_t n, unsigned bytes) {
   for (int i = static_cast<int>(bytes) - 1; i >= 0; --i) {
@@ -35,7 +35,7 @@ inline void text(std::vector<uint8_t>& out, const std::string& s, size_t bound) 
 template<class Command, class Gid>
 std::vector<uint8_t> encode(uint8_t kind, const Gid& gid, const Command& m) {
   if (kind > 4 || gid.size() != 24) throw std::invalid_argument("frame kind/gid");
-  std::vector<uint8_t> out{'S', 'C', 'F', '2', 2, kind};
+  std::vector<uint8_t> out{'S', 'C', 'F', '3', 3, kind};
   integer(out, size, 2);
   out.insert(out.end(), gid.begin(), gid.end());
   text(out, m.robot_id, 128);
@@ -54,6 +54,9 @@ std::vector<uint8_t> encode(uint8_t kind, const Gid& gid, const Command& m) {
   integer(out, m.source_epoch, 8);
   number(out, m.received_steady);
   text(out, m.close_reason, 32);
+  number(out, m.manual_linear);
+  number(out, m.manual_linear_limit);
+  number(out, m.degraded_linear_limit);
   if (out.size() != size) throw std::logic_error("frame size mismatch");
   return out;
 }
@@ -66,12 +69,25 @@ template<class C> bool same_payload(const C& a, const C& b) {
     a.steady_deadline == b.steady_deadline && a.vx == b.vx && a.wz == b.wz &&
     a.source_kind == b.source_kind && a.source_id == b.source_id &&
     a.source_epoch == b.source_epoch && a.received_steady == b.received_steady &&
-    a.close_reason == b.close_reason;
+    a.close_reason == b.close_reason && a.manual_linear == b.manual_linear &&
+    a.manual_linear_limit == b.manual_linear_limit &&
+    a.degraded_linear_limit == b.degraded_linear_limit;
+}
+
+template<class C> bool manual_metadata(const C& m) {
+  if (!std::isfinite(m.manual_linear) || !std::isfinite(m.manual_linear_limit) ||
+      !std::isfinite(m.degraded_linear_limit)) return false;
+  if (m.source_kind != "manual" || m.close_reason != "intent") {
+    return m.manual_linear == 0 && m.manual_linear_limit == 0 && m.degraded_linear_limit == 0;
+  }
+  return std::abs(m.manual_linear) <= 1 && m.manual_linear_limit >= 0 &&
+    m.degraded_linear_limit >= 0 &&
+    m.vx == m.manual_linear * m.manual_linear_limit;
 }
 
 // Identity notifications cannot enter the actuator generation/sequence frontier.
 template<class C> bool terminal_identity(const C& m) {
-  return m.source_kind == "navigation" && !m.source_id.empty() && m.source_id == m.session_id &&
+  return manual_metadata(m) && m.source_kind == "navigation" && !m.source_id.empty() && m.source_id == m.session_id &&
     !m.owner_boot_id.empty() && !m.request_id.empty() && m.source_epoch > 0 &&
     (m.close_reason == "task_terminal" || (m.close_reason == "task_settled" &&
       m.generation == 0 && m.connection_epoch == m.source_epoch)) && m.sequence == 0 && m.steady_deadline == 0 &&
@@ -89,6 +105,7 @@ template<class C> bool terminal_identity_authorized(
 }
 
 template<class C> bool barrier(const C& m) {
+  if (!manual_metadata(m)) return false;
   if (m.vx != 0 || m.wz != 0 || m.sequence != 0 || m.steady_deadline != 0) return false;
   if (m.close_reason == "estop_reset" || m.close_reason == "fault_recover") {
     return !m.request_id.empty() && m.source_kind == "idle" &&

@@ -67,7 +67,7 @@ def core(monkeypatch):
     lifecycle.with_dds_info = with_info
     monkeypatch.setitem(sys.modules, "senior_robot.motion_lifecycle", lifecycle)
     monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.0)
-    c = MotionCoreOutput(Node(), SimulationMotionProfile())
+    c = MotionCoreOutput(Node(), SimulationMotionProfile(), ingress_factory=None)
     yield c
     c.close()
 
@@ -90,6 +90,9 @@ def barrier(reason="release", generation=2, request=""):
         source_epoch=42,
         received_steady=9.9,
         close_reason=reason,
+        manual_linear=0.0,
+        manual_linear_limit=0.0,
+        degraded_linear_limit=0.0,
     )
 
 
@@ -198,7 +201,14 @@ def test_reference_missing_gid_is_simulation_only_and_never_refreshes_old_packet
     def packet(seq=1, stamp=10.0):
         return N(
             data=json.dumps(
-                dict(schema=1, boot_id="fusion-boot", sequence=seq, sampled_steady=stamp)
+                dict(
+                    schema=1,
+                    boot_id="fusion-boot",
+                    sequence=seq,
+                    sampled_steady=stamp,
+                    sampled_ros=stamp,
+                    sources=[],
+                )
             )
         )
 
@@ -244,7 +254,7 @@ def test_explicit_idle_estop_uses_original_request_without_inventing_authority(c
     message.request_id = "next-explicit-press"
     assert core.command(message)
     assert core.machine.state.estop_revision == first + 1
-    assert core._barrier_payload[-2] == 9.25
+    assert core._barrier_payload[14] == 9.25
 
 
 def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, monkeypatch):
@@ -262,28 +272,25 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
     assert core.target.source == "idle"
 
 
-@pytest.mark.parametrize("expired", ["prediction_window", "owner_deadline"])
-def test_body_projection_uses_ros_window_and_original_owner_expiry_under_slow_rtf(core, expired):
-    core._reference = {
-        "sampled_steady": 20.2,
-        "sampled_ros": 10.1,
-        "reference": {"end_ros": 10.0, "average": {"vx": 0.0, "vy": 0.0, "wz": 0.0}},
-        "sources": [
-            {
-                "source": "laser",
-                "ready": True,
-                "valid_until_steady": 20.8,
-                "sample": {"received_steady": 20.0, "epoch": "laser", "sequence": 1},
-            }
-        ],
-    }
+@pytest.mark.parametrize("expired", ["ros_age", "steady_age"])
+def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, expired):
+    from senior_control.motion.estimator import MotionObservation, Origin
+
+    core.sensors.estimator.ingest(
+        MotionObservation(
+            "laser",
+            (0.0, None, 0.0),
+            10.0,
+            (Origin("laser", "laser", 1, 10.0, 10.0, 20.0),),
+            independent=(True, True, True),
+        )
+    )
     core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.1e9))
     _, body, _ = core._inputs(20.2)
     assert body is not None
-    assert body.stamp_steady == 20.0 and body.deadline_steady == 20.8
-    if expired == "prediction_window":
-        core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.16e9))
+    assert body.stamp_steady == 20.0 and body.deadline_steady == 21.0
+    if expired == "ros_age":
+        core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=11e9))
         assert core._inputs(20.2)[1] is None
     else:
-        # Separate histories: checking steady expiry must not manufacture a ROS rollback.
-        assert core._inputs(20.8)[1] is None
+        assert core._inputs(21.0)[1] is None

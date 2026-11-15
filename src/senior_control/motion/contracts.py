@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Literal
 
 from senior_control.models import BodyTwist, Velocity
+from senior_control.motion.manual_target import ManualLinearTarget
 
 
 class MotionMode(str, Enum):
@@ -94,9 +95,11 @@ class AcceptedManualIntent:
 @dataclass(frozen=True)
 class MotionTarget:
     velocity: Velocity
-    source: Literal["manual", "navigation", "idle"]
+    source: Literal["manual", "navigation", "idle", "startup_learning"]
     source_id: str
     deadline_steady: float
+    # //Compatible: non-manual pure callers need no normalized stick metadata.
+    manual_linear: ManualLinearTarget | None = None
 
 
 @dataclass(frozen=True)

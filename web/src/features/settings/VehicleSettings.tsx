@@ -34,6 +34,11 @@ const FIELDS: ReadonlyArray<{
       scale: 1,
       unit: 'rad/s'
     }, {
+      key: 'degraded_linear_mps',
+      label: '退化模式线速度上限',
+      scale: 3.6,
+      unit: 'km/h'
+    }, {
       key: 'reverse_linear_mps',
       label: '统一倒车速度上限',
       scale: 3.6,
@@ -65,8 +70,9 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   return <fieldset disabled={!enabled || busy}>
     <legend>驾驶设置 · 生效版本 {data.snapshot.driving_version}</legend>
     <div className={styles.fields}>{FIELDS.map(f => <label key={f.key}>{f.label}（{f.unit}）<input aria-label={f.label} type="number" step="any" min={data.capabilities.driving_minimum[f.key] * f.scale} max={data.capabilities.driving_maximum[f.key] * f.scale} value={draft[f.key]} onChange={e => setDraft({ ...draft, [f.key]: e.target.value })} />
-      <small>生效 {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} · 默认 {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} · 范围 {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–{(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}</small>
+      <small>已保存上限 {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} · 默认 {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} · 范围 {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–{(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}</small>
     </label>)}</div>
+    <p>手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。</p>
     <div className={styles.actions}>
       <button disabled={!data.can_apply_driving} onClick={() => save(false)}>保存驾驶设置</button>
       <button disabled={!data.can_apply_driving} onClick={() => save(true)}>恢复驾驶默认值</button>

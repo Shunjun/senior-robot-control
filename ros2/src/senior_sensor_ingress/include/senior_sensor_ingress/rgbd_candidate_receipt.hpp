@@ -1,9 +1,12 @@
+#include "senior_motion_msgs/sensor_timing.hpp"
 #pragma once
 
 #include <array>
 #include <deque>
 #include <utility>
 #include <mutex>
+#include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <rclcpp/rclcpp.hpp>
@@ -44,6 +47,7 @@ private:
   void candidate(const Candidate & body, const rclcpp::MessageInfo & info);
   void inspect();
   void invalidate(const std::string & reason, bool owner_lost = false);
+  std::optional<int64_t> capture_age(const Header & header, int64_t ros_ns, double steady) noexcept;
   bool originals_current(const Candidate & body, int64_t ros_ns, double steady);
   bool clocks_ok(int64_t ros_ns, double steady);
   std::string output_gid() const;
@@ -58,8 +62,16 @@ private:
   int64_t producer_floor_ros_ = 0, last_ros_ = 0;
   double producer_floor_steady_ = 0.0, last_steady_ = 0.0;
   bool failed_ = false, tf_ready_ = false, tf_needs_new_generation_ = false, producer_ready_ = false;
+  sensor_timing::Policy sensor_policy_;
+  sensor_timing::AgeSummary sensor_ages_;
+  double last_age_report_ = 0.;
+  std::unique_ptr<sensor_timing::QueuePolicy> queue_policy_;
+  sensor_timing::QueueMonitor tf_queue_monitor_;
+  uint64_t tf_queue_dropped_ = 0;
+  uint64_t tf_queue_overwritten_ = 0;
   Static tf_first_;
-  std::deque<std::pair<std::string, Static>> pending_tf_;
+  struct PendingTf {std::string first; Static second; double queued;};
+  std::deque<PendingTf> pending_tf_;
   RgbdCandidateLedger ledger_;
   Candidate last_candidate_;
   rclcpp::Publisher<Fenced>::SharedPtr publisher_;

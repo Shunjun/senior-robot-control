@@ -1,9 +1,10 @@
 """Small non-blocking ingress queue with an explicit invalidation barrier."""
 
-from collections import deque
 from collections.abc import Callable
 from threading import Lock
 from typing import Any
+
+from senior_control.runtime.diagnostics import DiagnosticDeque
 
 
 class BoundedInbox:
@@ -13,7 +14,7 @@ class BoundedInbox:
         self._capacity = capacity
         self._lock = Lock()
         self._generation = 1
-        self._items: deque[tuple[int, Any]] = deque()
+        self._items: DiagnosticDeque[tuple[int, Any]] = DiagnosticDeque("rgbd.inbox", capacity)
         self._barrier = ""
 
     def revoke(self, reason: str) -> None:
@@ -29,6 +30,7 @@ class BoundedInbox:
             if len(self._items) >= self._capacity:
                 self._generation += 1
                 self._items.clear()
+                self._items.reject()
                 self._barrier = "overflow"
                 return False
             self._items.append((self._generation, value))

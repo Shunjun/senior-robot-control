@@ -8,6 +8,9 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
+from senior_control.runtime.diagnostics import DiagnosticDeque
+from senior_control.sensors.policy import sensor_current
+
 
 @dataclass(frozen=True)
 class DepthHeader:
@@ -52,7 +55,7 @@ class DepthAdmission:
         self._frontier_ns = 0
         self._identity: tuple[str, str, str] | None = None
         self._identity_failed = False
-        self._pending: deque[DepthHeader] = deque()
+        self._pending: deque[DepthHeader] = DiagnosticDeque("vision.future_depth_headers", 16)
         self._last_ros_ns: int | None = None
 
     def retire(self) -> None:
@@ -176,7 +179,12 @@ class DepthAdmission:
             and not self._pending
             and (self._last_ros_ns is None or now_ros_ns >= self._last_ros_ns)
             and math.isfinite(now_steady)
-            and 0 <= now_steady - header.received_steady <= self.max_age_s
-            and 0 <= now_ros_ns - header.received_ros_ns <= self.max_age_s * 1e9
-            and 0 <= now_ros_ns - header.stamp_ns <= self.max_age_s * 1e9
+            and sensor_current(
+                stamp_ros=header.stamp_ns / 1e9,
+                received_ros=header.received_ros_ns / 1e9,
+                received_steady=header.received_steady,
+                now_ros=now_ros_ns / 1e9,
+                now_steady=now_steady,
+                max_age_s=self.max_age_s,
+            )
         )

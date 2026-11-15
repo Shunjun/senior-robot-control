@@ -1,18 +1,27 @@
 """Real controller/T4; delay only the actual output time after its decision."""
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace as N
 
 import pytest
+from test_directional_constraints import scene
 from test_reference_nanosecond_boundary import replay as boundary_fixture
 
-from senior_control.models import Velocity
+from senior_control.models import Pose2D, Velocity
 
 
 @pytest.fixture
 def rig(monkeypatch):
     fixture = boundary_fixture.__wrapped__(monkeypatch)
     value = next(fixture)
+    # Output-time tests need a drive proposal, not a near-wall acceptance claim.
+    # Original raw motion times/errors are retained. Explicit synthetic open
+    # geometry isolates deadline/commit ordering from the now-wider uncertainty.
+    value.core._observation = lambda now: (
+        replace(scene(now), frame_id="scan_reference", forecast_horizon_s=12),
+        Pose2D(0, 0, 0),
+    )
     try:
         yield value
     finally:
@@ -25,7 +34,9 @@ def rig(monkeypatch):
 
 def start(rig, target_span):
     core = rig.core
-    core.tick()  # Actual captured body and full scan establish health.
+    core.tick()  # Captured raw motion and explicitly synthetic open geometry.
+    state = json.loads(rig.node.messages[-1].data)
+    assert state["healthy"], state["reason"]
     rig.clock.steady += 0.01
     target_deadline = rig.clock.steady + target_span
     assert core.command(
@@ -39,6 +50,9 @@ def start(rig, target_span):
             sequence=1,
             received_steady=rig.clock.steady,
             steady_deadline=target_deadline,
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             vx=0.01,
             wz=0.01,
         )
@@ -76,9 +90,9 @@ def test_actual_exit_must_precede_original_aggregate_deadline(rig, monkeypatch, 
     decisions = delayed_decision(rig, monkeypatch, lambda d: d.evidence_deadline + delta)
     rig.core.tick()
     state = json.loads(rig.node.messages[-1].data)
-    laser = next(row for row in rig.core._reference["sources"] if row["source"] == "laser")
-    assert state["body_reference"]["computed_steady"] == laser["sample"]["received_steady"]
-    assert state["body_reference"]["valid_until_steady"] == laser["valid_until_steady"]
+    independent = rig.core.sensors.independent
+    assert state["body_reference"]["computed_steady"] == independent.stamp_steady
+    assert state["body_reference"]["valid_until_steady"] == independent.deadline_steady
     assert state["sampled_steady"] == sampled
     assert state["valid_until"] == sampled + 0.15
     assert state["fault_revision"] == 0

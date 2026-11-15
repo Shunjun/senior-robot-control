@@ -31,6 +31,11 @@ from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.workspace_export import load_exported_grid
+from senior_control.runtime.diagnostics import (
+    DiagnosticsSettings,
+    configure_diagnostics,
+    diagnostics_from_environment,
+)
 from senior_control.runtime.ipc import IpcClient, IpcError
 from senior_control.settings.models import vehicle_settings_profile
 from senior_control.settings.service import RuntimeGate, SettingsService
@@ -63,6 +68,7 @@ class AgentConfig:
     simulation_video_frame: Path | None = None
     # //Compatible: accepted from old simulation environments; no longer gates settings.
     simulation_settings: bool = False
+    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -101,6 +107,7 @@ class AgentConfig:
                 workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
                 simulation_video_frame=Path(video) if video is not None else None,
                 simulation_settings=environment.get("SENIOR_SIMULATION_SETTINGS") == "1",
+                diagnostics=diagnostics_from_environment(environment),
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
@@ -283,6 +290,7 @@ def build_task_runtime(
 
 
 async def run_agent(config: AgentConfig) -> int:
+    configure_diagnostics(config.diagnostics)
     async with Database(config.database_path) as database:
         tasks = TaskStore(database, robot_id=config.robot_id)
         waypoints = WaypointStore(database, robot_id=config.robot_id)

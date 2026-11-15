@@ -1,10 +1,10 @@
-"""Strict same-build guard v2 decoder; no old-frame/default-field fallback."""
+"""Strict same-build guard v3 decoder; no old-frame/default-field fallback."""
 
 import math
 import struct
 from types import SimpleNamespace
 
-LAYOUT = struct.Struct("!4sBBH24s129s129s129s129sQQQQddd17s129sQd33s")
+LAYOUT = struct.Struct("!4sBBH24s129s129s129s129sQQQQddd17s129sQd33sddd")
 
 
 PAYLOAD_FIELDS = (
@@ -24,6 +24,9 @@ PAYLOAD_FIELDS = (
     "source_epoch",
     "received_steady",
     "close_reason",
+    "manual_linear",
+    "manual_linear_limit",
+    "degraded_linear_limit",
 )
 
 
@@ -59,10 +62,24 @@ def decode_frame(packet: bytes) -> tuple[int, bytes, SimpleNamespace]:
         source_epoch,
         received,
         reason,
+        manual_linear,
+        manual_linear_limit,
+        degraded_linear_limit,
     ) = LAYOUT.unpack(packet)
-    if magic != b"SCF2" or version != 2 or length != LAYOUT.size or kind not in (0, 1, 2, 3, 4):
+    if magic != b"SCF3" or version != 3 or length != LAYOUT.size or kind not in (0, 1, 2, 3, 4):
         raise ValueError("guard frame version/type")
-    if not all(math.isfinite(x) for x in (deadline, vx, wz, received)):
+    if not all(
+        math.isfinite(x)
+        for x in (
+            deadline,
+            vx,
+            wz,
+            received,
+            manual_linear,
+            manual_linear_limit,
+            degraded_linear_limit,
+        )
+    ):
         raise ValueError("guard frame number")
     msg = SimpleNamespace(
         robot_id=_text(robot),
@@ -81,5 +98,8 @@ def decode_frame(packet: bytes) -> tuple[int, bytes, SimpleNamespace]:
         source_epoch=source_epoch,
         received_steady=received,
         close_reason=_text(reason),
+        manual_linear=manual_linear,
+        manual_linear_limit=manual_linear_limit,
+        degraded_linear_limit=degraded_linear_limit,
     )
     return kind, gid, msg

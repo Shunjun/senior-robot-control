@@ -71,7 +71,11 @@ class SettingsStore:
                 raise ValueError("unknown settings schema")
             payload = str(row[1])
             self._validate_snapshot_shape(json.loads(payload))
-            return SettingsSnapshot.model_validate_json(payload)
+            snapshot = SettingsSnapshot.model_validate_json(payload)
+            # //Compatible: persist the canonical six-field image on first old-image load.
+            if "degraded_linear_mps" not in json.loads(payload)["driving"]:
+                await self.write_snapshot(connection, snapshot)
+            return snapshot
 
     async def lookup(
         self, connection: aiosqlite.Connection, request_id: str
@@ -121,8 +125,8 @@ class SettingsStore:
 
     @staticmethod
     def _validate_snapshot_shape(document: object) -> None:
-        # Durable state is a complete image. Model construction defaults are NEVER
-        # permitted to fill missing fields in a damaged image or request receipt.
+        # Durable state is a complete image except for the explicit legacy
+        # five-field driving group below; never default any other damaged field.
         if not isinstance(document, dict) or set(document) != set(SettingsSnapshot.model_fields):
             raise ValueError("settings unavailable: incomplete snapshot")
         for name, expected in (
@@ -130,5 +134,13 @@ class SettingsStore:
             ("logging", LoggingSettings.model_fields),
         ):
             values = document.get(name)
+            # //Compatible: the only valid older image lacks this new preference.
+            # Leave all other missing/extra fields subject to strict corruption checks.
+            if (
+                name == "driving"
+                and isinstance(values, dict)
+                and set(values) == set(expected) - {"degraded_linear_mps"}
+            ):
+                continue
             if not isinstance(values, dict) or set(values) != set(expected):
                 raise ValueError("settings unavailable: incomplete settings group")

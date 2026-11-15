@@ -89,7 +89,7 @@ class Guard : public rclcpp::Node {
         m.robot_id != robot_ || m.owner_boot_id.empty() || m.owner_boot_id.size() > 128 ||
         m.session_id.size() > 128 || m.request_id.size() > 128 ||
         (!is_barrier && (m.gesture == 0) != m.request_id.empty()) || !std::isfinite(m.steady_deadline) ||
-        !std::isfinite(m.vx) || !std::isfinite(m.wz) || invalid_boot_) return;
+        !final_command_frame::manual_metadata(m) || !std::isfinite(m.vx) || !std::isfinite(m.wz) || invalid_boot_) return;
     if (!boot_.empty() && boot_ != m.owner_boot_id) { invalid_boot_ = true; send(0); return; }
     const bool zero = m.vx == 0 && m.wz == 0;
     if (boot_.empty() || m.generation > generation_) {

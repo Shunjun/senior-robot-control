@@ -17,9 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from senior_control.runtime.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
+from senior_control.sensors.policy import default_policy
+
 _HEADER = struct.Struct("!4sBBQQQqq24sI")
 _MAX_PAYLOAD = 20 * 1024 * 1024
-_MAX_TRANSPORT_AGE = 0.25
+_MAX_TRANSPORT_AGE = default_policy().hard_age_s
 _MAX_PENDING_SAMPLES = 64
 _MAX_PENDING_BYTES = 32 * 1024 * 1024
 
@@ -50,6 +53,21 @@ class NativeReceiptGroup:
         from rclpy.clock import Clock, ClockType
 
         self.node = node
+        now = time.monotonic()
+        process_diagnostics().queue(
+            QueueSnapshot(
+                "dds.motion_inputs", None, None, depth_basis="mixed_middleware_depth_unavailable"
+            ),
+            now,
+            owner=self,
+        )
+        process_diagnostics().queue(
+            QueueSnapshot(
+                "socket.native_receipt", None, None, depth_basis="kernel_message_depth_unavailable"
+            ),
+            now,
+            owner=self,
+        )
         self.inputs: list[_Input] = []
         self._lock = threading.Lock()
         self._pending: dict[int, deque[tuple[bytes, dict[str, Any]]]] = {}
@@ -83,6 +101,16 @@ class NativeReceiptGroup:
             expired,
         )
         self.inputs.append(entry)
+        process_diagnostics().queue(
+            QueueSnapshot(
+                f"dds.native_input.{len(self.inputs) - 1}",
+                None,
+                1 if qos == "latched" else 4,
+                depth_basis="middleware_depth_unavailable",
+            ),
+            time.monotonic(),
+            owner=self,
+        )
         return entry
 
     def _start(self):
@@ -194,7 +222,11 @@ class NativeReceiptGroup:
                         if not any(gid) or sequence <= entry.sequence or not payload:
                             raise ValueError("native receipt sample identity/order invalid")
                         entry.sequence = sequence
-                        packets = self._pending.setdefault(key, deque())
+                        if key not in self._pending:
+                            self._pending[key] = DiagnosticDeque(
+                                f"native_receipt.pending.{key}", _MAX_PENDING_SAMPLES
+                            )
+                        packets = self._pending[key]
                         # Every consumer receives ordered transitions, including
                         # negative states followed by positive states in one drain.
                         # Never infer delivery semantics from a message class name.
@@ -202,6 +234,7 @@ class NativeReceiptGroup:
                             len(packets) >= _MAX_PENDING_SAMPLES
                             or self._queued_bytes + len(payload) > _MAX_PENDING_BYTES
                         ):
+                            packets.reject()
                             raise ValueError("native ordered receipt queue overflow")
                         self._queued_bytes += len(payload)
                         packets.append(
@@ -226,11 +259,14 @@ class NativeReceiptGroup:
             with self._lock:
                 self._failed = True
                 self._failure_reason = f"{type(exc).__name__}: {exc}"
+                for packets in self._pending.values():
+                    packets.clear()
                 self._pending.clear()
                 self._queued_bytes = 0
                 self._invalid.update(range(len(self.inputs)))
 
     def _drain(self):
+        process_diagnostics().pump(time.monotonic())
         if self._closed:
             return
         if self._started_at is None:
@@ -260,7 +296,8 @@ class NativeReceiptGroup:
             )
             return
         for key, packets in pending.items():
-            for payload, info in packets:
+            while packets:
+                payload, info = packets.popleft()
                 with self._lock:
                     if self._failed:
                         return
@@ -270,7 +307,9 @@ class NativeReceiptGroup:
                         or self.inputs[key].barrier != info["receipt_barrier"]
                     )
                 entry = self.inputs[key]
-                expired = time.monotonic() - received_steady(info) > _MAX_TRANSPORT_AGE
+                delivery_wait = time.monotonic() - received_steady(info)
+                process_diagnostics().duration("native_delivery_wait", delivery_wait)
+                expired = delivery_wait >= _MAX_TRANSPORT_AGE
                 try:
                     message = deserialize_message(payload, entry.message_type)
                     if revoked or expired:
@@ -295,6 +334,8 @@ class NativeReceiptGroup:
                     with self._lock:
                         self._failed = True
                         self._failure_reason = f"payload on {entry.topic}: {exc}"
+                        for packets in self._pending.values():
+                            packets.clear()
                         self._pending.clear()
                         self._queued_bytes = 0
                         self._invalid.update(range(len(self.inputs)))

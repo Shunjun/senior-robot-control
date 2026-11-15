@@ -12,9 +12,12 @@ import os
 import socket
 import stat
 import struct
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+
+from senior_control.runtime.diagnostics import PendingCounter
 
 PROTOCOL_VERSION = 1
 MAX_FRAME = 8192
@@ -81,6 +84,7 @@ class IpcServer:
         self._path = path
         self._text = _check_path(path)
         self._handler = handler
+        self._handler_counter = PendingCounter("ipc.server.handlers")
         self._replace_existing = replace_existing
         self._server: asyncio.AbstractServer | None = None
         self._start_task: asyncio.Task[asyncio.CancelledError | None] | None = None
@@ -225,7 +229,13 @@ class IpcServer:
         if request.get("v") != PROTOCOL_VERSION or not isinstance(request.get("type"), str):
             return {"v": PROTOCOL_VERSION, "ok": False, "error": "bad_request"}
         try:
-            reply = await self._handler(request)
+            token = object()
+            self._handler_counter.enqueue(token, time.monotonic())
+            self._handler_counter.start(token, time.monotonic())
+            try:
+                reply = await self._handler(request)
+            finally:
+                self._handler_counter.finish(token, time.monotonic())
         except Exception:
             return {"v": PROTOCOL_VERSION, "ok": False, "error": "internal"}
         return {"v": PROTOCOL_VERSION, **reply}
@@ -238,20 +248,27 @@ class IpcClient:
         self._text = _check_path(path)
         self._timeout = timeout
         self._lock = asyncio.Lock()
+        self._queue_diagnostic = PendingCounter("ipc.client.lock_wait")
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
 
     async def request(self, kind: str, **fields: Any) -> Message:
         frame = _encode({"v": PROTOCOL_VERSION, "type": kind, **fields})
-        async with self._lock:
-            try:
-                return await asyncio.wait_for(self._exchange(frame), timeout=self._timeout)
-            except (asyncio.TimeoutError, OSError, IpcError) as exc:
-                self._drop()
-                raise IpcError(f"ipc request {kind} failed") from exc
-            except asyncio.CancelledError:
-                self._drop()
-                raise
+        token = object()
+        self._queue_diagnostic.enqueue(token, time.monotonic())
+        try:
+            async with self._lock:
+                self._queue_diagnostic.start(token, time.monotonic())
+                try:
+                    return await asyncio.wait_for(self._exchange(frame), timeout=self._timeout)
+                except (asyncio.TimeoutError, OSError, IpcError) as exc:
+                    self._drop()
+                    raise IpcError(f"ipc request {kind} failed") from exc
+                except asyncio.CancelledError:
+                    self._drop()
+                    raise
+        finally:
+            self._queue_diagnostic.finish(token, time.monotonic())
 
     async def _exchange(self, frame: bytes) -> Message:
         if self._writer is None or self._reader is None:

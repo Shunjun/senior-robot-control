@@ -6,7 +6,7 @@ All gains, uncertainty, acceleration/jerk and drive bounds below are hypotheses
 for bounded Linux verification, not measurements or acceptance freezes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from senior_control.models import Velocity
 from senior_control.motion.acceleration_model import AccelerationModel
@@ -15,6 +15,9 @@ from senior_control.motion.controller import ControllerConfig
 from senior_control.motion.fusion import FusionConfig
 from senior_control.motion.observations import AdmissionConfig, Source, SourceRule
 from senior_control.motion.temporal import TemporalConfig
+from senior_control.runtime.diagnostics import DiagnosticsSettings
+from senior_control.sensors.input_config import OptionalMotionInput
+from senior_control.sensors.policy import default_policy
 
 PROFILE_ID = "fortress-candidate-unvalidated-v1"
 
@@ -22,7 +25,10 @@ PROFILE_ID = "fortress-candidate-unvalidated-v1"
 @dataclass(frozen=True)
 class SimulationMotionProfile:
     profile_id: str = PROFILE_ID
-    max_age: float = 0.8
+    gps_input: OptionalMotionInput | None = None
+    rgbd_input: OptionalMotionInput | None = None
+    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
+    max_age: float = field(default_factory=lambda: default_policy().hard_age_s)
     accel: float = 0.3
     decel: float = 0.3
     jerk: float = 1.0
@@ -57,6 +63,10 @@ class SimulationMotionProfile:
     simulation_only: bool = True
     unvalidated: bool = True
 
+    def __post_init__(self):
+        # //Compatible: preserve old constructor shape, not its independent age policy.
+        object.__setattr__(self, "max_age", default_policy().hard_age_s)
+
     def perception_no_return_policy(self, frame_id: str, range_max: float) -> NoReturnPolicy:
         # //Compatible: ideal GPU lidar sensors6 6.9.0 SetClamp(false),
         # rendering6 6.6.4 and ros_gz_bridge 0.244.26 retain REP117 +Inf.
@@ -79,19 +89,19 @@ class SimulationMotionProfile:
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(
             tuple(SourceRule(s, self.max_age, 0.4, 0.1, 2.0) for s in Source),
-            5,
-            0.5,
+            1,
+            0.0,
             self.cap,
             self.degraded_cap,
-            0.2,
-            0.1,
+            self.max_age,
+            self.max_age,
             0.05,
-            0.3,
+            self.max_age,
             16,
         )
 
     def temporal(self) -> TemporalConfig:
-        return TemporalConfig(2.0, 512, 0.15, 0.15, 0.15, True)
+        return TemporalConfig(2.0, 512, self.max_age, self.max_age, self.max_age, True)
 
     def fusion(self) -> FusionConfig:
         return FusionConfig((), self.cap, self.degraded_cap, 0.4, 0.2)

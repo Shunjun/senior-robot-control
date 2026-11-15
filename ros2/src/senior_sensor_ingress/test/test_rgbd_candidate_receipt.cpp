@@ -2,6 +2,7 @@
 #include <chrono>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -31,6 +32,19 @@ public:
   static bool accept_clock(RgbdCandidateReceipt & node, int64_t ros, double steady) {
     return node.clocks_ok(ros, steady);
   }
+  static std::optional<int64_t> capture_age(RgbdCandidateReceipt & node,
+    const senior_motion_msgs::msg::RawCaptureHeader & header, int64_t ros, double steady) {
+    std::lock_guard<std::mutex> lock(node.mutex_);
+    return node.capture_age(header, ros, steady);
+  }
+  static uint64_t invalid_clocks(RgbdCandidateReceipt & node) {
+    std::lock_guard<std::mutex> lock(node.mutex_);
+    return node.sensor_ages_.invalid_clock;
+  }
+  static uint64_t observed_ages(RgbdCandidateReceipt & node) {
+    std::lock_guard<std::mutex> lock(node.mutex_);
+    return node.sensor_ages_.count;
+  }
   static void fill_producer_retirement(RgbdCandidateReceipt & node) {
     std::lock_guard<std::mutex> lock(node.mutex_);
     for (int i = 0; i < 64; ++i) node.retired_producer_gids_.insert("retired-" + std::to_string(i));
@@ -40,6 +54,19 @@ public:
 
 using namespace std::chrono_literals;
 namespace {
+rclcpp::NodeOptions clock_test_options()
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("sensor_soft_age_s", 0.3);
+  options.append_parameter_override("sensor_hard_age_s", 1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s", 5.0);
+  options.append_parameter_override("queue_warn_count", 32);
+  options.append_parameter_override("queue_warn_ratio", 0.75);
+  options.append_parameter_override("queue_warn_repeat_s", 5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio", 0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms", 300.0);
+  return options;
+}
 bool wait_for(const std::function<bool()> & predicate, std::chrono::milliseconds timeout = 5s)
 {
   const auto end = std::chrono::steady_clock::now() + timeout;
@@ -72,6 +99,14 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_egress_test"),
                                rclcpp::Parameter("camera_frame", "camera")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto raw = std::make_shared<rclcpp::Node>("raw_receipt");
   auto tf = std::make_shared<rclcpp::Node>("static_tf_receipt");
@@ -288,6 +323,14 @@ TEST(RgbdCandidateReceipt, ProducerBootChangeOnSameGidRevokesImmediately)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_boot_test")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto worker = std::make_shared<rclcpp::Node>("rgbd_candidate_producer");
   auto observer = std::make_shared<rclcpp::Node>("d2a_boot_observer");
@@ -334,6 +377,14 @@ TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_raw_restart")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto raw = std::make_shared<rclcpp::Node>("raw_receipt");
   auto observer = std::make_shared<rclcpp::Node>("d2a_restart_observer");
@@ -400,6 +451,14 @@ TEST(RgbdCandidateReceipt, SameCurrentHeaderWithDifferentPixelsRevokes)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_duplicate_raw")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto raw = std::make_shared<rclcpp::Node>("raw_receipt");
   auto observer = std::make_shared<rclcpp::Node>("d2a_duplicate_observer");
@@ -458,6 +517,14 @@ TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_fence"),
     rclcpp::Parameter("camera_frame", "camera")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto source = std::make_shared<rclcpp::Node>("static_tf_receipt");
   auto observer = std::make_shared<rclcpp::Node>("d2a_tf_fence_observer");
@@ -509,6 +576,14 @@ TEST(RgbdCandidateReceipt, RetirementExhaustionRevokesActualProducerOnGraphLoss)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_cap")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto worker = std::make_shared<rclcpp::Node>("rgbd_candidate_producer");
   auto observer = std::make_shared<rclcpp::Node>("d2a_cap_observer");
@@ -550,6 +625,14 @@ TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUniqu
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_pending")});
+  options.append_parameter_override("sensor_soft_age_s",0.3);
+  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
+  options.append_parameter_override("queue_warn_count",32);
+  options.append_parameter_override("queue_warn_ratio",0.75);
+  options.append_parameter_override("queue_warn_repeat_s",5.0);
+  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
+  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
   auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
   auto source = std::make_shared<rclcpp::Node>("static_tf_receipt");
   const std::string topic = "/d2a_tf_pending/tf";
@@ -603,9 +686,63 @@ TEST(RgbdCandidateReceipt, ClockRollbackRequiresRestart)
   auto cleanup = [](int *) {rclcpp::shutdown();};
   int sentinel = 0;
   std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
-  senior_sensor_ingress::RgbdCandidateReceipt receipt;
+  senior_sensor_ingress::RgbdCandidateReceipt receipt(clock_test_options());
   EXPECT_FALSE(Peer::accept_clock(receipt, 0, 1.0));
   EXPECT_TRUE(Peer::accept_clock(receipt, 100, 2.0));
   EXPECT_FALSE(Peer::accept_clock(receipt, 99, 3.0));
   EXPECT_FALSE(Peer::accept_clock(receipt, 101, 4.0));
+}
+
+
+TEST(RgbdCandidateReceipt, HeaderAgeBoundaryRejectsInputWithoutThrowingOrFakeAge)
+{
+  using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
+  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  rclcpp::init(0, nullptr);
+  auto cleanup = [](int *) {rclcpp::shutdown();};
+  int sentinel = 0;
+  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
+  senior_sensor_ingress::RgbdCandidateReceipt receipt(clock_test_options());
+  Header good;
+  good.stamp.sec = good.received_ros.sec = 1;
+  good.received_steady = 10.;
+  struct Case {Header header; int64_t ros; double steady;};
+  std::vector<Case> invalid;
+  Header changed = good;
+  changed.received_ros.sec = 2;
+  invalid.push_back({changed, 1500000000LL, 10.1}); // received > now > stamp
+  invalid.push_back({good, 999999999LL, 10.1});   // ROS rollback
+  invalid.push_back({good, 1500000000LL, 9.9});  // steady rollback
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  for (const double bad : {nan, inf, -inf}) {
+    changed = good; changed.received_steady = bad;
+    invalid.push_back({changed, 1500000000LL, 10.1});
+  }
+  const double largest = std::numeric_limits<double>::max();
+  for (const double bad : {nan, inf, -inf, largest})
+    invalid.push_back({good, 1500000000LL, bad});
+  changed = good; changed.received_steady = -largest;
+  invalid.push_back({changed, 1500000000LL, largest});
+  changed = good; changed.received_steady = 0.;
+  invalid.push_back({changed, 1500000000LL, 9e9+1.});
+  changed = good; changed.stamp.nanosec = 1000000000u;
+  invalid.push_back({changed, 1500000000LL, 10.1});
+  for (size_t i=0; i<invalid.size(); ++i) {
+    SCOPED_TRACE(i);
+    std::optional<int64_t> result;
+    EXPECT_NO_THROW(result = Peer::capture_age(receipt, invalid[i].header,
+      invalid[i].ros, invalid[i].steady));
+    EXPECT_FALSE(result);
+  }
+  EXPECT_EQ(Peer::invalid_clocks(receipt), invalid.size());
+  EXPECT_EQ(Peer::observed_ages(receipt), 0u); // no age=0 for rejected clocks
+  const auto current = Peer::capture_age(receipt, good, 1500000000LL, 10.1);
+  ASSERT_TRUE(current); EXPECT_EQ(*current, 500000000LL);
+  const auto expired = Peer::capture_age(receipt, good, 2000000000LL, 10.1);
+  ASSERT_TRUE(expired); EXPECT_EQ(*expired, 1000000000LL); // expired, not invalid
+  changed = good; changed.received_steady = largest;
+  const auto same_epoch = Peer::capture_age(receipt, changed, 1500000000LL, largest);
+  ASSERT_TRUE(same_epoch); EXPECT_EQ(*same_epoch, 500000000LL);
+  EXPECT_EQ(Peer::invalid_clocks(receipt), invalid.size());
 }

@@ -113,6 +113,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     value = module.CommandNode.__new__(module.CommandNode)
+    value._motion_control_configured = True
     clock = SimpleNamespace(now=10.0)
     value._monotonic_clock = SimpleNamespace(monotonic=lambda: clock.now)
     value._owner_boot = "command-boot"
@@ -198,6 +199,9 @@ def test_prepared_waits_then_original_deadline_release_and_new_authority(node: A
     actual = node.output[-1]
     assert actual.source_kind == "manual" and actual.source_id == identity
     assert actual.vx == 5 / 9 and actual.wz == 1
+    assert actual.manual_linear == 1
+    assert actual.manual_linear_limit == 5 / 9
+    assert actual.degraded_linear_limit == 0.3
     assert actual.received_steady == 19.99 and actual.steady_deadline == 20.29
     assert call(node, envelope("control.release", {"authority_id": identity}, seq=3))["ok"] is True
     assert node.output[-1].close_reason == "release"

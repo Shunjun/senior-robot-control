@@ -11,6 +11,7 @@ from rclpy.time import Time
 from senior_motion_msgs.msg import BoundedRawLaserScan, BoundedSafetyScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_robot.motion_lifecycle import run
 
@@ -33,7 +34,7 @@ class SafetyScanIngress(Node):
         self.declare_parameter("observation_max_age", -1.0)
         self._body = str(self.get_parameter("body_frame").value)
         self._raw_topic = str(self.get_parameter("scan_topic").value)
-        self._max_age = float(self.get_parameter("observation_max_age").value)
+        self._max_age = default_policy().hard_age_s
         if not self._body or len(self._body.encode()) > MAX_FRAME_BYTES or not self._raw_topic:
             raise ValueError("invalid safety ingress frame or raw topic")
         self._admission = (

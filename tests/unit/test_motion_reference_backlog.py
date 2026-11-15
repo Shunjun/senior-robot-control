@@ -29,7 +29,14 @@ class Node:
         self.output = []
         self._depth_policy = "laser_only"
         scan = case["scan"]
-        self._scans = [N(message=N(**scan), stamp=1.4, received=scan["ingress_steady"])]
+        self._scans = [
+            N(
+                message=N(**scan),
+                stamp=1.4,
+                received=scan["ingress_steady"],
+                received_ros=scan["ingress_ros"],
+            )
+        ]
 
     def create_publisher(self, *_args):
         return N(publish=self.messages.append)
@@ -73,8 +80,8 @@ def replay(monkeypatch):
     clock = N(steady=old["sampled_steady"], ros=old["sampled_ros"])
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
     node = Node(case, clock)
-    core = module.MotionCoreOutput(node, SimulationMotionProfile())
-    node.sub.callback(N(data=json.dumps(old)), {"publisher_gid": b"fusion"})
+    core = module.MotionCoreOutput(node, SimulationMotionProfile(), ingress_factory=None)
+    core._on_reference(N(data=json.dumps(old)), {"publisher_gid": b"fusion"})
     # Restore the captured one-way phase checkpoint; never invent body speed.
     core._startup_motion_unconfirmed = case["tick"]["startup_unconfirmed"]
     core.controller._last_now = case["previous_tick"]["sampled_steady"]
@@ -84,62 +91,66 @@ def replay(monkeypatch):
     core.close()
 
 
-def test_ready_latest_snapshot_is_consumed_before_control_tick(replay):
+def offer(replay, packet, gid=b"fusion"):
+    replay.core._on_reference(N(data=json.dumps(packet)), {"publisher_gid": gid})
+
+
+def test_raw_updates_are_consumed_without_second_fused_snapshot_queue(replay):
     for packet in replay.case["packets"][1:]:
-        replay.node.sub.ready.append((N(data=json.dumps(packet)), {"publisher_gid": b"fusion"}))
+        offer(replay, packet)
     replay.core.tick()
-    assert replay.core._reference_sequence == 88
     state = json.loads(replay.node.messages[-1].data)
-    assert state["body_reference"] is not None
-    assert state["fault_revision"] == 0
+    assert replay.core._reference_sequence == 88
+    assert state["body_reference"] is not None and state["fault_revision"] == 0
     assert replay.node.output[-1][0] == Velocity(0, 0)
-    # Original admission owner's time is retained; consuming never refreshes it.
-    laser = next(s for s in replay.case["packets"][-1]["sources"] if s["source"] == "laser")
-    assert state["body_reference"]["computed_steady"] == laser["sample"]["received_steady"]
-    assert state["body_reference"]["valid_until_steady"] == laser["valid_until_steady"]
+    assert replay.core._subscription is None
+    roots = replay.core.sensors.latest.independent_axes[0].roots
+    assert state["body_reference"]["valid_until_steady"] <= min(
+        r.received_steady + 1 - (r.received_ros - r.stamp_ros) for r in roots
+    )
 
 
-def test_missing_or_wrong_source_snapshot_does_not_relax_prediction_window(replay):
-    packet = copy.deepcopy(replay.case["packets"][-1])
-    replay.node.sub.ready.append((N(data=json.dumps(packet)), {"publisher_gid": b"other"}))
-    replay.core.tick()
-    state = json.loads(replay.node.messages[-1].data)
+def test_wrong_snapshot_publisher_cannot_replace_live_original_samples(replay):
+    offer(replay, replay.case["packets"][-1], b"other")
     assert replay.core._reference_sequence == 86
-    assert state["body_reference"] is None
-    assert state["mode"] == "execution_fault" and state["fault_revision"] == 1
+    _, tracking, _ = replay.core._inputs(replay.clock.steady)
+    assert tracking is not None  # old .15-second projection rejection was removed
+    replay.clock.steady += 1
+    assert replay.core._inputs(replay.clock.steady)[1] is None
 
 
-def test_queued_sequence_cannot_roll_back_the_admitted_frontier(replay):
+def test_reversed_updates_cannot_roll_back_raw_frontiers(replay):
     for packet in reversed(replay.case["packets"][1:]):
-        replay.node.sub.ready.append((N(data=json.dumps(packet)), {"publisher_gid": b"fusion"}))
-    replay.core.tick()
+        offer(replay, packet)
     assert replay.core._reference_sequence == 88
-    assert json.loads(replay.node.messages[-1].data)["body_reference"] is not None
+    _, tracking, _ = replay.core._inputs(replay.clock.steady)
+    assert tracking is not None
 
 
-def test_fresh_packet_does_not_renew_expired_original_laser_evidence(replay):
+def test_fresh_snapshot_never_renews_original_expired_sensor(replay):
     packet = copy.deepcopy(replay.case["packets"][-1])
-    for source in packet["sources"]:
-        if source["source"] == "laser":
-            source["valid_until_steady"] = replay.clock.steady - 0.001
-    replay.node.sub.ready.append((N(data=json.dumps(packet)), {"publisher_gid": b"fusion"}))
-    replay.core.tick()
-    state = json.loads(replay.node.messages[-1].data)
-    assert replay.core._reference_sequence == 88
-    assert state["body_reference"] is None
-    assert state["mode"] == "execution_fault" and state["fault_revision"] == 1
+    laser = next(r["sample"] for r in packet["sources"] if r["source"] == "laser")
+    laser["received_steady"] -= 2
+    offer(replay, packet)
+    replay.core._inputs(replay.clock.steady)
+    # The malformed replacement cannot invalidate the previous valid original
+    # sample or extend its lifetime; it is still usable until its own deadline.
+    prior = replay.core.sensors.independent
+    assert prior is not None
+    replay.clock.steady = prior.deadline_steady
+    replay.core._inputs(replay.clock.steady)
+    assert replay.core.sensors.independent is None
+    assert replay.core.sensors.tracking is not None  # newer wheel/IMU still available
 
 
-def test_ready_take_remains_bounded_when_new_snapshots_arrive_during_sampling(replay):
-    packet = copy.deepcopy(replay.case["packets"][-1])
-    take = replay.node.sub.take_message
-
-    def arriving(_type, raw):
-        packet["sequence"] += 1
-        replay.node.sub.ready.append((N(data=json.dumps(packet)), {"publisher_gid": b"fusion"}))
-        return take(_type, raw)
-
-    replay.node.sub.take_message = arriving
-    replay.core._consume_ready_reference()
-    assert replay.node.sub.takes == 10
-    assert replay.core._reference_sequence == 98
+def test_repeated_packet_is_not_new_evidence_or_extra_queued_work(replay):
+    packet = replay.case["packets"][-1]
+    offer(replay, packet)
+    replay.core._inputs(replay.clock.steady)
+    sequence = replay.core.sensors.tracking.sequence
+    for _ in range(100):
+        offer(replay, packet)
+        replay.core._consume_ready_reference()
+    replay.core._inputs(replay.clock.steady)
+    assert replay.core.sensors.tracking.sequence == sequence
+    assert len(replay.core.sensors.estimator._frontiers) == 3

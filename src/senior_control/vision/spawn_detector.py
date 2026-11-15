@@ -1,5 +1,6 @@
 """Optional spawned inference bound to original registered RGB-D captures.
 
+
 Only the RGB image crosses into the child. Original identity and sampled depth
 stay in a bounded parent cache; a late result can attach only to its own cache
 entry, never the latest frame. No result qualifies static space or laser masks.
@@ -17,6 +18,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Protocol
 
+from senior_control.runtime.diagnostics import (
+    DiagnosticDeque,
+    PendingCounter,
+    QueueSnapshot,
+    process_diagnostics,
+)
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth import GeometrySample
 from senior_control.vision.detector import Detection, _ultralytics_runtime
 from senior_control.vision.image_codec import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
@@ -194,9 +202,12 @@ class SpawnInferenceWorker:
         timeout_s: float = 5.0,
         retained_capacity: int = 4,
         max_skew_s: float = 0.03,
-        max_result_age_s: float = 0.3,
+        max_result_age_s: float | None = None,
         processor: Processor | None = None,
     ) -> None:
+        max_result_age_s = (
+            default_policy().hard_age_s if max_result_age_s is None else max_result_age_s
+        )
         if (
             not math.isfinite(timeout_s)
             or not 0.05 <= timeout_s <= 30
@@ -204,7 +215,7 @@ class SpawnInferenceWorker:
             or not math.isfinite(max_skew_s)
             or not 0 <= max_skew_s <= 0.2
             or not math.isfinite(max_result_age_s)
-            or not 0 < max_result_age_s <= 0.3
+            or not 0 < max_result_age_s <= default_policy().hard_age_s
             or not _bounded(device, 32)
         ):
             raise ValueError("invalid inference limits")
@@ -221,6 +232,7 @@ class SpawnInferenceWorker:
         self._supervisor: threading.Thread | None = None
         self._process: Any = None
         self._pending: tuple[int, int, ImageFrame] | None = None
+        self._queue_diagnostic = PendingCounter("vision.spawn_detector.pending", 1)
         self._busy = False
         self._generation = 0
         self._serial = 0
@@ -230,7 +242,9 @@ class SpawnInferenceWorker:
         self._identity_failed = False
         self._last_rgb_ns = self._last_depth_ns = 0
         self._retained: OrderedDict[int, RetainedFrame] = OrderedDict()
-        self._results: deque[BoundDetectionResult] = deque(maxlen=retained_capacity)
+        self._results: deque[BoundDetectionResult] = DiagnosticDeque(
+            "vision.spawn_detector.results", maxlen=retained_capacity
+        )
         self._issued: OrderedDict[int, BoundDetectionResult] = OrderedDict()
         self.dropped = 0
         self.failures = 0
@@ -256,6 +270,11 @@ class SpawnInferenceWorker:
         process = self._process
         return bool(process is not None and process.pid is not None and process.is_alive())
 
+    def _discard_pending(self) -> None:
+        if self._pending is not None:
+            self._queue_diagnostic.discard(self._pending[1], time.monotonic())
+        self._pending = None
+
     def _retire_locked(self) -> None:
         if self._active is not None:
             self._retired.add(self._active)
@@ -263,7 +282,7 @@ class SpawnInferenceWorker:
         self._identity = None
         self._identity_failed = False
         self._last_rgb_ns = self._last_depth_ns = 0
-        self._pending = None
+        self._discard_pending()
         self._retained.clear()
         self._results.clear()
         self._issued.clear()
@@ -308,7 +327,7 @@ class SpawnInferenceWorker:
                 self._retained.clear()
                 self._results.clear()
                 self._issued.clear()
-                self._pending = None
+                self._discard_pending()
                 self._generation += 1
                 return False
             if (
@@ -323,12 +342,14 @@ class SpawnInferenceWorker:
             self._serial += 1
             serial = self._serial
             if self._pending is not None:
+                self._queue_diagnostic.discard(self._pending[1], time.monotonic(), overwritten=True)
                 self._retained.pop(self._pending[1], None)
                 self.dropped += 1
             self._retained[serial] = frame
             while len(self._retained) > self._capacity:
                 self._retained.popitem(last=False)
             self._pending = (self._generation, serial, frame.rgb)
+            self._queue_diagnostic.enqueue(serial, time.monotonic())
             if self._supervisor is None:
                 self._supervisor = threading.Thread(target=self._supervise, daemon=True)
                 self._supervisor.start()
@@ -387,6 +408,18 @@ class SpawnInferenceWorker:
                     self._pending = None
                     self._busy = True
                 assert job is not None
+                self._queue_diagnostic.start(job[1], time.monotonic())
+                process_diagnostics().queue(
+                    QueueSnapshot(
+                        "vision.spawn_detector.jobs",
+                        None,
+                        1,
+                        running=1,
+                        depth_basis="no_child_started_ack",
+                    ),
+                    time.monotonic(),
+                    owner=self,
+                )
                 if process is None or not process.is_alive():
                     if jobs is not None:
                         jobs.cancel_join_thread()
@@ -420,6 +453,18 @@ class SpawnInferenceWorker:
                             break
                 with self._condition:
                     self._busy = False
+                    self._queue_diagnostic.finish(job[1], time.monotonic())
+                    process_diagnostics().queue(
+                        QueueSnapshot(
+                            "vision.spawn_detector.jobs",
+                            None,
+                            1,
+                            running=0,
+                            depth_basis="no_child_started_ack",
+                        ),
+                        time.monotonic(),
+                        owner=self,
+                    )
                     if self._closed:
                         break
                     if response is None:
@@ -429,12 +474,12 @@ class SpawnInferenceWorker:
                         self._retained.pop(job[1], None)
                         if job[0] == self._generation:
                             self._generation += 1
-                            self._pending = None
+                            self._discard_pending()
                             self._retained.clear()
                             self._issued.clear()
                     elif response[0] == "disabled":
                         self._status = ("disabled", response[1])
-                        self._pending = None
+                        self._discard_pending()
                         self._results.clear()
                         self._retained.clear()
                         self._issued.clear()
@@ -445,7 +490,7 @@ class SpawnInferenceWorker:
                         self._retained.pop(response[2], None)
                         if response[1] == self._generation:
                             self._generation += 1
-                            self._pending = None
+                            self._discard_pending()
                             self._retained.clear()
                             self._issued.clear()
                     elif response[0] == "result":
@@ -473,10 +518,11 @@ class SpawnInferenceWorker:
                 self._status = ("failed", "worker_supervisor_failed")
                 self._results.clear()
                 self._issued.clear()
-                self._pending = None
+                self._discard_pending()
                 self._busy = False
                 self._condition.notify_all()
         finally:
+            self._queue_diagnostic.reset(time.monotonic())
             if process is not None and process.pid is not None:
                 if process.is_alive():
                     process.terminate()
@@ -492,7 +538,7 @@ class SpawnInferenceWorker:
     def close(self) -> None:
         with self._condition:
             self._closed = True
-            self._pending = None
+            self._discard_pending()
             self._retained.clear()
             self._results.clear()
             self._issued.clear()

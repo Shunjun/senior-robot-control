@@ -226,3 +226,14 @@ authority 绑定可信的 boot、车辆、agent_epoch、controller_generation �
 T3b 该阶段接口：原Observation别名RateIntervalObservation仅用于真实声明的速率区间，PointObservation不伪造区间，DeltaObservation保留位移语义与T_body_sensor。AdmissionOwner以有界接纳事件/游标输出快照，解析器不会漏掉快照之间的burst；中断、源换代和游标缺口清缓存。TemporalResolver对点源使用有限因果ZOH，不要求30/50Hz时间戳相等；gyro仅给yaw，wheel的SE2预测须显式声明非完整侧向运动假设且仍不作为独立真值。GPS需要已知heading、同窗gyro和已知外参，保留一阶传播近似及适用域，不称严格保守真速界。
 
 NumericalFusion只对显式可信统计模型的分量作w=.5 CI，源间相关未知不假独立；不解决偏置或错误匹配。联合统计包络使用支持维数d乘边际方差的对角包络，原协方差/交叉项另保留；upper无适用确定性模型时始终None。source_health直接来自唯一准入owner；缺分量的分量参考保留mask与原样本键，完整average可空，不能因此永久禁用合法轮速退化。当前点参考附原时刻且predicted_at=None，不把旧均值重标当前。融合器只维护每源信息序号水印，重复tick/重编号查询不作为新信息，也不递归缩小精度。窗口内不一致可报告并拒绝本窗相关参考，不武断归罪GPS/滑移；外部显式故障与连续恢复仍由唯一owner处理。内部cap目标是配置策略，恢复平滑和车辆许可分别归T5/T4；本轮纯模块不授许可。
+
+
+## 2026-11-15 用户明确修订：统一时效、逐轴估计与诊断
+
+本次要求覆盖旧恢复样本强门、0.15/0.3/0.5秒同义传感器早拒绝和三分量齐全要求：实车/仿真动态观测共用0.3秒软降可信、1秒硬失效；唯一MotionEstimation逐轴消费原始采集/接收时间、质量和独立来源根，时间对齐后一致加权、二路冲突取原始新者、多路取一致组，单一来源可估计。vy缺测按0标假设，vx/wz缺轴预测受自身原始证据硬截止，另一轴不能续命。PoseEstimation/SpaceEstimation分别计算对应结果，缺测不代表无障碍。手动TTL、急停、任务和计算预算语义保留。
+
+统一有界年龄DEBUG默认5秒；处理队列超过统一可配置数量/容量比例或等待阈值时限频WARNING，可靠pending/等待/丢弃/覆盖才报，未知明确null，不新增禁行条件。协调者 msg_170d686f2959 已批准按[本次计划](../plans/2026-11-15-unified-sensor-estimation.md)实施；[具体算法](2026-11-15-unified-sensor-estimation-design.md)及[证据报告](../../testing/2026-11-15-unified-estimation-implementation.md)说明软件初始参数和未验证边界。本修订不是ROS/实车验收；独立停车速度域、decel、自回波学习和旧兼容链清理留给排队任务。
+
+### 2026-11-15 停车模型后续阶段记录
+
+已按用户本阶段授权将停车速度域接入统一MotionEstimate，并将仓库硬件草稿decel改为0.5 m/s²的软件估算；不再使用缺独立body即±最大车速策略。独立静止/复位证据、碰撞/未知空间/制动与车体扫掠保护保留。具体职责、未实测假设及仍存在的保守候选限制见[本阶段记录](../plans/2026-11-15-stopping-fused-input.md)，纯模块370项回归见[测试证据](../../testing/2026-11-15-stopping-fused-input.md)。本记录推进前节排队停车/decel项，不代表ROS/实车验收；自回波、GPS朝向、兼容链清理及整体审查仍留后续任务。

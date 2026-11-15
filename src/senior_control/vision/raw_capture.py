@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from senior_control.sensors.policy import sensor_current
+
 
 @dataclass(frozen=True)
 class RawCaptureHeader:
@@ -167,8 +169,14 @@ class RawCaptureAdmission:
             or header.received_ros_ns <= 0
             or not math.isfinite(header.received_steady)
             or not math.isfinite(now_steady)
-            or not 0 <= now_ros_ns - header.received_ros_ns <= self.max_age_s * 1e9
-            or not 0 <= now_steady - header.received_steady <= self.max_age_s
+            or not sensor_current(
+                stamp_ros=header.stamp_ns / 1e9,
+                received_ros=header.received_ros_ns / 1e9,
+                received_steady=header.received_steady,
+                now_ros=now_ros_ns / 1e9,
+                now_steady=now_steady,
+                max_age_s=self.max_age_s,
+            )
         ):
             self.latest = None
             self.generation += 1

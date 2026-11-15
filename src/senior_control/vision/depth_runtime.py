@@ -7,8 +7,10 @@ particular neither a valid pixel nor a column hit qualifies a swept 3-D volume.
 import hashlib
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from senior_control.runtime.diagnostics import DiagnosticDeque
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth import (
     CameraCalibration,
     GeometryConfig,
@@ -72,7 +74,7 @@ class DepthGeometrySettings:
     row_stride: int
     column_stride: int
     body_frame: str
-    tf_max_age_ns: int = 200_000_000
+    tf_max_age_ns: int = field(default_factory=lambda: round(default_policy().hard_age_s * 1e9))
 
 
 @dataclass(frozen=True)
@@ -98,8 +100,8 @@ class DepthPairBuffer:
             raise ValueError("invalid depth pairing limits")
         self.max_age_s = max_age_s
         self.pair_wait_s = pair_wait_s
-        self._depth: deque[DepthPacket] = deque()
-        self._info: deque[CameraInfoFrame] = deque()
+        self._depth: deque[DepthPacket] = DiagnosticDeque("vision.depth_info_pair.depth", 4)
+        self._info: deque[CameraInfoFrame] = DiagnosticDeque("vision.depth_info_pair.info", 16)
         self._failure: str | None = None
         self._last_depth_ns = 0
         self._last_info_ns = 0

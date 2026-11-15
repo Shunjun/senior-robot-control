@@ -1,4 +1,4 @@
-# Diagnostic proposal only: hard_error_qualified MUST be false.
+# Statistical measurement candidate: hard_error_qualified MUST be false.
 string<=64 producer_boot_id
 string<=128 producer_gid
 uint64 owner_generation
