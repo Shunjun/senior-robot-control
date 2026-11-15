@@ -4,6 +4,8 @@ import math
 import os
 from pathlib import Path
 
+from senior_control.models import Pose2D
+from senior_control.motion.learning_pose_history import LearningPose, LearningPoseHistory
 from senior_control.sensors.policy import default_policy
 
 
@@ -15,6 +17,12 @@ class StartupLearning:
         self.reason = "no_program_start_context"
         self.distance = 0.0
         self.motion_error = 0.0
+        self.position_error = 0.0
+        self.yaw_error = 0.0
+        self.pose_history = LearningPoseHistory()
+        self.validation_after_ros = None
+        self._frame_stamps = set()
+        self.previous_ros = None
         self.motion_radius = 0.0
         self.linear_error_mps = linear_error_mps
         self.yaw_error_rps = yaw_error_rps
@@ -66,9 +74,7 @@ class StartupLearning:
     def advance(self, estimate, wheel, *, now, stationary):
         if not self.active:
             return
-        if self.started is None:
-            self.started = now
-        if now < self.started or now - self.started > 30:
+        if self.started is not None and (now < self.started or now - self.started > 30):
             self.state, self.reason = "failed", "learning_time_budget"
             return
         if estimate is None or not estimate.healthy:
@@ -96,14 +102,18 @@ class StartupLearning:
             self.samples = self.samples + 1 if stationary else 0
             if self.samples >= 5:
                 self.state, self.reason = "sampling", "physical_interior_prior"
+                self.started = now
             self.previous = now
+            self.previous_ros = estimate.computed_ros
+            self._record_pose(estimate, stationary)
             return
-        dt = now - self.previous if self.previous is not None else 0
-        self.previous = now
-        if dt < 0 or dt >= default_policy().hard_age_s:
+        steady_gap = now - self.previous if self.previous is not None else 0
+        dt = estimate.computed_ros - self.previous_ros if self.previous_ros is not None else 0
+        self.previous, self.previous_ros = now, estimate.computed_ros
+        if dt < 0 or steady_gap < 0 or steady_gap >= default_policy().hard_age_s:
             self.interrupt("motion_integration_gap")
             return
-        if self.state in {"moving", "braking"}:
+        if self.state in {"moving", "braking", "validating"}:
             self.distance += max(0.0, axis.value) * dt
             self.yaw += gyro.value * dt
             independent = estimate.independent_axes
@@ -128,7 +138,9 @@ class StartupLearning:
                 yaw_error = (
                     independent[1].error if independent[1].error is not None else self.yaw_error_rps
                 )
-                self.motion_error += (linear_error + self.motion_radius * yaw_error) * dt
+                self.position_error += linear_error * dt
+                self.yaw_error += yaw_error * dt
+                self.motion_error = self.position_error + self.motion_radius * self.yaw_error
                 from senior_control.models import Pose2D
                 from senior_control.motion.kinematics import compose, exponential
 
@@ -144,28 +156,56 @@ class StartupLearning:
                 self.motion_verified = False
             if abs(self.yaw) > 0.05 or axis.value < -0.01:
                 self.interrupt("not_straight_forward")
-            elif self.distance >= 0.148:
+            elif self.state == "moving" and self.distance >= 0.148:
                 self.state, self.reason = "braking", "target_distance_reached"
             if self.state == "braking" and stationary:
                 self.state, self.reason = "validating", "post_motion_validation"
+                self.validation_after_ros = estimate.computed_ros
+        self._record_pose(estimate, stationary)
+
+    def _record_pose(self, estimate, stationary):
+        self.pose_history.add(
+            LearningPose(
+                estimate.computed_ros,
+                Pose2D(self.pose_x, self.pose_y, self.pose_yaw),
+                self.position_error,
+                self.yaw_error,
+                stationary,
+                self.motion_verified,
+                estimate.generation,
+            )
+        )
 
     def frame(self, model, observation):
-        from senior_control.models import Pose2D
-
-        if self.provisional:
-            model.observe(
-                observation,
-                Pose2D(self.pose_x, self.pose_y, self.pose_yaw),
-                force=self.state in {"sampling", "validating"},
-            )
+        stamp = observation.scan.stamp
+        key = round(stamp * 1e9)
+        sample = self.pose_history.at(stamp)
+        if sample is None or key in self._frame_stamps or not self.provisional:
+            return
+        if len(self._frame_stamps) >= 2048:
+            self.interrupt("learning_frame_budget")
+            return
+        self._frame_stamps.add(key)
+        retained = model.observe(
+            observation,
+            sample.pose,
+            pose_error_m=sample.position_error_m,
+            pose_yaw_error_rad=sample.yaw_error_rad,
+            force=self.state in {"sampling", "validating"},
+        )
         if self.state == "sampling" and len(model.frames) >= 5:
             self.state, self.reason = "moving", "learning_forward"
-        elif self.state == "validating":
+        elif (
+            self.state == "validating"
+            and retained
+            and self.validation_after_ros is not None
+            and stamp >= self.validation_after_ros
+            and sample.stationary
+        ):
             self.validation_samples += 1
             if self.validation_samples >= 5:
                 count = model.validate(
                     independent_motion=(self.motion_verified and self.independent_distance >= 0.08),
-                    motion_error_m=self.motion_error,
                 )
                 self.state = (
                     "completed"

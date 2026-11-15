@@ -29,6 +29,11 @@ def side_observation(distance):
     return filter_self(scan, DeviceProfile(footprint=BOUNDARY))
 
 
+def record(model, obs, pose):
+    # Distinct capture timestamps for the pure model's moving-frame fixtures.
+    model.observe(replace(obs, scan=replace(obs.scan, stamp=10 + pose.x)), pose)
+
+
 def test_provisional_is_endpoint_local_and_preserves_occlusion():
     m = SelfReturnModel(BOUNDARY, error_m=0.01)
     result = m.filter(observation(0.15), provisional=True)
@@ -42,7 +47,7 @@ def test_provisional_is_endpoint_local_and_preserves_occlusion():
 def test_model_requires_independent_motion_and_world_hypothesis_rejection():
     m = SelfReturnModel(BOUNDARY, error_m=0.005)
     for i in range(12):
-        m.observe(side_observation(0.15), Pose2D(i * 0.015, 0, 0))
+        record(m, side_observation(0.15), Pose2D(i * 0.015, 0, 0))
     assert m.validate(independent_motion=False) == 0
     assert m.validate(independent_motion=True) == 1
     assert m.filter(side_observation(0.15), provisional=False).rays[180].kind == "self"
@@ -53,7 +58,7 @@ def test_model_requires_independent_motion_and_world_hypothesis_rejection():
 def test_parallel_surface_and_repeated_points_remain_ambiguous():
     m = SelfReturnModel(BOUNDARY, error_m=0.01)
     for _ in range(12):
-        m.observe(observation(0.15), Pose2D(0, 0, 0))
+        record(m, observation(0.15), Pose2D(0, 0, 0))
     assert m.validate(independent_motion=True) == 0
 
 
@@ -87,14 +92,14 @@ def test_world_compatible_repeated_returns_never_become_learned():
     rays = tuple(RayEvidence(i, (0, 0), (0.15 + i * 0.015, 0), "hit") for i in range(20))
     frame = replace(base, rays=rays, external_hits=rays)
     for i in range(12):
-        m.observe(frame, Pose2D(i * 0.015, 0, 0))
+        record(m, frame, Pose2D(i * 0.015, 0, 0))
     assert m.validate(independent_motion=True) == 0
 
 
 def test_outside_following_object_and_device_removal_do_not_leave_a_mask():
     m = SelfReturnModel(BOUNDARY, error_m=0.005)
     for i in range(12):
-        m.observe(observation(1), Pose2D(i * 0.015, 0, 0))
+        record(m, observation(1), Pose2D(i * 0.015, 0, 0))
     assert m.validate(independent_motion=True) == 0
     assert m.filter(observation(1), provisional=True).external_hits
 
@@ -115,6 +120,7 @@ def test_owner_finishes_once_and_marks_wheel_only_motion_ambiguous(tmp_path):
             deadline_steady=i + 1,
         )
         return N(
+            computed_ros=i / 10,
             healthy=True,
             generation=1,
             vx=axis,
@@ -122,18 +128,20 @@ def test_owner_finishes_once_and_marks_wheel_only_motion_ambiguous(tmp_path):
             independent_axes=None,
         )
 
-    for i in range(1, 6):
-        owner.advance(estimate(i, 0), None, now=i * 0.1, stationary=True)
-    for _ in range(5):
-        owner.frame(m, observation(0.15))
+    for i in range(1, 11):
+        owner.advance(estimate(i, 0), 0.0, now=i / 10, stationary=True)
+        obs = observation(0.15)
+        owner.frame(m, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
     assert owner.state == "moving"
-    for i in range(6, 37):
-        owner.advance(estimate(i, 0.05), 0.05, now=i * 0.1, stationary=False)
-        owner.frame(m, observation(0.15))
+    for i in range(11, 42):
+        owner.advance(estimate(i, 0.05), 0.05, now=i / 10, stationary=False)
+        obs = observation(0.15)
+        owner.frame(m, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
     assert owner.distance >= 0.148
-    owner.advance(estimate(37, 0), None, now=3.7, stationary=True)
-    for _ in range(5):
-        owner.frame(m, observation(0.15))
+    for i in range(42, 48):
+        owner.advance(estimate(i, 0), 0.0, now=i / 10, stationary=True)
+        obs = observation(0.15)
+        owner.frame(m, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
     assert owner.state == "ambiguous" and not owner.provisional
     assert owner.velocity == 0 and not m.learned
     assert StartupLearning(tmp_path / "claim").state == "interrupted"
@@ -157,7 +165,7 @@ def test_zero_error_still_requires_strict_interior_and_never_expands_boundary():
 def test_learned_local_support_never_hides_an_obstacle_behind_equipment():
     m = SelfReturnModel(BOUNDARY, error_m=0.005)
     for i in range(12):
-        m.observe(side_observation(0.15), Pose2D(i * 0.015, 0, 0))
+        record(m, side_observation(0.15), Pose2D(i * 0.015, 0, 0))
     assert m.validate(independent_motion=True) == 1
     hidden = m.filter(side_observation(0.15), provisional=False)
     assert all(ray.index != 180 for ray in hidden.free_rays)
@@ -167,7 +175,7 @@ def test_learned_local_support_never_hides_an_obstacle_behind_equipment():
 def test_unobserved_world_prediction_cannot_be_rejected_behind_the_device():
     m = SelfReturnModel(BOUNDARY, error_m=0.005)
     for i in range(12):
-        m.observe(observation(0.15), Pose2D(i * 0.015, 0, 0))
+        record(m, observation(0.15), Pose2D(i * 0.015, 0, 0))
     assert m.validate(independent_motion=True) == 0
 
 
@@ -193,18 +201,28 @@ def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_p
             )
 
         x, y, w = axis(vx), axis(0), axis(0)
-        return N(healthy=True, generation=1, vx=x, vy=y, wz=w, independent_axes=(x, w))
+        return N(
+            computed_ros=i / 10,
+            healthy=True,
+            generation=1,
+            vx=x,
+            vy=y,
+            wz=w,
+            independent_axes=(x, w),
+        )
 
-    for i in range(1, 6):
+    for i in range(1, 11):
         owner.advance(estimate(i, 0), 0.0, now=i / 10, stationary=True)
-    for _ in range(5):
-        owner.frame(model, side_observation(0.15))
-    for i in range(6, 37):
+        obs = side_observation(0.15)
+        owner.frame(model, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
+    for i in range(11, 42):
         owner.advance(estimate(i, 0.05), 0.05, now=i / 10, stationary=False)
-        owner.frame(model, side_observation(0.15))
-    owner.advance(estimate(37, 0), 0.0, now=3.7, stationary=True)
-    for _ in range(5):
-        owner.frame(model, side_observation(0.15))
+        obs = side_observation(0.15)
+        owner.frame(model, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
+    for i in range(42, 48):
+        owner.advance(estimate(i, 0), 0.0, now=i / 10, stationary=True)
+        obs = side_observation(0.15)
+        owner.frame(model, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
     assert owner.state == "completed"
     assert owner.velocity == 0 and model.learned
 

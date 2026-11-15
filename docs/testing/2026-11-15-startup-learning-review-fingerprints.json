@@ -1,0 +1,11 @@
+{
+  "src/senior_control/motion/startup_learning.py": "89a462bb9d0ef7b0560f91ac66532aa24d557963b44bb34c351c72875b024f6b",
+  "src/senior_control/motion/learning_pose_history.py": "a46f556f8d798465e7d6ffaaf94f80894854100a5442eceb328de3ffc1d6edb5",
+  "src/senior_control/safety/self_learning.py": "13263fc4f7ca975b692ac96a5e2e5f5e6d46e089f9b8952101aaf93603da6f44",
+  "src/senior_control/safety/external_motion_features.py": "31e04ffa7a26d06d5888bfa3a1229bce978302c193c3b70c8cffad4c3b7bf456",
+  "ros2/src/senior_robot/senior_robot/motion_core_output.py": "a0da8a509d94b1414989842f1b0ee8c49ce433a8eab120ec110e6dc47da45d70",
+  "tests/unit/test_startup_learning.py": "133470289b4fc2935846c7d1b91cd53c152d87eb323436500af59ba91b0fb1a3",
+  "tests/unit/test_startup_learning_review.py": "502aafd31579f1daf7a24066b6c2620caca07f85805c346f4647292b70447506",
+  "tests/unit/test_startup_learning_cycle.py": "23558c4d4a4a0a8a26eefd1140f2f3d000c4595c3b3191ec91c0c067bf92b5c8",
+  "tests/fixtures/startup_learning_review/baseline_observation_plugin.py": "e1613b5aab0c4e70744b35010af695c79576934ac20fb4937739567648b37c21"
+}

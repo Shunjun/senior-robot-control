@@ -253,6 +253,14 @@ class MotionCoreOutput:
             MotionEvent(kind, source, revision, self.event_sequence), now_steady=now
         )
         if kind in {K.FEEDBACK_LOST, K.EXECUTION_FAULT}:
+            if (
+                kind is K.FEEDBACK_LOST
+                and self.startup.state == "initializing"
+                and self.target.source == "idle"
+            ):
+                # Initialization has not proposed any motion. Sensor/pose
+                # readiness may arrive later; safety state still records loss.
+                return
             self.revoke(kind.value, now=now)
 
     def _on_reference(self, msg: Any, info: Any) -> None:
@@ -644,6 +652,16 @@ class MotionCoreOutput:
         )
 
     def _startup_permission_lost(self, permission, now=None):
+        if self.startup.state == "validating":
+            return (
+                False  # Stationary post-sampling proposes zero; controller still checks stopping.
+            )
+        if (
+            self.startup.state == "braking"
+            and permission.brake is not None
+            and permission.brake.stop_verified
+        ):
+            return False  # Planned, verified stopping does not need a driving permit.
         if self.startup.active and self._learning_motion_emitted and permission.permit is None:
             self._interrupt_learning("learning_permission_lost")
             self._startup_target(time.monotonic() if now is None else now)
@@ -717,6 +735,53 @@ class MotionCoreOutput:
         self.scheduler.stop()
         self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
 
+    def _sync_learning_model(self, message):
+        if self.startup.state == "disabled":
+            return
+        boundary = tuple(self.node._profile().footprint)
+        geometry = (
+            message.source_epoch,
+            message.sensor_x,
+            message.sensor_y,
+            message.sensor_yaw,
+            message.angle_min,
+            message.angle_increment,
+            len(message.ranges),
+            boundary,
+            self.profile.sensor_error,
+            self.profile.orientation_error_rad,
+            self.profile.linear_error,
+            self.profile.yaw_error,
+        )
+        if geometry == self._learning_geometry:
+            return
+        if self._learning_geometry is not None:
+            self._interrupt_learning("scan_or_body_geometry_changed")
+            self.startup.state, self.startup.reason = "interrupted", "scan_or_body_geometry_changed"
+            if self.self_returns is not None:
+                self.self_returns.clear()
+            self._perception_key = None
+            self._filter_signature = None
+            self.space_estimator.invalidate("scan")
+        self._learning_geometry = geometry
+        self.self_returns = None
+        if len(boundary) < 3:
+            self.startup.state, self.startup.reason = "failed", "physical_polygon_missing"
+            raise ValueError("physical_polygon_missing")
+        radius = max(math.hypot(x, y) for x, y in boundary)
+        error = self.profile.sensor_error + radius * abs(
+            math.sin(self.profile.orientation_error_rad)
+        )
+        model = SelfReturnModel(boundary, error_m=error)
+        if self._startup_claim_path is not None:
+            from senior_control.safety.external_motion_features import write_feature_boundary
+
+            write_feature_boundary(self._startup_claim_path, boundary, error)
+        self.self_returns = model
+        self.startup.motion_radius = radius
+        self.startup.linear_error_mps = self.profile.linear_error
+        self.startup.yaw_error_rps = self.profile.yaw_error
+
     def _observation(self, now: float) -> tuple[Any, Pose2D]:
         if self.node._depth_policy != "laser_only":
             raise ValueError("candidate depth adapter not configured")
@@ -747,6 +812,7 @@ class MotionCoreOutput:
         )
         if age.band == "invalid":
             raise ValueError("scan_expired")
+        self._sync_learning_model(m)
         motion = self.sensors.latest
         current = self.sensors.pose_estimator.at(ros, now_ros=ros, now_steady=now, motion=motion)
         alignment_epoch = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
@@ -787,41 +853,6 @@ class MotionCoreOutput:
                 scan, self.node._profile(), self_mask_range_uncertainty=self.profile.sensor_error
             )
             if self.startup.state != "disabled":
-                geometry = (
-                    m.source_epoch,
-                    m.sensor_x,
-                    m.sensor_y,
-                    m.sensor_yaw,
-                    m.angle_min,
-                    m.angle_increment,
-                    len(m.ranges),
-                )
-                if self._learning_geometry is not None and geometry != self._learning_geometry:
-                    self._interrupt_learning("scan_geometry_or_epoch_changed")
-                    if self.self_returns is not None:
-                        self.self_returns.clear()
-                self._learning_geometry = geometry
-                if self.self_returns is None:
-                    boundary = self.node._profile().footprint
-                    if len(boundary) < 3:
-                        self.startup.state, self.startup.reason = (
-                            "failed",
-                            "physical_polygon_missing",
-                        )
-                    else:
-                        radius = max(math.hypot(x, y) for x, y in boundary)
-                        # Body endpoint range/yaw support; world pose error is not extrinsic error.
-                        error = self.profile.sensor_error + radius * abs(
-                            math.sin(self.profile.orientation_error_rad)
-                        )
-                        self.self_returns = SelfReturnModel(boundary, error_m=error)
-                        self.startup.motion_radius = radius
-                        if self._startup_claim_path is not None:
-                            from senior_control.safety.external_motion_features import (
-                                write_feature_boundary,
-                            )
-
-                            write_feature_boundary(self._startup_claim_path, boundary, error)
                 if self.self_returns is not None:
                     if self._learning_scan_key != raw_key:
                         self._learning_scan_key = raw_key

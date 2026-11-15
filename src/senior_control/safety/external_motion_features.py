@@ -30,8 +30,8 @@ def write_feature_boundary(claim: Path, vertices, error_m: float) -> None:
 
 
 @lru_cache(maxsize=4)
-def _boundary(path: str, revision: int):
-    data = json.loads(Path(path).read_text())
+def _boundary(serialized: str):
+    data = json.loads(serialized)
     from senior_control.safety.self_learning import SelfReturnModel
 
     validated = SelfReturnModel(data["physical_polygon"], error_m=data["error_m"])
@@ -41,10 +41,13 @@ def _boundary(path: str, revision: int):
 def external_feature_ranges(observation, claim: Path):
     path = boundary_path(claim)
     try:
-        stat = path.stat()
-        if stat.st_size > 16384:
+        with path.open() as file:
+            serialized = file.read(16385)
+        if len(serialized) > 16384:
             raise ValueError("physical_boundary_size")
-        body, error = _boundary(str(path), stat.st_mtime_ns)
+        # Cache parsed geometry by actual content, never a replaceable file's
+        # timestamp. Atomic writer replacement cannot preserve a stale polygon.
+        body, error = _boundary(serialized)
     except (OSError, KeyError, TypeError) as exc:
         raise ValueError("awaiting_start_physical_boundary") from exc
     ranges = list(observation.scan.ranges)

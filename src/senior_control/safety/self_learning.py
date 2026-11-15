@@ -1,6 +1,7 @@
 """Endpoint-local self-return evidence. Physical containment is a startup prior only."""
 
 import math
+from bisect import bisect_left
 from dataclasses import replace
 
 from shapely.geometry import MultiPoint, Point, Polygon
@@ -22,6 +23,10 @@ class SelfReturnModel:
         self.error = error_m
         self.bounds = self.body.bounds
         self.frames: list[tuple[Pose2D, tuple[tuple[float, float], ...]]] = []
+        self.frame_stamps: list[float] = []
+        self.frame_errors: list[float] = []
+        self.frame_yaw_errors: list[float] = []
+        self.frame_observations = []
         self.learned: tuple[tuple[float, float], ...] = ()
         self.revision = 0
         self.first_observation = None
@@ -48,24 +53,43 @@ class SelfReturnModel:
     def clear(self):
         self.learned = ()
         self.frames.clear()
+        self.frame_stamps.clear()
+        self.frame_errors.clear()
+        self.frame_yaw_errors.clear()
+        self.frame_observations.clear()
         self.first_observation = None
         self.revision += 1
 
-    def observe(self, observation: FilteredObservation, pose: Pose2D, *, force=False):
+    def observe(
+        self,
+        observation: FilteredObservation,
+        pose: Pose2D,
+        *,
+        force=False,
+        pose_error_m=0.0,
+        pose_yaw_error_rad=0.0,
+    ):
         points = tuple(
             r.endpoint for r in observation.rays if r.kind == "hit" and r.endpoint is not None
         )
         if len(points) > 2048:
             raise ValueError("self-return point budget exceeded")
-        # Retain a spatial baseline, not an unbounded high-frequency frame list.
+        stamp = observation.scan.stamp
+        i = bisect_left(self.frame_stamps, stamp)
+        if i < len(self.frame_stamps) and self.frame_stamps[i] == stamp:
+            return
         if len(self.frames) >= 5 and not force:
-            previous = self.frames[-1][0]
-            if math.hypot(pose.x - previous.x, pose.y - previous.y) < 0.005:
+            if any(math.hypot(pose.x - p.x, pose.y - p.y) < 0.005 for p, _ in self.frames):
                 return
         if len(self.frames) < 64:
-            if not self.frames:
-                self.first_observation = observation
-            self.frames.append((pose, points))
+            self.frames.insert(i, (pose, points))
+            self.frame_stamps.insert(i, stamp)
+            self.frame_errors.insert(i, pose_error_m)
+            self.frame_yaw_errors.insert(i, pose_yaw_error_rad)
+            self.frame_observations.insert(i, observation)
+            self.first_observation = self.frame_observations[0]
+            return True
+        return False
 
     def validate(self, *, independent_motion: bool, motion_error_m=0.0) -> int:
         self.learned = ()
@@ -101,9 +125,21 @@ class SelfReturnModel:
             predicted = Point(
                 c * (wx - first.x) + s * (wy - first.y), -s * (wx - first.x) + c * (wy - first.y)
             )
-            if clouds[0][1].distance(
-                predicted
-            ) > tolerance + motion_error_m and self._observed_free(predicted, tolerance):
+            # The exact same complete transformed support drives BOTH tests.
+            # Rotation uncertainty acts at the point's lever arm in each frame.
+            world_error = (
+                tolerance
+                + motion_error_m
+                + self.frame_errors[0]
+                + self.frame_errors[-1]
+                + 2
+                * math.hypot(predicted.x, predicted.y)
+                * math.sin(min(math.pi, self.frame_yaw_errors[0]) / 2)
+                + 2 * math.hypot(*point) * math.sin(min(math.pi, self.frame_yaw_errors[-1]) / 2)
+            )
+            if clouds[0][1].distance(predicted) > world_error and self._observed_free(
+                predicted, world_error
+            ):
                 selected.append(point)
         self.learned = tuple(selected)
         self.revision += 1
