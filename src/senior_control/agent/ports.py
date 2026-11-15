@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from senior_control.agent.connection import IpcMotion
-from senior_control.protocol import Envelope, MotionRuntimeState
+from senior_control.protocol import Envelope, MotionRuntimeState, RuntimeObservation
 from senior_control.settings.service import SettingsService
 
 if TYPE_CHECKING:
@@ -241,6 +241,8 @@ class RuntimeState:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    # //Compatible: older IPC omits observation metadata.
+    runtime_observation: RuntimeObservation | None = None
     motion_runtime: MotionRuntimeState | None = None
     motion_runtime_version: int = 0
     manual_protocol_version: int = 0
@@ -303,6 +305,8 @@ class StateReply(BaseModel):
     # //Compatible: older state replies have no qualified reference or navigation fields.
     map_generation: str | None = None
     localization_generation: str | None = None
+    # //Compatible: older IPC omits observation metadata.
+    runtime_observation: RuntimeObservation | None = None
     motion_runtime: MotionRuntimeState | None = None
     motion_runtime_version: int = 0
     manual_protocol_version: int = 0
@@ -355,6 +359,7 @@ class IpcState:
                 robot_pose=state.robot_pose if geometry_live else None,
                 scan_points=tuple(state.scan_points) if geometry_live else (),
                 navigation_block_reason=state.navigation_block_reason,
+                runtime_observation=state.runtime_observation,
                 motion_runtime=state.motion_runtime,
                 motion_runtime_version=state.motion_runtime_version,
                 manual_protocol_version=state.manual_protocol_version,

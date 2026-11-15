@@ -6,6 +6,7 @@ export interface VehicleStateViewProps {
   port?: VehiclePort;
 }
 const MODES = {
+  unknown: '运行状态不可用',
   idle: '静止待命',
   manual: '手动驾驶',
   task: '任务执行中',
@@ -14,6 +15,13 @@ const MODES = {
   feedback_stop: '反馈停车',
   execution_fault: '执行故障',
   estop: '急停已锁存'
+};
+const AVAILABILITY = {
+  current: '实时可观测',
+  missing: '尚未收到有效运行状态',
+  expired: '运行状态已过期',
+  revoked: '运行状态来源已撤销',
+  ipc_unavailable: '本地状态接口不可用'
 };
 const TASKS = {
   starting: '启动待确认',
@@ -67,11 +75,12 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
   return <section className={styles.card} aria-label="车辆运行状态">
     <header className={styles.head}>
       <h3>{MODES[frame.mode]}</h3>
-      <span>{view.connected && view.available ? '车端确认状态' : '最后已知 · 非实时'}</span>
+      <span>{view.connected && view.available ? (frame.mode === 'unknown' ? '上报在线 · 状态未知' : '车端确认状态') : '最后已知 · 非实时'}</span>
     </header>
     {!view.connected && <p className={styles.warning}>连接中断，任务可能继续；重连后查询原任务，不重新下发。</p>}
     {view.connected && !view.available && <p className={styles.warning}>运行状态通道未更新，显示最后确认状态；连接 RTT 不代表车端已允许操作。</p>}
-    <p>{frame.reason}</p>
+    <p>{frame.observation && frame.mode === 'unknown' ? AVAILABILITY[frame.observation.status] : frame.reason}</p>
+    {frame.observation && <p>最后有效观测：{frame.observation.age_seconds === null ? '尚无' : `${(frame.observation.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`} · 急停状态{frame.confirmed_estop_status === 'unknown' ? '未知' : '已报告'}</p>}
     <div className={styles.speed}>
       <strong>{body ? (body.average.vx * 3.6).toFixed(2) : '—'}</strong>
       <span>km/h · 车体纵向区间平均</span>

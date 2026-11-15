@@ -89,3 +89,15 @@
 - `request_ros(name)` 调用注入的 `call_ros`，慢调用不阻塞心跳。
 - 后台任务失败会通知 Agent 收束连接和本地 authority。
 - 认证拒绝停止重试，其他连接错误按有界指数退避重连。
+
+### 运行状态报告与运动证据
+
+`vehicle_ui` 是持续状态报告，不以运动许可为发送条件。ROS 发布器继续按控制周期发布运行状态（含急停、故障）；CommandNode 仍只将当前有效、未撤销的可信样本放入 IPC `motion_runtime`，额外返回只读 `runtime_observation`。Agent 即使未收到运行状态或 IPC 不可用，也发送 UI 帧。云沿现有 snapshot 通道转发，既有 controller 身份隔离不变。
+
+UI 增加 `observation`：`status` 为 `current / missing / expired / revoked / ipc_unavailable`，`last_sampled_steady` 为最后可信接收样本的原始单调采样时间（没有则 null），`age_seconds` 为它距生成 UI 帧的年龄。该时间不是 UTC，不用于浏览器时钟计算。网页从帧接收时刻继续累加年龄。IPC 断开期间 Agent 保留该历史时间，不能据此恢复许可；从未收到可信样本时明确报告 missing。
+
+状态不可观测时 `mode` 和 `confirmed_estop_status` 为 `unknown`，速度及 manual authority 为 null，`allowed_actions` 为空；不得用零速、静止或急停已解除替代未知。能力列表描述接口支持，不代表运动许可；设置和日志仍可独立提供。任务投影继续由任务生命周期管理。历史速度只可按原有 stale / 最后测量标记展示，不能成为操作证据。
+
+报告的 sequence 与心跳不改变 runtime `valid_until`、运动证据 deadline、来源隔离或复位 revision。有效期内但运动证据已过期的报告仍可显示模式，不能恢复 acquire / reset / recover。新可信样本正常恢复实时状态，操作仍需原有证据与车端许可。前端拒绝的旧帧不能将重连后的历史状态重新标为可用。
+
+发布顺序：先部署网页，再更新 Agent 与 ROS 适配器；网页兼容省略 observation 的旧帧，旧网页的严格解码器不能读取新增字段。该变更不宣称现场 DDS 接收故障已修复，也不改变 150 ms 期限。

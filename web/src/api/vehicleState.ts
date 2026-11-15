@@ -1,5 +1,5 @@
 /** Versioned vehicle UI contract. New routes require an explicit car capability. */
-export type Mode = 'idle' | 'manual' | 'task' | 'braking' | 'obstacle_hold' | 'feedback_stop' | 'execution_fault' | 'estop';
+export type Mode = 'unknown' | 'idle' | 'manual' | 'task' | 'braking' | 'obstacle_hold' | 'feedback_stop' | 'execution_fault' | 'estop';
 export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1';
 export type Action = 'acquire' | 'estop_reset' | 'fault_recover';
 export type TaskAction = 'pause' | 'resume' | 'cancel' | 'takeover';
@@ -28,7 +28,14 @@ export interface ManualAuthorityView {
   authority_id: string;
   state: 'prepared' | 'active' | 'closed';
 }
+export interface RuntimeObservation {
+  status: 'current' | 'missing' | 'expired' | 'revoked' | 'ipc_unavailable';
+  last_sampled_steady: number | null;
+  age_seconds: number | null;
+}
 export interface VehicleFrame {
+  //Compatible: previous agents omit observation metadata.
+  observation?: RuntimeObservation;
   manual_authority: ManualAuthorityView | null;
   schema: 1;
   sequence: number;
@@ -36,7 +43,7 @@ export interface VehicleFrame {
   reason: string;
   estop_revision: number;
   fault_revision: number;
-  confirmed_estop_status: 'clear' | 'software_latched' | 'hardware_latched';
+  confirmed_estop_status: 'unknown' | 'clear' | 'software_latched' | 'hardware_latched';
   body_reference: BodyReference | null;
   wheel_linear_mps: number | null;
   task: TaskExecution | null;
@@ -195,7 +202,7 @@ export const EMPTY_VIEW: VehicleView = Object.freeze({
   connected: false,
   rtt_ms: null
 });
-const MODES: readonly Mode[] = ['idle', 'manual', 'task', 'braking', 'obstacle_hold', 'feedback_stop', 'execution_fault', 'estop'];
+const MODES: readonly Mode[] = ['unknown', 'idle', 'manual', 'task', 'braking', 'obstacle_hold', 'feedback_stop', 'execution_fault', 'estop'];
 const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings.v1', 'task.execution.v1', 'logs.v1'];
 const LEVELS: readonly Level[] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 const ACTIONS: readonly Action[] = ['acquire', 'estop_reset', 'fault_recover'];
@@ -266,7 +273,10 @@ function task(value: unknown): TaskExecution {
   };
 }
 export function decodeVehicleFrame(value: unknown): VehicleFrame {
-  const r = record(value, ['manual_authority', 'schema', 'sequence', 'mode', 'reason', 'estop_revision', 'fault_revision', 'confirmed_estop_status', 'body_reference', 'wheel_linear_mps', 'task', 'allowed_actions', 'capabilities']);
+  const keys = ['manual_authority', 'schema', 'sequence', 'mode', 'reason', 'estop_revision', 'fault_revision', 'confirmed_estop_status', 'body_reference', 'wheel_linear_mps', 'task', 'allowed_actions', 'capabilities'];
+  const raw = record(value);
+  //Compatible: accept the prior exact frame shape during agent rollout.
+  const r = record(raw, 'observation' in raw ? [...keys, 'observation'] : keys);
   if (r.schema !== 1) throw new VehicleDecodeError();
   const authority = nullable(r.manual_authority, value => {
     const a = record(value, ['authority_id', 'state']);
@@ -280,13 +290,31 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
     reason: text(r.reason, 512),
     estop_revision: count(r.estop_revision),
     fault_revision: count(r.fault_revision),
-    confirmed_estop_status: oneOf(r.confirmed_estop_status, ['clear', 'software_latched', 'hardware_latched']),
+    confirmed_estop_status: oneOf(r.confirmed_estop_status, ['unknown', 'clear', 'software_latched', 'hardware_latched']),
     body_reference: nullable(r.body_reference, body),
     wheel_linear_mps: nullable(r.wheel_linear_mps, number),
     task: nullable(r.task, task),
     allowed_actions: array(r.allowed_actions, v => oneOf(v, ACTIONS), 3),
     capabilities: array(r.capabilities, v => oneOf(v, CAPS), 5)
   };
+  if ('observation' in r) {
+    const o = record(r.observation, ['status', 'last_sampled_steady', 'age_seconds']);
+    result.observation = {
+      status: oneOf(o.status, ['current', 'missing', 'expired', 'revoked', 'ipc_unavailable']),
+      last_sampled_steady: nullable(o.last_sampled_steady, number),
+      age_seconds: nullable(o.age_seconds, v => number(v, 0))
+    };
+  }
+  if (result.mode === 'unknown') {
+    const claimsCurrentState = result.confirmed_estop_status !== 'unknown'
+      || result.allowed_actions.length > 0 || result.manual_authority !== null
+      || result.body_reference !== null || result.wheel_linear_mps !== null;
+    if (!result.observation || result.observation.status === 'current' || claimsCurrentState) {
+      throw new VehicleDecodeError();
+    }
+    return result;
+  }
+  if (result.confirmed_estop_status === 'unknown' || (result.observation && result.observation.status !== 'current')) throw new VehicleDecodeError();
   if ((result.mode === 'estop') !== (result.confirmed_estop_status !== 'clear') || (result.confirmed_estop_status === 'hardware_latched' && result.allowed_actions.includes('estop_reset'))) throw new VehicleDecodeError();
   return result;
 }
@@ -421,7 +449,7 @@ export class VehicleTransport implements VehiclePort {
   update(value: unknown, connected: boolean): void {
     const frame = decodeVehicleFrame(value), old = this.view.frame;
     if (old && (frame.sequence <= old.sequence || frame.estop_revision < old.estop_revision || frame.fault_revision < old.fault_revision)) {
-      this.view = { ...this.view, connected, available: connected };
+      this.view = { ...this.view, connected, available: this.view.available && connected };
       if (!connected) this.fenceManual();
       this.publish();
       return;

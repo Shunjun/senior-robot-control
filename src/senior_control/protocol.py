@@ -368,6 +368,13 @@ class BodyReferenceState(StrictModel):
         return self
 
 
+class RuntimeObservation(StrictModel):
+    """Reporting metadata only: never an input to motion admission or recovery."""
+
+    status: Literal["current", "missing", "expired", "revoked", "ipc_unavailable"]
+    last_sampled_steady: float | None = None
+
+
 class MotionRuntimeState(StrictModel):
     """Trusted local /motion/runtime JSON; never accepted from a control socket."""
 

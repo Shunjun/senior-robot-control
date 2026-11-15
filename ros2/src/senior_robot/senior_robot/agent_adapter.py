@@ -507,6 +507,7 @@ def main() -> None:
             )
             result["task_evidence_ready"] = node.task_motion_allowed(continuing=True)
             runtime = node.motion_runtime()
+            result["runtime_observation"] = node.runtime_observation()
             result["motion_runtime"] = runtime
             result["motion_runtime_version"] = 1
             result["manual_authority"] = node.manual_view()

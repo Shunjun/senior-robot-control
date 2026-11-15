@@ -31,6 +31,7 @@ from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.workspace_export import load_exported_grid
+from senior_control.protocol import MotionRuntimeState, RuntimeObservation
 from senior_control.runtime.diagnostics import (
     DiagnosticsSettings,
     configure_diagnostics,
@@ -145,6 +146,7 @@ class SnapshotState:
         self._settings_enabled, self._logs_enabled = settings_enabled, logs_enabled
         self._clock = clock
         self._sequence = 0
+        self._last_sampled_steady: float | None = None
         self._safety_frontiers: dict[str, tuple[str, int, int]] = {}
         self._recovery_tokens: dict[str, tuple[int, int]] = {}
 
@@ -165,12 +167,49 @@ class SnapshotState:
         # Read the current T5 boot/version before translating an opaque UI token;
         # a delayed command cannot reset another boot's equal numeric revision.
         live = await self.collect()
-        if live.vehicle_ui is None:
+        if live.vehicle_ui is None or kind not in live.vehicle_ui["allowed_actions"]:
             raise DomainError(ErrorCode.UNAVAILABLE, "local motion state is not ready")
         current = self._recovery_tokens.get(kind)
         if current is None or current[0] != token:
             raise DomainError(ErrorCode.CONFLICT, "motion recovery version changed")
         return current[1]
+
+    def _runtime_revisions(self, runtime: MotionRuntimeState | None) -> tuple[int, int]:
+        if runtime is not None:
+            return (
+                self._safety_token("estop_reset", runtime.boot_id, runtime.estop_revision),
+                self._safety_token("fault_recover", runtime.boot_id, runtime.fault_revision),
+            )
+        fallback = (self._epoch() * 1_000_000_000, 0)
+        return (
+            self._recovery_tokens.get("estop_reset", fallback)[0],
+            self._recovery_tokens.get("fault_recover", fallback)[0],
+        )
+
+    def _unavailable_frame(self) -> dict[str, object]:
+        self._sequence += 1
+        ui = vehicle_frame(
+            None,
+            sequence=self._epoch() * 1_000_000_000 + self._sequence,
+            connected=self._connected(),
+            task=None,
+            manual=None,
+            manual_enabled=False,
+            tasks_enabled=False,
+            runtime_enabled=False,
+            safety_revisions=self._runtime_revisions(None),
+            now=self._clock(),
+            observation=RuntimeObservation(
+                status="ipc_unavailable", last_sampled_steady=self._last_sampled_steady
+            ),
+        )
+        capabilities = ui["capabilities"]
+        assert isinstance(capabilities, list)
+        if self._settings_enabled:
+            capabilities.append("settings.v1")
+        if self._logs_enabled():
+            capabilities.append("logs.v1")
+        return ui
 
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
@@ -189,6 +228,7 @@ class SnapshotState:
                 tasks=summaries,
                 deleted_task_ids=deleted_task_ids,
                 navigation_ready=False,
+                vehicle_ui=self._unavailable_frame(),
             )
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
@@ -197,53 +237,39 @@ class SnapshotState:
             and state.map_generation is not None
             and state.map_generation == state.localization_generation
         )
-        ui = None
-        if (
-            state.motion_runtime is not None
-            and state.motion_runtime.sampled_steady
-            <= self._clock()
-            < state.motion_runtime.valid_until
-        ):
-            self._sequence += 1
-            task_view = None
-            if self._navigation is not None:
-                self._navigation.executor.context = state.for_tasks(self._connected())
-                current = await self._tasks.current_execution()
-                if current is not None:
-                    try:
-                        task_view = await self._navigation.execution_view(current.execution_id)
-                    except KeyError:
-                        pass  # //Compatible: unmigrated execution has no lifecycle projection.
-            ui = vehicle_frame(
-                state.motion_runtime,
-                sequence=self._epoch() * 1_000_000_000 + self._sequence,
-                connected=self._connected(),
-                task=task_view,
-                manual=state.manual_authority,
-                manual_enabled=self._manual_enabled and state.manual_protocol_version == 1,
-                tasks_enabled=self._navigation is not None,
-                runtime_enabled=state.manual_protocol_version == 1,
-                safety_revisions=(
-                    self._safety_token(
-                        "estop_reset",
-                        state.motion_runtime.boot_id,
-                        state.motion_runtime.estop_revision,
-                    ),
-                    self._safety_token(
-                        "fault_recover",
-                        state.motion_runtime.boot_id,
-                        state.motion_runtime.fault_revision,
-                    ),
-                ),
-                now=self._clock(),
-            )
-        if ui is not None:
-            capabilities = ui["capabilities"]
-            assert isinstance(capabilities, list)
-            if self._settings_enabled:
-                capabilities.append("settings.v1")
-            if self._logs_enabled():
-                capabilities.append("logs.v1")
+        if state.runtime_observation is not None:
+            self._last_sampled_steady = state.runtime_observation.last_sampled_steady
+        elif state.motion_runtime is not None:
+            self._last_sampled_steady = state.motion_runtime.sampled_steady
+        self._sequence += 1
+        task_view = None
+        if self._navigation is not None:
+            self._navigation.executor.context = state.for_tasks(self._connected())
+            current = await self._tasks.current_execution()
+            if current is not None:
+                try:
+                    task_view = await self._navigation.execution_view(current.execution_id)
+                except KeyError:
+                    pass  # //Compatible: unmigrated execution has no lifecycle projection.
+        ui = vehicle_frame(
+            state.motion_runtime,
+            sequence=self._epoch() * 1_000_000_000 + self._sequence,
+            connected=self._connected(),
+            task=task_view,
+            manual=state.manual_authority,
+            manual_enabled=self._manual_enabled and state.manual_protocol_version == 1,
+            tasks_enabled=self._navigation is not None,
+            runtime_enabled=state.manual_protocol_version == 1,
+            safety_revisions=self._runtime_revisions(state.motion_runtime),
+            observation=state.runtime_observation,
+            now=self._clock(),
+        )
+        capabilities = ui["capabilities"]
+        assert isinstance(capabilities, list)
+        if self._settings_enabled:
+            capabilities.append("settings.v1")
+        if self._logs_enabled():
+            capabilities.append("logs.v1")
         return LiveState(
             localized,
             state.map_ref,

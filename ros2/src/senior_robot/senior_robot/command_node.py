@@ -936,6 +936,11 @@ class CommandNode(Node):
         self._pending_recovery = None
         self._arbiter.confirm_local_estop(False)
 
+    def runtime_observation(self) -> dict[str, Any]:
+        return self._motion_runtime.observation(
+            self._monotonic_clock.monotonic()
+        ).model_dump()
+
     def motion_runtime(self) -> dict[str, Any] | None:
         value = self._motion_runtime.current(self._monotonic_clock.monotonic())
         return value.model_dump(by_alias=True) if value is not None else None

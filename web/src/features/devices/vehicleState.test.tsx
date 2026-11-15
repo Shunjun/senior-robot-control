@@ -56,3 +56,17 @@ it('requests explicit resume without projecting local task completion or mode ch
   expect(screen.getByText(/paused · 已暂停/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: /replan/ })).toBeNull();
 });
+it('shows missing runtime as an online report with unknown safety and speed', () => {
+  const port = testPort();
+  port.update(runtime({
+    sequence: 2, mode: 'unknown', confirmed_estop_status: 'unknown',
+    wheel_linear_mps: null, allowed_actions: [],
+    observation: { status: 'missing', last_sampled_steady: null, age_seconds: null }
+  }), true);
+  render(<VehicleStateView port={port} />);
+  expect(screen.getByText('运行状态不可用')).toBeTruthy();
+  expect(screen.getByText('上报在线 · 状态未知')).toBeTruthy();
+  expect(screen.getByText('尚未收到有效运行状态')).toBeTruthy();
+  expect(screen.getByText(/急停状态未知/)).toBeTruthy();
+  expect(screen.getByText('—', { selector: 'strong' })).toBeTruthy();
+});
