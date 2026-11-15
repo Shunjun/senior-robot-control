@@ -1,0 +1,13 @@
+{
+  "src/senior_control/motion/startup_learning.py": "bf6bdf748ce2485fc956b7d4d8cd78e2986095e20739922b4a8c2386f00e7fa4",
+  "src/senior_control/safety/self_learning.py": "90a4162631fd1c746472a376155059591ce24aa60c3fb501d1abb9745f1ae690",
+  "src/senior_control/safety/external_motion_features.py": "209fc719088869fdf3571b65b22a834da9a2da61b54aa3cb1f71e4c0f28a831b",
+  "src/senior_control/localization/gps_course.py": "2378713de4ff3727e76cbd89b5b66041547c4906f3e4e86476c9f563b6296d03",
+  "ros2/src/senior_robot/senior_robot/motion_core_output.py": "11cd5e66fe4074d1fddd329def439a3f8193104c9811e92b281a98ec93cd5def",
+  "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py": "a58c759bd77a3aa56b5af2528b9171f737301348757453f5baa8d2900909cb1f",
+  "ros2/src/senior_robot/senior_robot/optional_motion_inputs.py": "caa6d9e2067bf77e92f2ceebf808755675b83652accbd7e76767c75bc4e38b0e",
+  "ros2/src/senior_robot/senior_robot/scan_adapter.py": "293a93f3c9a5868691cdaa9f2bd6b44ea997e994265f924afbc4d9ddcc8c2739",
+  "tests/unit/test_startup_learning.py": "55ed7e9f00f209489a01afcee14c9829d5f6b4e12c69afa328b91c7430c61d79",
+  "tests/unit/test_startup_learning_chain.py": "7dc05fadbb974ce7321549e7856c532ff95186a592c495ef6ec5cfd834fa218b",
+  "tests/unit/test_gps_course.py": "7d63a71e496ce761ebd99340c2fb88424a456e1c2f5d249a517183481092fbc8"
+}

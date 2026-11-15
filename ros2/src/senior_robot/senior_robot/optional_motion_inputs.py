@@ -104,6 +104,7 @@ class OptionalMotionInputs:
         self._gps_family = None if profile.gps_input is None else profile.gps_input.origin_family
         if profile.gps_input is not None and self._gps_family is None:
             raise ValueError("GPS input requires original raw acquisition family")
+        self._course_frame = None if profile.gps_input is None else profile.gps_input.course_frame
         self._subscriptions = []
         from nav_msgs.msg import Odometry
         from senior_motion_msgs.msg import FencedRgbdCandidate
@@ -135,7 +136,7 @@ class OptionalMotionInputs:
                 handler(message, info, origin)
             except (ValueError, TypeError, AttributeError, OverflowError):
                 # A bad optional source never clears other motion sources.
-                self.runtime.estimator.invalidate(name)
+                self._invalidate(name)
 
         if self._allow_topology:
             # //Compatible: use the existing isolated-simulation ROS receipt path.
@@ -156,9 +157,15 @@ class OptionalMotionInputs:
                     writer=setting.publisher,
                     namespace=setting.namespace,
                     qos="reliable",
-                    invalidate=lambda: self.runtime.estimator.invalidate(name),
+                    invalidate=lambda: self._invalidate(name),
                 )
             )
+
+    def _invalidate(self, name):
+        self.runtime.estimator.invalidate(name)
+        if name == "gps":
+            self.runtime.gps_course.reset()
+            self.runtime.gps_heading = None
 
     def rgbd(self, message: Any, info: Any, origin: Any) -> None:
         self.runtime.ingest_observation(
@@ -169,10 +176,12 @@ class OptionalMotionInputs:
 
     def gps(self, message: Any, info: Any, origin: Any) -> None:
         # An Odometry twist is expressed in child_frame_id, never silently ENU.
+        # //Compatible: body-frame replay adapters may have no course binding.
+        if getattr(self, "_course_frame", None) is not None:
+            self._course(message, info, origin)
+            return
         from rclpy.time import Time
         from tf2_ros import TransformException
-
-        from senior_robot.native_receipt import received_steady
 
         v = message.twist.twist.linear
         w = message.twist.twist.angular
@@ -198,28 +207,7 @@ class OptionalMotionInputs:
             )
         stamp = stamp_seconds(message.header.stamp)
         ros = self.node.get_clock().now().nanoseconds / 1e9
-        if self._allow_topology:
-            if self._simulation_clock is not None and ros < self._simulation_clock:
-                self._simulation_epoch += 1
-            self._simulation_clock = ros
-            self._simulation_sequence += 1
-            info = {
-                "received_timestamp": round(ros * 1e9),
-                "native_received_steady": received_steady(info),
-                "receipt_generation": self._simulation_epoch,
-                "receipt_sequence": self._simulation_sequence,
-            }
-        receipt_ros = info["received_timestamp"] / 1e9
-        steady = received_steady(info)
-        # DDS receipt sequence is monotone in this authenticated publisher epoch.
-        root = Origin(
-            self._gps_family,
-            str(origin.sample_gid or origin.topology_gid) + ":" + str(info["receipt_generation"]),
-            int(info["receipt_sequence"]),
-            stamp,
-            receipt_ros,
-            steady,
-        )
+        root = self._gps_root(message, info, origin, ros)
         roots = (root,)
         if transform_stamp:
             roots += (
@@ -244,6 +232,34 @@ class OptionalMotionInputs:
             time.monotonic(),
         )
         self._gps_pose(message, roots, body_from_child)
+
+    def _gps_root(self, message, info, origin, ros):
+        from senior_robot.native_receipt import received_steady
+
+        stamp = stamp_seconds(message.header.stamp)
+        if self._allow_topology:
+            if self._simulation_clock is not None and ros < self._simulation_clock:
+                self._simulation_epoch += 1
+            self._simulation_clock = ros
+            self._simulation_sequence += 1
+            info = {
+                "received_timestamp": round(ros * 1e9),
+                "native_received_steady": received_steady(info),
+                "receipt_generation": self._simulation_epoch,
+                "receipt_sequence": self._simulation_sequence,
+            }
+        receipt_ros = info["received_timestamp"] / 1e9
+        steady = received_steady(info)
+        # DDS receipt sequence is monotone in this authenticated publisher epoch.
+        root = Origin(
+            self._gps_family,
+            str(origin.sample_gid or origin.topology_gid) + ":" + str(info["receipt_generation"]),
+            int(info["receipt_sequence"]),
+            stamp,
+            receipt_ros,
+            steady,
+        )
+        return root
 
     def _gps_pose(
         self, message: Any, roots: tuple[Origin, ...], body_from_child: Any = None
@@ -305,3 +321,66 @@ class OptionalMotionInputs:
         except (ValueError, AttributeError, TransformException):
             # Missing absolute heading/frame removes only this pose contribution.
             return
+
+    def _course(self, message: Any, info: Any, origin: Any) -> None:
+        """Heading-only ENU path; no static TF can manufacture antenna heading."""
+        from senior_control.localization.gps_course import CourseFix
+
+        runtime = self.runtime
+        runtime.gps_heading = None
+        if (
+            message.header.frame_id != self._course_frame
+            or message.child_frame_id != self._course_frame
+            or self._gps_family == "wheel"
+        ):
+            runtime.gps_course.reset()
+            return
+        ros = self.node.get_clock().now().nanoseconds / 1e9
+        steady = time.monotonic()
+        root = self._gps_root(message, info, origin, ros)
+        estimate = runtime.latest
+        wheel = runtime.wheel_linear(steady, with_deadline=True)
+        if estimate is None or wheel is None or estimate.independent_axes is None:
+            runtime.gps_course.reset()
+            return
+        gyro = estimate.independent_axes[1]
+        if not gyro.observed or "imu" not in gyro.sources or steady >= gyro.deadline_steady:
+            runtime.gps_course.reset()
+            return
+
+        def sigma(covariance):
+            xx, yy, xy, yx = (float(covariance[i]) for i in (0, 7, 1, 6))
+            if (
+                not all(math.isfinite(v) for v in (xx, yy, xy, yx))
+                or xx <= 0
+                or yy <= 0
+                or abs(xy - yx) > 1e-9
+                or xy * xy > xx * yy
+            ):
+                return None
+            return math.sqrt(max(xx + abs(xy), yy + abs(xy)))
+
+        p, v = message.pose.pose.position, message.twist.twist.linear
+        heading = runtime.gps_course.observe(
+            CourseFix(
+                float(p.x),
+                float(p.y),
+                sigma(message.pose.covariance),
+                float(v.x),
+                float(v.y),
+                sigma(message.twist.covariance),
+                root,
+            ),
+            wheel_vx=wheel[0],
+            imu_wz=gyro.value,
+            now_ros=ros,
+            now_steady=steady,
+        )
+        if heading is not None:
+            from dataclasses import replace
+
+            heading = replace(
+                heading,
+                deadline_steady=min(heading.deadline_steady, wheel[1], gyro.deadline_steady),
+            )
+        runtime.gps_heading = heading

@@ -82,3 +82,11 @@
 | 21 | Linux 全链路仿真验收 | 验收资产已添加 | Linux、Gazebo 与浏览器未执行 |
 
 阶段一至阶段四已有分模块实现和历史复审记录。阶段退出条件写在实施计划对应章节。下面这些 Linux 检查还没有执行，不能记成通过：`safety_node` 进程、整条 ROS 速度链、Nav2 launch 与 lattice、`slam_toolbox`、返航的 ROS 结果等待、`tests/ros/test_relocalization.py` 和任务 21 端到端套件。任务 5 的 ROS 测试在第一次上 Linux 前，还要先补上订阅发现完成后再发命令的等待；当前测试可能在发现完成前丢消息。
+
+### 启动随车回波学习（软件实现，实车仍 Draft）
+
+程序 `start` 初始化且传感/空间条件满足后，会经原控制与避障链提出低速前移 **15 cm** 的学习目标。既有物理车身 polygon 和激光外参必须准确；不再手填 `self_mask_xy`。学习期间只暂定处理误差域严格位于物理边界内的回波，设备后方保持未知。外部障碍、边界歧义或空间不足会等待或中断，不能强行走完；急停、接管、组件重启均不会恢复旧尝试。完整程序的新一次 start 是新的启动尝试。
+
+学习验证不足会报告 `ambiguous`，不会永久屏蔽未验证回波；设备移动/消失后撤销对应局部模型。状态与计程见统一周期诊断 `startup_learning`，原始回波与停车保护保留。本功能尚未通过完整 ROS 构建或实车运动验收。
+
+单天线 GPS 可选。在既有 `gps_input` 中显式配置 `course_frame` 时，该输入按 ENU 的 heading-only Odometry 使用：header 与 child frame 均为指定 ENU frame，pose 为米、twist 为米/秒，平面协方差为对应单位的方差，`origin_family` 必须是原始 GNSS 采集族。程序结合连续轮速/IMU和位置、速度精度积累朝向，输出 `gps_course` 周期诊断；它不自动提供地图朝向或地图变换。15 cm 不保证精度，GPS未就绪不阻止相对运动和学习；默认硬件草稿仍未配置 GPS，也没有 RTK 精度验收证据。

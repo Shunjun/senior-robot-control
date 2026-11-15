@@ -389,7 +389,9 @@ async def supervise(
     if not headless:
         _desktop_environment()
     root = profile.credentials.parent
-    env = dict(os.environ)
+    from senior_control.motion.startup_learning import start_environment
+
+    env = start_environment(dict(os.environ), root)
     env.pop("NOTIFY_SOCKET", None)
     env.pop("SENIOR_SIMULATION_VIDEO_FRAME", None)
     camera = TemporaryDirectory(prefix=".camera-", dir=root) if profile.video else None

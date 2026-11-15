@@ -5,9 +5,11 @@ Deployment profiles supply response evidence; no ground truth enters this module
 
 import json
 import math
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -37,12 +39,14 @@ from senior_control.motion.estimator import Origin
 from senior_control.motion.kinematics import compose, inverse
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.source_modes import SourceMode
+from senior_control.motion.startup_learning import StartupLearning
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
 from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
 from senior_control.safety.motion_runtime import SourceEpochFence
 from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 from senior_control.sensors.policy import default_policy
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
@@ -71,6 +75,18 @@ class MotionCoreOutput:
         self.acceleration_model = profile.acceleration_model()
         self.stopping = StoppingRisk()
         self.boot = uuid4().hex
+        claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+        self._startup_claim_path = Path(claim) if claim else None
+        self.startup = StartupLearning(
+            Path(claim) if claim else None,
+            linear_error_mps=profile.linear_error,
+            yaw_error_rps=profile.yaw_error,
+        )
+        self.self_returns = None
+        self._learning_scan_key = None
+        self._filter_signature = None
+        self._learning_geometry = None
+        self._learning_motion_emitted = False
         self.sequence = 0
         self.event_sequence = 0
         self.model_deadline = time.monotonic() + profile.model_seconds
@@ -409,6 +425,7 @@ class MotionCoreOutput:
             return False
         if velocity != Velocity(0, 0):
             self._startup_motion_unconfirmed = False
+        self._interrupt_learning("control_takeover")
         self.target = MotionTarget(
             velocity, msg.source_kind, source_id, float(msg.steady_deadline), manual_linear
         )
@@ -617,7 +634,49 @@ class MotionCoreOutput:
         self._terminal_released.add(key)
         return True
 
+    def _body_footprint(self):
+        # //Compatible: offline profile-only nodes retain their rectangular footprint.
+        boundary = self.node._profile().footprint if hasattr(self.node, "_profile") else ()
+        return Footprint(
+            self.profile.length, self.profile.width, tuple(boundary) if boundary else None
+        )
+
+    def _startup_permission_lost(self, permission):
+        if self.startup.active and self._learning_motion_emitted and permission.permit is None:
+            self._interrupt_learning("learning_permission_lost")
+            self._startup_target(time.monotonic())
+            self.scheduler.stop()
+            return True
+        return False
+
+    def _startup_target(self, now):
+        if self.startup.active:
+            if self.target.source not in {"idle", "startup_learning"}:
+                self._interrupt_learning("other_control_source")
+                return
+            if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
+                self._interrupt_learning("latched_stop")
+            elif self.startup.state != "initializing":
+                self.target = MotionTarget(
+                    Velocity(self.startup.velocity, 0),
+                    "startup_learning",
+                    self.boot,
+                    self.model_deadline,
+                )
+                return
+        if self.target.source == "startup_learning":
+            self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
+
+    def _interrupt_learning(self, reason):
+        was_active = self.startup.active
+        self.startup.interrupt(reason)
+        if was_active and self.self_returns is not None:
+            self.self_returns.clear()
+            self.space_estimator.invalidate("scan")
+            self._perception_key = None
+
     def revoke(self, reason: str, *, now: float | None = None) -> None:
+        self._interrupt_learning(reason)
         # One logical transition uses one steady instant. Resampling inside a
         # close followed by its event would make that event appear to go back.
         now = time.monotonic() if now is None else now
@@ -680,7 +739,14 @@ class MotionCoreOutput:
         current = self.sensors.pose_estimator.at(ros, now_ros=ros, now_steady=now, motion=motion)
         alignment_epoch = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
         self.space_estimator.reset_frame(alignment_epoch)
-        key = (m.source_epoch, m.sequence, alignment_epoch)
+        signature = (
+            self.startup.provisional,
+            None if self.self_returns is None else self.self_returns.revision,
+        )
+        if self._filter_signature is not None and signature != self._filter_signature:
+            self.space_estimator.invalidate("scan")
+        self._filter_signature = signature
+        key = (m.source_epoch, m.sequence, alignment_epoch, signature)
         old = self._perception_pose if key == self._perception_key else None
         if old is None:
             old = self.sensors.pose_estimator.at(
@@ -708,6 +774,49 @@ class MotionCoreOutput:
             filtered = filter_self(
                 scan, self.node._profile(), self_mask_range_uncertainty=self.profile.sensor_error
             )
+            if self.startup.state != "disabled":
+                geometry = (
+                    m.source_epoch,
+                    m.sensor_x,
+                    m.sensor_y,
+                    m.sensor_yaw,
+                    m.angle_min,
+                    m.angle_increment,
+                    len(m.ranges),
+                )
+                if self._learning_geometry is not None and geometry != self._learning_geometry:
+                    self._interrupt_learning("scan_geometry_or_epoch_changed")
+                    if self.self_returns is not None:
+                        self.self_returns.clear()
+                self._learning_geometry = geometry
+                if self.self_returns is None:
+                    boundary = self.node._profile().footprint
+                    if len(boundary) < 3:
+                        self.startup.state, self.startup.reason = (
+                            "failed",
+                            "physical_polygon_missing",
+                        )
+                    else:
+                        radius = max(math.hypot(x, y) for x, y in boundary)
+                        # Body endpoint range/yaw support; world pose error is not extrinsic error.
+                        error = self.profile.sensor_error + radius * abs(
+                            math.sin(self.profile.orientation_error_rad)
+                        )
+                        self.self_returns = SelfReturnModel(boundary, error_m=error)
+                        self.startup.motion_radius = radius
+                        if self._startup_claim_path is not None:
+                            from senior_control.safety.external_motion_features import (
+                                write_feature_boundary,
+                            )
+
+                            write_feature_boundary(self._startup_claim_path, boundary, error)
+                if self.self_returns is not None:
+                    if self._learning_scan_key != raw_key:
+                        self._learning_scan_key = raw_key
+                        self.startup.frame(self.self_returns, filtered)
+                    filtered = self.self_returns.filter(
+                        filtered, provisional=self.startup.provisional
+                    )
             from senior_robot.motion_core_perception import scan_free_patches
 
             policy = self.profile.perception_no_return_policy(m.frame_id, m.range_max)
@@ -917,7 +1026,7 @@ class MotionCoreOutput:
             motion,
             mode,
             response,
-            Footprint(p.length, p.width),
+            self._body_footprint(),
             perception,
             pose,
             "scan_reference",
@@ -1017,6 +1126,14 @@ class MotionCoreOutput:
             output = decision.command
         # No candidate never holds the previous nonzero Twist. The fallback
         # is explicitly unverified stop/fault output, not a safe-stop claim.
+        elif (
+            self.startup.active
+            and not self._learning_motion_emitted
+            and self.target.source in {"idle", "startup_learning"}
+        ):
+            # Pre-movement sampling holds zero on blocked/unknown space. No
+            # certificate is issued and obstacle checks still run on every tick.
+            return output
         elif decision.emergency and reason in {
             "stop_envelope_blocked",
             "stop_response_failed",
@@ -1112,11 +1229,31 @@ class MotionCoreOutput:
             elif self._last_healthy:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
+            estimate = self.sensors.latest
+            stationary = (
+                estimate is not None
+                and estimate.vx.observed
+                and estimate.wz.observed
+                and abs(estimate.vx.value or 0) < 0.01
+                and abs(estimate.wz.value or 0) < 0.02
+            )
+            self.startup.advance(
+                estimate, self.sensors.wheel_linear(now), now=now, stationary=stationary
+            )
+            self._startup_target(now)
             perception, pose = self._observation(now)
+            self._startup_target(now)
             ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
+            if self._startup_permission_lost(permission):
+                # Rebuild with provisional filtering revoked before proposing
+                # any output. The current raw sequence is never re-stamped.
+                perception, pose = self._observation(now)
+                ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+                evaluation = self.engine.evaluate(ctx, now)
+                permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
@@ -1188,6 +1325,8 @@ class MotionCoreOutput:
                     not decision.verified or not emit_now < decision.evidence_deadline
                 ):
                     raise ValueError("motion_expired_or_unqualified")
+            if self.startup.active and output != Velocity(0, 0):
+                self._learning_motion_emitted = True
             self.node._emit_motion_core(output, reason)
             self._record_stopping_output(output, time.monotonic())
             self.controller.commit(prepared)
@@ -1222,6 +1361,8 @@ class MotionCoreOutput:
                 self.controller.discard(prepared)
             self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
+            if self.startup.state != "initializing":
+                self._interrupt_learning(reason)
             self.node._emit_motion_core(Velocity(0, 0), reason)
             self._record_stopping_output(Velocity(0, 0), time.monotonic())
             if self._last_healthy:
@@ -1282,11 +1423,18 @@ class MotionCoreOutput:
         msg = self._runtime_type()
         msg.data = runtime.model_dump_json()
         self._runtime.publish(msg)
+        self.diagnostics.summary(
+            "startup_learning",
+            self.startup.summary(
+                learned_count=0 if self.self_returns is None else len(self.self_returns.learned)
+            ),
+        )
         self.diagnostics.duration("control_compute", time.monotonic() - now)
         self.diagnostics.pump(time.monotonic())
 
     def close(self) -> None:
         self._closed = True
+        self._interrupt_learning("shutdown")
         self.scheduler.stop()
         self.executor.shutdown(wait=False, cancel_futures=True)
 

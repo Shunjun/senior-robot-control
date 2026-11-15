@@ -23,6 +23,10 @@ class MotionSensorRuntime:
         self.diagnostics = diagnostics
         a = profile.acceleration_model().upper
         self.estimator = MotionEstimation(acceleration=(a.vx, a.vx, a.wz))
+        from senior_control.localization.gps_course import GPSCourseObserver
+
+        self.gps_course = GPSCourseObserver()
+        self.gps_heading = None
         self.latest = None
         self.independent = None
         self.tracking = None
@@ -137,9 +141,39 @@ class MotionSensorRuntime:
         return accepted
 
     def estimate(self, now_ros: float, now_steady: float):
+        if self.gps_heading is not None and now_steady >= self.gps_heading.deadline_steady:
+            self.gps_heading = None
+        heading = self.gps_heading
+        self.diagnostics.summary(
+            "gps_course",
+            dict(
+                ready=heading is not None,
+                yaw_rad=None if heading is None else heading.yaw_rad,
+                sigma_rad=None if heading is None else heading.sigma_rad,
+                stamp_ros=None if heading is None else heading.stamp_ros,
+                deadline_steady=None if heading is None else heading.deadline_steady,
+                basis="single antenna ENU statistical course; heading-only input",
+            ),
+        )
         self.sequence += 1
         r = self.latest = self.estimator.estimate(now_ros, now_steady)
         self.pose_estimator.advance(r)
+        gyro = None if r.independent_axes is None else r.independent_axes[1]
+        self.gps_course.record_motion(
+            stamp_ros=now_ros,
+            wheel_vx=self.wheel_linear(now_steady),
+            imu_wz=(
+                gyro.value
+                if gyro is not None
+                and gyro.observed
+                and "imu" in gyro.sources
+                and now_steady < gyro.deadline_steady
+                else None
+            ),
+            generation=r.generation,
+        )
+        if self.gps_course.anchor is None:
+            self.gps_heading = None
         for name, retained, capacity in (
             ("motion.estimator.history", self.estimator.retained_samples, 192),
             ("motion.pose.history", self.pose_estimator.retained_samples, 1536),
@@ -301,7 +335,8 @@ class MotionSensorRuntime:
                 )
             )
 
-    def wheel_linear(self, now_steady):
+    def wheel_linear(self, now_steady, *, with_deadline=False):
+        # //Compatible: existing callers retain scalar raw-wheel velocity.
         o = self.raw_wheel
         if o is None or self.latest is None:
             return None
@@ -309,7 +344,9 @@ class MotionSensorRuntime:
             age = self.estimator._age(o.roots, self.latest.computed_ros, now_steady)
         except ValueError:
             return None
-        return None if age.band == "invalid" else o.values[0]
+        if age.band == "invalid":
+            return None
+        return (o.values[0], age.deadline_steady) if with_deadline else o.values[0]
 
     def report(self):
         return None if self.latest is None else asdict(self.latest)

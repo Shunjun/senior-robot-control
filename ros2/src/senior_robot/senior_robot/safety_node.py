@@ -109,7 +109,6 @@ class SafetyGate(Node):
         self.declare_parameter("hard_margin", -1.0)
         self.declare_parameter("observation_max_age", -1.0)
         self.declare_parameter("footprint_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
-        self.declare_parameter("self_mask_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.declare_parameter("interpolate", False)
@@ -284,22 +283,15 @@ class SafetyGate(Node):
 
     def _profile(self) -> DeviceProfile:
         footprint_xy = self._array_parameter("footprint_xy")
-        mask_xy = self._array_parameter("self_mask_xy")
-        if len(footprint_xy) > 128 or len(mask_xy) > 128:
+        if len(footprint_xy) > 128:
             raise ValueError("footprint or self-mask exceeds safety geometry complexity limit")
         footprint = (
             list(zip(footprint_xy[::2], footprint_xy[1::2], strict=False))
             if len(footprint_xy) >= 6 and len(footprint_xy) % 2 == 0
             else []
         )
-        mask = (
-            [list(zip(mask_xy[::2], mask_xy[1::2], strict=False))]
-            if len(mask_xy) >= 6 and len(mask_xy) % 2 == 0
-            else []
-        )
         return DeviceProfile(
             footprint=footprint,
-            self_mask=mask,
             braking_deceleration=_positive(float(self.get_parameter("braking_deceleration").value)),
             lateral_braking_deceleration=_positive(
                 float(self.get_parameter("lateral_braking_deceleration").value)

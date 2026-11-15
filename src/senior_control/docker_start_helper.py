@@ -340,7 +340,9 @@ async def supervise(
         if profile is not None:
             robot_id = read_credentials(root / "device.json").robot_id
             adapter_command = _adapter_command(profile, robot_id)
-        environment = dict(environment)
+        from senior_control.motion.startup_learning import start_environment
+
+        environment = start_environment(environment, root)
         if profile is not None:
             # Hardware deployment must not inherit a simulation identity or clock policy.
             for key in tuple(environment):

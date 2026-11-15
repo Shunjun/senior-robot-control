@@ -153,18 +153,38 @@ def prepare_perception(
 class Footprint:
     length_m: float
     width_m: float
+    physical_polygon: tuple[Point, ...] | None = None
 
     def __post_init__(self) -> None:
         if not all(math.isfinite(x) and x > 0 for x in (self.length_m, self.width_m)):
             raise ValueError("invalid body geometry")
+        if self.physical_polygon is not None:
+            shape = Polygon(self.physical_polygon)
+            if (
+                len(self.physical_polygon) > 64
+                or not shape.is_valid
+                or shape.area <= 0
+                or not all(math.isfinite(v) for p in self.physical_polygon for v in p)
+            ):
+                raise ValueError("invalid physical polygon")
 
     @property
     def physical_vertices(self) -> tuple[Point, ...]:
+        if self.physical_polygon is not None:
+            return self.physical_polygon
         x, y = self.length_m / 2, self.width_m / 2
         return ((-x, -y), (x, -y), (x, y), (-x, y))
 
     @property
     def vertices(self) -> tuple[Point, ...]:
+        if self.physical_polygon is not None:
+            # Preserve the configured collision outline, including concavities;
+            # a geometric outward margin cannot shrink a concave indentation.
+            return tuple(
+                Polygon(self.physical_polygon)
+                .buffer(0.025 * max(self.length_m, self.width_m), join_style=2)
+                .exterior.coords
+            )[:-1]
         x, y = self.length_m * 1.05 / 2, self.width_m * 1.05 / 2
         return ((-x, -y), (x, -y), (x, y), (-x, y))
 
@@ -373,6 +393,7 @@ def _identity(s: ConstraintSnapshot) -> tuple[str, ...]:
         s.config_version,
         str(s.footprint.length_m),
         str(s.footprint.width_m),
+        repr(s.footprint.physical_polygon),
         s.response.profile_id,
         s.target.source,
         s.target.source_id,

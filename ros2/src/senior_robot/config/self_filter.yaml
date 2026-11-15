@@ -3,8 +3,7 @@ scan_adapter:
     use_sim_time: true
     body_frame: base_link
     max_age_seconds: 0.5
-    # Simulation laser-plane attachment only; hardware must calibrate separately.
-    self_mask_xy: [-0.33, -0.24, -0.23, -0.24, -0.23, 0.24, -0.33, 0.24]
+    # Physical boundary is configured on safety_gate; startup learns local returns.
     # URDF robot_state_publisher chain laser_link -> base_link is fixed.
     transform_static: true
     no_return_clear: false

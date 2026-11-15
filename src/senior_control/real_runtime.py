@@ -181,6 +181,8 @@ def load_real_parameters(
         params.pop("transform_static", None)
         # //Compatible: remove the obsolete operator-confirmation flag.
         params.pop("self_mask_calibrated", None)
+        # //Compatible: hand-written filter polygons no longer drive production filtering.
+        params.pop("self_mask_xy", None)
         # //Compatible: the shipped real YAML used odom, but the WHEELTEC
         # base_serial launch publishes /odom with header.frame_id=odom_combined.
         if node == "motion_fusion" and params.get("wheel_frame") == "odom":

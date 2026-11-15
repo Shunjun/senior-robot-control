@@ -1,6 +1,7 @@
 """Actual output snapshot + constraint engine, with synthetic observed geometry only."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from senior_robot.motion_core_output import MotionCoreOutput
@@ -8,6 +9,7 @@ from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from shapely.geometry import GeometryCollection, Point, box
 from test_unified_motion_runtime import point
 
+from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
 from senior_control.motion.constraints import ConstraintConfig, ConstraintEngine, Perception
 from senior_control.motion.contracts import MotionTarget
@@ -24,6 +26,7 @@ def output(speed=0.0, yaw=0.0, imu=False):
     p = load_hardware_profile(ROOT / "config/hardware-motion.json")
     core = MotionCoreOutput.__new__(MotionCoreOutput)
     core.profile = p
+    core.node = SimpleNamespace(_profile=lambda: DeviceProfile())
     core.diagnostics = RuntimeDiagnostics(lambda *_: None)
     core.sensors = MotionSensorRuntime(p, core.diagnostics)
     core.acceleration_model = p.acceleration_model()
