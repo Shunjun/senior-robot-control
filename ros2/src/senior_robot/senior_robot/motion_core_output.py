@@ -86,7 +86,6 @@ class MotionCoreOutput:
         self._learning_scan_key = None
         self._filter_signature = None
         self._learning_geometry = None
-        self._learning_motion_emitted = False
         self.sequence = 0
         self.event_sequence = 0
         self.model_deadline = time.monotonic() + profile.model_seconds
@@ -576,6 +575,8 @@ class MotionCoreOutput:
         )
 
     def _startup_permission_lost(self, permission, now=None):
+        if self.startup.motion_withdrawn:
+            return False  # Only static validation remains; no forward target can replay.
         if self.startup.state == "validating":
             return (
                 False  # Stationary post-sampling proposes zero; controller still checks stopping.
@@ -586,7 +587,7 @@ class MotionCoreOutput:
             and permission.brake.stop_verified
         ):
             return False  # Planned, verified stopping does not need a driving permit.
-        if self.startup.active and self._learning_motion_emitted and permission.permit is None:
+        if self.startup.active and self.startup.motion_started and permission.permit is None:
             self._interrupt_learning("learning_permission_lost")
             self._startup_target(time.monotonic() if now is None else now)
             self.scheduler.stop()
@@ -603,7 +604,13 @@ class MotionCoreOutput:
                 self._interrupt_learning("other_control_source")
                 return
             if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
-                self._interrupt_learning("latched_stop")
+                self.startup.hold_motion()
+                self._retire_startup(now)
+                if self.target.source == "startup_learning":
+                    self.target = MotionTarget(
+                        Velocity(0, 0), "idle", self.boot, self.model_deadline
+                    )
+                return
             elif self.startup.state != "initializing":
                 if self.machine.state.task_id != self.boot:
                     self._event(K.TASK_START, now, self.boot)
@@ -629,7 +636,15 @@ class MotionCoreOutput:
             self._perception_key = None
 
     def revoke(self, reason: str, *, now: float | None = None) -> None:
-        self._interrupt_learning(reason)
+        if reason in {"estop", "fault", "estop_reset", "fault_recover",
+                      K.EXECUTION_FAULT.value}:
+            self.startup.hold_motion()
+        elif reason == K.FEEDBACK_LOST.value and (
+            not self.startup.motion_started or self.startup.motion_withdrawn
+        ):
+            pass  # Initialization/static evidence may wait for fresh observations.
+        else:
+            self._interrupt_learning(reason)
         # One logical transition uses one steady instant. Resampling inside a
         # close followed by its event would make that event appear to go back.
         now = time.monotonic() if now is None else now
@@ -1095,7 +1110,7 @@ class MotionCoreOutput:
         # is explicitly unverified stop/fault output, not a safe-stop claim.
         elif (
             self.startup.active
-            and not self._learning_motion_emitted
+            and not self.startup.motion_started
             and self.target.source in {"idle", "startup_learning"}
         ):
             # Pre-movement sampling holds zero on blocked/unknown space. No
@@ -1222,7 +1237,7 @@ class MotionCoreOutput:
             self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
-            estop = self.machine.state.mode is MotionMode.ESTOP
+            estop = self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
             prepared = self.controller.propose_tick(
                 ctx.target.velocity,
                 ctx,
@@ -1291,7 +1306,7 @@ class MotionCoreOutput:
                 ):
                     raise ValueError("motion_expired_or_unqualified")
             if self.startup.active and output != Velocity(0, 0):
-                self._learning_motion_emitted = True
+                self.startup.motion_emitted(time.monotonic())
             self.node._emit_motion_core(output, reason)
             self._record_stopping_output(output, time.monotonic())
             self.controller.commit(prepared)
@@ -1326,7 +1341,7 @@ class MotionCoreOutput:
                 self.controller.discard(prepared)
             self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
-            if self.startup.state != "initializing":
+            if self.startup.motion_started and not self.startup.motion_withdrawn:
                 self._interrupt_learning(reason)
             self.node._emit_motion_core(Velocity(0, 0), reason)
             self._record_stopping_output(Velocity(0, 0), time.monotonic())

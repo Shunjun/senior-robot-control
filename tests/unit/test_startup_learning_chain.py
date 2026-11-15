@@ -5,7 +5,7 @@ from senior_control.models import Velocity
 from senior_control.motion.startup_learning import StartupLearning
 
 
-def test_core_owns_startup_and_revoke_interrupts_without_rearming(core, tmp_path):  # noqa: F811
+def test_core_preserves_unmoved_learning_on_estop(core, tmp_path):  # noqa: F811
     from senior_control.motion.state_machine import RecoveryObservation
 
     core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
@@ -18,7 +18,7 @@ def test_core_owns_startup_and_revoke_interrupts_without_rearming(core, tmp_path
     from senior_control.motion.contracts import MotionMode
 
     assert core.machine.state.mode is MotionMode.ESTOP
-    assert core.startup.state == "interrupted"
+    assert core.startup.active
     core._startup_target(10)
     assert core.target.velocity == Velocity(0, 0)
 
@@ -110,7 +110,8 @@ def test_startup_flows_through_real_tick_and_safety_checks(
         assert any(v.vx > 0 for v, _ in node.emitted), (core.startup.summary(), node.emitted[-3:])
     assert core.self_returns.learned == ()  # prior has never become learned at rest
     core.revoke("estop", now=now[0])
-    assert not core.startup.provisional
+    assert core.startup.provisional
+    assert core.startup.velocity == (0 if core.startup.motion_started else .05)
     assert core.self_returns.learned == ()
 
 
@@ -119,7 +120,7 @@ def test_permission_loss_after_first_output_interrupts_and_clears_prior(core, tm
 
     core.startup = StartupLearning(tmp_path / "claim")
     core.startup.state = "moving"
-    core._learning_motion_emitted = True
+    core.startup.motion_emitted(10.)
     assert core._startup_permission_lost(N(permit=None))
     assert core.startup.state == "interrupted"
     assert not core.startup.provisional

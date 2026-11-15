@@ -32,6 +32,8 @@ class StartupLearning:
         self.pose_y = 0.0
         self.pose_yaw = 0.0
         self.started = None
+        self.motion_withdrawn = False
+        self.resample_required = False
         self.previous = None
         self.key = None
         self.samples = 0
@@ -61,11 +63,29 @@ class StartupLearning:
 
     @property
     def velocity(self):
-        return min(0.05, max(0.0, self.distance_remaining)) if self.state == "moving" else 0.0
+        return (
+            min(0.05, max(0.0, self.distance_remaining))
+            if self.state == "moving" and not self.motion_withdrawn
+            else 0.0
+        )
 
     @property
     def distance_remaining(self):
         return 0.15 - self.distance
+
+    @property
+    def motion_started(self):
+        return self.started is not None
+
+    def motion_emitted(self, now):
+        if not self.motion_started:
+            self.started = now
+
+    def hold_motion(self):
+        # Withdrawal is irreversible only after an actual motion attempt. A
+        # pending attempt continues static learning and never creates a new claim.
+        if self.motion_started:
+            self.motion_withdrawn = True
 
     def interrupt(self, reason):
         if self.active:
@@ -74,11 +94,15 @@ class StartupLearning:
     def advance(self, estimate, wheel, *, now, stationary):
         if not self.active:
             return
-        if self.started is not None and (now < self.started or now - self.started > 30):
+        if (
+            self.started is not None
+            and not self.motion_withdrawn
+            and (now < self.started or now - self.started > 30)
+        ):
             self.state, self.reason = "failed", "learning_time_budget"
             return
         if estimate is None or not estimate.healthy:
-            if self.state != "initializing":
+            if self.motion_started and not self.motion_withdrawn:
                 self.interrupt("motion_feedback_unavailable")
             return
         if self.generation is not None and estimate.generation != self.generation:
@@ -91,7 +115,7 @@ class StartupLearning:
             or gyro.value is None
             or now >= min(axis.deadline_steady, gyro.deadline_steady)
         ):
-            if self.state != "initializing":
+            if self.motion_started and not self.motion_withdrawn:
                 self.interrupt("motion_axis_unavailable")
             return
         key = tuple((r.family, r.epoch, r.sequence) for a in (axis, gyro) for r in a.roots)
@@ -102,7 +126,6 @@ class StartupLearning:
             self.samples = self.samples + 1 if stationary else 0
             if self.samples >= 5:
                 self.state, self.reason = "sampling", "physical_interior_prior"
-                self.started = now
             self.previous = now
             self.previous_ros = estimate.computed_ros
             self._record_pose(estimate, stationary)
@@ -111,7 +134,14 @@ class StartupLearning:
         dt = estimate.computed_ros - self.previous_ros if self.previous_ros is not None else 0
         self.previous, self.previous_ros = now, estimate.computed_ros
         if dt < 0 or steady_gap < 0 or steady_gap >= default_policy().hard_age_s:
-            self.interrupt("motion_integration_gap")
+            if not self.motion_started:
+                self.state = "sampling"
+                self.resample_required = True
+                self._frame_stamps.clear()
+                self.pose_history.samples.clear()
+                self._record_pose(estimate, stationary)
+            else:
+                self.interrupt("motion_integration_gap")
             return
         if self.state in {"moving", "braking", "validating"}:
             self.distance += max(0.0, axis.value) * dt
@@ -158,7 +188,9 @@ class StartupLearning:
                 self.interrupt("not_straight_forward")
             elif self.state == "moving" and self.distance >= 0.148:
                 self.state, self.reason = "braking", "target_distance_reached"
-            if self.state == "braking" and stationary:
+            if (
+                self.state == "braking" or (self.state == "moving" and self.motion_withdrawn)
+            ) and stationary:
                 self.state, self.reason = "validating", "post_motion_validation"
                 self.validation_after_ros = estimate.computed_ros
         self._record_pose(estimate, stationary)
@@ -177,6 +209,9 @@ class StartupLearning:
         )
 
     def frame(self, model, observation):
+        if self.resample_required:
+            model.clear()
+            self.resample_required = False
         stamp = observation.scan.stamp
         key = round(stamp * 1e9)
         sample = self.pose_history.at(stamp)
@@ -191,8 +226,11 @@ class StartupLearning:
             sample.pose,
             pose_error_m=sample.position_error_m,
             pose_yaw_error_rad=sample.yaw_error_rad,
-            force=self.state in {"sampling", "validating"},
+            force=self.state in {"sampling", "validating"} or not self.motion_started,
         )
+        if self.state == "moving" and not self.motion_started:
+            model.retain_recent(5)
+            self._frame_stamps = {round(t * 1e9) for t in model.frame_stamps}
         if self.state == "sampling" and len(model.frames) >= 5:
             self.state, self.reason = "moving", "learning_forward"
         elif (
@@ -205,12 +243,23 @@ class StartupLearning:
             self.validation_samples += 1
             if self.validation_samples >= 5:
                 count = model.validate(
-                    independent_motion=(self.motion_verified and self.independent_distance >= 0.08),
+                    independent_motion=(
+                        not self.motion_withdrawn
+                        and self.motion_verified
+                        and self.independent_distance >= 0.08
+                    ),
                 )
                 self.state = (
                     "completed"
-                    if count
-                    or not any(model.interior(p) for _, points in model.frames for p in points)
+                    if (
+                        not self.motion_withdrawn
+                        and (
+                            count
+                            or not any(
+                                model.interior(p) for _, points in model.frames for p in points
+                            )
+                        )
+                    )
                     else "ambiguous"
                 )
                 self.reason = "verified_local_returns" if count else "classification_unverified"

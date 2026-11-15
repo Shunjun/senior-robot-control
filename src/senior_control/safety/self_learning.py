@@ -91,6 +91,17 @@ class SelfReturnModel:
             return True
         return False
 
+    def retain_recent(self, count: int):
+        for values in (
+            self.frames,
+            self.frame_stamps,
+            self.frame_errors,
+            self.frame_yaw_errors,
+            self.frame_observations,
+        ):
+            del values[:-count]
+        self.first_observation = self.frame_observations[0] if self.frames else None
+
     def validate(self, *, independent_motion: bool, motion_error_m=0.0) -> int:
         self.learned = ()
         if not independent_motion or len(self.frames) < 10:

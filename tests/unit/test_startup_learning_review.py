@@ -73,7 +73,9 @@ def test_initialization_wait_does_not_consume_learning_budget(tmp_path):
     for i in range(5):
         owner.advance(estimate(100 + i * 0.1, 0), 0.0, now=100 + i * 0.1, stationary=True)
     assert owner.state == "sampling"
-    assert owner.started == pytest.approx(100.4)
+    assert owner.started is None
+    owner.motion_emitted(100.5)
+    assert owner.started == pytest.approx(100.5)
 
 
 def test_world_support_crossing_unknown_cannot_be_classified_self():
@@ -122,7 +124,7 @@ def test_planned_verified_braking_is_not_permission_loss(core, tmp_path):  # noq
 
     core.startup = StartupLearning(tmp_path / "claim")
     core.startup.state = "braking"
-    core._learning_motion_emitted = True
+    core.startup.motion_emitted(10.)
     permission = N(permit=None, brake=BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True))
     assert not core._startup_permission_lost(permission, 10.0)
     assert core.startup.state == "braking"
