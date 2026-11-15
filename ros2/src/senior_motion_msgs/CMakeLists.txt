@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_motion_msgs)
 find_package(ament_cmake REQUIRED)
-install(DIRECTORY include/ DESTINATION include)
-ament_export_include_directories(include)
+# ament_target_dependencies uses exported targets exclusively when rosidl
+# targets exist, so handwritten headers need their own usage requirements.
+add_library(sensor_timing INTERFACE)
+target_include_directories(sensor_timing INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
+target_compile_features(sensor_timing INTERFACE cxx_std_17)
+install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+install(TARGETS sensor_timing EXPORT export_sensor_timing)
+ament_export_targets(export_sensor_timing)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -36,5 +44,15 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_final_command_frame.py)
   set_tests_properties(final_command_frame_roundtrip PROPERTIES
     ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}")
+  # colcon test runs after installation: exercise the public package export,
+  # including generated and handwritten headers, without source include paths.
+  add_test(NAME installed_header_consumer
+    COMMAND ${CMAKE_COMMAND}
+      "-DPACKAGE_PREFIX=${CMAKE_INSTALL_PREFIX}"
+      "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
+      "-DCONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/installed_header_consumer"
+      "-DCONSUMER_BINARY=${CMAKE_CURRENT_BINARY_DIR}/installed_header_consumer"
+      "-DCONSUMER_CXX=${CMAKE_CXX_COMPILER}"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/test/check_installed_headers.cmake)
 endif()
 ament_package()

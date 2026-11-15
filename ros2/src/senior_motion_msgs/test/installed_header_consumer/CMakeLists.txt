@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.8)
+project(installed_header_consumer LANGUAGES CXX)
+find_package(ament_cmake REQUIRED)
+find_package(senior_motion_msgs REQUIRED)
+add_library(header_consumer OBJECT header_consumer.cpp)
+ament_target_dependencies(header_consumer senior_motion_msgs)
