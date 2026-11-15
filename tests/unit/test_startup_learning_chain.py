@@ -6,6 +6,9 @@ from senior_control.motion.startup_learning import StartupLearning
 
 
 def test_core_owns_startup_and_revoke_interrupts_without_rearming(core, tmp_path):  # noqa: F811
+    from senior_control.motion.state_machine import RecoveryObservation
+
+    core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
     core.startup = StartupLearning(tmp_path / "claim")
     core.startup.state = "moving"
     core._startup_target(10)
@@ -135,3 +138,18 @@ def test_component_reconstruction_cannot_repeat_program_start(core, tmp_path, mo
         assert rebuilt.target.velocity == Velocity(0, 0)
     finally:
         rebuilt.close()
+
+
+def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # noqa: F811
+    from senior_control.motion.contracts import MotionMode
+    from senior_control.motion.state_machine import RecoveryObservation
+
+    core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
+    core.startup = StartupLearning(tmp_path / "claim")
+    core.startup.state = "moving"
+    core._startup_target(10)
+    assert core.machine.state.mode is MotionMode.TASK
+    assert core.machine.state.task_id == core.boot
+    core.startup.state = "completed"
+    core._startup_target(10)
+    assert core.machine.state.task_id is None

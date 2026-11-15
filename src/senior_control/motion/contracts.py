@@ -95,7 +95,7 @@ class AcceptedManualIntent:
 @dataclass(frozen=True)
 class MotionTarget:
     velocity: Velocity
-    source: Literal["manual", "navigation", "idle"]
+    source: Literal["manual", "navigation", "idle", "startup_learning"]
     source_id: str
     deadline_steady: float
     # //Compatible: non-manual pure callers need no normalized stick metadata.

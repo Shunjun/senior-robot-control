@@ -414,6 +414,8 @@ class MotionCoreOutput:
             except (ValueError, KeyError, TypeError):
                 return False
         if self.target.source_id != source_id:
+            self._interrupt_learning("control_takeover")
+            self._retire_startup(now)
             if msg.source_kind == "navigation" and self.machine.task_paused:
                 self._event(K.TASK_RESUME, now, msg.source_id)
             self._event(
@@ -641,13 +643,17 @@ class MotionCoreOutput:
             self.profile.length, self.profile.width, tuple(boundary) if boundary else None
         )
 
-    def _startup_permission_lost(self, permission):
+    def _startup_permission_lost(self, permission, now=None):
         if self.startup.active and self._learning_motion_emitted and permission.permit is None:
             self._interrupt_learning("learning_permission_lost")
-            self._startup_target(time.monotonic())
+            self._startup_target(time.monotonic() if now is None else now)
             self.scheduler.stop()
             return True
         return False
+
+    def _retire_startup(self, now):
+        if self.machine.state.task_id == self.boot:
+            self._event(K.TASK_RETIRED, now, self.boot)
 
     def _startup_target(self, now):
         if self.startup.active:
@@ -657,6 +663,10 @@ class MotionCoreOutput:
             if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
                 self._interrupt_learning("latched_stop")
             elif self.startup.state != "initializing":
+                if self.machine.state.task_id != self.boot:
+                    self._event(K.TASK_START, now, self.boot)
+                if self.machine.state.task_id != self.boot:
+                    return  # Shared arbitration has not admitted this startup task.
                 self.target = MotionTarget(
                     Velocity(self.startup.velocity, 0),
                     "startup_learning",
@@ -665,6 +675,7 @@ class MotionCoreOutput:
                 )
                 return
         if self.target.source == "startup_learning":
+            self._retire_startup(now)
             self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
 
     def _interrupt_learning(self, reason):
@@ -680,6 +691,7 @@ class MotionCoreOutput:
         # One logical transition uses one steady instant. Resampling inside a
         # close followed by its event would make that event appear to go back.
         now = time.monotonic() if now is None else now
+        self._retire_startup(now)
         if reason not in {
             "prepared",
             "release",
@@ -1247,7 +1259,7 @@ class MotionCoreOutput:
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
-            if self._startup_permission_lost(permission):
+            if self._startup_permission_lost(permission, now):
                 # Rebuild with provisional filtering revoked before proposing
                 # any output. The current raw sequence is never re-stamped.
                 perception, pose = self._observation(now)

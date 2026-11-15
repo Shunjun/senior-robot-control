@@ -52,3 +52,5 @@ Files: localization/gps_course.py, optional_motion_inputs.py, sensors/input_conf
 - scan_adapter的匹配候选新增外部特征筛选。程序start的run上下文中，由输出owner从既有polygon生成只读边界快照；它不是自过滤mask，内部/边界回波仅不作为独立激光匹配特征，原始安全scan不变。快照尚未生成则matcher候选等待；轮/IMU相对估计仍可初始化。没有新topic/msg/年龄门。
 - GPS course_frame是显式ENU、heading-only模式，位置/速度协方差有单位约束，未知/零精度不可信；IMU/轮速连续tick资格覆盖整段GPS窗口，不能仅以GPS瞬间的零角速度当全程直行。输出runtime.gps_heading及统一周期诊断，不冒充已有地图航向变换。
 - 编写者已亲读新增owner、过滤、外部特征、start环境、仲裁和配置diff；遵照派单不另派reviewer，负责人后续独立审diff。已有手工mask的离线低层API暂留，生产节点不再读取self_mask_xy，兼容链独立清理不夹带。
+
+- 追加共享状态投影修复：启动owner通过TASK_START/TASK_RETIRED注册/退役，只有共享仲裁接受时才设置启动目标；急停/接管/完成不留虚假活跃身份。新增真实RED→GREEN探针覆盖idle错误投影。

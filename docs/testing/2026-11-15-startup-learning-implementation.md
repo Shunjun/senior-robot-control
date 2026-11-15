@@ -23,11 +23,11 @@ Python环境：共享既有venv（CPython3.12.15），源码用 `PYTHONPATH=src`
 PYTHONPATH=src '/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest tests/unit/test_startup_learning.py tests/unit/test_startup_learning_chain.py tests/unit/test_gps_course.py tests/unit/test_optional_motion_inputs.py tests/unit/test_motion_core_chain.py tests/unit/test_motion_core_handoff.py tests/unit/test_motion_core_startup.py tests/unit/test_motion_core_exit_deadline.py tests/unit/test_motion_core_event_time.py tests/unit/test_motion_core_stop_fallback.py tests/unit/test_limited_motion_core.py tests/unit/test_stopping_fused_input.py tests/unit/test_directional_constraints.py -q --tb=short
 ```
 
-结果 **190 passed**。新增API先跑到缺模块/接口失败，启动实链探针也实际复现了内部遮挡造成sweep_unknown；随后明确验证保守等待分支，没有移动障碍、填造free或放宽profile来使它通过。端点分类、一次性claim、真实急停command、核心tick输出、前方障碍、边界/外伸端点、遮挡、重复纹理/平行面、外部跟随点、撤销、轮空转/独立证据不足、GPS精度不足/转弯/跳变/倒车/原始ENU适配均有定向探针。
+结果 **191 passed**。新增API先跑到缺模块/接口失败，启动实链探针也实际复现了内部遮挡造成sweep_unknown；随后明确验证保守等待分支，没有移动障碍、填造free或放宽profile来使它通过。端点分类、一次性claim、真实急停command、核心tick输出、前方障碍、边界/外伸端点、遮挡、重复纹理/平行面、外部跟随点、撤销、轮空转/独立证据不足、GPS精度不足/转弯/跳变/倒车/原始ENU适配均有定向探针。
 
 ruff对全部新增/受影响Python文件检查通过，git diff --check通过。前序停车测试的纯_snapshot夹具显式补node._profile依赖，未改变原障碍、速度或断言。
 
-额外尝试的 `tests/unit/test_docker_start_helper.py` 有7项Unix socket bind被当前sandbox以PermissionError拒绝、1项skip；未提权重跑，也没有启动真实服务。起初合并回归中的其他34项失败均为纯_snapshot夹具缺node，补齐夹具后已被最终190项覆盖通过。前轮已记录的旧 `test_self_filter::test_uncalibrated_mask_is_unusable` 与生产旧标志忽略规则矛盾，本轮不改、不将其计入通过。
+额外尝试的 `tests/unit/test_docker_start_helper.py` 有7项Unix socket bind被当前sandbox以PermissionError拒绝、1项skip；未提权重跑，也没有启动真实服务。起初合并回归中的其他34项失败均为纯_snapshot夹具缺node，补齐夹具后已被最终191项覆盖通过。前轮已记录的旧 `test_self_filter::test_uncalibrated_mask_is_unusable` 与生产旧标志忽略规则矛盾，本轮不改、不将其计入通过。
 
 ## 解释边界与剩余限制
 
@@ -38,3 +38,7 @@ ruff对全部新增/受影响Python文件检查通过，git diff --check通过�
 暂定先验与learned均依赖正确物理polygon、激光外参及profile软件误差；这些不是已实测保证。无法区分同一支持域内的设备与完全同观测替代物，不能声称解决所有物理不可观测情形。GPS输出为统计朝向观察，不自动校正地图、TF或轮里程计，也未引入任何接收机驱动。
 
 作者已自审实际diff，未派helper；负责人应亲审后统一交付。独立兼容链清理、1米前障碍保守角扫掠等继续排队，没有夹带。具体代码SHA256见 [指纹](2026-11-15-startup-learning-fingerprints.json)。
+
+## 追加状态投影修复
+
+首个功能提交 `6f43312` 后自审补获：启动输出虽受安全链约束，共享MotionState仍可能显示idle。新增 `test_startup_registers_and_retires_shared_runtime_task` 实际RED复现，随后通过TASK_START/TASK_RETIRED接入共享仲裁，并在完成/中断/急停/接管时退役启动身份；MotionTarget类型显式包含startup_learning。未得到共享仲裁接纳不能设置启动运动目标，期间运行状态现在为task或原有obstacle_hold。定向22项先通过，最终完整命令191项通过；没有把该修复隐藏在旧190项证据中。
