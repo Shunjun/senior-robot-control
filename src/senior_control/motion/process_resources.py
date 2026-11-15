@@ -1,29 +1,40 @@
 """Bounded spawn-process resources; no ROS context is inherited across fork."""
 
+from __future__ import annotations
+
 import ctypes
 import multiprocessing as mp
 import os
 import pickle
 import signal
 import sys
+from collections.abc import Callable
 from concurrent.futures import Future
+from multiprocessing.context import BaseContext
+from multiprocessing.process import BaseProcess
+from multiprocessing.synchronize import Event
+from typing import Generic, Literal, TypeAlias, TypeVar, cast
+
+SnapshotT = TypeVar("SnapshotT")
+ResultT = TypeVar("ResultT")
+WorkerReply: TypeAlias = tuple[Literal[True], ResultT] | tuple[Literal[False], str]
 
 
-class LatestSnapshot:
+class LatestSnapshot(Generic[SnapshotT]):
     """One serialized immutable value, never a queue or a blocking busy-lock wait.
 
     Serialization is outside the lock. A reader copies bytes under a try-lock,
     then deserializes its private copy. Oversize data fails explicitly.
     """
 
-    def __init__(self, context, capacity=8 * 1024 * 1024):
+    def __init__(self, context: BaseContext, capacity: int = 8 * 1024 * 1024) -> None:
         self.capacity = capacity
-        self._buffer = context.RawArray("B", capacity)
-        self._length = context.RawValue("I", 0)
-        self._version = context.RawValue("Q", 0)
+        self._buffer = context.RawArray(ctypes.c_ubyte, capacity)
+        self._length = context.RawValue(ctypes.c_uint, 0)
+        self._version = context.RawValue(ctypes.c_ulonglong, 0)
         self._lock = context.Lock()
 
-    def put(self, value):
+    def put(self, value: SnapshotT) -> bool:
         payload = pickle.dumps(value, protocol=5)
         if len(payload) > self.capacity:
             raise ValueError("snapshot_capacity_exceeded")
@@ -37,7 +48,7 @@ class LatestSnapshot:
             self._lock.release()
         return True
 
-    def take(self, after):
+    def take(self, after: int) -> tuple[int, SnapshotT] | None:
         if not self._lock.acquire(False):
             return None
         try:
@@ -47,10 +58,12 @@ class LatestSnapshot:
             payload = bytes(memoryview(self._buffer).cast("B")[: self._length.value])
         finally:
             self._lock.release()
-        return version, pickle.loads(payload)
+        # This private channel only receives values serialized by the paired
+        # producer of the same SnapshotT; pickle cannot express that relation.
+        return version, cast(SnapshotT, pickle.loads(payload))
 
 
-def child_lifetime(parent_pid):
+def child_lifetime(parent_pid: int) -> None:
     """Rootless Linux parent-death cleanup; check the registration race too."""
     if sys.platform == "linux":
         libc = ctypes.CDLL(None, use_errno=True)
@@ -60,7 +73,7 @@ def child_lifetime(parent_pid):
         raise SystemExit(0)
 
 
-def stop_process(process, stop):
+def stop_process(process: BaseProcess, stop: Event) -> None:
     stop.set()
     process.join(timeout=1.0)
     if process.is_alive():
@@ -72,7 +85,12 @@ def stop_process(process, stop):
     process.close()
 
 
-def _refinement_loop(requests, responses, stop, parent_pid):
+def _refinement_loop(
+    requests: LatestSnapshot[Callable[[], ResultT]],
+    responses: LatestSnapshot[WorkerReply[ResultT]],
+    stop: Event,
+    parent_pid: int,
+) -> None:
     child_lifetime(parent_pid)
     version = 0
     while not stop.is_set() and os.getppid() == parent_pid:
@@ -81,6 +99,7 @@ def _refinement_loop(requests, responses, stop, parent_pid):
             stop.wait(0.005)
             continue
         version, task = row
+        result: WorkerReply[ResultT]
         try:
             result = (True, task())
         except Exception as exc:
@@ -89,34 +108,38 @@ def _refinement_loop(requests, responses, stop, parent_pid):
             stop.wait(0.001)
 
 
-class _ProcessFuture(Future):
-    def __init__(self, owner, version):
+class _ProcessFuture(Future[ResultT]):
+    def __init__(self, owner: ProcessWorker[ResultT], version: int) -> None:
         super().__init__()
         self.owner, self.version = owner, version
 
-    def done(self):
+    def done(self) -> bool:
         if not super().done():
             row = self.owner.responses.take(self.version)
             if row is not None:
-                self.owner.response_version, (ok, result) = row
-                if ok:
-                    self.set_result(result)
+                self.owner.response_version, reply = row
+                if reply[0]:
+                    self.set_result(reply[1])
                 else:
-                    self.set_exception(RuntimeError(result))
+                    self.set_exception(RuntimeError(reply[1]))
             elif not self.owner.process.is_alive():
                 self.set_exception(RuntimeError("geometry_process_exited"))
         return super().done()
 
 
-class ProcessWorker:
-    """One dedicated interpreter for one scheduler flight; no executor backlog."""
+class ProcessWorker(Generic[ResultT]):
+    """One dedicated interpreter for one scheduler flight; no executor backlog.
 
-    def __init__(self, *, name="motion-geometry"):
+    ResultT is fixed for this worker: task, result slot and Future must agree.
+    """
+
+    def __init__(self, *, name: str = "motion-geometry") -> None:
         context = mp.get_context("spawn")
-        self.requests, self.responses = LatestSnapshot(context), LatestSnapshot(context)
+        self.requests: LatestSnapshot[Callable[[], ResultT]] = LatestSnapshot(context)
+        self.responses: LatestSnapshot[WorkerReply[ResultT]] = LatestSnapshot(context)
         self.stop = context.Event()
         self.response_version = 0
-        self.flight = None
+        self.flight: _ProcessFuture[ResultT] | None = None
         self.process = context.Process(
             target=_refinement_loop,
             args=(self.requests, self.responses, self.stop, os.getpid()),
@@ -125,7 +148,7 @@ class ProcessWorker:
         self.process.start()
         self._closed = False
 
-    def submit(self, task):
+    def submit(self, task: Callable[[], ResultT]) -> Future[ResultT]:
         if self.stop.is_set() or not self.process.is_alive():
             raise RuntimeError("geometry_process_unavailable")
         if self.flight is not None and not self.flight.done():
@@ -135,7 +158,7 @@ class ProcessWorker:
         self.flight = _ProcessFuture(self, self.response_version)
         return self.flight
 
-    def close(self):
+    def close(self) -> None:
         if self._closed:
             return
         self._closed = True

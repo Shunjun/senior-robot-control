@@ -145,9 +145,7 @@ def test_pending_overlay_clears_without_new_telemetry(sequence, connected):
 
 @pytest.mark.parametrize("pending", [True, False])
 def test_pending_overlay_never_clears_or_relabels_confirmed_estop(pending):
-    confirmed = project_vehicle_state(
-        runtime(10, MotionMode.ESTOP), ConnectionState(True)
-    )
+    confirmed = project_vehicle_state(runtime(10, MotionMode.ESTOP), ConnectionState(True))
     stale = project_vehicle_state(
         runtime(9),
         ConnectionState(False),

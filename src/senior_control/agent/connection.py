@@ -171,7 +171,7 @@ class IpcMotion:
             received_at=received_steady,
         )
 
-    async def send_intent(
+    async def send_intent_frame(
         self,
         envelope: ManualIntentEnvelope,
         *,

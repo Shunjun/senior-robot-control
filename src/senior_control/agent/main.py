@@ -243,10 +243,7 @@ class Agent:
 
     @property
     def _safety_blocked(self) -> bool:
-        return (
-            self._estop_inflight
-            or any(key[0] == "safety.estop" for key in self._safety_pending)
-        )
+        return self._estop_inflight or any(key[0] == "safety.estop" for key in self._safety_pending)
 
     @property
     def continuity_generation(self) -> int:
@@ -697,13 +694,17 @@ class Agent:
                 logger.error(
                     "safety delivery interrupted; request_id=%s type=%s pending=%d; "
                     "vehicle owner state is unconfirmed",
-                    envelope.request_id, kind, len(self._safety_pending),
+                    envelope.request_id,
+                    kind,
+                    len(self._safety_pending),
                 )
                 raise
             except DomainError as exc:
                 logger.error(
                     "safety delivery not confirmed; request_id=%s type=%s error=%s",
-                    envelope.request_id, kind, exc.code.value,
+                    envelope.request_id,
+                    kind,
+                    exc.code.value,
                 )
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))

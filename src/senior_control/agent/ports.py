@@ -437,12 +437,13 @@ class TaskAwareMotion(IpcMotion):
     async def send_intent(
         self, envelope: ManualIntentEnvelope, *, received_steady: float, deadline_steady: float
     ) -> None:
+        """Select vehicle-owned settings, then hand a complete frame to the transport."""
         if self.settings is None:
             raise DomainError(ErrorCode.UNAVAILABLE, "vehicle driving profile is not selected")
         if self._manual_clock() >= deadline_steady:
             return
         snapshot = self.settings.published_snapshot
-        await super().send_intent(
+        await super().send_intent_frame(
             envelope,
             received_steady=received_steady,
             deadline_steady=deadline_steady,

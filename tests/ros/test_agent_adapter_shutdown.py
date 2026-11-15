@@ -12,7 +12,6 @@ def adapter_command(script, tmp_path):
     return [sys.executable, "-c", script]
 
 
-
 @pytest.mark.parametrize("signal_name", ["SIGINT", "SIGTERM"])
 def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     pytest.importorskip("rclpy")

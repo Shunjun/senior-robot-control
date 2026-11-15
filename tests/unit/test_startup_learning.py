@@ -133,7 +133,7 @@ def test_owner_finishes_once_and_marks_wheel_only_motion_ambiguous(tmp_path):
         obs = observation(0.15)
         owner.frame(m, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
     assert owner.state == "moving"
-    owner.motion_emitted(1.)
+    owner.motion_emitted(1.0)
     for i in range(11, 42):
         owner.advance(estimate(i, 0.05), 0.05, now=i / 10, stationary=False)
         obs = observation(0.15)
@@ -216,7 +216,7 @@ def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_p
         owner.advance(estimate(i, 0), 0.0, now=i / 10, stationary=True)
         obs = side_observation(0.15)
         owner.frame(model, replace(obs, scan=replace(obs.scan, stamp=i / 10)))
-    owner.motion_emitted(1.)
+    owner.motion_emitted(1.0)
     for i in range(11, 42):
         owner.advance(estimate(i, 0.05), 0.05, now=i / 10, stationary=False)
         obs = side_observation(0.15)

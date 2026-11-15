@@ -165,7 +165,7 @@ class MotionController:
         self._last_feedback[role] = key
         return value
 
-    def _still(self, wheel, imu, now):
+    def _still(self, wheel: Feedback | None, imu: Feedback | None, now: float) -> None:
         self.measured_still = stationary(
             wheel,
             imu,
@@ -190,7 +190,7 @@ class MotionController:
             command, reason, verified, emergency, self.engine.identity(ctx), deadline
         )
 
-    def reset_at_stillness(self, wheel, imu, now: float) -> bool:
+    def reset_at_stillness(self, wheel: Feedback | None, imu: Feedback | None, now: float) -> bool:
         """Reset only from the same raw wheel/IMU evidence as the state owner."""
         self._prepared = None
         self._still(wheel, imu, now)

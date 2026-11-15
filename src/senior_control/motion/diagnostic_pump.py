@@ -3,9 +3,11 @@
 import threading
 import time
 
+from senior_control.runtime.diagnostics import RuntimeDiagnostics
+
 
 class DiagnosticPump:
-    def __init__(self, diagnostics):
+    def __init__(self, diagnostics: RuntimeDiagnostics) -> None:
         self.stop = threading.Event()
         self.thread = threading.Thread(
             target=self._run,
@@ -15,10 +17,10 @@ class DiagnosticPump:
         )
         self.thread.start()
 
-    def _run(self, diagnostics):
+    def _run(self, diagnostics: RuntimeDiagnostics) -> None:
         while not self.stop.wait(0.05):
             diagnostics.pump(time.monotonic())
 
-    def close(self):
+    def close(self) -> None:
         self.stop.set()
         self.thread.join(timeout=1.0)

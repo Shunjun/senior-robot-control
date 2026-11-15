@@ -291,12 +291,14 @@ class Hub:
     def _push_connection(self, robot_id: str, only: Connection | None = None) -> None:
         """Transport identity is available even before the first vehicle report."""
         link = self._links[robot_id]
-        frame = json.dumps({
-            "v": 1,
-            "type": CONNECTION,
-            "robot_id": robot_id,
-            "connection_epoch": link.agent.epoch if link.agent is not None else 0,
-        }).encode()
+        frame = json.dumps(
+            {
+                "v": 1,
+                "type": CONNECTION,
+                "robot_id": robot_id,
+                "connection_epoch": link.agent.epoch if link.agent is not None else 0,
+            }
+        ).encode()
         for controller in list(link.controllers) if only is None else [only]:
             if not controller.outbox.put(frame, CONNECTION):
                 controller.outbox.close(CLOSE_OVERLOAD)
@@ -706,7 +708,9 @@ class Hub:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
             else:
                 connection.manual_requests[envelope.request_id] = (
-                    envelope.session_id, envelope.seq, envelope.type,
+                    envelope.session_id,
+                    envelope.seq,
+                    envelope.type,
                 )
             return
         if isinstance(envelope, WorkspaceEnvelope):
