@@ -1,7 +1,6 @@
-"""Pure bounded reachability certificates; no actuator, authority or task side effects.
+"""Pure reachability checks over caller-declared response/risk assumptions.
 
-The caller supplies independently supported mode/scene envelopes. Statistical
-covariance and wheel references alone never establish these physical bounds.
+Software deployment assumptions are not measured physical guarantees.
 """
 
 import math
@@ -282,6 +281,13 @@ class AxisStop:
     phases: tuple[StopPhase, ...]
 
 
+@dataclass(frozen=True)
+class StopPrediction:
+    linear: AxisStop
+    yaw: AxisStop
+    horizon_s: float
+
+
 def stop_axis(speed: float, accel_upper: float, decel: float, jerk: float, lag: float) -> AxisStop:
     """Exact positive-speed S-curve upper profile, including reaction and jerk release.
 
@@ -523,15 +529,10 @@ class ConstraintEngine:
         r = s.response
         v = max(abs(speed_linear[0]), abs(speed_linear[1]), abs(target.vx))
         w = max(abs(speed_yaw[0]), abs(speed_yaw[1]), abs(target.wz))
-        a = (
-            e.reaction_accel_upper
-            if stop_only
-            else Velocity(r.accel if v else 0, r.yaw_accel if w else 0)
-        )
-        stop_v = stop_axis(v, a.vx, r.decel, r.jerk, r.actuator_lag)
-        stop_w = stop_axis(w, a.wz, r.yaw_decel, r.yaw_jerk, r.actuator_lag)
+        prediction = self.stop_prediction(s, target, stop_only=stop_only)
+        stop_v, stop_w = prediction.linear, prediction.yaw
         drive = 0.0 if stop_only else self.config.lease_s
-        horizon = max(stop_v.duration, stop_w.duration, e.lateral_stop_s or 0.0) + drive
+        horizon = prediction.horizon_s
         if horizon > e.max_horizon_s:
             raise ValueError("model_horizon_exceeded")
         length = stop_v.distance + v * drive
@@ -572,6 +573,27 @@ class ConstraintEngine:
         return SweepCertificate(
             target, sweep, physical, domain_v, domain_w, horizon, e, _response_key(r)
         )
+
+    def stop_prediction(
+        self, s: ConstraintSnapshot, target: Velocity | None = None, *, stop_only: bool = True
+    ) -> StopPrediction:
+        """The same reaction/jerk model used by geometry, before horizon rejection."""
+        e = s.envelope
+        assert e is not None
+        target = target or Velocity(0, 0)
+        linear, yaw = self._bounds(s) if stop_only else self._effective_bounds(s)
+        v = max(abs(linear[0]), abs(linear[1]), abs(target.vx))
+        w = max(abs(yaw[0]), abs(yaw[1]), abs(target.wz))
+        r = s.response
+        a = (
+            e.reaction_accel_upper
+            if stop_only
+            else Velocity(r.accel if v else 0, r.yaw_accel if w else 0)
+        )
+        stop_v = stop_axis(v, a.vx, r.decel, r.jerk, r.actuator_lag)
+        stop_w = stop_axis(w, a.wz, r.yaw_decel, r.yaw_jerk, r.actuator_lag)
+        horizon = max(stop_v.duration, stop_w.duration, e.lateral_stop_s or 0.0)
+        return StopPrediction(stop_v, stop_w, horizon + (0.0 if stop_only else self.config.lease_s))
 
     def _clear(self, c: SweepCertificate, s: ConstraintSnapshot, now: float) -> str | None:
         assert s.envelope is not None

@@ -64,6 +64,7 @@ class Replay:
         )
         self.core.controller._last_now = clock.steady - 0.05
         self.free = False
+        self.collision = False
         self.decisions = []
         actual_tick = self.core.controller.propose_tick
 
@@ -87,7 +88,8 @@ class Replay:
         )
         perception = prepare_perception(
             patches,
-            tuple(tuple(p) for p in self.capture["hit_witnesses"]),
+            tuple(tuple(p) for p in self.capture["hit_witnesses"])
+            + (((0.0, 0.0),) if self.collision else ()),
             error_m=0.02,
             stamp_steady=now - 0.01,
             deadline_steady=now + 0.79,
@@ -152,6 +154,7 @@ class Replay:
         packet = copy.deepcopy(self.capture["recovery_references"][-1])
         self.core.sensors.estimator.invalidate("laser")
         self.free = False
+        self.collision = True
         packet["reference"]["end_ros"] = packet["sampled_ros"] - 1.0
         packet["reference"]["start_ros"] = packet["reference"]["end_ros"] - 0.1
         return self.step(packet, ros=packet["sampled_ros"])
@@ -175,16 +178,19 @@ def replay(monkeypatch):
 
 def test_captured_startup_unknown_stop_denies_motion_without_fault(replay):
     state = replay.step(ros=1.46)
-    assert replay.decisions[-1].reason == "stop_envelope_blocked"
+    # Original captured witnesses stay unchanged. Removing the fictitious
+    # maximum-speed inertia exposes the actual remaining unknown-space reason.
+    assert replay.decisions[-1].reason == "sweep_unknown"
     assert replay.decisions[-1].emergency and not replay.decisions[-1].verified
     assert replay.decisions[-1].command is None
     assert replay.core.scheduler.current.permit is None
-    assert replay.core.scheduler.current.brake.kind is BrakeKind.EMERGENCY
+    assert replay.core.scheduler.current.brake.kind is BrakeKind.CONTROLLED
     assert not replay.core.scheduler.current.brake.stop_verified
     assert replay.node.output[-1][0] == Velocity(0, 0)
     assert not state.stationary and state.body_reference is None
-    assert state.mode == "feedback_stop"
-    assert state.fault_revision == 0 and "acquire" not in state.allowed_actions
+    assert state.mode == "braking"
+    assert state.healthy and state.fault_revision == 0
+    assert "acquire" in state.allowed_actions
 
 
 def test_captured_startup_recovers_to_real_navigation_admission(replay, navigation):  # noqa: F811
@@ -292,6 +298,10 @@ def test_source_intent_then_release_preserves_one_way_startup(
     )
     assert core.command(close)
     assert core.target.source == "idle" and core.controller.trajectory.velocity == Velocity(0, 0)
+    # A real synthetic occupied point in the current body isolates the
+    # one-way fault classification; missing independent body no longer creates
+    # a fictitious long sweep into the captured distant wall.
+    replay.collision = True
     state = replay.step(ros=1.46)
     assert state.mode == expected_mode and state.fault_revision == expected_fault
 
@@ -313,5 +323,6 @@ def test_startup_classification_does_not_clear_preexisting_fault_or_estop(replay
 )
 def test_nonzero_trajectory_is_not_startup_waiting(replay, velocity, acceleration):
     replay.core.controller.trajectory = Trajectory(velocity, acceleration)
+    replay.collision = True
     state = replay.step(ros=1.46)
     assert state.mode == "execution_fault" and state.fault_revision == 1

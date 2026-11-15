@@ -6,7 +6,7 @@
   "simulation_only": false,
   "max_age": 0.5,
   "accel": 0.2,
-  "decel": 0.1,
+  "decel": 0.5,
   "jerk": 0.4,
   "yaw_accel": 0.3,
   "yaw_decel": 0.15,

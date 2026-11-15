@@ -5,12 +5,14 @@ from dataclasses import replace
 import pytest
 from test_directional_constraints import scene
 from test_motion_core_handoff import core  # noqa: F401
+from test_unified_motion_runtime import point
 
 from senior_control.agent.manual_control import ManualIngress
 from senior_control.models import Pose2D, Velocity
 from senior_control.motion.contracts import ManualIntent, MotionTarget
-from senior_control.motion.controller import Feedback
+from senior_control.motion.estimator import MotionObservation, Origin
 from senior_control.motion.manual_target import ManualLinearTarget
+from senior_control.motion.observations import Source
 from senior_control.motion.source_modes import SourceMode
 from senior_control.settings.models import vehicle_settings_profile
 
@@ -46,21 +48,12 @@ def context(
     core.target = MotionTarget(
         sample.velocity, source, "authority:1", 10.3, metadata if source == "manual" else None
     )
-    core._reference = {"sampled_steady": 10.0}
-    wheel = Feedback(Velocity(0, 0), 10.0, 10.8, "wheel", 1, True, "synthetic")
+    # Exercise the same single owner as production instead of passing a
+    # fabricated feedback object with no canonical estimate behind it.
+    core.sensors.ingest(point(Source.WHEEL, 10.0, 10.0, (0.0, 0.0)), 10, 10, 10)
+    core.sensors.ingest(point(Source.IMU, 10.0, 10.0, (0.0,)), 10, 10, 10)
+    ref, _, wheel = core.sensors.estimate(10, 10)
     imu = {"sample": {"values": [0.0]}}
-    ref = {
-        "mode": SourceMode.WHEEL_IMU_LIMITED.value,
-        "start_ros": 9.9,
-        "end_ros": 10.0,
-        "average": None,
-        "source_health": [
-            {"source": s, "epoch": s, "ready": True, "valid_until_steady": 10.8}
-            for s in ("wheel", "imu")
-        ],
-    }
-    # A narrow synthetic passive envelope keeps this a target/scene test.
-    core.profile = replace(core.profile, assumed_body_cap=0.01, linear_error=0.0)
     return core._snapshot(
         ref,
         None,
@@ -110,17 +103,20 @@ def test_normal_cap_still_bounds_manual_degraded_speed(core):  # noqa: F811
 @pytest.mark.parametrize("gear,limit", [("low", 5 / 9), ("high", 25 / 18)])
 def test_normal_mode_preserves_gear_percentage(core, gear, limit):  # noqa: F811
     ctx = context(core, 0.5, gear, degraded_limit=0.1)
-    body = Feedback(Velocity(0, 0), 10.0, 10.8, "body", 1, True, "synthetic")
-    ref = {
-        "mode": SourceMode.LASER_REFERENCE.value,
-        "start_ros": 9.9,
-        "end_ros": 10.0,
-        "average": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
-        "source_health": [
-            {"source": "laser", "epoch": "laser", "ready": True, "valid_until_steady": 10.8}
-        ],
-    }
-    actual = core._snapshot(ref, body, body, None, False, 10.0, ctx.perception, ctx.pose)
+    core.sensors.ingest_observation(
+        MotionObservation(
+            "laser",
+            (0.0, None, 0.0),
+            10.0,
+            (Origin("laser", "boot", 1, 10.0, 10.0, 10.0),),
+            independent=(True, True, True),
+        ),
+        10.0,
+        10.0,
+    )
+    ref, body, wheel = core.sensors.estimate(10.0, 10.0)
+    assert ref["mode"] == SourceMode.FUSED_REFERENCE.value
+    actual = core._snapshot(ref, body, wheel, None, False, 10.0, ctx.perception, ctx.pose)
     assert actual.target.velocity.vx == pytest.approx(0.5 * limit)
     assert actual.envelope.linear_cap_mps == core.profile.cap
 

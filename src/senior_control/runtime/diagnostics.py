@@ -121,6 +121,7 @@ class RuntimeDiagnostics:
         self._policy = queue_policy or QueueWarningPolicy()
         self._lock = RLock()
         self._stats: dict[str, _Stats] = {}
+        self._summaries: dict[str, dict[str, Any]] = {}
         self._last_keys: dict[str, OrderedDict[Hashable, None]] = {}
         self._sensor_results: dict[str, int] = {}
         self._queues: dict[str, _QueueState] = {}
@@ -202,6 +203,14 @@ class RuntimeDiagnostics:
     def duration(self, name: str, seconds: float) -> None:
         with self._lock:
             self._record("duration." + name, seconds)
+
+    def summary(self, name: str, values: dict[str, Any]) -> None:
+        """Bounded latest context, emitted by the existing periodic DEBUG pump."""
+        with self._lock:
+            if name not in self._summaries and len(self._summaries) >= self._max:
+                self.unregistered = min(_LIMIT, self.unregistered + 1)
+                return
+            self._summaries[name] = dict(values)
 
     def queue(
         self,
@@ -426,6 +435,7 @@ class RuntimeDiagnostics:
                         dict(
                             event="runtime_statistics",
                             streams={name: s.report() for name, s in self._stats.items()},
+                            summaries=dict(self._summaries),
                             sensor_results=dict(self._sensor_results),
                             unregistered=self.unregistered,
                             queues={
@@ -435,6 +445,7 @@ class RuntimeDiagnostics:
                     )
                 )
                 self._stats.clear()
+                self._summaries.clear()
                 self._sensor_results.clear()
                 self._last_flush = now
             self._emitting = True

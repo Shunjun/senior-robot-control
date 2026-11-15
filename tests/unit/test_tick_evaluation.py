@@ -29,6 +29,9 @@ def test_real_core_shares_one_base_stop_but_keeps_independent_tracking(replay, m
     assert core.command(
         N(
             close_reason="intent",
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             source_kind="navigation",
             source_id="captured-route",
             source_epoch=1,
@@ -303,6 +306,9 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
     assert core.command(
         N(
             close_reason="intent",
+            manual_linear=0.0,
+            manual_linear_limit=0.0,
+            degraded_linear_limit=0.0,
             source_kind="navigation",
             source_id="route",
             source_epoch=1,
@@ -348,8 +354,8 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
     core.executor.shutdown(wait=True)
     assert captured[0].brake.reason == "permit_expired_or_changed"
     state = json.loads(replay.node.messages[-1].data)
-    assert state["reason"] == "laser_reference:" + decisions[0].reason
-    assert state["reason"] == "laser_reference:waiting_refinement"
+    assert state["reason"] == "fused_reference:" + decisions[0].reason
+    assert state["reason"] == "fused_reference:waiting_refinement"
     assert replay.node.output[-1][0] == decisions[0].command
     assert state["sampled_steady"] == replay.clock.steady
     assert state["valid_until"] == replay.clock.steady + 0.15

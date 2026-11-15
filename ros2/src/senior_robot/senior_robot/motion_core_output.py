@@ -38,6 +38,7 @@ from senior_control.motion.kinematics import compose, inverse
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+from senior_control.motion.stopping_input import stopping_domains
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
 from senior_control.safety.motion_runtime import SourceEpochFence
@@ -843,7 +844,6 @@ class MotionCoreOutput:
             True,
             "unified current control estimate; no truth bound",
         )
-        body = self.sensors.independent
         p = self.profile
         acceleration_upper = self.acceleration_model.upper
         response = ResponseBounds(
@@ -883,27 +883,11 @@ class MotionCoreOutput:
             )
         a = self.controller.trajectory.acceleration
         v = self.controller.trajectory.velocity
-        # Independent deployment response envelope, not wheel truth.
-        # Hardware requires explicit evidence and operating conditions.
-        if body is None:
-            # Body speed is unknown: use the independent whole-body envelope.
-            linear = (-p.assumed_body_cap, p.assumed_body_cap)
-            gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
-            angular = (gyro - p.yaw_error, gyro + p.yaw_error)
-        else:
-            axes = self.sensors.latest.independent_axes
-            assert axes is not None
-            # Each current prediction retains its original support/age and error.
-            # Known total error already includes projection; unknown raw error
-            # uses the deployment policy plus projection once, never age=0.
-            dv = p.linear_error + axes[0].prediction_error
-            dw = p.yaw_error + axes[1].prediction_error
-            if axes[0].error is not None:
-                dv = max(dv, axes[0].error)
-            if axes[1].error is not None:
-                dw = max(dw, axes[1].error)
-            linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
-            angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = stopping_domains(
+            estimate, v, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
         risk = RiskEnvelope(
             p.profile_id,
             p.risk_basis or p.profile_id,
@@ -945,9 +929,33 @@ class MotionCoreOutput:
         )
         return ctx
 
+    def _diagnose_stopping(self, ctx, reason):
+        estimate = self.sensors.latest
+        values = dict(
+            basis="software risk assumptions; no measured guarantee",
+            linear_interval_mps=ctx.envelope.linear_interval,
+            yaw_interval_rps=ctx.envelope.yaw_interval,
+            model_allowed_s=ctx.envelope.max_horizon_s,
+            feedback_deadline_steady=ctx.motion.valid_until_steady,
+            axis_age_s=[estimate.vx.observation_age_s, estimate.wz.observation_age_s],
+            axis_reason=[estimate.vx.reason, estimate.wz.reason],
+            constraint_reason=reason,
+        )
+        try:
+            prediction = self.engine.stop_prediction(ctx)
+            values.update(
+                predicted_stop_s=prediction.horizon_s,
+                linear_stop_distance_m=prediction.linear.distance,
+                yaw_stop_angle_rad=prediction.yaw.distance,
+                model_horizon_exceeded=prediction.horizon_s > ctx.envelope.max_horizon_s,
+            )
+        except ValueError as error:
+            values["prediction_error"] = str(error)
+        self.diagnostics.summary("stopping", values)
+
     def _imu_state(self, packet, now):
-        # Existing stop-envelope consumer receives independent yaw evidence only;
-        # the canonical wheel/model control estimate is not a physical gyro.
+        # //Compatible: retain the old raw-shaped independent yaw view for
+        # existing controller diagnostics. Stopping consumes the fused estimate.
         estimate = self.sensors.latest
         axis = (
             None
@@ -1080,6 +1088,9 @@ class MotionCoreOutput:
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
+            self._diagnose_stopping(
+                ctx, None if permission.brake is None else permission.brake.reason
+            )
             estop = self.machine.state.mode is MotionMode.ESTOP
             prepared = self.controller.propose_tick(
                 ctx.target.velocity,
