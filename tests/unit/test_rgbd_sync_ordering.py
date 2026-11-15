@@ -69,3 +69,18 @@ def test_reoffered_same_object_is_consumed_once_and_duplicate_slot_is_dropped(mo
     state = d.snapshot("vision.rgb_depth_pair.rgb")
     assert state.pending == 1 and state.dropped_total == 1
     assert s.offer_depth(depth(2.0)) is not None
+
+
+def test_unusable_nan_slot_is_not_retained_as_newer_than_the_match(monkeypatch):
+    import senior_control.runtime.diagnostics as module
+
+    d = RuntimeDiagnostics(lambda *_: None)
+    monkeypatch.setattr(module, "process_diagnostics", lambda: d)
+    s = RgbdSynchronizer(max_skew_s=0.01)
+    for stamp in (2.0, float("nan"), 1.0):
+        s.offer_rgb(rgb(stamp))
+    assert s.offer_depth(depth(1.0)) is not None
+    state = d.snapshot("vision.rgb_depth_pair.rgb")
+    assert state.pending == 1 and state.dropped_total == 1
+    assert s.offer_depth(depth(2.0)) is not None
+    assert d.snapshot("vision.rgb_depth_pair.rgb").pending == 0

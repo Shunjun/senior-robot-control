@@ -1,7 +1,6 @@
 {
-  "parent_commit": "28d0635a561a176a52fba70596707a0a815dbc28",
-  "production_source_sha256": "9324799e47b0bd5554ccb8ccd2df4a147452c0139fb0ed7a02aa7a9efffbda92",
-  "code_and_tests_sha256": "cf6d299d69dc8e820a9ee4916cf3b99056f48a50111667717c092d3a279117f6",
+  "production_source_sha256": "68a87641cf20f7f197ee28a6a38c2b9f3bb4b56777c5414bd97b87398affe10a",
+  "code_and_tests_sha256": "4d59ed90b06f88e78471423df62f70668c098081ef8583e234a37ecd678d7136",
   "fingerprint_files": [
     "ros2/src/senior_robot/senior_robot/motion_core_output.py",
     "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py",
@@ -47,21 +46,8 @@
         "-q",
         "--tb=short"
       ],
-      "stdout": "........................................................................ [ 36%]\n........................................................................ [ 72%]\n.......................................................                  [100%]\n199 passed in 7.64s\n",
-      "note": "199 passed before addition of the exact (0.2,0,0) fixture; production source unchanged afterward"
-    },
-    {
-      "argv": [
-        "python",
-        "-m",
-        "pytest",
-        "tests/unit/test_relative_interval_regressions.py",
-        "tests/unit/test_rgbd_sync_ordering.py",
-        "-q",
-        "--tb=short"
-      ],
-      "stdout": "...................                                                      [100%]\n19 passed in 1.58s\n",
-      "note": "Final 19 new regressions, including exact three-axis reproduction; do not sum duplicate tests"
+      "stdout": "........................................................................ [ 35%]\n........................................................................ [ 71%]\n.........................................................                [100%]\n201 passed in 7.85s\n",
+      "note": "Final delivery source and current test collection, including exact three-axis and NaN predicate boundary coverage"
     }
   ],
   "static_commands": [
@@ -115,5 +101,18 @@
     "No Linux ROS generation/linking, DDS runtime, VM or physical vehicle validation",
     "Existing full-mypy baseline errors were not re-run or claimed fixed",
     "No parking-domain/decel/self-filter changes"
-  ]
+  ],
+  "review_base_commit": "28d0635a561a176a52fba70596707a0a815dbc28",
+  "first_repair_commit": "58677cb931753c02472fa261a1c91b0d6509534e",
+  "historical_checkpoints": [
+    {
+      "result": "199 passed in 7.64s",
+      "note": "199 passed before addition of the exact (0.2,0,0) fixture; production source unchanged afterward"
+    },
+    {
+      "result": "19 passed in 1.58s",
+      "note": "Final 19 new regressions, including exact three-axis reproduction; do not sum duplicate tests"
+    }
+  ],
+  "strict_predicate_red": "1 failed in 0.06s"
 }

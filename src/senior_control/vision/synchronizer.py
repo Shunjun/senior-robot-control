@@ -120,7 +120,9 @@ class RgbdSynchronizer:
             consumed = False
             for index in range(len(queue) - 1, -1, -1):
                 frame = queue[index]
-                if frame.stamp <= matched.stamp:
+                # Preserve the original strict keep predicate, including its
+                # handling of unusable NaN stamps (not a newer frame).
+                if not frame.stamp > matched.stamp:
                     if frame is matched and not consumed:
                         queue.take_index(index)
                         consumed = True

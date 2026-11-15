@@ -1,6 +1,6 @@
 # 共同积分历史与乱序配对返修
 
-当前状态：负责人已亲读R1–R3增量，主要修正已到位，继续累计审阅发现P1/P2两项回归；本轮以 `28d0635a561a176a52fba70596707a0a815dbc28` 为父提交追加修复。累计100文件审阅仍未完成，本次提交待亲审，不声明ROS或整车验收。分支及工作区保持 `fix/degraded-drive-speed` / `/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed`。
+当前状态：负责人已亲读R1–R3增量，主要修正已到位，继续累计审阅发现P1/P2两项回归；本轮以 `28d0635a561a176a52fba70596707a0a815dbc28` 为审阅基线追加修复，先提交 `58677cb931753c02472fa261a1c91b0d6509534e`，再追加原过滤谓词边界补充；没有改写原提交。累计100文件审阅仍未完成，本次提交待亲审，不声明ROS或整车验收。分支及工作区保持 `fix/degraded-drive-speed` / `/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed`。
 
 ## P1：计算相对区间，抵消共同积分前缀
 
@@ -27,14 +27,14 @@
 
 RgbdSynchronizer的offer没有单调输入前提，原while队首算法确会遗漏后面的matched帧。现在反向遍历完整有界deque：消费matched对象一次，删除所有更早及重复stamp槽，保留所有更新帧的原顺序及原enqueue时间。未增加单调门或来源拒绝。
 
-DiagnosticDeque新增take_index，和discard_index区分真正消费/旧帧丢弃，不重建deque或重新入队。RGB先到/Depth先到、乱序、二次重复配对、未消费新帧、相同对象重入以及pending/drop/oldest_wait统计均覆盖。输入容量及原max_skew规则不变。
+DiagnosticDeque新增take_index，和discard_index区分真正消费/旧帧丢弃，不重建deque或重新入队。RGB先到/Depth先到、乱序、二次重复配对、未消费新帧、相同对象重入以及pending/drop/oldest_wait统计均覆盖。输入容量及原max_skew规则不变。最终核对还恢复了原函数严格 `stamp > matched` 的保留谓词：NaN不能被当成更新帧残留；该边界先复现pending=2而应为1，再修正并覆盖。
 
 motion_core_output相邻注释已统一为footprint半径，移除farthest observed range的矛盾表述。
 
 ## 验证与范围
 
 - 新用例先得到 **10 failed,1 passed**，复现P1/P2；后续补齐精确三分量、源切换边界、vx/wz真实缺失及恢复、部分到期仍有非零名义积分等覆盖。
-- 受影响运动/感知/配对/core组合组最终 **199 passed**；之后仅补精确三分量测试，生产源码未再变，最终两个新增测试文件 **19 passed**。不将重复覆盖相加成独立用例总数；精确argv、父版本、生产源码/测试指纹和stdout见 `2026-11-15-relative-interval-sync-verification.json`。
+- 最终受影响运动/感知/配对/core组合组 **201 passed**，包含20项新增回归。中途199项及后补精确三分量时19项通过记录保留在verification历史检查点；随后新增NaN过滤谓词生产边界修正，才重新验证本轮受影响组，不重复累计测试数；精确argv、父版本、生产源码/测试指纹和stdout见 `2026-11-15-relative-interval-sync-verification.json`。
 - 首轮受影响组为197 passed/1 failed，失败来自上一轮人为固定“捕获近墙记录必须无许可”的测试期望。P1修正后该软件低速候选可证明通行，因此改为验证速度误差仍保留、正确局部对齐可形成许可，并用显式障碍覆盖验证仍拦截。没有删掉障碍保护、清零R3速度误差或压低软件参数来恢复旧结果；上一轮把这一记录固定为负例的结论现被更正，旧执行事实仍保留在阶段报告。
 - 初期恢复序号夹具低于原frontier被正确拒绝，已使合成输入序号单调；组合用合成ROS纳秒时钟，避免测试生成的亚纳秒浮点差异。未放松生产replay/clock保护。
 - 8个变更Python文件Ruff check/format --check、py_compile、git diff --check通过；3个变更纯源码模块严格mypy通过。未例行重跑不受影响前端/C++构建或全量mypy，既有4个基线类型错误状态见前一报告，不声明已修复。
