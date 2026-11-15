@@ -1,0 +1,98 @@
+{
+  "base": "e277e6326b416e0726ad3cf4f650b56b468180ef",
+  "cwd": "/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed",
+  "environment": {
+    "PYTHONPATH": "src"
+  },
+  "checks": [
+    {
+      "argv": [
+        "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/unit/test_stopping_fused_input.py",
+        "tests/unit/test_directional_constraints.py",
+        "tests/unit/test_motion_controller.py",
+        "tests/unit/test_prepared_control.py",
+        "tests/unit/test_tick_evaluation.py",
+        "tests/unit/test_constraint_scheduling.py",
+        "tests/unit/test_motion_core_startup.py",
+        "tests/unit/test_motion_core_chain.py",
+        "tests/unit/test_motion_core_exit_deadline.py",
+        "tests/unit/test_motion_core_stop_fallback.py",
+        "tests/unit/test_limited_motion_core.py",
+        "tests/unit/test_degraded_manual_speed.py",
+        "tests/unit/test_runtime_diagnostics.py",
+        "tests/unit/test_estimation_review_contracts.py",
+        "tests/unit/test_unified_motion_runtime.py",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "output": "........................................................................ [ 21%]\n........................................................................ [ 43%]\n........................................................................ [ 64%]\n........................................................................ [ 86%]\n..............................................                           [100%]\n334 passed in 21.11s\n"
+    },
+    {
+      "argv": [
+        "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/ruff",
+        "check",
+        "src/senior_control/motion/stopping_input.py",
+        "src/senior_control/motion/constraints.py",
+        "src/senior_control/runtime/diagnostics.py",
+        "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+        "tests/unit/test_stopping_fused_input.py",
+        "tests/unit/test_tick_evaluation.py"
+      ],
+      "exit_code": 0,
+      "output": "All checks passed!\n"
+    },
+    {
+      "argv": [
+        "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/ruff",
+        "format",
+        "--check",
+        "src/senior_control/motion/stopping_input.py",
+        "src/senior_control/motion/constraints.py",
+        "src/senior_control/runtime/diagnostics.py",
+        "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+        "tests/unit/test_stopping_fused_input.py",
+        "tests/unit/test_tick_evaluation.py"
+      ],
+      "exit_code": 0,
+      "output": "6 files already formatted\n"
+    },
+    {
+      "argv": [
+        "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/mypy",
+        "--follow-imports=silent",
+        "src/senior_control/motion/stopping_input.py",
+        "src/senior_control/motion/constraints.py",
+        "src/senior_control/runtime/diagnostics.py"
+      ],
+      "exit_code": 0,
+      "output": "Success: no issues found in 3 source files\n"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    }
+  ],
+  "red": {
+    "command": "PYTHONPATH=src /Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python -m pytest tests/unit/test_stopping_fused_input.py -q -k expired_linear --tb=short",
+    "result": "2 failed, 29 deselected in 0.31s",
+    "witness": "vx .8; fresh IMU; upper 1.1197 before cutoff collapsed to .02/.22 after cutoff for trajectory 0/.2"
+  },
+  "sha256": {
+    "src/senior_control/motion/stopping_input.py": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc",
+    "src/senior_control/motion/constraints.py": "215ffb1a7ea3832aa3390bb3f2ecade2f1c447ad6d53e1c86af7d1255b46980e",
+    "src/senior_control/runtime/diagnostics.py": "401fa661176e04eac464294413001a1f878edf36f51a0f0c80862fa2979250a4",
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py": "40818d2cb3bbd9de74c9d91eee5cd7484951d38e9fd02c4df72d849e5c534ed5",
+    "tests/unit/test_stopping_fused_input.py": "5f82d618a609e1660e71316c9580510c78724e9cc6405d0f23006dde5fa8ecee",
+    "tests/unit/test_tick_evaluation.py": "32a8ed21f05af04c4a847173849dc8aa154e64ddf23a09e92a8e7c88d1034b2b",
+    "config/hardware-motion.json": "448bdd3c870deb7c543ab61c8a780f4c496e453c7c00b501df22cd58e615f318"
+  }
+}

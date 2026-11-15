@@ -204,6 +204,11 @@ class RuntimeDiagnostics:
         with self._lock:
             self._record("duration." + name, seconds)
 
+    def sample(self, name: str, value: float) -> None:
+        """Reuse the bounded numeric streams for peaks and event counts."""
+        with self._lock:
+            self._record(name, value)
+
     def summary(self, name: str, values: dict[str, Any]) -> None:
         """Bounded latest context, emitted by the existing periodic DEBUG pump."""
         with self._lock:

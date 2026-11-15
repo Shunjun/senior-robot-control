@@ -38,7 +38,7 @@ from senior_control.motion.kinematics import compose, inverse
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
-from senior_control.motion.stopping_input import stopping_domains
+from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
 from senior_control.safety.motion_runtime import SourceEpochFence
@@ -69,6 +69,7 @@ class MotionCoreOutput:
         self._ingress = None
         self._last_tick_diagnostic = None
         self.acceleration_model = profile.acceleration_model()
+        self.stopping = StoppingRisk()
         self.boot = uuid4().hex
         self.sequence = 0
         self.event_sequence = 0
@@ -798,6 +799,14 @@ class MotionCoreOutput:
             self.sensors.poses = list(self._ingress.core.poses)
             self.sensors.ingest_poses(self.sensors.poses)
         ref, tracking, secondary = self.sensors.estimate(ros, now)
+        # Remember motion even if perception later fails before _snapshot.
+        self.stopping.domains(
+            self.sensors.latest,
+            self.controller.trajectory.velocity,
+            self._response(),
+            linear_error=self.profile.linear_error,
+            yaw_error=self.profile.yaw_error,
+        )
         self._reference = dict(
             sampled_steady=now, sampled_ros=ros, reference=ref, poses=self.sensors.poses
         )
@@ -845,18 +854,7 @@ class MotionCoreOutput:
             "unified current control estimate; no truth bound",
         )
         p = self.profile
-        acceleration_upper = self.acceleration_model.upper
-        response = ResponseBounds(
-            acceleration_upper.vx,
-            p.decel,
-            p.jerk,
-            acceleration_upper.wz,
-            p.yaw_decel,
-            p.yaw_jerk,
-            p.lag,
-            self.model_deadline,
-            p.profile_id,
-        )
+        response = self._response()
         degraded = mode is SourceMode.WHEEL_IMU_LIMITED
         cap = p.degraded_cap if degraded else p.cap
         target = self.target
@@ -885,8 +883,8 @@ class MotionCoreOutput:
         v = self.controller.trajectory.velocity
         if estimate is None or not estimate.healthy:
             raise ValueError("all_relevant_motion_feedback_unavailable")
-        linear, angular = stopping_domains(
-            estimate, v, linear_error=p.linear_error, yaw_error=p.yaw_error
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
         )
         risk = RiskEnvelope(
             p.profile_id,
@@ -903,7 +901,7 @@ class MotionCoreOutput:
             p.horizon_s,
             linear,
             angular,
-            self.acceleration_model.reaction(a),
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
             p.position_error,
             p.orientation_error_rad,
             p.lateral_drift_mps,
@@ -929,7 +927,28 @@ class MotionCoreOutput:
         )
         return ctx
 
-    def _diagnose_stopping(self, ctx, reason):
+    def _response(self):
+        p = self.profile
+        a = self.acceleration_model.upper
+        return ResponseBounds(
+            a.vx,
+            p.decel,
+            p.jerk,
+            a.wz,
+            p.yaw_decel,
+            p.yaw_jerk,
+            p.lag,
+            self.model_deadline,
+            p.profile_id,
+        )
+
+    def _record_stopping_output(self, output, now):
+        p = self.profile
+        self.stopping.commanded(
+            output, now, self._response(), Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot)
+        )
+
+    def _diagnose_stopping(self, ctx, reason, evaluation):
         estimate = self.sensors.latest
         values = dict(
             basis="software risk assumptions; no measured guarantee",
@@ -940,17 +959,27 @@ class MotionCoreOutput:
             axis_age_s=[estimate.vx.observation_age_s, estimate.wz.observation_age_s],
             axis_reason=[estimate.vx.reason, estimate.wz.reason],
             constraint_reason=reason,
+            residual_reason=[self.stopping.linear.reason, self.stopping.yaw.reason],
+            residual_support_deadline=[
+                value if math.isfinite(value) else None
+                for value in (
+                    self.stopping.linear.support_deadline,
+                    self.stopping.yaw.support_deadline,
+                )
+            ],
         )
-        try:
-            prediction = self.engine.stop_prediction(ctx)
+        self.diagnostics.sample("stopping.reason." + (reason or "permit"), 1.0)
+        prediction = evaluation.stop_prediction
+        if prediction is not None:
+            self.diagnostics.sample("stopping.predicted_s", prediction.horizon_s)
+            self.diagnostics.sample("stopping.linear_distance_m", prediction.linear.distance)
+            self.diagnostics.sample("stopping.yaw_angle_rad", prediction.yaw.distance)
             values.update(
                 predicted_stop_s=prediction.horizon_s,
                 linear_stop_distance_m=prediction.linear.distance,
                 yaw_stop_angle_rad=prediction.yaw.distance,
                 model_horizon_exceeded=prediction.horizon_s > ctx.envelope.max_horizon_s,
             )
-        except ValueError as error:
-            values["prediction_error"] = str(error)
         self.diagnostics.summary("stopping", values)
 
     def _imu_state(self, packet, now):
@@ -1089,7 +1118,7 @@ class MotionCoreOutput:
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             self._diagnose_stopping(
-                ctx, None if permission.brake is None else permission.brake.reason
+                ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
             estop = self.machine.state.mode is MotionMode.ESTOP
             prepared = self.controller.propose_tick(
@@ -1160,6 +1189,7 @@ class MotionCoreOutput:
                 ):
                     raise ValueError("motion_expired_or_unqualified")
             self.node._emit_motion_core(output, reason)
+            self._record_stopping_output(output, time.monotonic())
             self.controller.commit(prepared)
             if self.target.source == "manual" and output != Velocity(0, 0):
                 self._manual_motion_source = self.target.source_id
@@ -1193,6 +1223,7 @@ class MotionCoreOutput:
             self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
             self.node._emit_motion_core(Velocity(0, 0), reason)
+            self._record_stopping_output(Velocity(0, 0), time.monotonic())
             if self._last_healthy:
                 self._event(K.FEEDBACK_LOST, event_now)
                 self._last_healthy = False

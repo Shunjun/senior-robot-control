@@ -14,6 +14,7 @@ from senior_control.motion.contracts import MotionTarget
 from senior_control.motion.controller import MotionController
 from senior_control.motion.hardware_profile import load_hardware_profile
 from senior_control.motion.observations import Source
+from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +27,7 @@ def output(speed=0.0, yaw=0.0, imu=False):
     core.diagnostics = RuntimeDiagnostics(lambda *_: None)
     core.sensors = MotionSensorRuntime(p, core.diagnostics)
     core.acceleration_model = p.acceleration_model()
+    core.stopping = StoppingRisk()
     core.model_deadline = 3600.0
     core.engine = ConstraintEngine(ConstraintConfig((1.0, 0.75, 0.5, 0.25), 0.15, 0.05, 256, 0.005))
     core.controller = MotionController(core.engine, p.controller(), Velocity(0, 0), Velocity(0, 0))
@@ -180,7 +182,8 @@ def test_missing_axis_hold_keeps_own_cutoff_then_closes_only_that_target_axis():
     expired = snapshot(core, 21)
     assert core.sensors.latest.vx.value is None
     assert expired.target.velocity.vx == 0
-    assert expired.envelope.linear_interval == pytest.approx((-0.02, 0.02))
+    assert expired.envelope.linear_interval[0] <= held.envelope.linear_interval[0]
+    assert expired.envelope.linear_interval[1] >= held.envelope.linear_interval[1]
     assert expired.motion.valid_until_steady == pytest.approx(21.4)
 
 
@@ -220,9 +223,10 @@ def test_stopping_diagnostics_share_periodic_debug_and_distinguish_geometry_age_
     core.diagnostics = RuntimeDiagnostics(lambda level, values: events.append((level, values)))
     core.diagnostics.pump(20)
     ctx = snapshot(core, obstacle=Point(1, 0))
-    result = core.engine.refine(ctx, 20)
+    evaluation = core.engine.evaluate(ctx, 20)
+    result = evaluation.zero_stop()
     for _ in range(50):
-        core._diagnose_stopping(ctx, result.brake.reason)
+        core._diagnose_stopping(ctx, result.brake.reason, evaluation)
     core.diagnostics.pump(24.99)
     assert not events
     core.diagnostics.pump(25)
@@ -301,3 +305,116 @@ def test_nonzero_trajectory_residual_survives_opposite_fused_velocity():
     assert ctx.envelope.linear_interval == pytest.approx((-0.04, 0.8))
     assert ctx.envelope.reaction_accel_upper.vx == 0.1
     assert core.engine.refine(ctx, 20).brake.reason == "stop_envelope_blocked"
+
+
+@pytest.mark.parametrize("trajectory", [0.0, 0.2])
+def test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh(trajectory):
+    from senior_control.motion.trajectory import Trajectory
+
+    core = output(0.8, imu=True)
+    core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 30)
+    core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+    snapshot(core, 20, Point(1, 0))
+    core.sensors.ingest(point(Source.IMU, 10.9, 20.9, (0.0,), 2), 10.9, 20.9, 10.9)
+    before = snapshot(core, 20.999, Point(1, 0))
+    after = snapshot(core, 21, Point(1, 0))
+    assert core.sensors.latest.vx.value is None
+    assert core.sensors.latest.wz.observed
+    assert core.sensors.latest.vx.deadline_steady == 21
+    assert after.envelope.linear_interval[1] >= before.envelope.linear_interval[1]
+    permission = core.engine.refine(after, 21)
+    assert permission.permit is None and permission.brake.reason == "stop_envelope_blocked"
+    core.controller._last_now = 20.95
+    decision = core.controller.propose_tick(
+        after.target.velocity, after, permission, core.sensors.tracking, core.sensors.tracking, 21
+    ).decision
+    assert decision.emergency and decision.command is None
+
+
+def missing_linear(core, now, sequence=2):
+    core.sensors.ingest(point(Source.IMU, now - 10, now, (0.0,), sequence), now - 10, now, now - 10)
+    return snapshot(core, now, Point(1, 0))
+
+
+@pytest.mark.parametrize("trajectory", [0.0, 0.2])
+def test_only_actual_zero_output_can_start_missing_axis_response_and_settle(trajectory):
+    from senior_control.motion.trajectory import Trajectory
+
+    core = output(0.8, imu=True)
+    core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 40)
+    core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+    snapshot(core)
+    lost = missing_linear(core, 21)
+    later = missing_linear(core, 22, 3)
+    assert later.envelope.linear_interval[1] >= lost.envelope.linear_interval[1]
+    assert core.stopping.linear.brake is None  # A zero target/trajectory did nothing.
+    assert later.envelope.reaction_accel_upper.vx == core._response().accel
+    assert core.engine.refine(later, 22).brake.reason == "stop_envelope_blocked"
+    core._record_stopping_output(Velocity(0, 0), 22)
+    started = core.stopping.linear.at
+    for now, seq in ((22.1, 4), (23.0, 5), (30.0, 6)):
+        ctx = missing_linear(core, now, seq)
+        core._record_stopping_output(Velocity(0, 0), now)
+        assert core.stopping.linear.at == started
+    assert ctx.envelope.linear_interval == (0.0, 0.0)
+    assert core.stopping.linear.reason == "assumed_settled"
+    assert core.stopping.linear.support_deadline == 21
+    assert core.sensors.latest.vx.value is None and not core.sensors.latest.vx.observed
+    assert core.engine.refine(ctx, 30).permit is not None  # Other axis can continue.
+    assert not core.sensors.stationary_supported  # Model settling cannot reset a fault.
+
+
+def test_nonzero_output_cancels_settling_and_fresh_observation_replaces_residual():
+    core = output(0.8, imu=True)
+    snapshot(core)
+    missing_linear(core, 21)
+    core._record_stopping_output(Velocity(0, 0), 21)
+    missing_linear(core, 21.5, 3)
+    core._record_stopping_output(Velocity(0.2, 0), 21.5)
+    assert core.stopping.linear.brake is None
+    core.sensors.ingest(point(Source.WHEEL, 11.6, 21.6, (0.0, 0.0), 2), 11.6, 21.6, 11.6)
+    restored = snapshot(core, 21.6, Point(1, 0))
+    assert restored.envelope.linear_interval == pytest.approx((-0.02, 0.02))
+    assert core.sensors.latest.vx.observed
+    assert core.engine._stop(restored, 21.6).stop_verified
+
+
+def test_diagnostics_reuse_tick_prediction_and_keep_transient_reason_counts_and_peaks(monkeypatch):
+    events = []
+    core = output(0.8)
+    core.diagnostics = RuntimeDiagnostics(lambda _level, value: events.append(value))
+    core.diagnostics.pump(20)
+    blocked = snapshot(core, 20, Point(1, 0))
+    evaluation = core.engine.evaluate(blocked, 20)
+    result = evaluation.zero_stop()
+    prediction = evaluation.stop_prediction
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("diagnostic recomputed an existing stopping prediction")
+
+    monkeypatch.setattr(core.engine, "stop_prediction", forbidden)
+    core._diagnose_stopping(blocked, result.brake.reason, evaluation)
+    monkeypatch.undo()
+    core.sensors.ingest(point(Source.WHEEL, 10.1, 20.1, (0.0, 0.0), 2), 10.1, 20.1, 10.1)
+    clear = snapshot(core, 20.1)
+    clear_evaluation = core.engine.evaluate(clear, 20.1)
+    clear_evaluation.zero_stop()
+    core._diagnose_stopping(clear, "controlled_stop", clear_evaluation)
+    core.diagnostics.pump(25)
+    assert len(events) == 1
+    assert events[0]["summaries"]["stopping"]["constraint_reason"] == "controlled_stop"
+    assert events[0]["streams"]["stopping.reason.stop_envelope_blocked"]["count"] == 1
+    assert events[0]["streams"]["stopping.reason.controlled_stop"]["count"] == 1
+    assert events[0]["streams"]["stopping.predicted_s"]["max"] == prediction.horizon_s
+
+
+def test_model_settling_never_turns_total_feedback_loss_into_live_motion():
+    core = output(0.8)
+    snapshot(core)
+    with pytest.raises(ValueError, match="all_relevant_motion_feedback_unavailable"):
+        snapshot(core, 21)
+    core._record_stopping_output(Velocity(0, 0), 21)
+    with pytest.raises(ValueError, match="all_relevant_motion_feedback_unavailable"):
+        snapshot(core, 30)
+    assert not core.sensors.latest.healthy
+    assert core.sensors.tracking is None
