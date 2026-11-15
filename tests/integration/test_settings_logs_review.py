@@ -30,6 +30,9 @@ def relay() -> tuple[Hub, Any, Any, Any]:
     agent.heartbeat_at = time.monotonic()
     owner, peer = hub.attach_controller("robot", "owner"), hub.attach_controller("robot", "peer")
     assert owner is not None and peer is not None
+    for controller in (owner, peer):
+        kind, raw = controller.outbox._items.popleft()
+        assert kind == "control.connection"
     return hub, agent, owner, peer
 
 

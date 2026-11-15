@@ -95,7 +95,7 @@ class MotionTarget:
     velocity: Velocity
     source: Literal["manual", "navigation", "idle", "startup_learning"]
     source_id: str
-    deadline_steady: float
+    deadline_steady: float | None
     # //Compatible: non-manual pure callers need no normalized stick metadata.
     manual_linear: ManualLinearTarget | None = None
 
@@ -130,7 +130,6 @@ class ResponseBounds:
     yaw_decel: float
     yaw_jerk: float
     actuator_lag: float
-    valid_until_steady: float
     profile_id: str
 
 

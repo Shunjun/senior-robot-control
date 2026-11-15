@@ -113,7 +113,7 @@ def prepare_perception(
             raise ValueError("free patches must be valid convex polygons")
         if patch.kind is PatchKind.NO_RETURN and no_return_policy is NoReturnPolicy.UNKNOWN:
             continue
-        free.append(polygon.buffer(-error_m, join_style="mitre") if error_m else polygon)
+        free.append(polygon)
     if not all(math.isfinite(v) for point in hits for v in point):
         raise ValueError("nonfinite hit")
     # Squares circumscribe Euclidean error disks; never use an inscribed circle.
@@ -136,8 +136,13 @@ def prepare_perception(
             occupied = unary_union([box(*extent) for extent in bounds])
     else:
         occupied = MultiPoint(hits) if hits else GeometryCollection()
+    # The patches are overlapping pieces of ONE observation and share its
+    # position error. Erode their observed union, not every artificial window
+    # edge: per-patch erosion invents unknown seams near the sensor.
+    observed_free = unary_union(free)
+    free_space = observed_free.buffer(-error_m, join_style="mitre") if error_m else observed_free
     return Perception(
-        unary_union(free),
+        free_space,
         occupied,
         stamp_steady,
         deadline_steady,
@@ -196,7 +201,6 @@ class RiskEnvelope:
     motion_epoch: str
     modes: tuple[SourceMode, ...]
     response_profile: str
-    valid_until_steady: float
     max_horizon_s: float
     linear_interval: tuple[float, float]
     yaw_interval: tuple[float, float]
@@ -216,7 +220,6 @@ class RiskEnvelope:
 
     def __post_init__(self) -> None:
         numbers = (
-            self.valid_until_steady,
             self.max_horizon_s,
             *self.linear_interval,
             *self.yaw_interval,
@@ -233,7 +236,7 @@ class RiskEnvelope:
             or self.max_horizon_s <= 0
             or self.linear_interval[0] > self.linear_interval[1]
             or self.yaw_interval[0] > self.yaw_interval[1]
-            or min(numbers[6:]) < 0
+            or min(numbers[5:]) < 0
             or not self.scope_id
             or not self.basis
             or not self.motion_epoch
@@ -492,8 +495,6 @@ class ConstraintEngine:
             or r.actuator_lag < 0
         ):
             return "invalid_response"
-        if not now < r.valid_until_steady:
-            return "response_expired"
         e = s.envelope
         if e is None:
             return "missing_risk_envelope"
@@ -505,8 +506,6 @@ class ConstraintEngine:
             or s.frame_id != s.perception.frame_id
         ):
             return "envelope_not_applicable"
-        if now >= e.valid_until_steady:
-            return "envelope_expired"
         if e.lateral_drift_mps > 0 and e.lateral_stop_s is None:
             return "lateral_stop_model_missing"
         if e.reaction_accel_upper.vx > r.accel or e.reaction_accel_upper.wz > r.yaw_accel:
@@ -639,8 +638,6 @@ class ConstraintEngine:
         assert s.envelope is not None
         if (
             s.perception.stamp_steady + s.perception.forecast_horizon_s < now + c.horizon_s
-            or s.envelope.valid_until_steady < now + c.horizon_s
-            or s.response.valid_until_steady < now + c.horizon_s
             or s.envelope.max_horizon_s < c.horizon_s
         ):
             return "forecast_horizon_short"
@@ -704,7 +701,9 @@ class ConstraintEngine:
     def _refine(self, s: ConstraintSnapshot, now: float, stop: BrakeRequest) -> ConstraintResult:
         if not stop.stop_verified:
             return ConstraintResult(None, stop)
-        if not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady:
+        if s.target.deadline_steady is not None and (
+            not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady
+        ):
             return ConstraintResult(
                 None, BrakeRequest(BrakeKind.CONTROLLED, "target_expired", True)
             )
@@ -732,11 +731,9 @@ class ConstraintEngine:
             )
         deadline = min(
             now + self.config.lease_s,
-            s.target.deadline_steady,
+            *((s.target.deadline_steady,) if s.target.deadline_steady is not None else ()),
             s.motion.valid_until_steady,
             s.perception.deadline_steady,
-            s.response.valid_until_steady,
-            s.envelope.valid_until_steady,
         )
         permit = MotionPermit(tuple(c.velocity for c in certs), now, deadline, _identity(s))
         return ConstraintResult(permit, None, tuple(certs))
@@ -751,7 +748,9 @@ class ConstraintEngine:
     ) -> ConstraintResult:
         if not stop.stop_verified:
             return ConstraintResult(None, stop)
-        if not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady:
+        if s.target.deadline_steady is not None and (
+            not math.isfinite(s.target.deadline_steady) or now >= s.target.deadline_steady
+        ):
             return ConstraintResult(
                 None, BrakeRequest(BrakeKind.CONTROLLED, "target_expired", True)
             )
@@ -813,11 +812,9 @@ class ConstraintEngine:
                 p.created_steady,
                 min(
                     p.deadline_steady,
-                    s.target.deadline_steady,
+                    *((s.target.deadline_steady,) if s.target.deadline_steady is not None else ()),
                     s.motion.valid_until_steady,
                     s.perception.deadline_steady,
-                    s.response.valid_until_steady,
-                    e.valid_until_steady,
                 ),
                 p.source_identity,
             ),

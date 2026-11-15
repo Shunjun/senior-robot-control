@@ -85,7 +85,7 @@ def test_older_but_live_remaining_source_survives_legacy_controller_receipt_fron
     assert c._admit_feedback("body", remaining, 20.8) is None
 
 
-def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillness():
+def test_raw_wheel_imu_stillness_does_not_depend_on_independent_samples():
     from test_unified_estimator import observation
 
     s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
@@ -100,7 +100,7 @@ def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillne
         s.ingest(point(Source.WHEEL, t, t + 10, (0.0, 0.0), sequence=i + 1), t, t + 10, t)
         s.ingest(point(Source.IMU, t, t + 10, (0.0,), sequence=i + 1), t, t + 10, t)
         s.estimate(t, t + 10)
-    assert s.latest.healthy and not s.stationary_supported
+    assert s.latest.healthy and s.stationary(t + 10)
     for i in range(7):
         t = 10.7 + i * 0.1
         o = replace(
@@ -109,7 +109,7 @@ def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillne
         )
         s.ingest_observation(o, t, t + 10)
         s.estimate(t, t + 10)
-    assert s.stationary_supported
+    assert s.stationary(t + 10)
 
 
 def test_laser_delta_retains_both_raw_capture_receipts_through_processing_delay():

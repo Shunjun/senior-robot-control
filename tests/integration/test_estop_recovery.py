@@ -59,6 +59,7 @@ async def test_received_estop_survives_epoch_invalidation(
             motion = IpcMotion(
                 IpcClient(socket_path),
                 disable_client=IpcClient(socket_path),
+                intent_client=IpcClient(socket_path),
             )
             agent = Agent(
                 ROBOT,

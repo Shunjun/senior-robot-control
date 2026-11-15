@@ -67,8 +67,13 @@ async def test_reporting_without_motion_evidence(node, cloud, monkeypatch):  # n
                 assert ui["confirmed_estop_status"] == "unknown"
                 assert ui["wheel_linear_mps"] is None
                 assert ui["body_reference"] is None
-                with pytest.raises(DomainError):
-                    await snapshots.recovery_revision("estop_reset", ui["estop_revision"])
+                if status == "missing":
+                    with pytest.raises(DomainError):
+                        await snapshots.recovery_revision("estop_reset", ui["estop_revision"])
+                else:
+                    assert (
+                        await snapshots.recovery_revision("estop_reset", ui["estop_revision"]) == 0
+                    )
             snapshot = RobotSnapshot(
                 robot,
                 True,
@@ -102,10 +107,10 @@ async def test_reporting_without_motion_evidence(node, cloud, monkeypatch):  # n
         assert receiver.accept(sample, b"t5", 10)
         assert (await check("current", "idle"))["allowed_actions"] == ["acquire"]
         node.clock.now = 11
-        expired = await check("expired")
-        assert expired["observation"]["last_sampled_steady"] == 10
-        await check("expired")
-        assert receiver.current(11) is None and receiver.value.valid_until == 10.25
+        historic = await check("current", "idle")
+        assert historic["observation"]["last_sampled_steady"] == 10
+        assert receiver.current(11) is sample
+        assert not hasattr(sample, "valid_until")
         receiver.invalidate()
         await check("revoked")
         assert not receiver.accept(sample, b"t5", 11)
@@ -157,6 +162,6 @@ def test_report_heartbeat_does_not_extend_motion_evidence():
     )
     assert frame["observation"]["status"] == "current"
     assert frame["mode"] == "idle"
-    assert frame["allowed_actions"] == []
+    assert frame["allowed_actions"] == ["acquire"]
     assert sample.evidence_deadline_steady == 10.05
-    assert sample.valid_until == 10.25
+    assert not hasattr(sample, "valid_until")

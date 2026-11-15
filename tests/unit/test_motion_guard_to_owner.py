@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as N
 
+from control_process_test_support import capture_inputs
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
 from test_motion_core_chain import feed
 from test_motion_core_handoff import Publisher, core  # noqa: F401
@@ -102,10 +103,7 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
         core.node.get_publishers_info_by_topic = lambda _: [
             N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")
         ]
-        core._on_reference(
-            N(data=strict_reference_json(observations.snapshot(10.3, 10.3))),
-            {"publisher_gid": b"fusion"},
-        )
+        capture_inputs(core, N(data=strict_reference_json(observations.snapshot(10.3, 10.3))))
         assert core._inputs(10.3)[1] is not None
         for mode in ("manual_release", "manual_intent"):
             subprocess.run(

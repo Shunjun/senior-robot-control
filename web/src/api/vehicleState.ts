@@ -29,7 +29,7 @@ export interface ManualAuthorityView {
   state: 'prepared' | 'active' | 'closed';
 }
 export interface RuntimeObservation {
-  status: 'current' | 'missing' | 'expired' | 'revoked' | 'ipc_unavailable';
+  status: 'current' | 'missing' | 'revoked' | 'ipc_unavailable';
   last_sampled_steady: number | null;
   age_seconds: number | null;
 }
@@ -51,6 +51,7 @@ export interface VehicleFrame {
   capabilities: readonly Capability[];
 }
 export interface VehicleView {
+  manual_connected: boolean;
   available: boolean;
   received_at_ms: number | null;
   frame: VehicleFrame | null;
@@ -187,6 +188,7 @@ export interface VehiclePort {
   onManualFenced(listener: () => void): () => void;
   acquire(): Promise<Authority>;
   release(authorityId: string): Promise<void>;
+  /** Resolves after local send; vehicle status arrives independently. */
   intent(value: Intent): Promise<void>;
   recover(kind: 'estop_reset' | 'fault_recover'): Promise<void>;
   taskCommand(action: TaskAction): Promise<void>;
@@ -196,6 +198,7 @@ export interface VehiclePort {
   readonly logs: VehicleLogPort | null;
 }
 export const EMPTY_VIEW: VehicleView = Object.freeze({
+  manual_connected: false,
   available: false,
   received_at_ms: null,
   frame: null,
@@ -300,7 +303,7 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
   if ('observation' in r) {
     const o = record(r.observation, ['status', 'last_sampled_steady', 'age_seconds']);
     result.observation = {
-      status: oneOf(o.status, ['current', 'missing', 'expired', 'revoked', 'ipc_unavailable']),
+      status: oneOf(o.status, ['current', 'missing', 'revoked', 'ipc_unavailable']),
       last_sampled_steady: nullable(o.last_sampled_steady, number),
       age_seconds: nullable(o.age_seconds, v => number(v, 0))
     };
@@ -417,8 +420,8 @@ export function decodeLogPage(value: unknown): LogPage {
   if (p.next_cursor > p.high_water || p.entries.some((e, i) => e.sequence > p.next_cursor || (i > 0 && e.sequence <= p.entries[i - 1]!.sequence))) throw new VehicleDecodeError();
   return p;
 }
-export type VehicleRequestType = 'control.acquire' | 'control.release' | 'drive.intent' | 'drive.stop' | 'safety.estop.reset' | 'safety.fault.recover' | 'task.execution.command' | 'settings.get' | 'settings.apply' | 'settings.result';
-export const VEHICLE_REQUEST_TYPES: readonly string[] = ['drive.intent', 'safety.estop.reset', 'safety.fault.recover', 'task.execution.command', 'settings.get', 'settings.apply', 'settings.result'];
+export type VehicleRequestType = 'control.acquire' | 'control.release' | 'drive.stop' | 'safety.estop.reset' | 'safety.fault.recover' | 'task.execution.command' | 'settings.get' | 'settings.apply' | 'settings.result';
+export const VEHICLE_REQUEST_TYPES: readonly string[] = ['safety.estop.reset', 'safety.fault.recover', 'task.execution.command', 'settings.get', 'settings.apply', 'settings.result'];
 /** Validate locally before marking a request as possibly submitted. */
 export function validateSettingsRequest(request: SettingsRequest): void {
   if (!text(request.request_id)) throw new VehicleDecodeError();
@@ -439,7 +442,7 @@ export class VehicleTransport implements VehiclePort {
     this.manualListeners.add(listener);
     return () => this.manualListeners.delete(listener);
   }
-  constructor(private readonly send: (type: VehicleRequestType, payload: unknown) => Promise<unknown>, readonly logs: VehicleLogPort | null = null) {
+  constructor(private readonly send: (type: VehicleRequestType | 'drive.intent', payload: unknown) => Promise<unknown>, readonly logs: VehicleLogPort | null = null) {
   }
   getSnapshot = (): VehicleView => this.view;
   subscribe = (listener: () => void): (() => void) => {
@@ -450,7 +453,6 @@ export class VehicleTransport implements VehiclePort {
     const frame = decodeVehicleFrame(value), old = this.view.frame;
     if (old && (frame.sequence <= old.sequence || frame.estop_revision < old.estop_revision || frame.fault_revision < old.fault_revision)) {
       this.view = { ...this.view, connected, available: this.view.available && connected };
-      if (!connected) this.fenceManual();
       this.publish();
       return;
     }
@@ -471,6 +473,7 @@ export class VehicleTransport implements VehiclePort {
     this.view = {
       ...this.view,
       connected,
+      manual_connected: connected && this.view.manual_connected,
       available: connected && this.view.available,
       rtt_ms: rtt
     };
@@ -479,7 +482,19 @@ export class VehicleTransport implements VehiclePort {
   }
   setUnsupportedConnection(connected: boolean): void {
     this.view = { ...this.view, connected, available: false };
-    this.fenceManual();
+    this.publish();
+  }
+  setRtt(rtt: number): void {
+    this.view = { ...this.view, rtt_ms: rtt };
+    this.publish();
+  }
+  setManualConnection(connected: boolean): void {
+    this.view = { ...this.view, manual_connected: connected };
+    if (!connected) this.fenceManual();
+    this.publish();
+  }
+  markReportStale(): void {
+    this.view = { ...this.view, connected: false, available: false };
     this.publish();
   }
   private publish(): void {
@@ -491,8 +506,6 @@ export class VehicleTransport implements VehiclePort {
     return frame;
   }
   async acquire(): Promise<Authority> {
-    const f = this.require('motion.intent.v1');
-    if (!f.allowed_actions.includes('acquire')) throw new Error('车端未允许获取控制');
     const r = record(await this.send('control.acquire', {}));
     if (r.state !== 'prepared') throw new VehicleDecodeError();
     const id = text(r.authority_id);
@@ -500,11 +513,9 @@ export class VehicleTransport implements VehiclePort {
     return { authority_id: id, state: 'prepared' };
   }
   async release(id: string): Promise<void> {
-    this.require('motion.intent.v1');
     await this.send('control.release', { authority_id: id });
   }
   async intent(value: Intent): Promise<void> {
-    this.require('motion.intent.v1');
     number(value.linear, -1, 1);
     number(value.turn, -1, 1);
     count(value.gesture);

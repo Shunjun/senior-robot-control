@@ -143,7 +143,7 @@ class SimulationReference:
         return (
             0 <= time.monotonic() - observed_at <= 1.25
             and self._safety_gid is not None
-            and self._source("/safety/status", "safety_gate") == self._safety_gid
+            and self._source("/safety/status", "motion_reporter") == self._safety_gid
         )
 
     def state(
@@ -393,7 +393,7 @@ class SimulationReference:
 
     @with_dds_info
     def _on_safety(self, msg: Any, info: dict[str, Any]) -> None:
-        self._safety_gid = self._source("/safety/status", "safety_gate", info)
+        self._safety_gid = self._source("/safety/status", "motion_reporter", info)
         status = next((status for status in msg.status if status.name == "safety_gate"), None)
         self.safety_reason = status.message if status is not None else "no_status"
         self.safety_ages = (

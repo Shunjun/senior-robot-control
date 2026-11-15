@@ -45,7 +45,6 @@ class SimulationMotionProfile:
     yaw_error: float = 0.1
     sensor_error: float = 0.02
     position_error: float = 0.03
-    model_seconds: float = 175.0
     # Independent passive-drive hypotheses, NOT wheel +/- sensor error bounds.
     assumed_body_cap: float = 1.52
     drive_linear_overshoot: float = 0.1
@@ -114,11 +113,8 @@ class SimulationMotionProfile:
             Velocity(0, 0),
             0.481154,
             1.52,
-            0.15,
             0.02,
             0.03,
-            5,
-            0.5,
             0.3,
             "unvalidated simulation-only passive drive hypothesis",
             True,

@@ -53,16 +53,8 @@ def context(
     core.sensors.ingest(point(Source.WHEEL, 10.0, 10.0, (0.0, 0.0)), 10, 10, 10)
     core.sensors.ingest(point(Source.IMU, 10.0, 10.0, (0.0,)), 10, 10, 10)
     ref, _, wheel = core.sensors.estimate(10, 10)
-    imu = {"sample": {"values": [0.0]}}
     return core._snapshot(
-        ref,
-        None,
-        wheel,
-        imu,
-        True,
-        10.0,
-        replace(scene(10.0), frame_id="scan_reference"),
-        Pose2D(0, 0, 0),
+        ref, wheel, 10.0, replace(scene(10.0), frame_id="scan_reference"), Pose2D(0, 0, 0)
     )
 
 
@@ -116,7 +108,7 @@ def test_normal_mode_preserves_gear_percentage(core, gear, limit):  # noqa: F811
     )
     ref, body, wheel = core.sensors.estimate(10.0, 10.0)
     assert ref["mode"] == SourceMode.FUSED_REFERENCE.value
-    actual = core._snapshot(ref, body, wheel, None, False, 10.0, ctx.perception, ctx.pose)
+    actual = core._snapshot(ref, wheel, 10.0, ctx.perception, ctx.pose)
     assert actual.target.velocity.vx == pytest.approx(0.5 * limit)
     assert actual.envelope.linear_cap_mps == core.profile.cap
 

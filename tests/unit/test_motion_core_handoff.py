@@ -7,8 +7,8 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import local_resources, make_core, read_inputs
 from motion_reference_test_support import ReadySubscription
-from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
 
 from senior_control.models import Velocity
@@ -49,7 +49,7 @@ class Node:
     def get_parameter(self, name):
         return N(value="route-sim")
 
-    def _emit_motion_core(self, v, reason):
+    def _emit_motion_core(self, v, reason, deadline=0.0):
         self.emitted.append((v, reason))
 
 
@@ -67,7 +67,8 @@ def core(monkeypatch):
     lifecycle.with_dds_info = with_info
     monkeypatch.setitem(sys.modules, "senior_robot.motion_lifecycle", lifecycle)
     monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.0)
-    c = MotionCoreOutput(Node(), SimulationMotionProfile(), ingress_factory=None)
+    local_resources(monkeypatch)
+    c = make_core(monkeypatch, Node(), SimulationMotionProfile())
     yield c
     c.close()
 
@@ -102,7 +103,7 @@ def test_release_installs_local_owner_without_emitting_hard_zero_or_resetting_tr
     message = barrier(request="retire-token")
     assert core.command(message)
     assert core.target.source == "idle" and core.target.source_id == core.boot
-    assert core.target.deadline_steady == core.model_deadline
+    assert core.target.deadline_steady is None
     assert core.controller.trajectory.velocity.vx == 0.4
     assert core.controller.trajectory.acceleration.vx == 0.2
     assert core.node.emitted == []
@@ -192,46 +193,14 @@ def test_feedback_pause_retains_task_replan_intent_but_source_is_fenced(core):
     assert "replan_task" in core.machine.state.allowed_actions
 
 
-def test_reference_missing_gid_is_simulation_only_and_never_refreshes_old_packet(core):
-    from dataclasses import replace
-
-    endpoints = [N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")]
-    core.node.get_publishers_info_by_topic = lambda _: endpoints
-
-    def packet(seq=1, stamp=10.0):
-        return N(
-            data=json.dumps(
-                dict(
-                    schema=1,
-                    boot_id="fusion-boot",
-                    sequence=seq,
-                    sampled_steady=stamp,
-                    sampled_ros=stamp,
-                    sources=[],
-                )
-            )
-        )
-
-    core._on_reference(packet(), {"source_timestamp": 123})
-    assert core._reference_sequence == 1
-    core._on_reference(packet(2), {"publisher_gid": b"wrong"})
-    assert core._reference_sequence == 1
-    core._on_reference(packet(1, 10.0), {})
-    core._on_reference(packet(2, 8.0), {})
-    assert core._reference_sequence == 1
-    endpoints.append(N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"other"))
-    core._on_reference(packet(2), {})
-    assert core._reference_sequence == 1
-    endpoints.pop()
-    endpoints[0].node_namespace = "/unexpected"
-    core._on_reference(packet(2), {})
-    assert core._reference_sequence == 1
-    endpoints[0].node_namespace = "/"
-    core.profile = replace(core.profile, simulation_only=False)
-    core._on_reference(packet(2), {})
-    assert core._reference_sequence == 1
-    core._on_reference(packet(2), {"publisher_gid": b"fusion"})
-    assert core._reference_sequence == 2
+def test_control_owner_only_accepts_reception_snapshot_and_has_no_fused_subscription(core):
+    assert not hasattr(core, "_on_reference")
+    assert not hasattr(core, "_consume_ready_reference")
+    assert hasattr(core.sensors, "input_reference")
+    assert read_inputs(core, 10)[1] is None
+    core.sensors.__dict__.pop("input_reference")
+    with pytest.raises(ValueError, match="input_snapshot_missing"):
+        core._inputs(10)
 
 
 def test_explicit_idle_estop_uses_original_request_without_inventing_authority(core):
@@ -276,7 +245,7 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
 def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, expired):
     from senior_control.motion.estimator import MotionObservation, Origin
 
-    core.sensors.estimator.ingest(
+    core.node._reception_test.sensors.estimator.ingest(
         MotionObservation(
             "laser",
             (0.0, None, 0.0),
@@ -286,11 +255,11 @@ def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, exp
         )
     )
     core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.1e9))
-    _, body, _ = core._inputs(20.2)
+    _, body, _ = read_inputs(core, 20.2)
     assert body is not None
     assert body.stamp_steady == 20.0 and body.deadline_steady == 21.0
     if expired == "ros_age":
         core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=11e9))
-        assert core._inputs(20.2)[1] is None
+        assert read_inputs(core, 20.2)[1] is None
     else:
-        assert core._inputs(21.0)[1] is None
+        assert read_inputs(core, 21.0)[1] is None

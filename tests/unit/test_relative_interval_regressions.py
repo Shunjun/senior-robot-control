@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from control_process_test_support import read_inputs, read_observation
 
 from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
 from senior_control.motion.pose_estimator import PoseEstimation
@@ -132,18 +133,18 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
     try:
         results = []
         for duration in (10.0, 60.0):
-            c.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
+            c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
             for i in range(round(duration / 0.05) + 1):
                 t = round((10.0 + i * 0.05) * 1e9) / 1e9
                 clock[0] = t
-                c.sensors.ingest_observation(
+                c.node._reception_test.sensors.ingest_observation(
                     MotionObservation(
                         "laser", (0.2, None, 0.4), t, (Origin("laser", "fresh", i + 1, t, t, t),)
                     ),
                     t,
                     t,
                 )
-                c._inputs(t)
+                read_inputs(c, t)
             stamp = round((t - 0.05) * 1e9) / 1e9
             c.node._scans = [
                 N(
@@ -166,7 +167,7 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
                     ),
                 )
             ]
-            perception, _ = c._observation(t)
+            perception, _ = read_observation(c, t)
             results.append(
                 (c._space_estimate.software_alignment_error_m, perception.free_space.area)
             )

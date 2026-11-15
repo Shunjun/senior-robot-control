@@ -371,7 +371,7 @@ class BodyReferenceState(StrictModel):
 class RuntimeObservation(StrictModel):
     """Reporting metadata only: never an input to motion admission or recovery."""
 
-    status: Literal["current", "missing", "expired", "revoked", "ipc_unavailable"]
+    status: Literal["current", "missing", "revoked", "ipc_unavailable"]
     last_sampled_steady: float | None = None
 
 
@@ -383,7 +383,6 @@ class MotionRuntimeState(StrictModel):
     boot_id: str = Field(min_length=1, max_length=128)
     sequence: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
     sampled_steady: float
-    valid_until: float
     mode: Literal[
         "idle",
         "manual",
@@ -419,8 +418,6 @@ class MotionRuntimeState(StrictModel):
 
     @model_validator(mode="after")
     def evidence_window(self) -> "MotionRuntimeState":
-        if self.valid_until <= self.sampled_steady:
-            raise ValueError("runtime observation interval is invalid")
         if (self.evidence_stamp_steady is None) != (self.evidence_deadline_steady is None):
             raise ValueError("runtime evidence interval must be paired")
         if (
@@ -464,7 +461,6 @@ class PreparedAuthorityPayload(StrictModel):
 
 class ResponsePayload(StrictModel):
     request_type: Literal[
-        "drive.intent",
         "safety.estop.reset",
         "safety.fault.recover",
         "task.execution.command",

@@ -35,7 +35,7 @@ def test_new_output_owner_ignores_old_files_and_never_restores_motion(
     with monkeypatch.context() as patch:
         patch.setattr(Path, "open", forbidden)
         patch.setattr("builtins.open", forbidden)
-        fresh = MotionCoreOutput(Node(), SimulationMotionProfile(), ingress_factory=None)
+        fresh = MotionCoreOutput(Node(), SimulationMotionProfile())
         try:
             assert fresh.machine.state.mode is MotionMode.IDLE
             assert fresh.machine.state.estop_revision == 0
@@ -73,7 +73,7 @@ def test_retired_hardware_packets_are_not_software_state_or_permission(ready, st
     previous = ready.node._motion_runtime.value
     ready.node._on_motion_runtime(N(data=json.dumps(packet)), {})
     assert ready.node._motion_runtime.value is previous
-    assert not ready.node.task_motion_allowed(continuing=True)
+    assert ready.node.task_motion_allowed(continuing=True)
     assert not hasattr(ready.node._arbiter, "confirm_local_estop")
 
 
@@ -84,8 +84,32 @@ def test_expired_or_old_estop_report_cannot_relock_after_owner_clear(ready):
     prior = ready.node._motion_runtime.value
     old = dict(packet, sequence=198, mode="estop", confirmed_estop_status="software_latched")
     ready.node._on_motion_runtime(N(data=json.dumps(old)), {})
-    expired = dict(old, sequence=200, valid_until=ready.clock.mono - 0.001)
+    expired = dict(old, sequence=200, estop_revision=1)
     ready.node._on_motion_runtime(N(data=json.dumps(expired)), {})
     assert ready.node._motion_runtime.value is prior
     assert prior.confirmed_estop_status == "clear"
     assert not any(frame.close_reason == "estop" for frame in ready.barriers)
+
+
+def test_raw_wheel_imu_reset_without_independent_body_never_restores_old_target(core):
+    from test_unified_motion_runtime import point
+
+    from senior_control.motion.observations import Source
+
+    receiver = core.node._reception_test
+    receiver.sensors.ingest(point(Source.WHEEL, 10, 10, (0.015, 0.02)), 10, 10, 10)
+    receiver.sensors.ingest(point(Source.IMU, 10, 10, (0.015,)), 10, 10, 10)
+    receiver.publish(10, 10)
+    assert core.sensors.independent is None and core.sensors.stationary(10)
+    assert core.command(barrier("estop", generation=2, request="raw-only-estop"))
+    reset = barrier("estop_reset", generation=3, request="raw-only-reset")
+    reset.gesture = core.machine.state.estop_revision
+    assert core.command(reset)
+    assert core.machine.state.mode is MotionMode.IDLE
+    assert core.controller.trajectory.velocity == Velocity(0, 0)
+    assert core.target.source == "idle"
+    old = barrier("intent", generation=2, request="retired-intent")
+    old.sequence, old.steady_deadline = 1, 10.3
+    old.vx, old.manual_linear, old.manual_linear_limit, old.degraded_linear_limit = 0.2, 1, 0.2, 0.3
+    assert not core.command(old)
+    assert core.target.source == "idle" and core.node.emitted == []

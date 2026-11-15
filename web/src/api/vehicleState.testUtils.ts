@@ -20,6 +20,7 @@ export function runtime(overrides: Partial<VehicleFrame> = {}): VehicleFrame {
 export function testPort(send: (type: string, payload: unknown) => Promise<unknown> = async () => ({ authority_id: 'authority', state: 'prepared' })) {
   const port = new VehicleTransport(send);
   port.update(runtime(), true);
+  port.setManualConnection(true);
   return port;
 }
 export const settingsFixture = {

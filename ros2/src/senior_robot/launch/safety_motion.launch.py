@@ -1,7 +1,8 @@
 """WHEELTEC drivers and shared hardware motion stack; mapping remains external.
 
 The supervisor starts exactly one agent_adapter/CommandNode separately, preserving
-its Unix peer identity. This launch owns the sole safety_gate /cmd_vel output.
+its Unix peer identity. This launch owns the safety_gate decision owner and
+its private native /cmd_vel transport.
 """
 
 from pathlib import Path
@@ -87,14 +88,9 @@ def _nodes(context):
         ),
         Node(
             package="senior_robot",
-            executable="motion_fusion",
-            parameters=[runtime["motion_fusion"], selected],
-            remappings=remaps,
-        ),
-        Node(
-            package="senior_robot",
             executable="safety_node",
             parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
+            remappings=remaps,
         ),
     ]
 

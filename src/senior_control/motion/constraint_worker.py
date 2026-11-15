@@ -4,6 +4,7 @@ import math
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Protocol
 
 from senior_control.models import Velocity
@@ -94,7 +95,7 @@ class ConstraintScheduler:
             # No closure over mutable scheduler state; captured snapshot/time are immutable.
             try:
                 future = self.worker.submit(
-                    lambda: engine.refine(pending.snapshot, pending.submitted_at)
+                    partial(engine.refine, pending.snapshot, pending.submitted_at)
                 )
             except Exception:
                 self._worker_failure("worker_unavailable")

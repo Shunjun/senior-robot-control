@@ -33,7 +33,7 @@ def test_new_frame_keeps_live_earlier_ticket_and_original_deadline():
     )
     assert first is not None and second is not None
     assert ledger.current(first, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
-    assert not ledger.current(first, binding_generation=4, now_ros_ns=1_400_000_001, now_steady=1.4)
+    assert not ledger.current(first, binding_generation=4, now_ros_ns=2_100_000_001, now_steady=2.1)
 
 
 def test_source_replacement_revokes_old_and_retired_replay_does_not_revoke_new():

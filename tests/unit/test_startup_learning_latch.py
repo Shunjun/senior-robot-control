@@ -3,6 +3,7 @@
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import publish_inputs
 from test_motion_core_handoff import barrier, core  # noqa: F401
 from test_startup_learning import observation
 from test_startup_learning_feasibility import BOUNDARY
@@ -87,8 +88,8 @@ def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkey
     for i in range(1, 31):
         t = now[0] = (10.0 if i < 16 else 50.0) + i * 0.1
         for source, values in ((Source.WHEEL, (0.0, 0.0)), (Source.IMU, (0.0,))):
-            core.sensors.ingest(point(source, t, t, values, i), t, t, t)
-        core.sensors.ingest_observation(
+            core.node._reception_test.sensors.ingest(point(source, t, t, values, i), t, t, t)
+        core.node._reception_test.sensors.ingest_observation(
             MotionObservation(
                 "laser",
                 (0.0, 0.0, 0.0),
@@ -122,6 +123,8 @@ def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkey
                 ),
             )
         ]
+        publish_inputs(core)
+        core.prefetch_scan()
         core.tick()
     assert core.startup.active and core.startup.provisional
     assert len(core.self_returns.frames) >= 5

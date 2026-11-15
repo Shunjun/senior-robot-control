@@ -9,6 +9,7 @@ from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
     Envelope,
+    ManualIntentEnvelope,
     ResponseEnvelope,
     SimpleEnvelope,
     VideoEnvelope,
@@ -85,6 +86,14 @@ class MotionPort(Protocol):
         **fields: Any,
     ) -> dict[str, Any]: ...
 
+    async def send_intent(
+        self,
+        envelope: ManualIntentEnvelope,
+        *,
+        received_steady: float,
+        deadline_steady: float,
+    ) -> None: ...
+
     async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None: ...
 
     async def stop(self, envelope: SimpleEnvelope) -> None: ...
@@ -115,10 +124,12 @@ class IpcMotion:
         self,
         client: IpcClient,
         *,
+        intent_client: IpcClient,
         disable_client: IpcClient | None = None,
         safety_client: IpcClient | None = None,
     ) -> None:
         self._client = client
+        self._intent_client = intent_client
         # //Compatible: isolated callers can still supply one serialized IPC client.
         self._disable_client = disable_client if disable_client is not None else client
         self._safety_client = safety_client if safety_client is not None else client
@@ -160,6 +171,24 @@ class IpcMotion:
             received_at=received_steady,
         )
 
+    async def send_intent(
+        self,
+        envelope: ManualIntentEnvelope,
+        *,
+        received_steady: float,
+        deadline_steady: float,
+        driving: dict[str, Any],
+        driving_version: int,
+    ) -> None:
+        await self._intent_client.send(
+            "manual_intent",
+            envelope=serialize_envelope(envelope).decode(),
+            received_steady=received_steady,
+            deadline_steady=deadline_steady,
+            driving=driving,
+            driving_version=driving_version,
+        )
+
     async def manual(
         self,
         envelope: Envelope,
@@ -198,6 +227,7 @@ class IpcMotion:
     async def close(self) -> None:
         for client in {
             self._client,
+            self._intent_client,
             self._disable_client,
             self._safety_client,
         }:

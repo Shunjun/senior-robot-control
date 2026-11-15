@@ -154,8 +154,12 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
     node._owner_boot = "command-boot"
     node._awaiting_feedback = {}
     node.get_parameter = lambda _: SimpleNamespace(value="robot")
-    node.get_publishers_info_by_topic = lambda _: [
-        SimpleNamespace(node_name="safety_gate", node_namespace="/", endpoint_gid=b"gate")
+    node.get_publishers_info_by_topic = lambda topic: [
+        SimpleNamespace(
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
+            node_namespace="/",
+            endpoint_gid=b"gate",
+        )
     ]
     node._retirement_core = (b"gate", "test-core")
     node._navigation_source.task_epoch = 1

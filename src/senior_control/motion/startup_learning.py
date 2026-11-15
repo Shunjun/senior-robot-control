@@ -36,7 +36,6 @@ class StartupLearning:
         self.resample_required = False
         self.previous = None
         self.key = None
-        self.samples = 0
         self.validation_samples = 0
         self.motion_verified = True
         self.generation = None
@@ -123,8 +122,7 @@ class StartupLearning:
             return
         self.key = key
         if self.state == "initializing":
-            self.samples = self.samples + 1 if stationary else 0
-            if self.samples >= 5:
+            if stationary:
                 self.state, self.reason = "sampling", "physical_interior_prior"
             self.previous = now
             self.previous_ros = estimate.computed_ros

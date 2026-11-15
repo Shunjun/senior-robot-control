@@ -30,7 +30,29 @@ DRIVING = dict(
     low_angular_rps=1.0,
     high_angular_rps=1.0,
     reverse_linear_mps=0.3,
+    degraded_linear_mps=0.3,
 )
+
+
+async def manual_exchange(client, intents, envelope, now):
+    """Shared acceptance transport boundary, runnable without ROS or an output world."""
+    if envelope["type"] == "drive.intent":
+        await intents.send(
+            "manual_intent",
+            envelope=json.dumps(envelope),
+            driving=DRIVING,
+            driving_version=0,
+            received_steady=now,
+            deadline_steady=now + 0.2,
+        )
+        return None
+    return await client.request(
+        "manual",
+        envelope=json.dumps(envelope),
+        driving=DRIVING,
+        received_steady=now,
+        deadline_steady=now + 0.2,
+    )
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -80,7 +102,7 @@ async def test_motion_core_normal(case):
     def record_runtime(m):
         nonlocal runtime
         endpoints = node.get_publishers_info_by_topic("/motion/runtime")
-        if len(endpoints) != 1 or endpoints[0].node_name != "safety_gate":
+        if len(endpoints) != 1 or endpoints[0].node_name != "motion_reporter":
             return
         runtime = MotionRuntimeState.model_validate_json(m.data)
         rows.append(("runtime", time.monotonic(), "", 0.0, 0.0, 0.0, "", "", m.data))
@@ -93,6 +115,7 @@ async def test_motion_core_normal(case):
         node.create_subscription(String, "/motion/runtime", record_runtime, 10),
     ]
     client = IpcClient(Path(socket))
+    intents = IpcClient(Path(socket))
     authority = None
     session = uuid4().hex
     seq = 0
@@ -141,13 +164,9 @@ async def test_motion_core_normal(case):
                 ),
             )
         )
-        response = await client.request(
-            "manual",
-            envelope=json.dumps(envelope),
-            driving=DRIVING,
-            received_steady=now,
-            deadline_steady=now + 0.2,
-        )
+        response = await manual_exchange(client, intents, envelope, now)
+        if kind == "drive.intent":
+            return None
         rows.append(
             (
                 "response",
@@ -169,7 +188,8 @@ async def test_motion_core_normal(case):
             await sample()
             if (
                 runtime
-                and runtime.valid_until > time.monotonic()
+                and runtime.evidence_deadline_steady is not None
+                and runtime.evidence_deadline_steady > time.monotonic()
                 and runtime.healthy
                 and runtime.stationary
             ):
@@ -193,7 +213,7 @@ async def test_motion_core_normal(case):
                 gear=gear,
             ),
         )
-        assert response.get("accepted"), response
+        assert response is None
         began = time.monotonic()
         while time.monotonic() - began < active:
             intent_seq += 1
@@ -208,12 +228,12 @@ async def test_motion_core_normal(case):
                     gear=gear,
                 ),
             )
-            assert response.get("accepted"), response
+            assert response is None
             for _ in range(5):
                 await sample()
         released = time.monotonic()
         response = await request("control.release", dict(authority_id=authority))
-        assert response.get("accepted"), response
+        assert response.get("ok") and response.get("accepted"), response
         authority = None
         until = time.monotonic() + 15
         while time.monotonic() < until:
@@ -273,6 +293,7 @@ async def test_motion_core_normal(case):
                 indent=2,
             )
         )
+        await intents.close()
         await client.close()
         for sub in subscriptions:
             node.destroy_subscription(sub)

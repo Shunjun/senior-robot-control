@@ -52,7 +52,7 @@ def test_motion_upper_is_separate_from_measured_average() -> None:
         True,
         "qualified",
     )
-    response = ResponseBounds(1.0, 0.5, 2.0, 0.8, 0.4, 1.5, 0.1, 20.0, "measured-profile")
+    response = ResponseBounds(1.0, 0.5, 2.0, 0.8, 0.4, 1.5, 0.1, "measured-profile")
     assert motion.average.vx == -0.5
     assert motion.upper is not None
     assert motion.upper.vx == 0.6

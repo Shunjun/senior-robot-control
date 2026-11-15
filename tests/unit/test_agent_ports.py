@@ -99,7 +99,7 @@ async def test_stop_uses_an_independent_motion_ipc_client() -> None:
         request_id="stop",
         payload={},
     )
-    motion = IpcMotion(motion_ipc, safety_client=safety_ipc)
+    motion = IpcMotion(motion_ipc, safety_client=safety_ipc, intent_client=AsyncMock())
     await motion.stop(stop)
     motion_ipc.request.assert_not_awaited()
     safety_ipc.request.assert_awaited_once()

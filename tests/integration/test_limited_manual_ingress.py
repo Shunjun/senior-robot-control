@@ -54,16 +54,16 @@ def test_explicit_limited_acquire_allows_new_neutral_without_stationary(node):
     assert call(
         node, envelope("control.release", dict(authority_id=second["authority_id"]), seq=7)
     )["accepted"]
-    assert not node.value.task_motion_allowed(continuing=False)
+    assert node.value.task_motion_allowed(continuing=False)
     # RuntimeCheck for settings stays stationary=False; no handoff changes it.
     assert not node.value._motion_runtime.current(node.clock.now).stationary
 
 
-def test_no_explicit_action_does_not_prepare_an_authority(node):
+def test_old_allowed_actions_does_not_gate_prepare(node):
     node.value._motion_runtime.accept(
         runtime(10.0, 2, mode="braking", stationary=False, allowed_actions=[]), b"t5", 10.0
     )
-    assert not call(node, envelope("control.acquire", {}))["ok"]
+    assert call(node, envelope("control.acquire", {}))["ok"]
 
 
 async def test_limited_action_does_not_open_settings_or_navigation(tmp_path, monkeypatch):
@@ -107,4 +107,4 @@ async def test_limited_action_does_not_open_settings_or_navigation(tmp_path, mon
         motion_runtime=frame,
         motion_runtime_version=1,
     )
-    assert not state.for_tasks(True).admission_ready
+    assert state.for_tasks(True).admission_ready

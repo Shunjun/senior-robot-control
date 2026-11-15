@@ -2,12 +2,21 @@
 
 import math
 from bisect import bisect_left
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from uuid import uuid4
 
 from shapely.geometry import MultiPoint, Point, Polygon
 
 from senior_control.models import Pose2D
 from senior_control.safety.self_filter import FilteredObservation
+
+
+@dataclass(frozen=True)
+class SelfReturnRevocation:
+    model_id: str
+    base_revision: int
+    baseline: tuple[tuple[float, float], ...]
+    removed: tuple[tuple[float, float], ...]
 
 
 class SelfReturnModel:
@@ -29,6 +38,7 @@ class SelfReturnModel:
         self.frame_observations = []
         self.learned: tuple[tuple[float, float], ...] = ()
         self.revision = 0
+        self.model_id = uuid4().hex
         self.first_observation = None
 
     def interior(self, xy):
@@ -199,23 +209,47 @@ class SelfReturnModel:
             box(point.x - error, point.y - error, point.x + error, point.y + error)
         )
 
-    def filter(self, observation: FilteredObservation, *, provisional: bool):
+    def apply_revocation(self, update: SelfReturnRevocation) -> bool:
+        """Only subtract independently verified members, never import copied model state."""
+        if (
+            update.model_id != self.model_id
+            or type(update.base_revision) is not int
+            or update.base_revision < 0
+            or update.base_revision > self.revision
+            or not set(update.removed).issubset(update.baseline)
+            or len(set(update.removed)) != len(update.removed)
+            or update.base_revision == self.revision
+            and update.baseline != self.learned
+        ):
+            raise ValueError("invalid_self_return_revocation")
+        retained = tuple(point for point in self.learned if point not in update.removed)
+        if retained == self.learned:
+            return False
+        self.learned = retained
+        self.revision += 1
+        return True
+
+    def filter_snapshot(self, observation: FilteredObservation, *, provisional: bool):
+        """Pure observation check; return explicit monotonic deletions for the model owner."""
         hits = [r.endpoint for r in observation.rays if r.kind == "hit" and r.endpoint is not None]
         tolerance = max(2 * self.error, 0.003)
         retained = tuple(p for p in self.learned if any(math.dist(p, h) <= tolerance for h in hits))
-        if retained != self.learned:
-            self.learned = retained
-            self.revision += 1
+        update = SelfReturnRevocation(
+            self.model_id,
+            self.revision,
+            self.learned,
+            tuple(point for point in self.learned if point not in retained),
+        )
         rays = tuple(
             replace(r, kind="self")
             if r.kind == "hit"
             and r.endpoint is not None
             and self.interior(r.endpoint)
-            and (provisional or any(math.dist(r.endpoint, p) <= tolerance for p in self.learned))
+            and (provisional or any(math.dist(r.endpoint, p) <= tolerance for p in retained))
             else r
             for r in observation.rays
         )
-        return replace(
+        filtered = replace(
             observation,
             rays=rays,
             external_hits=tuple(r for r in rays if r.kind == "hit"),
@@ -224,3 +258,9 @@ class SelfReturnModel:
             # No invented mask polygon: blocked beams themselves preserve unknown.
             self_masks=(),
         )
+        return filtered, update
+
+    def filter(self, observation: FilteredObservation, *, provisional: bool):
+        filtered, update = self.filter_snapshot(observation, provisional=provisional)
+        self.apply_revocation(update)
+        return filtered

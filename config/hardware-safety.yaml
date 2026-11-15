@@ -37,28 +37,9 @@ scan_motion_node:
     reanchor_distance: 0.12
     reanchor_yaw: 0.1
     min_rays: 100
-motion_fusion:
-  ros__parameters:
-    use_sim_time: false
-    body_frame: base_link
-    wheel_frame: odom_combined
-    imu_frame: gyro_link
-    sensor_max_age: 0.5
-    alignment_max_gap: 0.25
-    pending_wait: 0.25
-    max_variance: 0.1
-    imu_zero_variance: 0.01
-    min_quality: 0.3
-    max_yaw_error: 0.12
-    startup_window: 0.6
-    wheel_motion_limit: 0.004
-    stall_distance: 0.04
-    lateral_limit: 0.04
-    yaw_limit: 0.12
-    progress_stationary_max_linear_speed: 0.05
-    progress_stationary_max_yaw_rate: 0.05
 safety_gate:
   ros__parameters:
+    wheel_frame: odom_combined
     use_sim_time: false
     body_frame: base_link
     simulation_rate_hz: 20.0

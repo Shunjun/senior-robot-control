@@ -34,16 +34,9 @@ scan_motion_node:
     reanchor_distance: 0.12
     reanchor_yaw: 0.1
     min_rays: 100
-motion_fusion:
-  ros__parameters:
-    # Explicit launch selection only; no real/hardware implicit activation.
-    motion_core_profile: fortress-candidate-unvalidated-v1
-    use_sim_time: true
-    body_frame: base_link
-    wheel_frame: odom
-    imu_frame: imu_link
 safety_gate:
   ros__parameters:
+    wheel_frame: odom
     # fortress-candidate-unvalidated-v1 requires localhost + simulated clock.
     # See simulation_motion_profile.py for individual evidence vs assumptions.
     motion_core_profile: fortress-candidate-unvalidated-v1

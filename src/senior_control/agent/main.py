@@ -62,6 +62,7 @@ from senior_control.runtime.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
+from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
@@ -72,8 +73,6 @@ logger = logging.getLogger("senior_control.agent")
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
 MAX_SAFETY_PENDING = 64
-# Browser commands may be admitted for this long. The vehicle does not execute for that long:
-# a velocity older than command_ttl_seconds is refused on the local clock.
 
 
 def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
@@ -477,6 +476,7 @@ class Agent:
             if video is not None:
                 video.retire()
             keepalive.cancel()
+            self._discard_queued_intent()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
@@ -545,7 +545,8 @@ class Agent:
         if envelope._received_steady is None:
             envelope._received_steady = self._clock.monotonic()
         if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
-            self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
+            if not isinstance(envelope, ManualIntentEnvelope):
+                self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
             return
         if envelope.type in HALT_TYPES | {
             "control.release",
@@ -614,14 +615,14 @@ class Agent:
                 if envelope._received_steady is not None
                 else self._clock.monotonic()
             )
-            self._settle_queued_intent(overwritten=True)
+            self._discard_queued_intent(overwritten=True)
             self._queued_intent = (link, envelope, now, now + self._command_ttl_seconds)
             self._intent_queue.enqueue(id(envelope), time.monotonic())
             if self._intent_task is None or self._intent_task.done():
                 self._intent_task = self._spawn(self._drain_intent())
             return
         if envelope.type in HALT_TYPES or envelope.type == "control.release":
-            self._settle_queued_intent()
+            self._discard_queued_intent()
         if envelope.type in HALT_TYPES:
             key = self._safety_key(envelope)
             existing = self._safety_pending.get(key)
@@ -645,13 +646,10 @@ class Agent:
             raise ConnectionError("agent command capacity exceeded")
         self._spawn(self._answer(link, envelope))
 
-    def _settle_queued_intent(self, *, overwritten: bool = False) -> None:
+    def _discard_queued_intent(self, *, overwritten: bool = False) -> None:
         pending, self._queued_intent = self._queued_intent, None
         if pending is not None:
             self._intent_queue.discard(id(pending[1]), time.monotonic(), overwritten=overwritten)
-            # Same successful transport settlement as relay coalescing: no
-            # execution claim, no authority rejection, no resend of an old target.
-            self._spawn(self._reply(pending[0], pending[1]))
 
     async def _drain_intent(self) -> None:
         while self._queued_intent is not None:
@@ -659,11 +657,22 @@ class Agent:
             self._queued_intent = None
             self._intent_queue.start(id(envelope), time.monotonic())
             try:
-                result = await self._manual_control(envelope, received, deadline)
+                self._admit(envelope)
+                if link is not self._link or self._clock.monotonic() >= deadline:
+                    continue
+                # Completion is local socket handoff only; status travels independently.
+                await self._motion.send_intent(
+                    envelope,
+                    received_steady=received,
+                    deadline_steady=deadline,
+                )
             except DomainError as exc:
-                await self._reply(link, envelope, error=exc.code)
-            else:
-                await self._reply(link, envelope, result=result)
+                logger.debug("manual stream sample discarded: %s", exc.code.value)
+            except (OSError, ConnectionError, IpcError):
+                logger.exception("manual stream transport failed")
+                self._lose_eligibility()
+                await link.close()
+                return
             finally:
                 self._intent_queue.finish(id(envelope), time.monotonic())
 
@@ -672,9 +681,9 @@ class Agent:
             self._safety_fault()
 
     async def _drain_safety(self) -> None:
+        # Revoking motion or faulting the transport does not revoke accepted halt
+        # events. Shutdown's _settle_safety bounds this drain before IPC is closed.
         while self._safety_pending:
-            if self.runtime_failed and self._stopping:
-                return
             key = next(
                 (key for key in self._safety_pending if key[0] == "safety.estop"),
                 next(iter(self._safety_pending)),
@@ -684,7 +693,18 @@ class Agent:
             self._estop_inflight = kind == "safety.estop"
             try:
                 result = await self.dispatch(envelope)
+            except asyncio.CancelledError:
+                logger.error(
+                    "safety delivery interrupted; request_id=%s type=%s pending=%d; "
+                    "vehicle owner state is unconfirmed",
+                    envelope.request_id, kind, len(self._safety_pending),
+                )
+                raise
             except DomainError as exc:
+                logger.error(
+                    "safety delivery not confirmed; request_id=%s type=%s error=%s",
+                    envelope.request_id, kind, exc.code.value,
+                )
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))
                 if (
@@ -706,10 +726,14 @@ class Agent:
         done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
         failed = task not in done or task.cancelled()
         if not failed:
-            failed = task.exception() is not None
+            failed = task.exception() is not None or bool(self._safety_pending)
         if failed:
             self._safety_fault()
-            logger.error("safety command did not complete; restart is disabled")
+            logger.error(
+                "safety drain did not complete; pending=%d; "
+                "vehicle owner state is unconfirmed; restart is disabled",
+                len(self._safety_pending),
+            )
             if not task.done():
                 task.cancel()
                 done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
@@ -886,7 +910,9 @@ class Agent:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
-        if isinstance(envelope, (ManualIntentEnvelope, RecoveryEnvelope)) or envelope.type in {
+        if isinstance(envelope, ManualIntentEnvelope):
+            raise DomainError(ErrorCode.VALIDATION, "intent uses the send-only stream")
+        if isinstance(envelope, RecoveryEnvelope) or envelope.type in {
             "control.acquire",
             "control.release",
         }:
@@ -924,8 +950,6 @@ class Agent:
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "manual command is for another robot")
         self._admit(envelope)
-        if isinstance(envelope, ManualIntentEnvelope) and self._clock.monotonic() >= deadline:
-            raise DomainError(ErrorCode.TIMEOUT, "intent expired before local handoff")
         if self._safety_blocked and envelope.type not in {
             "control.release",
             "safety.estop.reset",

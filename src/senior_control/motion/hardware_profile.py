@@ -105,11 +105,6 @@ class HardwareMotionProfile(BaseModel):
     yaw_error: float = Field(ge=0)
     sensor_error: float = Field(ge=0)
     position_error: float = Field(ge=0)
-    model_seconds: float = Field(
-        default=3600.0,
-        gt=0,
-        description="Startup model lease budget, seconds; not measured response",
-    )
     # Kept as the consumer's field name: must be an independently established
     # whole-body envelope, never a wheel speed or a simulation assumption.
     assumed_body_cap: float = Field(gt=0)
@@ -153,10 +148,8 @@ class HardwareMotionProfile(BaseModel):
     def coherent(self) -> "HardwareMotionProfile":
         if self.gps_input is not None and self.gps_input.origin_family is None:
             raise ValueError("GPS input requires its original raw acquisition family")
-        if self.model_seconds <= self.horizon_s or self.lateral_stop_s > self.horizon_s:
-            raise ValueError(
-                "model lease must cover search horizon and lateral settling must fit it"
-            )
+        if self.lateral_stop_s > self.horizon_s:
+            raise ValueError("lateral settling must fit the search horizon")
         if self.reaction_linear_accel < self.accel or self.reaction_yaw_accel < self.yaw_accel:
             raise ValueError("reaction acceleration bounds must cover commanded acceleration")
         if (
@@ -222,11 +215,8 @@ class HardwareMotionProfile(BaseModel):
             Velocity(0, 0),
             self.track_width_m,
             self.wheel_speed_mps,
-            0.15,
             self.stationary_linear_mps - self.linear_error,
             self.stationary_yaw_rps - self.yaw_error,
-            5,
-            0.5,
             max(2 * self.linear_error, self.stationary_linear_mps),
             self.evidence_basis or self.profile_id,
             False,

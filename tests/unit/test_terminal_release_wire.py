@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace as N
 
 import pytest
+from motion_reference_test_support import final_command_message
 from test_navigation_command_clock import navigation as command_fixture
 
 
@@ -16,16 +17,18 @@ def wire(monkeypatch):
     node._navigation_source.task_epoch = 1
     node._awaiting_feedback = {}
     node.get_parameter = lambda _: N(value="robot")
-    node.get_publishers_info_by_topic = lambda _: [
+    node.get_publishers_info_by_topic = lambda topic: [
         N(
-            node_name="safety_gate",
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
             node_namespace="/",
-            endpoint_gid=b"runtime" if _ == "/motion/runtime" else b"gate",
+            endpoint_gid=b"runtime" if topic == "/motion/runtime" else b"gate",
         )
     ]
     frames = []
     node._final_publisher = N(publish=frames.append)
-    monkeypatch.setattr(sys.modules["command_clock_under_test"], "FinalCommand", N)
+    monkeypatch.setattr(
+        sys.modules["command_clock_under_test"], "FinalCommand", final_command_message
+    )
     del (
         node._publish_barrier
     )  # Exercise the real frame builder, including immutable original source.
@@ -100,11 +103,10 @@ def test_missing_receipt_cannot_send_a_new_global_barrier_over_later_authority(w
         from senior_control.motion.manual_authority import ManualAuthorityState
 
         node._manual_ingress = N(view=lambda _: N(state=ManualAuthorityState.PREPARED))
+    elif foreign == "manual":
+        node._manual_target = object()
     else:
-        node._motion_runtime.value = N(
-            mode="manual" if foreign == "manual" else "task",
-            task_id="other" if foreign == "different_task" else "private-execution",
-        )
+        node._navigation_source = N(execution_id="other", task_epoch=1)
     assert node.request_terminal_release("private-execution", 1, "cancel", "canceled") is None
     assert not wire.frames and not node._retirements
 
@@ -117,7 +119,7 @@ def test_core_restart_rotates_unknown_proof_before_original_handshake(wire):
     assert node._terminal_requests["cancel"].proof is not None
     node.get_publishers_info_by_topic = lambda topic: [
         N(
-            node_name="safety_gate",
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
             node_namespace="/",
             endpoint_gid=b"new-runtime" if topic == "/motion/runtime" else b"gate",
         )
@@ -337,7 +339,7 @@ def test_missing_gid_old_ack_cannot_cross_feedback_incarnation(wire, ack_first, 
     before = node._generation, node._barrier_frame, len(wire.frames)
     node.get_publishers_info_by_topic = lambda topic: [
         N(
-            node_name="safety_gate",
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
             node_namespace="/",
             endpoint_gid=b"new-gate" if topic.endswith("drive_feedback") else b"new-runtime",
         )
@@ -363,7 +365,7 @@ def test_cached_output_retirement_is_not_reused_across_unobserved_core_change(wi
     assert node.navigation_source_retired("private-execution")
     node.get_publishers_info_by_topic = lambda topic: [
         N(
-            node_name="safety_gate",
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
             node_namespace="/",
             endpoint_gid=b"new-runtime" if topic == "/motion/runtime" else b"new-gate",
         )

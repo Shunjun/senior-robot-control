@@ -753,7 +753,7 @@ def drain_outbox(connection: object) -> list[bytes]:
 
     outbox = connection.outbox  # type: ignore[attr-defined]
     assert isinstance(outbox, Outbox)
-    items = [item for _, item in list(outbox._items)]
+    items = [item for kind, item in list(outbox._items) if kind != "control.connection"]
     return items
 
 
@@ -774,6 +774,8 @@ class WireRig:
         assert controller is not None
         self.controller = controller
         self.agent = self.hub.attach_agent("robot-a")
+        kind, _ = self.controller.outbox._items.popleft()
+        assert kind == "control.connection"
 
 
 async def test_video_offer_on_control_connection_is_accepted_not_closed() -> None:
@@ -802,6 +804,8 @@ async def test_video_answer_reaches_only_the_viewer_that_offered() -> None:
     rig = WireRig()
     bystander = rig.hub.attach_controller("robot-a", "other-session-hash")
     assert bystander is not None
+    kind, _ = bystander.outbox._items.popleft()
+    assert kind == "control.connection"
     rig.hub.handle_control_frame(rig.controller, offer_frame())
     rig.hub.handle_agent_frame(
         rig.agent, wire_frame("video.answer", {"sdp": "a"}, connection_epoch=1)
@@ -966,6 +970,8 @@ async def test_close_is_only_sent_for_the_viewer_that_ended() -> None:
     rig = WireRig()
     bystander = rig.hub.attach_controller("robot-a", "other-hash")
     assert bystander is not None
+    kind, _ = bystander.outbox._items.popleft()
+    assert kind == "control.connection"
     rig.hub.close_session("other-hash")  # never offered, so nothing to stop
     assert close_frames(rig.agent) == []
     rig.hub.handle_control_frame(rig.controller, offer_frame())

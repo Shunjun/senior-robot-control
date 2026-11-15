@@ -127,7 +127,11 @@ def _pushed(controller: Connection) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
     while controller.outbox.pending:
         item = controller.outbox._items.popleft()  # noqa: SLF001
-        frames.append(json.loads(item[1]))
+        frame = json.loads(item[1])
+        if frame["type"] == "control.connection":
+            assert frame["v"] == 1 and frame["robot_id"] == controller.robot_id
+        else:
+            frames.append(frame)
     return frames
 
 

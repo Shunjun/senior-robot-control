@@ -13,6 +13,7 @@ from senior_control.motion.constraints import (
 )
 from senior_control.motion.contracts import BrakeKind
 from senior_control.motion.source_modes import SourceMode
+from senior_control.motion.stillness import stationary
 from senior_control.motion.trajectory import Trajectory, TrajectoryStep, scale_wheels
 
 
@@ -56,11 +57,8 @@ class ControllerConfig:
     integral_limit: Velocity
     track_width_m: float
     wheel_speed_mps: float
-    max_tick_s: float
     still_speed_mps: float
     still_yaw_rps: float
-    still_samples: int
-    still_span_s: float
     disagreement_mps: float
     basis: str
     synthetic: bool
@@ -75,16 +73,13 @@ class ControllerConfig:
             self.integral_limit.wz,
             self.track_width_m,
             self.wheel_speed_mps,
-            self.max_tick_s,
             self.still_speed_mps,
             self.still_yaw_rps,
-            self.still_span_s,
             self.disagreement_mps,
         )
         if (
             not all(math.isfinite(x) and x >= 0 for x in numbers)
-            or min(self.track_width_m, self.wheel_speed_mps, self.max_tick_s) <= 0
-            or self.still_samples < 1
+            or min(self.track_width_m, self.wheel_speed_mps) <= 0
             or not self.basis
         ):
             raise ValueError("explicit controller capability required")
@@ -115,7 +110,6 @@ class PreparedControl:
     integral: Velocity
     braking: bool
     brake_deadline: float | None
-    limited_complete: bool
     fallback: bool = False
 
 
@@ -131,7 +125,7 @@ class MotionController:
 
     Body Feedback must be an explicitly supported CURRENT reference. An old
     BodyMotion interval mean cannot just be relabelled here. Wheel Feedback is
-    tracking/slip evidence and never establishes independent body stillness.
+    tracking/slip evidence. Stillness consumes only separate raw wheel/IMU samples.
     """
 
     def __init__(
@@ -148,17 +142,8 @@ class MotionController:
         self._last_now: float | None = None
         self._context_key: tuple[str, ...] | None = None
         self._last_feedback: dict[str, tuple[str, int, float]] = {}
-        self._still_first: float | None = None
-        self._still_count = 0
         self._brake_deadline: float | None = None
-        self._still_key: tuple[str, int, float] | None = None
         self.measured_still = False
-        self._limited_epoch: tuple[object, ...] | None = None
-        self._limited_key: tuple[int, int, float] | None = None
-        self._limited_first: float | None = None
-        self._limited_count = 0
-        self._limited_until = -math.inf
-        self._limited_complete = False
         self._direction = Velocity(
             math.copysign(1, initial_velocity.vx) if initial_velocity.vx else 0,
             math.copysign(1, initial_velocity.wz) if initial_velocity.wz else 0,
@@ -177,34 +162,16 @@ class MotionController:
                 return None
             if key[0] != old[0]:
                 self.integral = Velocity(0, 0)
-                self._still_count = 0
-                self._still_first = None
-                self._still_key = None
         self._last_feedback[role] = key
         return value
 
-    def _still(self, body: Feedback | None, wheel: Feedback | None) -> None:
-        if (
-            body is None
-            or wheel is None
-            or not all(body.observed_axes)
-            or max(abs(body.velocity.vx), abs(wheel.velocity.vx)) > self.config.still_speed_mps
-            or max(abs(body.velocity.wz), abs(wheel.velocity.wz)) > self.config.still_yaw_rps
-        ):
-            self._still_first = None
-            self._still_count = 0
-            self.measured_still = False
-            self._still_key = None
-            return
-        key = (body.epoch, body.sequence, body.stamp_steady)
-        if key != self._still_key:
-            self._still_key = key
-            self._still_count += 1
-            if self._still_first is None:
-                self._still_first = body.stamp_steady
-        self.measured_still = (
-            self._still_count >= self.config.still_samples
-            and body.stamp_steady >= (self._still_first or 0) + self.config.still_span_s
+    def _still(self, wheel, imu, now):
+        self.measured_still = stationary(
+            wheel,
+            imu,
+            now,
+            linear_limit=self.config.still_speed_mps,
+            yaw_limit=self.config.still_yaw_rps,
         )
 
     def _decision(
@@ -218,125 +185,15 @@ class MotionController:
         deadline = min(
             ctx.motion.valid_until_steady,
             ctx.perception.deadline_steady,
-            ctx.response.valid_until_steady,
-            ctx.envelope.valid_until_steady if ctx.envelope else -math.inf,
         )
         return ControlDecision(
             command, reason, verified, emergency, self.engine.identity(ctx), deadline
         )
 
-    def invalidate_limited_rearm(self) -> None:
-        """A broken conditional stop cannot inherit its old completion deadline."""
-        if self._limited_epoch is not None:
-            self._brake_deadline = None
-        self._limited_epoch = None
-        self._limited_key = None
-        self._limited_first = None
-        self._limited_count = 0
-        self._limited_until = -math.inf
-        self._limited_complete = False
-
-    def limited_rearm_ready(
-        self,
-        now: float,
-        *,
-        epochs: tuple[str, str] | None = None,
-    ) -> bool:
-        """Simulation-model permission, never independent body stillness."""
-        return bool(
-            self._limited_complete
-            and self._last_now is not None
-            and self._last_now <= now < self._limited_until
-            and (epochs is None or (self._limited_epoch and self._limited_epoch[:2] == epochs))
-        )
-
-    def _limited_observation(
-        self,
-        ctx: ConstraintSnapshot,
-        body: Feedback | None,
-        wheel: Feedback | None,
-        imu: Feedback | None,
-        now: float,
-    ) -> None:
-        e = ctx.envelope
-        if not (
-            body is None
-            and wheel is not None
-            and imu is not None
-            and ctx.mode is SourceMode.WHEEL_IMU_LIMITED
-            and self.config.synthetic
-            and e is not None
-            and e.synthetic
-            and e.brake_drive_overshoot is not None
-            and e.brake_tracking_basis
-        ):
-            self.invalidate_limited_rearm()
-            return
-        epoch = (
-            wheel.epoch,
-            imu.epoch,
-            ctx.motion.source_epoch,
-            ctx.perception.source_epoch,
-            ctx.response,
-            e.brake_tracking_basis,
-            e.brake_drive_overshoot,
-            e.linear_interval,
-            ctx.scope_id,
-            ctx.config_version,
-        )
-        if epoch != self._limited_epoch or now >= self._limited_until:
-            self.invalidate_limited_rearm()
-            self._brake_deadline = None
-            self._limited_epoch = epoch
-        self._limited_until = min(
-            wheel.deadline_steady,
-            imu.deadline_steady,
-            ctx.motion.valid_until_steady,
-            ctx.perception.deadline_steady,
-            ctx.response.valid_until_steady,
-            e.valid_until_steady,
-        )
-        quiet = (
-            abs(wheel.velocity.vx) <= self.config.still_speed_mps
-            and abs(wheel.velocity.wz) <= self.config.still_yaw_rps
-            and abs(imu.velocity.wz) <= self.config.still_yaw_rps
-        )
-        if not quiet:
-            self._limited_count = 0
-            self._limited_first = None
-            self._limited_key = None
-            self._limited_complete = False
-            return
-        stamp = min(wheel.stamp_steady, imu.stamp_steady)
-        key = (wheel.sequence, imu.sequence, stamp)
-        if self._limited_key is None or all(
-            a > b for a, b in zip(key[:2], self._limited_key[:2], strict=True)
-        ):
-            self._limited_key = key
-            self._limited_count += 1
-            if self._limited_first is None:
-                self._limited_first = stamp
-
-    def _limited_completion(self, now: float, step: TrajectoryStep, deadline: float | None) -> bool:
-        return bool(
-            self._limited_epoch is not None
-            and now < self._limited_until
-            and deadline is not None
-            and now >= deadline
-            and self._limited_count >= self.config.still_samples
-            and self._limited_first is not None
-            and self._limited_key is not None
-            and self._limited_key[2] >= self._limited_first + self.config.still_span_s
-            and step.velocity == Velocity(0, 0)
-            and step.acceleration == Velocity(0, 0)
-        )
-
-    def reset_at_stillness(self, body: Feedback, wheel: Feedback, now: float) -> bool:
-        """Composition calls only after independent state-machine reset acceptance."""
+    def reset_at_stillness(self, wheel, imu, now: float) -> bool:
+        """Reset only from the same raw wheel/IMU evidence as the state owner."""
         self._prepared = None
-        b = self._admit_feedback("body", body, now)
-        w = self._admit_feedback("wheel", wheel, now)
-        self._still(b, w)
+        self._still(wheel, imu, now)
         if not self.measured_still:
             return False
         self.trajectory = Trajectory(Velocity(0, 0), Velocity(0, 0))
@@ -346,37 +203,14 @@ class MotionController:
         self._brake_deadline = None
         return True
 
-    def _check_brake(
-        self, proof: BrakingProof, body: Feedback | None, wheel: Feedback | None, now: float
-    ) -> tuple[str | None, float | None]:
+    def _check_brake(self, proof: BrakingProof, now: float) -> tuple[str | None, float | None]:
         deadline = self._brake_deadline
         if deadline is None:
             if not proof.brake.stop_verified or proof.deadline_steady is None:
                 return "unverified_brake", deadline
             deadline = proof.deadline_steady
-        if now > deadline:
-            if body is None or wheel is None:
-                if (
-                    self._limited_epoch is not None
-                    and wheel is not None
-                    and (
-                        abs(wheel.velocity.vx) > self.config.still_speed_mps
-                        or abs(wheel.velocity.wz) > self.config.still_yaw_rps
-                    )
-                ):
-                    return "stop_response_failed", deadline
-                if self._limited_completion(
-                    now,
-                    TrajectoryStep(self.trajectory.velocity, self.trajectory.acceleration),
-                    deadline,
-                ):
-                    return None, deadline
-                return "stop_boundary_without_feedback", deadline
-            if (
-                max(abs(body.velocity.vx), abs(wheel.velocity.vx)) > self.config.still_speed_mps
-                or max(abs(body.velocity.wz), abs(wheel.velocity.wz)) > self.config.still_yaw_rps
-            ):
-                return "stop_response_failed", deadline
+        if now > deadline and not self.measured_still:
+            return "stop_response_failed", deadline
         return None, deadline
 
     def _raw_pi(self, goal: Velocity, error: Velocity, trial: Velocity) -> Velocity:
@@ -452,7 +286,7 @@ class MotionController:
             reason = "target_braking"
         reversing = target.vx * self._direction.vx < 0 or target.wz * self._direction.wz < 0
         if reversing and not (
-            (self.measured_still or self.limited_rearm_ready(self._last_now or 0))
+            self.measured_still
             and self.trajectory.velocity == Velocity(0, 0)
             and self.trajectory.acceleration == Velocity(0, 0)
         ):
@@ -498,16 +332,14 @@ class MotionController:
         estop: bool = False,
         # //Compatible: old callers without an IMU never gain conditional rearm.
         imu: Feedback | None = None,
-        require_limited_rearm: bool = False,
+        still_wheel: Feedback | None = None,
         evaluation: TickEvaluation | None = None,
     ) -> PreparedControl:
         """Admit observations once; stage command state until actual selection."""
         self._prepared = None
         # IMU uses only velocity.wz: its unused vx is NOT body linear evidence.
         if estop:
-            self._still(
-                self._admit_feedback("body", body, now), self._admit_feedback("wheel", wheel, now)
-            )
+            self._still(still_wheel, imu, now)
             if math.isfinite(now) and (self._last_now is None or now >= self._last_now):
                 self._last_now = now
             return self._failure(ctx, now, "user_estop_override", command=Velocity(0, 0))
@@ -516,13 +348,12 @@ class MotionController:
             return self._failure(ctx, now, "clock_initialized", keep_integral=True)
         dt = now - self._last_now
         self._last_now = now
-        if not math.isfinite(now) or not 0 < dt <= self.config.max_tick_s:
+        if not math.isfinite(now) or not math.isfinite(dt) or dt <= 0:
             return self._failure(ctx, now, "invalid_tick", emergency=True)
         body = self._admit_feedback("body", body, now)
         wheel = self._admit_feedback("wheel", wheel, now)
         imu = self._admit_feedback("imu", imu, now)
-        self._still(body, wheel)
-        self._limited_observation(ctx, body, wheel, imu, now)
+        self._still(still_wheel, imu, now)
         key = (*self.engine.identity(ctx), ctx.mode.value)
         if key != self._context_key:
             self.integral = Velocity(0, 0)
@@ -548,8 +379,6 @@ class MotionController:
             else self.engine.tighten(permission, ctx, now)
         )
         goal, cap, braking, reason = self._goal(target, ctx, fresh, reference)
-        if require_limited_rearm and not self.limited_rearm_ready(now):
-            goal, braking, reason = Velocity(0, 0), True, "limited_rearm_not_ready"
         return self._candidate(
             goal,
             cap,
@@ -646,14 +475,11 @@ class MotionController:
                     emergency=True,
                 )
             assert brake_proof is not None
-            failure, brake_deadline = self._check_brake(brake_proof, body, wheel, now)
+            failure, brake_deadline = self._check_brake(brake_proof, now)
             if failure:
                 return self._failure(ctx, now, failure, emergency=True)
         elif not permitted:
             return self._failure(ctx, now, "final_candidate_rejected", emergency=True)
-        limited_complete = braking and self._limited_completion(now, step, brake_deadline)
-        if limited_complete:
-            reason = "limited_drive_settled"
         integral = (
             self.integral
             if goal != Velocity(0, 0) and integrate_body and not slip
@@ -676,7 +502,11 @@ class MotionController:
                 evidence_deadline=min(
                     decision.evidence_deadline,
                     fresh.permit.deadline_steady,
-                    ctx.target.deadline_steady,
+                    *(
+                        (ctx.target.deadline_steady,)
+                        if ctx.target.deadline_steady is not None
+                        else ()
+                    ),
                     reference.deadline_steady if reference else decision.evidence_deadline,
                 ),
             )
@@ -692,7 +522,6 @@ class MotionController:
             integral,
             braking,
             brake_deadline,
-            limited_complete,
             fallback,
         )
         self._prepared = prepared
@@ -721,7 +550,6 @@ class MotionController:
             self.integral if keep_integral else Velocity(0, 0),
             False,
             None,
-            False,
         )
         self._prepared = prepared
         return prepared
@@ -812,15 +640,11 @@ class MotionController:
         self._consume(prepared)
         decision = prepared.decision
         self.integral = prepared.integral
-        if decision.command is None or decision.emergency or not decision.verified:
-            self.invalidate_limited_rearm()
         if prepared.step is not None:
             self.trajectory.commit(prepared.step)
             if prepared.braking:
                 self._brake_deadline = prepared.brake_deadline
-                self._limited_complete = prepared.limited_complete
             else:
-                self.invalidate_limited_rearm()
                 self._brake_deadline = None
             for component in ("vx", "wz"):
                 value = getattr(prepared.step.velocity, component)
@@ -841,7 +665,7 @@ class MotionController:
         *,
         estop: bool = False,
         imu: Feedback | None = None,
-        require_limited_rearm: bool = False,
+        still_wheel: Feedback | None = None,
         evaluation: TickEvaluation | None = None,
     ) -> ControlDecision:
         # //Compatible: existing pure callers own delivery and commit immediately.
@@ -855,7 +679,7 @@ class MotionController:
                 now,
                 estop=estop,
                 imu=imu,
-                require_limited_rearm=require_limited_rearm,
+                still_wheel=still_wheel,
                 evaluation=evaluation,
             )
         )

@@ -166,9 +166,7 @@ class SnapshotState:
     async def recovery_revision(self, kind: str, token: int) -> int:
         # Read the current T5 boot/version before translating an opaque UI token;
         # a delayed command cannot reset another boot's equal numeric revision.
-        live = await self.collect()
-        if live.vehicle_ui is None or kind not in live.vehicle_ui["allowed_actions"]:
-            raise DomainError(ErrorCode.UNAVAILABLE, "local motion state is not ready")
+        await self.collect()
         current = self._recovery_tokens.get(kind)
         if current is None or current[0] != token:
             raise DomainError(ErrorCode.CONFLICT, "motion recovery version changed")
@@ -330,6 +328,7 @@ async def run_agent(config: AgentConfig) -> int:
             return 78
         motion = TaskAwareMotion(
             IpcClient(config.socket_path),
+            intent_client=IpcClient(config.socket_path),
             disable_client=IpcClient(config.socket_path),
             safety_client=IpcClient(config.socket_path),
         )

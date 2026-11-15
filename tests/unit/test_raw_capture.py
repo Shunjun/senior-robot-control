@@ -244,7 +244,7 @@ def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
     assert not group.offer("info", info, bridge_gid=info.bridge_gid, **args)
 
 
-def test_scan_profile_can_select_bounded_longer_receipt_age_without_changing_default():
+def test_legacy_receipt_age_override_cannot_extend_shared_one_second_policy():
     import pytest
 
     from senior_control.vision.raw_capture import RawCaptureAdmission
@@ -253,7 +253,7 @@ def test_scan_profile_can_select_bounded_longer_receipt_age_without_changing_def
         RawCaptureAdmission(max_age_s=3.0)
     admission = RawCaptureAdmission(max_age_s=3.0, hard_limit_s=5.0)
     good = raw_header()
-    assert admission.offer(
+    assert not admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=3_000_000_000, now_steady=12.0
     )
     assert not admission.offer(

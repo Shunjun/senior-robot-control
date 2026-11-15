@@ -4,6 +4,7 @@ No second lease or actuator: ManualAuthorityManager admits samples, and T5
 consumes the frozen target/deadline and owns closed-loop braking on source close.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -121,7 +122,7 @@ class MotionRuntimeReceiver:
         self._available = False
 
     def accept(self, value: "MotionRuntimeState", publisher: bytes, now: float) -> bool:
-        if not value.sampled_steady <= now < value.valid_until:
+        if not math.isfinite(now) or value.sampled_steady > now:
             return False
         identity = publisher.hex() + ":" + value.boot_id
         if not self._sources.accept(identity):
@@ -147,32 +148,18 @@ class MotionRuntimeReceiver:
         value = self.value
         if value is None:
             return RuntimeObservation(status="missing")
-        status: Literal["current", "revoked", "expired"] = "current"
+        status: Literal["current", "revoked"] = "current"
         if not self._available:
             status = "revoked"
-        elif not value.sampled_steady <= now < value.valid_until:
-            status = "expired"
+        elif not math.isfinite(now) or value.sampled_steady > now:
+            status = "revoked"
         return RuntimeObservation(status=status, last_sampled_steady=value.sampled_steady)
 
     def current(self, now: float) -> "MotionRuntimeState | None":
         value = self.value
         return (
-            value
-            if self._available
-            and value is not None
-            and value.sampled_steady <= now < value.valid_until
-            else None
+            value if self._available and value is not None and value.sampled_steady <= now else None
         )
-
-
-def runtime_healthy(value: "MotionRuntimeState | None", now: float) -> bool:
-    return bool(
-        value is not None
-        and value.healthy
-        and value.evidence_stamp_steady is not None
-        and value.evidence_deadline_steady is not None
-        and value.evidence_stamp_steady <= now < value.evidence_deadline_steady
-    )
 
 
 def vehicle_frame(
@@ -208,10 +195,6 @@ def vehicle_frame(
             status="missing" if runtime is None else "current",
             last_sampled_steady=None if runtime is None else runtime.sampled_steady,
         )
-    if runtime is not None and not runtime.sampled_steady <= now < runtime.valid_until:
-        observation = RuntimeObservation(
-            status="expired", last_sampled_steady=runtime.sampled_steady
-        )
     reporting = observation.model_dump()
     reporting["age_seconds"] = (
         None
@@ -242,8 +225,8 @@ def vehicle_frame(
         runtime.task_id,
         safety_revisions[0],
         safety_revisions[1],
-        runtime.stationary and runtime_healthy(runtime, now),
-        tuple(runtime.allowed_actions) if runtime_healthy(runtime, now) else (),
+        runtime.stationary,
+        tuple(runtime.allowed_actions),
     )
     view = project_vehicle_state(
         RuntimeSnapshot(sequence, motion),

@@ -77,7 +77,7 @@ def test_response_round_trip_and_typed_payload():
 
     raw = message(
         type="response",
-        payload={"request_type": "drive.intent", "ok": False, "error": "safety_rejected"},
+        payload={"request_type": "control.acquire", "ok": False, "error": "safety_rejected"},
     )
     result = validate_envelope(raw, "r1")
     assert isinstance(result, ResponseEnvelope)
@@ -179,3 +179,10 @@ def test_video_close_has_no_payload_and_round_trips():
         validate_frame(video_message("video.close", {"sdp": "v=0"}), "r1")
     with pytest.raises(ValueError):
         validate_envelope(video_message("video.close", {}), "r1")
+
+
+def test_retired_intent_receipt_is_rejected():
+    with pytest.raises(ValueError):
+        validate_envelope(
+            message(type="response", payload={"request_type": "drive.intent", "ok": True}), "r1"
+        )

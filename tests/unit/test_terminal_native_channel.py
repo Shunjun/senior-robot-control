@@ -33,6 +33,9 @@ def test_native_identity_channel_preserves_newer_manual_generation(rig):  # noqa
     def intent(kind, source, epoch, generation):
         return N(
             close_reason="intent",
+            manual_linear=1.0 if kind == "manual" else 0.0,
+            manual_linear_limit=0.01 if kind == "manual" else 0.0,
+            degraded_linear_limit=0.3 if kind == "manual" else 0.0,
             source_kind=kind,
             source_id=source,
             source_epoch=epoch,

@@ -31,6 +31,7 @@ async function connected() {
   socket.readyState = 1;
   socket.onopen?.();
   await opening;
+  socket.receive({ v: 1, type: 'control.connection', robot_id: 'robot', connection_epoch: 3 });
   socket.receive(snapshot());
   return { client, socket };
 }
@@ -206,6 +207,7 @@ it('retires manual input when agent epoch changes on the same browser socket wit
       task_id: 'nav', version: 1, phase: 'running', completed: 0, total: 1,
       stopped_for: null, allowed_actions: ['pause']
     } });
+    socket.receive({ v: 1, type: 'control.connection', robot_id: 'robot', connection_epoch: 4 });
     socket.receive(next);
     expect(controller.phase).toBe('none');
     const boundary = socket.sent.length;
@@ -221,7 +223,7 @@ it('retires manual input when agent epoch changes on the same browser socket wit
   }
 });
 
-it('still closes held input on a real car rejection', async () => {
+it('ignores retired per-intent receipts and continues fresh samples', async () => {
   vi.useFakeTimers();
   const { client, socket } = await connected();
   const controller = new ManualController(client.vehicle, () => {});
@@ -235,11 +237,10 @@ it('still closes held input on a real car rejection', async () => {
       request_type: 'drive.intent', ok: false, error: 'safety_rejected'
     } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(controller.phase).toBe('none');
-    expect(socket.sent.at(-1)?.type).toBe('control.release');
-    respond(socket, socket.sent.at(-1)!, {});
+    expect(controller.phase).toBe('active');
     await vi.advanceTimersByTimeAsync(500);
-    expect(socket.sent.filter(item => item.type === 'drive.intent')).toHaveLength(1);
+    expect(socket.sent.filter(item => item.type === 'drive.intent')).toHaveLength(6);
+    expect(socket.sent.some(item => item.type === 'control.release')).toBe(false);
   } finally {
     controller.dispose();
     client.disconnect();
@@ -303,4 +304,37 @@ it('strictly restricts lifecycle data shape and request types', () => {
   expect(parseInbound(JSON.stringify({ ...envelope, payload: {
     request_type: 'navigation.return_home', ok: false, error: 'conflict', data: taskState
   } }))).toBeNull();
+});
+
+it('sends every 100ms while a 400ms independent receipt is unresolved, with no intent pending or retry', async () => {
+  vi.useFakeTimers();
+  const { client, socket } = await connected();
+  const controller = new ManualController(client.vehicle, () => {});
+  try {
+    const preparing = controller.prepare();
+    respond(socket, socket.sent.at(-1)!, { authority_id: 'a', state: 'prepared' });
+    await preparing;
+    const receipt = client.request('operation.query', { operation_id: 'slow' });
+    void receipt.catch(() => {});
+    const request = socket.sent.at(-1)!;
+    controller.begin(0.1, 0, 'low');
+    for (let i = 1; i <= 4; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    const intents = socket.sent.filter(item => item.type === 'drive.intent');
+    expect(intents).toHaveLength(5);
+    expect(intents.map(item => (item.payload as { sequence: number }).sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+    respond(socket, request, undefined);
+    await receipt;
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    controller.release();
+    respond(socket, socket.sent.at(-1)!, {});
+    const boundary = socket.sent.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(socket.sent.slice(boundary)).toEqual([]);
+  } finally {
+    controller.dispose();
+    client.disconnect();
+  }
 });

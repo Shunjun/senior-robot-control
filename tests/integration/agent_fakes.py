@@ -153,6 +153,9 @@ class FakeMotion:
         self.events.append(f"forward:{envelope.type}")
         return {"ok": True, "authority_id": "test-authority", "state": "prepared"}
 
+    async def send_intent(self, envelope, *, received_steady, deadline_steady):
+        self.events.append(f"forward:{envelope.type}")
+
     async def stop(self, envelope: SimpleEnvelope) -> None:
         self.events.append(f"stop:{envelope.request_id}")
 

@@ -82,24 +82,12 @@
           "title": "Wheel Speed Mps",
           "type": "number"
         },
-        "max_tick_s": {
-          "title": "Max Tick S",
-          "type": "number"
-        },
         "still_speed_mps": {
           "title": "Still Speed Mps",
           "type": "number"
         },
         "still_yaw_rps": {
           "title": "Still Yaw Rps",
-          "type": "number"
-        },
-        "still_samples": {
-          "title": "Still Samples",
-          "type": "integer"
-        },
-        "still_span_s": {
-          "title": "Still Span S",
           "type": "number"
         },
         "disagreement_mps": {
@@ -121,11 +109,8 @@
         "integral_limit",
         "track_width_m",
         "wheel_speed_mps",
-        "max_tick_s",
         "still_speed_mps",
         "still_yaw_rps",
-        "still_samples",
-        "still_span_s",
         "disagreement_mps",
         "basis",
         "synthetic"
@@ -518,13 +503,6 @@
     "position_error": {
       "minimum": 0,
       "title": "Position Error",
-      "type": "number"
-    },
-    "model_seconds": {
-      "default": 3600.0,
-      "description": "Startup model lease budget, seconds; not measured response",
-      "exclusiveMinimum": 0,
-      "title": "Model Seconds",
       "type": "number"
     },
     "assumed_body_cap": {

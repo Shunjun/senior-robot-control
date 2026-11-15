@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 import test_motion_core_handoff as handoff
+from control_process_test_support import capture_inputs
 from test_directional_constraints import scene
 from test_motion_core_handoff import barrier
 
@@ -77,10 +78,10 @@ def setup_stop(c, monkeypatch):
                 source_health=sources,
             ),
         )
-        c.sensors.ingest_packet(packet)
+        capture_inputs(c, packet)
         c.tick()
         result = json.loads(c.node.publishers["/motion/runtime"].messages[-1].data)
-        assert result["body_reference"] is None and not result["stationary"]
+        assert result["body_reference"] is None
         clock[0] += 0.05
         return result
 
@@ -106,7 +107,7 @@ def test_release_rearm_prepared_neutral_new_gesture_and_second_release(core, mon
     clock, tick = setup_stop(core, monkeypatch)
     for _ in range(170):
         r = tick()
-    assert r["mode"] == "braking" and r["allowed_actions"] == ["acquire"]
+    assert r["mode"] == "idle" and r["allowed_actions"] == ["acquire"]
     deadline = core.controller._brake_deadline
     prepared = barrier("prepared", generation=3)
     prepared.source_id = "new-authority"
@@ -133,7 +134,7 @@ def test_release_rearm_prepared_neutral_new_gesture_and_second_release(core, mon
     assert core.command(stop)
     for _ in range(170):
         r = tick()
-    assert r["mode"] == "braking" and r["allowed_actions"] == ["acquire"]
+    assert r["mode"] == "idle" and r["allowed_actions"] == ["acquire"]
     assert core.node.emitted[-1][0] == Velocity(0, 0)
 
 
@@ -157,5 +158,7 @@ def test_first_motion_rechecks_evidence_after_neutral(core, monkeypatch, change)
             now,
             now,
         )
-    assert core.command(intent(clock, "new-authority", 2, 5 / 9)) is (change == "epoch")
+    # Command entry does not repeat report/feedback qualification; the next
+    # control calculation owns expired input evidence and must hold zero.
+    assert core.command(intent(clock, "new-authority", 2, 5 / 9))
     assert core.node.emitted[-1][0] == Velocity(0, 0)

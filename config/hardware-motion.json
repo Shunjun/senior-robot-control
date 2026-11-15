@@ -27,7 +27,6 @@
   "orientation_error_rad": 0.05,
   "stationary_linear_mps": 0.05,
   "stationary_yaw_rps": 0.05,
-  "model_seconds": 3600.0,
   "horizon_s": 12.0,
   "drive_linear_overshoot": 0.1,
   "drive_yaw_overshoot": 0.15,

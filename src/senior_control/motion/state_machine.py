@@ -21,6 +21,7 @@ class RecoveryObservation:
     sequence: int
     stamp_steady: float
     deadline_steady: float
+    # Live composition supplies raw wheel/IMU validity, never fusion/body health.
     healthy: bool
     stationary: bool
     # //Compatible: only the scoped T5 stop owner can provide this permission.

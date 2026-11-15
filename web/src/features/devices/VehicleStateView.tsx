@@ -19,7 +19,6 @@ const MODES = {
 const AVAILABILITY = {
   current: '实时可观测',
   missing: '尚未收到有效运行状态',
-  expired: '运行状态已过期',
   revoked: '运行状态来源已撤销',
   ipc_unavailable: '本地状态接口不可用'
 };

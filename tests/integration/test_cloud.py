@@ -79,6 +79,7 @@ class WsClient:
         self.closed = False
         self.close_code: int | None = None
         self.response_headers: dict[bytes, bytes] = {}
+        self.control_connections: list[dict[str, Any]] = []
 
     async def connect(self) -> bool:
         self._task = asyncio.ensure_future(
@@ -89,6 +90,12 @@ class WsClient:
         if message is not None and message["type"] == "websocket.accept":
             self.accepted = True
             self.response_headers = dict(message.get("headers", []))
+            if self._scope["path"] == "/ws/control":
+                raw = await self.receive()
+                assert raw is not None
+                event = json.loads(raw)
+                assert event["type"] == "control.connection" and event["v"] == 1
+                self.control_connections.append(event)
         else:
             self.closed = True
         return self.accepted
@@ -346,8 +353,10 @@ async def test_two_sockets_old_epoch_dropped(cloud: Cloud) -> None:
     assert await browser.connect() is True
     old = await cloud.agent(token)
     assert await old.connect() is True
+    assert json.loads(await browser.receive())["connection_epoch"] == 1
     new = await cloud.agent(token)
     assert await new.connect() is True
+    assert json.loads(await browser.receive())["connection_epoch"] == 2
 
     await old.send(ok_frame(robot_id, seq=1, epoch=1))
     assert await browser.receive() is None

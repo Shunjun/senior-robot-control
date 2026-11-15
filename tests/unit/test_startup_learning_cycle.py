@@ -4,6 +4,7 @@ import math
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import publish_inputs
 from test_motion_core_chain import InlineWorker
 from test_motion_core_handoff import core  # noqa: F401
 from test_unified_motion_runtime import point
@@ -61,6 +62,8 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
     # Real core initialization may wait longer than the learning budget.
     for t in (10.0, 50.0):
         now[0] = t
+        publish_inputs(core)
+        core.prefetch_scan()
         core.tick()
     assert core.startup.state == "initializing" and core.startup.started is None
     for i in range(1, 301):
@@ -69,9 +72,9 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
         # supplies the next measured speed. No permit or obstacle is patched.
         v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
         positions.append((t, positions[-1][1] + v * 0.05))
-        core.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
-        core.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
-        core.sensors.ingest_observation(
+        core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+        core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+        core.node._reception_test.sensors.ingest_observation(
             MotionObservation(
                 "laser",
                 (v, 0.0, 0.0),
@@ -115,6 +118,8 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
                 ),
             )
         ]
+        publish_inputs(core)
+        core.prefetch_scan()
         core.tick()
         phases.add(core.startup.state)
         captures.append(stamp)
@@ -136,7 +141,13 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
     assert core.startup.validation_samples == 5
     assert stopped_stamp is not None
     assert core.self_returns.frame_stamps == sorted(set(core.self_returns.frame_stamps))
+    # Completion can occur while consuming the exit geometry snapshot. The
+    # next fixed control slot retires its lifecycle identity and stays zero.
+    now[0] += 0.05
+    publish_inputs(core)
+    core.tick()
     assert core.machine.state.task_id is None
+    assert core.target.source == "idle" and core.node.emitted[-1][0].vx == 0
     if len(delay_pattern) > 1:
         assert any(a > b for a, b in zip(captures, captures[1:], strict=False))
 

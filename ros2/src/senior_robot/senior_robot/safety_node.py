@@ -14,12 +14,11 @@ import socket
 import subprocess
 import time
 from collections import deque
+from contextlib import ExitStack
 from pathlib import Path
 
 import rclpy
 from ament_index_python.packages import get_package_prefix
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import Twist
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.exceptions import ParameterUninitializedException
@@ -57,14 +56,32 @@ from senior_robot.raw_safety_observation import RawSafetyObservation
 
 
 class SafetyGate(Node):
-    def __init__(self, *, parameter_overrides=None) -> None:
+    def __init__(self, *, parameter_overrides=None, input_channel=None) -> None:
+        self._resources = ExitStack()
+        try:
+            self._initialize(parameter_overrides=parameter_overrides, input_channel=input_channel)
+        except BaseException:
+            self._resources.close()
+            raise
+
+    def _own(self, resource):
+        self._resources.callback(resource.close)
+        return resource
+
+    def _initialize(self, *, parameter_overrides, input_channel):
         super().__init__(
-            "safety_gate",
+            "safety_input" if input_channel is not None else "safety_gate",
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
+        self._input_channel = input_channel
+        self._input_process = None
+        self._input_scan_ready = False
+        from senior_control.motion.cadence import ControlCadence
+
         self.declare_parameter("simulation_rate_hz", 20.0)
         self.declare_parameter("body_frame", "base_link")
+        self.declare_parameter("wheel_frame", "odom")
         self.declare_parameter("footprint_xy", rclpy.Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("final_command_topic", "/safety/final_command")
         self.declare_parameter("robot_id", "robot")
@@ -79,8 +96,9 @@ class SafetyGate(Node):
         self.declare_parameter("output_topic", "/cmd_vel")
         self._body = str(self.get_parameter("body_frame").value)
         rate = float(self.get_parameter("simulation_rate_hz").value)
-        if not self._body or not math.isfinite(rate) or rate <= 0.0:
-            raise ValueError("simulation_rate_hz must be positive and body_frame nonempty")
+        if not self._body or not math.isfinite(rate) or rate <= 0:
+            raise ValueError("control frequency must be finite/positive and body_frame nonempty")
+        self._cadence = ControlCadence(1.0 / rate)
         self.declare_parameter("motion_core_profile", "")
         self.declare_parameter("hardware_motion_profile", "")
         hardware_path = str(self.get_parameter("hardware_motion_profile").value)
@@ -144,33 +162,95 @@ class SafetyGate(Node):
         self._bounded_depth_topic = str(self.get_parameter("bounded_depth_topic").value)
         self._raw_depth_topic = str(self.get_parameter("raw_depth_topic").value)
         self._raw_depth_info_topic = str(self.get_parameter("raw_depth_info_topic").value)
-        self._publisher = self.create_publisher(Twist, output, 10)
-        self._drive_feedback_publisher = self.create_publisher(
-            DriveFeedbackMessage, "/safety/drive_feedback", qos_profile_sensor_data
+        from senior_robot.motion_output import MotionOutput
+
+        self._output_transport = (
+            self._own(MotionOutput(self.resolve_topic_name(output)))
+            if input_channel is None
+            else None
         )
-        self._status_publisher = self.create_publisher(DiagnosticArray, "/safety/status", 10)
+        self._drive_feedback_publisher = (
+            self.create_publisher(
+                DriveFeedbackMessage, "/safety/drive_feedback", qos_profile_sensor_data
+            )
+            if input_channel is None
+            else None
+        )
         self._status_counts: dict[str, int] = {}
         self._last_status = float("-inf")
         self._status_geometry: dict[str, object] = {}
         self._command_topic = str(self.get_parameter("final_command_topic").value)
-        self._start_command_guard()
-        self.create_subscription(
-            FencedSafetyScan, self._bounded_scan_topic, self._on_scan, qos_profile_sensor_data
-        )
-        if self._depth_policy == "required":
-            self.create_subscription(
-                FencedDepthEvidence,
-                self._bounded_depth_topic,
-                self._on_depth,
-                qos_profile_sensor_data,
+        if input_channel is not None:
+            from tf2_ros import Buffer, TransformListener
+
+            from senior_control.runtime.diagnostics import configure_diagnostics
+            from senior_robot.motion_observation_adapter import NativeObservationRosBridge
+            from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+
+            self._input_sensors = MotionSensorRuntime(
+                candidate_profile, configure_diagnostics(candidate_profile.diagnostics)
             )
-        self.create_timer(
-            1.0 / rate, self._on_timer, clock=RosClock(clock_type=ClockType.STEADY_TIME)
+            from senior_control.motion.diagnostic_pump import DiagnosticPump
+
+            self._input_diagnostics = self._own(DiagnosticPump(self._input_sensors.diagnostics))
+            if not self.has_parameter("wheel_frame"):
+                self.declare_parameter("wheel_frame", "odom")
+            self._tf = Buffer()
+            self._tf_listener = TransformListener(self._tf, self)
+            self._input_bridge = NativeObservationRosBridge(
+                self,
+                candidate_profile,
+                sample_sink=self._input_sensors.ingest,
+                source_invalidated=self._input_sensors.invalidate,
+                publish=False,
+            )
+            self._optional_inputs = None
+            if candidate_profile.gps_input is not None or candidate_profile.rgbd_input is not None:
+                from senior_robot.optional_motion_inputs import OptionalMotionInputs
+
+                self._optional_inputs = OptionalMotionInputs(
+                    self, candidate_profile, self._input_sensors
+                )
+            self.create_subscription(
+                FencedSafetyScan, self._bounded_scan_topic, self._on_scan, qos_profile_sensor_data
+            )
+            if self._depth_policy == "required":
+                self.create_subscription(
+                    FencedDepthEvidence,
+                    self._bounded_depth_topic,
+                    self._on_depth,
+                    qos_profile_sensor_data,
+                )
+            self.create_timer(
+                0.05, self._publish_inputs, clock=RosClock(clock_type=ClockType.STEADY_TIME)
+            )
+        else:
+            from senior_robot.control_inputs import ControlInputs
+            from senior_robot.motion_core_output import MotionCoreOutput
+
+            self._start_command_guard()
+            self._resources.callback(self._stop_guard)
+            self._motion_core = self._own(MotionCoreOutput(self, candidate_profile))
+            self._input_process = self._own(ControlInputs(self))
+            # Wake frequently, but only absolute 50ms slots can start a tick.
+            self.create_timer(
+                min(0.005, 1.0 / rate),
+                self._on_timer,
+                clock=RosClock(clock_type=ClockType.STEADY_TIME),
+            )
+
+    def _publish_inputs(self):
+        sensors = self._input_sensors
+        now = time.monotonic()
+        ros = self.get_clock().now().nanoseconds / 1e9
+        sensors.poses = list(self._input_bridge.core.poses)
+        sensors.ingest_poses(sensors.poses)
+        reference = sensors.estimate(ros, now)
+        ready = self._scan_topology_ready()
+        state = {k: v for k, v in sensors.__dict__.items() if k not in {"profile", "diagnostics"}}
+        self._input_channel.put(
+            (state, tuple(self._scans), ready, self._scan_generation, reference)
         )
-
-        from senior_robot.motion_core_output import MotionCoreOutput
-
-        self._motion_core = MotionCoreOutput(self, candidate_profile)
 
     def _array_parameter(self, name: str) -> list[float]:
         try:
@@ -353,6 +433,8 @@ class SafetyGate(Node):
             self._freshness.scan_received = None
 
     def _scan_topology_ready(self) -> bool:
+        if self._input_channel is None:
+            return self._input_scan_ready
         endpoints = self.get_publishers_info_by_topic(self._bounded_scan_topic)
         ready, changed = self._scan_topology.observe(
             [(item.node_name, item.node_namespace, bytes(item.endpoint_gid)) for item in endpoints]
@@ -639,13 +721,8 @@ class SafetyGate(Node):
         msg = self._depth_messages.get((header.source_epoch, header.sequence))
         return msg if msg is not None and self._depth_shape_valid(msg, ros_ns, steady) else None
 
-    def _emit_motion_core(self, velocity: Velocity, reason: str) -> None:
-        # Called only by the selected steady core tick, after final proof or
-        # explicit unverified fault-stop handling. The publisher is unchanged.
-        twist = Twist()
-        # //Compatible: ROS float setters reject an internal integer-valued zero.
-        twist.linear.x, twist.angular.z = float(velocity.vx), float(velocity.wz)
-        self._publisher.publish(twist)
+    def _emit_motion_core(self, velocity: Velocity, reason: str, deadline: float = 0.0) -> None:
+        self._output_transport.publish(velocity, deadline)
         self._report(reason)
 
     def _report(self, reason: str) -> None:
@@ -661,29 +738,31 @@ class SafetyGate(Node):
             "buffered_scans": str(len(self._scans)),
             **{f"count.{key}": str(value) for key, value in self._status_counts.items()},
         }
-        status = DiagnosticStatus()
-        status.name = "safety_gate"
-        status.hardware_id = self._body
-        status.level = (
-            DiagnosticStatus.OK
-            if reason in ("hard_sweep_clear", "warning_overlap")
-            else DiagnosticStatus.WARN
-        )
-        status.message = reason
-        status.values = [KeyValue(key=key, value=value) for key, value in values.items()]
-        array = DiagnosticArray()
-        array.header.stamp = self.get_clock().now().to_msg()
-        array.status = [status]
-        self._status_publisher.publish(array)
+        self._motion_core.report_status(dict(body=self._body, reason=reason, values=values))
 
     def _on_timer(self) -> None:
-        self._poll_command_guard()
-        if not self._command_topology_ready():
-            self._motion_core.revoke("command_topology_unqualified")
-        self._motion_core.tick()
+        started = False
+        try:
+            self._cadence.observe(time.monotonic())
+            self._input_process.update(self, self._motion_core.sensors)
+            self._motion_core.prefetch_scan()
+            if not self._cadence.due(time.monotonic()):
+                return
+            started = True
+            self._poll_command_guard()
+            if not self._command_topology_ready():
+                self._motion_core.revoke("command_topology_unqualified")
+            # Core samples its own actual calculation time after guard work;
+            # controller dt therefore cannot inherit a pre-prefetch timestamp.
+            self._motion_core.tick()
+        except ValueError as exc:
+            self._motion_core.revoke(str(exc))
+            self._emit_motion_core(Velocity(0, 0), str(exc))
+        finally:
+            if started:
+                self._cadence.finished(time.monotonic())
 
-    def destroy_node(self):
-        self._motion_core.close()
+    def _stop_guard(self):
         if self._guard_socket is not None:
             self._guard_socket.close()
             self._guard_socket = None
@@ -694,7 +773,20 @@ class SafetyGate(Node):
             except subprocess.TimeoutExpired:
                 self._guard_process.kill()
                 self._guard_process.wait(timeout=1.0)
-        return super().destroy_node()
+
+    def destroy_node(self):
+        try:
+            if self._input_channel is None:
+                self._motion_core.revoke("shutdown")
+                try:
+                    self._emit_motion_core(Velocity(0, 0), "shutdown")
+                except ValueError:
+                    pass  # A lost output channel is already withdrawn by the native owner.
+        finally:
+            try:
+                self._resources.close()
+            finally:
+                super().destroy_node()
 
 
 def main() -> None:

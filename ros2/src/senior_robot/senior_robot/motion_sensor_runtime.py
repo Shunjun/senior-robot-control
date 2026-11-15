@@ -1,7 +1,8 @@
 """ROS-independent composition of the one current-motion estimation owner.
 
-No consumer selects raw sources. Tracking and independent-body evidence are
-separate views; this module never supplies a stopping envelope or a truth bound.
+No consumer selects raw sources. Tracking, independent-body diagnostics and
+raw wheel/IMU stillness are separate views. This module never supplies a
+stopping envelope or a truth bound.
 """
 
 from dataclasses import asdict
@@ -14,6 +15,7 @@ from senior_control.motion.observations import Frame, Source, SourceStatus
 from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
 from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
 from senior_control.motion.source_modes import SourceMode
+from senior_control.motion.stillness import stationary
 from senior_control.runtime.diagnostics import QueueSnapshot, RuntimeDiagnostics
 
 
@@ -31,14 +33,13 @@ class MotionSensorRuntime:
         self.independent = None
         self.tracking = None
         self.raw_wheel = None
+        self.raw_imu = None
+        self._raw_evidence_sequence = 0
         self.sequence = 0
         self._evidence_key = None
         self._evidence_sequence = 0
         self._independent_key = None
         self._independent_sequence = 0
-        self._still_axes = [None, None]
-        self.stationary_supported = False
-        self._still_generation = None
         self.poses = []
         self.pose_estimator = PoseEstimation(
             unknown_speed_mps=profile.assumed_body_cap,
@@ -54,6 +55,8 @@ class MotionSensorRuntime:
         self.estimator.invalidate(source.value)
         if source is Source.WHEEL:
             self.raw_wheel = None
+        if source is Source.IMU:
+            self.raw_imu = None
 
     def ingest(
         self,
@@ -110,8 +113,12 @@ class MotionSensorRuntime:
             sequence=sample.sequence,
         )
         accepted = self.ingest_observation(o, now_ros, now_steady)
+        if accepted and sample.source in {Source.WHEEL, Source.IMU}:
+            self._raw_evidence_sequence += 1
         if accepted and sample.source is Source.WHEEL:
             self.raw_wheel = o if quality != 0 else None
+        if accepted and sample.source is Source.IMU:
+            self.raw_imu = o if quality != 0 else None
         return accepted
 
     def ingest_observation(
@@ -187,9 +194,6 @@ class MotionSensorRuntime:
             self.diagnostics.sensor_attempt(
                 attempt.observation.source, "use", attempt.age, attempt.outcomes
             )
-        if self._still_generation != r.generation:
-            self._still_axes = [None, None]
-            self._still_generation = r.generation
         observed = [a for a in (r.vx, r.wz) if a.observed]
         roots = tuple(dict.fromkeys(root for a in observed for root in a.roots))
         key = tuple((root.family, root.epoch, root.sequence) for root in roots)
@@ -248,7 +252,6 @@ class MotionSensorRuntime:
                 True,
                 "independent-sensor current prediction; not a guaranteed speed bound",
             )
-        self._observe_stillness(independent)
         mode = (
             SourceMode.UNAVAILABLE
             if not r.healthy
@@ -289,34 +292,55 @@ class MotionSensorRuntime:
         )
         return ref, self.tracking, self.tracking
 
-    def _observe_stillness(self, axes):
-        # Existing physical reset/stillness evidence, never a driving admission
-        # gate. New wheel ticks or projections cannot count as new independent vx.
+    def raw_feedback(self, source, now):
+        observation = self.raw_wheel if source == "wheel" else self.raw_imu
+        if observation is None or self.latest is None:
+            return None
+        try:
+            age = self.estimator._age(observation.roots, self.latest.computed_ros, now)
+        except ValueError:
+            return None
+        if age.band == "invalid":
+            return None
+        vx = observation.values[0] if source == "wheel" else 0.0
+        wz = observation.values[2]
+        if vx is None or wz is None:
+            return None
+        return Feedback(
+            Velocity(vx, wz),
+            min(r.received_steady for r in observation.roots),
+            age.deadline_steady,
+            observation.identity_epoch,
+            observation.identity_sequence,
+            True,
+            "raw wheel odometry" if source == "wheel" else "raw IMU yaw rate",
+            observed_axes=(source == "wheel", True),
+        )
+
+    def stationary(self, now):
         config = self.profile.controller()
-        for i, limit in enumerate((config.still_speed_mps, config.still_yaw_rps)):
-            axis = None if axes is None else axes[i]
-            if axis is None or not axis.observed or abs(axis.value) > limit:
-                self._still_axes[i] = None
-                continue
-            key = tuple((r.family, r.epoch, r.sequence) for r in axis.roots)
-            domain = tuple(sorted({(r.family, r.epoch) for r in axis.roots}))
-            stamp = min(r.received_steady for r in axis.roots)
-            prior = self._still_axes[i]
-            if prior is None or prior[0] != domain:
-                self._still_axes[i] = (domain, key, stamp, stamp, 1)
-            elif prior[1] != key:
-                self._still_axes[i] = (
-                    domain,
-                    key,
-                    prior[2],
-                    stamp,
-                    min(config.still_samples, prior[4] + 1),
-                )
-        self.stationary_supported = all(
-            row is not None
-            and row[4] >= config.still_samples
-            and row[3] >= row[2] + config.still_span_s
-            for row in self._still_axes
+        return stationary(
+            self.raw_feedback("wheel", now),
+            self.raw_feedback("imu", now),
+            now,
+            linear_limit=config.still_speed_mps,
+            yaw_limit=config.still_yaw_rps,
+        )
+
+    def recovery(self, now):
+        wheel, imu = self.raw_feedback("wheel", now), self.raw_feedback("imu", now)
+        if wheel is None or imu is None:
+            return None
+        from senior_control.motion.state_machine import RecoveryObservation
+
+        return RecoveryObservation(
+            wheel.epoch + "|" + imu.epoch,
+            self._raw_evidence_sequence,
+            min(wheel.stamp_steady, imu.stamp_steady),
+            min(wheel.deadline_steady, imu.deadline_steady),
+            True,
+            self.stationary(now),
+            manual_rearm_ready=True,
         )
 
     def ingest_poses(self, rows):

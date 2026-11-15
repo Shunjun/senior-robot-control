@@ -4,7 +4,6 @@ import time
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
 from senior_control.protocol import validate_frame
-from senior_control.safety.arbiter import Arbiter
 
 
 def frame(kind: str, seq: int, payload: dict | None = None, *, epoch: int = 1) -> bytes:
@@ -48,13 +47,12 @@ async def test_later_drive_stop_cannot_overtake_an_earlier_estop() -> None:
     agent = hub.attach_agent("car-a")
     control = hub.attach_controller("car-a", "auth")
     assert control is not None
-    arbiter = Arbiter("car-a", 0.3)
 
     hub.handle_control_frame(control, frame("safety.estop", 2))
     hub.handle_control_frame(control, frame("drive.stop", 3))
+    types = []
     for _ in range(2):
         queued = await agent.outbox.get()
         assert isinstance(queued, bytes)
-        arbiter.accept(validate_frame(queued, "car-a"), 0.2)
-
-    assert arbiter.mode(0.2) == "estop"
+        types.append(validate_frame(queued, "car-a").type)
+    assert types == ["safety.estop", "drive.stop"]

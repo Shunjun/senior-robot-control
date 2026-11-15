@@ -12,7 +12,7 @@ export interface DriveViewProps {
   active?: boolean;
   compact?: boolean;
 }
-export function DriveView({ robotId, link, snapshot, active = true, compact = false }: DriveViewProps): ReactElement {
+export function DriveView({ robotId, link, active = true, compact = false }: DriveViewProps): ReactElement {
   const view = useVehicleView(link.vehicle);
   const [phase, setPhase] = useState<ManualPhase>('none');
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +23,7 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
     setPhase(next);
     if (issue) setError(issue);
   }) : null, [link, robotId]);
-  const supported = view.frame?.capabilities.includes('motion.intent.v1') === true;
-  const enabled = active && view.available && view.connected && snapshot?.stale !== true && supported;
+  const enabled = active && view.manual_connected;
   useEffect(() => {
     if (!enabled) {
       controller?.release();
@@ -84,9 +83,8 @@ export function DriveView({ robotId, link, snapshot, active = true, compact = fa
         active: '手动会话进行中'
       })[phase]}</span>
     </header>
-    {!supported && <p className={styles.lock}>方向力度控制尚未接通，请等待车辆连接就绪。</p>}
     <div className={styles.leaseGroup}>
-      <button className={styles.primary} disabled={!enabled || !view.frame?.allowed_actions.includes('acquire') || phase !== 'none'} onClick={() => {
+      <button className={styles.primary} disabled={!enabled || phase !== 'none'} onClick={() => {
         setError(null);
         void controller?.prepare();
       }}>获取控制权</button>

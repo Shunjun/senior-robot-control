@@ -202,6 +202,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
             runtime.ref.navigation_evidence_ready() if continuing else runtime.ref.safety_ready()
         ),
         motion_runtime=lambda: None,
+        runtime_observation=lambda: {"status": "missing", "last_sampled_steady": None},
         manual_view=lambda: None,
         manual_request=lambda message: {"ok": False, "error": "unavailable"},
         motion_mode=lambda: "autonomous",
@@ -209,6 +210,13 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         disconnect=lambda *a: None,
         bind_navigation_source=lambda *a, **k: True,
         clear_navigation_source=lambda *a: None,
+        complete_navigation_source=lambda *a: None,
+        retire_navigation_source=lambda *a, **k: None,
+        collect_terminal=lambda *a, **k: None,
+        query_terminal_collection=lambda *a, **k: None,
+        request_terminal_release=lambda *a, **k: None,
+        terminal_release_status=lambda *a: None,
+        collect_terminal_releases=lambda *a: None,
         navigation_source_matches=lambda *a: True,
         navigation_source_retired=lambda *a: False,
         shutdown_motion=lambda: None,
@@ -231,7 +239,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
             return True
 
     class Controller:
-        def __init__(self, *args):
+        def __init__(self, *args, **kwargs):
             pass
 
         def available(self):

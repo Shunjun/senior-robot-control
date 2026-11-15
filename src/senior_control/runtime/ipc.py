@@ -7,6 +7,7 @@ A frame longer than ``MAX_FRAME`` is never read: the peer is disconnected instea
 
 import asyncio
 import json
+import logging
 import math
 import os
 import socket
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from senior_control.runtime.diagnostics import PendingCounter
+
+logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 MAX_FRAME = 8192
@@ -76,7 +79,7 @@ async def _read(reader: asyncio.StreamReader) -> Message:
 
 
 class IpcServer:
-    """ROS-side listener. The handler answers one request per frame."""
+    """ROS listener: request replies and a dedicated latest-intent notification stream."""
 
     def __init__(self, path: Path, handler: Handler, *, replace_existing: bool = True) -> None:
         if type(replace_existing) is not bool:
@@ -211,17 +214,54 @@ class IpcServer:
         task = asyncio.current_task()
         assert task is not None
         self._connections.add(task)
+        latest: Message | None = None
+        consumer: asyncio.Task[None] | None = None
+        stream: bool | None = None
+        intent_queue = PendingCounter("ipc.server.manual_intent", 1)
+
+        async def consume() -> None:
+            nonlocal latest
+            while latest is not None:
+                sample, latest = latest, None
+                intent_queue.start(id(sample), time.monotonic())
+                try:
+                    reply = await self._answer(sample)
+                    if reply.get("ok") is not True:
+                        logger.warning("manual intent delivery rejected: %s", reply.get("error"))
+                finally:
+                    intent_queue.finish(id(sample), time.monotonic())
+
         try:
             while True:
                 try:
                     request = await _read(reader)
                 except IpcError:
                     return
-                writer.write(_encode(await self._answer(request)))
-                await writer.drain()
+                notification = request.get("type") == "manual_intent"
+                if stream is None:
+                    stream = notification
+                elif stream != notification:
+                    # Dedicated intent connections cannot mix replies with notifications.
+                    return
+                if notification:
+                    if latest is not None:
+                        intent_queue.discard(id(latest), time.monotonic(), overwritten=True)
+                    latest = request
+                    intent_queue.enqueue(id(request), time.monotonic())
+                    if consumer is None or consumer.done():
+                        consumer = asyncio.create_task(consume())
+                else:
+                    writer.write(_encode(await self._answer(request)))
+                    await writer.drain()
         except (ConnectionError, IpcError):
             return
         finally:
+            if latest is not None:
+                intent_queue.discard(id(latest), time.monotonic())
+            latest = None
+            if consumer is not None:
+                consumer.cancel()
+                await asyncio.gather(consumer, return_exceptions=True)
             self._connections.discard(task)
             writer.close()
 
@@ -251,8 +291,12 @@ class IpcClient:
         self._queue_diagnostic = PendingCounter("ipc.client.lock_wait")
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._send_only: bool | None = None
 
     async def request(self, kind: str, **fields: Any) -> Message:
+        if self._send_only is True:
+            raise IpcError("intent connection cannot carry requests")
+        self._send_only = False
         frame = _encode({"v": PROTOCOL_VERSION, "type": kind, **fields})
         token = object()
         self._queue_diagnostic.enqueue(token, time.monotonic())
@@ -270,11 +314,35 @@ class IpcClient:
         finally:
             self._queue_diagnostic.finish(token, time.monotonic())
 
-    async def _exchange(self, frame: bytes) -> Message:
+    async def send(self, kind: str, **fields: Any) -> None:
+        """Write one intent notification, without reading an execution receipt.
+
+        The Agent owns a single latest-value slot while local transport is busy.
+        On the server a dedicated reader replaces queued values while one handoff runs.
+        """
+        if kind != "manual_intent" or self._send_only is False:
+            raise IpcError("notifications require a dedicated intent connection")
+        self._send_only = True
+        frame = _encode({"v": PROTOCOL_VERSION, "type": kind, **fields})
+        async with self._lock:
+            try:
+                await asyncio.wait_for(self._write(frame), timeout=self._timeout)
+            except (asyncio.TimeoutError, OSError, IpcError) as exc:
+                self._drop()
+                raise IpcError("ipc intent transport failed") from exc
+            except asyncio.CancelledError:
+                self._drop()
+                raise
+
+    async def _write(self, frame: bytes) -> None:
         if self._writer is None or self._reader is None:
             self._reader, self._writer = await asyncio.open_unix_connection(self._text)
         self._writer.write(frame)
         await self._writer.drain()
+
+    async def _exchange(self, frame: bytes) -> Message:
+        await self._write(frame)
+        assert self._reader is not None
         reply = await _read(self._reader)
         if reply.get("v") != PROTOCOL_VERSION:
             raise IpcError("unsupported ipc version")

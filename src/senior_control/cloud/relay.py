@@ -50,6 +50,7 @@ AUTHORITY_TYPES = frozenset({"control.acquire", "control.release"})
 VIDEO = "video"
 VIDEO_CLOSE = "video.close"
 SNAPSHOT = "snapshot"
+CONNECTION = "control.connection"
 WORKSPACE = "workspace"
 WORKSPACE_REPLY_SECONDS = 5.0
 HEARTBEAT_WINDOW_SECONDS = 2.0
@@ -57,7 +58,7 @@ HEARTBEAT_WINDOW_SECONDS = 2.0
 RECONNECT_GRACE_SECONDS = 60.0
 SNAPSHOT_TTL_SECONDS = 60.0
 VIDEO_CLOSE_TTL_SECONDS = 300.0
-PROTECTED_TYPES = SAFETY_TYPES | AUTHORITY_TYPES | {VIDEO_CLOSE}
+PROTECTED_TYPES = SAFETY_TYPES | AUTHORITY_TYPES | {VIDEO_CLOSE, CONNECTION}
 
 CLOSE_NORMAL = 1000
 CLOSE_POLICY = 1008
@@ -104,7 +105,7 @@ class Outbox:
             return False
         if kind in SAFETY_TYPES or kind in AUTHORITY_TYPES:
             self.discard_intent()
-        if kind in ("drive.intent", SNAPSHOT):
+        if kind in ("drive.intent", SNAPSHOT, CONNECTION):
             self._discard_matching(lambda queued: queued == kind, overwritten=True)
         if len(self._items) >= self._limit and not self._evict(kind):
             self._items.reject()
@@ -204,7 +205,6 @@ class Connection:
     controller_generation: int = 0
     manual_session: str | None = None
     manual_requests: dict[str, tuple[str, int, str]] = field(default_factory=dict)
-    motion_intent: bool = False
     settings_requests: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     safety_session: str = field(default_factory=lambda: "safety-" + secrets.token_hex(16))
     """Signaling id of this socket's video offer. Answers and candidates route by it."""
@@ -288,6 +288,19 @@ class Hub:
         deadline = link.agent.reconnect_deadline(now) if link.agent else 0.0
         return now < max(link.reconnect_until, deadline)
 
+    def _push_connection(self, robot_id: str, only: Connection | None = None) -> None:
+        """Transport identity is available even before the first vehicle report."""
+        link = self._links[robot_id]
+        frame = json.dumps({
+            "v": 1,
+            "type": CONNECTION,
+            "robot_id": robot_id,
+            "connection_epoch": link.agent.epoch if link.agent is not None else 0,
+        }).encode()
+        for controller in list(link.controllers) if only is None else [only]:
+            if not controller.outbox.put(frame, CONNECTION):
+                controller.outbox.close(CLOSE_OVERLOAD)
+
     def _push_snapshot(self, robot_id: str, only: Connection | None = None) -> None:
         """Send the cache's view of a robot to its control sockets, or to the one given.
 
@@ -352,6 +365,7 @@ class Hub:
             if previous.heartbeat_at is not None:
                 link.reconnect_until = previous.reconnect_deadline(connection.started_at)
             previous.outbox.close(CLOSE_SUPERSEDED)
+        self._push_connection(robot_id)
         self._push_snapshot(robot_id)
         return connection
 
@@ -381,6 +395,7 @@ class Hub:
         link.controller_generation += 1
         connection.controller_generation = link.controller_generation
         link.controllers.add(connection)
+        self._push_connection(robot_id, only=connection)
         self._push_snapshot(robot_id, only=connection)
         return connection
 
@@ -401,6 +416,7 @@ class Hub:
                 link.agent = None
                 link.workspace_request = None
                 self.snapshots.mark_offline(connection.robot_id)
+                self._push_connection(connection.robot_id)
                 self._push_snapshot(connection.robot_id)
         self._stop_viewer_video(connection)
         connection.outbox.close(CLOSE_NORMAL)
@@ -495,10 +511,6 @@ class Hub:
         ):
             return
         if isinstance(envelope, SnapshotEnvelope):
-            connection.motion_intent = (
-                envelope.payload.vehicle_ui is not None
-                and "motion.intent.v1" in envelope.payload.vehicle_ui.get("capabilities", ())
-            )
             self.snapshots.store(snapshot_from_envelope(envelope))
             self._push_snapshot(connection.robot_id)
             return
@@ -534,7 +546,7 @@ class Hub:
                 if time.monotonic() < pending.deadline:
                     pending.controller.outbox.put(raw, WORKSPACE)
             return
-        if envelope.payload.request_type in {"control.acquire", "control.release", "drive.intent"}:
+        if envelope.payload.request_type in {"control.acquire", "control.release"}:
             if self._route_manual_reply(link, envelope):
                 return
             return
@@ -589,17 +601,6 @@ class Hub:
                 ),
             )
             return
-        if kind != "drive.intent":
-            return
-        intent = ManualIntentEnvelope.model_validate_json(raw)
-        # Coalescing is a successful transport settlement, not vehicle execution
-        # or an authority rejection. The browser may keep its latest held input.
-        response = ResponseEnvelope(
-            **intent.model_dump(exclude={"type", "payload"}),
-            type="response",
-            payload=ResponsePayload(request_type="drive.intent", ok=True),
-        )
-        self._route_manual_reply(link, response)
 
     def handle_control_frame(self, connection: Connection, raw: bytes) -> None:
         link = self._links.get(connection.robot_id)
@@ -670,7 +671,6 @@ class Hub:
         if native_manual:
             if (
                 "controller_generation" in data
-                or (not agent.motion_intent and envelope.type != "control.release")
                 or envelope.connection_epoch != agent.epoch
                 or (
                     connection.manual_session is not None
@@ -695,9 +695,10 @@ class Hub:
                     "controller_generation": connection.controller_generation,
                 }
             )
-            # Release the queued sample's receipt before checking the owner bound.
-            # Already transmitted requests still require a real vehicle receipt.
-            agent.outbox.discard_intent()
+            if isinstance(envelope, ManualIntentEnvelope):
+                # Latest-value stream: no request registration or synthetic settlement.
+                agent.outbox.put(serialize_envelope(envelope), envelope.type)
+                return
             if len(connection.manual_requests) >= 64:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
                 return
@@ -705,9 +706,7 @@ class Hub:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
             else:
                 connection.manual_requests[envelope.request_id] = (
-                    envelope.session_id,
-                    envelope.seq,
-                    envelope.type,
+                    envelope.session_id, envelope.seq, envelope.type,
                 )
             return
         if isinstance(envelope, WorkspaceEnvelope):
@@ -781,6 +780,9 @@ class Hub:
     def _reject(
         self, connection: Connection, envelope: Envelope | VideoEnvelope, error: ErrorCode
     ) -> None:
+        if isinstance(envelope, ManualIntentEnvelope):
+            logger.debug("manual stream sample discarded: %s", error.value)
+            return
         request_type: Any = (
             envelope.payload.request_type
             if isinstance(envelope, ResponseEnvelope)

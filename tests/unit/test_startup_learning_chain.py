@@ -1,4 +1,5 @@
 import pytest
+from control_process_test_support import capture_inputs, publish_inputs
 from test_motion_core_handoff import barrier, core  # noqa: F401
 
 from senior_control.models import Velocity
@@ -71,9 +72,7 @@ def test_startup_flows_through_real_tick_and_safety_checks(
     for i in range(45):
         t = now[0] = 10 + i * 0.025
         feed(a, t)
-        core._on_reference(
-            N(data=strict_reference_json(a.snapshot(t, t))), {"publisher_gid": b"fusion"}
-        )
+        capture_inputs(core, N(data=strict_reference_json(a.snapshot(t, t))))
         ranges = [10.0] * 720
         if interior_occlusion is True:
             ranges[0] = 0.15  # occlusion behind rear equipment remains unknown
@@ -100,6 +99,8 @@ def test_startup_flows_through_real_tick_and_safety_checks(
                 ),
             )
         ]
+        publish_inputs(core)
+        core.prefetch_scan()
         core.tick()
     assert core.startup.state == "moving", core.startup.summary()
     if interior_occlusion:
@@ -111,7 +112,7 @@ def test_startup_flows_through_real_tick_and_safety_checks(
     assert core.self_returns.learned == ()  # prior has never become learned at rest
     core.revoke("estop", now=now[0])
     assert core.startup.provisional
-    assert core.startup.velocity == (0 if core.startup.motion_started else .05)
+    assert core.startup.velocity == (0 if core.startup.motion_started else 0.05)
     assert core.self_returns.learned == ()
 
 
@@ -120,7 +121,7 @@ def test_permission_loss_after_first_output_interrupts_and_clears_prior(core, tm
 
     core.startup = StartupLearning(tmp_path / "claim")
     core.startup.state = "moving"
-    core.startup.motion_emitted(10.)
+    core.startup.motion_emitted(10.0)
     assert core._startup_permission_lost(N(permit=None))
     assert core.startup.state == "interrupted"
     assert not core.startup.provisional
@@ -132,7 +133,7 @@ def test_component_reconstruction_cannot_repeat_program_start(core, tmp_path, mo
     claim = tmp_path / "program-run"
     assert StartupLearning(claim).active
     monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(claim))
-    rebuilt = MotionCoreOutput(core.node, core.profile, ingress_factory=None)
+    rebuilt = MotionCoreOutput(core.node, core.profile)
     try:
         assert rebuilt.startup.state == "interrupted"
         rebuilt._startup_target(10)
@@ -154,3 +155,33 @@ def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # n
     core.startup.state = "completed"
     core._startup_target(10)
     assert core.machine.state.task_id is None
+
+
+def test_geometry_pending_does_not_interrupt_started_learning(core, tmp_path, monkeypatch):  # noqa: F811
+    from senior_control.motion.startup_learning import StartupLearning
+
+    core.startup = StartupLearning(tmp_path / "pending-learning")
+    core.startup.state = "moving"
+    from test_unified_motion_runtime import point
+
+    from senior_control.motion.observations import Source
+
+    receiver = core.node._reception_test
+    receiver.sensors.ingest(point(Source.WHEEL, 10, 10, (0.0, 0.0)), 10, 10, 10)
+    receiver.sensors.ingest(point(Source.IMU, 10, 10, (0.0,)), 10, 10, 10)
+    receiver.publish(10, 10)
+    core.startup.motion_emitted(9.9)
+    core._startup_target(10)
+
+    def pending(_now):
+        raise ValueError("scan_geometry_pending")
+
+    monkeypatch.setattr(core, "_observation", pending)
+    publish_inputs(core)
+    core.prefetch_scan()
+    core.tick()
+    assert core.startup.state == "moving"
+    assert core.startup.motion_started
+    assert core.target.source == "startup_learning"
+    assert core.target.velocity == Velocity(0.05, 0)
+    assert core.node.emitted[-1][0] == Velocity(0, 0)

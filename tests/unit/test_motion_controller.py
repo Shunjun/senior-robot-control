@@ -18,11 +18,8 @@ def config():
         Velocity(0.2, 0.1),
         0.4,
         1.0,
-        0.1,
         0.02,
         0.03,
-        3,
-        0.1,
         0.3,
         "synthetic plant",
         True,
@@ -32,6 +29,17 @@ def config():
 def feedback(now, v, seq, epoch="body", supported=True):
     return Feedback(
         Velocity(v, 0), now, now + 0.08, epoch, seq, supported, "synthetic current plant"
+    )
+
+
+def imu_feedback(wheel):
+    if wheel is None:
+        return None
+    return replace(
+        wheel,
+        velocity=Velocity(0, wheel.velocity.wz),
+        epoch="imu:" + wheel.epoch,
+        observed_axes=(False, True),
     )
 
 
@@ -46,10 +54,8 @@ def loop(steps=500, release=200):
         ctx = snapshot(now, target=Velocity(0.7, 0), current=body)
         ctx = replace(
             ctx,
-            response=replace(ctx.response, valid_until_steady=20.0),
             envelope=replace(
                 ctx.envelope,
-                valid_until_steady=20.0,
                 brake_drive_overshoot=Velocity(0, 0),
                 brake_tracking_basis="synthetic whole-stop tracking and settling hypothesis",
             ),
@@ -62,6 +68,8 @@ def loop(steps=500, release=200):
             feedback(now, body, i),
             feedback(now, body / 0.9, i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, body / 0.9, i, "wheel")),
+            still_wheel=feedback(now, body / 0.9, i, "wheel"),
         )
         if d.command is not None:
             body += (0.9 * d.command.vx - body) * 0.2
@@ -92,21 +100,49 @@ def test_stale_feedback_brakes_not_fake_body_or_instant_zero():
     now = 2.0
     ctx = context_for(c, now, rows[-1][2])
     p = engine().refine(ctx, now)
-    d = c.tick(Velocity(0.4, 0), ctx, p, feedback(0, 0.4, 1), feedback(0, 0.4, 1, "wheel"), now)
+    d = c.tick(
+        Velocity(0.4, 0),
+        ctx,
+        p,
+        feedback(0, 0.4, 1),
+        feedback(0, 0.4, 1, "wheel"),
+        now,
+        imu=imu_feedback(feedback(0, 0.4, 1, "wheel")),
+        still_wheel=feedback(0, 0.4, 1, "wheel"),
+    )
     assert d.reason == "feedback_braking"
     assert d.command is not None and d.command.vx > 0
     assert c.integral == Velocity(0, 0)
 
 
-def test_long_tick_has_no_unbounded_catchup_and_estop_is_distinct():
-    c = MotionController(engine(), config(), Velocity(0.3, 0), Velocity(0, 0))
-    ctx = snapshot(current=0.3)
+def test_long_tick_uses_actual_dt_without_fixed_150ms_rejection():
+    c = MotionController(engine(), config(), Velocity(0, 0), Velocity(0, 0))
+    ctx = snapshot()
     c.tick(Velocity(0.4, 0), ctx, None, None, None, 0)
-    d = c.tick(Velocity(0.4, 0), ctx, None, None, None, 1)
-    assert d.command is None and d.reason == "invalid_tick"
-    assert c.tick(Velocity(0.4, 0), ctx, None, None, None, 1.01, estop=True).command == Velocity(
+    ctx = snapshot(0.8)
+    prepared = c.propose_tick(
+        Velocity(0.4, 0),
+        ctx,
+        engine().refine(ctx, 0.8),
+        feedback(0.8, 0, 1),
+        feedback(0.8, 0, 1, "wheel"),
+        0.8,
+        imu=feedback(0.8, 0, 1, "imu"),
+        still_wheel=feedback(0.8, 0, 1, "raw-wheel"),
+    )
+    assert prepared.dt == pytest.approx(0.8)
+    assert prepared.decision.reason != "invalid_tick"
+    c.commit(prepared)
+    assert c.tick(Velocity(0.4, 0), ctx, None, None, None, 0.81, estop=True).command == Velocity(
         0, 0
     )
+
+
+@pytest.mark.parametrize("now", [0.0, -0.01, float("nan"), float("inf")])
+def test_nonpositive_or_nonfinite_dt_is_still_rejected(now):
+    c = MotionController(engine(), config(), Velocity(0, 0), Velocity(0, 0))
+    c.tick(Velocity(0, 0), snapshot(), None, None, None, 0)
+    assert c.tick(Velocity(0, 0), snapshot(), None, None, None, now).reason == "invalid_tick"
 
 
 def test_degraded_wheel_reference_is_not_used_to_claim_measured_stillness():
@@ -132,10 +168,8 @@ def context_for(c, now, body, budget=0.7, *, rear=True, mode=SourceMode.LASER_RE
     s = snapshot(now, target=Velocity(budget, 0), current=body, rear=rear, mode=mode)
     return replace(
         s,
-        response=replace(s.response, valid_until_steady=20.0),
         envelope=replace(
             s.envelope,
-            valid_until_steady=20.0,
             linear_interval=(body - 0.005, body + 0.005),
             brake_drive_overshoot=Velocity(0, 0),
             brake_tracking_basis="synthetic whole-stop tracking and settling hypothesis",
@@ -168,6 +202,8 @@ def test_front_block_reverse_waits_for_measured_stop_then_reverses_plant():
             feedback(now, body, i),
             feedback(now, body, i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, body, i, "wheel")),
+            still_wheel=feedback(now, body, i, "wheel"),
         )
         if d.command is not None:
             if d.command.vx < 0:
@@ -193,6 +229,8 @@ def test_rear_unknown_has_no_reverse_and_body_stops():
             feedback(now, body, i),
             feedback(now, body, i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, body, i, "wheel")),
+            still_wheel=feedback(now, body, i, "wheel"),
         )
         if d.command is not None:
             assert d.command.vx >= 0
@@ -222,6 +260,8 @@ def test_mode_cap_reduction_brakes_and_recovery_is_jerk_limited():
             None if degraded else feedback(now, body, i),
             feedback(now, body, i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, body, i, "wheel")),
+            still_wheel=feedback(now, body, i, "wheel"),
         )
         if i > 0:
             assert d.command is not None, d.reason
@@ -245,6 +285,8 @@ def test_out_of_order_and_unsupported_body_do_not_enter_pi():
         feedback(now, 100, 0),
         feedback(now, 0.3, 100, "wheel"),
         now,
+        imu=imu_feedback(feedback(now, 0.3, 100, "wheel")),
+        still_wheel=feedback(now, 0.3, 100, "wheel"),
     )
     assert d.reason == "feedback_braking" and c.integral == Velocity(0, 0)
     now += 0.02
@@ -256,6 +298,8 @@ def test_out_of_order_and_unsupported_body_do_not_enter_pi():
         feedback(now, 0, 101, supported=False),
         feedback(now, 0.3, 101, "wheel"),
         now,
+        imu=imu_feedback(feedback(now, 0.3, 101, "wheel")),
+        still_wheel=feedback(now, 0.3, 101, "wheel"),
     )
     assert d.reason == "feedback_braking"
 
@@ -265,7 +309,14 @@ def test_final_rejection_does_not_commit_trajectory_or_integral(monkeypatch):
     c = MotionController(e, config(), Velocity(0, 0), Velocity(0, 0))
     ctx = context_for(c, 0, 0)
     c.tick(
-        Velocity(0.4, 0), ctx, e.refine(ctx, 0), feedback(0, 0, 1), feedback(0, 0, 1, "wheel"), 0
+        Velocity(0.4, 0),
+        ctx,
+        e.refine(ctx, 0),
+        feedback(0, 0, 1),
+        feedback(0, 0, 1, "wheel"),
+        0,
+        imu=imu_feedback(feedback(0, 0, 1, "wheel")),
+        still_wheel=feedback(0, 0, 1, "wheel"),
     )
     seen = []
 
@@ -282,19 +333,21 @@ def test_final_rejection_does_not_commit_trajectory_or_integral(monkeypatch):
         feedback(0.02, 0, 2),
         feedback(0.02, 0, 2, "wheel"),
         0.02,
+        imu=imu_feedback(feedback(0.02, 0, 2, "wheel")),
+        still_wheel=feedback(0.02, 0, 2, "wheel"),
     )
     assert d.command is None and d.reason == "final_candidate_rejected"
     assert 0 < seen[0].vx < 0.4
     assert c.trajectory.velocity == Velocity(0, 0) and c.integral == Velocity(0, 0)
 
 
-def test_reset_needs_independent_fresh_measured_stillness():
+def test_reset_needs_fresh_raw_wheel_and_imu_stillness():
     c = MotionController(engine(), config(), Velocity(0.3, 0), Velocity(0, 0))
-    assert not c.reset_at_stillness(feedback(0, 0, 1), feedback(0, 0, 1, "wheel"), 1)
+    assert not c.reset_at_stillness(feedback(0, 0, 1, "wheel"), feedback(0, 0, 1, "imu"), 1)
     for i in range(4):
         now = 1 + i * 0.05
         reset = c.reset_at_stillness(
-            feedback(now, 0, 10 + i), feedback(now, 0, 10 + i, "wheel"), now
+            feedback(now, 0, 10 + i, "wheel"), feedback(now, 0, 10 + i, "imu"), now
         )
     assert reset and c.trajectory.velocity == Velocity(0, 0)
     assert c.integral == Velocity(0, 0)
@@ -304,11 +357,29 @@ def test_consumed_permit_deadline_is_not_extended_in_output_receipt():
     c = MotionController(engine(), config(), Velocity(0, 0), Velocity(0, 0))
     ctx = context_for(c, 0, 0)
     p = engine().refine(ctx, 0)
-    c.tick(Velocity(0.4, 0), ctx, p, feedback(0, 0, 1), feedback(0, 0, 1, "wheel"), 0)
+    c.tick(
+        Velocity(0.4, 0),
+        ctx,
+        p,
+        feedback(0, 0, 1),
+        feedback(0, 0, 1, "wheel"),
+        0,
+        imu=imu_feedback(feedback(0, 0, 1, "wheel")),
+        still_wheel=feedback(0, 0, 1, "wheel"),
+    )
     ctx = context_for(c, 0.02, 0)
     p = engine().refine(ctx, 0.02)
     p = replace(p, permit=replace(p.permit, deadline_steady=0.025))
-    d = c.tick(Velocity(0.4, 0), ctx, p, feedback(0.02, 0, 2), feedback(0.02, 0, 2, "wheel"), 0.02)
+    d = c.tick(
+        Velocity(0.4, 0),
+        ctx,
+        p,
+        feedback(0.02, 0, 2),
+        feedback(0.02, 0, 2, "wheel"),
+        0.02,
+        imu=imu_feedback(feedback(0.02, 0, 2, "wheel")),
+        still_wheel=feedback(0.02, 0, 2, "wheel"),
+    )
     assert d.verified and d.evidence_deadline <= 0.025
 
 
@@ -324,6 +395,8 @@ def test_slip_does_not_accumulate_integral_to_chase_body_speed():
             feedback(now, 0, 200 + i),
             feedback(now, 0.8, 200 + i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, 0.8, 200 + i, "wheel")),
+            still_wheel=feedback(now, 0.8, 200 + i, "wheel"),
         )
         assert c.integral == Velocity(0, 0)
         assert d.reason == "inconsistent_feedback_limited"
@@ -389,7 +462,14 @@ def test_fresh_but_nonresponding_body_exhausts_original_stop_model():
         now = i * 0.02
         ctx = context_for(c, now, 0.4)
         d = c.tick(
-            Velocity(0, 0), ctx, None, feedback(now, 0.4, i), feedback(now, 0.4, i, "wheel"), now
+            Velocity(0, 0),
+            ctx,
+            None,
+            feedback(now, 0.4, i),
+            feedback(now, 0.4, i, "wheel"),
+            now,
+            imu=imu_feedback(feedback(now, 0.4, i, "wheel")),
+            still_wheel=feedback(now, 0.4, i, "wheel"),
         )
         if d.reason == "stop_response_failed":
             failures.append(d)
@@ -402,12 +482,26 @@ def test_latest_collision_risk_outranks_exhausted_brake_supervision():
         now = i * 0.02
         ctx = context_for(c, now, 0.4)
         c.tick(
-            Velocity(0, 0), ctx, None, feedback(now, 0.4, i), feedback(now, 0.4, i, "wheel"), now
+            Velocity(0, 0),
+            ctx,
+            None,
+            feedback(now, 0.4, i),
+            feedback(now, 0.4, i, "wheel"),
+            now,
+            imu=imu_feedback(feedback(now, 0.4, i, "wheel")),
+            still_wheel=feedback(now, 0.4, i, "wheel"),
         )
     now = 2.0
     ctx = snapshot(now, target=Velocity(0, 0), current=0.4, hits=((0.5, 0),))
     d = c.tick(
-        Velocity(0, 0), ctx, None, feedback(now, 0.4, 100), feedback(now, 0.4, 100, "wheel"), now
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(now, 0.4, 100),
+        feedback(now, 0.4, 100, "wheel"),
+        now,
+        imu=imu_feedback(feedback(now, 0.4, 100, "wheel")),
+        still_wheel=feedback(now, 0.4, 100, "wheel"),
     )
     assert d.emergency and d.reason == "stop_envelope_blocked"
 
@@ -433,17 +527,26 @@ def test_controller_and_reducer_estop_reset_never_restart_old_manual_target():
             feedback(now, body, i, "wheel"),
             now,
             estop=True,
+            imu=imu_feedback(feedback(now, body, i, "wheel")),
+            still_wheel=feedback(now, body, i, "wheel"),
         )
         body += (d.command.vx - body) * 0.2
     now = 0.8
     m.observe(RecoveryObservation("body", 40, now, now + 0.08, True, body < 0.02), now)
     state = m.reduce(MotionEvent(K.ESTOP_RESET, "user", m.state.estop_revision, 2), now_steady=now)
     assert state.mode is MotionMode.IDLE
-    assert c.reset_at_stillness(feedback(now, body, 40), feedback(now, body, 40, "wheel"), now)
+    assert c.reset_at_stillness(feedback(now, body, 40, "wheel"), feedback(now, 0, 40, "imu"), now)
     now = 0.82
     ctx = context_for(c, now, body)
     d = c.tick(
-        Velocity(0, 0), ctx, None, feedback(now, body, 41), feedback(now, body, 41, "wheel"), now
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(now, body, 41),
+        feedback(now, body, 41, "wheel"),
+        now,
+        imu=imu_feedback(feedback(now, body, 41, "wheel")),
+        still_wheel=feedback(now, body, 41, "wheel"),
     )
     assert d.command == Velocity(0, 0) and body < 0.005
 
@@ -460,6 +563,8 @@ def test_expired_intent_continues_jerk_braking_not_zero_assignment():
         feedback(now, rows[-1][2], 160),
         feedback(now, rows[-1][2], 160, "wheel"),
         now,
+        imu=imu_feedback(feedback(now, rows[-1][2], 160, "wheel")),
+        still_wheel=feedback(now, rows[-1][2], 160, "wheel"),
     )
     assert d.command is not None and d.command.vx > 0.1 and d.verified
     assert d.reason == "target_expired"
@@ -468,10 +573,26 @@ def test_expired_intent_continues_jerk_braking_not_zero_assignment():
 def test_infeasible_jerk_step_reports_failure_without_inventing_safe_zero():
     c = MotionController(engine(), config(), Velocity(0.001, 0), Velocity(-0.5, 0))
     ctx = context_for(c, 0, 0.001)
-    c.tick(Velocity(0, 0), ctx, None, feedback(0, 0.001, 1), feedback(0, 0.001, 1, "wheel"), 0)
+    c.tick(
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(0, 0.001, 1),
+        feedback(0, 0.001, 1, "wheel"),
+        0,
+        imu=imu_feedback(feedback(0, 0.001, 1, "wheel")),
+        still_wheel=feedback(0, 0.001, 1, "wheel"),
+    )
     ctx = context_for(c, 0.02, 0.001)
     d = c.tick(
-        Velocity(0, 0), ctx, None, feedback(0.02, 0.001, 2), feedback(0.02, 0.001, 2, "wheel"), 0.02
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(0.02, 0.001, 2),
+        feedback(0.02, 0.001, 2, "wheel"),
+        0.02,
+        imu=imu_feedback(feedback(0.02, 0.001, 2, "wheel")),
+        still_wheel=feedback(0.02, 0.001, 2, "wheel"),
     )
     assert d.command is None and d.emergency and d.reason == "infeasible_no_reverse"
     assert c.trajectory.velocity.vx == 0.001
@@ -489,6 +610,8 @@ def test_rate_saturation_freezes_integral_instead_of_winding_up_at_start():
             feedback(now, 0, i),
             feedback(now, 0, i, "wheel"),
             now,
+            imu=imu_feedback(feedback(now, 0, i, "wheel")),
+            still_wheel=feedback(now, 0, i, "wheel"),
         )
         assert c.integral == Velocity(0, 0)
     assert d.command.vx > 0
@@ -512,7 +635,16 @@ def test_combined_wheel_limit_reaches_curvature_preserving_target_without_tick_c
         )
         b = replace(feedback(now, body.vx, i), velocity=body)
         w = replace(b, epoch="wheel")
-        d = c.tick(Velocity(0.5, 1), ctx, engine().refine(ctx, now), b, w, now)
+        d = c.tick(
+            Velocity(0.5, 1),
+            ctx,
+            engine().refine(ctx, now),
+            b,
+            w,
+            now,
+            imu=imu_feedback(w),
+            still_wheel=w,
+        )
         if i:
             assert d.command is not None, d.reason
         if d.command:
@@ -527,10 +659,26 @@ def test_real_wheel_cap_change_is_not_treated_as_numerical_roundoff():
     cfg = replace(config(), wheel_speed_mps=0.2)
     c = MotionController(engine(), cfg, Velocity(0.6, 0), Velocity(0, 0))
     ctx = context_for(c, 0, 0.6)
-    c.tick(Velocity(0, 0), ctx, None, feedback(0, 0.6, 1), feedback(0, 0.6, 1, "wheel"), 0)
+    c.tick(
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(0, 0.6, 1),
+        feedback(0, 0.6, 1, "wheel"),
+        0,
+        imu=imu_feedback(feedback(0, 0.6, 1, "wheel")),
+        still_wheel=feedback(0, 0.6, 1, "wheel"),
+    )
     ctx = context_for(c, 0.02, 0.6)
     d = c.tick(
-        Velocity(0, 0), ctx, None, feedback(0.02, 0.6, 2), feedback(0.02, 0.6, 2, "wheel"), 0.02
+        Velocity(0, 0),
+        ctx,
+        None,
+        feedback(0.02, 0.6, 2),
+        feedback(0.02, 0.6, 2, "wheel"),
+        0.02,
+        imu=imu_feedback(feedback(0.02, 0.6, 2, "wheel")),
+        still_wheel=feedback(0.02, 0.6, 2, "wheel"),
     )
     assert d.command is None and d.reason == "wheel_limit_infeasible_step"
     assert c.trajectory.velocity.vx == 0.6
@@ -547,7 +695,14 @@ def test_body_stop_proof_does_not_authorize_high_historical_drive():
             perception=replace(ctx.perception, occupied=Point(0.5, 0).buffer(0.02)),
         )
         d = c.tick(
-            Velocity(0, 0), ctx, None, feedback(now, 0, i), feedback(now, 0.8, i, "wheel"), now
+            Velocity(0, 0),
+            ctx,
+            None,
+            feedback(now, 0, i),
+            feedback(now, 0.8, i, "wheel"),
+            now,
+            imu=imu_feedback(feedback(now, 0.8, i, "wheel")),
+            still_wheel=feedback(now, 0.8, i, "wheel"),
         )
     assert d.command is None and not d.verified
 
@@ -574,7 +729,14 @@ def test_normal_body_lag_does_not_expire_before_drive_stop_family():
         now = i * 0.02
         ctx = context_for(c, now, body)
         d = c.tick(
-            Velocity(0, 0), ctx, None, feedback(now, body, i), feedback(now, wheel, i, "wheel"), now
+            Velocity(0, 0),
+            ctx,
+            None,
+            feedback(now, body, i),
+            feedback(now, wheel, i, "wheel"),
+            now,
+            imu=imu_feedback(feedback(now, wheel, i, "wheel")),
+            still_wheel=feedback(now, wheel, i, "wheel"),
         )
         if i:
             assert d.command is not None, d.reason

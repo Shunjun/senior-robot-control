@@ -4,6 +4,7 @@ import logging
 from dataclasses import replace
 
 import pytest
+from control_process_test_support import read_inputs, read_observation
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
 from test_reference_nanosecond_boundary import replay  # noqa: F401
@@ -67,23 +68,31 @@ def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
     assert out["sensor_results"]["use.laser.expired"] == 1
 
 
-def test_scan_reuse_has_one_raw_and_each_attempted_use_age(replay):  # noqa: F811
+def test_scan_reuse_has_one_raw_and_each_attempted_use_age(replay, monkeypatch):  # noqa: F811
     d, emitted = reporter()
     c = replay.core
     c.diagnostics = d
-    c._inputs(replay.clock.steady)
-    c._observation(replay.clock.steady)
+    attempts = []
+    original = c._observation
+
+    def observe(now):
+        attempts.append(now)
+        return original(now)
+
+    monkeypatch.setattr(c, "_observation", observe)
+    read_inputs(c, replay.clock.steady)
+    read_observation(c, replay.clock.steady)
     replay.clock.ns += 200_000_000
     replay.clock.steady += 0.2
-    c._inputs(replay.clock.steady)
-    c._observation(replay.clock.steady)
+    read_inputs(c, replay.clock.steady)
+    read_observation(c, replay.clock.steady)
     replay.clock.ns += 1_000_000_000
     replay.clock.steady += 1
     with pytest.raises(ValueError, match="scan_expired"):
-        c._observation(replay.clock.steady)
+        read_observation(c, replay.clock.steady)
     out = summary(d, emitted)
     assert out["streams"]["sensor.raw.scan"]["count"] == 1
-    assert out["streams"]["sensor.use.scan"]["count"] == 3
+    assert out["streams"]["sensor.use.scan"]["count"] == len(attempts)
     assert out["streams"]["sensor.use.scan"]["over_hard"] == 1
 
 
@@ -101,16 +110,16 @@ def test_relative_integration_accumulates_known_motion_errors():
 
 def test_actual_scan_space_keeps_unknown_pose_error_and_uses_relative_prediction(replay):  # noqa: F811
     c = replay.core
-    c._inputs(replay.clock.steady)
-    first, _ = c._observation(replay.clock.steady)
+    read_inputs(c, replay.clock.steady)
+    first, _ = read_observation(c, replay.clock.steady)
     initial = c._space_estimate
     assert initial.unknown_pose_sources == ("scan",)
     assert initial.alignment_error_m is None
     assert initial.software_alignment_error_m > 0
     replay.clock.ns += 300_000_000
     replay.clock.steady += 0.3
-    c._inputs(replay.clock.steady)
-    later, _ = c._observation(replay.clock.steady)
+    read_inputs(c, replay.clock.steady)
+    later, _ = read_observation(c, replay.clock.steady)
     assert c._space_estimate.alignment_error_m is None
     assert c._space_estimate.software_alignment_error_m > initial.software_alignment_error_m
     assert later.free_space.area < first.free_space.area
@@ -119,7 +128,7 @@ def test_actual_scan_space_keeps_unknown_pose_error_and_uses_relative_prediction
 @pytest.mark.parametrize("age", [0.3, 0.7, 0.999])
 def test_current_independent_projection_keeps_raw_support_and_error_in_risk(replay, age):  # noqa: F811
     c = replay.core
-    s = c.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
+    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
     t = 5.0
     now = replay.clock.steady
     raw = replace(
@@ -137,20 +146,11 @@ def test_current_independent_projection_keeps_raw_support_and_error_in_risk(repl
     s.ingest_observation(raw, t, now)
     replay.clock.ns = round((t + age) * 1e9)
     replay.clock.steady += age
-    ref, body, wheel = c._inputs(replay.clock.steady)
+    ref, body, wheel = read_inputs(c, replay.clock.steady)
     assert ref["start_ros"] == ref["end_ros"] == t
     from test_directional_constraints import scene
 
-    ctx = c._snapshot(
-        ref,
-        body,
-        wheel,
-        None,
-        False,
-        replay.clock.steady,
-        scene(replay.clock.steady),
-        Pose2D(0, 0, 0),
-    )
+    ctx = c._snapshot(ref, wheel, replay.clock.steady, scene(replay.clock.steady), Pose2D(0, 0, 0))
     axis = s.latest.independent_axes[0]
     assert axis.observation_age_s == pytest.approx(age)
     expected = max(c.profile.linear_error + axis.prediction_error, axis.error)
@@ -249,7 +249,7 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
 
 def test_steady_elapsed_prediction_error_is_preserved_when_ros_is_paused(replay):  # noqa: F811
     c = replay.core
-    s = c.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
+    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
     now = replay.clock.steady
     raw = replace(
         observation("laser", (0.2, None, 0.1), stamp=5),
@@ -272,21 +272,27 @@ def test_steady_elapsed_prediction_error_is_preserved_when_ros_is_paused(replay)
 
 def test_scan_geometry_retains_original_pose_association_on_reuse(replay, monkeypatch):  # noqa: F811
     c = replay.core
-    c._inputs(replay.clock.steady)
-    c._observation(replay.clock.steady)
+    read_inputs(c, replay.clock.steady)
+    read_observation(c, replay.clock.steady)
     anchor = c._perception_pose
     original = c.sensors.pose_estimator.at
 
+    queried = []
+
     def at(stamp, **kwargs):
-        assert stamp != replay.node._scans[-1].stamp  # no hidden recapture/reprojection
+        queried.append(stamp)
         return original(stamp, **kwargs)
 
-    monkeypatch.setattr(c.sensors.pose_estimator, "at", at)
     replay.clock.ns += 100_000_000
     replay.clock.steady += 0.1
-    c._inputs(replay.clock.steady)
-    c._observation(replay.clock.steady)
+    read_inputs(c, replay.clock.steady)
+    original = c.sensors.pose_estimator.at
+    monkeypatch.setattr(c.sensors.pose_estimator, "at", at)
+    read_observation(c, replay.clock.steady)
     assert c._perception_pose is anchor
+    # Latest-scan tightening may query its pose without changing the selected
+    # geometry's original association or proof deadline.
+    assert replay.node._scans[-1].stamp in queried
 
 
 def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose():
@@ -307,7 +313,7 @@ def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose
 
 def test_interval_projection_support_and_software_error_are_not_expanded_twice(replay):  # noqa: F811
     c = replay.core
-    s = c.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
+    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
     now = replay.clock.steady
     o = observation("laser", (0.2, None, 0.1), stamp=4.9)
     o = replace(
@@ -322,23 +328,14 @@ def test_interval_projection_support_and_software_error_are_not_expanded_twice(r
     s.ingest_observation(o, 5.0, now)
     replay.clock.ns = 5_500_000_000
     replay.clock.steady += 0.5
-    ref, body, wheel = c._inputs(replay.clock.steady)
+    ref, body, wheel = read_inputs(c, replay.clock.steady)
     assert ref["start_ros"] == pytest.approx(4.8) and ref["end_ros"] == 5.0
     axis = s.latest.independent_axes[0]
     # Oldest original capture age=.7s; interval width is already represented.
     assert axis.prediction_error == pytest.approx(0.7 * s.estimator.acceleration[0])
     from test_directional_constraints import scene
 
-    ctx = c._snapshot(
-        ref,
-        body,
-        wheel,
-        None,
-        False,
-        replay.clock.steady,
-        scene(replay.clock.steady),
-        Pose2D(0, 0, 0),
-    )
+    ctx = c._snapshot(ref, wheel, replay.clock.steady, scene(replay.clock.steady), Pose2D(0, 0, 0))
     assert ctx.envelope.linear_interval[1] == pytest.approx(
         0.2 + c.profile.linear_error + axis.prediction_error
     )
@@ -402,10 +399,9 @@ def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(repl
 
     c = replay.core
     now = replay.clock.steady
-    ref, body, wheel = c._inputs(now)
-    perception, pose = c._observation(now)
-    imu, imu_current = c._imu_state(c._reference, now)
-    ctx = c._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+    ref, body, wheel = read_inputs(c, now)
+    perception, pose = read_observation(c, now)
+    ctx = c._snapshot(ref, wheel, now, perception, pose)
     ctx = replace(ctx, target=replace(ctx.target, velocity=Velocity(0.01, 0.01)))
     assert c.sensors.latest.healthy
     axis = c.sensors.latest.independent_axes[0]

@@ -133,19 +133,6 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="senior_robot",
-                executable="motion_fusion",
-                parameters=[
-                    params,
-                    ros_sensor_parameters(),
-                    {
-                        "motion_core_profile": ParameterValue(
-                            LaunchConfiguration("motion_core_profile"), value_type=str
-                        )
-                    },
-                ],
-            ),
-            Node(
                 package="senior_sensor_ingress",
                 executable="scan_receipt_node",
                 parameters=[params, ros_sensor_parameters()],

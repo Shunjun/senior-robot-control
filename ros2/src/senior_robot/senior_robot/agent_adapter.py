@@ -109,7 +109,7 @@ class AdapterCore:
             "navigation.current",
         }:
             return await self._route_request(kind, message)
-        if kind == "manual":
+        if kind in {"manual", "manual_intent"}:
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unsupported"}
             raw = message.get("envelope")
@@ -118,6 +118,10 @@ class AdapterCore:
             try:
                 envelope = validate_envelope(raw.encode(), self._robot_id)
             except ValueError:
+                return {"ok": False, "error": "bad_request"}
+            if kind == "manual_intent" and envelope.type != "drive.intent":
+                return {"ok": False, "error": "bad_request"}
+            if kind == "manual" and envelope.type == "drive.intent":
                 return {"ok": False, "error": "bad_request"}
             if envelope.connection_epoch <= self._disabled_through_epoch:
                 return {"ok": False, "error": "offline"}
@@ -483,9 +487,11 @@ def main() -> None:
 
         def state() -> dict[str, Any]:
             current = routes.current if routes is not None else None
+            manual = node.manual_view()
+            manual_active = manual is not None and manual["state"] == "active"
             result = (
                 reference.state(
-                    node.motion_mode(),
+                    "manual" if manual_active else "idle",
                     current.status if current is not None else "idle",
                     navigation_ready=navigation_ready is not None and navigation_ready(),
                 )
@@ -510,19 +516,8 @@ def main() -> None:
             result["runtime_observation"] = node.runtime_observation()
             result["motion_runtime"] = runtime
             result["motion_runtime_version"] = 1
-            result["manual_authority"] = node.manual_view()
-            if runtime is not None:
-                result["manual_driving"] = runtime["mode"] == "manual" or (
-                    result["manual_authority"] is not None
-                    and result["manual_authority"]["state"] == "active"
-                )
-                result["task_evidence_ready"] = result["task_evidence_ready"] and runtime["healthy"]
-                result["navigation_ready"] = (
-                    result["navigation_ready"]
-                    and runtime["healthy"]
-                    and runtime["stationary"]
-                    and runtime["mode"] in {"idle", "task"}
-                )
+            result["manual_authority"] = manual
+            result["manual_driving"] = manual_active
             result["navigation_block_reason"] = (
                 None if result["navigation_ready"] else previous_failure or "navigation unavailable"
             )

@@ -29,7 +29,6 @@ from senior_control.agent.manual_control import (
     ManualIngress,
     ManualTarget,
     MotionRuntimeReceiver,
-    runtime_healthy,
 )
 from senior_control.clock import Clock, SystemClock
 from senior_control.errors import ErrorCode
@@ -143,7 +142,7 @@ class CommandNode(Node):
                 String,
                 "/motion/runtime",
                 self._on_motion_runtime,
-                writer="safety_gate",
+                writer="motion_reporter",
                 qos="reliable",
                 invalidate=self._invalidate_motion_runtime,
             )
@@ -243,10 +242,6 @@ class CommandNode(Node):
         self._publish_barrier(envelope.request_id, reason="estop")
         return self._barrier_frame
 
-    def motion_mode(self) -> str:
-        runtime = self._motion_runtime.current(self._monotonic_clock.monotonic())
-        return runtime.mode if runtime is not None else "unknown"
-
     def disconnect(self, connection_epoch: int) -> None:
         if hasattr(self, "_manual_ingress"):
             context = self._manual_ingress.context
@@ -284,18 +279,8 @@ class CommandNode(Node):
             self._consuming_runtime = False
 
     def task_motion_allowed(self, *, continuing: bool) -> bool:
-        self._consume_ready_runtime()
-        now = self._monotonic_clock.monotonic()
-        runtime = self._motion_runtime.current(now)
-        if (
-            not runtime_healthy(runtime, now)
-            or runtime is None
-            or runtime.mode in {"estop", "execution_fault", "feedback_stop"}
-            or getattr(self, "_pending_estop_request", None) is not None
-            or self._manual_target is not None
-        ):
-            return False
-        return continuing or runtime.stationary
+        # Source ownership only; final control owns physical motion decisions.
+        return getattr(self, "_pending_estop_request", None) is None and self._manual_target is None
 
     def bind_navigation_source(
         self,
@@ -367,15 +352,8 @@ class CommandNode(Node):
     def _other_motion_active(self, execution_id: str) -> bool:
         source = self._navigation_source
         manual = self._manual_ingress.view(self._monotonic_clock.monotonic())
-        runtime = self._motion_runtime.value
-        foreign = (
-            source is None
-            and runtime is not None
-            and (runtime.mode == "manual" or runtime.task_id not in {None, execution_id})
-        )
         return (
-            foreign
-            or self._manual_target is not None
+            self._manual_target is not None
             or (manual is not None and manual.state is not ManualAuthorityState.CLOSED)
             or (source is not None and source.execution_id != execution_id)
         )
@@ -700,8 +678,8 @@ class CommandNode(Node):
         runtime = self.get_publishers_info_by_topic("/motion/runtime")
         feedback = self.get_publishers_info_by_topic("/safety/drive_feedback")
         good = all(
-            len(rows) == 1 and rows[0].node_name == "safety_gate" and rows[0].node_namespace == "/"
-            for rows in (runtime, feedback)
+            len(rows) == 1 and rows[0].node_name == writer and rows[0].node_namespace == "/"
+            for rows, writer in ((runtime, "motion_reporter"), (feedback, "safety_gate"))
         )
         current = self._retirement_core
         feedback_gid = bytes(feedback[0].endpoint_gid) if good else None
@@ -828,8 +806,6 @@ class CommandNode(Node):
 
     def _invalidate_motion_runtime(self) -> None:
         self._motion_runtime.invalidate()
-        self._manual_ingress.revoke(self._monotonic_clock.monotonic())
-        self._close_manual("qualification_lost")
 
     def _invalidate_drive_feedback(self) -> None:
         self._invalidate_retirement_proofs()
@@ -844,7 +820,7 @@ class CommandNode(Node):
         endpoint = endpoints[0]
         gid = info.get("publisher_gid") if info else None
         if (
-            endpoint.node_name != "safety_gate"
+            endpoint.node_name != "motion_reporter"
             or endpoint.node_namespace != "/"
             or (gid is not None and bytes(gid) != bytes(endpoint.endpoint_gid))
         ):
@@ -866,20 +842,9 @@ class CommandNode(Node):
             and value.confirmed_estop_status == "software_latched"
         ):
             self._pending_estop_request = None
-        if value.mode in {"feedback_stop", "execution_fault", "estop"}:
-            self._manual_ingress.revoke(now)
-            self._close_manual(
-                "qualification_lost"
-                if value.mode == "estop"
-                else "expiry"
-                if value.mode == "feedback_stop"
-                else "fault"
-            )
 
     def runtime_observation(self) -> dict[str, Any]:
-        return self._motion_runtime.observation(
-            self._monotonic_clock.monotonic()
-        ).model_dump()
+        return self._motion_runtime.observation(self._monotonic_clock.monotonic()).model_dump()
 
     def motion_runtime(self) -> dict[str, Any] | None:
         value = self._motion_runtime.current(self._monotonic_clock.monotonic())
@@ -906,21 +871,11 @@ class CommandNode(Node):
                 message["envelope"].encode(), str(self.get_parameter("robot_id").value)
             )
             now = self._monotonic_clock.monotonic()
-            runtime = self._motion_runtime.current(now)
             if isinstance(envelope, RecoveryEnvelope):
                 key = "estop_reset" if envelope.type == "safety.estop.reset" else "fault_recover"
-                current = (
-                    runtime.estop_revision
-                    if runtime is not None and key == "estop_reset"
-                    else (runtime.fault_revision if runtime is not None else -1)
-                )
-                if (
-                    runtime is None
-                    or getattr(self, "_pending_estop_request", None) is not None
-                    or key not in runtime.allowed_actions
-                    or envelope.payload.revision != current
-                ):
+                if getattr(self, "_pending_estop_request", None) is not None:
                     return {"ok": False, "accepted": False, "error": "conflict"}
+                current = envelope.payload.revision
                 self._manual_ingress.revoke(now)
                 self._close_manual("fault")
                 self._generation += 1
@@ -950,20 +905,12 @@ class CommandNode(Node):
                     if current is not None and current.authority_id == identity:
                         self._close_manual("release")
                 return {"ok": True, "accepted": True}
-            if (
-                getattr(self, "_pending_estop_request", None) is not None
-                or runtime is None
-                or not runtime_healthy(runtime, now)
-                or runtime.mode in {"estop", "execution_fault", "feedback_stop"}
-            ):
+            if getattr(self, "_pending_estop_request", None) is not None:
                 return {"ok": False, "error": "unavailable"}
             if self._navigation_source is not None or self._arbiter.task_navigation_active:
                 return {"ok": False, "accepted": False, "error": "conflict"}
             if envelope.type == "control.acquire":
                 previous = self._manual_ingress.view(now)
-                retry = self._manual_ingress.request == (envelope.request_id, "{}")
-                if "acquire" not in runtime.allowed_actions and not retry:
-                    return {"ok": False, "error": "unavailable"}
                 receipt = self._manual_ingress.acquire(envelope.request_id, now)
                 if receipt.state is ManualAuthorityState.PREPARED and (
                     previous is None or previous.authority_id != receipt.authority_id
@@ -977,10 +924,7 @@ class CommandNode(Node):
             if not isinstance(envelope, ManualIntentEnvelope):
                 return {"ok": False, "error": "bad_request"}
             view = self._manual_ingress.view(now)
-            if view is None or (
-                view.state is ManualAuthorityState.PREPARED
-                and "acquire" not in runtime.allowed_actions
-            ):
+            if view is None:
                 return {"ok": False, "accepted": False, "error": "safety_rejected"}
             sample = self._manual_ingress.accept(
                 ManualIntent(**envelope.payload.model_dump()),
@@ -1041,11 +985,6 @@ class CommandNode(Node):
             or view.state is not ManualAuthorityState.ACTIVE
             or now >= target.sample.deadline_steady
         ):
-            self._close_manual("expiry")
-            return False
-        runtime = self._motion_runtime.current(now)
-        if not runtime_healthy(runtime, now):
-            self._manual_ingress.revoke(now)
             self._close_manual("expiry")
             return False
         message = FinalCommand()

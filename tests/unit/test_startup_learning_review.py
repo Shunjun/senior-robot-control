@@ -3,6 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import read_inputs, read_observation
 from test_motion_core_handoff import core  # noqa: F401
 from test_startup_learning import observation, side_observation
 from test_startup_learning_feasibility import BOUNDARY
@@ -124,7 +125,7 @@ def test_planned_verified_braking_is_not_permission_loss(core, tmp_path):  # noq
 
     core.startup = StartupLearning(tmp_path / "claim")
     core.startup.state = "braking"
-    core.startup.motion_emitted(10.)
+    core.startup.motion_emitted(10.0)
     permission = N(permit=None, brake=BrakeRequest(BrakeKind.CONTROLLED, "controlled_stop", True))
     assert not core._startup_permission_lost(permission, 10.0)
     assert core.startup.state == "braking"
@@ -185,7 +186,7 @@ def test_body_update_invalidates_actual_observation_cache(core, tmp_path):  # no
     core.startup.state = "completed"
     for source, values in ((Source.WHEEL, (0.0, 0.0)), (Source.IMU, (0.0,))):
         core.sensors.ingest(point(source, 10.0, 10.0, values), 10.0, 10.0, 10.0)
-    core.sensors.ingest_observation(
+    core.node._reception_test.sensors.ingest_observation(
         MotionObservation(
             "laser",
             (0.0, 0.0, 0.0),
@@ -196,7 +197,7 @@ def test_body_update_invalidates_actual_observation_cache(core, tmp_path):  # no
         10.0,
         10.0,
     )
-    core._inputs(10.0)
+    read_inputs(core, 10.0)
     ranges = [10.0] * 720
     ranges[359] = 0.15
     angle = -math.pi + 359 * 2 * math.pi / 719
@@ -222,13 +223,13 @@ def test_body_update_invalidates_actual_observation_cache(core, tmp_path):  # no
             ),
         )
     ]
-    core._observation(10.0)
+    read_observation(core, 10.0)
     core.self_returns.learned = (endpoint,)
     core.self_returns.revision += 1
-    core._observation(10.0)
+    read_observation(core, 10.0)
     assert core._perception.occupied.distance(Point(endpoint)) > 0
     boundary[0] = [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)]
-    core._observation(10.0)  # identical raw capture/key; only the body changed
+    read_observation(core, 10.0)  # identical raw capture/key; only the body changed
     assert core.self_returns.body.equals(Polygon(boundary[0]))
     assert core._perception.occupied.distance(Point(endpoint)) == 0
     assert not core.self_returns.learned and core.startup.state == "interrupted"

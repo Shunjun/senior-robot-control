@@ -58,14 +58,13 @@ def snapshot(
     motion = BodyMotion(
         BodyTwist(current, 0, 0), None, now - 0.1, now, now, now + 2, "motion", True, "synthetic"
     )
-    response = ResponseBounds(0.4, 0.5, 2.0, 0.5, 0.6, 2.0, 0.1, 20.0, "synthetic-response")
+    response = ResponseBounds(0.4, 0.5, 2.0, 0.5, 0.6, 2.0, 0.1, "synthetic-response")
     risk = RiskEnvelope(
         "synthetic-floor",
         "independent synthetic exact plant; not wheel truth",
         "motion",
         (SourceMode.LASER_REFERENCE, SourceMode.WHEEL_IMU_LIMITED),
         "synthetic-response",
-        20.0,
         10.0,
         (current, current),
         (0.0, 0.0),
@@ -179,15 +178,15 @@ def test_residual_acceleration_at_zero_speed_and_nonpositive_intervals_are_not_l
     assert engine().refine(negative, 0).brake.kind is BrakeKind.EMERGENCY
 
 
-def test_model_and_response_must_cover_stop_horizon_not_just_current_time():
-    s = snapshot(now=0.5)
-    for field in ("model", "response"):
-        short = (
-            replace(s, envelope=replace(s.envelope, valid_until_steady=0.51))
-            if field == "model"
-            else replace(s, response=replace(s.response, valid_until_steady=0.51))
-        )
-        assert engine().refine(short, 0.5).permit is None
+def test_static_models_survive_one_hour_while_dynamic_evidence_expires():
+    original = snapshot()
+    fresh = snapshot(now=7200)
+    fresh = replace(fresh, response=original.response, envelope=original.envelope)
+    assert engine().refine(fresh, 7200).permit is not None
+    assert engine().refine(original, 7200).permit is None
+    for field in ("motion", "perception", "target"):
+        stale = replace(fresh, **{field: getattr(original, field)})
+        assert engine().refine(stale, 7200).permit is None
 
 
 def test_fast_recheck_brakes_for_new_definite_reversal_and_accepts_moving_pose():

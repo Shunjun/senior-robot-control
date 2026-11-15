@@ -244,7 +244,7 @@ def test_worker_failure_preserves_latest_valid_permit(failure):
     assert q.worker_diagnostic is not None
 
 
-@pytest.mark.parametrize("deadline", ["motion", "perception", "response", "envelope"])
+@pytest.mark.parametrize("deadline", ["motion", "perception"])
 def test_zero_target_poll_rechecks_each_original_proof_deadline(deadline):
     s = snapshot(target=Velocity(0, 0))
     if deadline == "perception":

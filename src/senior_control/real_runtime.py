@@ -13,23 +13,6 @@ from senior_control.sensors.policy import default_policy
 # belongs in this file, not in a simulation YAML or product driving preferences.
 RETIRED_PARAMETERS = {
     "scan_adapter": {"self_mask_range_uncertainty"},
-    "motion_fusion": {
-        "max_yaw_error",
-        "startup_window",
-        "progress_stationary_max_yaw_rate",
-        "sensor_max_age",
-        "alignment_max_gap",
-        "imu_frame",
-        "pending_wait",
-        "wheel_motion_limit",
-        "stall_distance",
-        "progress_stationary_max_linear_speed",
-        "imu_zero_variance",
-        "yaw_limit",
-        "max_variance",
-        "lateral_limit",
-        "min_quality",
-    },
     "safety_gate": {
         "motion_max_variance",
         "evidence_topic",
@@ -78,9 +61,9 @@ REQUIRED_PARAMETERS = {
         "reanchor_yaw",
         "min_rays",
     ),
-    "motion_fusion": ("body_frame", "wheel_frame"),
     "safety_gate": (
         "body_frame",
+        "wheel_frame",
         "simulation_rate_hz",
         "footprint_xy",
         "depth_policy",
@@ -130,12 +113,9 @@ def real_parameter_defaults(
             "reanchor_yaw": 0.1,
             "min_rays": 100,
         },
-        "motion_fusion": {
-            **common,
-            "wheel_frame": "odom_combined",
-        },
         "safety_gate": {
             **common,
+            "wheel_frame": "odom_combined",
             "simulation_rate_hz": 20.0,
             "depth_policy": "laser_only",
             "footprint_xy": (
@@ -188,10 +168,23 @@ def load_real_parameters(
         params.pop("self_mask_calibrated", None)
         # //Compatible: hand-written filter polygons no longer drive production filtering.
         params.pop("self_mask_xy", None)
-        # //Compatible: the shipped real YAML used odom, but the WHEELTEC
-        # base_serial launch publishes /odom with header.frame_id=odom_combined.
-        if node == "motion_fusion" and params.get("wheel_frame") == "odom":
-            params["wheel_frame"] = "odom_combined"
+        # //Compatible: wheel-frame configuration moved with the sole receiver.
+        # Persisted real YAML used a motion_fusion section; no node or second
+        # estimation path is started for it. Preserve only its actual frame value.
+        explicit = entry.get("ros__parameters", {}) if isinstance(entry, dict) else {}
+        if node == "safety_gate" and (
+            not isinstance(explicit, dict) or "wheel_frame" not in explicit
+        ):
+            legacy_entry = value.get("motion_fusion", {})
+            legacy = (
+                legacy_entry.get("ros__parameters", {}) if isinstance(legacy_entry, dict) else {}
+            )
+            frame = (
+                legacy.get("wheel_frame", params["wheel_frame"])
+                if isinstance(legacy, dict)
+                else params["wheel_frame"]
+            )
+            params["wheel_frame"] = "odom_combined" if frame == "odom" else frame
         # //Compatible: legacy YAML age copies now share one policy in memory.
         for field in (
             "max_age_seconds",
@@ -237,7 +230,6 @@ def load_real_parameters(
         for key, expected in (("final_command_topic", "/safety/final_command"),):
             if p.get(key, expected) != expected:
                 errors.append(f"{node}.{key} must stay {expected}")
-    result["safety_gate"]["wheel_frame"] = result["motion_fusion"]["wheel_frame"]
     if errors:
         raise ValueError("Real ROS configuration incomplete:\n" + "\n".join(errors))
     return result
