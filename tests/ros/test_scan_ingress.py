@@ -211,7 +211,7 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
     from senior_motion_msgs.msg import BoundedSafetyScan, FencedSafetyScan
     from senior_robot.safety_node import SafetyGate
 
-    from senior_control.safety.motion_runtime import SourceEpochFence
+    from senior_control.motion.source_fences import SourceEpochFence
 
     rclpy.init()
     gate = SafetyGate(

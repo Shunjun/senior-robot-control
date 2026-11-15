@@ -27,7 +27,6 @@ _EVENTS = frozenset(
 _DIAGNOSTICS = {
     "motion revoked: %s": "motion_revoked",
     "heartbeat failed": "heartbeat_failed",
-    "drive sink failed": "drive_sink_failed",
     "background task %s failed": "background_task_failed",
     "uplink failed": "uplink_failed",
     "could not initialize persistent agent safety state": "safety_state_initialize_failed",
@@ -168,7 +167,7 @@ _OPERATION_LABELS = frozenset(
         "map.import",
         "map.clear",
         "operation.query",
-        "drive.velocity",
+        "drive.intent",
         "drive.stop",
         "safety.estop",
         "control",

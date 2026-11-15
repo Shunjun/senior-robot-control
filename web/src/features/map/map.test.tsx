@@ -12,6 +12,7 @@ import {
   type RobotSnapshot,
 } from "../../api/protocol";
 import { HomeControls } from "./HomeControls";
+import { runtime, testPort } from "../../api/vehicleState.testUtils";
 import {
   MapCanvas,
   fitView,
@@ -81,6 +82,7 @@ function snapshot(overrides: Partial<RobotSnapshot> = {}): RobotSnapshot {
 }
 
 class FakeLink implements RobotLink {
+  vehicle = testPort();
   sent: Array<{ type: string; payload: unknown }> = [];
   requestImpl: (type: string, payload: unknown) => Promise<unknown> = async (type) => ({
     request_type: type,
@@ -427,7 +429,7 @@ describe("HomeControls", () => {
   it("test_home_unset_and_localization_pending_disable_navigation", async () => {
     const link = new FakeLink();
     const { rerender } = render(<HomeControls snapshot={snapshot({ home: null })} link={link} />);
-    const start = () => screen.getByRole("button", { name: "开始导航" }) as HTMLButtonElement;
+    const start = () => screen.getByRole("button", { name: "返航" }) as HTMLButtonElement;
     const resume = () => screen.getByRole("button", { name: "继续导航" }) as HTMLButtonElement;
 
     expect(start().disabled).toBe(true);
@@ -447,16 +449,16 @@ describe("HomeControls", () => {
     expect(screen.getByText(/缓存快照/)).toBeTruthy();
 
     rerender(<HomeControls snapshot={snapshot()} link={link} />);
-    expect(start().disabled).toBe(false);
+    expect(start().disabled).toBe(true);
     fireEvent.click(start());
     await flush();
-    expect(link.sent).toEqual([{ type: "navigation.start", payload: {} }]);
+    expect(link.sent).toEqual([]);
   });
 
   it("blocks start and resume while a cross-robot Home is unconfirmed", () => {
     const home = { waypoint_id: "home-1", map_ref: MAP_REF, status: "pending_confirmation" };
     render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);
-    expect((screen.getByRole("button", { name: "开始导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "继续导航" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/尚未确认/)).toBeTruthy();
   });
@@ -464,25 +466,33 @@ describe("HomeControls", () => {
   it("blocks navigation when Home belongs to another map", () => {
     const home = { waypoint_id: "home-1", map_ref: { map_id: "map-9", reference_revision: 1 }, status: "ready" };
     render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);
-    expect((screen.getByRole("button", { name: "开始导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Home 不属于当前地图/)).toBeTruthy();
   });
 
   it("keeps cancel available while navigation start is blocked", async () => {
     const link = new FakeLink();
+    link.vehicle = testPort(async (type, payload) => {
+      link.sent.push({ type, payload });
+      const request = payload as { request_id: string; task_id: string };
+      return { ...request, accepted: true, version: 4, reason: "accepted" };
+    });
+    link.vehicle.update(runtime({ sequence: 2, task: { task_id: "route", version: 3, phase: "running",
+      completed: 0, total: 1, stopped_for: null, allowed_actions: ["cancel"] } }), true);
     render(<HomeControls snapshot={snapshot({ home: null, localized: false })} link={link} />);
     const cancel = screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement;
     expect(cancel.disabled).toBe(false);
     fireEvent.click(cancel);
     await flush();
-    expect(link.sent).toEqual([{ type: "navigation.cancel", payload: {} }]);
+    expect(link.sent[0]?.type).toBe("task.execution.command");
+    expect(link.sent[0]?.payload).toMatchObject({ action: "cancel", task_id: "route", expected_version: 3 });
   });
 
   it("shows no success for a command the robot rejected", async () => {
     const link = new FakeLink();
     link.requestImpl = () => Promise.reject(new CommandError("safety_rejected", "no"));
-    render(<HomeControls snapshot={snapshot()} link={link} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始导航" }));
+    render(<HomeControls snapshot={snapshot({ home: null })} link={link} />);
+    fireEvent.click(screen.getByRole("button", { name: "设为 Home" }));
     await flush();
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("安全保护拒绝");
@@ -569,7 +579,7 @@ describe("HomeControls", () => {
     expect(screen.getByRole("status", { name: "定位状态" }).textContent).toContain("已定位");
     rerender(<HomeControls snapshot={null} link={new FakeLink()} />);
     expect(screen.getByText(/等待车端快照/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "开始导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

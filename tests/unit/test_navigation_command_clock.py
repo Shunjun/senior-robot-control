@@ -39,7 +39,6 @@ def navigation(monkeypatch):
         SimpleNamespace(time=lambda: clock.wall, time_ns=lambda: round(clock.wall * 1e9)),
     )
     node = module.CommandNode.__new__(module.CommandNode)
-    node._motion_control_configured = True
     node._consuming_runtime = False
     node._runtime_subscription = MagicMock(msg_type=object, raw=False)
     node._runtime_subscription.handle.take_message.return_value = None
@@ -254,28 +253,27 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff, close_r
     assert len(events) == 2
 
 
-def test_shutdown_and_publish_convert_velocity_to_ros_float_fields(navigation, monkeypatch):
-    from senior_control.models import Velocity
-
-    class FloatVector:
-        def __setattr__(self, name, value):
-            assert isinstance(value, float), f"ROS float field {name} rejected {type(value)}"
-            super().__setattr__(name, value)
-
-    class StrictTwist:
-        def __init__(self):
-            self.linear = FloatVector()
-            self.angular = FloatVector()
-
-    monkeypatch.setattr(sys.modules["command_clock_under_test"], "Twist", StrictTwist)
+def test_shutdown_retires_source_with_final_command_barrier(navigation):
     node = navigation.node
-    messages, events = [], []
-    node._publisher = SimpleNamespace(publish=messages.append)
+    events = []
     node._arbiter.shutdown = lambda: events.append("shutdown")
     node._publish_barrier = lambda: events.append("barrier")
-    node.shutdown_motion()  # Actual shutdown uses Velocity(0, 0).
+    node.shutdown_motion()
     assert events == ["shutdown", "barrier"]
-    assert (messages[0].linear.x, messages[0].angular.z) == (0.0, 0.0)
     assert node._generation == 2 and not node._active
-    node._publish(Velocity(1, -1))
-    assert (messages[1].linear.x, messages[1].angular.z) == (1.0, -1.0)
+
+
+def test_feedback_writer_loss_retires_acknowledgement_proofs(navigation):
+    from dataclasses import replace
+
+    node = navigation.node
+    node._owner_boot = "command-boot"
+    node._navigation_source.task_epoch = 1
+    node.clear_navigation_source("private-execution")
+    proof = node._retirements["private-execution"]
+    node._retirements["private-execution"] = replace(proof, acknowledged=True, task_epoch=1)
+    node._retirement_core = (b"gate", "old-core")
+    node._retirement_feedback_gid = b"gate"
+    node._invalidate_drive_feedback()
+    assert not node._retirements["private-execution"].acknowledged
+    assert node._retirement_core is None and node._retirement_feedback_gid is None

@@ -62,10 +62,10 @@
 
 本份 JSON 有完整示例数值，但 unvalidated=true 和未知硬件能力
 都是真实状态。它不是可驾驶配置；不能仅改验证标志就当作实车测量完成。
-旧配置不选择运动模型时，Agent/IPC 仍可启动，缺模型不再阻断整个服务。
+标准启动要求显式有效运动模型；缺模型在启动前报错。旧持久化设置与 YAML 退役字段仅做数据迁移，不选择旧控制器。
 
 配套的 ROS 参数草稿为 `config/hardware-safety.yaml`，对应 config.json 的
-`safety_parameters`；当前安装确认仍为 false，不会伪装已校准。
+`safety_parameters`；旧安装确认标志仅作为忽略的数据迁移字段，不影响当前启动学习。
 
 ### 网页退化驾驶偏好
 

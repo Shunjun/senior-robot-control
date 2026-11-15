@@ -26,10 +26,8 @@ class RoutePlan(BaseModel):
     task_id: str | None = Field(default=None, min_length=1, max_length=128)
     map_id: str = Field(min_length=1, max_length=128)
     reference_revision: int = Field(ge=0)
-    # //Compatible: version 1 routes retain their original connection namespace.
-    connection_epoch: int | None = Field(default=None, ge=1)
-    task_epoch: int | None = Field(default=None, ge=1)
-    effect_id: str | None = Field(default=None, min_length=1, max_length=128)
+    task_epoch: int = Field(ge=1)
+    effect_id: str = Field(min_length=1, max_length=128)
     action_ids: list[str] = Field(default_factory=list, max_length=MAX_ROUTE_WAYPOINTS)
     pose_ref: str | None = None
     map_generation: str = Field(min_length=1, max_length=128)
@@ -39,13 +37,10 @@ class RoutePlan(BaseModel):
 
     @model_validator(mode="after")
     def task_identity(self) -> "RoutePlan":
-        if self.task_epoch is not None:
-            if not self.effect_id or self.connection_epoch is not None:
-                raise ValueError("task execution must have its own effect/epoch namespace")
-            if len(self.action_ids) != len(self.poses) or len(set(self.action_ids)) != len(
-                self.action_ids
-            ):
-                raise ValueError("each route action needs a stable unique identity")
+        if len(self.action_ids) != len(self.poses) or len(set(self.action_ids)) != len(
+            self.action_ids
+        ):
+            raise ValueError("each route action needs a stable unique identity")
         return self
 
     @property
@@ -61,6 +56,7 @@ class RouteProgress(BaseModel):
     map_generation: str = Field(min_length=1, max_length=128)
     status: RouteStatus
     active_waypoint_index: int | None = Field(default=None, ge=0, lt=MAX_ROUTE_WAYPOINTS)
+    # //Compatible: cached progress can lack task identity; it never admits a route.
     task_epoch: int | None = None
     effect_id: str | None = None
     completed_action_ids: list[str] = Field(default_factory=list)

@@ -38,13 +38,13 @@ from senior_control.motion.controller import Feedback, MotionController
 from senior_control.motion.estimator import Origin
 from senior_control.motion.kinematics import compose, inverse
 from senior_control.motion.manual_target import ManualLinearTarget
+from senior_control.motion.source_fences import SourceEpochFence
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.startup_learning import StartupLearning
 from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
 from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
-from senior_control.safety.motion_runtime import SourceEpochFence
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation

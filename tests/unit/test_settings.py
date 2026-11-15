@@ -27,11 +27,12 @@ def test_settings_precedence_and_redaction(tmp_path):
     assert "sensitive-value" not in str(exc.value)
 
 
-def test_timing_constraints():
-    with pytest.raises(ValueError):
-        load_settings(
-            SettingsSource(cli={"secret": "x", "heartbeat_seconds": 2, "disconnect_seconds": 1})
-        )
+def test_retired_disconnect_setting_does_not_gate_connection_heartbeat():
+    settings = load_settings(
+        SettingsSource(cli={"secret": "x", "heartbeat_seconds": 2, "disconnect_seconds": 1})
+    )
+    assert settings.heartbeat_seconds == 2
+    assert "disconnect_seconds" not in settings.model_dump()
 
 
 def test_import_has_no_side_effects(tmp_path):

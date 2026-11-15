@@ -24,7 +24,7 @@ TOPICS = {
     "clock": ("/clock", "rosgraph_msgs/msg/Clock"),
     "scan": ("/scan", "sensor_msgs/msg/LaserScan"),
     "scan_motion": ("/motion/scan", "senior_motion_msgs/msg/ScanMotion"),
-    "motion": ("/motion/evidence", "senior_motion_msgs/msg/MotionEvidence"),
+    "motion": ("/motion/core_reference", "std_msgs/msg/String"),
     "wheel": ("/wheel/odom", "nav_msgs/msg/Odometry"),
     "imu": ("/imu/data", "sensor_msgs/msg/Imu"),
     "command": ("/cmd_vel", "geometry_msgs/msg/Twist"),
@@ -86,7 +86,25 @@ def ros_sample(stream: str, message: dict[str, Any], received_steady: float) -> 
         }
     elif stream == "command":
         data = {"vx": _path(message, "linear", "x"), "wz": _path(message, "angular", "z")}
-    elif stream in {"motion", "scan_motion"}:
+    elif stream == "motion":
+        try:
+            value = json.loads(message["data"])
+            reference = value["reference"]
+            stamp = value["sampled_ros"]
+            average = reference.get("average")
+            data = {
+                "interval_start_ros": reference["start_ros"],
+                "valid": average is not None,
+                "source_epoch": value["boot_id"],
+                "sequence": value["sequence"],
+                "reason": reference["current_reference"]["reason"],
+                "mode": reference["mode"],
+                "vx": average.get("vx") if average else None,
+                "wz": average.get("wz") if average else None,
+            }
+        except (ValueError, KeyError, TypeError):
+            data = {"valid": False, "reason": "invalid_core_reference"}
+    elif stream == "scan_motion":
         start = _stamp(message.get("interval_start"))
         data = {
             "interval_start_ros": start,
@@ -94,12 +112,7 @@ def ros_sample(stream: str, message: dict[str, Any], received_steady: float) -> 
             "source_epoch": message.get("source_epoch"),
             "reason": message.get("reason"),
         }
-        if stream == "motion":
-            data.update(
-                vx=_path(message, "body_velocity", "linear", "x"),
-                wz=_path(message, "body_velocity", "angular", "z"),
-            )
-        elif stamp is not None and start is not None and stamp > start:
+        if stamp is not None and start is not None and stamp > start:
             delta = message.get("body_delta", {})
             x, y, yaw = (delta.get(key) for key in ("x", "y", "theta"))
             if all(type(v) in (int, float) and math.isfinite(v) for v in (x, y, yaw)):

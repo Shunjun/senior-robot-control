@@ -90,7 +90,6 @@ async def test_directory_log_database_does_not_abort_composed_control(
     link = FakeLink(1)
     connector = FakeConnector(link)
     agents: list[Agent] = []
-    heartbeat_seen = asyncio.Event()
     monkeypatch.setattr(composition, "WebSocketConnector", lambda *args, **kwargs: connector)
     monkeypatch.setattr(Agent, "install_signal_handlers", lambda self: agents.append(self))
 
@@ -115,11 +114,7 @@ async def test_directory_log_database_does_not_abort_composed_control(
             }
         if kind == "manual":
             return {"ok": True, "authority_id": "test-authority", "state": "prepared"}
-        if kind == "server_heartbeat":
-            heartbeat_seen.set()
-        if kind == "drive_feedback":
-            return {"ok": True, "feedback": []}
-        assert kind in {"identity", "server_heartbeat", "disable_motion", "exit"}
+        assert kind in {"identity", "disable_motion", "exit"}
         return {"ok": True}
 
     monkeypatch.setattr(IpcClient, "request", ipc)
@@ -148,12 +143,12 @@ async def test_directory_log_database_does_not_abort_composed_control(
         settings = agents[0]._settings
         assert settings is not None and settings._timer is not None
         # task_loop uses this exact gate. Hold it to expose the lock boundary:
-        # acquire waits, while the real Agent receiver still delivers a heartbeat
-        # through its separate IPC client to the controlled ROS boundary.
+        # acquire waits, while the real Agent receiver still processes its
+        # authenticated socket heartbeat independently of the task/settings gate.
         async with settings.runtime.lock:
             await link.inbox.put(envelope("control.acquire", {}, request="gate-acquire"))
             await link.inbox.put(HeartbeatFrame("robot", time.monotonic() + 2))
-            await asyncio.wait_for(heartbeat_seen.wait(), 0.3)
+            await until(lambda: agents[0]._ledger.eligible("robot"), timeout=0.3)
             assert not link.responses
         await until(lambda: bool(link.responses))
         assert link.responses[0].request_id == "gate-acquire"

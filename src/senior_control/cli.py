@@ -292,11 +292,6 @@ def main(argv: list[str] | None = None) -> int:
         "doctor", parents=[simulation_default], help="check the profile without starting services"
     )
     doctor.add_argument("--container", nargs="?", const="ros2", help="Check a Docker container")
-    commands.add_parser(
-        "requalify-motion",
-        parents=[simulation_default],
-        help="request stationary motion requalification for a running simulation",
-    )
     deploy = commands.add_parser(
         "deploy", parents=[simulation_default], help="install the selected real vehicle service"
     )
@@ -337,10 +332,6 @@ def main(argv: list[str] | None = None) -> int:
             profile = profile.model_copy(update={"container": args.container})
         if args.command == "doctor":
             return _doctor(profile)
-        if args.command == "requalify-motion":
-            from senior_control.simulation_cli import requalify_motion
-
-            return requalify_motion(profile_path, profile)
         if args.command == "deploy":
             return _deploy(profile, profile_path, dry_run=args.dry_run)
         if args.command != "pair":

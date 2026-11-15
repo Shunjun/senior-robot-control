@@ -38,3 +38,21 @@ def logarithm(p: Pose2D, dt: float) -> tuple[float, float, float]:
 
 def body_delta(delta: Pose2D, extrinsic: Pose2D) -> Pose2D:
     return compose(compose(extrinsic, delta), inverse(extrinsic))
+
+
+def body_twist_delta(delta: Pose2D) -> Pose2D:
+    """SE(2) logarithm: integrated body twist for a measured relative pose."""
+    theta = math.atan2(math.sin(delta.yaw), math.cos(delta.yaw))
+    if abs(theta) < 1e-8:
+        a, b = 1.0, theta / 2.0
+    else:
+        a = math.sin(theta) / theta
+        b = 2.0 * math.sin(theta / 2.0) ** 2 / theta
+    denominator = a * a + b * b
+    if denominator <= 1e-12:
+        raise ValueError("unobservable body twist")
+    return Pose2D(
+        (a * delta.x + b * delta.y) / denominator,
+        (-b * delta.x + a * delta.y) / denominator,
+        theta,
+    )

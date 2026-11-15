@@ -64,7 +64,7 @@ def gate_for(rig, wire):
     return gate
 
 
-@pytest.mark.parametrize("reason", ["navigation_lease_inactive", "clock_offset_changed"])
+@pytest.mark.parametrize("reason", ["navigation_source_inactive", "clock_offset_changed"])
 def test_original_expiry_fault_retirement_then_cancel_uses_unchanged_payload(rig, wire, reason):
     start(rig, 0.5)
     gate_for(rig, wire)

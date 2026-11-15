@@ -63,33 +63,29 @@
 - 浏览器帧发给 agent 前的检查：
   - 帧不合法或超限：关闭连接（1007 / 1009）。
   - `robot_id` 与连接的机器人不同，或帧类型是 `response`：回 `ResponseEnvelope`，`ok=false`，`error=validation`，不转发。
-  - 一般命令已过期（`expires_at`）：回 `error=timeout`。驾驶命令按下述云端期限验证；租约和停止类指令不依赖浏览器时钟。
+  - 一般命令已过期（`expires_at`）：回 `error=timeout`。手动意图按车端本地 TTL 验证；控制准备、释放和停止不依赖浏览器时钟。
   - 机器人没有在线 agent：回 `error=offline`。
   - agent 发送队列已满：回 `error=conflict`。
   - 其余帧原样转发给当前 epoch 的 agent。
 - 拒绝响应回显原帧的 `robot_id`、`session_id`、`connection_epoch`、`request_id`、`seq`。
 
-### 驾驶资格与急停
+### 手动意图与急停
 
-- 断线清除旧代次的租约、挑战及待发送速度。恢复后先完成新代次的心跳，再重新申请控制租约。
-- `control.acquire` 经车端确认后，同一浏览器 socket 可为该会话及当前车端代次请求 `drive.challenge`（空 `payload`）。云端响应携带 `challenge_id` 和 `server_deadline`，有效期 0.3 秒。
-- 每条 `drive.velocity` 的 `payload` 包含 `vx`、`wz` 和一次性的 `challenge_id`。浏览器不得提供 `server_deadline`（包括 `null`）。云端核对资格后才写入期限，期限与同一车端连接的心跳时间使用同一个单调时间基准。车端用心跳中的服务端时间戳和本地发送时刻进行保守换算，将期限映射到本地单调时钟。车端配置更短的驾驶时限时，仍从 challenge 的签发时刻计算，过期样本将被拒绝。
-- 车端连接换代、租约重新申请或释放、停止类指令使已有 challenge 失效。重新申请租约会清除上一租约的速度，车端确认后方可申请新的 challenge。已确认的租约绑定原控制 socket。持有租约的 socket 断开后，云端清除尚未发送的速度并发送该会话的 `control.release`。车端确认释放后，新控制 socket 可在当前车端代次申请租约。租约变更超时未收到确认时，云端关闭车端连接以撤销原代次。
-- `safety.estop` 可在浏览器还未收到状态快照时发送。云端使用已认证的当前车端代次；急停可先于该代次的 ROS 心跳到达并锁定，但不授予驾驶权限。生产车端仍不接受远程急停复位。
-
-以上描述当前实现；浏览器到 ROS 底盘的运行验收仍需在目标环境执行。
+- 浏览器通过 `control.acquire` 准备车端手动 authority；`drive.intent` 只发送 authority_id、gesture、sequence、linear、turn 和 gear。车端在本地收包时绑定 TTL，过期或退役 authority 的迟到数据不能复活。
+- 云端认证并按原始 socket 分配 controller_generation，回执按原 socket/会话/请求关联。浏览器不能提交可信来源代次。断开控制 socket 时清除待发意图并向车端发送该来源的 release。
+- 浏览器时钟不参与驾驶资格。心跳用于连接活性与状态；自主任务继续使用自己的执行代次及本地 Nav2 样本 TTL，断网不取消已接受任务。
+- `safety.estop` 可在浏览器还未收到状态快照时发送，使用已认证的当前车端代次。急停持久化、实体急停优先和车端确认恢复继续有效；新版恢复使用带 revision 的 `safety.estop.reset` / `safety.fault.recover`。
 
 ### 有界队列
 
-每个 socket 有 `outbox_frames` 个槽位的发送队列。`drive.velocity` 只保留最新一帧；队列满时先丢旧的速度帧，`drive.stop` 与 `safety.estop` 可挤掉其他非安全帧，其余帧被拒绝并回 `conflict`。接收方太慢导致队列溢出的浏览器 socket 会被关闭（1013）。
+每个 socket 有 `outbox_frames` 个槽位。`drive.intent` 只保留最新待发送帧，替换只结算运输回执，不宣称车体执行。急停和停止优先，视频最先让出容量；过载请求拒绝并回 `conflict`，无法继续发送的 socket 关闭（1013）。
 
-ROS 仿真使用 2 秒的远程心跳窗口及独立的 0.3 秒速度命令有效期。收到明确断线时立即撤销当前代次的运动许可。
+浏览器到 ROS 底盘的同版运行验收仍需目标环境执行。
 
 ## Agent 运行时（`senior_control.runtime.supervisor`）
 
-`Supervisor` 是异步上下文管理器，构造时不启动任何东西。它拥有心跳任务、后台任务和上行重连循环，不导入 ROS，也从不调用 `publish_cmd_vel`。
+`Supervisor` 是异步上下文管理器，构造时不启动任务。它拥有独立心跳、后台任务和上行重连循环，不导入 ROS，不传递速度样本。
 
-- `request_ros(name)` 调用注入的 `call_ros`，心跳在独立任务中运行，不被慢调用阻塞。
-- `submit_drive(vx, wz)` 同步，只有一个待发送槽：新的提交（包括 `(0, 0)` 停车）直接替换槽里尚未发出的值，不排队。已经进入 `drive_sink` 的那一次调用可以完成，被替换的旧值不会再发出。运动被撤销后返回 `False`。
-- 任一后台任务抛错或提前结束，运动被撤销并清空队列。`drive_sink` 抛错同样撤销。
-- `connect` 抛 `AuthRejected` 时状态变为 `auth_failed`，撤销运动，不再重试。其他异常以指数退避重试（`retry_delay` 起，上限 `max_retry_delay`）。
+- `request_ros(name)` 调用注入的 `call_ros`，慢调用不阻塞心跳。
+- 后台任务失败会通知 Agent 收束连接和本地 authority。
+- 认证拒绝停止重试，其他连接错误按有界指数退避重连。

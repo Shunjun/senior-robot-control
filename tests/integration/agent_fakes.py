@@ -15,12 +15,12 @@ from senior_control.models import MapRef, Pose2D
 from senior_control.protocol import (
     EmptyPayload,
     Envelope,
+    ManualIntentEnvelope,
+    ManualIntentPayload,
     OperationEnvelope,
     OperationPayload,
     ResponseEnvelope,
     SimpleEnvelope,
-    VelocityEnvelope,
-    VelocityPayload,
 )
 from senior_control.waypoints import Waypoint
 
@@ -75,8 +75,8 @@ def stop(epoch: int = 1, robot_id: str = ROBOT, seq: int = 2) -> SimpleEnvelope:
 
 def velocity(
     epoch: int = 1, robot_id: str = ROBOT, seq: int = 3, vx: float = 0.2
-) -> VelocityEnvelope:
-    return VelocityEnvelope(
+) -> ManualIntentEnvelope:
+    return ManualIntentEnvelope(
         v=1,
         robot_id=robot_id,
         session_id="session-1",
@@ -84,8 +84,10 @@ def velocity(
         request_id="req-velocity",
         seq=seq,
         expires_at=time.time() + 5,
-        type="drive.velocity",
-        payload=VelocityPayload(vx=vx, wz=0.0),
+        type="drive.intent",
+        payload=ManualIntentPayload(
+            authority_id="test-authority", gesture=1, sequence=seq, linear=vx, turn=0.0, gear="low"
+        ),
     )
 
 
@@ -111,9 +113,6 @@ class FakeLink:
         if item is None:
             raise ConnectionError("link dropped")
         return item
-
-    def command_clock_valid(self) -> bool:
-        return True
 
     async def send_response(self, envelope: ResponseEnvelope) -> None:
         self.responses.append(envelope)
@@ -150,27 +149,21 @@ class FakeMotion:
     def __init__(self, events: list[str] | None = None) -> None:
         self.events: list[str] = events if events is not None else []
 
-    async def drive(
-        self,
-        envelope: VelocityEnvelope,
-        *,
-        received_at: float | None = None,
-        local_deadline: float | None = None,
-    ) -> None:
-        del received_at, local_deadline
-        self.events.append(f"drive:{envelope.seq}:{envelope.payload.vx}:{envelope.payload.wz}")
+    async def manual(self, envelope, **fields):
+        self.events.append(f"forward:{envelope.type}")
+        return {"ok": True, "authority_id": "test-authority", "state": "prepared"}
 
     async def stop(self, envelope: SimpleEnvelope) -> None:
         self.events.append(f"stop:{envelope.request_id}")
+
+    async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None:
+        await self.estop(envelope)
 
     async def estop(self, envelope: SimpleEnvelope) -> None:
         self.events.append(f"estop:{envelope.request_id}")
 
     async def forward(self, envelope: Envelope) -> None:
         self.events.append(f"forward:{envelope.type}")
-
-    async def server_heartbeat(self, connection_epoch: int, deadline: float) -> None:
-        self.events.append(f"heartbeat:{connection_epoch}")
 
     async def disable(self, connection_epoch: int) -> None:
         self.events.append(f"disable:{connection_epoch}")

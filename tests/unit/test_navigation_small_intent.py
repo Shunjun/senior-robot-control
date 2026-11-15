@@ -15,7 +15,7 @@ def rig(monkeypatch):
 
     r = clock_fixture.__wrapped__(monkeypatch)
     node = r.node
-    node._arbiter = Arbiter("robot", 0.2, 5.0, 0.3)
+    node._arbiter = Arbiter("robot", 0.3)
     assert node._arbiter.begin_navigation("private-execution", r.clock.mono, task_epoch=1)
     node._settle_local_reset = lambda: None
     node._publish_manual_target = lambda: False
@@ -64,4 +64,4 @@ def test_exact_producer_zero_still_stops_immediately(rig):
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert r.node._navigation_source.sequence == 2
     assert not rig.final and len(rig.barriers) == 1
-    assert r.node._arbiter.tick(r.clock.mono) == Velocity(0, 0)
+    assert r.node._arbiter.final_command(r.clock.mono) is None

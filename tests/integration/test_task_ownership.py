@@ -152,7 +152,7 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
     ros_nav = importlib.import_module("senior_robot.navigation_adapter")
     ros_ipc = importlib.import_module("senior_robot.agent_adapter")
     goals: list[asyncio.Future[bool]] = []
-    arbiter = Arbiter("robot", 0.2, 5, 0.3, require_server_heartbeat=True)
+    arbiter = Arbiter("robot", 0.3)
 
     class Goals:
         async def start(self, goal: Any) -> str:
@@ -190,7 +190,6 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
         release_identity=lambda key, epoch, _effect, outcome, **_wire: (
             key in retired and epoch == 2 and outcome == "succeeded"
         ),
-        connection_epoch=lambda: 99,
     )
     core = ros_ipc.AdapterCore(
         robot_id="robot",
@@ -494,42 +493,6 @@ async def test_accepted_targets_are_immutable_when_future_schedule_is_edited(
         await executor.control_current("resume", "resume")
         assert nav.definitions[-1].waypoint_ids == ("a", "b")
         assert nav.effects[-1].remaining == ("0:a", "1:b")
-
-
-async def test_actual_manual_adapter_waits_for_task_retirement(tmp_path: Path) -> None:
-    from agent_fakes import simple
-
-    from senior_control.agent.ports import TaskAwareMotion
-    from senior_control.errors import DomainError
-    from senior_control.protocol import validate_envelope
-    from senior_control.safety.arbiter import Arbiter
-
-    async with Database(tmp_path / "task.db") as database:
-        runtime, executor, nav, live, identity = await start(database)
-        arbiter = Arbiter("robot", 0.2, 5, 0.3, require_server_heartbeat=True)
-        arbiter.server_heartbeat(1, 0, 1)
-        assert arbiter.begin_navigation(identity, 0, task_epoch=1)
-        calls: list[str] = []
-
-        class Client:
-            async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
-                calls.append(kind)
-                envelope = validate_envelope(fields["envelope"].encode(), "robot")
-                result = arbiter.accept(envelope, 0)
-                return {"ok": result.accepted}
-
-        motion = TaskAwareMotion(Client())  # type: ignore[arg-type]
-        motion.bind_tasks(executor)
-        acquire = simple("control.acquire", seq=1, robot_id="robot", request_id="manual")
-        with pytest.raises(DomainError):
-            await motion.forward(acquire)
-        assert calls == [] and arbiter.task_navigation_active
-        nav.retired = True
-        arbiter.end_navigation(identity)
-        await motion.forward(acquire)
-        assert calls == ["command"]
-        assert executor.lifecycle is not None
-        assert (await executor.lifecycle.store.load(identity)).stopped_for == "takeover"
 
 
 async def test_status_timeout_keeps_accepted_task_for_next_tick(tmp_path: Path) -> None:

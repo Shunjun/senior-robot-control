@@ -90,3 +90,6 @@
 学习验证不足会报告 `ambiguous`，不会永久屏蔽未验证回波；设备移动/消失后撤销对应局部模型。状态与计程见统一周期诊断 `startup_learning`，原始回波与停车保护保留。本功能尚未通过完整 ROS 构建或实车运动验收。
 
 单天线 GPS 可选。在既有 `gps_input` 中显式配置 `course_frame` 时，该输入按 ENU 的 heading-only Odometry 使用：header 与 child frame 均为指定 ENU frame，pose 为米、twist 为米/秒，平面协方差为对应单位的方差，`origin_family` 必须是原始 GNSS 采集族。程序结合连续轮速/IMU和位置、速度精度积累朝向，输出 `gps_course` 周期诊断；它不自动提供地图朝向或地图变换。15 cm 不保证精度，GPS未就绪不阻止相对运动和学习；默认硬件草稿仍未配置 GPS，也没有 RTK 精度验收证据。
+
+
+运动路径已收敛：标准实车与仿真均使用共享 MotionCoreOutput；旧网页挑战/校时、旧租约速度仲裁、MotionEvidence 安全门与进展恢复入口已退休。上文若引用已删除测试文件，仅保留为历史验证记录，不能作为当前执行命令。当前清理映射与精确回归见 [路径收敛记录](docs/testing/2026-11-15-motion-path-convergence.md)。完整 Linux 同版重建与运行验收仍 Draft。

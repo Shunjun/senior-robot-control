@@ -16,9 +16,6 @@ from pydantic import (
 from senior_control.errors import ErrorCode
 from senior_control.navigation import RouteProgress
 
-DRIVE_CHALLENGE_SECONDS = 0.3
-DRIVE_TRANSPORT_SECONDS = 0.5
-DRIVE_HOLD_FLOOR_SECONDS = 0.2
 DEVICE_REVOKED_CLOSE_CODE = 4403
 _MAX_SAFE_WEB_INTEGER = 2**53 - 1
 
@@ -33,18 +30,6 @@ class StrictModel(BaseModel):
     )
 
 
-class DriveClockConfirmation(StrictModel):
-    nonce: str = Field(min_length=1, max_length=128)
-    t4: float
-
-
-class DriveClockProbe(StrictModel):
-    type: Literal["drive.clock"]
-    nonce: str = Field(min_length=1, max_length=128)
-    t1: float
-    confirmation: DriveClockConfirmation | None = None
-
-
 class HeartbeatRequest(StrictModel):
     v: Literal[1]
     type: Literal["heartbeat.request"]
@@ -52,12 +37,11 @@ class HeartbeatRequest(StrictModel):
     connection_epoch: int = Field(ge=1)
     nonce: str = Field(min_length=1, max_length=128)
     sent_at: float
-    drive_t1: float | None = None
-    drive_confirmation: DriveClockConfirmation | None = None
 
 
 class EmptyPayload(StrictModel):
     authority_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # //Compatible: this optional shape is part of persisted emergency-intent fingerprints.
     gesture: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
 
     @model_serializer(mode="wrap")
@@ -66,29 +50,6 @@ class EmptyPayload(StrictModel):
         if self.authority_id is None:
             value.pop("authority_id", None)
         return value
-
-
-class VelocityPayload(StrictModel):
-    vx: float
-    wz: float
-    challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
-    server_deadline: float | None = None
-    gesture: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
-    sampled_at: float | None = None
-    server_issued_at: float | None = None
-
-    @model_validator(mode="after")
-    def validate_sample(self) -> "VelocityPayload":
-        if (self.gesture is None) != (self.sampled_at is None):
-            raise ValueError("sample requires both gesture and source time")
-        if self.gesture is not None:
-            if self.challenge_id is not None:
-                raise ValueError("timed sample cannot use a legacy challenge")
-            if (self.server_issued_at is None) != (self.server_deadline is None):
-                raise ValueError("sample grant requires both issuance and deadline")
-        elif self.server_issued_at is not None:
-            raise ValueError("sample grant requires a timed sample")
-        return self
 
 
 class EnvelopeBase(StrictModel):
@@ -102,71 +63,12 @@ class EnvelopeBase(StrictModel):
     expires_at: float
 
 
-class DriveFeedbackKey(StrictModel):
-    robot_id: str = Field(min_length=1, max_length=128)
-    session_id: str = Field(min_length=1, max_length=128)
-    connection_epoch: int = Field(ge=1)
-    request_id: str = Field(min_length=1, max_length=128)
-    seq: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
-    gesture: int = Field(ge=1, le=_MAX_SAFE_WEB_INTEGER)
-
-
-class DriveExecutionFeedback(DriveFeedbackKey):
-    type: Literal["drive.feedback"] = "drive.feedback"
-    status: Literal["applied", "blocked", "superseded", "expired"]
-    vx: float | None = None
-    wz: float | None = None
-    limited: bool | None = None
-    reason: str | None = Field(default=None, min_length=1, max_length=128)
-
-    @classmethod
-    def superseded(cls, envelope: "VelocityEnvelope") -> "DriveExecutionFeedback":
-        gesture = envelope.payload.gesture
-        if gesture is None:
-            raise ValueError("legacy samples do not carry feedback correlation")
-        return cls(
-            robot_id=envelope.robot_id,
-            session_id=envelope.session_id,
-            connection_epoch=envelope.connection_epoch,
-            request_id=envelope.request_id,
-            seq=envelope.seq,
-            gesture=gesture,
-            status="superseded",
-        )
-
-    @model_validator(mode="after")
-    def validate_output(self) -> "DriveExecutionFeedback":
-        fields = self.vx, self.wz, self.limited
-        if self.status == "applied":
-            if any(value is None for value in fields) or self.reason is not None:
-                raise ValueError("applied feedback requires actual output")
-        elif any(value is not None for value in fields):
-            raise ValueError("only applied feedback may include actual output")
-        return self
-
-
-class VelocityEnvelope(EnvelopeBase):
-    type: Literal["drive.velocity"]
-    payload: VelocityPayload
-
-    @model_validator(mode="after")
-    def validate_timed_sequence(self) -> "VelocityEnvelope":
-        if self.payload.gesture is not None and not 1 <= self.seq <= _MAX_SAFE_WEB_INTEGER:
-            raise ValueError("timed sample sequence must be a positive browser-safe integer")
-        return self
-
-
 class SimpleEnvelope(EnvelopeBase):
     type: Literal[
         "control.acquire",
-        "drive.challenge",
         "control.release",
         "drive.stop",
         "safety.estop",
-        "safety.reset",
-        "navigation.start",
-        "navigation.cancel",
-        "navigation.resume",
     ]
     payload: EmptyPayload
     controller_generation: int | None = Field(default=None, ge=1, le=_MAX_SAFE_WEB_INTEGER)
@@ -579,15 +481,9 @@ class ResponsePayload(StrictModel):
         "map.clear",
         "operation.query",
         "control.acquire",
-        "drive.challenge",
         "control.release",
-        "drive.velocity",
         "drive.stop",
         "safety.estop",
-        "safety.reset",
-        "navigation.start",
-        "navigation.cancel",
-        "navigation.resume",
         "video.offer",
         "video.answer",
         "video.candidate",
@@ -600,8 +496,6 @@ class ResponsePayload(StrictModel):
     ok: bool
     error: ErrorCode | None = None
     operation_id: str | None = None
-    challenge_id: str | None = Field(default=None, min_length=1, max_length=128)
-    server_deadline: float | None = None
     data: dict[str, Any] | None = None
     status: (
         Literal["accepted", "dispatching", "running", "succeeded", "failed", "needs_review"] | None
@@ -694,8 +588,7 @@ class VideoCloseEnvelope(EnvelopeBase):
 VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope
 
 Envelope = Annotated[
-    VelocityEnvelope
-    | SimpleEnvelope
+    SimpleEnvelope
     | TaskExecutionEnvelope
     | SettingsGetEnvelope
     | SettingsApplyEnvelope
@@ -709,8 +602,7 @@ Envelope = Annotated[
     Field(discriminator="type"),
 ]
 Frame = Annotated[
-    VelocityEnvelope
-    | SimpleEnvelope
+    SimpleEnvelope
     | TaskExecutionEnvelope
     | SettingsGetEnvelope
     | SettingsApplyEnvelope
@@ -763,10 +655,7 @@ def serialize_envelope(envelope: Envelope | VideoEnvelope) -> bytes:
         validated = _frame_adapter.validate_python(envelope)
     except ValidationError as exc:
         raise ValueError("invalid envelope") from exc
-    # //Compatible: omit new optional timing fields from legacy wire payloads.
     excluded: dict[str, set[str]] = {}
-    if isinstance(validated, VelocityEnvelope) and validated.payload.gesture is None:
-        excluded["payload"] = {"gesture", "sampled_at", "server_issued_at"}
     if isinstance(validated, SimpleEnvelope):
         excluded["payload"] = {
             name for name in ("gesture", "authority_id") if getattr(validated.payload, name) is None

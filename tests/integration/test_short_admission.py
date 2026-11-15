@@ -131,8 +131,6 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             if json.loads(fields["envelope"])["type"] == "control.acquire":
                 manual_active = True
             return {"ok": True, "authority_id": "test-authority", "state": "prepared"}
-        if kind == "drive_feedback":
-            return {"ok": True, "feedback": []}
         if kind.startswith("navigation."):
             if delayed and kind in {"navigation.task_cancel", "navigation.task_status"}:
                 port_started.set()
@@ -153,7 +151,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 "collected": kind == "navigation.task_settled",
                 "progress": None,
             }
-        assert kind in {"identity", "disable_motion", "exit", "server_heartbeat"}
+        assert kind in {"identity", "disable_motion", "exit"}
         return {"ok": True}
 
     monkeypatch.setattr(IpcClient, "request", ipc)

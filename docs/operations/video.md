@@ -6,7 +6,7 @@
 
 - 信令复用已认证的 `/ws/agent` 和 `/ws/control`。不开独立的视频端口，也没有未认证入口。
 - `VideoSession` 在车端按单个观看者创建，构造时带上云端已验证的连接身份（`role` 和所选 `robot_id`）。每次 `offer`、`add_ice_candidate`、`turn_credentials` 都会重新核对：连接必须是 `control` 角色，请求的机器人必须等于所选机器人，也必须等于本车。
-- 视频帧不经过 `Supervisor.submit_drive`，也不占那个唯一的待发速度槽。帧的路径是：相机 → 一个只保留最新帧的槽 → 对端。对端拥塞时丢帧并计数，心跳和停止不受影响。
+- 视频帧与手动意图使用独立的有界队列；Supervisor 只管理连接和后台任务。帧的路径是：相机 → 一个只保留最新帧的槽 → 对端。对端拥塞时丢帧并计数，心跳和停止不受影响。
 - 车端 Agent 尚未装配相机帧源。收到 offer 时会回送 `video.close`，浏览器清除视频画面，心跳和控制连接继续运行。
 - `aiortc` 在可选依赖 `video` 里。`import senior_control` 不会导入它。只有 `AiortcPeerFactory.open` 才导入，缺少时报告 `aiortc_not_installed`。安装：`uv sync --group dev --extra video`。
 

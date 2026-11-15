@@ -129,16 +129,18 @@ class CloudSettings(CommonSettings):
 class AgentSettings(CommonSettings):
     role: Literal["agent"] = "agent"
     heartbeat_seconds: float = Field(default=0.2, gt=0)
-    disconnect_seconds: float = Field(default=1.0, gt=0)
     command_ttl_seconds: float = Field(default=0.3, gt=0)
     perception_stale_seconds: float = Field(default=0.5, gt=0)
     device: DeviceProfile = Field(default_factory=DeviceProfile)
 
-    @model_validator(mode="after")
-    def check_timing(self) -> "AgentSettings":
-        if self.heartbeat_seconds >= self.disconnect_seconds:
-            raise ValueError("heartbeat must be shorter than disconnect threshold")
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def retire_disconnect_setting(cls, value: Any) -> Any:
+        # //Compatible: persisted Agent settings may carry the retired lease timeout.
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("disconnect_seconds", None)
+        return value
 
 
 AppSettings = AgentSettings | CloudSettings

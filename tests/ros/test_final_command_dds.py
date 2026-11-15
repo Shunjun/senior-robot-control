@@ -1,276 +1,219 @@
-"""Actual local DDS publisher identity and zero-barrier regression."""
+"""Opt-in actual DDS -> native guard -> profile-selected SafetyGate regressions.
 
+No sensor or vehicle is supplied: accepted transport is observed at the real
+FinalCommandFence, while the unchanged motion core must keep /cmd_vel stopped.
+This proves transport identity/barriers, not physical motion or stop performance.
+Run only in an explicitly isolated, same-build Linux ROS workspace.
+"""
+
+import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from senior_control.agent.manual_control import ManualIngress
 from senior_control.models import Velocity
-from senior_control.protocol import EmptyPayload, SimpleEnvelope, VelocityEnvelope, VelocityPayload
+from senior_control.motion.contracts import ManualIntent
+from senior_control.protocol import EmptyPayload, SimpleEnvelope
 from senior_control.safety.arbiter import PersistentEstop
+from senior_control.settings.models import DrivingSettings
+
+COMMAND_TTL = 3.0  # Test-only: distinguish identity rejection from expiry during DDS discovery.
 
 
-def wait(executor, predicate, timeout=2.0):
+def wait(executor, predicate, timeout=3.0):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
-        executor.spin_once(timeout_sec=0.02)
+        executor.spin_once(timeout_sec=0.01)
         if predicate():
             return
     raise AssertionError("DDS condition timed out")
 
 
-def test_old_dds_frame_cannot_cross_stop_barrier(tmp_path):
+@pytest.fixture
+def dds(tmp_path, monkeypatch):
+    if os.environ.get("SENIOR_FINAL_COMMAND_DDS") != "1":
+        pytest.skip("opt-in actual DDS/native-guard composition; no services started by default")
     rclpy = pytest.importorskip("rclpy")
-    from rclpy.executors import SingleThreadedExecutor
+    from geometry_msgs.msg import Twist
     from rclpy.parameter import Parameter
     from senior_motion_msgs.msg import FinalCommand
     from senior_robot.command_node import CommandNode
+    from senior_robot.motion_lifecycle import MotionExecutor
     from senior_robot.safety_node import SafetyGate
 
-    rclpy.init()
-    parameter = Parameter("robot_id", value="paired-car")
-    path = tmp_path / "estop.json"
-    PersistentEstop.initialize(path, "paired-car")
-    command = CommandNode(
-        parameter_overrides=[parameter, Parameter("safety_state_path", value=str(path))],
-        require_server_heartbeat=True,
-    )
-    gate = SafetyGate(parameter_overrides=[parameter])
-    observer = rclpy.create_node("final_command_observer")
-    seen = []
-    observer.create_subscription(FinalCommand, "/safety/final_command", seen.append, 10)
-    executor = SingleThreadedExecutor()
-    for node in (command, gate, observer):
-        executor.add_node(node)
-    try:
-        wait(executor, lambda: bool(seen))
-        wait(executor, lambda: gate._command_topology_ready() and gate._final_identity is not None)
-        now = time.monotonic()
-        assert command.server_heartbeat(1, now + 0.8)
-        base = dict(
-            v=1,
-            robot_id="paired-car",
-            session_id="page",
-            connection_epoch=1,
-            request_id="x",
-            expires_at=0.0,
-        )
-        assert command.submit(
-            SimpleEnvelope(**base, seq=1, type="control.acquire", payload=EmptyPayload())
-        ).accepted
-        assert command.submit(
-            VelocityEnvelope(
-                **base, seq=2, type="drive.velocity", payload=VelocityPayload(vx=0.1, wz=0.0)
-            ),
-            now,
-        ).accepted
-        wait(executor, lambda: gate._command == Velocity(0.1, 0.0))
-        wait(executor, lambda: any(m.vx == 0.1 for m in seen))
-        old = next(m for m in reversed(seen) if m.vx == 0.1)
-        # Model one lost generation without publishing its barrier to DDS.
-        command._generation += 1
-        assert command.submit(
-            SimpleEnvelope(**base, seq=3, type="drive.stop", payload=EmptyPayload())
-        ).accepted
-        wait(executor, lambda: gate._command == Velocity(0.0, 0.0))
-        command._final_publisher.publish(old)
-        for _ in range(10):
-            executor.spin_once(timeout_sec=0.02)
-            assert gate._command == Velocity(0.0, 0.0)
-        now = time.monotonic()
-        assert command.server_heartbeat(1, now + 0.8)
-        assert command.submit(
-            VelocityEnvelope(
-                **base, seq=4, type="drive.velocity", payload=VelocityPayload(vx=0.1, wz=0.0)
-            ),
-            now,
-        ).accepted
-        wait(executor, lambda: gate._command == Velocity(0.1, 0.0))
-        attacker = rclpy.create_node("unexpected_publisher")
-        forged = attacker.create_publisher(FinalCommand, "/safety/final_command", 10)
-        try:
-            wait(executor, lambda: not gate._command_topology_ready())
-            forged.publish(old)
-            for _ in range(10):
-                executor.spin_once(timeout_sec=0.02)
-                assert gate._command == Velocity(0.0, 0.0)
-        finally:
-            attacker.destroy_node()
-        gate._guard_process.kill()
-        gate._guard_process.wait(timeout=2.0)
-        wait(executor, lambda: not gate._command_topology_ready())
-        assert not gate._final_fence.usable(time.monotonic()) or not gate._command_topology_ready()
-    finally:
-        for node in (observer, gate, command):
-            executor.remove_node(node)
-            node.destroy_node()
-        executor.shutdown()
-        rclpy.shutdown()
-
-
-def test_ros_command_owner_estop_survives_restart(tmp_path):
-    rclpy = pytest.importorskip("rclpy")
-    from rclpy.parameter import Parameter
-    from senior_robot.command_node import CommandNode
-
+    domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
+    assert domain.isdecimal() and 0 <= int(domain) <= 232, "select an isolated ROS domain"
+    monkeypatch.setenv("ROS_DOMAIN_ID", domain)
+    monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     rclpy.init()
     path = tmp_path / "estop.json"
     PersistentEstop.initialize(path, "paired-car")
     parameters = [
         Parameter("robot_id", value="paired-car"),
         Parameter("safety_state_path", value=str(path)),
+        Parameter("command_ttl_seconds", value=COMMAND_TTL),
     ]
-    node = CommandNode(parameter_overrides=parameters, require_server_heartbeat=True)
+    nodes = []
+    executor = MotionExecutor()
+
+    def own(node):
+        nodes.append(node)
+        executor.add_node(node)
+        return node
+
     try:
-        now = time.monotonic()
-        assert node.server_heartbeat(1, now + 0.8)
-        request = SimpleEnvelope(
+        command = own(CommandNode(parameter_overrides=parameters))
+        gate = own(
+            SafetyGate(
+                parameter_overrides=[
+                    Parameter("robot_id", value="paired-car"),
+                    Parameter("use_sim_time", value=True),
+                    Parameter("motion_core_profile", value="fortress-candidate-unvalidated-v1"),
+                ]
+            )
+        )
+        observer = own(rclpy.create_node("final_command_observer"))
+        frames, outputs = [], []
+        observer.create_subscription(FinalCommand, "/safety/final_command", frames.append, 10)
+        observer.create_subscription(Twist, "/cmd_vel", outputs.append, 10)
+        wait(executor, lambda: gate._command_topology_ready() and bool(frames))
+        delivered, revoked = [], []
+        consume, revoke = gate._motion_core.command, gate._motion_core.revoke
+
+        def observe_command(message):
+            delivered.append((message.generation, message.sequence, message.vx))
+            return consume(message)
+
+        def observe_revoke(reason, **kwargs):
+            revoked.append(reason)
+            return revoke(reason, **kwargs)
+
+        gate._motion_core.command = observe_command
+        gate._motion_core.revoke = observe_revoke
+        yield SimpleNamespace(
+            rclpy=rclpy,
+            executor=executor,
+            command=command,
+            gate=gate,
+            own=own,
+            nodes=nodes,
+            outputs=outputs,
+            delivered=delivered,
+            revoked=revoked,
+        )
+    finally:
+        for node in reversed(nodes):
+            executor.remove_node(node)
+            node.destroy_node()
+        executor.shutdown()
+        rclpy.shutdown()
+
+
+def manual_frame(command, sequence=2):
+    """Use the current authority owner, not a removed velocity/clock protocol."""
+    from senior_motion_msgs.msg import FinalCommand
+
+    now = time.monotonic()
+    ingress = ManualIngress("paired-car", command._owner_boot, ttl=COMMAND_TTL)
+    ingress.bind(1, 1, "page", now)
+    authority = ingress.acquire("acquire", now).authority_id
+    # Prepared authority only activates on the explicit initial neutral sample.
+    settings = DrivingSettings(
+        low_linear_mps=0.5,
+        high_linear_mps=1.0,
+        low_angular_rps=0.5,
+        high_angular_rps=1.0,
+        reverse_linear_mps=0.3,
+    )
+    neutral = ManualIntent(authority, 1, 1, 0.0, 0.0, "low")
+    assert ingress.accept(neutral, settings, now, now + COMMAND_TTL, now) is not None
+    intent = ManualIntent(authority, 1, sequence, 0.2, 0.0, "low")
+    target = ingress.accept(intent, settings, now, now + COMMAND_TTL, now)
+    assert target is not None
+    return FinalCommand(
+        robot_id="paired-car",
+        owner_boot_id=command._owner_boot,
+        session_id="page",
+        generation=command._generation,
+        connection_epoch=1,
+        sequence=sequence,
+        steady_deadline=target.sample.deadline_steady,
+        vx=target.velocity.vx,
+        wz=target.velocity.wz,
+        request_id="intent",
+        gesture=1,
+        source_kind="manual",
+        source_id=authority,
+        source_epoch=target.source_epoch,
+        received_steady=target.sample.received_steady,
+        close_reason="intent",
+        manual_linear=intent.linear,
+        manual_linear_limit=target.linear_limit_mps,
+        degraded_linear_limit=target.degraded_linear_mps,
+    )
+
+
+@pytest.mark.parametrize(
+    "fault", ["stop_barrier", "duplicate_expected", "duplicate_other", "sole_other", "guard_lost"]
+)
+def test_actual_dds_identity_and_generation_fence_reach_current_owner(dds, fault):
+    from senior_motion_msgs.msg import FinalCommand
+
+    command, gate, executor = dds.command, dds.gate, dds.executor
+    original = manual_frame(command)
+    command._final_publisher.publish(original)
+    sample = (original.generation, original.sequence, original.vx)
+    wait(executor, lambda: sample in dds.delivered)
+    assert gate._final_fence.usable(time.monotonic())
+
+    if fault == "stop_barrier":
+        # Lose an intermediate generation. A newer actual stop barrier must win.
+        command._generation += 1
+        stop = SimpleEnvelope(
             v=1,
             robot_id="paired-car",
             session_id="page",
             connection_epoch=1,
             request_id="stop",
-            seq=1,
+            seq=3,
             expires_at=0.0,
-            type="safety.estop",
+            type="drive.stop",
             payload=EmptyPayload(),
         )
-        assert node.submit(request).accepted
-    finally:
-        node.destroy_node()
-    node = CommandNode(parameter_overrides=parameters, require_server_heartbeat=True)
-    try:
-        now = time.monotonic()
-        assert node.server_heartbeat(2, now + 0.8)
-        assert node._arbiter.mode(now) == "estop"
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        assert command.submit(stop).accepted
+        wait(executor, lambda: gate._motion_core.output_generation == command._generation)
+        assert gate._motion_core._barrier_complete
+        publish = command._final_publisher.publish
+    elif fault == "guard_lost":
+        process = gate._guard_process
+        assert process is not None and process.poll() is None
+        process.kill()
+        process.wait(timeout=3)
+        wait(executor, lambda: "command_topology_unqualified" in dds.revoked)
+        publish = command._final_publisher.publish
+    else:
+        name = "command_node" if fault == "duplicate_expected" else "unexpected_publisher"
+        attacker = dds.own(dds.rclpy.create_node(name))
+        forged = attacker.create_publisher(FinalCommand, "/safety/final_command", 10)
+        if fault == "sole_other":
+            executor.remove_node(command)
+            dds.nodes.remove(command)
+            command.destroy_node()
+        wait(executor, lambda: not gate._command_topology_ready())
+        publish = forged.publish
 
-
-@pytest.mark.parametrize(
-    "event", ["renewal", "ticket_expired", "velocity_changed", "zero", "lease_changed", "gap"]
-)
-def test_identical_command_refresh_keeps_original_geometry_deadline(monkeypatch, event):
-    from types import SimpleNamespace
-
-    rclpy = pytest.importorskip("rclpy")
-    from senior_motion_msgs.msg import FinalCommand
-    from senior_robot import safety_node as module
-
-    from senior_control.safety.async_guard import SafetyTicket
-
-    rclpy.init()
-    gate = module.SafetyGate()
-    try:
-        now = 10.0
-        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: now))
-        monkeypatch.setattr(gate, "_command_topology_ready", lambda: True)
-        monkeypatch.setattr(gate, "_report", lambda _reason: None)
-        emitted = []
-        monkeypatch.setattr(gate, "_publisher", SimpleNamespace(publish=emitted.append))
-        gid = b"fixture-publisher"
-        gate._final_fence.set_publisher(gid)
-
-        def accept(generation, sequence, deadline, vx, *, session="page", epoch=1):
-            gate._on_command(
-                FinalCommand(
-                    robot_id="robot",
-                    owner_boot_id="fixture",
-                    generation=generation,
-                    session_id=session,
-                    connection_epoch=epoch,
-                    sequence=sequence,
-                    steady_deadline=deadline,
-                    vx=vx,
-                ),
-                gid,
-            )
-
-        accept(1, 0, 0.0, 0.0)
-        accept(1, 1, 10.2, 0.1)
-        generation = gate._command_generation
-        ros_now = gate.get_clock().now().nanoseconds / 1e9
-        ticket = SafetyTicket(
-            generation, 1, 1, "motion-epoch", Velocity(0.1, 0.0), now, 10.2, ros_now, ros_now + 2.0
-        )
-        now = 10.1
-        renewal_deadline = 10.15 if event == "gap" else 10.4
-        accept(1, 2, renewal_deadline, 0.1)
-        assert gate._command_generation == generation
-        assert gate._command_deadline == renewal_deadline
-
-        def drain():
-            if event in {"zero", "lease_changed"}:
-                accept(2, 0, 0.0, 0.0)
-                if event == "lease_changed":
-                    accept(2, 3, 10.45, 0.1, session="replacement", epoch=2)
-                else:
-                    accept(2, 3, 10.45, 0.1)
-            else:
-                accept(1, 3, 10.45, 0.2 if event == "velocity_changed" else 0.1)
-
-        # The final drain may see another renewal just as a geometry result is emitted.
-        if event == "ticket_expired":
-            now = ticket.steady_deadline
-        elif event == "gap":
-            now = 10.16
-        monkeypatch.setattr(gate, "_poll_command_guard", drain)
-        gate._publish(ticket.command, "hard_sweep_clear", ticket=ticket)
-        assert gate._final_fence.usable(now)
-        assert emitted[-1].linear.x == (0.1 if event == "renewal" else 0.0)
-    finally:
-        gate.destroy_node()
-        rclpy.shutdown()
-
-
-def test_drive_feedback_follows_actual_output(monkeypatch):
-    from types import SimpleNamespace
-
-    rclpy = pytest.importorskip("rclpy")
-    from senior_motion_msgs.msg import FinalCommand
-    from senior_robot import safety_node as module
-
-    rclpy.init()
-    gate = module.SafetyGate()
-    try:
-        events = []
-        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: 10.0))
-        monkeypatch.setattr(gate, "_poll_command_guard", lambda: None)
-        monkeypatch.setattr(gate, "_report", lambda _reason: None)
-        monkeypatch.setattr(
-            gate, "_publisher", SimpleNamespace(publish=lambda msg: events.append(("output", msg)))
-        )
-        monkeypatch.setattr(
-            gate,
-            "_drive_feedback_publisher",
-            SimpleNamespace(publish=lambda msg: events.append(("feedback", msg))),
-        )
-        gid = b"fixture"
-        gate._final_fence.set_publisher(gid)
-        gate._on_command(FinalCommand(robot_id="robot", owner_boot_id="boot", generation=1), gid)
-        gate._on_command(
-            FinalCommand(
-                robot_id="robot",
-                owner_boot_id="boot",
-                session_id="page",
-                generation=1,
-                connection_epoch=3,
-                sequence=2,
-                steady_deadline=10.4,
-                request_id="req-2",
-                gesture=5,
-                vx=0.2,
-            ),
-            gid,
-        )
-        assert events == []
-        gate._publish(Velocity(0.0, 0.0), "scan_topology_unqualified")
-        assert [kind for kind, _ in events] == ["output", "feedback"]
-        assert events[0][1].linear.x == 0.0
-        feedback = events[1][1]
-        assert feedback.status == "blocked"
-        assert feedback.reason == "scan_topology_unqualified"
-        assert (feedback.request_id, feedback.gesture, feedback.connection_epoch) == ("req-2", 5, 3)
-    finally:
-        gate.destroy_node()
-        rclpy.shutdown()
+    frontier = len(dds.delivered)
+    for _ in range(12):
+        assert time.monotonic() < original.steady_deadline, "expiry would mask identity rejection"
+        publish(original)  # Same payload; actual publisher/GID and barrier checks stay real.
+        executor.spin_once(timeout_sec=0.01)
+        assert sample not in dds.delivered[frontier:]
+        assert gate._motion_core.target.source == "idle"
+    if fault == "stop_barrier":
+        assert gate._final_fence._velocity == Velocity(0, 0)
+    else:
+        assert not gate._command_topology_ready()
+        assert "command_topology_unqualified" in dds.revoked
+    assert dds.outputs and all(m.linear.x == 0 and m.angular.z == 0 for m in dds.outputs)

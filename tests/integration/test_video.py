@@ -286,7 +286,6 @@ async def test_congested_video_keeps_heartbeat_and_stop() -> None:
     await session.offer("robot-a", video_offer("VP8"))
 
     beats = 0
-    driven: list[tuple[float, float]] = []
 
     async def heartbeat() -> None:
         nonlocal beats
@@ -295,31 +294,12 @@ async def test_congested_video_keeps_heartbeat_and_stop() -> None:
     async def ros(name: str) -> None:
         return None
 
-    async def sink(vx: float, wz: float) -> None:
-        driven.append((vx, wz))
-
-    async def cmd_vel(vx: float, wz: float) -> None:
-        raise AssertionError("video must never publish drive")
-
     supervisor = Supervisor(
         send_heartbeat=heartbeat,
         call_ros=ros,
-        drive_sink=sink,
-        publish_cmd_vel=cmd_vel,
         heartbeat_seconds=0.01,
     )
-    submitted = 0
-    original = supervisor.submit_drive
-
-    def counted(vx: float, wz: float) -> bool:
-        nonlocal submitted
-        submitted += 1
-        return original(vx, wz)
-
-    supervisor.submit_drive = counted  # type: ignore[method-assign]
-
     async with supervisor:
-        assert supervisor.submit_drive(0.3, 0.0)
         for index in range(300):
             source.feed(rgb_frame(clock.now + index * 0.001))
             if index % 50 == 0:
@@ -327,12 +307,8 @@ async def test_congested_video_keeps_heartbeat_and_stop() -> None:
         beats_before = beats
         await asyncio.sleep(0.2)
 
-        assert supervisor.pending == 0  # the video flood never occupied the drive slot
-        assert submitted == 1  # only the test's own drive command
         assert beats > beats_before  # heartbeat kept running under congestion
-        assert supervisor.submit_drive(0.0, 0.0)
         await asyncio.sleep(0.05)
-        assert driven[-1] == (0.0, 0.0)  # stop still reaches the sink
 
     status = await session.status()
     assert status.frames_sent == 0
@@ -871,37 +847,28 @@ async def test_malformed_or_misdirected_video_frames_are_refused() -> None:
 async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     pytest.importorskip("fastapi")
     rig = WireRig(outbox_frames=3)
-    acquire = wire_frame("control.acquire", {})
-    rig.hub.handle_control_frame(rig.controller, acquire)
-    assert await rig.agent.outbox.get() == acquire
-    rig.hub.handle_agent_frame(
-        rig.agent,
-        json.dumps(
-            {
-                **json.loads(acquire),
-                "type": "response",
-                "payload": {"request_type": "control.acquire", "ok": True},
-            }
-        ).encode(),
-    )
-    await rig.controller.outbox.get()
+    rig.agent.motion_intent = True
 
     async def queue_velocity(vx: float, seq: int) -> None:
-        rig.hub.handle_control_frame(rig.controller, wire_frame("drive.challenge", {}, seq=seq))
-        grant = json.loads(await rig.controller.outbox.get())["payload"]
-        assert grant["ok"]
         rig.hub.handle_control_frame(
             rig.controller,
             wire_frame(
-                "drive.velocity",
-                {"vx": vx, "wz": 0.0, "challenge_id": grant["challenge_id"]},
-                seq=seq + 1,
+                "drive.intent",
+                {
+                    "authority_id": "vehicle-prepared",
+                    "gesture": 1,
+                    "sequence": seq,
+                    "linear": vx,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                seq=seq,
             ),
         )
 
     await queue_velocity(0.2, 2)
     (drive,) = drain_outbox(rig.agent)
-    assert json.loads(drive)["payload"]["vx"] == 0.2
+    assert json.loads(drive)["payload"]["linear"] == 0.2
     rig.hub.handle_control_frame(rig.controller, offer_frame())
     rig.hub.handle_control_frame(rig.controller, candidate_frame())
     # The outbox is full. A third video frame is refused instead of displacing the sample.
@@ -915,9 +882,9 @@ async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     await queue_velocity(0.4, 4)
     queue = drain_outbox(rig.agent)
     velocities = [
-        frame["payload"]["vx"]
+        frame["payload"]["linear"]
         for frame in map(json.loads, queue)
-        if frame["type"] == "drive.velocity"
+        if frame["type"] == "drive.intent"
     ]
     assert velocities == [0.4] and drive not in queue
     assert not rig.controller.outbox.closed
@@ -930,49 +897,16 @@ async def test_video_frame_leaves_the_pending_drive_sample_alone() -> None:
     assert json.loads(stop_frame()) in map(json.loads, drain_outbox(flooded.agent))
 
 
-async def test_video_frames_never_reach_the_supervisor_drive_slot() -> None:
+async def test_video_frames_remain_video_on_the_agent_wire() -> None:
     pytest.importorskip("fastapi")
     rig = WireRig()
-    submitted: list[tuple[float, float]] = []
-
-    async def heartbeat() -> None:
-        return None
-
-    async def ros(name: str) -> None:
-        return None
-
-    async def sink(vx: float, wz: float) -> None:
-        submitted.append((vx, wz))
-
-    async def cmd_vel(vx: float, wz: float) -> None:
-        raise AssertionError("video must never publish drive")
-
-    supervisor = Supervisor(
-        send_heartbeat=heartbeat,
-        call_ros=ros,
-        drive_sink=sink,
-        publish_cmd_vel=cmd_vel,
-        heartbeat_seconds=0.01,
-    )
-    calls = 0
-    original = supervisor.submit_drive
-
-    def counted(vx: float, wz: float) -> bool:
-        nonlocal calls
-        calls += 1
-        return original(vx, wz)
-
-    supervisor.submit_drive = counted  # type: ignore[method-assign]
-    async with supervisor:
-        assert supervisor.submit_drive(0.3, 0.0)
-        rig.hub.handle_control_frame(rig.controller, offer_frame())
-        rig.hub.handle_control_frame(rig.controller, candidate_frame())
-        # Only the drive frame is a drive frame: the relay hands the agent two video frames
-        # that it has no reason to turn into a velocity sample.
-        assert calls == 1
-        await asyncio.sleep(0.05)
+    rig.hub.handle_control_frame(rig.controller, offer_frame())
+    rig.hub.handle_control_frame(rig.controller, candidate_frame())
+    assert [json.loads(frame)["type"] for frame in drain_outbox(rig.agent)] == [
+        "video.offer",
+        "video.candidate",
+    ]
     assert not rig.controller.outbox.closed
-    assert submitted[:1] == [(0.3, 0.0)]
 
 
 def close_frames(connection: object) -> list[dict[str, object]]:

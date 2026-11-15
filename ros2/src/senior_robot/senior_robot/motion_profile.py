@@ -18,7 +18,7 @@ def select_motion_profile(
                 "hardware profile requires use_sim_time=false and no simulation candidate"
             )
         return load_hardware_profile(Path(hardware_path))
-    # //Compatible: keep the isolated candidate's original clock/domain admission.
+    # Simulation uses the configured local domain and requires a simulated clock.
     return select_simulation_profile(
         name, simulated_clock=simulated_clock, localhost_only=localhost_only, domain_id=domain_id
     )
