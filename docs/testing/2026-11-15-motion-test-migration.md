@@ -43,7 +43,7 @@
 | `integration/test_shutdown` 删除的旧 arbiter lease/drive IPC/epoch/reset | 原 lease、旧 velocity IPC/自动 reset 恢复退役；当前 ManualIngress 原始 context/不可复开、旧控制者隔离、持久急停及关闭顺序在 `test_manual_wire.py`、`test_manual_authority.py`、现存 shutdown 测试 |
 | integration task takeover、runtime/video drive_slot | 手动接管已在 `test_manual_wire.py::test_native_acquire_consumes_durable_task_retirement_before_ipc`；有界合并/settlement/视频隔离有现用 wire 用例。Supervisor drive_slot 无消费者，退役 |
 | integration CLI requalify-motion 的十个函数 | 被删命令/Trigger 专用的校验、超时、域检查、私密输出合同退役；通用部署/profile/身份检查未删除 |
-| 现存五个 ROS 文件引用已删旧 active_fusion 夹具 | 它们仍描述旧 progress/shape gate 接口；按收窄意见撤回本次重复 generated-message 重写，不把旧夹具失效本身当成新功能缺陷或恢复旧路径的理由；现行原始来源/形状/时效合同按上表已有测试检查 |
+| 五个 ROS 文件引用已删旧 active_fusion 夹具 | 后续收集返修已逐项删除这五个退役文件（15 个函数），消除真实收集失败；未恢复旧门或增加重复资产，详情见下节 |
 
 终态 retired/task_retired/task_collected 的生产语义和 `test_task_terminal_release.py`、`test_terminal_release_wire.py`、`test_terminal_release_collection.py`、`test_terminal_native_channel.py`、`test_terminal_collection_capacity.py` 保留。本次不额外复制持久 settlement/回收/重启/容量测试，也不把前轮已记录的基线失败改称通过。
 
@@ -59,3 +59,23 @@
 实际 DDS 待在隔离、同版 Linux ROS 工作区运行：`SENIOR_FINAL_COMMAND_DDS=1 SENIOR_MOTION_DOMAIN=173 python -m pytest tests/ros/test_final_command_dds.py -q`（173 仅示例，需选择无人使用的隔离域）。本次未执行此命令，Linux 消息生成、guard/RMW/scan matcher 链接、SCF3/823 与 ScanMotion 双 capture 同版重建及实车仍 Draft。
 
 最终本轮三个源码/测试文件的规范化 LF SHA-256：`de602b167f9f00e01b24376080dbd633c8737e651498453444e844293bbd5bd8`；精确脚本、日志、逐文件原始指纹和旧断言索引见 `/private/tmp/vehicle-motion-dds-review-0f91003/`，本地提交 SHA 见其中 commit.json。该指纹只含本轮自有文件，避免混入共享工作区原生接收 Agent 的独立修复。
+
+## 悬空测试导入收尾（基线 a380a555）
+
+此前仅说明合同退役却留下旧 fixture import，会使 ROS 测试收集失败。本次实际删除文件，未新增替代接口或重复测试：
+
+| 文件/函数数 | 读取断言后的判断 |
+| --- | --- |
+| `test_scan_shape_epoch_interleavings.py` / 5 | 全部断言旧 `_progress`、`_deferred_scan`、`_scan_frontier` 的 reserved future epoch/失败 frontier；不存在现行独有入口。通用 epoch/重放/回滚已有 motion_sources、deferred_sources、egress_receipt 合同测试，命令 DDS 身份差异在保留的 final_command_dds 资产 |
+| `test_scan_shape_structural.py` / 2 | residual/valid_rays/noncanonical stamp 驱动旧 Fusion progress 资格；该消费者已删。原始来源时间检查仍在 sensor_timing/egress_receipt，不能恢复旧资格门以消费这些字段 |
+| `test_scan_shape_qualification.py` / 5 | covariance/response/字段长度触发旧资格阈值及 retired/pending progress 断言；旧阈值合同退役，现行原始 capture、质量、身份与时间消费者/测试不改 |
+| `test_invalid_source_receipt.py` / 1 | 无日期 invalid 在旧 Fusion `_scan_frontier` 建立 failure frontier 的专用合同；原始 receipt 不刷新年龄的现用合同在 sensor_timing、egress_receipt、unified_motion_runtime |
+| `test_deferred_immutability.py` / 2 | 旧 Fusion `_on_scan` 对 mutable ScanMotion 的专用 future FIFO 快照和旧 epoch 丢弃；该入口/队列已删。没有为了复制旧快照语义给现行估计增加兼容路径 |
+
+实际验证（仅静态/收集，不执行测试、不启动 ROS）：
+
+- `.venv/bin/python /private/tmp/vehicle-motion-import-cleanup-a380a55/check_imports.py`：解析全部 **201 个**测试 Python 文件，核查本轮所有被删生产/测试模块的普通 import、from import、常量动态 import；**无悬空引用**。并确认五个文件已移除，两个禁止修改的原生接收文件保留任务开始时字节哈希。
+- `.venv/bin/python -m pytest tests/ros --collect-only -q`：**134 tests collected / 0.45s**，无收集错误；本机缺 ROS 的模块可在 importorskip 边界跳过，不能把收集成功宣称 ROS 环境运行通过。
+- `git -c core.whitespace=cr-at-eol diff --check`：通过。
+
+本轮只提交这五个删除及本文更新；不修改 native_receipt.py 或 tests/test_native_receipt_diagnostics.py，不运行大套、不部署、不推送。Linux/ROS 同版构建、DDS 实际执行和实车仍未验证。原始五文件、逐文件哈希/函数清单、精确检查脚本与收集日志保存在 `/private/tmp/vehicle-motion-import-cleanup-a380a55/`，最终本地版本见其中 commit.json。
