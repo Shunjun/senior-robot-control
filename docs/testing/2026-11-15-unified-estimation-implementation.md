@@ -1,5 +1,7 @@
 # Unified estimation implementation ledger
 
+> 返修状态：负责人已亲读部分累计代码并提出R1源级年龄统计、R2相对位姿误差、R3独立预测证据接线三项问题，累计100文件审阅尚未完成；当前返修与定向证据见[审阅修正报告](2026-11-15-unified-estimation-review-fixes.md)，待复审，未验收。下文保留437b0c8及更早阶段事实。
+
 Plan: docs/superpowers/plans/2026-11-15-unified-sensor-estimation.md
 Base: 07b815de1c92bb11469483d2b99f94fa922e2cb5, fix/degraded-drive-speed.
 Coordinator authorized serial execution in msg_170d686f2959; no intermediate approval gates.

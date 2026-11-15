@@ -151,6 +151,10 @@ class NativeObservations:
             self.poses.clear()
         self._last_ros = now_ros
         self._sequences[source] += 1
+        return self.source_epoch(gid, producer_epoch), self._sequences[source]
+
+    def source_epoch(self, gid: bytes | PublisherOrigin, producer_epoch: str) -> str:
+        """Describe provenance without advancing source/sample state (diagnostics)."""
         # Preserve producer epoch AND DDS identity. Clock restart is a distinct
         # receiver context, not a replacement for either producer identity.
         provenance = (
@@ -162,9 +166,7 @@ class NativeObservations:
             if isinstance(gid, PublisherOrigin)
             else {"sample_gid": gid.hex(), "basis": "per_sample_dds_gid"}
         )
-        return json.dumps(
-            [self.boot_id, provenance, producer_epoch, self._clock_epoch]
-        ), self._sequences[source]
+        return json.dumps([self.boot_id, provenance, producer_epoch, self._clock_epoch])
 
     def ingest(
         self, sample: MotionSample, now_ros: float, now_steady: float, *, origins=None
@@ -474,32 +476,7 @@ class NativeObservationRosBridge:
                     self.core.invalidate_source(source)
 
                 def expired(message, info, source=source):
-                    # A late/revoked sample is diagnostic only; it never re-enters
-                    # the estimator or renews source availability.
-                    from senior_control.runtime.diagnostics import process_diagnostics
-                    from senior_control.sensors.policy import default_policy
-                    from senior_robot.native_receipt import received_steady
-
-                    try:
-                        stamp = stamp_seconds(
-                            message.interval_start
-                            if source is Source.LASER
-                            else message.header.stamp
-                        )
-                        age = default_policy().age(
-                            stamp_ros=stamp,
-                            received_ros=info["received_timestamp"] / 1e9,
-                            received_steady=received_steady(info),
-                            now_ros=node.get_clock().now().nanoseconds / 1e9,
-                            now_steady=time.monotonic(),
-                        )
-                        process_diagnostics().age(
-                            source.value,
-                            age,
-                            key=("expired", info["receipt_generation"], info["receipt_sequence"]),
-                        )
-                    except (ValueError, TypeError, KeyError, AttributeError):
-                        pass
+                    self._record_rejected_receipt(message, info, source)
 
                 subscription = subscribe(
                     node,
@@ -518,6 +495,62 @@ class NativeObservationRosBridge:
             if publish
             else None
         )
+
+    def _record_rejected_receipt(self, message: Any, info: Any, source: Source) -> None:
+        """Observe withdrawn transport input without parsing it into live state."""
+        from senior_control.motion.estimator import Origin, origin_key, validate_origins
+        from senior_control.runtime.diagnostics import process_diagnostics
+        from senior_control.sensors.policy import default_policy
+        from senior_robot.native_receipt import received_steady
+
+        d = process_diagnostics()
+        key = ("rejected_receipt", info.get("receipt_generation"), info.get("receipt_sequence"))
+        try:
+            if source is Source.LASER:
+                roots = tuple(
+                    Origin(
+                        "laser",
+                        f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                        int(h.sequence),
+                        stamp_seconds(h.stamp),
+                        stamp_seconds(h.received_ros),
+                        float(h.received_steady),
+                    )
+                    for h in (message.first_capture, message.second_capture)
+                )
+            else:
+                gid = bytes(info["publisher_gid"])
+                provenance = PublisherOrigin(gid, gid, "native_message_info_and_writer_binding")
+                roots = (
+                    Origin(
+                        source.value,
+                        self.core.source_epoch(provenance, ""),
+                        int(info["receipt_sequence"]),
+                        stamp_seconds(message.header.stamp),
+                        info["received_timestamp"] / 1e9,
+                        received_steady(info),
+                    ),
+                )
+            validate_origins(roots)
+            key = origin_key(roots)
+            ages = [
+                default_policy().age(
+                    stamp_ros=r.stamp_ros,
+                    received_ros=r.received_ros,
+                    received_steady=r.received_steady,
+                    now_ros=self.node.get_clock().now().nanoseconds / 1e9,
+                    now_steady=time.monotonic(),
+                )
+                for r in roots
+            ]
+            age = max(ages, key=lambda a: a.seconds)
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            d.sensor_attempt(source.value, "raw", None, ("invalid_time_or_metadata",), key=key)
+            d.sensor_attempt(source.value, "use", None, ("invalid_time_or_metadata",))
+            return
+        outcome = "expired" if age.band == "invalid" else "transport_revoked"
+        d.sensor_attempt(source.value, "raw", age, (outcome,), key=key)
+        d.sensor_attempt(source.value, "use", age, (outcome,))
 
     def _callback(self, handler: Any, topic: str) -> Any:
         def receive(msg: Any, info: Any) -> None:
@@ -542,6 +575,10 @@ class NativeObservationRosBridge:
                 else "/",
             )
             if origin is None:
+                from senior_control.runtime.diagnostics import process_diagnostics
+
+                role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[topic]
+                process_diagnostics().sensor_attempt(role, "raw", None, ("source_rejected",))
                 if now - self._warn_at > 1:
                     self._warn_at = now
                     self.node.get_logger().warning(
@@ -558,7 +595,23 @@ class NativeObservationRosBridge:
                 accepted = handler(msg, origin, ros_now, now)
                 if accepted and topic == "/motion/scan":
                     self._publish(laser_update=True)
-            except (ValueError, TypeError, AttributeError, OverflowError, TransformException):
+            except (
+                ValueError,
+                TypeError,
+                AttributeError,
+                OverflowError,
+                TransformException,
+            ) as exc:
+                from senior_control.runtime.diagnostics import process_diagnostics
+                from senior_control.sensors.policy import SensorClockError
+
+                # Runtime already recorded clocks that reached its age classifier.
+                # Earlier malformed payload/TF failures have counters, never age=0.
+                if not isinstance(exc, SensorClockError):
+                    role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[
+                        topic
+                    ]
+                    process_diagnostics().sensor_attempt(role, "raw", None, ("invalid_data",))
                 if now - self._warn_at > 1:
                     self._warn_at = now
                     self.node.get_logger().warning("native motion observation unavailable")

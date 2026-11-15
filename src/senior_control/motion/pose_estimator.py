@@ -2,7 +2,7 @@
 
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from senior_control.models import Pose2D
 from senior_control.motion.estimator import MotionEstimate, Origin, validate_origins
@@ -28,6 +28,26 @@ class PoseObservation:
 
 
 @dataclass(frozen=True)
+class PoseErrorBudget:
+    """Known errors remain optional; software fallback is explicit, never a certificate."""
+
+    position_m: float | None = 0.0
+    yaw_rad: float | None = 0.0
+    software_position_m: float = 0.0
+    software_yaw_rad: float = 0.0
+
+    def plus(self, other: "PoseErrorBudget") -> "PoseErrorBudget":
+        return PoseErrorBudget(
+            None
+            if self.position_m is None or other.position_m is None
+            else self.position_m + other.position_m,
+            None if self.yaw_rad is None or other.yaw_rad is None else self.yaw_rad + other.yaw_rad,
+            self.software_position_m + other.software_position_m,
+            self.software_yaw_rad + other.software_yaw_rad,
+        )
+
+
+@dataclass(frozen=True)
 class PoseEstimate:
     pose: Pose2D
     stamp_ros: float
@@ -38,6 +58,9 @@ class PoseEstimate:
     error_yaw_rad: float | None = None
     confidence: tuple[float, float, float] = (0.0, 0.0, 0.0)
     sources: tuple[str, ...] = ()
+    # //Compatible: legacy pose values have no evidence of a shared anchor.
+    anchor_roots: tuple[Origin, ...] | None = None
+    prediction_error: PoseErrorBudget = PoseErrorBudget()
 
 
 @dataclass(frozen=True)
@@ -50,6 +73,8 @@ class _PoseCandidate:
     alignment: tuple[float, float, float]
     quality: float
     raw_time: float
+    prediction_error: PoseErrorBudget
+    anchor_roots: tuple[Origin, ...]
 
 
 class PoseEstimation:
@@ -60,12 +85,36 @@ class PoseEstimation:
         linear_tolerance: float = 0.1,
         angular_tolerance: float = 0.1,
         unknown_speed_mps: float = 1.52,
+        linear_error_mps: float = 0.1,
+        angular_error_rps: float = 0.1,
+        lateral_drift_mps: float = 0.0,
+        unknown_yaw_rps: float = 1.0,
+        position_error_m: float = 0.03,
+        orientation_error_rad: float = 0.0,
     ):
         if not frame or not all(
             math.isfinite(v) and v > 0
             for v in (linear_tolerance, angular_tolerance, unknown_speed_mps)
         ):
             raise ValueError("invalid pose estimation policy")
+        if not all(
+            math.isfinite(v) and v >= 0
+            for v in (
+                linear_error_mps,
+                angular_error_rps,
+                lateral_drift_mps,
+                unknown_yaw_rps,
+                position_error_m,
+                orientation_error_rad,
+            )
+        ):
+            raise ValueError("invalid pose software error policy")
+        self.linear_error = linear_error_mps
+        self.angular_error = angular_error_rps
+        self.lateral_drift = lateral_drift_mps
+        self.unknown_yaw = unknown_yaw_rps
+        self.position_error = position_error_m
+        self.orientation_error = orientation_error_rad
         self.frame = frame
         self.tolerances = (linear_tolerance, linear_tolerance, angular_tolerance)
         self.unknown_speed = unknown_speed_mps
@@ -77,6 +126,86 @@ class PoseEstimation:
         self.frame_generation = 0
         self._absolute_frame_aligned = False
         self._clock_epochs: dict[str, str] = {}
+
+    def _prediction_error(
+        self,
+        motion: MotionEstimate,
+        dt: float,
+        *,
+        previous_yaw_error: float = 0.0,
+        missing_linear_s: float = 0.0,
+        missing_yaw_s: float = 0.0,
+    ) -> PoseErrorBudget:
+        vx, vy, wz = motion.vx, motion.vy, motion.wz
+        linear = self.linear_error + vx.prediction_error
+        if vx.error is not None:
+            linear = max(linear, vx.error)
+        lateral = (
+            (vy.error if vy.error is not None else self.linear_error + vy.prediction_error)
+            if vy.observed
+            else self.lateral_drift
+        )
+        angular = self.angular_error + wz.prediction_error
+        if wz.error is not None:
+            angular = max(angular, wz.error)
+        yaw = dt * angular + missing_yaw_s * self.unknown_yaw
+        distance = dt * math.hypot(vx.value or 0.0, vy.value or 0.0)
+        position = dt * (linear + lateral) + distance * (previous_yaw_error + yaw)
+        position += missing_linear_s * self.unknown_speed
+        position_known = vx.error is not None and (not vy.observed or vy.error is not None)
+        position_known &= wz.error is not None and not missing_linear_s and not missing_yaw_s
+        return PoseErrorBudget(
+            position if position_known else None,
+            yaw if wz.error is not None and not missing_yaw_s else None,
+            position,
+            yaw,
+        )
+
+    def relative_error(self, old: PoseEstimate, current: PoseEstimate) -> PoseErrorBudget:
+        if old.frame != current.frame:
+            raise ValueError("relative pose frame mismatch")
+        distance = math.hypot(current.pose.x - old.pose.x, current.pose.y - old.pose.y)
+        if old.anchor_roots is not None and old.anchor_roots == current.anchor_roots:
+            # A shared left-hand SE(2) transform cancels exactly. Endpoint
+            # prediction errors do not: without their correlation we add them.
+            if old == current:
+                return PoseErrorBudget()
+            result = old.prediction_error.plus(current.prediction_error)
+            lever = distance * old.prediction_error.software_yaw_rad
+            return replace(
+                result,
+                position_m=None if result.position_m is None else result.position_m + lever,
+                software_position_m=result.software_position_m + lever,
+            )
+
+        # Different fixes cannot claim common-mode cancellation. An unknown
+        # endpoint uses the explicit deployment policy plus its prediction budget.
+        def linear(p: PoseEstimate) -> float:
+            return (
+                p.error_m
+                if p.error_m is not None
+                else (self.position_error + p.prediction_error.software_position_m)
+            )
+
+        def angular(p: PoseEstimate) -> float:
+            return (
+                p.error_yaw_rad
+                if p.error_yaw_rad is not None
+                else (self.orientation_error + p.prediction_error.software_yaw_rad)
+            )
+
+        pos = linear(old) + linear(current) + distance * angular(old)
+        yaw = angular(old) + angular(current)
+        return PoseErrorBudget(
+            pos
+            if old.error_m is not None
+            and current.error_m is not None
+            and old.error_yaw_rad is not None
+            else None,
+            yaw if old.error_yaw_rad is not None and current.error_yaw_rad is not None else None,
+            pos,
+            yaw,
+        )
 
     @property
     def retained_samples(self) -> int:
@@ -231,6 +360,8 @@ class PoseEstimation:
                     absolute.error_m,
                     self.frame,
                     absolute.error_yaw_rad,
+                    anchor_roots=absolute.anchor_roots,
+                    prediction_error=absolute.prediction_error,
                 )
             )
             self._previous_motion = motion
@@ -244,6 +375,8 @@ class PoseEstimation:
                     "relative_dead_reckoning",
                     0.0,
                     self.frame,
+                    0.0,
+                    anchor_roots=(),
                 )
             )
         previous = self._relative[-1]
@@ -270,21 +403,36 @@ class PoseEstimation:
             for a, d in zip((prior.vx, prior.vy, prior.wz), axis_dt, strict=True)
         ]
         increment = exponential(rates[0], rates[1], rates[2], dt)
-        missing_dt = max(full_dt - axis_dt[0], full_dt - axis_dt[2])
-        error = (
-            None
-            if previous.error_m is None
-            or any(a.observed and a.error is None for a in (prior.vx, prior.wz))
-            else (previous.error_m + self.unknown_speed * missing_dt)
+        step_error = self._prediction_error(
+            prior,
+            dt,
+            previous_yaw_error=previous.prediction_error.software_yaw_rad,
+            missing_linear_s=max(
+                full_dt - axis_dt[0], full_dt - axis_dt[1] if prior.vy.observed else 0
+            ),
+            missing_yaw_s=full_dt - axis_dt[2],
         )
+        budget = previous.prediction_error.plus(step_error)
         self._relative.append(
             PoseEstimate(
                 compose(previous.pose, increment),
                 motion.computed_ros,
                 roots,
                 "relative_dead_reckoning",
-                error,
+                None
+                if previous.error_m is None
+                or previous.error_yaw_rad is None
+                or step_error.position_m is None
+                else previous.error_m
+                + step_error.position_m
+                + math.hypot(increment.x, increment.y)
+                * max(0.0, previous.error_yaw_rad - (previous.prediction_error.yaw_rad or 0.0)),
                 self.frame,
+                None
+                if previous.error_yaw_rad is None or step_error.yaw_rad is None
+                else previous.error_yaw_rad + step_error.yaw_rad,
+                anchor_roots=previous.anchor_roots,
+                prediction_error=budget,
             )
         )
         self._previous_motion = motion
@@ -321,6 +469,8 @@ class PoseEstimation:
             alignment = (0.0, 0.0, 0.0)
             quality = a.quality
             raw_time = a.stamp_ros
+            prediction_error = PoseErrorBudget()
+            anchor_roots = a.roots
             if right is not None:
                 fraction = (stamp_ros - a.stamp_ros) / (right.stamp_ros - a.stamp_ros)
                 pose = Pose2D(
@@ -329,6 +479,7 @@ class PoseEstimation:
                     angle(a.pose.yaw + angle(right.pose.yaw - a.pose.yaw) * fraction),
                 )
                 roots = tuple(dict.fromkeys(a.roots + right.roots))
+                anchor_roots = roots
                 kind = "interpolated_pose"
                 linear = (
                     None
@@ -365,17 +516,22 @@ class PoseEstimation:
                 )
                 roots = tuple(dict.fromkeys(a.roots + dependencies))
                 kind = "predicted_pose"
+                prediction_error = self._prediction_error(motion, dt)
                 linear = (
                     None
                     if a.error_m is None
-                    or motion.vx.error is None
-                    or (motion.vy.observed and motion.vy.error is None)
-                    else (a.error_m + dt * (motion.vx.error + (motion.vy.error or 0.0)))
+                    or a.error_yaw_rad is None
+                    or prediction_error.position_m is None
+                    else a.error_m
+                    + prediction_error.position_m
+                    + dt
+                    * math.hypot(motion.vx.value or 0.0, motion.vy.value or 0.0)
+                    * a.error_yaw_rad
                 )
                 angular = (
                     None
-                    if a.error_yaw_rad is None or motion.wz.error is None
-                    else a.error_yaw_rad + dt * motion.wz.error
+                    if a.error_yaw_rad is None or prediction_error.yaw_rad is None
+                    else a.error_yaw_rad + prediction_error.yaw_rad
                 )
                 errors = (linear, linear, angular)
                 # A weighting penalty is not a hard error certificate. Unknown
@@ -391,7 +547,18 @@ class PoseEstimation:
             except ValueError:
                 continue
             candidates.append(
-                _PoseCandidate(a, pose, roots, kind, errors, alignment, quality, raw_time)
+                _PoseCandidate(
+                    a,
+                    pose,
+                    roots,
+                    kind,
+                    errors,
+                    alignment,
+                    quality,
+                    raw_time,
+                    prediction_error,
+                    anchor_roots,
+                )
             )
         if candidates:
             anchor = max(candidates, key=lambda c: c.observation.stamp_ros).pose.yaw
@@ -435,6 +602,21 @@ class PoseEstimation:
             )
             sources = tuple(sorted(candidates[i].observation.source for i in selected))
             kind = "fused_pose" if len(selected) > 1 else candidates[next(iter(selected))].kind
+            chosen = [candidates[i] for i in sorted(selected)]
+            pos_spread = max(
+                math.hypot(c.pose.x - results[0].value, c.pose.y - results[1].value) for c in chosen
+            )
+            yaw_spread = max(abs(angle(c.pose.yaw - results[2].value)) for c in chosen)
+            prediction = PoseErrorBudget(
+                None
+                if any(c.prediction_error.position_m is None for c in chosen)
+                else max(c.prediction_error.position_m or 0 for c in chosen) + pos_spread,
+                None
+                if any(c.prediction_error.yaw_rad is None for c in chosen)
+                else max(c.prediction_error.yaw_rad or 0 for c in chosen) + yaw_spread,
+                max(c.prediction_error.software_position_m for c in chosen) + pos_spread,
+                max(c.prediction_error.software_yaw_rad for c in chosen) + yaw_spread,
+            )
             return PoseEstimate(
                 Pose2D(results[0].value, results[1].value, angle(results[2].value)),
                 stamp_ros,
@@ -445,6 +627,8 @@ class PoseEstimation:
                 results[2].error,
                 (results[0].confidence, results[1].confidence, results[2].confidence),
                 sources,
+                tuple(dict.fromkeys(r for c in chosen for r in c.anchor_roots)),
+                prediction,
             )
         # Relative integration is not an absolute-fix freshness claim.
         if motion is not None and motion.healthy:
@@ -453,8 +637,12 @@ class PoseEstimation:
                 relative = relative_left[-1]
                 dt = stamp_ros - relative.stamp_ros
                 if 0 <= dt < default_policy().hard_age_s:
-                    return PoseEstimate(
-                        compose(
+                    extra = self._prediction_error(
+                        motion, dt, previous_yaw_error=relative.prediction_error.software_yaw_rad
+                    )
+                    return replace(
+                        relative,
+                        pose=compose(
                             relative.pose,
                             exponential(
                                 motion.vx.value or 0.0,
@@ -463,10 +651,22 @@ class PoseEstimation:
                                 dt,
                             ),
                         ),
-                        stamp_ros,
-                        relative.roots,
-                        "relative_dead_reckoning",
-                        relative.error_m,
-                        self.frame,
+                        stamp_ros=stamp_ros,
+                        kind="relative_dead_reckoning",
+                        error_m=None
+                        if relative.error_m is None
+                        or relative.error_yaw_rad is None
+                        or extra.position_m is None
+                        else relative.error_m
+                        + extra.position_m
+                        + dt
+                        * math.hypot(motion.vx.value or 0.0, motion.vy.value or 0.0)
+                        * max(
+                            0.0, relative.error_yaw_rad - (relative.prediction_error.yaw_rad or 0.0)
+                        ),
+                        error_yaw_rad=None
+                        if relative.error_yaw_rad is None or extra.yaw_rad is None
+                        else relative.error_yaw_rad + extra.yaw_rad,
+                        prediction_error=relative.prediction_error.plus(extra),
                     )
         raise ValueError("pose result cannot support requested time/frame")

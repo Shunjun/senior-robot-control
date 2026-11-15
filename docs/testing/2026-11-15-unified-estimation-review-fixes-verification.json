@@ -1,0 +1,78 @@
+{
+  "parent_commit": "437b0c86ef72a77da6ab0fca3782fb8cd1a6d01c",
+  "source_fingerprint_sha256": "486189d969067ab81602dd58e24b5913495985302c299809a08eaf5fd8fc44cb",
+  "fingerprint_files": [
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+    "ros2/src/senior_robot/senior_robot/motion_observation_adapter.py",
+    "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py",
+    "src/senior_control/motion/estimator.py",
+    "src/senior_control/motion/pose_estimator.py",
+    "src/senior_control/runtime/diagnostics.py",
+    "src/senior_control/safety/space_estimator.py",
+    "src/senior_control/sensors/policy.py",
+    "tests/unit/test_estimation_review_contracts.py",
+    "tests/unit/test_motion_core_exit_deadline.py"
+  ],
+  "python": "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python",
+  "environment": {
+    "PYTHONPATH": "src"
+  },
+  "commands": [
+    {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "tests/unit/test_estimation_review_contracts.py",
+        "tests/unit/test_sensor_timing.py",
+        "tests/unit/test_pose_space_estimation.py",
+        "tests/unit/test_unified_estimator.py",
+        "tests/unit/test_unified_motion_runtime.py",
+        "tests/unit/test_runtime_diagnostics.py",
+        "tests/unit/test_native_motion_observation_adapter.py",
+        "tests/unit/test_optional_motion_inputs.py",
+        "tests/unit/test_motion_core_chain.py",
+        "tests/unit/test_motion_core_handoff.py",
+        "tests/unit/test_motion_core_startup.py",
+        "tests/unit/test_motion_core_event_time.py",
+        "tests/unit/test_motion_core_exit_deadline.py",
+        "tests/unit/test_motion_core_stop_fallback.py",
+        "tests/unit/test_motion_core_perception.py",
+        "tests/unit/test_laser_reference_publication.py",
+        "tests/unit/test_reference_clock_frontier.py",
+        "tests/unit/test_reference_nanosecond_boundary.py",
+        "tests/unit/test_motion_reference_backlog.py",
+        "tests/unit/test_limited_motion_core.py",
+        "-q",
+        "--tb=short"
+      ],
+      "stdout": "........................................................................ [ 45%]\n........................................................................ [ 91%]\n.............                                                            [100%]\n157 passed in 7.53s\n"
+    },
+    {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "tests/unit/test_degraded_manual_speed.py",
+        "-q",
+        "--tb=short"
+      ],
+      "stdout": "...........................................................              [100%]\n59 passed in 1.18s\n"
+    }
+  ],
+  "focused_mypy_command": [
+    "python",
+    "-m",
+    "mypy",
+    "src/senior_control/motion/estimator.py",
+    "src/senior_control/motion/pose_estimator.py",
+    "src/senior_control/safety/space_estimator.py",
+    "src/senior_control/runtime/diagnostics.py",
+    "src/senior_control/sensors/policy.py"
+  ],
+  "focused_mypy_result": "Success: no issues found in 5 source files",
+  "whole_src_mypy_output": "src/senior_control/tasks/lifecycle.py:318: error: Incompatible types in assignment (expression has type \"Literal['succeeded', 'canceled', 'failed'] | None\", variable has type \"Literal['empty', 'starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']\")  [assignment]\nsrc/senior_control/motion/controller.py:625: error: Argument 1 to \"validate_output\" of \"TickEvaluation\" has incompatible type \"ConstraintResult | None\"; expected \"ConstraintResult\"  [arg-type]\nsrc/senior_control/motion/controller.py:627: error: Argument 1 to \"validate_output\" of \"ConstraintEngine\" has incompatible type \"ConstraintResult | None\"; expected \"ConstraintResult\"  [arg-type]\nsrc/senior_control/tasks/lifecycle_store.py:647: error: Value of type \"Row | None\" is not indexable  [index]\nFound 4 errors in 3 files (checked 158 source files)\n",
+  "initial_red": "8 failed in 0.43s",
+  "first_affected_run": "16 failed, 120 passed in 10.29s",
+  "static_checks": "ruff check and format --check on changed Python files; py_compile to /tmp; git diff --check"
+}

@@ -1,18 +1,27 @@
 """Real controller/T4; delay only the actual output time after its decision."""
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace as N
 
 import pytest
+from test_directional_constraints import scene
 from test_reference_nanosecond_boundary import replay as boundary_fixture
 
-from senior_control.models import Velocity
+from senior_control.models import Pose2D, Velocity
 
 
 @pytest.fixture
 def rig(monkeypatch):
     fixture = boundary_fixture.__wrapped__(monkeypatch)
     value = next(fixture)
+    # Output-time tests need a drive proposal, not a near-wall acceptance claim.
+    # Original raw motion times/errors are retained. Explicit synthetic open
+    # geometry isolates deadline/commit ordering from the now-wider uncertainty.
+    value.core._observation = lambda now: (
+        replace(scene(now), frame_id="scan_reference", forecast_horizon_s=12),
+        Pose2D(0, 0, 0),
+    )
     try:
         yield value
     finally:
@@ -25,7 +34,7 @@ def rig(monkeypatch):
 
 def start(rig, target_span):
     core = rig.core
-    core.tick()  # Actual captured body and full scan establish health.
+    core.tick()  # Captured raw motion and explicitly synthetic open geometry.
     state = json.loads(rig.node.messages[-1].data)
     assert state["healthy"], state["reason"]
     rig.clock.steady += 0.01

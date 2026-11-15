@@ -103,9 +103,13 @@ class MotionCoreOutput:
         )
         self._reference_warning_at = float("-inf")
         self._perception_key: tuple[Any, ...] | None = None
+        self._perception_pose = None
+        self._space_estimate = None
         self._perception: Perception | None = None
         self.space_estimator = SpaceEstimation(
-            frame=self.sensors.pose_estimator.frame, frame_epoch="1:0"
+            frame=self.sensors.pose_estimator.frame,
+            frame_epoch="1:0",
+            software_pose_error_m=profile.position_error,
         )
         self._barrier_key: tuple[str, int, int] | None = None
         self._barrier_payload: tuple[Any, ...] | None = None
@@ -651,23 +655,36 @@ class MotionCoreOutput:
         m = raw.message
         ros = self.node.get_clock().now().nanoseconds / 1e9
         root = Origin("scan", m.source_epoch, m.sequence, raw.stamp, raw.received_ros, raw.received)
-        age = default_policy().age(
-            stamp_ros=root.stamp_ros,
-            received_ros=root.received_ros,
-            received_steady=root.received_steady,
-            now_ros=ros,
-            now_steady=now,
+        raw_key = (root.epoch, root.sequence)
+        try:
+            age = default_policy().age(
+                stamp_ros=root.stamp_ros,
+                received_ros=root.received_ros,
+                received_steady=root.received_steady,
+                now_ros=ros,
+                now_steady=now,
+            )
+        except ValueError:
+            self.diagnostics.sensor_attempt("scan", "raw", None, ("invalid_time",), key=raw_key)
+            self.diagnostics.sensor_attempt("scan", "use", None, ("invalid_time",))
+            raise
+        self.diagnostics.sensor_attempt("scan", "raw", age, ("observed",), key=raw_key)
+        self.diagnostics.sensor_attempt(
+            "scan", "use", age, ("expired" if age.band == "invalid" else "evaluated",)
         )
-        self.diagnostics.age("scan", age, key=(root.epoch, root.sequence))
         if age.band == "invalid":
             raise ValueError("scan_expired")
         motion = self.sensors.latest
-        old = self.sensors.pose_estimator.at(raw.stamp, now_ros=ros, now_steady=now, motion=motion)
         current = self.sensors.pose_estimator.at(ros, now_ros=ros, now_steady=now, motion=motion)
-        pose = compose(inverse(old.pose), current.pose)
         alignment_epoch = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
         self.space_estimator.reset_frame(alignment_epoch)
         key = (m.source_epoch, m.sequence, alignment_epoch)
+        old = self._perception_pose if key == self._perception_key else None
+        if old is None:
+            old = self.sensors.pose_estimator.at(
+                raw.stamp, now_ros=ros, now_steady=now, motion=motion
+            )
+        pose = compose(inverse(old.pose), current.pose)
         if key != self._perception_key:
             scan = ScanObservation(
                 tuple(m.ranges),
@@ -716,15 +733,44 @@ class MotionCoreOutput:
                     self._perception.occupied,
                     self._perception.free_space,
                     (root,),
-                    error_m=old.error_m or 0.0,
+                    error_m=old.error_m,
+                    software_error_m=self.profile.position_error
+                    + old.prediction_error.software_position_m,
                     frame=self.sensors.pose_estimator.frame,
                     pose_in_frame=old.pose,
                     frame_epoch=alignment_epoch,
                 )
             )
+            # Keep the geometry's original pose association stable. A later
+            # re-evaluation of historical pose must not silently move its frame.
+            self._perception_pose = old
             self._perception_key = key
         assert self._perception is not None
-        space = self.space_estimator.at(ros, now, reference_pose=old.pose)
+        relative_error = self.sensors.pose_estimator.relative_error(old, current)
+        # Convert relative orientation uncertainty to a displacement at the
+        # farthest observed range; apply once to geometry, separately from the
+        # sensor error already charged by prepare_perception.
+        # The uncertainty is in the current body pose within the scan frame,
+        # not a rotation of every obstacle about the sensor. Its lever arm is
+        # the vehicle footprint, not the lidar's full measurement range.
+        radius = math.hypot(self.profile.length, self.profile.width) / 2
+        angular = relative_error.software_yaw_rad
+        software_error = relative_error.software_position_m + 2 * radius * math.sin(
+            min(math.pi, angular) / 2
+        )
+        known_error = (
+            None
+            if relative_error.position_m is None or relative_error.yaw_rad is None
+            else relative_error.position_m
+            + 2 * radius * math.sin(min(math.pi, relative_error.yaw_rad) / 2)
+        )
+        space = self._space_estimate = self.space_estimator.at(
+            ros,
+            now,
+            reference_pose=old.pose,
+            alignment_error_m=known_error,
+            software_alignment_error_m=software_error,
+        )
         return replace(
             self._perception,
             occupied=space.occupied,
@@ -848,10 +894,17 @@ class MotionCoreOutput:
             gyro = float(imu["sample"]["values"][0]) if imu_current and imu is not None else 0.0
             angular = (gyro - p.yaw_error, gyro + p.yaw_error)
         else:
-            age = max(0.0, self._reference_age_ros(ref)) + (ref["end_ros"] - ref["start_ros"]) / 2
-            predictor_accel = acceleration_upper
-            dv = p.linear_error + predictor_accel.vx * age
-            dw = p.yaw_error + predictor_accel.wz * age
+            axes = self.sensors.latest.independent_axes
+            assert axes is not None
+            # Each current prediction retains its original support/age and error.
+            # Known total error already includes projection; unknown raw error
+            # uses the deployment policy plus projection once, never age=0.
+            dv = p.linear_error + axes[0].prediction_error
+            dw = p.yaw_error + axes[1].prediction_error
+            if axes[0].error is not None:
+                dv = max(dv, axes[0].error)
+            if axes[1].error is not None:
+                dw = max(dw, axes[1].error)
             linear = (min(body.velocity.vx - dv, v.vx), max(body.velocity.vx + dv, v.vx))
             angular = (min(body.velocity.wz - dw, v.wz), max(body.velocity.wz + dw, v.wz))
         risk = RiskEnvelope(

@@ -24,10 +24,12 @@ class SpaceObservation:
     occupied: BaseGeometry
     free: BaseGeometry
     roots: tuple[Origin, ...]
-    error_m: float = 0.0
+    error_m: float | None = 0.0
     frame: str = "scan_reference"
     pose_in_frame: Pose2D | None = None
     frame_epoch: str = "default"
+    # //Compatible: append fallback policy after existing positional geometry fields.
+    software_error_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -40,14 +42,25 @@ class SpaceEstimate:
     frame: str
     reference_pose: Pose2D | None = None
     frame_epoch: str = "default"
+    alignment_error_m: float | None = 0.0
+    software_alignment_error_m: float = 0.0
+    unknown_pose_sources: tuple[str, ...] = ()
 
 
 class SpaceEstimation:
     def __init__(
-        self, *, frame: str = "scan_reference", capacity: int = 32, frame_epoch: str = "default"
+        self,
+        *,
+        frame: str = "scan_reference",
+        capacity: int = 32,
+        frame_epoch: str = "default",
+        software_pose_error_m: float = 0.03,
     ):
         if not frame or not frame_epoch or not 1 <= capacity <= 128:
             raise ValueError("invalid space ownership policy")
+        if not math.isfinite(software_pose_error_m) or software_pose_error_m < 0:
+            raise ValueError("invalid space software pose error policy")
+        self.software_pose_error = software_pose_error_m
         self.frame = frame
         self.capacity = capacity
         self.frame_epoch = frame_epoch
@@ -81,8 +94,10 @@ class SpaceEstimation:
             )
             or not o.occupied.is_valid
             or not o.free.is_valid
-            or not math.isfinite(o.error_m)
-            or o.error_m < 0
+            or o.error_m is not None
+            and (not math.isfinite(o.error_m) or o.error_m < 0)
+            or o.software_error_m is not None
+            and (not math.isfinite(o.software_error_m) or o.software_error_m < 0)
         ):
             raise ValueError("invalid aligned space evidence")
         root = max(o.roots, key=lambda r: (r.stamp_ros, r.family))
@@ -105,12 +120,26 @@ class SpaceEstimation:
         return True
 
     def at(
-        self, now_ros: float, now_steady: float, *, reference_pose: Pose2D | None = None
+        self,
+        now_ros: float,
+        now_steady: float,
+        *,
+        reference_pose: Pose2D | None = None,
+        alignment_error_m: float | None = 0.0,
+        software_alignment_error_m: float | None = None,
     ) -> SpaceEstimate:
         if reference_pose is not None and not all(
             math.isfinite(v) for v in (reference_pose.x, reference_pose.y, reference_pose.yaw)
         ):
             raise ValueError("invalid space reference pose")
+        if (
+            alignment_error_m is not None
+            and (not math.isfinite(alignment_error_m) or alignment_error_m < 0)
+        ) or (
+            software_alignment_error_m is not None
+            and (not math.isfinite(software_alignment_error_m) or software_alignment_error_m < 0)
+        ):
+            raise ValueError("invalid relative alignment error")
         live = []
         deadlines: list[float] = []
         p = default_policy()
@@ -143,23 +172,40 @@ class SpaceEstimation:
                 rotate(geometry, origin.yaw, origin=(0, 0), use_radians=True), origin.x, origin.y
             )
 
+        def error(o: SpaceObservation) -> float:
+            if reference_pose is not None and o.pose_in_frame == reference_pose:
+                # This observation and its reference share the exact same SE(2)
+                # transform. Its global pose error cancels, not its sensor error
+                # (already charged upstream) or the query's relative prediction.
+                return 0.0
+            if o.error_m is not None:
+                return o.error_m
+            return self.software_pose_error if o.software_error_m is None else o.software_error_m
+
         occupied = (
             unary_union(
-                [
-                    aligned(o, o.occupied.buffer(o.error_m) if o.error_m else o.occupied)
-                    for o in live
-                ]
+                [aligned(o, o.occupied.buffer(error(o)) if error(o) else o.occupied) for o in live]
             )
             if live
             else GeometryCollection()
         )
         free = (
             unary_union(
-                [aligned(o, o.free.buffer(-o.error_m) if o.error_m else o.free) for o in live]
+                [aligned(o, o.free.buffer(-error(o)) if error(o) else o.free) for o in live]
             )
             if live
             else GeometryCollection()
         )
+        if software_alignment_error_m is None:
+            software_alignment_error_m = (
+                self.software_pose_error if alignment_error_m is None else alignment_error_m
+            )
+        query_error = (
+            alignment_error_m if alignment_error_m is not None else software_alignment_error_m
+        )
+        if query_error:
+            occupied = occupied.buffer(query_error)
+            free = free.buffer(-query_error)
         return SpaceEstimate(
             occupied,
             free.difference(occupied),
@@ -169,4 +215,7 @@ class SpaceEstimation:
             self.frame,
             reference_pose,
             self.frame_epoch,
+            alignment_error_m,
+            software_alignment_error_m,
+            tuple(o.source for o in live if o.error_m is None),
         )

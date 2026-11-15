@@ -11,6 +11,10 @@ if TYPE_CHECKING:
     from senior_control.runtime.diagnostics import DiagnosticsSettings
 
 
+class SensorClockError(ValueError):
+    """A numeric age cannot be assigned to these observation clocks."""
+
+
 @dataclass(frozen=True)
 class Age:
     seconds: float
@@ -47,13 +51,13 @@ class SensorTiming:
     ) -> Age:
         values = (stamp_ros, received_ros, received_steady, now_ros, now_steady)
         if not all(math.isfinite(v) for v in values):
-            raise ValueError("nonfinite sensor clock")
+            raise SensorClockError("nonfinite sensor clock")
         try:
             stamp, receipt, steady, ros, now = (round(v * 1_000_000_000) for v in values)
         except OverflowError as exc:
-            raise ValueError("sensor clock outside numeric range") from exc
+            raise SensorClockError("sensor clock outside numeric range") from exc
         if stamp < 0 or receipt < stamp or ros < receipt or now < steady:
-            raise ValueError("future or reversed sensor clock")
+            raise SensorClockError("future or reversed sensor clock")
         initial = receipt - stamp
         age = max(ros - stamp, initial + now - steady) / 1_000_000_000
         band: Literal["normal", "low", "invalid"] = (

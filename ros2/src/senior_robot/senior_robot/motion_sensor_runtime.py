@@ -8,7 +8,7 @@ from dataclasses import asdict
 
 from senior_control.models import Pose2D, Velocity
 from senior_control.motion.controller import Feedback
-from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
+from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin, origin_key
 from senior_control.motion.kinematics import body_delta, logarithm
 from senior_control.motion.observations import Frame, Source, SourceStatus
 from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
@@ -36,7 +36,15 @@ class MotionSensorRuntime:
         self.stationary_supported = False
         self._still_generation = None
         self.poses = []
-        self.pose_estimator = PoseEstimation(unknown_speed_mps=profile.assumed_body_cap)
+        self.pose_estimator = PoseEstimation(
+            unknown_speed_mps=profile.assumed_body_cap,
+            unknown_yaw_rps=profile.yaw_cap,
+            linear_error_mps=profile.linear_error,
+            angular_error_rps=profile.yaw_error,
+            lateral_drift_mps=profile.lateral_drift_mps,
+            position_error_m=profile.position_error,
+            orientation_error_rad=profile.orientation_error_rad,
+        )
 
     def invalidate(self, source: Source) -> None:
         self.estimator.invalidate(source.value)
@@ -97,10 +105,7 @@ class MotionSensorRuntime:
             epoch=sample.epoch,
             sequence=sample.sequence,
         )
-        accepted = self.estimator.ingest(o, now_ros=now_ros, now_steady=now_steady)
-        age = self.estimator._age(roots, now_ros, now_steady) if quality != 0 else None
-        if accepted and age is not None:
-            self.diagnostics.age(source, age, key=(sample.epoch, sample.sequence))
+        accepted = self.ingest_observation(o, now_ros, now_steady)
         if accepted and sample.source is Source.WHEEL:
             self.raw_wheel = o if quality != 0 else None
         return accepted
@@ -108,18 +113,27 @@ class MotionSensorRuntime:
     def ingest_observation(
         self, observation: MotionObservation, now_ros: float, now_steady: float
     ) -> bool:
-        accepted = self.estimator.ingest(observation, now_ros=now_ros, now_steady=now_steady)
-        age = (
-            self.estimator._age(observation.roots, now_ros, now_steady)
-            if observation.quality != 0
-            else None
-        )
-        if accepted and age is not None:
-            self.diagnostics.age(
-                observation.source,
-                age,
-                key=tuple((r.family, r.epoch, r.sequence) for r in observation.roots),
+        key = origin_key(observation.roots)
+        try:
+            age = self.estimator._age(observation.roots, now_ros, now_steady)
+        except ValueError:
+            self.diagnostics.sensor_attempt(
+                observation.source, "raw", None, ("invalid_time",), key=key
             )
+            raise
+        # Record before admission: replay, poor quality, late and revoked samples
+        # are observations too, never silently omitted from age diagnostics.
+        accepted = self.estimator.ingest(observation, now_ros=now_ros, now_steady=now_steady)
+        outcome = (
+            "expired"
+            if age.band == "invalid"
+            else "unavailable"
+            if observation.quality == 0
+            else "accepted"
+            if accepted
+            else "rejected"
+        )
+        self.diagnostics.sensor_attempt(observation.source, "raw", age, (outcome,), key=key)
         return accepted
 
     def estimate(self, now_ros: float, now_steady: float):
@@ -135,10 +149,10 @@ class MotionSensorRuntime:
                 now_steady,
                 owner=self,
             )
-        for name, axis in (("vx", r.vx), ("vy", r.vy), ("wz", r.wz)):
-            if axis.roots:
-                age = self.estimator._age(axis.roots, now_ros, now_steady)
-                self.diagnostics.age("motion." + name, age, usage=True)
+        for attempt in self.estimator.evaluations:
+            self.diagnostics.sensor_attempt(
+                attempt.observation.source, "use", attempt.age, attempt.outcomes
+            )
         if self._still_generation != r.generation:
             self._still_axes = [None, None]
             self._still_generation = r.generation
@@ -214,8 +228,28 @@ class MotionSensorRuntime:
         ]
         ref = dict(
             mode=mode.value,
-            start_ros=now_ros,
-            end_ros=now_ros,
+            start_ros=min(
+                (
+                    a.support_start_ros
+                    if a.support_start_ros is not None
+                    else min(root.stamp_ros for root in a.roots)
+                )
+                for a in observed
+            )
+            if observed
+            else now_ros,
+            end_ros=max(
+                (
+                    a.support_end_ros
+                    if a.support_end_ros is not None
+                    else max(root.stamp_ros for root in a.roots)
+                )
+                for a in observed
+            )
+            if observed
+            else now_ros,
+            computed_ros=now_ros,
+            estimate_kind="current_prediction",
             average=dict(vx=r.vx.value or 0.0, vy=r.vy.value, wz=r.wz.value or 0.0),
             source_health=health,
         )

@@ -10,7 +10,7 @@ import logging
 import math
 import time
 import weakref
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
@@ -121,7 +121,8 @@ class RuntimeDiagnostics:
         self._policy = queue_policy or QueueWarningPolicy()
         self._lock = RLock()
         self._stats: dict[str, _Stats] = {}
-        self._last_keys: dict[str, Hashable] = {}
+        self._last_keys: dict[str, OrderedDict[Hashable, None]] = {}
+        self._sensor_results: dict[str, int] = {}
         self._queues: dict[str, _QueueState] = {}
         self._owners: dict[tuple[str, int], tuple[Any, QueueSnapshot, float]] = {}
         self._last_flush: float | None = None
@@ -143,16 +144,60 @@ class RuntimeDiagnostics:
     ) -> None:
         with self._lock:
             stream = ("sensor.use." if usage else "sensor.raw.") + name
-            if key is not None and self._last_keys.get(stream) == key:
+            if key is not None and not self._remember(stream, key):
                 return
-            if key is not None:
-                if stream not in self._last_keys and len(self._last_keys) >= self._max:
-                    return
-                self._last_keys[stream] = key
             p = default_policy()
             self._record(
                 stream, value.seconds, value.seconds >= p.soft_age_s, value.seconds >= p.hard_age_s
             )
+
+    def _remember(self, stream: str, key: Hashable) -> bool:
+        if stream not in self._last_keys and len(self._last_keys) >= self._max:
+            self.unregistered = min(_LIMIT, self.unregistered + 1)
+            return False
+        seen = self._last_keys.setdefault(stream, OrderedDict())
+        if key in seen:
+            seen.move_to_end(key)
+            return False
+        seen[key] = None
+        if len(seen) > 256:
+            seen.popitem(last=False)
+        return True
+
+    def sensor_attempt(
+        self,
+        name: str,
+        phase: Literal["raw", "use"],
+        value: Age | None,
+        outcomes: tuple[str, ...],
+        *,
+        key: Hashable | None = None,
+    ) -> None:
+        """One unique raw sample / one attempted sample per estimate, before selection.
+
+        A sample can have different axis outcomes but supplies exactly one age.
+        Raw age deduplicates acquisitions; raw outcome counters count all ingress
+        attempts, including replay rejection, independently of unique raw count.
+        Invalid clocks have counters only. Raw replay dedup survives DEBUG flush
+        in a bounded 256-identity/source window, independent of selection outcome.
+        """
+        with self._lock:
+            stream = "sensor." + phase + "." + name
+            unique_age = key is None or self._remember(stream, key)
+            if value is not None and unique_age:
+                p = default_policy()
+                self._record(
+                    stream,
+                    value.seconds,
+                    value.seconds >= p.soft_age_s,
+                    value.seconds >= p.hard_age_s,
+                )
+            for outcome in set(outcomes):
+                label = phase + "." + name + "." + outcome
+                if label not in self._sensor_results and len(self._sensor_results) >= self._max:
+                    self.unregistered = min(_LIMIT, self.unregistered + 1)
+                    continue
+                self._sensor_results[label] = min(_LIMIT, self._sensor_results.get(label, 0) + 1)
 
     def duration(self, name: str, seconds: float) -> None:
         with self._lock:
@@ -381,6 +426,7 @@ class RuntimeDiagnostics:
                         dict(
                             event="runtime_statistics",
                             streams={name: s.report() for name, s in self._stats.items()},
+                            sensor_results=dict(self._sensor_results),
                             unregistered=self.unregistered,
                             queues={
                                 name: asdict(state.value) for name, state in self._queues.items()
@@ -389,6 +435,7 @@ class RuntimeDiagnostics:
                     )
                 )
                 self._stats.clear()
+                self._sensor_results.clear()
                 self._last_flush = now
             self._emitting = True
         try:

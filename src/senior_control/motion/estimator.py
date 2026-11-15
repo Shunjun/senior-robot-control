@@ -22,6 +22,11 @@ class Origin:
     received_steady: float
 
 
+def origin_key(roots: tuple[Origin, ...]) -> tuple[tuple[str, str, float], ...]:
+    """Acquisition identity, independent of processing/delivery sequence."""
+    return tuple((r.family, r.epoch, r.stamp_ros) for r in roots)
+
+
 def validate_origins(roots: tuple[Origin, ...]) -> None:
     if not isinstance(roots, tuple) or not 1 <= len(roots) <= 32:
         raise ValueError("invalid original origin set")
@@ -120,6 +125,18 @@ class AxisEstimate:
     error: float | None
     independent: bool
     deadline_steady: float
+    # //Compatible: pure callers may omit projection metadata; roots still retain age.
+    prediction_error: float = 0.0
+    support_start_ros: float | None = None
+    support_end_ros: float | None = None
+    observation_age_s: float | None = None
+
+
+@dataclass(frozen=True)
+class SourceEvaluation:
+    observation: MotionObservation
+    age: Age | None
+    outcomes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -183,6 +200,19 @@ class MotionEstimation:
         self._clock: tuple[float, float] | None = None
         self.generation = 1
         self._clock_epochs: dict[str, str] = {}
+        self._evaluations: dict[MotionObservation, tuple[Age | None, set[str]]] = {}
+
+    @property
+    def evaluations(self) -> tuple[SourceEvaluation, ...]:
+        return tuple(
+            SourceEvaluation(o, age, tuple(sorted(outcomes)))
+            for o, (age, outcomes) in self._evaluations.items()
+        )
+
+    def _assessed(self, o: MotionObservation, age: Age | None, outcome: str) -> None:
+        # Two per-axis history slots, 32 sources: at most 192 unique entries/tick.
+        entry = self._evaluations.setdefault(o, (age, set()))
+        entry[1].add(outcome)
 
     @property
     def retained_samples(self) -> int:
@@ -270,9 +300,14 @@ class MotionEstimation:
             try:
                 age = self._age(item.roots, ros, steady)
             except ValueError:
+                self._assessed(item, None, "invalid_time")
                 continue
-            if age.band != "invalid" and item.measured_ros <= ros:
+            if age.band == "invalid":
+                self._assessed(item, age, "expired")
+            elif item.measured_ros <= ros:
                 eligible.append((item, age))
+            else:
+                self._assessed(item, None, "invalid_time")
         if not eligible:
             return None
         o, age = eligible[-1]
@@ -282,6 +317,7 @@ class MotionEstimation:
         accel = 0.0
         if len(eligible) > 1:
             previous = eligible[-2][0]
+            self._assessed(previous, eligible[-2][1], "alignment_history")
             v0 = previous.values[axis]
             dt = o.measured_ros - previous.measured_ros
             try:
@@ -294,7 +330,7 @@ class MotionEstimation:
                 )
         elapsed = ros - o.measured_ros
         aligned = value + accel * elapsed
-        alignment_error = self.acceleration[axis] * (elapsed + o.interval_half_s)
+        alignment_error = self.acceleration[axis] * max(elapsed + o.interval_half_s, age.seconds)
         raw_error = o.error[axis]
         error = None if raw_error is None else raw_error + alignment_error
         quality = 0.5 if o.quality is None else o.quality
@@ -356,6 +392,7 @@ class MotionEstimation:
         ]
         if independent_only:
             candidates = [c for c in candidates if c.observation.independent[axis]]
+        evaluated = candidates
         candidates = self._independent_groups(candidates)
         if not candidates:
             if axis == 1:
@@ -384,6 +421,10 @@ class MotionEstimation:
                             band=age.band,
                             reason="model_only_bounded_hold",
                             deadline_steady=age.deadline_steady,
+                            observation_age_s=age.seconds,
+                            prediction_error=previous.prediction_error
+                            + self.acceleration[axis]
+                            * max(0.0, age.seconds - (previous.observation_age_s or 0.0)),
                             error=None,
                         )
                 except ValueError:
@@ -409,6 +450,12 @@ class MotionEstimation:
             self.tolerances[axis],
         )
         selected = [candidates[i] for i in fused.indices]
+        chosen = {c.observation for c in selected}
+        for c in evaluated:
+            outcome = "selected" if c.observation in chosen else "not_selected"
+            if independent_only:
+                outcome += "_independent"
+            self._assessed(c.observation, c.age, outcome)
         roots = tuple(dict.fromkeys(r for c in selected for r in c.observation.roots))
         result = AxisEstimate(
             fused.value,
@@ -421,12 +468,17 @@ class MotionEstimation:
             fused.error,
             all(c.observation.independent[axis] for c in selected),
             min(c.age.deadline_steady for c in selected),
+            max(c.alignment_error + abs(c.value - fused.value) for c in selected),
+            min(c.observation.measured_ros - c.observation.interval_half_s for c in selected),
+            max(c.observation.measured_ros + c.observation.interval_half_s for c in selected),
+            max(c.age.seconds for c in selected),
         )
         if not independent_only:
             self._last_axes[axis] = result
         return result
 
     def estimate(self, now_ros: float, now_steady: float) -> MotionEstimate:
+        self._evaluations.clear()
         if not all(math.isfinite(v) for v in (now_ros, now_steady)):
             raise ValueError("invalid estimation clock")
         if self._clock is not None and (now_ros < self._clock[0] or now_steady < self._clock[1]):
