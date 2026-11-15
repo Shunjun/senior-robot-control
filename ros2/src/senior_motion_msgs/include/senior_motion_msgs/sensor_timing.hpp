@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <limits>
+#include <optional>
 
 namespace sensor_timing {
 struct Policy {
@@ -18,24 +19,35 @@ struct Policy {
     soft_ns=static_cast<int64_t>(std::llround(s*1e9));
     hard_ns=static_cast<int64_t>(std::llround(h*1e9));
   }
-  int64_t age_ns(int64_t stamp, int64_t received_ros, double received_steady,
-                 int64_t now_ros, double now_steady) const {
+  std::optional<int64_t> try_age_ns(int64_t stamp, int64_t received_ros,
+      double received_steady, int64_t now_ros, double now_steady) const noexcept {
     if (stamp<0 || received_ros<stamp || now_ros<received_ros ||
         !std::isfinite(received_steady) || !std::isfinite(now_steady) || now_steady<received_steady)
-      throw std::invalid_argument("invalid sensor clock");
+      return std::nullopt;
     const double elapsed_seconds=now_steady-received_steady;
     if (!std::isfinite(elapsed_seconds) || elapsed_seconds>9e9)
-      throw std::invalid_argument("sensor clock outside numeric range");
+      return std::nullopt;
     const auto elapsed = static_cast<int64_t>(std::llround(elapsed_seconds*1e9));
     const auto initial=received_ros-stamp;
     const auto combined=elapsed>std::numeric_limits<int64_t>::max()-initial ?
       std::numeric_limits<int64_t>::max() : initial+elapsed;
     return std::max(now_ros-stamp,combined);
   }
+  //Compatible: explicit programmer callers retain the throwing API. Runtime
+  // input boundaries use try_age_ns; unrelated program failures are not caught.
+  int64_t age_ns(int64_t stamp, int64_t received_ros, double received_steady,
+      int64_t now_ros, double now_steady) const {
+    const auto age = try_age_ns(stamp, received_ros, received_steady, now_ros, now_steady);
+    if (!age) throw std::invalid_argument("invalid or out-of-range sensor clock");
+    return *age;
+  }
 };
 struct AgeSummary {
-  uint64_t count=0, over_soft=0, over_hard=0;
+  uint64_t count=0, over_soft=0, over_hard=0, invalid_clock=0;
   double sum=0, maximum=0;
+  void reject_invalid_clock() noexcept {
+    if (invalid_clock < std::numeric_limits<uint64_t>::max()) ++invalid_clock;
+  }
   void observe(int64_t ns, const Policy &p) {
     ++count; const double age=static_cast<double>(ns)/1e9;
     sum+=age; maximum=std::max(maximum,age);

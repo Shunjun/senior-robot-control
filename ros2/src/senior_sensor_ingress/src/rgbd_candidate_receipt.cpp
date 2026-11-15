@@ -360,6 +360,15 @@ void RgbdCandidateReceipt::accept_tf(const Static & body, const std::string & ac
   tf_needs_new_generation_ = false; tf_ready_ = true;
 }
 
+std::optional<int64_t> RgbdCandidateReceipt::capture_age(
+  const Header & header, int64_t ros_ns, double steady) noexcept
+{
+  const auto age = sensor_policy_.try_age_ns(nanos(header.stamp), nanos(header.received_ros),
+    header.received_steady, ros_ns, steady);
+  if (!age) sensor_ages_.reject_invalid_clock();
+  return age;
+}
+
 bool RgbdCandidateReceipt::originals_current(const Candidate & body, int64_t ros_ns, double steady)
 {
   const std::array<const Header *, 4> first = {&body.first_rgb, &body.first_depth,
@@ -375,11 +384,10 @@ bool RgbdCandidateReceipt::originals_current(const Candidate & body, int64_t ros
     if (current.bridge_gid.empty() || !graph_matches(raw_topics_[i], "raw_receipt", current.bridge_gid)) return false;
     for (const auto * h : {first[i], second[i]}) {
       const auto stamp = nanos(h->stamp), received = nanos(h->received_ros);
-      if (stamp < 0 || received < stamp || ros_ns < stamp ||
-          !std::isfinite(h->received_steady) || steady < h->received_steady) return false;
-      const auto age = sensor_policy_.age_ns(stamp,received,h->received_steady,ros_ns,steady);
-      sensor_ages_.observe(age,sensor_policy_);
-      if (!h->valid || age >= sensor_policy_.hard_ns || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
+      const auto age = capture_age(*h, ros_ns, steady);
+      if (!age) return false;
+      sensor_ages_.observe(*age,sensor_policy_);
+      if (!h->valid || *age >= sensor_policy_.hard_ns || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
           h->source_epoch != current.epoch || h->bridge_boot_id != raw_boot_ ||
           h->capture_generation != raw_generation_ || h->frame_id != camera_ || h->sequence == 0 ||
           stamp <= producer_floor_ros_ || received <= producer_floor_ros_ ||
@@ -475,8 +483,12 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
   for (const auto * header : {&body.first_rgb, &body.first_depth, &body.first_rgb_info,
       &body.first_depth_info, &body.second_rgb, &body.second_depth, &body.second_rgb_info,
       &body.second_depth_info}) {
-    if (sensor_policy_.age_ns(nanos(header->stamp),nanos(header->received_ros),
-          header->received_steady,final_ros,final_steady) >= sensor_policy_.hard_ns ||
+    const auto age = capture_age(*header, final_ros, final_steady);
+    if (!age) {
+      invalidate("candidate_invalid");
+      return;
+    }
+    if (*age >= sensor_policy_.hard_ns ||
         final_ros - nanos(header->stamp) >= sensor_policy_.hard_ns ||
         final_ros - nanos(header->received_ros) >= sensor_policy_.hard_ns ||
         final_steady - header->received_steady >= sensor_policy_.hard) {
@@ -495,11 +507,12 @@ void RgbdCandidateReceipt::inspect()
   const auto steady = steady_now();
   if (!clocks_ok(ros_ns, steady)) return;
   if (steady-last_age_report_ >= sensor_policy_.period) {
-    RCLCPP_DEBUG(get_logger(), "sensor_use_age avg=%.6f max=%.6f count=%llu over_soft=%llu over_hard=%llu",
+    RCLCPP_DEBUG(get_logger(), "sensor_use_age avg=%.6f max=%.6f count=%llu over_soft=%llu over_hard=%llu invalid_clock=%llu",
       sensor_ages_.count ? sensor_ages_.sum/sensor_ages_.count : 0., sensor_ages_.maximum,
       static_cast<unsigned long long>(sensor_ages_.count),
       static_cast<unsigned long long>(sensor_ages_.over_soft),
-      static_cast<unsigned long long>(sensor_ages_.over_hard));
+      static_cast<unsigned long long>(sensor_ages_.over_hard),
+      static_cast<unsigned long long>(sensor_ages_.invalid_clock));
     sensor_ages_ = {}; last_age_report_ = steady;
   }
   const auto oldest = std::min_element(pending_tf_.begin(),pending_tf_.end(),

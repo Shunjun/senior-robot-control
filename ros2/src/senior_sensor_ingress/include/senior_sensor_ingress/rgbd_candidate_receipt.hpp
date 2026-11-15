@@ -6,6 +6,7 @@
 #include <utility>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <rclcpp/rclcpp.hpp>
@@ -46,6 +47,7 @@ private:
   void candidate(const Candidate & body, const rclcpp::MessageInfo & info);
   void inspect();
   void invalidate(const std::string & reason, bool owner_lost = false);
+  std::optional<int64_t> capture_age(const Header & header, int64_t ros_ns, double steady) noexcept;
   bool originals_current(const Candidate & body, int64_t ros_ns, double steady);
   bool clocks_ok(int64_t ros_ns, double steady);
   std::string output_gid() const;
