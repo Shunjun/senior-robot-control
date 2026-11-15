@@ -25,7 +25,7 @@ def command_state(controller):
 
 
 def stage(rig, monkeypatch):
-    rig.clock.ns = 5_100_000_000
+    rig.clock.ns = 5_110_000_000
     rig.core._reference_clock = None  # Independent setup clock, before any control tick.
     start(rig, 0.5)
     rig.clock.steady += 0.01
@@ -51,8 +51,9 @@ def test_fallback_rebuilds_current_ros_risk_without_readmitting_or_committing_dr
     def stop(prepared, ctx, body, wheel, now):
         assert command_state(rig.core.controller) == before
         assert ctx is not prepared.context
-        assert ctx.envelope.linear_interval != prepared.context.envelope.linear_interval
-        assert body == prepared.body and wheel == prepared.wheel
+        assert ctx.motion.computed_steady > prepared.context.motion.computed_steady
+        assert rig.core.controller._same_feedback_evidence(body, prepared.body)
+        assert rig.core.controller._same_feedback_evidence(wheel, prepared.wheel)
         result = original(prepared, ctx, body, wheel, now)
         inputs.append(result)
         return result
@@ -75,7 +76,7 @@ def test_fallback_rebuilds_current_ros_risk_without_readmitting_or_committing_dr
     assert rig.core.target.source == "navigation"
 
 
-@pytest.mark.parametrize("invalid", ["ros_window", "packet_changed", "steady_source"])
+@pytest.mark.parametrize("invalid", ["ros_window", "steady_source"])
 def test_fallback_never_salvages_invalid_or_different_packet(rig, monkeypatch, invalid):
     stage(rig, monkeypatch)
     before = command_state(rig.core.controller)
@@ -85,7 +86,7 @@ def test_fallback_never_salvages_invalid_or_different_packet(rig, monkeypatch, i
     def stop(prepared, packet, now):
         attempted.append(now)
         if invalid == "ros_window":
-            rig.clock.ns = 5_150_000_001
+            rig.clock.ns = 6_150_000_001
         elif invalid == "packet_changed":
             rig.core._reference = copy.deepcopy(packet)
         else:
@@ -124,7 +125,7 @@ def test_stop_expiring_during_fallback_is_rejected_once_without_commit(rig, monk
 
 
 def test_failed_actual_output_never_commits_proposed_command(rig, monkeypatch):
-    rig.clock.ns = 5_100_000_000
+    rig.clock.ns = 5_110_000_000
     rig.core._reference_clock = None  # Independent setup clock, before any control tick.
     start(rig, 0.5)
     rig.clock.steady += 0.01

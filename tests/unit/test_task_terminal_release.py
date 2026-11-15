@@ -90,6 +90,9 @@ def intent(rig, source="next", epoch=1, generation=5, kind="navigation"):
         sequence=1,
         received_steady=rig.clock.steady,
         steady_deadline=rig.clock.steady + 0.2,
+        manual_linear=1.0 if kind == "manual" else 0.0,
+        manual_linear_limit=0.01 if kind == "manual" else 0.0,
+        degraded_linear_limit=0.3 if kind == "manual" else 0.0,
         vx=0.01,
         wz=0.0,
     )

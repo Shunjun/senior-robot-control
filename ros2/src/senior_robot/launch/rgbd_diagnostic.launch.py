@@ -6,6 +6,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from senior_control.sensors.policy import ros_sensor_parameters
+
 
 def generate_launch_description():
     remappings = [
@@ -29,7 +31,7 @@ def generate_launch_description():
             Node(
                 package="senior_sensor_ingress",
                 executable="rgbd_candidate_receipt_node",
-                parameters=[common],
+                parameters=[common, ros_sensor_parameters()],
                 remappings=remappings,
             ),
             Node(

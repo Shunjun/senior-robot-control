@@ -24,6 +24,7 @@ from senior_control.cloud.pairing import PAIRING_STATEMENTS, PairingBusy, Pairin
 from senior_control.cloud.registry import ROBOT_STATEMENTS, RobotRegistry
 from senior_control.cloud.relay import CLOSE_OVERLOAD, CLOSE_POLICY, Hub, serve_connection
 from senior_control.config import CloudSettings
+from senior_control.runtime.diagnostics import configure_diagnostics
 from senior_control.storage.database import Database
 from senior_control.storage.migrations import Migration, migrate
 from senior_control.storage.schema import DOMAIN_MIGRATIONS
@@ -153,6 +154,7 @@ def create_app(
             if owned:
                 await database.__aexit__(None, None, None)
 
+    configure_diagnostics(settings.diagnostics)
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodyLimitMiddleware, max_bytes=limits.max_body_bytes)
 

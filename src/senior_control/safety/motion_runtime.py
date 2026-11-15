@@ -7,6 +7,7 @@ from typing import Generic, Literal, TypeVar
 
 from senior_control.config import DeviceProfile
 from senior_control.models import BodyTwist, Pose2D, Velocity
+from senior_control.runtime.diagnostics import DiagnosticDeque
 from senior_control.safety.guard import evaluate_motion
 from senior_control.safety.motion_estimator import (
     ImuYaw,
@@ -38,11 +39,13 @@ class DeferredSample(Generic[_DeferredValue]):
 class DeferredSourceQueue(Generic[_DeferredValue]):
     """Bounded, source-ordered future observations retaining first receipt time."""
 
-    def __init__(self, *, max_pending: int) -> None:
+    def __init__(self, *, max_pending: int, diagnostic_name: str = "motion.deferred") -> None:
         if max_pending < 1:
             raise ValueError("deferred source capacity must be positive")
         self.max_pending = max_pending
-        self._pending: deque[DeferredSample[_DeferredValue]] = deque()
+        self._pending: deque[DeferredSample[_DeferredValue]] = DiagnosticDeque(
+            diagnostic_name, max_pending
+        )
 
     def offer(self, item: DeferredSample[_DeferredValue]) -> bool:
         if (
@@ -250,7 +253,7 @@ class ProgressQueue:
         if max_pending < 1:
             raise ValueError("progress queue capacity must be positive")
         self.max_pending = max_pending
-        self._pending: deque[ProgressInterval] = deque()
+        self._pending: deque[ProgressInterval] = DiagnosticDeque("motion.progress", max_pending)
         self._epoch: str | None = None
         self._last_end_ns: int | None = None
         self._unqualified = False

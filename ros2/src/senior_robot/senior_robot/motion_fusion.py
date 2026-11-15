@@ -20,6 +20,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_control.models import Pose2D, Velocity
+from senior_control.runtime.diagnostics import QueueSnapshot, process_diagnostics
 from senior_control.safety.motion_estimator import MotionEstimator
 from senior_control.safety.motion_runtime import (
     DeferredSample,
@@ -43,6 +44,7 @@ from senior_control.safety.motion_runtime import (
     stationary_interval,
 )
 from senior_control.safety.slip import SlipMonitor
+from senior_control.sensors.policy import default_policy
 from senior_robot.motion_lifecycle import MotionExecutor, run
 
 
@@ -85,7 +87,7 @@ class MotionFusion(Node):
         self._body = str(self.get_parameter("body_frame").value)
         self._wheel_frame = str(self.get_parameter("wheel_frame").value)
         self._imu_frame = str(self.get_parameter("imu_frame").value)
-        self._max_age = float(self.get_parameter("sensor_max_age").value)
+        self._max_age = default_policy().hard_age_s
         gap = float(self.get_parameter("alignment_max_gap").value)
         self._wait = float(self.get_parameter("pending_wait").value)
         variance = float(self.get_parameter("max_variance").value)
@@ -131,9 +133,15 @@ class MotionFusion(Node):
         self._progress = ProgressQueue(max_pending=64)
         self._progress_requalification = ProgressRequalification(max_gap=gap, required_intervals=2)
         self._progress_started = False
-        self._deferred_wheel = DeferredSourceQueue(max_pending=16)
-        self._deferred_imu = DeferredSourceQueue(max_pending=16)
-        self._deferred_scan = DeferredSourceQueue(max_pending=16)
+        self._deferred_wheel = DeferredSourceQueue(
+            max_pending=16, diagnostic_name="motion.deferred.wheel"
+        )
+        self._deferred_imu = DeferredSourceQueue(
+            max_pending=16, diagnostic_name="motion.deferred.imu"
+        )
+        self._deferred_scan = DeferredSourceQueue(
+            max_pending=16, diagnostic_name="motion.deferred.scan"
+        )
         self._deferred_cursor = 0
         self._scan_topology = ProducerTopology("scan_motion_node", "/")
         self._scan_epochs = SourceEpochFence(max_retired=256)
@@ -144,6 +152,8 @@ class MotionFusion(Node):
         self._imu_received: float | None = None
         self._pending = None
         self._pending_at = 0.0
+        self._pending_enqueued = 0.0
+        self._pending_overwritten = 0
         self._pending_received_ros_ns = 0
         self._scan_events = deque(maxlen=256)
         self._last_accepted_scan = None
@@ -908,6 +918,8 @@ class MotionFusion(Node):
             except ValueError:
                 self._invalid(message, "progress_history_unqualified")
                 return
+        self._pending_overwritten += int(self._pending is not None)
+        self._pending_enqueued = time.monotonic()
         self._pending = message
         self._pending_at = received_steady
         self._pending_received_ros_ns = received_ros_ns
@@ -987,6 +999,20 @@ class MotionFusion(Node):
         return True
 
     def _try_pending(self) -> None:
+        now = time.monotonic()
+        process_diagnostics().queue(
+            QueueSnapshot(
+                "motion.scan_pending",
+                int(self._pending is not None),
+                1,
+                max(0.0, now - self._pending_enqueued) * 1000 if self._pending else 0.0,
+                overwritten_total=self._pending_overwritten,
+                kind="latest",
+            ),
+            now,
+            owner=self,
+        )
+        process_diagnostics().pump(now)
         if not self._clock_ok() or not self._scan_topology_ready():
             self._pending = None
             return

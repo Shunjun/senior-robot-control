@@ -133,6 +133,27 @@
       "title": "ControllerConfig",
       "type": "object"
     },
+    "DiagnosticsSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "queue": {
+          "$ref": "#/$defs/QueueWarningPolicy",
+          "default": {
+            "count": 32,
+            "ratio": 0.75,
+            "repeat_s": 5.0,
+            "recovery_ratio": 0.5,
+            "oldest_wait_ms": 300.0
+          }
+        },
+        "period_s": {
+          "title": "Period S",
+          "type": "number"
+        }
+      },
+      "title": "DiagnosticsSettings",
+      "type": "object"
+    },
     "FusionConfig": {
       "additionalProperties": false,
       "properties": {
@@ -232,6 +253,79 @@
         }
       },
       "title": "HardwareEstopCapability",
+      "type": "object"
+    },
+    "OptionalMotionInput": {
+      "additionalProperties": false,
+      "properties": {
+        "origin_family": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Family"
+        },
+        "topic": {
+          "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "publisher": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "title": "Publisher",
+          "type": "string"
+        },
+        "namespace": {
+          "default": "/",
+          "pattern": "^/(?:[A-Za-z_][A-Za-z0-9_/]*)?$",
+          "title": "Namespace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "publisher"
+      ],
+      "title": "OptionalMotionInput",
+      "type": "object"
+    },
+    "QueueWarningPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "default": 32,
+          "title": "Count",
+          "type": "integer"
+        },
+        "ratio": {
+          "default": 0.75,
+          "title": "Ratio",
+          "type": "number"
+        },
+        "repeat_s": {
+          "default": 5.0,
+          "title": "Repeat S",
+          "type": "number"
+        },
+        "recovery_ratio": {
+          "default": 0.5,
+          "title": "Recovery Ratio",
+          "type": "number"
+        },
+        "oldest_wait_ms": {
+          "default": 300.0,
+          "title": "Oldest Wait Ms",
+          "type": "number"
+        }
+      },
+      "title": "QueueWarningPolicy",
       "type": "object"
     },
     "Source": {
@@ -363,8 +457,10 @@
       "title": "Simulation Only",
       "type": "boolean"
     },
+    "diagnostics": {
+      "$ref": "#/$defs/DiagnosticsSettings"
+    },
     "max_age": {
-      "default": 0.5,
       "exclusiveMinimum": 0,
       "title": "Max Age",
       "type": "number"
@@ -605,6 +701,28 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ControllerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "gps_input": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OptionalMotionInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "rgbd_input": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OptionalMotionInput"
         },
         {
           "type": "null"

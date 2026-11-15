@@ -11,6 +11,7 @@ from senior_control.protocol import (
     VideoEnvelope,
     VideoSdpEnvelope,
 )
+from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
 from senior_control.vision.stream import SessionDescription, VideoError, VideoLimits, VideoSession
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,9 @@ class VideoSignaling:
         self._viewer: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._refusal: asyncio.Task[None] | None = None
-        self._candidates: asyncio.Queue[str] = asyncio.Queue(VideoLimits().max_candidates)
+        self._candidates: asyncio.Queue[str] = DiagnosticAsyncQueue(
+            "vision.signaling.candidates", VideoLimits().max_candidates
+        )
         self._closed = False
 
     def submit(self, frame: VideoEnvelope) -> None:
@@ -56,7 +59,9 @@ class VideoSignaling:
                     self._refusal = asyncio.create_task(self._notify_closed(metadata))
                 return
             self._viewer = frame.session_id
-            self._candidates = asyncio.Queue(VideoLimits().max_candidates)
+            self._candidates = DiagnosticAsyncQueue(
+                "vision.signaling.candidates", VideoLimits().max_candidates
+            )
             self._task = asyncio.create_task(self._serve(frame))
         elif frame.session_id == self._viewer and self._task is not None:
             if isinstance(frame, VideoCloseEnvelope):

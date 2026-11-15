@@ -14,6 +14,7 @@ from senior_control.motion.constraints import (
     TickEvaluation,
 )
 from senior_control.motion.contracts import BrakeKind, BrakeRequest
+from senior_control.runtime.diagnostics import QueueSnapshot, process_diagnostics
 
 
 class Worker(Protocol):
@@ -69,6 +70,7 @@ class ConstraintScheduler:
         self._fence = 0
         self._active = False
         self._last_now: float | None = None
+        self._overwrites = 0
 
     def stop(self) -> None:
         self._fence += 1
@@ -142,10 +144,22 @@ class ConstraintScheduler:
             )
             return self.current
         self._active = True
+        self._overwrites += int(self._pending is not None)
         self._pending = _Pending(snapshot, now, self._fence)  # replace, never queue every scan
         return self.poll(now, evaluation=evaluation)
 
+    def queue_snapshot(self, now: float) -> QueueSnapshot:
+        return QueueSnapshot(
+            "constraint.pending",
+            int(self._pending is not None),
+            1,
+            max(0.0, now - self._pending.submitted_at) * 1000 if self._pending else 0.0,
+            overwritten_total=self._overwrites,
+            running=int(self._flight is not None),
+        )
+
     def poll(self, now: float, *, evaluation: TickEvaluation | None = None) -> ConstraintResult:
+        process_diagnostics().queue(self.queue_snapshot(now), now, owner=self)
         if not self._clock_valid(now):
             return self.current
         latest = self._latest

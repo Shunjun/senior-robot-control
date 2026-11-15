@@ -17,6 +17,8 @@ from senior_motion_msgs.msg import (
     StaticTransformEdge,
 )
 
+from senior_control.runtime.diagnostics import DiagnosticPending, process_diagnostics
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.independent_motion import Profile
 from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.rgbd_bounded_inbox import BoundedInbox
@@ -222,9 +224,16 @@ class RgbdCandidateProducer(Node):
             final_ros = self.get_clock().now().nanoseconds
             final_steady = time.monotonic()
             if any(
-                not (0 <= final_ros - h.stamp_ns <= 300_000_000)
-                or not (0 <= final_ros - h.received_ros_ns <= 300_000_000)
-                or not (0 <= final_steady - h.received_steady <= 0.3)
+                default_policy()
+                .age(
+                    stamp_ros=h.stamp_ns / 1e9,
+                    received_ros=h.received_ros_ns / 1e9,
+                    received_steady=h.received_steady,
+                    now_ros=final_ros / 1e9,
+                    now_steady=final_steady,
+                )
+                .band
+                == "invalid"
                 for group in result.headers
                 for h in group
             ):
@@ -236,7 +245,7 @@ class RgbdCandidateProducer(Node):
 
     def _work(self):
         last_invalid = 0.0
-        pending_tf = {}
+        pending_tf = DiagnosticPending("rgbd.pending_tf.python", 4)
         allow_tf_reconfirm = False
         last_ros = 0
         last_steady = 0.0
@@ -337,6 +346,7 @@ class RgbdCandidateProducer(Node):
                                 self._engine.revoke("raw_owner_unavailable")
                     if not self._inbox.current(generation):
                         continue
+                process_diagnostics().pump(time.monotonic())
                 if pending_tf:
                     owner = self._owner(self._tf_topic, "static_tf_receipt")
                     pending = pending_tf.pop(owner, None)

@@ -52,8 +52,8 @@ def test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_cloc
     assert state["sampled_steady"] == sampled and state["valid_until"] == sampled + 0.15
 
 
-def test_limited_followup_observation_and_qualification_use_final_event_time(rig, monkeypatch):
-    rig.clock.ns = 5_100_000_000
+def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monkeypatch):
+    rig.clock.ns = 5_110_000_000
     rig.core._reference_clock = None
     start(rig, 0.5)
     rig.clock.steady += 0.01
@@ -61,8 +61,7 @@ def test_limited_followup_observation_and_qualification_use_final_event_time(rig
     # Synthetic bounded risk isolates event ordering from unknown-body geometry.
     rig.core.scheduler.stop()  # Fence the body-domain setup flight.
     rig.core.scheduler._flight.future.result(timeout=2)
-    packet = rig.core._reference
-    packet["reference"]["average"] = None
+    rig.core.sensors.estimator.invalidate("laser")
     snapshot = rig.core._snapshot
 
     def bounded(*args):
@@ -120,14 +119,15 @@ def test_limited_followup_observation_and_qualification_use_final_event_time(rig
     )
     assert proposals[0].reason == "tracking"
     assert len(fallbacks) == 1 and fallbacks[0].braking and fallbacks[0].fallback
-    assert [name for name, _ in seen] == ["ready", "observe", "healthy"]
-    assert all(now == rig.clock.steady > sampled for _, now in seen)
+    assert [name for name, _ in seen] == ["observe", "healthy"]
+    assert all(now == sampled for _, now in seen)
+    assert rig.clock.steady > sampled  # Actual output deadline is checked after fallback.
     assert state["sampled_steady"] == sampled
 
 
 @pytest.mark.parametrize("rollback_at", ["t1", "t2"])
 def test_real_sampled_clock_rollback_rejects_without_clamping(rig, monkeypatch, rollback_at):
-    rig.clock.ns = 5_100_000_000
+    rig.clock.ns = 5_110_000_000
     rig.core._reference_clock = None
     start(rig, 0.5)
     rig.clock.steady += 0.01

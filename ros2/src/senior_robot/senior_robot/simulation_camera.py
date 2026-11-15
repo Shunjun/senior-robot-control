@@ -9,6 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.simulation_video import publish_image
 from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
 
@@ -45,7 +46,11 @@ class SimulationCamera(Node):
             return
         stamp = image.header.stamp.sec * 10**9 + image.header.stamp.nanosec
         age = self.get_clock().now().nanoseconds - stamp
-        if stamp <= 0 or stamp == self._last_stamp or not 0 <= age <= 500_000_000:
+        if (
+            stamp <= 0
+            or stamp == self._last_stamp
+            or not 0 <= age < round(default_policy().hard_age_s * 1e9)
+        ):
             return
         try:
             if publish_image(

@@ -62,9 +62,13 @@ def test_humble_missing_gid_accepts_only_expected_unique_simulation_publisher(mo
     monkeypatch.setitem(sys.modules, "tf2_ros", tf)
     endpoints = [N(node_name="drive", node_namespace="/", endpoint_gid=b"wheel")]
     bridge = object.__new__(NativeObservationRosBridge)
+    bridge.profile = N(wheel_publisher="drive", imu_publisher="imu", source_namespace="/")
+    bridge.core = N(receipt_ros=None)
     bridge.allow_topology_only = True
     bridge.node = N(
         get_publishers_info_by_topic=lambda _: endpoints,
+        resolve_topic_name=lambda topic: topic,
+        get_logger=lambda: N(warning=lambda _: None),
         get_clock=lambda: N(now=lambda: N(nanoseconds=1_000_000_000)),
     )
     bridge._warn_at = 0

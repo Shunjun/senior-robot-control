@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass
 from typing import TypeVar
 
+from senior_control.runtime.diagnostics import DiagnosticPending
+from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.depth import GeometrySample
 from senior_control.vision.depth_runtime import CameraInfoFrame, _intrinsics
 from senior_control.vision.detector import Detection
@@ -55,7 +57,7 @@ def qualify_registration(
         not registered_profile
         or not math.isfinite(now_steady)
         or not math.isfinite(max_age_s)
-        or not 0 < max_age_s <= 0.3
+        or not 0 < max_age_s <= default_policy().hard_age_s
         or now_ros_ns <= 0
         or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) <= 0
         or len({rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns}) != 1
@@ -74,24 +76,20 @@ def qualify_registration(
         or info.width * info.height > 2_073_600
     ):
         raise ValueError("registration_identity_unqualified")
-    age_ns = max_age_s * 1e9
-    if (
-        not 0 <= now_ros_ns - rgb_stamp_ns <= age_ns
-        or any(
-            not 0 <= now_ros_ns - receipt <= age_ns
-            for receipt in (
-                info.received_ros_ns,
-                depth.received_ros_ns,
-                depth.info_received_ros_ns,
-            )
+    # //Compatible: legacy per-caller age is validated metadata; all dynamic
+    # semantic inputs use the common original-capture age policy.
+    if any(
+        not sensor_current(
+            stamp_ros=rgb_stamp_ns / 1e9,
+            received_ros=receipt_ros / 1e9,
+            received_steady=receipt_steady,
+            now_ros=now_ros_ns / 1e9,
+            now_steady=now_steady,
         )
-        or any(
-            not math.isfinite(receipt) or not 0 <= now_steady - receipt <= max_age_s
-            for receipt in (
-                info.received_steady,
-                depth.received_steady,
-                depth.info_received_steady,
-            )
+        for receipt_ros, receipt_steady in (
+            (info.received_ros_ns, info.received_steady),
+            (depth.received_ros_ns, depth.received_steady),
+            (depth.info_received_ros_ns, depth.info_received_steady),
         )
     ):
         raise ValueError("registration_expired")
@@ -275,7 +273,10 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
         or not 0 < minimum < maximum <= 100
         or error <= 0
         or abs(sum(x * x for x in quaternion) - 1) > 0.001
-        or (not wire.transform_static and not 0 <= stamp - tf_stamp <= 200_000_000)
+        or (
+            not wire.transform_static
+            and not 0 <= stamp - tf_stamp < round(default_policy().hard_age_s * 1e9)
+        )
     ):
         raise ValueError("depth_wire_invalid")
     norm = math.sqrt(sum(x * x for x in quaternion))
@@ -348,12 +349,13 @@ class SemanticSynchronizer:
     """Bounded exact-frame pairing; wait for future timestamps without restamping."""
 
     def __init__(self, *, max_age_s: float) -> None:
-        if not math.isfinite(max_age_s) or not 0 < max_age_s <= 0.3:
+        if not math.isfinite(max_age_s) or not 0 < max_age_s <= default_policy().hard_age_s:
             raise ValueError("invalid_age")
-        self._age = max_age_s
-        self._rgb: dict[int, ColorCapture] = {}
-        self._info: dict[int, CameraInfoFrame] = {}
-        self._depth: dict[int, DepthSnapshot] = {}
+        # //Compatible: retain valid old age arguments, use the shared policy.
+        self._age = default_policy().hard_age_s
+        self._rgb: dict[int, ColorCapture] = DiagnosticPending("semantic.rgb_pair", 4)
+        self._info: dict[int, CameraInfoFrame] = DiagnosticPending("semantic.info_pair", 4)
+        self._depth: dict[int, DepthSnapshot] = DiagnosticPending("semantic.depth_pair", 4)
         self._last: dict[str, int] = {}
         self._last_ros: int | None = None
 
@@ -411,9 +413,12 @@ class SemanticSynchronizer:
         for queue in (self._rgb, self._info, self._depth):
             for old in tuple(queue):
                 if old <= stamp:
-                    del queue[old]
+                    if old == stamp:
+                        queue.pop(old)
+                    else:
+                        del queue[old]
         if stamp > now_ros_ns:
             return None, "future_expired"
-        if not 0 <= age <= self._age or not 0 <= now_ros_ns - stamp <= self._age * 1e9:
+        if not 0 <= age < self._age or not 0 <= now_ros_ns - stamp < self._age * 1e9:
             return None, "frame_expired"
         return (rgb, info, depth), None

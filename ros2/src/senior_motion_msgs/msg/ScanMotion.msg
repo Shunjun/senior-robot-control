@@ -11,3 +11,6 @@ float64 residual
 uint32 valid_rays
 bool startup_reference_valid
 builtin_interfaces/Time startup_reference_stamp
+# Original two raw acquisitions, never publication/processing receipt times.
+senior_motion_msgs/RawCaptureHeader first_capture
+senior_motion_msgs/RawCaptureHeader second_capture

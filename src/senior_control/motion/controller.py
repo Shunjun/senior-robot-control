@@ -25,6 +25,9 @@ class Feedback:
     sequence: int
     current_supported: bool
     basis: str
+    # //Compatible: legacy pure callers provide complete, non-unified feedback.
+    observed_axes: tuple[bool, bool] = (True, True)
+    unified: bool = False
 
     def fresh(self, now: float) -> bool:
         return (
@@ -165,7 +168,10 @@ class MotionController:
         if value is None or not value.fresh(now):
             return None
         old = self._last_feedback.get(role)
-        key = (value.epoch, value.sequence, value.stamp_steady)
+        # The unified owner already fences raw provenance. Its surviving source
+        # can have an older receipt than an expired contributor. Compare control
+        # sampling order here; freshness still uses the original root deadline.
+        key = (value.epoch, value.sequence, now if value.unified else value.stamp_steady)
         if old is not None:
             if key[2] < old[2] or (key[0] == old[0] and key[1] < old[1]):
                 return None
@@ -181,6 +187,7 @@ class MotionController:
         if (
             body is None
             or wheel is None
+            or not all(body.observed_axes)
             or max(abs(body.velocity.vx), abs(wheel.velocity.vx)) > self.config.still_speed_mps
             or max(abs(body.velocity.wz), abs(wheel.velocity.wz)) > self.config.still_yaw_rps
         ):
@@ -395,6 +402,11 @@ class MotionController:
             if reference
             else Velocity(0, 0)
         )
+        if reference is not None:
+            error = Velocity(
+                error.vx if reference.observed_axes[0] else 0.0,
+                error.wz if reference.observed_axes[1] else 0.0,
+            )
         trial = (
             _bounded(
                 Velocity(
@@ -406,6 +418,11 @@ class MotionController:
             if integrate and not slip
             else Velocity(0, 0)
         )
+        if reference is not None:
+            trial = Velocity(
+                trial.vx if reference.observed_axes[0] else 0.0,
+                trial.wz if reference.observed_axes[1] else 0.0,
+            )
         requested = self._raw_pi(goal, error, trial)
         raw = Velocity(
             requested.vx if requested.vx * goal.vx > 0 else 0,
@@ -515,6 +532,7 @@ class MotionController:
             reference = wheel
         slip = (
             body is not None
+            and not body.unified
             and wheel is not None
             and abs(body.velocity.vx - wheel.velocity.vx) > self.config.disagreement_mps
         )
@@ -717,6 +735,23 @@ class MotionController:
         if prepared.owner is self and self._prepared is prepared:
             self._prepared = None
 
+    @staticmethod
+    def _same_feedback_evidence(current: Feedback | None, original: Feedback | None) -> bool:
+        if current is None or original is None:
+            return current is original
+        if not (current.unified and original.unified):
+            return current == original
+        # Current-time projection may change velocity, never the original roots
+        # represented by this clock/source generation and evidence sequence.
+        return (
+            current.epoch == original.epoch
+            and current.sequence == original.sequence
+            and current.observed_axes == original.observed_axes
+            and current.current_supported == original.current_supported
+            and current.stamp_steady == original.stamp_steady
+            and current.deadline_steady <= original.deadline_steady + 1e-9
+        )
+
     def prepare_stop(
         self,
         prepared: PreparedControl,
@@ -739,11 +774,11 @@ class MotionController:
             or prepared.decision.command in (None, Velocity(0, 0))
             or not math.isfinite(now)
             or now < prepared.sampled_now
-            or ctx.target is not prepared.context.target
+            or ctx.target != prepared.context.target
             or ctx.mode is not prepared.context.mode
             or self.engine.identity(ctx) != self.engine.identity(prepared.context)
-            or body != prepared.body
-            or wheel != prepared.wheel
+            or not self._same_feedback_evidence(body, prepared.body)
+            or not self._same_feedback_evidence(wheel, prepared.wheel)
             or (body is not None and not body.fresh(now))
             or wheel is None
             or not wheel.fresh(now)
@@ -752,6 +787,7 @@ class MotionController:
         assert ctx.envelope is not None
         slip = (
             body is not None
+            and not body.unified
             and abs(body.velocity.vx - wheel.velocity.vx) > self.config.disagreement_mps
         )
         return self._candidate(

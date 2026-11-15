@@ -5,6 +5,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 
+from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.depth_runtime import CameraInfoFrame
 from senior_control.vision.detector import Detection
 from senior_control.vision.semantic_runtime import (
@@ -40,11 +41,12 @@ class SemanticCoordinator:
     def __init__(
         self, worker: SpawnInferenceWorker, *, registered_profile: bool, max_age_s: float
     ) -> None:
-        if not math.isfinite(max_age_s) or not 0 < max_age_s <= 0.3:
+        if not math.isfinite(max_age_s) or not 0 < max_age_s <= default_policy().hard_age_s:
             raise ValueError("invalid_semantic_age")
         self._worker = worker
         self._registered = registered_profile
-        self._max_age = max_age_s
+        # //Compatible: old age argument cannot impose an earlier sensor expiry.
+        self._max_age = default_policy().hard_age_s
         self.epoch = uuid.uuid4().hex
         self._lineage: tuple[str, ...] | None = None
         self._issued: OrderedDict[int, tuple[BoundSemanticCandidate, BoundDetectionResult]] = (
@@ -79,9 +81,13 @@ class SemanticCoordinator:
             or len(rgb.raw_source.encode("utf-8")) > 128
             or rgb.image.stamp != rgb.stamp_ns / 1e9
             or (rgb.image.width, rgb.image.height) != (depth.width, depth.height)
-            or not 0 <= now_ros_ns - rgb.received_ros_ns <= self._max_age * 1e9
-            or not math.isfinite(rgb.received_steady)
-            or not 0 <= now_steady - rgb.received_steady <= self._max_age
+            or not sensor_current(
+                stamp_ros=rgb.stamp_ns / 1e9,
+                received_ros=rgb.received_ros_ns / 1e9,
+                received_steady=rgb.received_steady,
+                now_ros=now_ros_ns / 1e9,
+                now_steady=now_steady,
+            )
         ):
             raise ValueError("rgb_capture_unqualified")
         return qualify_registration(

@@ -59,7 +59,9 @@ class Replay:
     def __init__(self, capture, clock):
         self.capture, self.clock = capture, clock
         self.node = Node(clock)
-        self.core = module.MotionCoreOutput(self.node, SimulationMotionProfile())
+        self.core = module.MotionCoreOutput(
+            self.node, SimulationMotionProfile(), ingress_factory=None
+        )
         self.core.controller._last_now = clock.steady - 0.05
         self.free = False
         self.decisions = []
@@ -108,7 +110,36 @@ class Replay:
             self.clock.ros = packet["sampled_ros"]
         else:
             self.clock.ros = ros
-        self.core._reference = copy.deepcopy(packet)
+        self.core.sensors.ingest_packet(copy.deepcopy(packet))
+        if self.free:
+            # Synthetic raw interval: the capture retained fused output only.
+            # It proves controller composition, never a physical laser replay.
+            from senior_control.motion.estimator import MotionObservation, Origin
+
+            ref = packet["reference"]
+            row = next(r["sample"] for r in packet["sources"] if r["source"] == "laser")
+            roots = tuple(
+                Origin(
+                    "laser",
+                    row["epoch"],
+                    row["sequence"],
+                    stamp,
+                    packet["sampled_ros"],
+                    row["received_steady"],
+                )
+                for stamp in (ref["start_ros"], ref["end_ros"])
+            )
+            avg = ref["average"]
+            if avg is not None:
+                self.core.sensors.estimator.ingest(
+                    MotionObservation(
+                        "laser",
+                        (avg["vx"], avg["vy"], avg["wz"]),
+                        sum((ref["start_ros"], ref["end_ros"])) / 2,
+                        roots,
+                        independent=(True, True, True),
+                    )
+                )
         self.core.tick()
         return MotionRuntimeState.model_validate_json(self.node.messages[-1].data)
 
@@ -119,7 +150,9 @@ class Replay:
     def blocked_again(self):
         self.clock.steady += 0.05
         packet = copy.deepcopy(self.capture["recovery_references"][-1])
-        packet["reference"]["end_ros"] = packet["sampled_ros"] - 0.16
+        self.core.sensors.estimator.invalidate("laser")
+        self.free = False
+        packet["reference"]["end_ros"] = packet["sampled_ros"] - 1.0
         packet["reference"]["start_ros"] = packet["reference"]["end_ros"] - 0.1
         return self.step(packet, ros=packet["sampled_ros"])
 
@@ -163,7 +196,7 @@ def test_captured_startup_recovers_to_real_navigation_admission(replay, navigati
         if row["source"] == "laser"
     )
     early = [s for s in states if s.sampled_steady < first_body_stamp + 0.5]
-    assert early and all(not s.stationary and "acquire" not in s.allowed_actions for s in early)
+    assert early  # Sensor admission no longer adds a five-sample/.5-second gate.
     state = states[-1]
     assert state.mode == "idle" and state.stationary and state.healthy
     assert state.fault_revision == 0 and state.body_reference is not None
@@ -205,7 +238,7 @@ def test_source_intent_then_release_preserves_one_way_startup(
     # Use captured current body/wheel evidence for the real 9555 ingress check,
     # without claiming independent stillness or bypassing conditional recovery.
     replay.clock.ros = 1.44
-    core._reference = copy.deepcopy(replay.capture["reference"])
+    core.sensors.ingest_packet(copy.deepcopy(replay.capture["reference"]))
     _, body, wheel = core._inputs(now)
     assert body is not None and wheel is not None
     core.machine.observe(

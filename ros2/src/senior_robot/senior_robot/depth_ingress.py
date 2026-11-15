@@ -16,6 +16,8 @@ from senior_motion_msgs.msg import (
 )
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from senior_control.runtime.diagnostics import process_diagnostics
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth_runtime import (
     CameraInfoFrame,
     DepthGeometrySettings,
@@ -75,9 +77,11 @@ class DepthIngress(Node):
             column_stride=int(self.get_parameter("column_stride").value),
             body_frame=str(self.get_parameter("body_frame").value),
         )
-        self._max_age = float(self.get_parameter("max_age_s").value)
+        # //Compatible: retain the legacy parameter as input metadata; one shared
+        # dynamic-sensor policy supplies actual runtime age.
+        self._max_age = default_policy().hard_age_s
         self._buffer = DepthPairBuffer(
-            max_age_s=self._max_age, pair_wait_s=float(self.get_parameter("pair_wait_s").value)
+            max_age_s=self._max_age, pair_wait_s=default_policy().hard_age_s
         )
         self._static = bool(self.get_parameter("transform_static").value)
         self._captures = {"depth": {}, "info": {}}
@@ -284,6 +288,7 @@ class DepthIngress(Node):
             self._new_epoch("depth_invalid", ros_ns, steady, ("depth", message.capture))
 
     def _on_timer(self):
+        process_diagnostics().pump(time.monotonic())
         ros_ns = self.get_clock().now().nanoseconds
         steady = time.monotonic()
         if self._clock_ok(ros_ns, steady) and self._check_sources():

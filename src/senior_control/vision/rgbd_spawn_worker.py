@@ -18,6 +18,8 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Any, Protocol, cast
 
+from senior_control.runtime.diagnostics import QueueSnapshot, process_diagnostics
+from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.independent_motion import (
     Frame,
     IndependentMotion,
@@ -376,6 +378,26 @@ class SpawnWorker:
     def sequence_frontier(self) -> int:
         return self._sequence
 
+    def _report_queue(self, now: float) -> None:
+        process_diagnostics().queue(
+            QueueSnapshot(
+                "rgbd.worker.pending",
+                int(self._pending is not None),
+                1,
+                max(0.0, now - self._pending.now_steady) * 1000 if self._pending else 0.0,
+                dropped_total=self.dropped,
+                running=int(self._inflight is not None),
+                depth_basis="parent_pending_child_inflight",
+            ),
+            now,
+            owner=self,
+        )
+        process_diagnostics().queue(
+            QueueSnapshot("rgbd.worker.jobs", None, 1, depth_basis="no_child_started_ack"),
+            now,
+            owner=self,
+        )
+
     def _dispatch(self) -> None:
         if self._inflight is None and self._pending is not None:
             try:
@@ -421,8 +443,12 @@ class SpawnWorker:
             return False
         if any(
             not math.isfinite(h.received_steady)
-            or ros_deadline_ns > min(h.stamp_ns, h.received_ros_ns) + 300_000_000
-            or steady_deadline > h.received_steady + 0.3
+            or ros_deadline_ns
+            > min(h.stamp_ns, h.received_ros_ns) + round(default_policy().hard_age_s * 1e9)
+            or steady_deadline
+            > h.received_steady
+            + default_policy().hard_age_s
+            - (h.received_ros_ns - h.stamp_ns) / 1e9
             for h in headers
         ):
             return False
@@ -438,7 +464,9 @@ class SpawnWorker:
             ros_deadline_ns,
             steady_deadline,
         )
+        self._report_queue(now_steady)
         self._dispatch()
+        self._report_queue(now_steady)
         return True
 
     def invalidate(self) -> None:
@@ -448,6 +476,7 @@ class SpawnWorker:
         self._pending = None
 
     def poll(self, *, now_ros_ns: int, now_steady: float) -> CompactResult | None:
+        self._report_queue(now_steady)
         if self._closed or self._unavailable:
             return None
         if (
@@ -535,9 +564,13 @@ class SpawnWorker:
             self._dispatch()
             return None
         if any(
-            not 0 <= now_ros_ns - h.stamp_ns <= 300_000_000
-            or not 0 <= now_ros_ns - h.received_ros_ns <= 300_000_000
-            or not 0 <= now_steady - h.received_steady <= 0.3
+            not sensor_current(
+                stamp_ros=h.stamp_ns / 1e9,
+                received_ros=h.received_ros_ns / 1e9,
+                received_steady=h.received_steady,
+                now_ros=now_ros_ns / 1e9,
+                now_steady=now_steady,
+            )
             for group in result.headers
             for h in group
         ):

@@ -1,6 +1,5 @@
 """Captured R6 reference216: the 150ms closed boundary is exact in ROS ns."""
 
-import copy
 import json
 import sys
 from pathlib import Path
@@ -29,7 +28,7 @@ def replay(monkeypatch):
     node.get_clock = lambda: N(now=lambda: N(nanoseconds=clock.ns))
     scan = CASE["scan"]["body"]
     node._scans[0].stamp = scan["stamp"]["sec"] + scan["stamp"]["nanosec"] / 1e9
-    core = module.MotionCoreOutput(node, SimulationMotionProfile())
+    core = module.MotionCoreOutput(node, SimulationMotionProfile(), ingress_factory=None)
     core._on_reference(N(data=json.dumps(CASE["packet"])), {"publisher_gid": b"fusion"})
     core._startup_motion_unconfirmed = False
     core.controller._last_now = clock.steady - 0.05
@@ -38,37 +37,31 @@ def replay(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("ros_ns", "allowed"),
-    [(5_150_000_000, True), (5_150_000_001, False), (4_999_999_999, False)],
+    ("age_ns", "allowed"),
+    [(150_000_000, True), (300_000_000, True), (999_999_999, True), (1_000_000_000, False)],
 )
-def test_captured_snapshot_body_and_selection_share_exact_closed_window(replay, ros_ns, allowed):
-    replay.clock.ns = ros_ns
-    # Isolate timestamp qualification from the independent clock-rollback barrier.
-    replay.core._reference_clock = None
-    usable = replay.core._reference_usable(replay.core._reference, replay.clock.steady, ros_ns)
+def test_raw_original_nanosecond_boundary_is_shared_one_second(replay, age_ns, allowed):
+    from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
+
+    replay.core.sensors.estimator = MotionEstimation()
+    replay.core.sensors.estimator.ingest(
+        MotionObservation(
+            "laser",
+            (0.0, None, 0.0),
+            5.0,
+            (Origin("laser", "boundary", 1, 5.0, 5.0, replay.clock.steady),),
+            independent=(True, True, True),
+        )
+    )
+    replay.clock.ns = 5_000_000_000 + age_ns
     body = replay.core._inputs(replay.clock.steady)[1]
     assert (body is not None) is allowed
-    assert usable is allowed
     if body is not None:
-        laser = next(s for s in CASE["packet"]["sources"] if s["source"] == "laser")
-        assert body.stamp_steady == laser["sample"]["received_steady"]
-        assert body.deadline_steady == laser["valid_until_steady"]
+        assert body.deadline_steady <= replay.clock.steady + (1 - age_ns / 1e9)
 
 
-def test_captured_tick_keeps_body_at_150ms_instead_of_latching_unknown_body_fault(replay):
-    replay.core.tick()
-    state = json.loads(replay.node.messages[-1].data)
-    assert state["body_reference"] is not None
-    assert state["fault_revision"] == 0
-
-
-def test_future_update_keeps_boundary_legal_snapshot_until_original_window_ends(replay):
-    future = copy.deepcopy(CASE["packet"])
-    future["sequence"] = 217
-    future["reference"]["end_ros"] = 5.2
-    replay.core._on_reference(N(data=json.dumps(future)), {"publisher_gid": b"fusion"})
-    assert replay.core._reference["sequence"] == 216
-    assert replay.core._pending_reference["sequence"] == 217
-    assert replay.core._inputs(replay.clock.steady)[1] is not None
-    replay.clock.ns += 1
-    assert replay.core._inputs(replay.clock.steady)[1] is None
+def test_captured_raw_rows_remain_usable_beyond_old_150ms_cutoff(replay):
+    replay.clock.ns = 5_200_000_000
+    _, body, _ = replay.core._inputs(replay.clock.steady)
+    assert body is not None
+    assert replay.core.sensors.independent is not None

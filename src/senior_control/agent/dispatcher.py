@@ -5,11 +5,14 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
+
+from senior_control.runtime.diagnostics import PendingCounter
 
 if TYPE_CHECKING:
     from senior_control.tasks.executor import TaskExecutor
@@ -110,6 +113,9 @@ class Dispatcher:
         self._navigation = navigation
         self._waypoint_create = waypoint_create
         self._lanes = {"edit": asyncio.Lock(), "map": asyncio.Lock()}
+        self._queue_counters = {
+            key: PendingCounter("tasks." + key + ".lock_wait") for key in self._lanes
+        }
 
     async def run(self, envelope: OperationEnvelope) -> OperationResult:
         payload = envelope.payload
@@ -173,9 +179,16 @@ class Dispatcher:
 
         async def guarded() -> int | None:
             nonlocal started
-            async with self._lanes[lane]:
-                started = True
-                return await action()
+            token = object()
+            counter = self._queue_counters[lane]
+            counter.enqueue(token, time.monotonic())
+            try:
+                async with self._lanes[lane]:
+                    counter.start(token, time.monotonic())
+                    started = True
+                    return await action()
+            finally:
+                counter.finish(token, time.monotonic())
 
         deadline = self._deadlines.map if lane == "map" else self._deadlines.edit
         try:

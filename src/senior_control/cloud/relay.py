@@ -5,7 +5,6 @@ import json
 import logging
 import secrets
 import time
-from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -47,6 +46,7 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_frame,
 )
+from senior_control.runtime.diagnostics import DiagnosticDeque
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +85,15 @@ class Outbox:
     """
 
     def __init__(
-        self, limit: int, *, on_discard: Callable[[str, bytes], None] | None = None
+        self,
+        limit: int,
+        *,
+        on_discard: Callable[[str, bytes], None] | None = None,
+        diagnostic_name: str = "cloud.transport_outbox",
     ) -> None:
         self._limit = limit
         self._on_discard = on_discard
-        self._items: deque[tuple[str, bytes]] = deque()
+        self._items: DiagnosticDeque[tuple[str, bytes]] = DiagnosticDeque(diagnostic_name, limit)
         self._event = asyncio.Event()
         self._close_code: int | None = None
 
@@ -108,8 +112,9 @@ class Outbox:
         if kind in SAFETY_TYPES or kind in LEASE_TYPES:
             self.discard_velocity()
         if kind in (VELOCITY, "drive.intent", SNAPSHOT):
-            self._discard_matching(lambda queued: queued == kind)
+            self._discard_matching(lambda queued: queued == kind, overwritten=True)
         if len(self._items) >= self._limit and not self._evict(kind):
+            self._items.reject()
             return False
         if kind in SAFETY_TYPES:
             # Give safety frames priority without reversing their command sequence.
@@ -140,16 +145,18 @@ class Outbox:
                 return frame
         return None
 
-    def _drop(self, index: int) -> None:
+    def _drop(self, index: int, *, overwritten: bool = False) -> None:
         kind, frame = self._items[index]
-        del self._items[index]
+        self._items.discard_index(index, overwritten=overwritten)
         if self._on_discard is not None:
             self._on_discard(kind, frame)
 
-    def _discard_matching(self, matches: Callable[[str], bool]) -> None:
+    def _discard_matching(
+        self, matches: Callable[[str], bool], *, overwritten: bool = False
+    ) -> None:
         for index in range(len(self._items) - 1, -1, -1):
             if matches(self._items[index][0]):
-                self._drop(index)
+                self._drop(index, overwritten=overwritten)
 
     def _evict(self, incoming: str) -> bool:
         if incoming in {VIDEO, WORKSPACE}:
@@ -357,6 +364,7 @@ class Hub:
             robot_id,
             Outbox(
                 self._limits.outbox_frames,
+                diagnostic_name="cloud.agent_outbox",
                 on_discard=lambda kind, raw: self._settle_discarded_command(
                     link, kind, raw, robot_id
                 ),
@@ -398,7 +406,10 @@ class Hub:
         if len(link.controllers) >= self._limits.max_controllers_per_robot:
             return None
         connection = Connection(
-            "control", robot_id, Outbox(self._limits.outbox_frames), session_hash=session_hash
+            "control",
+            robot_id,
+            Outbox(self._limits.outbox_frames, diagnostic_name="cloud.control_outbox"),
+            session_hash=session_hash,
         )
         link.controller_generation += 1
         connection.controller_generation = link.controller_generation

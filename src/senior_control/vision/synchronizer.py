@@ -5,6 +5,8 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from senior_control.runtime.diagnostics import DiagnosticDeque
+
 
 class FrameSyncError(ValueError):
     """An RGB/depth pair that must not be fused."""
@@ -76,8 +78,10 @@ class RgbdSynchronizer:
         if not math.isfinite(max_skew_s) or max_skew_s < 0.0:
             raise ValueError("max_skew_s must be finite and non-negative")
         self._max_skew_s = max_skew_s
-        self._rgb: deque[ImageFrame] = deque(maxlen=capacity)
-        self._depth: deque[DepthFrame] = deque(maxlen=capacity)
+        self._rgb: deque[ImageFrame] = DiagnosticDeque("vision.rgb_depth_pair.rgb", maxlen=capacity)
+        self._depth: deque[DepthFrame] = DiagnosticDeque(
+            "vision.rgb_depth_pair.depth", maxlen=capacity
+        )
         self.rejected = 0
 
     def offer_rgb(self, frame: ImageFrame) -> AlignedRgbdFrame | None:
@@ -109,7 +113,7 @@ class RgbdSynchronizer:
 
     def _consume(self, pair: AlignedRgbdFrame) -> None:
         """Frames at or before the matched stamps can no longer pair with newer data."""
-        self._rgb = deque((f for f in self._rgb if f.stamp > pair.rgb.stamp), self._rgb.maxlen)
-        self._depth = deque(
-            (f for f in self._depth if f.stamp > pair.depth.stamp), self._depth.maxlen
-        )
+        while self._rgb and self._rgb[0].stamp <= pair.rgb.stamp:
+            self._rgb.popleft()
+        while self._depth and self._depth[0].stamp <= pair.depth.stamp:
+            self._depth.popleft()

@@ -18,6 +18,8 @@ from pydantic import (
     model_validator,
 )
 
+from senior_control.runtime.diagnostics import DiagnosticsSettings
+
 
 class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, hide_input_in_errors=True)
@@ -110,6 +112,7 @@ class DeviceProfile(ConfigModel):
 
 
 class CommonSettings(ConfigModel):
+    diagnostics: DiagnosticsSettings = Field(default_factory=DiagnosticsSettings)
     secret: SecretStr
 
     @model_validator(mode="after")

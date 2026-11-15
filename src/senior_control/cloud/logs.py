@@ -10,12 +10,15 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
 from senior_control.vehicle_logs.wire import LOG_WIRE_BYTES, LogRequest
 
 
 @dataclass(eq=False)
 class LogPeer:
-    queue: asyncio.Queue[dict[str, Any]] = field(default_factory=lambda: asyncio.Queue(32))
+    queue: asyncio.Queue[dict[str, Any]] = field(
+        default_factory=lambda: DiagnosticAsyncQueue("cloud.logs_outbox", 32)
+    )
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
     def offer(self, frame: dict[str, Any]) -> bool:
@@ -79,7 +82,10 @@ class LogRelay:
         if agent is None or agent.closed.is_set() or len(self.viewers) >= 32:
             await socket.close(code=1013)
             return
-        client, peer = secrets.token_hex(16), LogPeer(queue=asyncio.Queue(4))
+        client, peer = (
+            secrets.token_hex(16),
+            LogPeer(queue=DiagnosticAsyncQueue("cloud.logs_outbox", 4)),
+        )
         self.viewers[client] = robot, peer
         await socket.accept()
 

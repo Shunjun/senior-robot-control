@@ -1,0 +1,97 @@
+{
+  "scope": "proposal_scalar_algebra_only",
+  "cases": [
+    {
+      "case": "close_quality_weight",
+      "value": 0.41333333333333333,
+      "selected": [
+        "a",
+        "b"
+      ],
+      "passed": true
+    },
+    {
+      "case": "close_age_weight",
+      "value": 0.41290322580645167,
+      "selected": [
+        "a",
+        "b"
+      ],
+      "passed": true
+    },
+    {
+      "case": "two_conflict_raw_newer",
+      "value": 0.9,
+      "selected": [
+        "b"
+      ],
+      "passed": true
+    },
+    {
+      "case": "consensus_beats_newest_outlier",
+      "value": 0.42000000000000004,
+      "selected": [
+        "a",
+        "b"
+      ],
+      "passed": true
+    },
+    {
+      "case": "no_consensus_newest",
+      "value": 0.8,
+      "selected": [
+        "c"
+      ],
+      "passed": true
+    },
+    {
+      "case": "same_time_quality_tie",
+      "value": 0.8,
+      "selected": [
+        "b"
+      ],
+      "passed": true
+    },
+    {
+      "case": "same_time_stable_id_tie",
+      "value": 0,
+      "selected": [
+        "a"
+      ],
+      "passed": true
+    },
+    {
+      "case": "derived_duplicate_one_vote",
+      "value": 0.42000000000000004,
+      "selected": [
+        "gps",
+        "wheel"
+      ],
+      "passed": true
+    },
+    {
+      "case": "expired_contributor_other_still_usable",
+      "value": 0.42,
+      "selected": [
+        "live"
+      ],
+      "passed": true
+    }
+  ],
+  "age_bands": [
+    "normal",
+    "low",
+    "low",
+    "invalid"
+  ],
+  "original_age_not_refreshed": true,
+  "queue_thresholds": {
+    "1": 1,
+    "4": 3,
+    "16": 12,
+    "64": 32,
+    "1024": 32
+  },
+  "assertion_groups": 12,
+  "all_passed": true
+}

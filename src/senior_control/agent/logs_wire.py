@@ -1,14 +1,17 @@
 """Log source and dedicated cloud transport; neither awaits the control connection.
 
+
 ROS /rosout is not wired here. This source records actual Python Agent events.
 """
 
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from senior_control.runtime.diagnostics import DiagnosticLock, PendingCounter
 from senior_control.settings.models import Level
 from senior_control.vehicle_logs.models import LogInput
 from senior_control.vehicle_logs.service import Action, VehicleLogService
@@ -76,7 +79,8 @@ class AgentLogConnection:
 
     async def serve(self, socket: Any) -> None:
         pending: dict[str, asyncio.Task[None]] = {}
-        send_lock = asyncio.Lock()
+        send_lock = DiagnosticLock("agent.logs_send_wait")
+        counter = PendingCounter("agent.logs_requests", 32)
 
         async def run(client: str, request: LogRequest) -> None:
             subscription = None
@@ -144,7 +148,19 @@ class AgentLogConnection:
                     raise ValueError("log operation quota")
                 request = LogRequest.model_validate_json(json.dumps(frame))
                 self.grants.active.add(client)
-                pending[client] = asyncio.create_task(run(client, request))
+                token = object()
+                counter.enqueue(token, time.monotonic())
+
+                async def counted(
+                    client: str = client, request: LogRequest = request, token: object = token
+                ) -> None:
+                    counter.start(token, time.monotonic())
+                    try:
+                        await run(client, request)
+                    finally:
+                        counter.finish(token, time.monotonic())
+
+                pending[client] = asyncio.create_task(counted())
         finally:
             self.connected = False
             self.grants.active.clear()

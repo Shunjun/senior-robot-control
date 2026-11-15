@@ -83,6 +83,7 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
         node._scans = [
             N(
                 received=t,
+                received_ros=t,
                 stamp=t,
                 message=N(
                     source_epoch="scan",
@@ -105,7 +106,7 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
 
     for i in range(70):
         state = tick(10.0 + i * 0.025)
-    assert state["healthy"], state
+    assert state["healthy"], (state["reason"], state)
     assert state["stationary"], state
     assert "acquire" in state["allowed_actions"], state
     assert core.command(barrier("prepared"))
@@ -133,4 +134,4 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     assert core.node.emitted[-1][0] == Velocity(0, 0)
     assert core.target.source == "idle"
     assert state["body_reference"] is not None
-    assert core._reference["reference"]["statistical_covariance"] is None
+    assert core.sensors.latest.vx.error is None  # No invented physical error bound.

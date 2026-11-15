@@ -75,8 +75,16 @@ bool rigid(const std::array<double, 16> & m)
 }  // namespace
 
 RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
-: Node("rgbd_candidate_receipt", options), relay_boot_(new_boot())
+: Node("rgbd_candidate_receipt", options), relay_boot_(new_boot()), sensor_policy_(
+    declare_parameter<double>("sensor_soft_age_s", -1.0),
+    declare_parameter<double>("sensor_hard_age_s", -1.0),
+    declare_parameter<double>("sensor_diagnostics_period_s", -1.0))
 {
+  queue_policy_ = std::make_unique<sensor_timing::QueuePolicy>(
+    declare_parameter<int>("queue_warn_count", -1), declare_parameter<double>("queue_warn_ratio", -1.),
+    declare_parameter<double>("queue_warn_repeat_s", -1.),
+    declare_parameter<double>("queue_warn_recovery_ratio", -1.),
+    declare_parameter<double>("queue_warn_oldest_wait_ms", -1.));
   const auto prefix = declare_parameter<std::string>("topic_prefix", "/rgbd_diagnostic");
   if (!text_ok(prefix, 100)) throw std::invalid_argument("invalid RGB-D receipt prefix");
   raw_topics_ = {prefix+"/rgb", prefix+"/depth", prefix+"/rgb_info", prefix+"/depth_info"};
@@ -136,7 +144,7 @@ bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns, double steady)
   if (last_ros_ > 0 && (ros_ns < last_ros_ || steady < last_steady_)) {
     // A new time epoch requires restarting the diagnostic chain and its ledgers.
     failed_ = true;
-    ledger_.clear(); pending_tf_.clear(); tf_ready_ = false; producer_ready_ = false;
+    ledger_.clear(); tf_queue_dropped_ += pending_tf_.size(); pending_tf_.clear(); tf_ready_ = false; producer_ready_ = false;
     invalidate("clock_invalid", true);
     return false;
   }
@@ -255,10 +263,11 @@ void RgbdCandidateReceipt::tf(const Static & body, const std::string & actual)
         (body.generation == previous.generation &&
         (body.sequence < previous.sequence ||
         (body.sequence == previous.sequence && !previous.valid && body.valid)))) return;
-    pending_tf_.erase(prior);
+    pending_tf_.erase(prior); ++tf_queue_overwritten_;
   }
-  if (pending_tf_.size() == 4) pending_tf_.pop_front();
-  pending_tf_.emplace_back(actual, body);
+  if (pending_tf_.size() == 4) {pending_tf_.pop_front(); ++tf_queue_dropped_;}
+  pending_tf_.push_back({actual, body, steady_now()});
+  tf_queue_monitor_.note(pending_tf_.size(),4,0.,steady_now(),*queue_policy_);
   if (clock_ready) retry_tf();
 }
 
@@ -266,6 +275,7 @@ void RgbdCandidateReceipt::retry_tf()
 {
   for (auto pending = pending_tf_.begin(); pending != pending_tf_.end();) {
     if (retired_tf_gids_.count(pending->first)) {
+      ++tf_queue_dropped_;
       pending = pending_tf_.erase(pending);
       continue;
     }
@@ -365,15 +375,19 @@ bool RgbdCandidateReceipt::originals_current(const Candidate & body, int64_t ros
     if (current.bridge_gid.empty() || !graph_matches(raw_topics_[i], "raw_receipt", current.bridge_gid)) return false;
     for (const auto * h : {first[i], second[i]}) {
       const auto stamp = nanos(h->stamp), received = nanos(h->received_ros);
-      if (!h->valid || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
+      if (stamp < 0 || received < stamp || ros_ns < stamp ||
+          !std::isfinite(h->received_steady) || steady < h->received_steady) return false;
+      const auto age = sensor_policy_.age_ns(stamp,received,h->received_steady,ros_ns,steady);
+      sensor_ages_.observe(age,sensor_policy_);
+      if (!h->valid || age >= sensor_policy_.hard_ns || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
           h->source_epoch != current.epoch || h->bridge_boot_id != raw_boot_ ||
           h->capture_generation != raw_generation_ || h->frame_id != camera_ || h->sequence == 0 ||
           stamp <= producer_floor_ros_ || received <= producer_floor_ros_ ||
           h->received_steady <= producer_floor_steady_ || stamp < tf_admission || received < tf_admission ||
           h->received_steady < tf_first_.admitted_from_steady ||
-          stamp > ros_ns || received > ros_ns || ros_ns-stamp > 300000000LL ||
-          ros_ns-received > 300000000LL || !std::isfinite(h->received_steady) ||
-          h->received_steady > steady || steady-h->received_steady > .3) return false;
+          stamp > ros_ns || received > ros_ns || ros_ns-stamp >= sensor_policy_.hard_ns ||
+          ros_ns-received >= sensor_policy_.hard_ns || !std::isfinite(h->received_steady) ||
+          h->received_steady > steady || steady-h->received_steady >= sensor_policy_.hard) return false;
     }
     if (nanos(first[i]->stamp) != first_stamp || nanos(second[i]->stamp) != second_stamp ||
         second[i]->sequence <= first[i]->sequence) return false;
@@ -461,9 +475,11 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
   for (const auto * header : {&body.first_rgb, &body.first_depth, &body.first_rgb_info,
       &body.first_depth_info, &body.second_rgb, &body.second_depth, &body.second_rgb_info,
       &body.second_depth_info}) {
-    if (final_ros - nanos(header->stamp) > 300000000LL ||
-        final_ros - nanos(header->received_ros) > 300000000LL ||
-        final_steady - header->received_steady > .3) {
+    if (sensor_policy_.age_ns(nanos(header->stamp),nanos(header->received_ros),
+          header->received_steady,final_ros,final_steady) >= sensor_policy_.hard_ns ||
+        final_ros - nanos(header->stamp) >= sensor_policy_.hard_ns ||
+        final_ros - nanos(header->received_ros) >= sensor_policy_.hard_ns ||
+        final_steady - header->received_steady >= sensor_policy_.hard) {
       invalidate("candidate_expired");
       return;
     }
@@ -478,6 +494,25 @@ void RgbdCandidateReceipt::inspect()
   const auto ros_ns = get_clock()->now().nanoseconds();
   const auto steady = steady_now();
   if (!clocks_ok(ros_ns, steady)) return;
+  if (steady-last_age_report_ >= sensor_policy_.period) {
+    RCLCPP_DEBUG(get_logger(), "sensor_use_age avg=%.6f max=%.6f count=%llu over_soft=%llu over_hard=%llu",
+      sensor_ages_.count ? sensor_ages_.sum/sensor_ages_.count : 0., sensor_ages_.maximum,
+      static_cast<unsigned long long>(sensor_ages_.count),
+      static_cast<unsigned long long>(sensor_ages_.over_soft),
+      static_cast<unsigned long long>(sensor_ages_.over_hard));
+    sensor_ages_ = {}; last_age_report_ = steady;
+  }
+  const auto oldest = std::min_element(pending_tf_.begin(),pending_tf_.end(),
+    [](const auto &a,const auto &b) {return a.queued<b.queued;});
+  const double wait_ms = pending_tf_.empty() ? 0. : (steady-oldest->queued)*1000;
+  const int event = tf_queue_monitor_.observe(pending_tf_.size(),4,wait_ms,steady,*queue_policy_);
+  if (event==1) RCLCPP_WARN(get_logger(),
+    "queue=rgbd.pending_tf.native pending=%zu trigger_pending=%zu peak=%zu threshold=%zu capacity=4 oldest_wait_ms=%.3f dropped_total=%llu overwritten_total=%llu",
+    pending_tf_.size(),tf_queue_monitor_.warning_pending,tf_queue_monitor_.peak,queue_policy_->threshold(4),wait_ms,
+    static_cast<unsigned long long>(tf_queue_dropped_),
+    static_cast<unsigned long long>(tf_queue_overwritten_));
+  else if (event==-1) RCLCPP_INFO(get_logger(),"queue_recovered queue=rgbd.pending_tf.native");
+
   for (size_t i=0; i<4; ++i) {
     auto & source = sources_[i];
     if (!source.bridge_gid.empty() && !graph_matches(raw_topics_[i], "raw_receipt", source.bridge_gid)) {

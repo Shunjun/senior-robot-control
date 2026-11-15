@@ -59,6 +59,12 @@ from senior_control.protocol import (
     VideoEnvelope,
     WorkspaceEnvelope,
 )
+from senior_control.runtime.diagnostics import (
+    DiagnosticPending,
+    PendingCounter,
+    QueueSnapshot,
+    process_diagnostics,
+)
 from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.settings.service import RuntimeGate, SettingsService
@@ -155,6 +161,8 @@ class Agent:
         self._runtime_gate = runtime_gate or (settings.runtime if settings is not None else None)
         self._native_manual = native_manual
         self._native_reset_token: int | None = None
+        self._intent_queue = PendingCounter("agent.manual_intent", 1)
+        self._velocity_queue = PendingCounter("agent.velocity", 1)
         self._queued_intent: tuple[Link, ManualIntentEnvelope, float, float] | None = None
         self._intent_task: asyncio.Task[None] | None = None
         self.metrics = metrics if metrics is not None else Metrics()
@@ -220,7 +228,9 @@ class Agent:
         self._velocity_task: asyncio.Task[None] | None = None
         self._queued_velocity: tuple[Link, VelocityEnvelope, int] | None = None
         self._replaced_velocity: deque[DriveExecutionFeedback] = deque(maxlen=16)
-        self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = {}
+        self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = DiagnosticPending(
+            "agent.safety_pending", MAX_SAFETY_PENDING
+        )
         self._safety_cleanups: set[asyncio.Task[None]] = set()
         self._safety_lock = asyncio.Lock()
         self._safety_admitting = 0
@@ -468,6 +478,8 @@ class Agent:
             self.request_shutdown()
             raise
         self._heartbeat_generation += 1
+        if self._queued_velocity is not None:
+            self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
         self._queued_velocity = None
         self._replaced_velocity.clear()
         self._revoked_link = None
@@ -850,14 +862,17 @@ class Agent:
                 if envelope._received_steady is not None
                 else self._clock.monotonic()
             )
-            self._settle_queued_intent()
+            self._settle_queued_intent(overwritten=True)
             self._queued_intent = (link, envelope, now, now + self._command_ttl_seconds)
+            self._intent_queue.enqueue(id(envelope), time.monotonic())
             if self._intent_task is None or self._intent_task.done():
                 self._intent_task = self._spawn(self._drain_intent())
             return
         if envelope.type in HALT_TYPES or envelope.type == "control.release":
             self._settle_queued_intent()
         if envelope.type in HALT_TYPES:
+            if self._queued_velocity is not None:
+                self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
             self._queued_velocity = None
             key = self._safety_key(envelope)
             existing = self._safety_pending.get(key)
@@ -878,12 +893,16 @@ class Agent:
         if isinstance(envelope, VelocityEnvelope) and envelope.payload.gesture is not None:
             if self._queued_velocity is not None:
                 previous = self._queued_velocity[1]
+                self._velocity_queue.discard(id(previous), time.monotonic(), overwritten=True)
                 self._replaced_velocity.append(DriveExecutionFeedback.superseded(previous))
             self._queued_velocity = (link, envelope, self.continuity_generation)
+            self._velocity_queue.enqueue(id(envelope), time.monotonic())
             if self._velocity_task is None or self._velocity_task.done():
                 self._velocity_task = self._spawn(self._drain_velocity())
             return
         if envelope.type in {"control.acquire", "control.release"}:
+            if self._queued_velocity is not None:
+                self._velocity_queue.discard(id(self._queued_velocity[1]), time.monotonic())
             self._queued_velocity = None
         safety_active = self._safety_task is not None and not self._safety_task.done()
         workspace_active = self._workspace_request in self._inflight
@@ -898,9 +917,10 @@ class Agent:
         else:
             self._spawn(self._answer(link, envelope))
 
-    def _settle_queued_intent(self) -> None:
+    def _settle_queued_intent(self, *, overwritten: bool = False) -> None:
         pending, self._queued_intent = self._queued_intent, None
         if pending is not None:
+            self._intent_queue.discard(id(pending[1]), time.monotonic(), overwritten=overwritten)
             # Same successful transport settlement as relay coalescing: no
             # execution claim, no authority rejection, no resend of an old target.
             self._spawn(self._reply(pending[0], pending[1]))
@@ -909,18 +929,25 @@ class Agent:
         while self._queued_intent is not None:
             link, envelope, received, deadline = self._queued_intent
             self._queued_intent = None
+            self._intent_queue.start(id(envelope), time.monotonic())
             try:
                 result = await self._manual_control(envelope, received, deadline)
             except DomainError as exc:
                 await self._reply(link, envelope, error=exc.code)
             else:
                 await self._reply(link, envelope, result=result)
+            finally:
+                self._intent_queue.finish(id(envelope), time.monotonic())
 
     async def _drain_velocity(self) -> None:
         while self._queued_velocity is not None:
             link, envelope, generation = self._queued_velocity
             self._queued_velocity = None
-            await self._answer(link, envelope, generation=generation)
+            self._velocity_queue.start(id(envelope), time.monotonic())
+            try:
+                await self._answer(link, envelope, generation=generation)
+            finally:
+                self._velocity_queue.finish(id(envelope), time.monotonic())
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
         if task.cancelled() or task.exception() is not None:
@@ -987,10 +1014,31 @@ class Agent:
             return False
         return True
 
+    def _report_queues(self) -> None:
+        now = time.monotonic()
+        d = process_diagnostics()
+        d.queue(
+            QueueSnapshot(
+                "agent.inflight", None, None, running=len(self._inflight), kind="inflight"
+            ),
+            now,
+            owner=self,
+        )
+        d.queue(
+            QueueSnapshot(
+                "agent.stragglers", None, None, running=len(self._stragglers), kind="inflight"
+            ),
+            now,
+            owner=self,
+        )
+        d.pump(now)
+
     def _spawn(self, work: Awaitable[None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(work)
         self._inflight.add(task)
+        self._report_queues()
         task.add_done_callback(self._inflight.discard)
+        task.add_done_callback(lambda _: self._report_queues())
         return task
 
     async def _answer(

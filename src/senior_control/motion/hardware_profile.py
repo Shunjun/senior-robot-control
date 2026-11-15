@@ -5,8 +5,10 @@ receive this profile and the isolated simulation profile through the same API.
 """
 
 import json
+import math
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,6 +19,9 @@ from senior_control.motion.controller import ControllerConfig
 from senior_control.motion.fusion import FusionConfig
 from senior_control.motion.observations import AdmissionConfig, Source, SourceRule
 from senior_control.motion.temporal import TemporalConfig
+from senior_control.runtime.diagnostics import DiagnosticsSettings
+from senior_control.sensors.input_config import OptionalMotionInput
+from senior_control.sensors.policy import default_policy
 
 
 class HardwareEstopCapability(BaseModel):
@@ -52,7 +57,56 @@ class HardwareMotionProfile(BaseModel):
     operating_conditions: str = ""
     simulation_only: Literal[False]
     # Software evidence TTL; acceptance still checks original receipts.
-    max_age: float = Field(default=0.5, gt=0)
+    diagnostics: DiagnosticsSettings = Field(default_factory=DiagnosticsSettings)
+    max_age: float = Field(default_factory=lambda: default_policy().hard_age_s, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def common_sensor_age(cls, value: Any) -> Any:
+        # //Compatible: old profiles stored per-deployment sensor-age copies.
+        # Migrate only in memory; never rewrite the vehicle's saved configuration.
+        if isinstance(value, dict):
+            legacy_age = value.get("max_age", default_policy().hard_age_s)
+            if (
+                isinstance(legacy_age, bool)
+                or not isinstance(legacy_age, (int, float))
+                or not math.isfinite(legacy_age)
+                or legacy_age <= 0
+            ):
+                raise ValueError("invalid legacy sensor age")
+            age = default_policy().hard_age_s
+            value = {**value, "max_age": age}
+            for name in ("admission_config", "temporal_config"):
+                nested = value.get(name)
+                if nested is None:
+                    continue
+                if is_dataclass(nested) and not isinstance(nested, type):
+                    nested = asdict(nested)
+                if not isinstance(nested, dict):
+                    continue
+                nested = dict(nested)
+                if name == "admission_config":
+                    nested.update(
+                        recovery_samples=1,
+                        recovery_span_s=0.0,
+                        heading_max_age_s=age,
+                        alignment_max_skew_s=age,
+                        clock_pause_s=age,
+                    )
+                    if not isinstance(nested.get("rules"), (list, tuple)):
+                        raise ValueError("invalid legacy source rules")
+                    nested["rules"] = [
+                        {
+                            **(asdict(r) if is_dataclass(r) and not isinstance(r, type) else r),
+                            "max_age_s": age,
+                        }
+                        for r in nested["rules"]
+                    ]
+                else:
+                    nested.update(max_hold_s=age, max_gap_s=age, prediction_horizon_s=age)
+                value[name] = nested
+        return value
+
     accel: float = Field(gt=0)
     decel: float = Field(gt=0)
     jerk: float = Field(gt=0)
@@ -106,6 +160,8 @@ class HardwareMotionProfile(BaseModel):
     temporal_config: TemporalConfig | None = None
     fusion_config: FusionConfig | None = None
     controller_config: ControllerConfig | None = None
+    gps_input: OptionalMotionInput | None = None
+    rgbd_input: OptionalMotionInput | None = None
     wheel_topic: str = Field(default="/odom", pattern=r"^/[A-Za-z_][A-Za-z0-9_/]*$")
     imu_topic: str = Field(default="/imu/data_raw", pattern=r"^/[A-Za-z_][A-Za-z0-9_/]*$")
     wheel_publisher: str = Field(default="wheeltec_robot", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -120,6 +176,8 @@ class HardwareMotionProfile(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "HardwareMotionProfile":
+        if self.gps_input is not None and self.gps_input.origin_family is None:
+            raise ValueError("GPS input requires its original raw acquisition family")
         if self.model_seconds <= self.horizon_s or self.lateral_stop_s > self.horizon_s:
             raise ValueError(
                 "model lease must cover search horizon and lateral settling must fit it"
@@ -157,19 +215,19 @@ class HardwareMotionProfile(BaseModel):
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(
             tuple(SourceRule(source, self.max_age, 0.4, 0.1, 2.0) for source in Source),
-            5,
-            0.5,
+            1,
+            0.0,
             self.cap,
             self.degraded_cap,
-            0.2,
-            0.1,
+            self.max_age,
+            self.max_age,
             0.05,
-            0.3,
+            self.max_age,
             16,
         )
 
     def temporal(self) -> TemporalConfig:
-        return TemporalConfig(2.0, 512, 0.15, 0.15, 0.3, True)
+        return TemporalConfig(2.0, 512, self.max_age, self.max_age, self.max_age, True)
 
     def fusion(self) -> FusionConfig:
         return FusionConfig(

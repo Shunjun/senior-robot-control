@@ -113,8 +113,8 @@ def wire_depth(stamp_ns=1_000_000_000):
         reason="",
         stamp=stamp(stamp_ns),
         camera_info_stamp=stamp(stamp_ns),
-        received_ros=stamp(1_000_000_000),
-        camera_info_received_ros=stamp(1_000_000_000),
+        received_ros=stamp(stamp_ns),
+        camera_info_received_ros=stamp(stamp_ns),
         transform_stamp=stamp(0),
         transform_static=True,
         received_steady=10.0,
@@ -180,9 +180,7 @@ def test_synchronizer_waits_for_future_clock_without_replacing_first_receipts():
         "rgb-gid",
         ImageFrame(stamp / 1e9, 3, 3, "rgb8", bytes(27)),
     )
-    info = replace(
-        color_info(), stamp_ns=stamp, received_ros_ns=1_000_000_000, received_steady=10.0
-    )
+    info = replace(color_info(), stamp_ns=stamp, received_ros_ns=stamp, received_steady=10.0)
     depth = depth_snapshot(wire_depth(stamp))
     sync = SemanticSynchronizer(max_age_s=0.3)
     sync.offer_rgb(rgb)
@@ -218,15 +216,13 @@ def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
         wire.samples[0].depth_m = wire.samples[0].z = distance
         rgb = ColorCapture(
             stamp,
-            1_000_000_000,
+            stamp,
             10.0,
             "optical",
             "rgb-gid",
             ImageFrame(stamp / 1e9, 3, 3, "rgb8", bytes(27)),
         )
-        info = replace(
-            color_info(), stamp_ns=stamp, received_ros_ns=1_000_000_000, received_steady=10.0
-        )
+        info = replace(color_info(), stamp_ns=stamp, received_ros_ns=stamp, received_steady=10.0)
         return rgb, info, depth_snapshot(wire)
 
     try:
@@ -242,7 +238,7 @@ def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
         assert result.depth.samples[0].depth_m == 1.0
         assert result.associations[0].sample.z == 1.0
         assert coordinator.is_current(result, now_ros_ns=1_100_000_000, now_steady=10.1)
-        assert not coordinator.is_current(result, now_ros_ns=1_100_000_000, now_steady=10.4)
+        assert not coordinator.is_current(result, now_ros_ns=1_100_000_000, now_steady=11.1)
         coordinator.invalidate()
         assert not coordinator.is_current(result, now_ros_ns=1_100_000_000, now_steady=10.1)
     finally:
@@ -331,3 +327,28 @@ def test_semantic_associations_bound_number_of_objects_and_never_assume_static()
     assert associate_samples((), (sample,)) == ()  # No result is not static evidence.
     with pytest.raises(ValueError):
         associate_samples((detection,) * 33, (sample,))
+
+
+@pytest.mark.parametrize("age,valid", [(0.3, True), (0.5, True), (0.999, True), (1.0, False)])
+def test_semantic_registration_uses_common_original_age(age, valid):
+    from senior_control.vision.semantic_runtime import SemanticSynchronizer, qualify_registration
+
+    assert SemanticSynchronizer(max_age_s=1)._age == 1
+
+    def qualify():
+        return qualify_registration(
+            color_info(),
+            depth_metadata(),
+            rgb_stamp_ns=1_000_000_000,
+            rgb_frame="optical",
+            registered_profile=True,
+            now_ros_ns=round((1 + age) * 1e9),
+            now_steady=10 + age,
+            max_age_s=0.3,
+        )
+
+    if valid:
+        assert qualify()
+    else:
+        with pytest.raises(ValueError, match="expired"):
+            qualify()

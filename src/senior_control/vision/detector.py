@@ -1,5 +1,6 @@
 """Optional object detector and its bounded, non-blocking inference worker.
 
+
 No detector runtime is imported at module import time. A missing weight file or
 a missing runtime yields a detector that is explicitly disabled; it never
 returns an empty list that could be read as "nobody is there".
@@ -13,6 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from senior_control.runtime.diagnostics import DiagnosticDeque
 from senior_control.vision.synchronizer import ImageFrame
 
 InferFn = Callable[[ImageFrame], "list[Detection]"]
@@ -135,7 +137,7 @@ class InferenceWorker:
         if max_pending <= 0:
             raise ValueError("max_pending must be positive")
         self._detector = detector
-        self._pending: deque[ImageFrame] = deque()
+        self._pending: deque[ImageFrame] = DiagnosticDeque("vision.detector.pending", max_pending)
         self._max_pending = max_pending
         self._condition = threading.Condition()
         self._busy = False
@@ -157,7 +159,7 @@ class InferenceWorker:
             if self._closed:
                 return False
             if len(self._pending) >= self._max_pending:
-                self._pending.popleft()
+                del self._pending[0]
                 self.dropped += 1
             self._pending.append(frame)
             if self._thread is None:

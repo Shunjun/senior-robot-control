@@ -15,6 +15,7 @@
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <senior_motion_msgs/msg/scan_motion.hpp>
+#include <senior_motion_msgs/msg/raw_capture_header.hpp>
 #include <senior_motion_msgs/msg/fenced_filtered_scan.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -30,7 +31,8 @@ public:
     const auto scan_topic = declare_parameter<std::string>("scan_topic", "/perception/scan_filtered");
     scan_topic_ = scan_topic;
     raw_topic_ = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
-    max_age_ = declare_parameter<double>("scan_max_age", -1.0);
+    declare_parameter<double>("scan_max_age", -1.0);  //Compatible: old YAML copy is no longer authoritative.
+    max_age_ = declare_parameter<double>("sensor_hard_age_s", -1.0);
     max_speed_ = declare_parameter<double>("max_linear_speed", -1.0);
     max_yaw_rate_ = declare_parameter<double>("max_yaw_rate", -1.0);
     MatcherLimits limits;
@@ -232,9 +234,9 @@ private:
       std::chrono::steady_clock::now().time_since_epoch()).count();
     const double received_ros = rclcpp::Time(capture.received_ros).seconds();
     if (!std::isfinite(capture.received_steady) || steady < capture.received_steady ||
-        steady - capture.received_steady > max_age_ || received_ros <= 0 ||
+        steady - capture.received_steady >= max_age_ || received_ros <= 0 ||
         get_clock()->now().seconds() < received_ros ||
-        get_clock()->now().seconds() - received_ros > max_age_) {
+        get_clock()->now().seconds() - received_ros >= max_age_) {
       invalidate(output, "raw_scan_receipt_expired", true); return;
     }
     relay_boot_ = owner.relay_boot;
@@ -248,7 +250,7 @@ private:
     const double stamp = rclcpp::Time(capture.stamp).seconds();
     const double now = get_clock()->now().seconds();
     if (!std::isfinite(stamp) || stamp <= 0 || !std::isfinite(now) || now < stamp ||
-        now - stamp > max_age_ || (last_stamp_ > 0 && stamp <= last_stamp_) ||
+        now - stamp >= max_age_ || (last_stamp_ > 0 && stamp <= last_stamp_) ||
         capture.frame_id.empty() || !std::isfinite(message.time_increment) ||
         message.time_increment != 0.0) {
       last_stamp_ = 0;
@@ -286,6 +288,7 @@ private:
       if (!match.valid) {
         if (match.reason == "initializing") {
           previous_stamp_ = rclcpp::Time(capture.stamp);
+          previous_capture_ = capture;
           previous_stamp_valid_ = true;
         }
         invalidate(output, match.reason, match.reason != "initializing"); return;
@@ -303,7 +306,10 @@ private:
       //Compatible: Humble rclcpp::Time converts to builtin_interfaces::msg::Time.
       // Keep the original integer source identity; match.start is a double.
       output.interval_start = previous_stamp_;
+      output.first_capture = previous_capture_;
+      output.second_capture = capture;
       previous_stamp_ = rclcpp::Time(capture.stamp);
+      previous_capture_ = capture;
       output.source_epoch = epoch_;
       output.valid = true;
       output.reason = match.reason;
@@ -340,6 +346,7 @@ private:
   bool published_qualified_ = false;
   rclcpp::Time previous_stamp_{static_cast<int64_t>(0), RCL_ROS_TIME};
   bool previous_stamp_valid_ = false;
+  senior_motion_msgs::msg::RawCaptureHeader previous_capture_;
   std::array<uint8_t, RMW_GID_STORAGE_SIZE> source_gid_{};
   bool diagnostic_failure_reported_ = false;
   MatchDiagnostics current_diagnostics_;

@@ -17,6 +17,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
 from senior_control.safety.self_filter import ScanObservation, filter_self
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_robot.motion_lifecycle import run
 
@@ -33,7 +34,7 @@ class ScanAdapter(Node):
         # //Compatible: omitted range uncertainty retains exact-mask filtering.
         self.declare_parameter("self_mask_range_uncertainty", 0.0)
         self.body = self.get_parameter("body_frame").value
-        self.max_age = self.get_parameter("max_age_seconds").value
+        self.max_age = default_policy().hard_age_s
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         try:
             coords = self.get_parameter("self_mask_xy").value or []

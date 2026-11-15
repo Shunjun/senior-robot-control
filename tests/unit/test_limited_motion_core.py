@@ -65,7 +65,8 @@ def setup_stop(c, monkeypatch):
                     ),
                 )
             )
-        c._reference = dict(
+        packet = dict(
+            sampled_ros=now,
             sampled_steady=now,
             sources=sources,
             reference=dict(
@@ -76,6 +77,7 @@ def setup_stop(c, monkeypatch):
                 source_health=sources,
             ),
         )
+        c.sensors.ingest_packet(packet)
         c.tick()
         result = json.loads(c.node.publishers["/motion/runtime"].messages[-1].data)
         assert result["body_reference"] is None and not result["stationary"]
@@ -94,6 +96,9 @@ def intent(clock, authority, sequence, vx):
     m.received_steady = clock[0]
     m.steady_deadline = clock[0] + 0.2
     m.vx = vx
+    m.manual_linear = vx / (5 / 9)
+    m.manual_linear_limit = 5 / 9
+    m.degraded_linear_limit = 0.3
     return m
 
 
@@ -140,9 +145,17 @@ def test_first_motion_rechecks_evidence_after_neutral(core, monkeypatch, change)
     assert core.command(intent(clock, "new-authority", 1, 0.0))
     tick()
     if change == "expire":
-        clock[0] += 0.2
+        clock[0] += 1.0
     else:
-        row = core._reference["sources"][1]
-        row["epoch"] = row["sample"]["epoch"] = "replacement"
-    assert not core.command(intent(clock, "new-authority", 2, 5 / 9))
+        from senior_control.motion.estimator import MotionObservation, Origin
+
+        now = clock[0]
+        core.sensors.ingest_observation(
+            MotionObservation(
+                "imu", (None, None, 0.0), now, (Origin("imu", "replacement", 1, now, now, now),)
+            ),
+            now,
+            now,
+        )
+    assert core.command(intent(clock, "new-authority", 2, 5 / 9)) is (change == "epoch")
     assert core.node.emitted[-1][0] == Velocity(0, 0)

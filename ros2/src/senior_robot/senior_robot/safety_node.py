@@ -69,6 +69,7 @@ from senior_control.safety.velocity_uncertainty import (
     IntervalVelocityBounds,
     interval_velocity_bounds,
 )
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
@@ -207,8 +208,8 @@ class SafetyGate(Node):
         self._worker_last_result = ""
         self._history = self._new_history()
         self._reference_admission: tuple[float, float, float] | None = None
-        scan_age = _positive(float(self.get_parameter("observation_max_age").value))
-        measured_age = _positive(float(self.get_parameter("measurement_max_age").value))
+        scan_age = default_policy().hard_age_s
+        measured_age = default_policy().hard_age_s
         self._freshness = (
             SafetyFreshness(min(scan_age, measured_age)) if scan_age and measured_age else None
         )
@@ -308,9 +309,7 @@ class SafetyGate(Node):
             ),
             reaction_time=_nonnegative(float(self.get_parameter("reaction_time").value)),
             hard_margin=_nonnegative(float(self.get_parameter("hard_margin").value)),
-            observation_max_age=_nonnegative(
-                float(self.get_parameter("observation_max_age").value)
-            ),
+            observation_max_age=default_policy().hard_age_s,
         )
 
     def _velocity(self, msg: Twist) -> Velocity | None:

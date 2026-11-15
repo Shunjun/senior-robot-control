@@ -15,6 +15,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from senior_control.sensors.policy import ros_sensor_parameters
+
 
 def generate_launch_description():
     robot_id = ParameterValue(LaunchConfiguration("robot_id"), value_type=str)
@@ -147,12 +149,17 @@ def generate_launch_description():
                     }
                 ],
             ),
-            Node(package="senior_robot", executable="scan_adapter", parameters=[params, rear_mask]),
+            Node(
+                package="senior_robot",
+                executable="scan_adapter",
+                parameters=[params, rear_mask, ros_sensor_parameters()],
+            ),
             Node(
                 package="senior_scan_matcher",
                 executable="scan_motion_node",
                 parameters=[
                     params,
+                    ros_sensor_parameters(),
                     {
                         "max_linear_speed": ParameterValue(
                             LaunchConfiguration("core_matcher_linear"), value_type=float
@@ -168,6 +175,7 @@ def generate_launch_description():
                 executable="motion_fusion",
                 parameters=[
                     params,
+                    ros_sensor_parameters(),
                     {
                         "motion_core_profile": ParameterValue(
                             LaunchConfiguration("motion_core_profile"), value_type=str
@@ -176,14 +184,21 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="senior_sensor_ingress", executable="scan_receipt_node", parameters=[params]
+                package="senior_sensor_ingress",
+                executable="scan_receipt_node",
+                parameters=[params, ros_sensor_parameters()],
             ),
-            Node(package="senior_robot", executable="safety_scan_ingress", parameters=[params]),
+            Node(
+                package="senior_robot",
+                executable="safety_scan_ingress",
+                parameters=[params, ros_sensor_parameters()],
+            ),
             Node(
                 package="senior_robot",
                 executable="safety_node",
                 parameters=[
                     params,
+                    ros_sensor_parameters(),
                     LaunchConfiguration("safety_overlay"),
                     rear_mask,
                     {
@@ -206,6 +221,7 @@ def generate_launch_description():
                 name="command_node",
                 parameters=[
                     params,
+                    ros_sensor_parameters(),
                     {
                         "robot_id": robot_id,
                         "safety_state_path": LaunchConfiguration("safety_state_path"),

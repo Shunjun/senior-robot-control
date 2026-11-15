@@ -16,6 +16,8 @@ from senior_motion_msgs.msg import (
     SemanticObject,
 )
 
+from senior_control.runtime.diagnostics import process_diagnostics
+from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth_runtime import CameraInfoFrame
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
@@ -69,7 +71,9 @@ class SemanticIngress(Node):
             str(self.get_parameter("raw_depth_topic").value),
             str(self.get_parameter("raw_depth_info_topic").value),
         )
-        self._max_age = float(self.get_parameter("max_age_s").value)
+        # //Compatible: retain the legacy parameter as input metadata; one shared
+        # dynamic-sensor policy supplies actual runtime age.
+        self._max_age = default_policy().hard_age_s
         self._registered = bool(self.get_parameter("registered_profile").value)
         self._depth_egress = EgressAdmission(max_age_s=self._max_age)
         self._sync = SemanticSynchronizer(max_age_s=self._max_age)
@@ -360,6 +364,7 @@ class SemanticIngress(Node):
             self._reset("depth_invalid")
 
     def _on_timer(self):
+        process_diagnostics().pump(time.monotonic())
         ros_ns, steady = self.get_clock().now().nanoseconds, time.monotonic()
         status, reason = self._coordinator.status
         if steady - self._last_status >= 0.2 and (

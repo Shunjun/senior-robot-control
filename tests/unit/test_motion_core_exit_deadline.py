@@ -26,6 +26,8 @@ def rig(monkeypatch):
 def start(rig, target_span):
     core = rig.core
     core.tick()  # Actual captured body and full scan establish health.
+    state = json.loads(rig.node.messages[-1].data)
+    assert state["healthy"], state["reason"]
     rig.clock.steady += 0.01
     target_deadline = rig.clock.steady + target_span
     assert core.command(
@@ -79,9 +81,9 @@ def test_actual_exit_must_precede_original_aggregate_deadline(rig, monkeypatch, 
     decisions = delayed_decision(rig, monkeypatch, lambda d: d.evidence_deadline + delta)
     rig.core.tick()
     state = json.loads(rig.node.messages[-1].data)
-    laser = next(row for row in rig.core._reference["sources"] if row["source"] == "laser")
-    assert state["body_reference"]["computed_steady"] == laser["sample"]["received_steady"]
-    assert state["body_reference"]["valid_until_steady"] == laser["valid_until_steady"]
+    independent = rig.core.sensors.independent
+    assert state["body_reference"]["computed_steady"] == independent.stamp_steady
+    assert state["body_reference"]["valid_until_steady"] == independent.deadline_steady
     assert state["sampled_steady"] == sampled
     assert state["valid_until"] == sampled + 0.15
     assert state["fault_revision"] == 0

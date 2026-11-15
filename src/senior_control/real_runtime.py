@@ -7,6 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from senior_control.motion.hardware_profile import HardwareMotionProfile, load_hardware_profile
+from senior_control.sensors.policy import default_policy
 
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
@@ -74,7 +75,7 @@ def real_parameter_defaults(
     they do not certify covariance, braking, installation, or sensor coverage.
     Nominal frames are from the WHEELTEC driver/URDF and require site verification.
     """
-    age = profile.max_age if profile else 0.5
+    age = default_policy().hard_age_s
     common = {"use_sim_time": False, "body_frame": "base_link"}
     return {
         "scan_receipt": {
@@ -111,8 +112,8 @@ def real_parameter_defaults(
             "wheel_frame": "odom_combined",
             "imu_frame": "gyro_link",
             "sensor_max_age": age,
-            "alignment_max_gap": 0.25,
-            "pending_wait": 0.25,
+            "alignment_max_gap": age,
+            "pending_wait": age,
             "max_variance": 0.1,
             "imu_zero_variance": 0.01,
             "min_quality": 0.3,
@@ -184,6 +185,18 @@ def load_real_parameters(
         # base_serial launch publishes /odom with header.frame_id=odom_combined.
         if node == "motion_fusion" and params.get("wheel_frame") == "odom":
             params["wheel_frame"] = "odom_combined"
+        # //Compatible: legacy YAML age copies now share one policy in memory.
+        for field in (
+            "max_age_seconds",
+            "observation_max_age",
+            "scan_max_age",
+            "sensor_max_age",
+            "measurement_max_age",
+            "alignment_max_gap",
+            "pending_wait",
+        ):
+            if field in params:
+                params[field] = default_policy().hard_age_s
         result[node] = params
         # Response-related duplicates must retain the model's single value.
         if profile is not None:
@@ -226,6 +239,7 @@ def load_real_parameters(
         ):
             if p.get(key, expected) != expected:
                 errors.append(f"{node}.{key} must stay {expected}")
+    result["safety_gate"]["wheel_frame"] = result["motion_fusion"]["wheel_frame"]
     if errors:
         raise ValueError("Real ROS configuration incomplete:\n" + "\n".join(errors))
     return result

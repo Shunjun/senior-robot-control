@@ -582,3 +582,23 @@ def test_normal_body_lag_does_not_expire_before_drive_stop_family():
             wheel = d.command.vx
             body += (wheel - body) * 0.2
     assert body < 0.005
+
+
+@pytest.mark.parametrize(
+    "change,expected",
+    [
+        ({"velocity": Velocity(0.2, 0.1)}, True),
+        ({"sequence": 2}, False),
+        ({"epoch": "new-roots"}, False),
+        ({"observed_axes": (False, True)}, False),
+        ({"deadline_steady": 2.1}, False),
+        ({"stamp_steady": 0.1}, False),
+    ],
+)
+def test_unified_stop_projection_preserves_original_evidence(change, expected):
+    from dataclasses import replace
+
+    original = Feedback(Velocity(0.1, 0), 0, 2, "roots", 1, True, "test", unified=True)
+    assert (
+        MotionController._same_feedback_evidence(replace(original, **change), original) is expected
+    )
