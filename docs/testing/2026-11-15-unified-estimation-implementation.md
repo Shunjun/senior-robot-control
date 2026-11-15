@@ -1,5 +1,7 @@
 # Unified estimation implementation ledger
 
+> 最新返修：负责人已亲读R1–R3并继续累计审阅，发现共同积分前缀误差和乱序配对两项回归；本轮修正与证据见[区间/配对返修报告](2026-11-15-relative-interval-sync-review.md)。累计100文件审阅未完成，待本轮复审；以下保留先前阶段事实。
+
 > 返修状态：负责人已亲读部分累计代码并提出R1源级年龄统计、R2相对位姿误差、R3独立预测证据接线三项问题，累计100文件审阅尚未完成；当前返修与定向证据见[审阅修正报告](2026-11-15-unified-estimation-review-fixes.md)，待复审，未验收。下文保留437b0c8及更早阶段事实。
 
 Plan: docs/superpowers/plans/2026-11-15-unified-sensor-estimation.md

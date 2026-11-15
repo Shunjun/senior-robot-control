@@ -1,0 +1,119 @@
+{
+  "parent_commit": "28d0635a561a176a52fba70596707a0a815dbc28",
+  "production_source_sha256": "9324799e47b0bd5554ccb8ccd2df4a147452c0139fb0ed7a02aa7a9efffbda92",
+  "code_and_tests_sha256": "cf6d299d69dc8e820a9ee4916cf3b99056f48a50111667717c092d3a279117f6",
+  "fingerprint_files": [
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+    "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py",
+    "src/senior_control/motion/pose_estimator.py",
+    "src/senior_control/runtime/diagnostics.py",
+    "src/senior_control/vision/synchronizer.py",
+    "tests/unit/test_estimation_review_contracts.py",
+    "tests/unit/test_relative_interval_regressions.py",
+    "tests/unit/test_rgbd_sync_ordering.py"
+  ],
+  "python": "/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python",
+  "environment": {
+    "PYTHONPATH": "src"
+  },
+  "commands": [
+    {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "tests/unit/test_relative_interval_regressions.py",
+        "tests/unit/test_rgbd_sync_ordering.py",
+        "tests/unit/test_pose_space_estimation.py",
+        "tests/unit/test_estimation_review_contracts.py",
+        "tests/unit/test_unified_motion_runtime.py",
+        "tests/unit/test_runtime_diagnostics.py",
+        "tests/unit/test_perception.py",
+        "tests/unit/test_semantic_candidates.py",
+        "tests/unit/test_depth_producer.py",
+        "tests/unit/test_depth_gate.py",
+        "tests/unit/test_rgbd_joiner.py",
+        "tests/unit/test_motion_core_chain.py",
+        "tests/unit/test_motion_core_handoff.py",
+        "tests/unit/test_motion_core_startup.py",
+        "tests/unit/test_motion_core_event_time.py",
+        "tests/unit/test_motion_core_exit_deadline.py",
+        "tests/unit/test_motion_core_stop_fallback.py",
+        "tests/unit/test_motion_core_perception.py",
+        "tests/unit/test_laser_reference_publication.py",
+        "tests/unit/test_reference_clock_frontier.py",
+        "tests/unit/test_reference_nanosecond_boundary.py",
+        "tests/unit/test_motion_reference_backlog.py",
+        "-q",
+        "--tb=short"
+      ],
+      "stdout": "........................................................................ [ 36%]\n........................................................................ [ 72%]\n.......................................................                  [100%]\n199 passed in 7.64s\n",
+      "note": "199 passed before addition of the exact (0.2,0,0) fixture; production source unchanged afterward"
+    },
+    {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "tests/unit/test_relative_interval_regressions.py",
+        "tests/unit/test_rgbd_sync_ordering.py",
+        "-q",
+        "--tb=short"
+      ],
+      "stdout": "...................                                                      [100%]\n19 passed in 1.58s\n",
+      "note": "Final 19 new regressions, including exact three-axis reproduction; do not sum duplicate tests"
+    }
+  ],
+  "static_commands": [
+    [
+      "python",
+      "-m",
+      "mypy",
+      "src/senior_control/motion/pose_estimator.py",
+      "src/senior_control/runtime/diagnostics.py",
+      "src/senior_control/vision/synchronizer.py"
+    ],
+    [
+      "python",
+      "-m",
+      "ruff",
+      "check",
+      "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+      "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py",
+      "src/senior_control/motion/pose_estimator.py",
+      "src/senior_control/runtime/diagnostics.py",
+      "src/senior_control/vision/synchronizer.py",
+      "tests/unit/test_estimation_review_contracts.py",
+      "tests/unit/test_relative_interval_regressions.py",
+      "tests/unit/test_rgbd_sync_ordering.py"
+    ],
+    [
+      "python",
+      "-m",
+      "ruff",
+      "format",
+      "--check",
+      "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+      "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py",
+      "src/senior_control/motion/pose_estimator.py",
+      "src/senior_control/runtime/diagnostics.py",
+      "src/senior_control/vision/synchronizer.py",
+      "tests/unit/test_estimation_review_contracts.py",
+      "tests/unit/test_relative_interval_regressions.py",
+      "tests/unit/test_rgbd_sync_ordering.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "mypy_stdout": "Success: no issues found in 3 source files\n",
+  "red_summary": "10 failed, 1 passed in 0.68s",
+  "initial_affected_summary": "1 failed, 197 passed in 7.74s",
+  "limitations": [
+    "No Linux ROS generation/linking, DDS runtime, VM or physical vehicle validation",
+    "Existing full-mypy baseline errors were not re-run or claimed fixed",
+    "No parking-domain/decel/self-filter changes"
+  ]
+}

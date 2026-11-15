@@ -1,7 +1,6 @@
 """Image and depth frames, plus the RGB/depth time and size pairing rule."""
 
 import math
-from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -78,8 +77,10 @@ class RgbdSynchronizer:
         if not math.isfinite(max_skew_s) or max_skew_s < 0.0:
             raise ValueError("max_skew_s must be finite and non-negative")
         self._max_skew_s = max_skew_s
-        self._rgb: deque[ImageFrame] = DiagnosticDeque("vision.rgb_depth_pair.rgb", maxlen=capacity)
-        self._depth: deque[DepthFrame] = DiagnosticDeque(
+        self._rgb: DiagnosticDeque[ImageFrame] = DiagnosticDeque(
+            "vision.rgb_depth_pair.rgb", maxlen=capacity
+        )
+        self._depth: DiagnosticDeque[DepthFrame] = DiagnosticDeque(
             "vision.rgb_depth_pair.depth", maxlen=capacity
         )
         self.rejected = 0
@@ -113,7 +114,15 @@ class RgbdSynchronizer:
 
     def _consume(self, pair: AlignedRgbdFrame) -> None:
         """Frames at or before the matched stamps can no longer pair with newer data."""
-        while self._rgb and self._rgb[0].stamp <= pair.rgb.stamp:
-            self._rgb.popleft()
-        while self._depth and self._depth[0].stamp <= pair.depth.stamp:
-            self._depth.popleft()
+        # Offers need not be monotonic. Inspect the entire bounded queue;
+        # removing only its head can leave the matched object behind newer data.
+        for queue, matched in ((self._rgb, pair.rgb), (self._depth, pair.depth)):
+            consumed = False
+            for index in range(len(queue) - 1, -1, -1):
+                frame = queue[index]
+                if frame.stamp <= matched.stamp:
+                    if frame is matched and not consumed:
+                        queue.take_index(index)
+                        consumed = True
+                    else:
+                        queue.discard_index(index)

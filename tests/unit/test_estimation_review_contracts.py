@@ -397,7 +397,7 @@ def test_space_positional_api_and_bounded_diagnostic_registrations():
     assert report["unregistered"] > 0
 
 
-def test_captured_near_wall_scene_does_not_gain_permission_by_erasing_old_error(replay):  # noqa: F811
+def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(replay):  # noqa: F811
     from senior_control.models import Velocity
 
     c = replay.core
@@ -408,8 +408,23 @@ def test_captured_near_wall_scene_does_not_gain_permission_by_erasing_old_error(
     ctx = c._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
     ctx = replace(ctx, target=replace(ctx.target, velocity=Velocity(0.01, 0.01)))
     assert c.sensors.latest.healthy
-    assert c.sensors.latest.independent_axes[0].observation_age_s > 0
-    assert c.engine.refine(ctx, now).permit is None
+    axis = c.sensors.latest.independent_axes[0]
+    assert axis.observation_age_s > 0
+    assert ctx.envelope.linear_interval[1] >= (
+        c.sensors.independent.velocity.vx + c.profile.linear_error + axis.prediction_error - 1e-12
+    )
+    # Correct shared-history cancellation can restore this low-speed software
+    # permit; old raw velocity error is still present, and occupancy still blocks.
+    assert c.engine.refine(ctx, now).permit is not None
+    from shapely.geometry import box
+
+    obstructed = replace(
+        ctx,
+        perception=replace(
+            perception, occupied=perception.occupied.union(box(-0.5, -0.5, 0.5, 0.5))
+        ),
+    )
+    assert c.engine.refine(obstructed, now).permit is None
 
 
 def test_unknown_space_errors_use_explicit_model_policy_instead_of_zero():

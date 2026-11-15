@@ -747,12 +747,9 @@ class MotionCoreOutput:
             self._perception_key = key
         assert self._perception is not None
         relative_error = self.sensors.pose_estimator.relative_error(old, current)
-        # Convert relative orientation uncertainty to a displacement at the
-        # farthest observed range; apply once to geometry, separately from the
-        # sensor error already charged by prepare_perception.
-        # The uncertainty is in the current body pose within the scan frame,
-        # not a rotation of every obstacle about the sensor. Its lever arm is
-        # the vehicle footprint, not the lidar's full measurement range.
+        # Convert current-body orientation uncertainty in the scan frame using
+        # the footprint radius. Apply this displacement once to geometry;
+        # prepare_perception already charged the separate sensor error.
         radius = math.hypot(self.profile.length, self.profile.width) / 2
         angular = relative_error.software_yaw_rad
         software_error = relative_error.software_position_m + 2 * radius * math.sin(

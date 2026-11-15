@@ -3,6 +3,7 @@
 import math
 from collections import deque
 from dataclasses import dataclass, replace
+from uuid import uuid4
 
 from senior_control.models import Pose2D
 from senior_control.motion.estimator import MotionEstimate, Origin, validate_origins
@@ -61,6 +62,18 @@ class PoseEstimate:
     # //Compatible: legacy pose values have no evidence of a shared anchor.
     anchor_roots: tuple[Origin, ...] | None = None
     prediction_error: PoseErrorBudget = PoseErrorBudget()
+    # //Compatible: old/external poses carry no proof of a common integration path.
+    integration_path: tuple[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class _RelativeSegment:
+    start_ros: float
+    end_ros: float
+    rates: tuple[float, float, float]
+    motion: MotionEstimate
+    missing_linear: bool
+    missing_yaw: bool
 
 
 @dataclass(frozen=True)
@@ -121,11 +134,59 @@ class PoseEstimation:
         self._sources: dict[str, deque[PoseObservation]] = {}
         self._positive_frontiers: dict[str, PoseObservation] = {}
         self._relative: deque[PoseEstimate] = deque(maxlen=256)
+        self._segments: deque[_RelativeSegment] = deque(maxlen=256)
+        self._path_owner = uuid4().hex
+        self._path_serial = 0
         self._previous_motion: MotionEstimate | None = None
         self._retired: dict[str, set[str]] = {}
         self.frame_generation = 0
         self._absolute_frame_aligned = False
         self._clock_epochs: dict[str, str] = {}
+
+    @property
+    def _path(self) -> tuple[str, int]:
+        return self._path_owner, self._path_serial
+
+    def _clear_relative(self) -> None:
+        self._relative.clear()
+        self._segments.clear()
+        self._path_serial += 1
+
+    def _interval_error(self, start: float, end: float) -> PoseErrorBudget:
+        """Reintegrate only this path interval, starting in the old body frame.
+
+        The prefix before start is the same uncertain SE(2) transform at both
+        endpoints and cancels. Turning uncertainty *inside* the interval still
+        affects subsequent travel. Missing/evicted spans get explicit local
+        model bounds, never lifetime error or a new sensor-age rejection.
+        """
+        result = PoseErrorBudget()
+        cursor = start
+        for segment in self._segments:
+            left, right = max(start, segment.start_ros), min(end, segment.end_ros)
+            if right <= left:
+                continue
+            if left - cursor > 1e-9:
+                gap = left - cursor
+                result = result.plus(
+                    PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
+                )
+            dt = right - left
+            step = self._prediction_error(
+                segment.motion,
+                dt,
+                previous_yaw_error=result.software_yaw_rad,
+                missing_linear_s=dt if segment.missing_linear else 0.0,
+                missing_yaw_s=dt if segment.missing_yaw else 0.0,
+            )
+            result = result.plus(step)
+            cursor = right
+        if end - cursor > 1e-9:
+            gap = end - cursor
+            result = result.plus(
+                PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
+            )
+        return result
 
     def _prediction_error(
         self,
@@ -148,10 +209,15 @@ class PoseEstimation:
         angular = self.angular_error + wz.prediction_error
         if wz.error is not None:
             angular = max(angular, wz.error)
-        yaw = dt * angular + missing_yaw_s * self.unknown_yaw
+        # A missing component may move anywhere in its software domain, while
+        # the clipped nominal integration can still be nonzero in this segment.
+        # Bound the difference from that nominal path, not just from zero.
+        yaw = dt * angular + missing_yaw_s * (self.unknown_yaw + abs(wz.value or 0.0))
         distance = dt * math.hypot(vx.value or 0.0, vy.value or 0.0)
         position = dt * (linear + lateral) + distance * (previous_yaw_error + yaw)
-        position += missing_linear_s * self.unknown_speed
+        position += missing_linear_s * (
+            self.unknown_speed + math.hypot(vx.value or 0.0, vy.value or 0.0)
+        )
         position_known = vx.error is not None and (not vy.observed or vy.error is not None)
         position_known &= wz.error is not None and not missing_linear_s and not missing_yaw_s
         return PoseErrorBudget(
@@ -166,10 +232,23 @@ class PoseEstimation:
             raise ValueError("relative pose frame mismatch")
         distance = math.hypot(current.pose.x - old.pose.x, current.pose.y - old.pose.y)
         if old.anchor_roots is not None and old.anchor_roots == current.anchor_roots:
-            # A shared left-hand SE(2) transform cancels exactly. Endpoint
-            # prediction errors do not: without their correlation we add them.
             if old == current:
                 return PoseErrorBudget()
+            if old.integration_path == current.integration_path == self._path:
+                start, end = sorted((old.stamp_ros, current.stamp_ros))
+                result = self._interval_error(start, end)
+                if old.stamp_ros <= current.stamp_ros:
+                    return result
+                # Inverting a relative transform rotates its translation by the
+                # uncertain interval yaw. Forward queries need no extra prefix.
+                lever = distance * result.software_yaw_rad
+                return replace(
+                    result,
+                    position_m=None if result.position_m is None else result.position_m + lever,
+                    software_position_m=result.software_position_m + lever,
+                )
+            # Same absolute fix, but no common recorded integration: retain the
+            # conservative independent endpoint-prediction policy.
             result = old.prediction_error.plus(current.prediction_error)
             lever = distance * old.prediction_error.software_yaw_rad
             return replace(
@@ -209,7 +288,11 @@ class PoseEstimation:
 
     @property
     def retained_samples(self) -> int:
-        return len(self._relative) + sum(len(history) for history in self._sources.values())
+        return (
+            len(self._relative)
+            + len(self._segments)
+            + sum(len(history) for history in self._sources.values())
+        )
 
     def ingest(self, o: PoseObservation) -> bool:
         validate_origins(o.roots)
@@ -245,7 +328,7 @@ class PoseEstimation:
                     return False
                 retired.add(old.epoch)
                 history.clear()
-                self._relative.clear()
+                self._clear_relative()
                 self._previous_motion = None
                 self.frame_generation += 1
             elif root.sequence <= old.sequence:
@@ -285,7 +368,7 @@ class PoseEstimation:
             self._previous_motion is not None
             and motion.generation != self._previous_motion.generation
         ):
-            self._relative.clear()
+            self._clear_relative()
             retained = {}
             for source, history in self._sources.items():
                 live = []
@@ -340,7 +423,7 @@ class PoseEstimation:
         if absolute is not None and absolute.kind != "relative_dead_reckoning":
             if not self._absolute_frame_aligned and self._relative:
                 self.frame_generation += 1
-                self._relative.clear()
+                self._clear_relative()
             self._absolute_frame_aligned = True
             if not self._relative:
                 raw_stamp = max(o.stamp_ros for o in eligible if o.stamp_ros <= motion.computed_ros)
@@ -377,12 +460,13 @@ class PoseEstimation:
                     self.frame,
                     0.0,
                     anchor_roots=(),
+                    integration_path=self._path,
                 )
             )
         previous = self._relative[-1]
         dt = motion.computed_ros - previous.stamp_ros
         if dt < 0:
-            self._relative.clear()
+            self._clear_relative()
             return
         if dt == 0:
             self._previous_motion = motion
@@ -390,6 +474,11 @@ class PoseEstimation:
         # No axis receives an infinite extension from the other axis. The motion
         # owner has already removed expired per-axis values; missing motion grows error.
         prior = self._previous_motion or motion
+        if previous.integration_path is None:
+            # An absolute anchor becomes the start of a new recorded relative
+            # path. Earlier absolute queries do not acquire this proof retroactively.
+            previous = replace(previous, integration_path=self._path)
+            self._relative[-1] = previous
         full_dt = dt
         dt = min(dt, default_policy().hard_age_s)
         # Integrate each axis only over its own remaining original lifetime.
@@ -403,6 +492,16 @@ class PoseEstimation:
             for a, d in zip((prior.vx, prior.vy, prior.wz), axis_dt, strict=True)
         ]
         increment = exponential(rates[0], rates[1], rates[2], dt)
+        self._segments.append(
+            _RelativeSegment(
+                previous.stamp_ros,
+                motion.computed_ros,
+                (rates[0] * dt / full_dt, rates[1] * dt / full_dt, rates[2] * dt / full_dt),
+                prior,
+                full_dt - axis_dt[0] > 1e-9 or (prior.vy.observed and full_dt - axis_dt[1] > 1e-9),
+                full_dt - axis_dt[2] > 1e-9,
+            )
+        )
         step_error = self._prediction_error(
             prior,
             dt,
@@ -433,6 +532,7 @@ class PoseEstimation:
                 else previous.error_yaw_rad + step_error.yaw_rad,
                 anchor_roots=previous.anchor_roots,
                 prediction_error=budget,
+                integration_path=self._path,
             )
         )
         self._previous_motion = motion
@@ -637,20 +737,41 @@ class PoseEstimation:
                 relative = relative_left[-1]
                 dt = stamp_ros - relative.stamp_ros
                 if 0 <= dt < default_policy().hard_age_s:
-                    extra = self._prediction_error(
-                        motion, dt, previous_yaw_error=relative.prediction_error.software_yaw_rad
+                    segment = next(
+                        (
+                            s
+                            for s in self._segments
+                            if s.start_ros == relative.stamp_ros and s.end_ros >= stamp_ros
+                        ),
+                        None,
                     )
+                    prediction_motion = segment.motion if segment is not None else motion
+                    rates = (
+                        segment.rates
+                        if segment is not None
+                        else (
+                            motion.vx.value or 0.0,
+                            motion.vy.value or 0.0,
+                            motion.wz.value or 0.0,
+                        )
+                    )
+                    missing_linear = (
+                        segment.missing_linear if segment is not None else motion.vx.value is None
+                    )
+                    missing_yaw = (
+                        segment.missing_yaw if segment is not None else motion.wz.value is None
+                    )
+                    extra = self._prediction_error(
+                        prediction_motion,
+                        dt,
+                        previous_yaw_error=relative.prediction_error.software_yaw_rad,
+                        missing_linear_s=dt if missing_linear else 0.0,
+                        missing_yaw_s=dt if missing_yaw else 0.0,
+                    )
+                    increment = exponential(*rates, dt)
                     return replace(
                         relative,
-                        pose=compose(
-                            relative.pose,
-                            exponential(
-                                motion.vx.value or 0.0,
-                                motion.vy.value or 0.0,
-                                motion.wz.value or 0.0,
-                                dt,
-                            ),
-                        ),
+                        pose=compose(relative.pose, increment),
                         stamp_ros=stamp_ros,
                         kind="relative_dead_reckoning",
                         error_m=None
@@ -659,8 +780,7 @@ class PoseEstimation:
                         or extra.position_m is None
                         else relative.error_m
                         + extra.position_m
-                        + dt
-                        * math.hypot(motion.vx.value or 0.0, motion.vy.value or 0.0)
+                        + math.hypot(increment.x, increment.y)
                         * max(
                             0.0, relative.error_yaw_rad - (relative.prediction_error.yaw_rad or 0.0)
                         ),

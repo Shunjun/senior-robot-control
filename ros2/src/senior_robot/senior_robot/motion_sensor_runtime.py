@@ -142,7 +142,7 @@ class MotionSensorRuntime:
         self.pose_estimator.advance(r)
         for name, retained, capacity in (
             ("motion.estimator.history", self.estimator.retained_samples, 192),
-            ("motion.pose.history", self.pose_estimator.retained_samples, 1280),
+            ("motion.pose.history", self.pose_estimator.retained_samples, 1536),
         ):
             self.diagnostics.queue(
                 QueueSnapshot(name, None, capacity, kind="history", retained=retained),

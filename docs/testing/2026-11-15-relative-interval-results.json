@@ -1,0 +1,230 @@
+[
+  {
+    "duration_s": 0.15,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": true,
+    "relative_interval_s": 0.04999999999999982,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002009999999999993,
+      "software_yaw_rad": 0.0009999999999999966
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.006059999999999998,
+      "software_yaw_rad": 0.0029999999999999983
+    },
+    "retained_records": 7
+  },
+  {
+    "duration_s": 10.05,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": true,
+    "relative_interval_s": 0.05000000000000071,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002010000000000029,
+      "software_yaw_rad": 0.0010000000000000143
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.6050100000000003,
+      "software_yaw_rad": 0.20099999999999957
+    },
+    "retained_records": 403
+  },
+  {
+    "duration_s": 60.05,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": true,
+    "relative_interval_s": 0.05000000000000426,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.0020100000000001722,
+      "software_yaw_rad": 0.0010000000000000852
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 9.62000999999993,
+      "software_yaw_rad": 1.2009999999999825
+    },
+    "retained_records": 512
+  },
+  {
+    "duration_s": 0.15,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": true,
+    "relative_interval_s": 0.04999999999999982,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002009999999999993,
+      "software_yaw_rad": 0.0009999999999999966
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.006059999999999998,
+      "software_yaw_rad": 0.0029999999999999983
+    },
+    "retained_records": 7
+  },
+  {
+    "duration_s": 10.05,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": true,
+    "relative_interval_s": 0.05000000000000071,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002010000000000029,
+      "software_yaw_rad": 0.0010000000000000143
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.6050100000000003,
+      "software_yaw_rad": 0.20099999999999957
+    },
+    "retained_records": 403
+  },
+  {
+    "duration_s": 60.05,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": true,
+    "relative_interval_s": 0.05000000000000426,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.0020100000000001722,
+      "software_yaw_rad": 0.0010000000000000852
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 9.62000999999993,
+      "software_yaw_rad": 1.2009999999999825
+    },
+    "retained_records": 512
+  },
+  {
+    "duration_s": 0.15,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": false,
+    "relative_interval_s": 0.04999999999999982,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.0025099999999999914,
+      "software_yaw_rad": 0.0009999999999999966
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.007559999999999996,
+      "software_yaw_rad": 0.0029999999999999983
+    },
+    "retained_records": 7
+  },
+  {
+    "duration_s": 10.05,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": false,
+    "relative_interval_s": 0.05000000000000071,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002510000000000036,
+      "software_yaw_rad": 0.0010000000000000143
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.7055099999999997,
+      "software_yaw_rad": 0.20099999999999957
+    },
+    "retained_records": 403
+  },
+  {
+    "duration_s": 60.05,
+    "yaw_rate_rps": 0.0,
+    "lateral_observed": false,
+    "relative_interval_s": 0.05000000000000426,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002510000000000215,
+      "software_yaw_rad": 0.0010000000000000852
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 10.220509999999926,
+      "software_yaw_rad": 1.2009999999999825
+    },
+    "retained_records": 512
+  },
+  {
+    "duration_s": 0.15,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": false,
+    "relative_interval_s": 0.04999999999999982,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.0025099999999999914,
+      "software_yaw_rad": 0.0009999999999999966
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.007559999999999996,
+      "software_yaw_rad": 0.0029999999999999983
+    },
+    "retained_records": 7
+  },
+  {
+    "duration_s": 10.05,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": false,
+    "relative_interval_s": 0.05000000000000071,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002510000000000036,
+      "software_yaw_rad": 0.0010000000000000143
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.7055099999999997,
+      "software_yaw_rad": 0.20099999999999957
+    },
+    "retained_records": 403
+  },
+  {
+    "duration_s": 60.05,
+    "yaw_rate_rps": 0.4,
+    "lateral_observed": false,
+    "relative_interval_s": 0.05000000000000426,
+    "relative_error": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 0.002510000000000215,
+      "software_yaw_rad": 0.0010000000000000852
+    },
+    "accumulated_prediction": {
+      "position_m": null,
+      "yaw_rad": null,
+      "software_position_m": 10.220509999999926,
+      "software_yaw_rad": 1.2009999999999825
+    },
+    "retained_records": 512
+  }
+]

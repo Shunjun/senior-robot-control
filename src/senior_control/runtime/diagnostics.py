@@ -649,6 +649,14 @@ class DiagnosticDeque(deque[T], Generic[T]):
     def __delitem__(self, index: SupportsIndex) -> None:  # type: ignore[override]
         self.discard_index(index)
 
+    def take_index(self, index: SupportsIndex) -> T:
+        """Consume one waiting item without resetting surviving enqueue times."""
+        value = self[index]
+        super().__delitem__(index)
+        del self._times[index]
+        self._report()
+        return value
+
     def discard_index(self, index: SupportsIndex, *, overwritten: bool = False) -> None:
         super().__delitem__(index)
         del self._times[index]
