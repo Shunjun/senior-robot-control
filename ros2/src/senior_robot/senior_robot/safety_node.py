@@ -1,10 +1,9 @@
 """Independent safety process.
 
+Startup requires an explicit valid hardware or isolated simulation motion profile.
 The default 20 Hz timer is simulation configuration, not a physical braking or
-timing guarantee. Braking, reaction, hard margin, and staleness stay unset
-until parameters provide them, and an unset limit publishes zero velocity.
-An unset or expired command TTL also publishes zero. The age is measured with
-a monotonic clock and does not wait for a stop message.
+timing guarantee. The shared motion core owns constraints and continuous braking;
+original command deadlines use the monotonic clock and need no stop message.
 This process does not arbitrate control, publish heartbeats, or remap Nav2.
 It does not read wheel odometry or /ground_truth/odom, and it does not use a
 wheel transform to relabel a scan into the body frame.

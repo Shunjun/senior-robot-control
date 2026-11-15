@@ -72,3 +72,7 @@
 代码/测试规范化 LF SHA-256：`fc3f5fcc4b5d3a07bf52264d72083692ea8ea5d6633afdbae6463b071e7bf664`（按 src、ros2、tools、tests、web/src 下现存 636 个版本文件的路径与内容排序计算；逐文件原始 SHA-256 随证据保存）。文档不参与该指纹。
 
 本地证据目录：`/private/tmp/vehicle-motion-convergence-8858514/`，含原始测试日志、基线对比、逐文件指纹、累计 patch 与提交元数据；本分支最终提交 SHA 见其中 commit.json 及 git log。
+
+## 负责人审阅后的测试资产返修
+
+仍有效的 DDS barrier/身份/guard 到 owner 的组合保护不应随旧夹具整文件丢弃。按后续收窄审阅，仅恢复小型参数化真实 DDS 组合资产；旧 progress、MotionEvidence、协方差资格门、逐速度回执和租约断网导航测试不恢复，已有等价保护不重复。精简逐场景去向、实际运行命令、版本及未执行边界见 [运动测试迁移审查](2026-11-15-motion-test-migration.md)。

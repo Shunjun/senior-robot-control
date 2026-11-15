@@ -459,7 +459,6 @@ class Hub:
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
-        time.monotonic()
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and data.get("type") == "heartbeat.request":
@@ -609,7 +608,6 @@ class Hub:
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
             return
-        time.monotonic()
         try:
             data = json.loads(raw)
             claimed = data["robot_id"]
