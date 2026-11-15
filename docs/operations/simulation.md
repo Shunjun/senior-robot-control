@@ -26,6 +26,8 @@ ROS 的 `rclpy` 由已安装的 ROS 提供，`--system-site-packages` 使该环�
 
 ## 2. 先创建统一目录与配置
 
+升级涉及消息删除或重命名时，先参考 [ROS 接口定向重建与启动前检查](ros-interface-rebuild.md)，在本机实际路径执行，重建目标保留 `senior_sim senior_robot`；该检查不启动仿真或 ROS 节点。
+
 仍在仿真机项目根目录，以当前普通用户执行，后续 pair/start/stop/status 都不要 sudo。默认读取当前用户 `~/senior-control/config.json`，CLI 不会自动生成它。多实例必须有独立私有目录、配对身份与未占用 ROS 域；下列 73 只是仿真示例，需核对未占用。
 
 ```sh

@@ -166,6 +166,8 @@ source install/setup.bash
 
 容器应预先具备对应 ROS 发行版、Python venv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
 
+启动服务前执行 [ROS 类型支持加载检查](ros-interface-rebuild.md#启动前检查不创建-ros-节点)。升级包含消息删除或重命名时，先按该页定向备份并重建接口包；普通增量构建成功不足以排除旧生成物和安装残留，无需重复创建 venv 或 pip 安装。
+
 ### 非容器模式
 
 本机的 `<project_dir>/.ros-venv` 同时承载 Agent 与适配器。按上面的 ROS 安装与构建步骤在本机准备环境，不执行 `docker exec`。只装宿主机 CLI 依赖不足以运行此模式。
