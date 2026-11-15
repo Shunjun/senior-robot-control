@@ -134,9 +134,6 @@ class MotionCoreOutput:
         self._barrier_complete = False
         self._last_fault_condition: tuple[str, str] | None = None
         self._closed = False
-        self._hardware = False
-        self._hardware_seen = float("-inf")
-        self._hardware_gid = None
         self._last_healthy = False
         self._body_epoch_used: str | None = None
         self._wheel_epoch_used: str | None = None
@@ -170,82 +167,11 @@ class MotionCoreOutput:
             from senior_robot.optional_motion_inputs import OptionalMotionInputs
 
             self._optional_inputs = OptionalMotionInputs(node, profile, self.sensors)
-        if not profile.simulation_only and profile.hardware_estop.mode == "readable":
-            from std_msgs.msg import Bool
-
-            from senior_robot.native_receipt import subscribe
-
-            self._hardware_subscription = subscribe(
-                node,
-                Bool,
-                profile.hardware_estop.topic,
-                self._on_hardware_estop,
-                writer=profile.hardware_estop.publisher,
-                namespace=profile.hardware_estop.namespace,
-                qos="reliable",
-                invalidate=self._invalidate_hardware_status,
-                expired=self._on_expired_hardware_estop,
-            )
-
-    def _on_expired_hardware_estop(self, msg: Any, info: Any) -> None:
-        # A delayed assertion still latches. A delayed release never clears or
-        # refreshes hardware status; the original receipt stays unchanged.
-        if bool(msg.data):
-            self._on_hardware_estop(msg, info)
-
     def _warn_reference(self, reason: str) -> None:
         now = time.monotonic()
         if now - self._reference_warning_at >= 2.0:
             self._reference_warning_at = now
             self.node.get_logger().warning(f"motion core reference rejected: {reason}")
-
-    def _invalidate_hardware_status(self) -> None:
-        self._hardware_seen = float("-inf")
-        self._hardware_gid = None
-
-    def _hardware_status_ready(self, now: float) -> bool:
-        if self.profile.simulation_only:
-            return True
-        capability = self.profile.hardware_estop
-        if capability.mode != "readable":
-            # No physical state channel selected: keep observation unknown,
-            # without turning missing operator confirmation into a motion gate.
-            return True
-        endpoints = self.node.get_publishers_info_by_topic(capability.topic)
-        return (
-            now - self._hardware_seen <= capability.max_age_s
-            and len(endpoints) == 1
-            and endpoints[0].node_name == capability.publisher
-            and endpoints[0].node_namespace == capability.namespace
-            and bytes(endpoints[0].endpoint_gid) == self._hardware_gid
-        )
-
-    def _on_hardware_estop(self, msg: Any, info: Any) -> None:
-        from senior_robot.native_receipt import received_steady
-
-        capability = self.profile.hardware_estop
-        origin = observation_origin(
-            info,
-            self.node.get_publishers_info_by_topic(capability.topic),
-            capability.publisher,
-            allow_topology_only=False,
-            expected_namespace=capability.namespace,
-        )
-        if origin is None:
-            return
-        now = time.monotonic()
-        self._hardware_seen = received_steady(info)
-        self._hardware_gid = origin.topology_gid
-        active = bool(msg.data)
-        if active and not self._hardware:
-            self._hardware = True
-            self._event(K.HARDWARE_ESTOP, now)
-            # Physical release never automatically resumes an old authority.
-            self._event(K.SOFTWARE_ESTOP, now)
-            self.revoke("hardware_estop", now=now)
-        elif not active and self._hardware:
-            self._hardware = False
-            self._event(K.HARDWARE_RELEASE, now)
 
     def _event(self, kind: K, now: float, source: str = "", revision: int = 0) -> None:
         self.event_sequence += 1
@@ -477,8 +403,6 @@ class MotionCoreOutput:
             return False
         self.revoke(reason, now=now)
         if reason in {"estop_reset", "fault_recover"}:
-            if not self._hardware_status_ready(now):
-                return False
             try:
                 _, body, wheel = self._inputs(now)
                 if not self._stationary(body, wheel, now):
@@ -1214,8 +1138,6 @@ class MotionCoreOutput:
         output = Velocity(0, 0)
         prepared = None
         try:
-            if not self._hardware_status_ready(now):
-                raise ValueError("hardware_estop_status_missing_or_expired")
             if now >= self.target.deadline_steady and self.target.source != "idle":
                 self.scheduler.stop()
                 self._event(
@@ -1438,24 +1360,9 @@ class MotionCoreOutput:
                 "evidence_deadline_steady": deadline,
                 "estop_revision": state.estop_revision,
                 "fault_revision": state.fault_revision,
-                "confirmed_estop_status": "hardware_latched"
-                if self._hardware
-                else "software_latched"
+                "confirmed_estop_status": "software_latched"
                 if state.mode is MotionMode.ESTOP
                 else "clear",
-                "hardware_estop_observation": (
-                    "not_configured"
-                    if self.profile.simulation_only
-                    else "unknown"
-                    if self.profile.hardware_estop.mode == "unknown"
-                    else "independent_unreadable"
-                    if self.profile.hardware_estop.mode == "independent_unreadable"
-                    else "unavailable"
-                    if not self._hardware_status_ready(now)
-                    else "latched"
-                    if self._hardware
-                    else "clear"
-                ),
                 "allowed_actions": actions,
                 "task_id": state.task_id,
                 "output_generation": self.output_generation,
