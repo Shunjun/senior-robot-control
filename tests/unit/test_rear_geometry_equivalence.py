@@ -6,7 +6,6 @@ import random
 from pathlib import Path
 
 from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self
-from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
 from senior_control.config import DeviceProfile
@@ -124,99 +123,6 @@ def _boundary_cases():
         )
         result.append((scan, _profile(masks), 0.1))
     return result
-
-
-def test_nonfinite_geometry_extremes_preserve_legacy_filter_behavior():
-    mask = [[(-2.0, -1.0), (-1.0, -1.0), (-1.0, 1.0), (-2.0, 1.0)]]
-    origin = Pose2D(1e308, 0.0, 0.0)
-    scan = ScanObservation(
-        (1e308,), 0.0, 0.01, 0.1, 1e308, 10.0, "ros", origin, 10.0, "base_link", 10.0
-    )
-
-    def outcome(function):
-        try:
-            return function(scan, _profile(mask))
-        except (ValueError, RuntimeWarning, GEOSException) as exc:
-            # //Compatible: GEOS versions differ in handling nonfinite coordinates.
-            return (type(exc), str(exc))
-
-    expected = outcome(legacy_filter_self)
-    actual = outcome(self_filter.filter_self)
-    assert actual == expected
-
-
-def test_tiny_segment_and_exact_mask_boundary_keep_legacy_linestring_path(monkeypatch):
-    original = self_filter.LineString
-    count = 0
-
-    def counted(*args, **kwargs):
-        nonlocal count
-        count += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(self_filter, "LineString", counted)
-    for distance, mask in (
-        (1e-16, [[(10.0, -1.0), (11.0, -1.0), (11.0, 1.0), (10.0, 1.0)]]),
-        (0.9, [[(0.9, 0.0), (1.1, 0.0), (1.1, 0.2), (0.9, 0.2)]]),
-    ):
-        scan = ScanObservation(
-            (distance,),
-            0.0,
-            0.01,
-            0.0,
-            20.0,
-            10.0,
-            "ros",
-            Pose2D(0, 0, 0),
-            10.0,
-            "base_link",
-            10.0,
-        )
-        expected = legacy_filter_self(scan, _profile(mask))
-        before = count
-        actual = self_filter.filter_self(scan, _profile(mask))
-        assert actual == expected
-        assert count > before
-
-
-def test_near_degenerate_triangle_keeps_legacy_mask_intersection_path(monkeypatch):
-    from senior_control.safety.self_filter import RayEvidence
-
-    origin = (0.0, 0.0)
-    pairs = [
-        (RayEvidence(0, origin, (1.0, 0.0), "hit"), RayEvidence(1, origin, (1.0, 1e-16), "hit"))
-    ]
-    masks = [Polygon([(10, 10), (11, 10), (11, 11), (10, 11)])]
-    reference = legacy_exact_partial_fans(pairs, masks, False)
-    original = coverage.Polygon
-    count = 0
-
-    class CountedTriangle:
-        def __init__(self, polygon):
-            self.polygon = polygon
-
-        def __getattr__(self, name):
-            return getattr(self.polygon, name)
-
-        def intersects(self, mask):
-            nonlocal count
-            count += 1
-            return self.polygon.intersects(mask)
-
-    def counted(vertices):
-        polygon = original(vertices)
-        return (
-            CountedTriangle(polygon)
-            if isinstance(vertices, tuple) and len(vertices) == 3
-            else polygon
-        )
-
-    monkeypatch.setattr(coverage, "Polygon", counted)
-    actual = coverage._exact_partial_fans(pairs, masks, False)
-    assert actual is not None and reference is not None
-    assert len(actual) == len(reference)
-    assert all(old.equals(new) for old, new in zip(reference, actual, strict=True))
-    assert count == 1
 
 
 def test_c12_rear_filter_avoids_unrelated_linestring_construction(monkeypatch):

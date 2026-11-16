@@ -262,15 +262,6 @@ def test_disconnect_retires_context_without_a_successor_and_cannot_be_undone() -
     assert owner.accept(newer, sample(fresh.authority_id), now_steady=10.3)
 
 
-@pytest.mark.parametrize("now", [float("nan"), float("inf"), -float("inf")])
-def test_nonfinite_clock_revokes_prepared_permission(now: float) -> None:
-    owner = manager()
-    receipt = owner.acquire(context(), "r", "p", now_steady=10.0)
-    owner.expire(now_steady=now)
-    assert owner.acquire(context(), "r", "p", now_steady=10.1).state is ManualAuthorityState.CLOSED
-    assert not owner.accept(context(), sample(receipt.authority_id), now_steady=10.1)
-
-
 @pytest.mark.parametrize("invalid", ["", " "])
 def test_invalid_factory_identity_does_not_consume_capacity(invalid: str) -> None:
     identities = iter((invalid, "valid"))

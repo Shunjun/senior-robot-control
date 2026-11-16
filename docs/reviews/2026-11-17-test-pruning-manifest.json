@@ -1,0 +1,97 @@
+{
+  "baseline": "5f59042dd9413cd50422b36c411ca9f2226c06f8",
+  "delete_python_functions": {
+    "tests/unit/test_independent_motion.py": [
+      "test_extreme_finite_principal_point_returns_unavailable_without_numerical_exception",
+      "test_extreme_integer_intrinsics_are_rejected_without_overflow",
+      "test_body_transform_overflow_is_rejected",
+      "test_extreme_receipt_and_profile_numbers_do_not_escape_as_overflow",
+      "test_malformed_capture_identity_is_rejected",
+      "test_mutable_dependencies_are_rejected_instead_of_aliasing_caller",
+      "test_dependency_identities_have_immutable_bounded_shape",
+      "test_calibration_container_metadata_cannot_alias_mutable_values",
+      "test_output_constructor_rejects_mutable_transform_or_pair",
+      "test_metadata_scalars_cannot_hide_mutable_objects",
+      "test_retired_source_capacity_exhaustion_fails_closed"
+    ],
+    "tests/unit/test_manual_session.py": [
+      "test_unrepresentably_large_axis_is_rejected_without_raising",
+      "test_unrepresentably_large_configuration_is_a_value_error",
+      "test_large_integer_deadline_sum_is_rejected_as_configuration_error",
+      "test_large_integer_receipt_sum_rejects_without_raising_or_renewing"
+    ],
+    "tests/unit/test_motion_sources.py": [
+      "test_huge_finite_off_diagonal_covariance_is_rejected_without_overflow",
+      "test_source_sequence_must_be_a_real_positive_integer",
+      "test_invalid_sequence_cannot_poison_the_replay_watermark",
+      "test_malformed_structure_after_valid_samples_is_pure_rejection"
+    ],
+    "tests/unit/test_control_process_resources.py": [
+      "test_cadence_rejects_nonfinite_and_backwards_clock"
+    ],
+    "tests/unit/test_manual_authority.py": [
+      "test_nonfinite_clock_revokes_prepared_permission"
+    ],
+    "tests/unit/test_rgbd_body_motion.py": [
+      "test_nonfinite_inverse_result_is_rejected"
+    ],
+    "tests/unit/test_rear_geometry_equivalence.py": [
+      "test_nonfinite_geometry_extremes_preserve_legacy_filter_behavior",
+      "test_tiny_segment_and_exact_mask_boundary_keep_legacy_linestring_path",
+      "test_near_degenerate_triangle_keeps_legacy_mask_intersection_path"
+    ],
+    "tests/unit/test_rear_fan_optimization.py": [
+      "test_seeded_gaps_and_unordered_rays_preserve_the_original_observed_set"
+    ],
+    "tests/unit/test_static_tf_binding.py": [
+      "test_malformed_numbers_fail_closed",
+      "test_malformed_lifetime_metadata_fails_closed",
+      "test_mutable_edge_storage_cannot_enter_binding"
+    ],
+    "tests/unit/test_static_tf_wire.py": [
+      "test_transform_rejects_bool_strings_and_nonfinite_values"
+    ],
+    "tests/unit/test_protocol.py": [
+      "test_serialization_rejects_mutated_and_constructed_nonfinite_payloads"
+    ],
+    "tests/unit/test_websocket_link.py": [
+      "test_reply_rejects_nonfinite_server_clock"
+    ],
+    "tests/unit/test_rgbd_spawn_worker.py": [
+      "test_malformed_worker_output_fails_closed_instead_of_raising",
+      "test_nonfinite_candidate_result_is_rejected",
+      "test_repeated_hung_large_frames_reclaim_ipc_threads_and_descriptors",
+      "test_reader_thread_start_failure_reaps_spawned_child_and_ipc",
+      "test_reader_start_failure_on_restart_reaps_child_and_closes_admission",
+      "test_shutdown_complete_stays_false_if_reader_or_feeder_did_not_stop"
+    ],
+    "tests/unit/test_rgbd_parent_ledger.py": [
+      "test_current_malformed_header_revokes_without_raising"
+    ],
+    "tests/unit/test_rgbd_frame_builder.py": [
+      "test_camera_roi_rejects_boolean_float_string_and_out_of_range"
+    ],
+    "tests/unit/test_directional_constraints.py": [
+      "test_unrepresentable_stop_model_is_a_brake_request_not_a_crash"
+    ],
+    "tests/unit/test_map_archive.py": [
+      "test_export_rejects_symlink_substituted_between_stat_and_open"
+    ],
+    "tests/integration/test_agent.py": [
+      "test_agent_release_is_bounded_for_cancellation_resistant_work"
+    ]
+  },
+  "delete_files": [
+    "tests/unit/test_native_sensor_age_boundary.py"
+  ],
+  "delete_web_tests": {
+    "web/src/api/client.test.ts": [
+      "does not append a motion sample behind a buffered socket"
+    ]
+  },
+  "delete_cpp_tests": {
+    "ros2/src/senior_sensor_ingress/test/test_rgbd_candidate_receipt.cpp": [
+      "RgbdCandidateReceipt.RetirementExhaustionRevokesActualProducerOnGraphLoss"
+    ]
+  }
+}

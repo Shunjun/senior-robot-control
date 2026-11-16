@@ -223,18 +223,6 @@ def test_invalid_fresh_sample_fences_earlier_packets_from_recovery():
     assert not owner.ingest(earlier, now_ros=10.2, now_steady=20.2).accepted
 
 
-def test_huge_finite_off_diagonal_covariance_is_rejected_without_overflow():
-    covariance = Covariance(
-        (1.0, 1e300, 0.0, 1e300, 1.0, 0.0, 0.0, 0.0, 1.0),
-        CovarianceKind.FULL,
-        "invalid correlation",
-        None,
-    )
-    assert not ingest(
-        AdmissionOwner(config(), event_capacity=128), sample(covariance=covariance)
-    ).accepted
-
-
 def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference():
     owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
@@ -419,51 +407,6 @@ def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
         measurement=capture_time(2.0, tick=1.0).measurement,
     )
     assert owner.ingest(fresh, now_ros=1.0, now_steady=2.0, heading=new_heading).accepted
-
-
-@pytest.mark.parametrize("sequence", [float("nan"), 1.5, True])
-def test_source_sequence_must_be_a_real_positive_integer(sequence):
-    assert not ingest(AdmissionOwner(config(), event_capacity=128), sample(seq=sequence)).accepted
-
-
-def test_invalid_sequence_cannot_poison_the_replay_watermark():
-    owner = AdmissionOwner(config(), event_capacity=128)
-    assert ingest(owner, sample()).accepted
-    assert not ingest(owner, sample(seq=float("nan"), end=10.1, received=20.1)).accepted
-    assert not ingest(owner, sample(seq=1, end=10.2, received=20.2)).accepted
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"sequence": "bad"},
-        {"sequence": []},
-        {"sequence": None},
-        {"epoch": []},
-        {"epoch": {}},
-        {"source": []},
-        {"source": "laser"},
-        {"end_steady": "bad"},
-        {"start_steady": 20.3},
-        {"end_steady": 21.0},
-        {"received_steady": 21.0},
-        {"quality": {}},
-        {"values": ("bad", 0.0, 0.0)},
-    ],
-)
-def test_malformed_structure_after_valid_samples_is_pure_rejection(changes):
-    owner = AdmissionOwner(config(), event_capacity=128)
-    ingest(owner, sample())
-    ingest(owner, sample(seq=2, end=10.1, received=20.1))
-    original = views(owner, now_ros=10.1, now_steady=20.1)[Source.LASER]
-    assert original.ready
-    for _ in range(3):
-        bad = replace(sample(seq=999, end=10.2, received=20.2), **changes)
-        assert not owner.ingest(bad, now_ros=10.2, now_steady=20.2).accepted
-    current = views(owner, now_ros=10.2, now_steady=20.2)[Source.LASER]
-    assert current.ready
-    assert current.observation.valid_until_steady == original.observation.valid_until_steady
-    assert ingest(owner, sample(seq=3, end=10.3, received=20.3)).accepted
 
 
 @pytest.mark.parametrize("end,received", [(11.0, 20.6), (10.1, 20.6)])

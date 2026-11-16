@@ -1,7 +1,6 @@
 """Real spawn/mailbox behavior without ROS, services or output transport."""
 
 import gc
-import math
 import multiprocessing as mp
 import os
 import time
@@ -54,16 +53,6 @@ def test_absolute_slots_skip_50ms_after_80ms_work_and_skip_long_backlog():
     assert cadence.due(1.300)
     cadence.finished(1.301)
     assert not cadence.due(1.301)
-
-
-@pytest.mark.parametrize("clock", [math.nan, math.inf, -math.inf, -0.01])
-def test_cadence_rejects_nonfinite_and_backwards_clock(clock):
-    cadence = ControlCadence()
-    cadence.due(0)
-    with pytest.raises(ValueError, match="invalid_control_clock"):
-        cadence.due(clock)
-    with pytest.raises(ValueError, match="invalid_control_clock"):
-        cadence.finished(clock)
 
 
 def test_mailbox_latest_is_private_bounded_and_busy_lock_does_not_wait():

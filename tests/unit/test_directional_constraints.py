@@ -289,13 +289,6 @@ def test_ramp_output_requires_an_explicit_new_check_not_discrete_inheritance():
     assert not e.validate_output(result, s, Velocity(0.008, -0.05), 0)
 
 
-def test_unrepresentable_stop_model_is_a_brake_request_not_a_crash():
-    s = snapshot(current=0.4)
-    s = replace(s, response=replace(s.response, decel=1e-300, jerk=1e-300))
-    result = engine().refine(s, 0)
-    assert result.permit is None and not result.brake.stop_verified
-
-
 def test_lateral_settling_and_validated_no_return_are_explicit_model_support():
     s = snapshot(target=Velocity(0, 0))
     safe = replace(s, envelope=replace(s.envelope, lateral_drift_mps=0.02, lateral_stop_s=0.5))

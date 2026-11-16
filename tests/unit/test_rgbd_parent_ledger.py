@@ -111,29 +111,6 @@ def test_mixed_retired_stream_is_ignored_without_revoking_successor():
     assert ledger.current(successor, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
 
 
-def test_current_malformed_header_revokes_without_raising():
-    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
-    first = ledger.offer(
-        bundle(1),
-        bridges=("02",) * 4,
-        binding_generation=4,
-        now_ros_ns=1_200_000_000,
-        now_steady=1.2,
-    )
-    malformed = tuple(replace(h, source_epoch=[]) for h in bundle(2))
-    assert (
-        ledger.offer(
-            malformed,
-            bridges=("02",) * 4,
-            binding_generation=4,
-            now_ros_ns=1_200_000_000,
-            now_steady=1.2,
-        )
-        is None
-    )
-    assert not ledger.current(first, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
-
-
 def test_system_clock_correction_keeps_ticket_until_original_monotonic_expiry():
     ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(

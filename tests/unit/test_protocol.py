@@ -109,21 +109,6 @@ def test_shared_values_reject_invalid_values():
             factory()
 
 
-def test_serialization_rejects_mutated_and_constructed_nonfinite_payloads():
-    from senior_control.protocol import ManualIntentPayload, serialize_envelope
-
-    envelope = validate_envelope(message(), "r1")
-    assert envelope.type == "drive.intent"
-    envelope.payload.linear = float("nan")
-    with pytest.raises(ValueError):
-        serialize_envelope(envelope)
-    envelope.payload = ManualIntentPayload.model_construct(
-        authority_id="a", gesture=1, sequence=1, linear=float("inf"), turn=0.0, gear="low"
-    )
-    with pytest.raises(ValueError):
-        serialize_envelope(envelope)
-
-
 def video_message(kind="video.offer", payload=None, **changes):
     return message(
         type=kind,

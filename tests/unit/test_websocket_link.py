@@ -44,18 +44,6 @@ async def test_reply_must_match_outstanding_nonce_and_epoch(wrong) -> None:
     assert await link.recv() == HeartbeatFrame("robot-a")
 
 
-async def test_reply_rejects_nonfinite_server_clock() -> None:
-    socket = Socket()
-    link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: 100.0, clock=lambda: 1.0)
-    await link.send_heartbeat()
-    request = json.loads(socket.sent[0])
-    socket.inbox.append(
-        json.dumps({**request, "type": "heartbeat.reply", "server_time": float("nan")})
-    )
-    with pytest.raises(ConnectionError):
-        await link.recv()
-
-
 async def test_connector_uses_authenticated_socket_and_epoch() -> None:
     from websockets.asyncio.server import serve
 

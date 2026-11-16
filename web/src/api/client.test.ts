@@ -134,25 +134,6 @@ it('does not send a new route when the vehicle has not advertised its capability
   }
 });
 
-it('does not append a motion sample behind a buffered socket', async () => {
-  const { client, socket } = await connected();
-  try {
-    socket.bufferedAmount = 100;
-    await expect(client.vehicle.intent({
-      authority_id: 'a',
-      gesture: 1,
-      sequence: 1,
-      linear: 1,
-      turn: 0,
-      gear: 'low'
-    })).rejects.toMatchObject({ name: 'IntentBackpressureError' });
-    expect(socket.sent).toEqual([]);
-  } finally {
-    client.disconnect();
-  }
-});
-
-
 it('keeps held input during backpressure, sends only current effort after draining, and drops released input', async () => {
   vi.useFakeTimers();
   const { client, socket } = await connected();

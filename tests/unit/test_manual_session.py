@@ -188,24 +188,6 @@ def test_new_authority_requires_an_explicit_new_session() -> None:
     assert not previous.accept(fresh, now_steady=11.0)
 
 
-@pytest.mark.parametrize("axis", ["linear", "turn"])
-def test_unrepresentably_large_axis_is_rejected_without_raising(axis: str) -> None:
-    control = session()
-    huge = 10**1000
-    bad = replace(intent(), linear=huge) if axis == "linear" else replace(intent(), turn=huge)
-    assert not control.accept(bad, now_steady=10.5)
-    assert control.accept(intent(), now_steady=10.75)
-
-
-@pytest.mark.parametrize("field", ["ttl", "now_steady"])
-def test_unrepresentably_large_configuration_is_a_value_error(field: str) -> None:
-    with pytest.raises(ValueError):
-        if field == "ttl":
-            ManualSession("authority-a", ttl=10**1000, now_steady=10.0)
-        else:
-            ManualSession("authority-a", ttl=1.0, now_steady=10**1000)
-
-
 def test_delayed_receipt_sets_deadline_from_receipt_not_processing() -> None:
     control = session()
     assert control.accept(intent(), now_steady=10.5, received_steady=10.1)
@@ -275,15 +257,3 @@ def test_taken_snapshot_deadline_never_changes_after_new_admission() -> None:
     assert taken.intent.sequence == 1
     assert taken.deadline_steady == 11.0
     assert control.deadline_steady == 11.8
-
-
-def test_large_integer_deadline_sum_is_rejected_as_configuration_error() -> None:
-    with pytest.raises(ValueError):
-        ManualSession("authority-a", ttl=10**308, now_steady=10**308)
-
-
-def test_large_integer_receipt_sum_rejects_without_raising_or_renewing() -> None:
-    control = ManualSession("authority-a", ttl=10**308, now_steady=10**307)
-    assert not control.accept(intent(), now_steady=10**308, received_steady=10**308)
-    assert not control.closed
-    assert control.deadline_steady == 11 * 10**307

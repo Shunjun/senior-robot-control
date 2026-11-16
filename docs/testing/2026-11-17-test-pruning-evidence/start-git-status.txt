@@ -1,0 +1,2 @@
+?? docs/reviews/2026-11-17-test-pruning-manifest.json
+?? docs/reviews/2026-11-17-test-pruning-review.md
