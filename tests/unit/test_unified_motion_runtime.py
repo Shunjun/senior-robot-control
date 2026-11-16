@@ -3,6 +3,7 @@ from types import SimpleNamespace as N
 import pytest
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 
 from senior_control.models import Pose2D
 from senior_control.motion.observations import Frame, Source, SourceStatus
@@ -10,7 +11,8 @@ from senior_control.motion.sample_types import PointObservation
 from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
 
-def point(source, stamp, received, values, sequence=1):
+def point(source, stamp, received, values, sequence=1, *, measurement_steady=None):
+    # This synthetic source has zero delivery delay unless explicitly supplied.
     return PointObservation(
         source,
         Frame.BODY,
@@ -24,6 +26,8 @@ def point(source, stamp, received, values, sequence=1):
         None,
         None,
         Pose2D(0, 0, 0),
+        measurement_steady=received if measurement_steady is None else measurement_steady,
+        measurement=None,
     )
 
 
@@ -85,7 +89,7 @@ def test_older_but_live_remaining_source_survives_legacy_controller_receipt_fron
     assert c._admit_feedback("body", remaining, 20.8) is None
 
 
-def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillness():
+def test_raw_wheel_imu_stillness_does_not_depend_on_independent_samples():
     from test_unified_estimator import observation
 
     s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
@@ -100,7 +104,7 @@ def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillne
         s.ingest(point(Source.WHEEL, t, t + 10, (0.0, 0.0), sequence=i + 1), t, t + 10, t)
         s.ingest(point(Source.IMU, t, t + 10, (0.0,), sequence=i + 1), t, t + 10, t)
         s.estimate(t, t + 10)
-    assert s.latest.healthy and not s.stationary_supported
+    assert s.latest.healthy and s.stationary(t + 10)
     for i in range(7):
         t = 10.7 + i * 0.1
         o = replace(
@@ -109,7 +113,7 @@ def test_new_wheel_or_gyro_samples_cannot_fabricate_repeated_independent_stillne
         )
         s.ingest_observation(o, t, t + 10)
         s.estimate(t, t + 10)
-    assert s.stationary_supported
+    assert s.stationary(t + 10)
 
 
 def test_laser_delta_retains_both_raw_capture_receipts_through_processing_delay():
@@ -152,11 +156,13 @@ def test_ros_imu_unavailable_sentinel_removes_only_imu_contribution():
     s.ingest(point(Source.WHEEL, 9.9, 19.9, (0.2, 0.1)), 10.0, 20.0, 9.9)
     msg = N(header=N(stamp=stamp(9.9), frame_id="base_link"), angular_velocity=N(z=0.1))
     core.receipt_ros = 10.0
-    assert core.imu(msg, b"imu", 10.0, 20.0)
+    assert core.imu(msg, b"imu", 10.0, 20.0, timing=capture_time(20.0, basis="driver_read"))
     assert s.estimate(10.0, 20.0)[1] is not None
     msg.angular_velocity_covariance = [-1.0] + [0.0] * 8
     msg.angular_velocity.z = float("nan")
-    assert core.imu(msg, b"imu", 10.0, 20.0)
+    assert core.imu(
+        msg, b"imu", 10.0, 20.0, timing=capture_time(20.0, basis="driver_read", sequence=2)
+    )
     s.estimate(10.0, 20.0)
     assert s.latest.healthy and s.latest.wz.sources == ("wheel",)
 
@@ -180,6 +186,6 @@ def test_bad_future_ingress_clock_does_not_replace_still_valid_earlier_input():
         ),
     )
     with pytest.raises(ValueError):
-        s.ingest_observation(future, 10.0, 20.2)
+        s.ingest_observation(future, 10.0, 20.0)
     assert s.estimate(10, 20.2)[1].velocity.vx == 0.4
     assert s.latest.vx.roots == old.roots

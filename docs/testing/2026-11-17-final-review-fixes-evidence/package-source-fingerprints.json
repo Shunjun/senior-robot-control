@@ -1,0 +1,694 @@
+[
+  {
+    "path": "pyproject.toml",
+    "sha256": "fa2ed95d49c1c16b04283c3cab3e75fc69eed2c5339d1251469846fb6ade6bc5"
+  },
+  {
+    "path": "src/senior_control/__init__.py",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "src/senior_control/agent/__init__.py",
+    "sha256": "32d4b9cd2c0065d6485b17b22ba17fe27916f6b4b52a10645207680fe1fb05b3"
+  },
+  {
+    "path": "src/senior_control/agent/composition.py",
+    "sha256": "6da58fb0c6aa9003da0644e8a4daa1235005a3f942285ae69e5f1f372d4c1db5"
+  },
+  {
+    "path": "src/senior_control/agent/connection.py",
+    "sha256": "73326d4303a153b6058284c3ffa74bd6340c41e47220e94035c85a814a1100a1"
+  },
+  {
+    "path": "src/senior_control/agent/direct_navigation.py",
+    "sha256": "e0b30bdd930dfb4648a97ef6fe68ec813683a370bfa9cae448df24210a21155a"
+  },
+  {
+    "path": "src/senior_control/agent/dispatcher.py",
+    "sha256": "d7950e58f6812f80124e54da40045d17d0c8b6a687aa5687433b4a4abffe269f"
+  },
+  {
+    "path": "src/senior_control/agent/journal.py",
+    "sha256": "5b19bc8dded2e40311ac75d0449acfe0e3f8de4e9a83e471ffc0b28a88a83b05"
+  },
+  {
+    "path": "src/senior_control/agent/logs_wire.py",
+    "sha256": "8071dd0cffc35650623880a4ee9becedd89fd8428662a7f1a64ce7ffb810bd3f"
+  },
+  {
+    "path": "src/senior_control/agent/main.py",
+    "sha256": "6a93ec937ba7c24754a83e8f54587dc8d30eac43ee220cb7aefc5b4515111fd2"
+  },
+  {
+    "path": "src/senior_control/agent/manual_control.py",
+    "sha256": "15efbfe6039c8f4c8645d8ddc4044126813a8f31da2b03de3cab02715ef5e6cb"
+  },
+  {
+    "path": "src/senior_control/agent/pairing.py",
+    "sha256": "7229d23f8244fe37cc35e4407e5f94b5e286aee23018185d12797c45b2fd734a"
+  },
+  {
+    "path": "src/senior_control/agent/ports.py",
+    "sha256": "4d84332f3a5ad058a6bc0cc5cedaa6d0703ca5c809a6616d43a34d03b56a4ba4"
+  },
+  {
+    "path": "src/senior_control/agent/settings_wire.py",
+    "sha256": "1b7c61aa9d072ea30409cb9e914718d898376c1cfa5d97dc47d70284b7ee9fae"
+  },
+  {
+    "path": "src/senior_control/agent/snapshots.py",
+    "sha256": "b39db2180abcfaeee162625e5f3ef2cd26b5eb6aaddd2c4f3ddb9409b724f84e"
+  },
+  {
+    "path": "src/senior_control/agent/vehicle_state.py",
+    "sha256": "0ecaa02175cfd11c75d719d32b3324968aef5a8dc5847bbc86d7270afe7f739a"
+  },
+  {
+    "path": "src/senior_control/agent/websocket.py",
+    "sha256": "32aa0aecb6c171cab9faaef2b55a97fb55f034c3d4f886934e56c678512412d4"
+  },
+  {
+    "path": "src/senior_control/agent/workspace.py",
+    "sha256": "b44db6a7a9c44adb462de062c4c5bf522c0f690e09b2ff260f33d8667b48f5ba"
+  },
+  {
+    "path": "src/senior_control/cli.py",
+    "sha256": "37f833b5696b8079fd592610bcb899fc57914dc28560737378ee035ad26fc233"
+  },
+  {
+    "path": "src/senior_control/clock.py",
+    "sha256": "8adb297521b277a3a87f04b0aaa409fdf5fe648e08d1819d93f06b3c34549009"
+  },
+  {
+    "path": "src/senior_control/cloud/__init__.py",
+    "sha256": "5d87efa3237807e0991abbd374c684ef9c771292093405a0da60b97ffaca4751"
+  },
+  {
+    "path": "src/senior_control/cloud/app.py",
+    "sha256": "1d11e9059575379e0d4583b889606f7b542bbfb0a2165d1f4962dca757172cfa"
+  },
+  {
+    "path": "src/senior_control/cloud/auth.py",
+    "sha256": "9e3fbc22dee446f9909a1baeb9daa343065f7b215d3a612a736da2857cd2a095"
+  },
+  {
+    "path": "src/senior_control/cloud/db.py",
+    "sha256": "e4168e46cb62971e4c865ca02f04fb2fcadcbbfdcea7e6c01f014673ba31d4bb"
+  },
+  {
+    "path": "src/senior_control/cloud/limits.py",
+    "sha256": "0148e80f67e552cead9cc9ebad49b63e808be236090682847c01de6e44b08c0c"
+  },
+  {
+    "path": "src/senior_control/cloud/logs.py",
+    "sha256": "e2bec67e18fd1b009409c4208cf11a18f183268addc6d5acf89484dc8bc31655"
+  },
+  {
+    "path": "src/senior_control/cloud/pairing.py",
+    "sha256": "0f86748fdd3954281487a22d6f61989985c5ace5caabfd2ca2cc065e0c3df1be"
+  },
+  {
+    "path": "src/senior_control/cloud/registry.py",
+    "sha256": "6aa14f6870f09184f0820d4bc754a882b0f710a0d86741fd603294107f01d8ec"
+  },
+  {
+    "path": "src/senior_control/cloud/relay.py",
+    "sha256": "e0f2727d703e0756b83a813de5650b88a02f4f641ec46cd6a5ded581293b3507"
+  },
+  {
+    "path": "src/senior_control/config.py",
+    "sha256": "5da782c9d754ccb7d089f5002c7bfd5a43289063760418f313877b6d0bd3dfee"
+  },
+  {
+    "path": "src/senior_control/docker_start_helper.py",
+    "sha256": "f73367e483853a5b4d31d9ba397413163936bc41d38db84ca587416969823395"
+  },
+  {
+    "path": "src/senior_control/errors.py",
+    "sha256": "ee29833d4adf2df2ce9f9ed7abe7e7c0b273262b8d12ae20177785bc64375ba5"
+  },
+  {
+    "path": "src/senior_control/hardware_navigation.py",
+    "sha256": "0d391022d3bf00462063fd9b8a0ac99eea8e92ddf06a79702af4a9e398c99c87"
+  },
+  {
+    "path": "src/senior_control/localization/__init__.py",
+    "sha256": "5ea6ac97642f3448c89c9a2da01c53e8ccecf60c583162830d4a380b4b8555b3"
+  },
+  {
+    "path": "src/senior_control/localization/geo.py",
+    "sha256": "12baf728770ed79d050f586d856b3ecc4811c4531e5d64b8f79c6da6880116db"
+  },
+  {
+    "path": "src/senior_control/localization/gps_course.py",
+    "sha256": "c6e9e7060908c97da3e3cf3ce06c1b37dabd0be5057af9a18b037bbe1d0de674"
+  },
+  {
+    "path": "src/senior_control/localization/heading.py",
+    "sha256": "4293f98f709ecc2ececd1df87f4e7daf5a68bef5aea832d21ee45dcf38a92e69"
+  },
+  {
+    "path": "src/senior_control/localization/relocalization.py",
+    "sha256": "6de9b8db38e1a43cedd0828a7edc911f5f9cbe145935cae52908ef8b71aacaae"
+  },
+  {
+    "path": "src/senior_control/mapping/__init__.py",
+    "sha256": "0b31beaee98606441e40aadaa3e4f8ce204dbaec7bd1289af7992e4fb5d573cb"
+  },
+  {
+    "path": "src/senior_control/mapping/archive.py",
+    "sha256": "5363ea46a60c454fe3edcb3f149643796a6113751cc52a7cbf83bc7155b5c579"
+  },
+  {
+    "path": "src/senior_control/mapping/evidence.py",
+    "sha256": "9db5714ae57466fa1fa6cd43c57bdaffafbf47c0afbd92f4b1f0620e6b09f4d7"
+  },
+  {
+    "path": "src/senior_control/mapping/occupancy.py",
+    "sha256": "afdd952ca100075752c77ca3237f6bcae62f2f70f4a8416089e009649e7562b3"
+  },
+  {
+    "path": "src/senior_control/mapping/operations.py",
+    "sha256": "3890d0e04baf8881499c64fc463e1187fb9e75d937daefe3b9dd0b390f07454c"
+  },
+  {
+    "path": "src/senior_control/mapping/references.py",
+    "sha256": "359d09f612036ad3cd17d27682c83d02ca50b7202f7e63dae9f8a295460e4805"
+  },
+  {
+    "path": "src/senior_control/mapping/simulation.py",
+    "sha256": "86efb415c18882d24d01e2994eaac58297f599ba81ae4645b3b0f26047317ead"
+  },
+  {
+    "path": "src/senior_control/mapping/store.py",
+    "sha256": "21856e6b0ed7466ae9e7a6d236f2ed9c9a98bacb842836c074ec49ab186589a6"
+  },
+  {
+    "path": "src/senior_control/mapping/workspace.py",
+    "sha256": "77e742fea83d84bdc911f0f6ba8e1fd2c19013610c5191bd7f1697f547002561"
+  },
+  {
+    "path": "src/senior_control/mapping/workspace_export.py",
+    "sha256": "8ff03b57e4eaf853e1ae8e14258e0a711dd4a27b8bc30346837b858f9199548e"
+  },
+  {
+    "path": "src/senior_control/models.py",
+    "sha256": "f885dd8ddd4776c624f0e64b5350f0e83eb535f7401004c10d8543f632799916"
+  },
+  {
+    "path": "src/senior_control/motion/__init__.py",
+    "sha256": "8afe7c496c208497275a68986bd125ef2ff2ee74c9275157126f76712ae5696e"
+  },
+  {
+    "path": "src/senior_control/motion/acceleration_model.py",
+    "sha256": "a95a692f120a356d34069642afbf10ee312edd69c6f24de1fba046ef1de4b8d8"
+  },
+  {
+    "path": "src/senior_control/motion/admission_events.py",
+    "sha256": "1e838c7741d85056338d2996aa6e640ac467a018ee748e563d358c6f550677a4"
+  },
+  {
+    "path": "src/senior_control/motion/cadence.py",
+    "sha256": "0461b8da26ef07674b56938e69cab8c5aab4c22f9fab1b04397aaaa96ba183bf"
+  },
+  {
+    "path": "src/senior_control/motion/constraint_worker.py",
+    "sha256": "759b7009b88d6f2e1761f8abb21289bb32d8acc67339853613d421d447cd9274"
+  },
+  {
+    "path": "src/senior_control/motion/constraints.py",
+    "sha256": "70f78d57bd0c62f8ca15943248aca2dc88de5ef5823cf1ca9700effb8b8b71f5"
+  },
+  {
+    "path": "src/senior_control/motion/contracts.py",
+    "sha256": "4aa3f2850854d737adbe00794e79794ba3c3dc957008cf87e51c4fcdda43265b"
+  },
+  {
+    "path": "src/senior_control/motion/controller.py",
+    "sha256": "1bbef72443f7bb7ed28cad6aefd5473ab0b5dbec5aba58d44b24ed6f5eb5c2a3"
+  },
+  {
+    "path": "src/senior_control/motion/diagnostic_pump.py",
+    "sha256": "70ad6f4cc279410cc19c315111c36295909c5c0fa042d8dc2ba43ffa1da0ca18"
+  },
+  {
+    "path": "src/senior_control/motion/estimator.py",
+    "sha256": "bbd8d060114212daf5fd03270c7eacd87babd0ac42dd3c06fbfb754d470897d6"
+  },
+  {
+    "path": "src/senior_control/motion/fusion.py",
+    "sha256": "9ae49ea8728f89bf4d50ffc70e8f01a309e58b2fe35033867821c506b191db9f"
+  },
+  {
+    "path": "src/senior_control/motion/hardware_profile.py",
+    "sha256": "eb889ec16371709b7334836eed4953cbf51124f4f67f16f1543f7dcaf97d34bd"
+  },
+  {
+    "path": "src/senior_control/motion/kinematics.py",
+    "sha256": "6a8e98f9ed659a85cb2591b97eb6cc29dbbda03bc58cb358ba3e866fe53eee74"
+  },
+  {
+    "path": "src/senior_control/motion/learning_record.py",
+    "sha256": "609f993a6a55ed66834848a58a61c1947cca7f338906a9e13283a9bc039a6f02"
+  },
+  {
+    "path": "src/senior_control/motion/manual_authority.py",
+    "sha256": "ab57ad59f226c6b59b6b27a62d51610a09350818a107c7854d88341e4d18d675"
+  },
+  {
+    "path": "src/senior_control/motion/manual_session.py",
+    "sha256": "724f860d180227f2814b371460c60947f735bef114000e735d03a25d61f231c1"
+  },
+  {
+    "path": "src/senior_control/motion/manual_target.py",
+    "sha256": "8ecb5552fd1f398a890e7bf9e74a5acbec2647c6c88bc40a76236c7b81b28e5b"
+  },
+  {
+    "path": "src/senior_control/motion/navigation_clock.py",
+    "sha256": "61596acc4d2f80f1804bb45206c3f4e00a47dfd4462b495272efdd3d6e852192"
+  },
+  {
+    "path": "src/senior_control/motion/observations.py",
+    "sha256": "49f45b4d9b042691eeb239a110f48b5f8f7b8313fbe6bb01f65998549007cfb9"
+  },
+  {
+    "path": "src/senior_control/motion/pose_estimator.py",
+    "sha256": "f6798d86e281ca30cd3cf6f2bb3294fc9935f8ca793b24e3444f62bc84a72b65"
+  },
+  {
+    "path": "src/senior_control/motion/process_resources.py",
+    "sha256": "4c5c61c312626f5553cfa6f8d2eb52fcc543e07926fde3a3f58122d3346e603e"
+  },
+  {
+    "path": "src/senior_control/motion/sample_types.py",
+    "sha256": "c4d82c97f1bd43c61dd2172b66c780240e4f0f43359f78b65489984421755691"
+  },
+  {
+    "path": "src/senior_control/motion/source_admission.py",
+    "sha256": "7d0d027f4ad1620c50793c5d0f736bb627c96457cbe2a0f66af9cea23f9a9087"
+  },
+  {
+    "path": "src/senior_control/motion/source_fences.py",
+    "sha256": "20937d7ac6c528044c4cd86ea00dd474d72988e646046b53abf33390cb256cc3"
+  },
+  {
+    "path": "src/senior_control/motion/source_modes.py",
+    "sha256": "1467dcf799290e6566bcc6803ba88d9142f6478b3331dbc49ab3d6a8a14603db"
+  },
+  {
+    "path": "src/senior_control/motion/startup_learning.py",
+    "sha256": "f2bcea7ebe414a052fa2dc5ac518fea8188aa79d9646bd9d4d5b6c52145b801a"
+  },
+  {
+    "path": "src/senior_control/motion/state_machine.py",
+    "sha256": "740fc6aac11e6dab61c954f721f5cc9d81cc6875a45d3367d5031ccf0354b76e"
+  },
+  {
+    "path": "src/senior_control/motion/stillness.py",
+    "sha256": "7afb168b66ca5c8567bac3686327041f7702385ed43e309d518343b1a923146d"
+  },
+  {
+    "path": "src/senior_control/motion/stopping_input.py",
+    "sha256": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc"
+  },
+  {
+    "path": "src/senior_control/motion/temporal.py",
+    "sha256": "fbd6c071912208771231dd9c88b762f4c598f1a983f3b97fc291b71a72f34c6e"
+  },
+  {
+    "path": "src/senior_control/motion/trajectory.py",
+    "sha256": "72bb75925cd79a39b1490f4ca79a1508bcfb4e25fba2837910f0c979f229e9f9"
+  },
+  {
+    "path": "src/senior_control/navigation.py",
+    "sha256": "ed0fe1af66070dc7ec66ca3e55013e17033766d366dbb1674d6e179deaeab220"
+  },
+  {
+    "path": "src/senior_control/observability.py",
+    "sha256": "275fd41af9a1b53bcbd12788104ea1ae167ba3e6c0c6ceb641ec4edb7327a8e0"
+  },
+  {
+    "path": "src/senior_control/protocol.py",
+    "sha256": "923b32cd80fc45e56e115f886b4b6167ce39b8582b6ae18ea4c91e967c161b2f"
+  },
+  {
+    "path": "src/senior_control/py.typed",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "src/senior_control/real_runtime.py",
+    "sha256": "deee60f1e50cdae8447edfb677a36aa86634182ad492eb3c32650064480b9c37"
+  },
+  {
+    "path": "src/senior_control/runtime/__init__.py",
+    "sha256": "1b5ba69652c1e517e139c59d13f77ce5b89e3a3575369e3da6a0bb7869f00c8c"
+  },
+  {
+    "path": "src/senior_control/runtime/diagnostics.py",
+    "sha256": "d4065e264144c97b8b574ac032d73f1f811992b18693520367b8a42aa9bdbc11"
+  },
+  {
+    "path": "src/senior_control/runtime/ipc.py",
+    "sha256": "2264459a054668abfe6903d4e0f05db325b36be23de90350eaa2d07e9bc96c2a"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_cleanup.py",
+    "sha256": "2f78adf0caee9fe59b6ace62a9d24921c3a54352baaeef7d1066b3cd5389d36b"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_client.py",
+    "sha256": "968e10b45cb714eb2845e23551b734f779cb5ea25b40c7b9cc00f0566329cbaa"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_owner.py",
+    "sha256": "f862e1e30cdc9270704513ff4634d76ee6018e04c605706a4aa06375b2fc2de9"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_service.py",
+    "sha256": "d1ed99d01fd830466dd1469dfd46c88419419b22427653a8112ff0094ca8f192"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_store.py",
+    "sha256": "fb977f323a48a14c67300cb8eeb37e072c930c075ff50b5d948571d2e30cfcd5"
+  },
+  {
+    "path": "src/senior_control/runtime/learning_wire.py",
+    "sha256": "830f291f25c384981d06f2b152e73d51cb5b5c0719a55a7e569d9718384e8b93"
+  },
+  {
+    "path": "src/senior_control/runtime/lifecycle_events.py",
+    "sha256": "a121ea95a5c64210d9ef6e2db46ddf5db10434128d29ecdc2a15d60d5ca91fef"
+  },
+  {
+    "path": "src/senior_control/runtime/supervisor.py",
+    "sha256": "b5b262f83145a195829a9e471d2e60df9e33a561fa11ae1aff984ce73840d25a"
+  },
+  {
+    "path": "src/senior_control/safety/__init__.py",
+    "sha256": "27d661857ee2e9bac66e5d85dd366cd1e257c1a75319526f8bd58a5851efba5d"
+  },
+  {
+    "path": "src/senior_control/safety/arbiter.py",
+    "sha256": "07d0e8f43ca234fe68b7d7e47b37affa1833951f29c1e749a17523556563f901"
+  },
+  {
+    "path": "src/senior_control/safety/coverage.py",
+    "sha256": "8e320be85164ac458bddeaf270e2abc0eee34e5740a112da83811c4d1582948e"
+  },
+  {
+    "path": "src/senior_control/safety/external_motion_features.py",
+    "sha256": "38e55ed34c06de31034c0ce9cc38a0dc51470ee21872f563e1526f6e18ceef89"
+  },
+  {
+    "path": "src/senior_control/safety/freshness.py",
+    "sha256": "4ae2b63f618e9a865771c104d5638c1e394f09b3327547e156cdfbf51733bd25"
+  },
+  {
+    "path": "src/senior_control/safety/geometry.py",
+    "sha256": "2b7c6ab3ba7efe93c5aec341f0a873fb635c7f31464e5cf26d6909c26f0c31d7"
+  },
+  {
+    "path": "src/senior_control/safety/geometry_bounds.py",
+    "sha256": "aabe4eb0825235c530ca5797d70081a67400f8a20f5bbcfba205406914fd126d"
+  },
+  {
+    "path": "src/senior_control/safety/learning_view.py",
+    "sha256": "ba79636a378b8750bbce38e304d326baff2fcf3ffeded03baa9348aec52d1c13"
+  },
+  {
+    "path": "src/senior_control/safety/self_filter.py",
+    "sha256": "742e99335d92ab1928d844831c194519566a5c43d9c23c5bfa3e7dc6c378822b"
+  },
+  {
+    "path": "src/senior_control/safety/self_learning.py",
+    "sha256": "f19536628813014a690b14a22eaa0593d09d875ded64480020a580b230e7ac33"
+  },
+  {
+    "path": "src/senior_control/safety/space_estimator.py",
+    "sha256": "282c4c3802e7b4fefaf95921e721d446b7380df4b2d994c40c557855b14ffe55"
+  },
+  {
+    "path": "src/senior_control/safety/startup_visibility.py",
+    "sha256": "24cc969d20b41871b720de58565ee719e837580697edb7956a6f81f1888be080"
+  },
+  {
+    "path": "src/senior_control/sensors/__init__.py",
+    "sha256": "90b5cf8a0015186d6d86fc8abab4734b4f35b6611cb90764c3831dd19d7f7656"
+  },
+  {
+    "path": "src/senior_control/sensors/consensus.py",
+    "sha256": "ce47094f00b75dfa1dad475179000249dda086bcaf3be04a929115d7f0b73b12"
+  },
+  {
+    "path": "src/senior_control/sensors/defaults.json",
+    "sha256": "26bc4c1ecdd37cdbc7a9fd09ca184a49aadb62181175ba462ee1dce29cf62246"
+  },
+  {
+    "path": "src/senior_control/sensors/input_config.py",
+    "sha256": "b4f590d9da3ac470207cae284096f6cf7c3bc1140be5db970744ccfd5822ab2e"
+  },
+  {
+    "path": "src/senior_control/sensors/policy.py",
+    "sha256": "12bf8ca3a43edccbce19a64980ec8d1abb80d39a7e33f1b09b3972963718fd58"
+  },
+  {
+    "path": "src/senior_control/sensors/time_proof.py",
+    "sha256": "8b01992dae4188aaf0b13be7e287d53340211182d52d6065b5833ccbf73328f3"
+  },
+  {
+    "path": "src/senior_control/settings/__init__.py",
+    "sha256": "d63a77a9005abc887cbc1fec8acb3b456c28fca9b803ffcac61dc4b2165fe89b"
+  },
+  {
+    "path": "src/senior_control/settings/models.py",
+    "sha256": "5914a94ccebaec2e515deb873f04776b3d601435b39f3a2dab46ec38e713c747"
+  },
+  {
+    "path": "src/senior_control/settings/service.py",
+    "sha256": "2968ff1ecfb77e09d7c1b6c9686bbc5655f26454ea45caee7fa0473ff3d3a76b"
+  },
+  {
+    "path": "src/senior_control/settings/store.py",
+    "sha256": "1e557273274428927d91d6045ea570ef2c3ff5064325531c6b5ab9a804248d8c"
+  },
+  {
+    "path": "src/senior_control/simulation_cli.py",
+    "sha256": "dd3c562944ee3312d551bac1b5f16b5bd825f0c9cb83070882b855e10f2b54d2"
+  },
+  {
+    "path": "src/senior_control/storage/__init__.py",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "src/senior_control/storage/core_schema.py",
+    "sha256": "4154f1716eafadf273acc7afc2c9d87eb4b78f94479ce2f866158807d441e645"
+  },
+  {
+    "path": "src/senior_control/storage/database.py",
+    "sha256": "266726f796572c31cefa2107e8f8855ccf90fb8f4462f70a45e3a6db51cf2ed6"
+  },
+  {
+    "path": "src/senior_control/storage/migrations.py",
+    "sha256": "29fc9fca4e08dfa1bb8322eaf80f612a5f7a8cac7083be030b8c32e872dada17"
+  },
+  {
+    "path": "src/senior_control/storage/schema.py",
+    "sha256": "c283946c4077d6f982d7ac60957eb374bc32ea1e1aa8a1289a5c52ce61ddaea9"
+  },
+  {
+    "path": "src/senior_control/tasks/__init__.py",
+    "sha256": "d488a4bb4877bde96c8686c5c54ca2e40794e07aa0434d19153f0906ee6ae097"
+  },
+  {
+    "path": "src/senior_control/tasks/executor.py",
+    "sha256": "d4a53b12a9c63c63139fd09b9545ba31026c5bbb91844d7f650477d0489bf21d"
+  },
+  {
+    "path": "src/senior_control/tasks/lifecycle.py",
+    "sha256": "9089b391ecc5868e7d034ebe58bed1a1e488b808a018c0d435ffd7e34e29010a"
+  },
+  {
+    "path": "src/senior_control/tasks/lifecycle_service.py",
+    "sha256": "7e7343621ae511b8082a9e66112bfbfff7e96f8c483e908650ab100ae5ca15d0"
+  },
+  {
+    "path": "src/senior_control/tasks/lifecycle_store.py",
+    "sha256": "8824a48dff2b6d83b1d6df3a1725548a3228dc849f0ab45593180293c0f11977"
+  },
+  {
+    "path": "src/senior_control/tasks/models.py",
+    "sha256": "309c0c5517196bf906e09cfcbadc99fd2174fc0159f5226d36ebc6324eca4a16"
+  },
+  {
+    "path": "src/senior_control/tasks/navigation_port.py",
+    "sha256": "0db67b0b08088d615e22fea654dbb49433b5a8cbee25e7ef4219337054841aff"
+  },
+  {
+    "path": "src/senior_control/tasks/runner.py",
+    "sha256": "4399bca2f0f16c8175d04c3c05500240a7434aac683685b487438016638feb11"
+  },
+  {
+    "path": "src/senior_control/tasks/runtime.py",
+    "sha256": "67de75b9973730721942371c9bde4ad23e5ba4d7b07cece9c946f86b23d49012"
+  },
+  {
+    "path": "src/senior_control/tasks/schedule.py",
+    "sha256": "59ec0f1bd536d2db44ad98302da7502dd4f4c6241291adc422f923d54ce328f6"
+  },
+  {
+    "path": "src/senior_control/tasks/store.py",
+    "sha256": "cecaeb8fa64bd82b7269945197d3491f7938d69ab15450461c79d39a19c4a18f"
+  },
+  {
+    "path": "src/senior_control/vehicle_deploy.py",
+    "sha256": "677dbc41b23c81790dcb06c2f8630b4ec16aab82c1ca7c364ce4dfb0a97bbdd3"
+  },
+  {
+    "path": "src/senior_control/vehicle_logs/__init__.py",
+    "sha256": "650b596dff06188260dedd2b2871f42109be16d3178b2fe13d3ad564e720811d"
+  },
+  {
+    "path": "src/senior_control/vehicle_logs/models.py",
+    "sha256": "990b5a42674e56a6db5bd1b69996a299e5a0199d677e7a1dde64e3e78a3bf717"
+  },
+  {
+    "path": "src/senior_control/vehicle_logs/service.py",
+    "sha256": "3a03a57b596d1b0feac45e09ba67f6689eb6875d5f795845bd01a389ffa3bfcd"
+  },
+  {
+    "path": "src/senior_control/vehicle_logs/store.py",
+    "sha256": "6c5b675eb20a3d26c644f18b05625c5e9494da49fa1ca23a5c55aefa3e9091e3"
+  },
+  {
+    "path": "src/senior_control/vehicle_logs/wire.py",
+    "sha256": "74252f0a608484cc802f2f8e611b5e93ef78120c01cbedc49ea444a2a92cd097"
+  },
+  {
+    "path": "src/senior_control/vision/__init__.py",
+    "sha256": "3e2158ed90e14d2667d8c55e92660482d909db9f71deeeb14d3941ffb02ff7eb"
+  },
+  {
+    "path": "src/senior_control/vision/depth.py",
+    "sha256": "6b51e172a740ddf901e903285dd9d8c4727659645262b9fec71baf52c0f5348f"
+  },
+  {
+    "path": "src/senior_control/vision/depth_runtime.py",
+    "sha256": "692abc9fe93050a68612d9e2e45086cafcd687d1d7fd1a73644c5f2699af7abd"
+  },
+  {
+    "path": "src/senior_control/vision/detector.py",
+    "sha256": "fc36ede5117b04fd70cd06c8f0b6c12789a3ee7e27ee4157306a0bf63f2ff641"
+  },
+  {
+    "path": "src/senior_control/vision/egress_receipt.py",
+    "sha256": "9c3b9c976d8f6a27df3c2b21863f619d34e021228b5c684c7fcbef3cb2103b42"
+  },
+  {
+    "path": "src/senior_control/vision/image_codec.py",
+    "sha256": "5825ba6808da43cede1c9d70731163705254823849791885e64f8e5893981798"
+  },
+  {
+    "path": "src/senior_control/vision/independent_motion.py",
+    "sha256": "6ed2f2a8353e49ca1b2c342ea6c5b5f98d8e420c34607436863cc9d1160c8ad8"
+  },
+  {
+    "path": "src/senior_control/vision/raw_capture.py",
+    "sha256": "f0d25933551f919767e68f46237a9409120df0d91865b78d62a5288a37d1c807"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_body_motion.py",
+    "sha256": "8aae82005d828535ce79b943415e99da0f243b27fdb23f899e5a2010b9ff1e30"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_bounded_inbox.py",
+    "sha256": "8d20cc8d5d763c7bd5dcef677f3af282b61c7400e830a6bbda08a3c710f1f426"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_candidate_codec.py",
+    "sha256": "89809a2932390d1597faf32a77e41da4d70e0d424f928e953ad300f9af7ae2ac"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_coordinator.py",
+    "sha256": "971a99570cf704306c69190184c875fa771ca2025a0bc84446558ade571253ce"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_frame_builder.py",
+    "sha256": "62ccb525cc3b5c401f4dfdb6f24352978e6223237ec632e527771da6e230a76e"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_joiner.py",
+    "sha256": "5d01f34f2ba2d43b19297d8a540bbf8002718ba12b057481a086a778b55f8e73"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_parent_ledger.py",
+    "sha256": "359f675053af645f81ac3af9e244892842a69b47406b880ba6f6be1904d0c595"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_producer_engine.py",
+    "sha256": "b36d840aea9ad686710aeee385c1f32db8c89e3520eca5d7e9dbb6365f24867f"
+  },
+  {
+    "path": "src/senior_control/vision/rgbd_spawn_worker.py",
+    "sha256": "a7661fcec67778b55b55dd4eb102d452486a8c251f29f7b2a5712139226da51e"
+  },
+  {
+    "path": "src/senior_control/vision/runtime_evidence.py",
+    "sha256": "a4d13ad7ca94ad85ae2b4d510f93238050225716a700fab13f9ba881516469dc"
+  },
+  {
+    "path": "src/senior_control/vision/semantic_coordinator.py",
+    "sha256": "9f9a3c266cd9903e311386ca382547272634461fb3cfde8d9ef14779dc4243d4"
+  },
+  {
+    "path": "src/senior_control/vision/semantic_runtime.py",
+    "sha256": "570b162b7b433a54ebb06a464e0bbabdeb4ac3f1e2e9016dfa85ea78f3bc9890"
+  },
+  {
+    "path": "src/senior_control/vision/signaling.py",
+    "sha256": "89d04e20e0cec2001257f1c193714f4ff83b8fd239033caed8a13e9cea841afb"
+  },
+  {
+    "path": "src/senior_control/vision/simulation_video.py",
+    "sha256": "dbc70ee49a005ecd3def732df217db822db239cf20eef19ba0b24358cccfd4e6"
+  },
+  {
+    "path": "src/senior_control/vision/spawn_detector.py",
+    "sha256": "4a8ed53e40842ed03217631decd147bdd8bb4bb14c33459c7095a9fa3466f86e"
+  },
+  {
+    "path": "src/senior_control/vision/static_tf_binding.py",
+    "sha256": "ca2269c253512b60e17763fd7fec6b34036c096ef69210b9f1e0a1becb84b469"
+  },
+  {
+    "path": "src/senior_control/vision/static_tf_wire.py",
+    "sha256": "de5476d81e7d5486c8f2c035a40556f3ca8fc272d0d25dc01f2c24a094425ef1"
+  },
+  {
+    "path": "src/senior_control/vision/stream.py",
+    "sha256": "a4685374649e5229afc0ce5eb240c2dcaa845144dbb5e2579f1ee3a5d50d502f"
+  },
+  {
+    "path": "src/senior_control/vision/synchronizer.py",
+    "sha256": "e9d2c1522aca183470eb8c434301e09cca6fe067111357fe6e2881e6b2ac46ee"
+  },
+  {
+    "path": "src/senior_control/vision/tracking.py",
+    "sha256": "ba5025d5aba6c2c18882bcd13a430ed95d6a55090a36ee137596a5a40cc946b7"
+  },
+  {
+    "path": "src/senior_control/vision/turn.py",
+    "sha256": "7374a6841fc0a5b7d94567fc84e9b4b42f868c3e26a321b5daf0b06681f70ae4"
+  },
+  {
+    "path": "src/senior_control/waypoints/__init__.py",
+    "sha256": "5ebc7a3d7742b6530316a31cf99af47227eef0c121ba7f44dba18929d8d4d9f9"
+  },
+  {
+    "path": "src/senior_control/waypoints/home.py",
+    "sha256": "3d94717c0cbf65bbf17e2054054a81f339e004318e502a13aa67a893f9dd5441"
+  },
+  {
+    "path": "src/senior_control/waypoints/store.py",
+    "sha256": "cc53c16c9010b096699827b28e881134333f1c16717cbc51de4e007026cfa415"
+  }
+]

@@ -1,0 +1,13 @@
+AT 2026-11-16T18:39:11.678959+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+COMMAND [".venv/bin/mypy", "--no-incremental", "--cache-dir", "/tmp/final-review-fixes-mypy", "src"]
+src/senior_control/tasks/lifecycle.py:318: error: Incompatible types in assignment (expression has type "Literal['succeeded', 'canceled', 'failed'] | None", variable has type "Literal['empty', 'starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']")  [assignment]
+src/senior_control/tasks/lifecycle_store.py:647: error: Value of type "Row | None" is not indexable  [index]
+src/senior_control/motion/constraints.py:189: error: Incompatible return value type (got "tuple[tuple[float, ...], ...]", expected "tuple[tuple[float, float], ...]")  [return-value]
+src/senior_control/motion/constraints.py:191: error: Argument "join_style" to "buffer" of "BaseGeometry" has incompatible type "Literal[2]"; expected "Literal['round', 'mitre', 'bevel'] | BufferJoinStyle"  [arg-type]
+src/senior_control/motion/controller.py:454: error: Argument 1 to "validate_output" of "TickEvaluation" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+src/senior_control/motion/controller.py:456: error: Argument 1 to "validate_output" of "ConstraintEngine" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+Found 6 errors in 4 files (checked 170 source files)
+
+EXIT 1
+ELAPSED 5.344284666003659

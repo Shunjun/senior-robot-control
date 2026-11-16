@@ -6,6 +6,7 @@ import {
   isRequestType,
   isWorkspaceRequestType,
   parseInbound,
+  parseControlConnection,
   parseVideoInbound,
   type EnvelopeBase,
   type ErrorCode,
@@ -341,6 +342,7 @@ export class RobotClient implements RobotLink {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000;
     this.browserLogs = new BrowserVehicleLogs(() => this.robotId, this.socketFactory);
     this.vehicle = new VehicleTransport(async (type, payload) => {
+      if (type === "drive.intent") return this.sendIntent(payload);
       const response = await this.request(type, payload);
       return response.data ?? null;
     }, options.logs ?? this.browserLogs);
@@ -407,15 +409,16 @@ export class RobotClient implements RobotLink {
 
   request<T = ResponsePayload>(type: string, payload: unknown): Promise<T> {
     if (!isRequestType(type) && !VEHICLE_REQUEST_TYPES.includes(type)) return Promise.reject(new CommandError("validation", "unsupported request type"));
+    if (type === "drive.intent") return Promise.reject(new CommandError("validation", "intent uses the send-only stream"));
+    const manual = type === "control.acquire" || type === "control.release";
     const urgent = type === "safety.estop" || type === "drive.stop";
     const safety = urgent || type === "control.release";
     const socket = this.socket, robotId = this.robotId;
     if (socket === null || robotId === null || socket.readyState !== SOCKET_OPEN) return Promise.reject(new CommandError("offline", "control socket is not open"));
-    if (!urgent && (this.epoch < 1 || this.latest === null || (!safety && (this.latest.stale || !this.latest.connected)))) return Promise.reject(new CommandError("offline", "no live vehicle snapshot"));
-    const required = type.startsWith("settings.") ? "settings.v1" : type === "task.execution.command" ? "task.execution.v1" : type === "drive.intent" || type === "control.acquire" ? "motion.intent.v1" : type === "safety.estop.reset" || type === "safety.fault.recover" ? "runtime.v1" : null;
+    if (!urgent && (this.epoch < 1 || (!manual && (this.latest === null || (!safety && (this.latest.stale || !this.latest.connected)))))) return Promise.reject(new CommandError("offline", "no live vehicle snapshot"));
+    const required = type.startsWith("settings.") ? "settings.v1" : type === "task.execution.command" ? "task.execution.v1" : type === "safety.estop.reset" || type === "safety.fault.recover" ? "runtime.v1" : null;
     const vehicle = this.vehicle.getSnapshot();
     if (required && (!vehicle.connected || !vehicle.available || !vehicle.frame?.capabilities.includes(required))) return Promise.reject(new CommandError("unavailable", "vehicle capability is not connected"));
-    if (type === "drive.intent" && socket.bufferedAmount > 0) return Promise.reject(new IntentBackpressureError());
     const requestId = crypto.randomUUID();
     const envelope = {
       v: PROTOCOL_VERSION,
@@ -455,6 +458,21 @@ export class RobotClient implements RobotLink {
         if (type === "safety.estop") this.vehicle.fenceManual();
       }
     });
+  }
+  private sendIntent(payload: unknown): void {
+    const socket = this.socket, robotId = this.robotId;
+    if (!socket || !robotId || socket.readyState !== SOCKET_OPEN || this.epoch < 1) {
+      throw new CommandError("offline", "control stream is not connected");
+    }
+    // A held gesture produces a fresh sample on the next 100ms tick.
+    if (socket.bufferedAmount > 0) throw new IntentBackpressureError();
+    const frame = JSON.stringify({
+      v: PROTOCOL_VERSION, robot_id: robotId, session_id: this.sessionId,
+      connection_epoch: this.epoch, request_id: crypto.randomUUID(), seq: ++this.seq,
+      expires_at: Date.now() / 1000 + COMMAND_TTL_SECONDS, type: "drive.intent", payload
+    });
+    if (new TextEncoder().encode(frame).length > MAX_MESSAGE_BYTES) throw new CommandError("validation", "intent is too large");
+    socket.send(frame);
   }
   sendVideoSignal(
     type: VideoSignalType,
@@ -538,6 +556,11 @@ export class RobotClient implements RobotLink {
     this.setStatus({ state: "closed", robotId: this.robotId, closeCode: code });
   }
   private receive(raw: unknown): void {
+    const connection = parseControlConnection(raw);
+    if (connection) {
+      if (connection.robot_id === this.robotId) this.onConnection(connection.connection_epoch);
+      return;
+    }
     const envelope = parseInbound(raw);
     if (envelope === null) {
       const video = parseVideoInbound(raw);
@@ -555,7 +578,7 @@ export class RobotClient implements RobotLink {
     if (strict && (entry.sessionId !== envelope.session_id || entry.epoch !== envelope.connection_epoch || entry.seq !== envelope.seq)) return;
     this.pending.delete(envelope.request_id);
     clearTimeout(entry.timer);
-    this.vehicle.setConnection(this.vehicle.getSnapshot().connected, Math.max(0, performance.now() - entry.sentAt));
+    this.vehicle.setRtt(Math.max(0, performance.now() - entry.sentAt));
     if (strict && entry.epoch !== this.epoch) {
       entry.reject(new CommandError("offline", "connection replaced"));
       return;
@@ -563,20 +586,20 @@ export class RobotClient implements RobotLink {
     if (envelope.payload.ok) entry.resolve(envelope.payload);
     else entry.reject(new CommandError(envelope.payload.error ?? "validation", describeCommandError(envelope.payload.error ?? "validation")));
   }
-  private onSnapshot(envelope: SnapshotEnvelope): void {
-    // The cloud sends its cache with the epoch of the connected agent (0 when none is), and the
-    // cache's own `stale` and `last_synced_at`. Nothing here is the browser's receipt time.
-    const incomingEpoch = envelope.connection_epoch;
+  private onConnection(incomingEpoch: number): void {
     if (incomingEpoch > 0 && (incomingEpoch < this.epochFrontier || incomingEpoch <= this.retiredEpoch)) return;
     if (incomingEpoch === 0) this.retiredEpoch = Math.max(this.retiredEpoch, this.epochFrontier);
     else this.epochFrontier = Math.max(this.epochFrontier, incomingEpoch);
-    const payload = incomingEpoch === 0
+    if (incomingEpoch !== this.epoch) this.vehicle.fenceManual();
+    this.epoch = incomingEpoch;
+    this.vehicle.setManualConnection(incomingEpoch > 0);
+  }
+  private onSnapshot(envelope: SnapshotEnvelope): void {
+    // Runtime report timing cannot grant or retire the transport's manual identity.
+    if (envelope.connection_epoch !== this.epoch) return;
+    const payload = envelope.connection_epoch === 0
       ? { ...envelope.payload, stale: true, connected: false }
       : envelope.payload;
-    // Retire only browser manual ownership before switching the request epoch.
-    // Tasks belong to the car and continue independently of this input lifetime.
-    if (incomingEpoch !== this.epoch) this.vehicle.fenceManual();
-    this.epoch = envelope.connection_epoch;
     this.latest = { robot_id: envelope.robot_id, ...payload };
     this.clearStaleTimer();
     if (!this.latest.stale) {
@@ -592,10 +615,8 @@ export class RobotClient implements RobotLink {
     this.clearStaleTimer();
     const current = this.latest;
     if (current === null || current.stale) return;
-    this.vehicle.setConnection(false);
     this.latest = { ...current, connected: false, stale: true };
-    if (this.latest.vehicle_ui !== undefined) this.vehicle.update(this.latest.vehicle_ui, !this.latest.stale && this.latest.connected);
-    else this.vehicle.setUnsupportedConnection(!this.latest.stale && this.latest.connected);
+    this.vehicle.markReportStale();
     this.snapshotListeners.forEach((listener) => listener(this.latest as RobotSnapshot));
   }
 

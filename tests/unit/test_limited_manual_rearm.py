@@ -34,8 +34,7 @@ def context(now, target=None):
             p.yaw_accel,
             p.yaw_decel,
             p.yaw_jerk,
-            p.lag,
-            200.0,
+            p.lag_ms / 1000,
             p.profile_id,
         ),
         Footprint(p.length, p.width),
@@ -50,7 +49,6 @@ def context(now, target=None):
             "wheel|imu",
             (SourceMode.WHEEL_IMU_LIMITED,),
             p.profile_id,
-            200.0,
             12.0,
             (-p.assumed_body_cap, p.assumed_body_cap),
             (-0.1, 0.1),
@@ -92,22 +90,20 @@ def stopped_controller():
             point(now, i, before),
             now,
             imu=point(now, i, epoch="imu"),
+            still_wheel=point(now, i, before),
         )
         if c._brake_deadline is not None:
             deadlines.append(c._brake_deadline)
-        if deadlines and now < deadlines[0]:
-            assert not c.limited_rearm_ready(now)
         assert decision.command is not None or i == 0
     return c, now, deadlines
 
 
-def test_completed_stop_is_manual_permission_not_body_stillness():
+def test_completed_stop_uses_raw_wheel_imu_stillness_without_body():
     c, now, deadlines = stopped_controller()
     assert len(set(deadlines)) == 1
-    assert c.limited_rearm_ready(now)
-    assert not c.measured_still
+    assert c.measured_still
     assert c.trajectory.velocity == Velocity(0, 0) and c.trajectory.acceleration == Velocity(0, 0)
-    assert not c.limited_rearm_ready(now + 0.11)
+    assert not c.reset_at_stillness(point(now, 200), point(now, 200, epoch="imu"), now + 0.11)
 
 
 def test_epoch_change_and_missing_model_remove_permission():
@@ -123,7 +119,7 @@ def test_epoch_change_and_missing_model_remove_permission():
         now,
         imu=point(now, 200, epoch="replacement"),
     )
-    assert not c.limited_rearm_ready(now)
+    assert not c.measured_still
     ctx = replace(ctx, envelope=replace(ctx.envelope, brake_drive_overshoot=None))
     c.tick(
         Velocity(0, 0),
@@ -134,7 +130,7 @@ def test_epoch_change_and_missing_model_remove_permission():
         now + 0.001,
         imu=point(now, 201, epoch="replacement"),
     )
-    assert not c.limited_rearm_ready(now + 0.001)
+    assert not c.measured_still
 
 
 def test_manual_only_readiness_never_clears_safety_or_grants_task_actions():
@@ -166,7 +162,7 @@ def test_manual_only_readiness_never_clears_safety_or_grants_task_actions():
     assert f.state.mode.value == "execution_fault" and "acquire" not in f.state.allowed_actions
 
 
-def test_unvalidated_simulation_model_is_not_enabled_for_hardware():
+def test_static_stop_model_does_not_manufacture_raw_stillness():
     c, now, _ = stopped_controller()
     c.config = replace(c.config, synthetic=False)
     now += 0.05
@@ -180,7 +176,7 @@ def test_unvalidated_simulation_model_is_not_enabled_for_hardware():
         now,
         imu=point(now, 200, epoch="imu"),
     )
-    assert not c.limited_rearm_ready(now)
+    assert not c.measured_still
 
 
 def test_manual_rearm_consumes_pending_task_auto_replan():

@@ -23,8 +23,6 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
 
     rclpy.init()
     values = [
-        Parameter("observation_max_age", value=1.0),
-        Parameter("measurement_max_age", value=1.0),
         Parameter("transform_static", value=True),
         Parameter("self_mask_calibrated", value=True),
     ]
@@ -207,19 +205,13 @@ def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_
 @pytest.mark.parametrize("failure", ["empty_epoch", "retirement_exhaustion"])
 def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, failure):
     rclpy = pytest.importorskip("rclpy")
-    from rclpy.parameter import Parameter
     from senior_motion_msgs.msg import BoundedSafetyScan, FencedSafetyScan
     from senior_robot.safety_node import SafetyGate
 
     from senior_control.motion.source_fences import SourceEpochFence
 
     rclpy.init()
-    gate = SafetyGate(
-        parameter_overrides=[
-            Parameter("observation_max_age", value=1.0),
-            Parameter("measurement_max_age", value=1.0),
-        ]
-    )
+    gate = SafetyGate()
     gate._scan_fence = SourceEpochFence(max_retired=1)
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     gate._scan_relay_gid = "aa" * 24
@@ -295,21 +287,15 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
 
 def test_scan_consumers_require_fenced_and_original_bounded_sources():
     rclpy = pytest.importorskip("rclpy")
-    from rclpy.parameter import Parameter
     from senior_motion_msgs.msg import BoundedRawLaserScan, FencedSafetyScan
     from senior_robot.safety_node import SafetyGate
     from senior_robot.safety_scan_ingress import SafetyScanIngress
     from senior_robot.scan_adapter import ScanAdapter
 
     rclpy.init()
-    ingress = SafetyScanIngress(parameter_overrides=[Parameter("observation_max_age", value=0.5)])
+    ingress = SafetyScanIngress()
     adapter = ScanAdapter()
-    gate = SafetyGate(
-        parameter_overrides=[
-            Parameter("observation_max_age", value=0.5),
-            Parameter("measurement_max_age", value=0.5),
-        ]
-    )
+    gate = SafetyGate()
     try:
         ingress_types = {item.topic_name: item.msg_type for item in ingress._subscriptions}
         adapter_types = {item.topic_name: item.msg_type for item in adapter._subscriptions}

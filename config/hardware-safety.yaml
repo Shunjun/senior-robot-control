@@ -11,19 +11,16 @@ scan_adapter:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
-    max_age_seconds: 0.5
     no_return_clear: false
 safety_scan_ingress:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
-    observation_max_age: 0.5
 scan_motion_node:
   ros__parameters:
     use_sim_time: false
     body_frame: base_link
-    scan_max_age: 0.5
-    max_interval: 0.4
+    max_interval_ms: 400.0
     max_linear_speed: 1.5
     max_yaw_rate: 1.0
     range_limit: 8.0
@@ -37,36 +34,14 @@ scan_motion_node:
     reanchor_distance: 0.12
     reanchor_yaw: 0.1
     min_rays: 100
-motion_fusion:
-  ros__parameters:
-    use_sim_time: false
-    body_frame: base_link
-    wheel_frame: odom_combined
-    imu_frame: gyro_link
-    sensor_max_age: 0.5
-    alignment_max_gap: 0.25
-    pending_wait: 0.25
-    max_variance: 0.1
-    imu_zero_variance: 0.01
-    min_quality: 0.3
-    max_yaw_error: 0.12
-    startup_window: 0.6
-    wheel_motion_limit: 0.004
-    stall_distance: 0.04
-    lateral_limit: 0.04
-    yaw_limit: 0.12
-    progress_stationary_max_linear_speed: 0.05
-    progress_stationary_max_yaw_rate: 0.05
 safety_gate:
   ros__parameters:
+    wheel_frame: odom_combined
     use_sim_time: false
     body_frame: base_link
     simulation_rate_hz: 20.0
-    observation_max_age: 0.5
-    measurement_max_age: 0.5
     hard_margin: 0.0
     depth_policy: laser_only
-    command_ttl_seconds: 0.3
     footprint_xy:
     - -0.337
     - -0.276
@@ -79,6 +54,4 @@ safety_gate:
 command_node:
   ros__parameters:
     use_sim_time: false
-    heartbeat_seconds: 0.2
-    disconnect_seconds: 2.0
-    command_ttl_seconds: 0.3
+    command_ttl_ms: 300.0

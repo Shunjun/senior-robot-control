@@ -25,7 +25,7 @@ def rig(monkeypatch):
     try:
         yield value
     finally:
-        value.core.executor.shutdown(wait=True)
+        value.core.worker.close()
         try:
             next(fixture)
         except StopIteration:
@@ -94,7 +94,7 @@ def test_actual_exit_must_precede_original_aggregate_deadline(rig, monkeypatch, 
     assert state["body_reference"]["computed_steady"] == independent.stamp_steady
     assert state["body_reference"]["valid_until_steady"] == independent.deadline_steady
     assert state["sampled_steady"] == sampled
-    assert state["valid_until"] == sampled + 0.15
+    assert "valid_until" not in state
     assert state["fault_revision"] == 0
     if delta < 0:
         assert rig.node.output[-1][0] == decisions[0].command

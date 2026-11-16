@@ -1,0 +1,10 @@
+AT 2026-11-16T18:40:41.714491+00:00
+CWD /tmp/final-review-fixes-pkgsrc
+COMMAND ["uv", "build", "--offline", "--out-dir", "/tmp/final-review-fixes-dist", "--cache-dir", "/tmp/startup-final-validation-uv-cache"]
+Building source distribution...
+Building wheel from source distribution...
+Successfully built /tmp/final-review-fixes-dist/senior_control-0.1.0.tar.gz
+Successfully built /tmp/final-review-fixes-dist/senior_control-0.1.0-py3-none-any.whl
+
+EXIT 0
+ELAPSED 1.259513208991848

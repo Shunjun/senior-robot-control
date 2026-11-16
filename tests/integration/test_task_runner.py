@@ -930,85 +930,6 @@ async def test_delayed_old_loss_callback_does_not_cancel_new_generation(tmp_path
         assert got is not None and got.status is ExecutionStatus.RUNNING
 
 
-async def test_agent_disconnect_during_start_persists_cancel_before_reconnect(
-    tmp_path: Path,
-) -> None:
-    import time
-
-    from agent_fakes import (
-        ROBOT,
-        FakeConnector,
-        FakeHome,
-        FakeLink,
-        FakeMaps,
-        FakeMotion,
-        FakeState,
-        FakeTasks,
-        until,
-    )
-
-    from senior_control.agent import Agent
-    from senior_control.agent.connection import HeartbeatFrame
-    from senior_control.agent.journal import AgentJournal
-
-    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
-    async with Database(tmp_path / "robot.db") as database:
-        store, task = await saved_task(database, created)
-        journal = AgentJournal(database, robot_id=ROBOT)
-        await journal.prepare()
-        first, second = FakeLink(1), FakeLink(2)
-        agent = Agent(
-            ROBOT,
-            connector=FakeConnector(first, second),
-            journal=journal,
-            tasks=FakeTasks(),
-            home=FakeHome(),
-            maps=FakeMaps(),
-            state=FakeState(),
-            motion=FakeMotion(),
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
-            on_eligibility_lost=store.mark_active_cancel_pending,
-        )
-        nav = HoldNavigation(store)
-        executor = TaskExecutor(
-            database,
-            store,
-            nav,
-            link_up=lambda: agent.eligible_for_motion,
-            generation=lambda: agent.continuity_generation,
-        )
-        runtime = TaskRuntime(store, executor, generation=lambda: agent.continuity_generation)
-        runner = asyncio.create_task(agent.run())
-        tick = None
-        try:
-            await until(lambda: agent.connected)
-            first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
-            context = ExecutionContext(True, True, True, False, task.map_ref)
-            await runtime.tick(created + timedelta(seconds=1799), 1.0, context)
-            tick = asyncio.create_task(
-                runtime.tick(created + timedelta(seconds=1800), 2.0, context)
-            )
-            await asyncio.wait_for(nav.started.wait(), 1)
-            first.drop()
-            await until(lambda: agent.continuity_generation > 0)
-            await until(lambda: second.epoch == agent._epoch)
-            second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
-            nav.release.set()
-            await tick
-            record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
-            assert record is not None and record.status is not ExecutionStatus.RUNNING
-            assert f"cancel:{record.execution_id}" in nav.calls
-        finally:
-            nav.release.set()
-            if tick is not None:
-                await asyncio.gather(tick, return_exceptions=True)
-            agent.request_shutdown()
-            await asyncio.wait_for(runner, 2)
-
-
 async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
     tmp_path: Path,
 ) -> None:
@@ -1100,7 +1021,11 @@ async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
         await store.save_scan_cursor(created)
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         # Emulate a pre-versioned database containing the existing continuity tables.
         await database.connection.execute("DROP TABLE IF EXISTS core_schema_version")
         await database.connection.execute("DROP TABLE IF EXISTS home_execution_guard")
@@ -1111,7 +1036,8 @@ async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
         await store.prepare()
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         assert await store.scan_cursor() == created
         loaded = await store.execution_by_id(execution.execution_id)
         assert loaded is not None and loaded.status is ExecutionStatus.CANCEL_PENDING
@@ -1153,9 +1079,14 @@ async def test_domain_versions_upgrade_without_touching_agent_safety(
         await migrate(database, list(DOMAIN_MIGRATIONS[:version]))
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         await TaskStore(database, robot_id="robot-a").prepare()
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         async with database.connection.execute("PRAGMA user_version") as cursor:
             assert await cursor.fetchone() == (3,)
         async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
@@ -1171,11 +1102,16 @@ async def test_core_migration_failure_rolls_back_and_preserves_safety(tmp_path: 
         await TaskStore(database, robot_id="robot-a").prepare()
         journal = AgentJournal(database, robot_id="robot-a")
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         failing = Migration(5, ("CREATE TABLE partial_upgrade (id INTEGER)", "INVALID SQL"))
         with pytest.raises(sqlite3.OperationalError):
             await migrate_core(database, (*CORE_MIGRATIONS, failing))
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
         async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
             assert await cursor.fetchone() == (4,)
         async with database.connection.execute(

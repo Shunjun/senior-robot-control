@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_motion_msgs)
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+ament_get_python_install_dir(PYTHON_INSTALL_DIR)
+install(FILES python/source_clock.py DESTINATION "${PYTHON_INSTALL_DIR}/${PROJECT_NAME}")
 # ament_target_dependencies uses exported targets exclusively when rosidl
 # targets exist, so handwritten headers need their own usage requirements.
 add_library(sensor_timing INTERFACE)
@@ -9,8 +12,14 @@ target_include_directories(sensor_timing INTERFACE
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
 target_compile_features(sensor_timing INTERFACE cxx_std_17)
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
-install(TARGETS sensor_timing EXPORT export_sensor_timing)
-ament_export_targets(export_sensor_timing)
+add_library(simulation_timing SHARED src/simulation_timing.cpp)
+set_target_properties(simulation_timing PROPERTIES
+  VERSION 0.2.0 SOVERSION 0
+  CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+target_link_libraries(simulation_timing PUBLIC sensor_timing)
+install(TARGETS sensor_timing simulation_timing EXPORT export_sensor_timing
+  LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
+ament_export_targets(export_sensor_timing HAS_LIBRARY_TARGET)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -19,6 +28,17 @@ find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHeader.msg"
+  "msg/NavigationSample.msg"
+  "msg/SourceTime.msg"
+  "msg/ActuatorTarget.msg"
+  "msg/TimedOdometry.msg"
+  "msg/TimedImu.msg"
+  "msg/TimedLaserScan.msg"
+  "msg/TimedImage.msg"
+  "msg/TimedCameraInfo.msg"
+  "msg/TimedPose.msg"
+  "msg/TimedTwist.msg"
+  "msg/TimedNavSatFix.msg"
   "msg/FinalCommand.msg" "msg/DriveExecutionFeedback.msg"
   "msg/BoundedSafetyScan.msg" "msg/DepthSample.msg" "msg/BoundedDepthEvidence.msg"
   "msg/SemanticObject.msg" "msg/SemanticAssociation.msg" "msg/BoundedSemanticEvidence.msg"
@@ -27,16 +47,20 @@ rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHead
   "msg/BoundedRawLaserScan.msg" "msg/BoundedFilteredScan.msg"
   "msg/FencedSafetyScan.msg" "msg/FencedFilteredScan.msg"
   "msg/StaticTransformEdge.msg" "msg/BoundedStaticTf.msg" "msg/RawImageLayout.msg" "msg/RgbdMotionCandidate.msg" "msg/FencedRgbdCandidate.msg"
-  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs)
+  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs)
 add_executable(final_command_guard src/final_command_guard.cpp)
 ament_target_dependencies(final_command_guard rclcpp)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
 target_link_libraries(final_command_guard "${cpp_typesupport_target}")
+target_link_libraries(sensor_timing INTERFACE "${cpp_typesupport_target}")
+add_executable(motion_output_guard src/motion_output_guard.cpp)
+ament_target_dependencies(motion_output_guard rclcpp geometry_msgs)
+target_link_libraries(motion_output_guard "${cpp_typesupport_target}" sensor_timing)
 add_executable(native_receipt src/native_receipt.cpp)
 ament_target_dependencies(native_receipt rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs)
 target_link_libraries(native_receipt "${cpp_typesupport_target}")
-install(TARGETS final_command_guard native_receipt DESTINATION lib/${PROJECT_NAME})
-ament_export_dependencies(rosidl_default_runtime)
+install(TARGETS final_command_guard motion_output_guard native_receipt DESTINATION lib/${PROJECT_NAME})
+ament_export_dependencies(rosidl_default_runtime builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs rclcpp)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   enable_testing()

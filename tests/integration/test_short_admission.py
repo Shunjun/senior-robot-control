@@ -122,7 +122,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                     if path == "failed-sample":
                         raise IpcError("controlled state read failure")
             return reply
-        if kind == "manual":
+        if kind in {"manual", "manual_intent"}:
             if path.startswith("takeover-") or path == "older-resumed":
                 state = await service.store.load("execution")
                 handoff_states.append((state.phase, state.stopped_for, state.pending is None))
@@ -155,6 +155,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
         return {"ok": True}
 
     monkeypatch.setattr(IpcClient, "request", ipc)
+    monkeypatch.setattr(IpcClient, "send", ipc)
     config = composition.AgentConfig(
         "robot",
         "wss://cloud.test/ws/agent",
@@ -404,10 +405,14 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                     )
                     await until(lambda: any(r.request_id == "release" for r in link.responses))
                 release.set()
-                with pytest.raises(VersionConflict):
-                    await starting
-                assert await service.store.tasks.latest_execution() is None
-                assert await service.store.query("submit") is None
+                if path == "retirement-fence":
+                    with pytest.raises(VersionConflict):
+                        await starting
+                    assert await service.store.tasks.latest_execution() is None
+                    assert await service.store.query("submit") is None
+                else:
+                    assert (await starting).receipt.accepted
+                    assert await service.store.tasks.latest_execution() is not None
                 return
             writing = asyncio.create_task(
                 settings.apply(
@@ -467,13 +472,8 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 )
             )
             await asyncio.sleep(0.05)
-        await until(
-            lambda: len([r for r in link.responses if r.request_id.startswith("intent-")]) == 5
-        )
-        replies = [r for r in link.responses if r.request_id.startswith("intent-")]
-        assert all(r.payload.ok for r in replies), [
-            (r.request_id, r.payload.error) for r in replies
-        ]
+        await until(lambda: len(manual_calls) == 5)
+        assert not any(r.request_id.startswith("intent-") for r in link.responses)
         assert len(manual_calls) == 5
         assert all(called < deadline for called, deadline in manual_calls)
         denied = await settings.apply(

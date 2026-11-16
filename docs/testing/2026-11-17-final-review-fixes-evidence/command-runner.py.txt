@@ -1,0 +1,13 @@
+import subprocess,sys,json,time,os
+from datetime import datetime, timezone
+from pathlib import Path
+root=Path('/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed')
+evid=root/'docs/testing/2026-11-17-final-review-fixes-evidence'
+name,cwd,*cmd=sys.argv[1:]
+env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',NO_COLOR='1',CI='1')
+start=time.monotonic()
+with (evid/(name+'.log')).open('w') as f:
+ f.write('AT '+datetime.now(timezone.utc).isoformat()+'\nCWD '+cwd+'\nCOMMAND '+json.dumps(cmd)+'\n'); f.flush()
+ p=subprocess.run(cmd,cwd=cwd,env=env,stdout=f,stderr=subprocess.STDOUT)
+ f.write('\nEXIT '+str(p.returncode)+'\nELAPSED '+str(time.monotonic()-start)+'\n')
+print(name,p.returncode,round(time.monotonic()-start,2)); print((evid/(name+'.log')).read_text()[-3500:])

@@ -43,7 +43,7 @@ async def test_composition_opens_and_closes_database(
         seen.append(not self.is_open)
 
     async def run(self: agent_module.Agent) -> None:
-        return None
+        await self._release()
 
     monkeypatch.setattr(Database, "__aexit__", close)
     monkeypatch.setattr(agent_module.Agent, "run", run)
@@ -112,78 +112,44 @@ def test_token_file_requires_private_permissions(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("missing_adapter", [True, False])
-async def test_composition_classifies_adapter_startup_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_adapter: bool
-) -> None:
-    from senior_control.agent import composition
-    from senior_control.runtime.ipc import IpcClient
-
-    async def missing_socket(*args: object, **kwargs: object) -> None:
-        raise FileNotFoundError("adapter is starting")
-
-    async def reject_identity(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
-        assert kind == "identity"
-        assert fields["robot_id"] == "robot-a"
-        return {"ok": False}
-
-    def unexpected_connector(*args: object, **kwargs: object) -> None:
-        pytest.fail("cloud connector must wait for adapter identity")
-
-    if missing_adapter:
-        monkeypatch.setattr(composition.asyncio, "open_unix_connection", missing_socket)
-    else:
-        monkeypatch.setattr(IpcClient, "request", reject_identity)
-    monkeypatch.setattr(composition, "WebSocketConnector", unexpected_connector)
-
-    config = AgentConfig(
-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
-    )
-    assert await composition.run_agent(config) == (1 if missing_adapter else 78)
-
-
-async def test_composition_retries_python310_asyncio_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from senior_control.agent import composition
-    from senior_control.runtime.ipc import IpcClient, IpcError
-
-    class LegacyAsyncioTimeout(Exception):
-        pass
-
-    async def timed_out(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
-        raise IpcError("ipc request identity failed") from LegacyAsyncioTimeout()
-
-    # //Compatible: asyncio.TimeoutError and builtins.TimeoutError are distinct in Python 3.10.
-    monkeypatch.setattr(composition.asyncio, "TimeoutError", LegacyAsyncioTimeout)
-    monkeypatch.setattr(IpcClient, "request", timed_out)
-    config = AgentConfig(
-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
-    )
-    assert await composition.run_agent(config) == 1
-
-
-@pytest.mark.parametrize("truncated", [True, False])
-async def test_composition_distinguishes_truncated_and_malformed_identity_reply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, truncated: bool
-) -> None:
+async def test_composition_starts_reporting_without_adapter_identity(
+    tmp_path, monkeypatch, missing_adapter
+):
     import asyncio
+    import tempfile
 
     from senior_control.agent import composition
-    from senior_control.runtime.ipc import IpcClient, IpcError
+    from senior_control.agent.main import Agent
+    from senior_control.runtime.ipc import IpcServer
+    from tests.integration.agent_fakes import FakeConnector, FakeLink, until
 
-    async def invalid_reply(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+    with tempfile.TemporaryDirectory(prefix="identity-") as directory:
+        socket = Path(directory) / "agent.sock"
+        seen = []
+
+        async def foreign(message):
+            seen.append(message["type"])
+            return {"ok": False}
+
+        server = IpcServer(socket, foreign)
+        if not missing_adapter:
+            await server.start()
+        link = FakeLink(1)
+        agents = []
+        monkeypatch.setattr(composition, "WebSocketConnector", lambda *a: FakeConnector(link))
+        monkeypatch.setattr(Agent, "install_signal_handlers", lambda self: agents.append(self))
+        config = AgentConfig(
+            "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", socket
+        )
+        runner = asyncio.create_task(composition.run_agent(config))
         try:
-            try:
-                if truncated:
-                    raise asyncio.IncompleteReadError(b"", 4)
-                raise ValueError("invalid JSON")
-            except (ValueError, asyncio.IncompleteReadError) as exc:
-                raise IpcError("could not read frame") from exc
-        except IpcError as exc:
-            raise IpcError("ipc request identity failed") from exc
-
-    monkeypatch.setattr(IpcClient, "request", invalid_reply)
-    config = AgentConfig(
-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
-    )
-    assert await composition.run_agent(config) == (1 if truncated else 78)
+            await until(lambda: bool(link.snapshots))
+            assert link.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
+            assert not runner.done() and not link.closed
+            if not missing_adapter:
+                assert seen and set(seen) == {"identity"}
+        finally:
+            if agents:
+                agents[0].request_shutdown()
+            await asyncio.wait_for(runner, 4)
+            await server.close()

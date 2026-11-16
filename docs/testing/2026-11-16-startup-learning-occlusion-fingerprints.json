@@ -1,0 +1,284 @@
+{
+  "task_id": "task_42785d15d6ab",
+  "dispatch_id": "ctx_a5fb055edf96",
+  "startup_snapshot": "/tmp/learning-occlusion-start",
+  "files": [
+    {
+      "path": "config/hardware-motion.json",
+      "status": "modified",
+      "startup_sha256": "1b8c304d8165900b4ff7b7b6f6c4a2f599a23ea8d1a64c245579f14e0f1c2af5",
+      "final_sha256": "32b4a99500b2b5a6a11e093a2bbc31937998f8a6c15998de61bb792e0b8ba09c"
+    },
+    {
+      "path": "config/hardware-motion.schema.json",
+      "status": "modified",
+      "startup_sha256": "b841e0df1543ba4b1a018ef802b54189c6a2c403a7d7eef6f55b21432ae2f279",
+      "final_sha256": "d2fb30412c89850beac210a24e959ffef529d68eab9ca77f705369b9e96351ac"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-11-12-vehicle-motion-redesign.md",
+      "status": "modified",
+      "startup_sha256": "dd4e7c830107db4276f042055861ace3130ba1696ee9aca046a33d558c60d98a",
+      "final_sha256": "5573dc23e76dfd13a8c19042ffd4e9bc68fe7a5863ada24124a88b11c471a01f"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-12-vehicle-motion-redesign.md",
+      "status": "modified",
+      "startup_sha256": "1ab75b6695f74b53e962dbce56e88b855f66e57d25c89b2ec1265d92caa1c4d6",
+      "final_sha256": "06c4b50645594df86226ffbbc4e39ae74a1eb8522d211a5a91149e281d13482a"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-16-learning-shared-state-design.md",
+      "status": "modified",
+      "startup_sha256": "e33645345c243f2c260b1756f247a57dc8fba8a032b4ade91d3bc4de106fbda3",
+      "final_sha256": "50aabdf7f7594d779ad5d1606b74f76bbb5dfe016f0068150990cfb7e8b83f98"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-16-startup-learning-visibility.md",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "72c0743a2ac4e29f2a893ea73dbe40a0f980a8243dc2b78a630a46d53aa682f2"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-accepted-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "94e24f19d200abf3409cef164e292464573c0595c92ec905dfc9a476616bbf9b"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-accepted-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "072ccae16761a66413e4cda75c9b0315f83b477e28d29c05ce07360ebd88e0a0"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-chain-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "e5eba5fc64ec73ae0a51bfb1fc92c062310080d6b6418c81ee489fab195d6814"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-chain-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "db8a5cb4f5622e67e49b07d6ff2e37b4ef53e0b646e59522fe2ce51b43ae9035"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-config-default-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "4c007013fbf454eca18b66764adeba4e2058c01ad4f3eab87bc5807281ca2e8d"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-config-default-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "2df390043f1d5ccc14c0a4d12f9cd59d3d582efa0af681070cfb513a810bf55e"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-config-ruff-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-constraints-baseline-mypy.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "7e9f1cbcd3e6ec62a31884be999c966502c92a20a5eb3f90136892edf375f2b7"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-constraints-final-mypy.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "cdc064cfb36e1bff911423978bc06122971fdc74f179bbc567bff260d537e178"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-final-current.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "7b7409204ae5b4c5ebf6dcc88ffb1e481b73ba6cf0e5349a613c1b575c441edd"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-final-current.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "f3a5143970738f2c2023338e0414825911b449fa104b4dd76ce19877df7e750d"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "35fb79280670baa1fb31c298e39a90900982ab60dbc3439b04d23b8d8ff824fa"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "b8322883cbe14460de96a17cb6e7b37dd12d10c520cab3fcd0f0503234a7ae4c"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-first.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "72708c19cc89352b729b72f38d9c593a09243872268d1397f3b4044c9a7374c8"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-first.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "f642f187f1689ab56a260072df35b362d61ba23809503b06b5f59a6e5310d0db"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-format-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "5b9f70ad96522f492ef846065642c069b5627379aff2ab3f74acd2e3b9ecfe34"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-mypy-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "71144743c83babea384888a735db0c4daba3d4d7b7942b6839984bd5c21b52bb"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-normal-regression.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "8e88d4a05f66d10869d44bfda59450b4bfc1f9a34210c152cf896176fa4dbb5a"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-normal-regression.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "73fd48720f186ebaa177b98349f214b93c1c4193582057f12dccb81a570da181"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion-evidence/occlusion-ruff-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "docs/testing/2026-11-16-startup-learning-occlusion.md",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "17226863a8faea600041f9a86e9af7ba1e55dce12840d41814c54ee1a6f30b9b"
+    },
+    {
+      "path": "ros2/src/senior_robot/config/simulation_motion.yaml",
+      "status": "modified",
+      "startup_sha256": "3a6c099c20b8ba48d5f7cc2458fa3873c9f1cc8765ff9fc4f058588858feec43",
+      "final_sha256": "ea07ebf50f4d8c9c70e54631071e3a0089c1c4fe3ccf748a67630195f8f013e5"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+      "status": "modified",
+      "startup_sha256": "464c9d4b09bdd475e9a5d33ba70c9f09d5b2153301aa04e03e931969d0a56adb",
+      "final_sha256": "2eece65e87483b3dcebce6b32fbb8a1e20e669c5890708d1155787adf367defa"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/motion_profile.py",
+      "status": "modified",
+      "startup_sha256": "248c6dad85f7aecd3647c66ab03edd467e90f853af43e1b14c7728fbbb900f48",
+      "final_sha256": "381bb91707e066db70d4c723fad8b48d35d3f070c696f56438001aa69f6c4326"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/safety_node.py",
+      "status": "modified",
+      "startup_sha256": "70e27cc22d18c5c68625f9279cb05177dbb05f2439d82bf879f18c4c3205fda1",
+      "final_sha256": "8b3c481689752a549c83f9d0d80b102718ec4ed923ff7ac366febc4462be16d9"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/simulation_motion_profile.py",
+      "status": "modified",
+      "startup_sha256": "fe0fa1b300dff711851116a98bed055d8e5878f0a3fe8c44feef5d5aa7d64bb7",
+      "final_sha256": "3c922a612af40336e68313eb33ad67ca564b82f0f819bfe0ed95b99324c7c1a9"
+    },
+    {
+      "path": "src/senior_control/motion/constraints.py",
+      "status": "modified",
+      "startup_sha256": "4dec9f6452ac3b9a36e8bb62bcfa00257e7250a8887258edc11d43da699655b7",
+      "final_sha256": "70f78d57bd0c62f8ca15943248aca2dc88de5ef5823cf1ca9700effb8b8b71f5"
+    },
+    {
+      "path": "src/senior_control/motion/hardware_profile.py",
+      "status": "modified",
+      "startup_sha256": "d3d7f922293f37919b7941bfad82dee74ac68bf8b65b64d2abe7bf105a6d7b8c",
+      "final_sha256": "fcac55dbe704521fec70d0dcdf3fbcadbb824c61dc0ec637f7a4cf2132993652"
+    },
+    {
+      "path": "src/senior_control/safety/startup_visibility.py",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "24cc969d20b41871b720de58565ee719e837580697edb7956a6f81f1888be080"
+    },
+    {
+      "path": "tests/unit/test_learning_core_surface_review.py",
+      "status": "modified",
+      "startup_sha256": "761636fbdf717eadd4a47c50f4b5e27278d31c5838ba6ba45b79917d7585d644",
+      "final_sha256": "1f7a0896cd110d970a15d398fb06e9ec7fa7df387277fc1b7f80ecb9188b336e"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_chain.py",
+      "status": "modified",
+      "startup_sha256": "3cce812432f3531dadc7479e6dc8255565148c880aa5cecea6d3b82aa929cf0d",
+      "final_sha256": "112903e2f99cee00f43f8f2a6a91130331ca03d739cc62dcabf2bde52b9f73be"
+    },
+    {
+      "path": "tests/unit/test_startup_visibility.py",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "34a328b49673dc2c88326bfe8f090a01e0cd5ccd3058658aeee8bc50691954f0"
+    }
+  ],
+  "protected_and_unchanged_policy": [
+    {
+      "path": "ros2/src/senior_robot/senior_robot/native_receipt.py",
+      "startup_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "final_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "unchanged": true
+    },
+    {
+      "path": "tests/test_native_receipt_diagnostics.py",
+      "startup_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "final_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "unchanged": true
+    },
+    {
+      "path": "docs/reviews/2026-11-16-software-estop-owner.md",
+      "startup_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "final_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "unchanged": true
+    },
+    {
+      "path": "src/senior_control/motion/stopping_input.py",
+      "startup_sha256": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc",
+      "final_sha256": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc",
+      "unchanged": true
+    },
+    {
+      "path": "src/senior_control/safety/self_learning.py",
+      "startup_sha256": "f19536628813014a690b14a22eaa0593d09d875ded64480020a580b230e7ac33",
+      "final_sha256": "f19536628813014a690b14a22eaa0593d09d875ded64480020a580b230e7ac33",
+      "unchanged": true
+    }
+  ],
+  "other_hardware_json_fields_unchanged": true,
+  "incremental_diff": {
+    "path": "docs/testing/2026-11-16-startup-learning-occlusion-owned.diff",
+    "sha256": "a8cd1be8426c57b7952edb8b922cf22b91dac395979e3860ec15dd852e733465"
+  },
+  "verification": {
+    "concentrated": "246 passed in 87.65s; selected related tests, not all motion tests",
+    "subsequent_config_assertions": "4 passed, 31 deselected in 0.33s; test-only strengthening",
+    "net_added_parameterized_cases": 38,
+    "mypy_owned": "Success: no issues found in 4 source files",
+    "constraints_mypy": "same 2 existing errors reproduced from startup snapshot; not claimed clean",
+    "ruff": "All checks passed; 10 files formatted"
+  },
+  "limitations": [
+    "No ROS/Linux/aarch64/vehicle run or physical execution acknowledgement",
+    "Policy is scoped to startup learning; ordinary driving and other-direction unknown coverage are unchanged"
+  ]
+}

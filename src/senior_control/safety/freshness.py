@@ -1,4 +1,4 @@
-"""Fail-closed freshness tracking across ROS and steady clocks."""
+"""Original monotonic measurement age for safety inputs."""
 
 import math
 
@@ -8,47 +8,37 @@ class SafetyFreshness:
         if not math.isfinite(max_age) or max_age <= 0:
             raise ValueError("max_age must be positive")
         self.max_age = max_age
-        self.last_ros: float | None = None
         self.scan_stamp: float | None = None
         self.scan_received: float | None = None
+        self._last_steady: float | None = None
 
-    def _clock(self, ros: float) -> bool:
-        if not math.isfinite(ros) or (self.last_ros is not None and ros < self.last_ros):
-            self.scan_received = None
-            self.scan_stamp = None
-            self.last_ros = ros if math.isfinite(ros) else None
-            return False
-        self.last_ros = ros
-        return True
+    def _clock(self, steady: float) -> bool:
+        valid = math.isfinite(steady) and (self._last_steady is None or steady >= self._last_steady)
+        if not valid:
+            self.scan_received = self.scan_stamp = None
+        self._last_steady = steady if math.isfinite(steady) else None
+        return valid
 
-    def _accept(self, kind: str, stamp: float, steady: float, ros: float) -> bool:
-        if not self._clock(ros):
-            return False
-        previous = getattr(self, kind + "_stamp")
+    def scan(self, measured: float, received: float, now: float) -> bool:
         valid = (
-            math.isfinite(stamp)
-            and math.isfinite(steady)
-            and stamp > 0
-            and 0 <= ros - stamp < self.max_age
-            and (previous is None or stamp > previous)
+            self._clock(now)
+            and math.isfinite(measured)
+            and math.isfinite(received)
+            and 0 <= measured <= received <= now
+            and now - measured < self.max_age
+            and (self.scan_stamp is None or measured > self.scan_stamp)
         )
         if not valid:
-            setattr(self, kind + "_received", None)
+            self.scan_received = None
             return False
-        setattr(self, kind + "_stamp", stamp)
-        setattr(self, kind + "_received", steady)
+        self.scan_stamp, self.scan_received = measured, received
         return True
 
-    def scan(self, stamp: float, steady: float, ros: float) -> bool:
-        return self._accept("scan", stamp, steady, ros)
-
-    def usable(self, ros: float, steady: float) -> bool:
-        if not self._clock(ros) or not math.isfinite(steady):
-            return False
-        return all(
-            received is not None
-            and 0 <= steady - received < self.max_age
-            and stamp is not None
-            and 0 <= ros - stamp < self.max_age
-            for received, stamp in ((self.scan_received, self.scan_stamp),)
+    def usable(self, steady: float) -> bool:
+        return (
+            self._clock(steady)
+            and self.scan_received is not None
+            and self.scan_stamp is not None
+            and self.scan_stamp <= self.scan_received <= steady
+            and steady - self.scan_stamp < self.max_age
         )

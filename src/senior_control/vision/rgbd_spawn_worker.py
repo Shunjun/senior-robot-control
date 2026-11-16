@@ -124,7 +124,6 @@ class _Job:
     frame: Frame
     now_ros_ns: int
     now_steady: float
-    ros_deadline_ns: int
     steady_deadline: float
 
 
@@ -244,7 +243,7 @@ class SpawnWorker:
         self._closed = False
         self._unavailable = False
         self._timed_out = False
-        self._fresh_after: tuple[int, float] | None = None
+        self._fresh_after: float | None = None
 
     def _start_process(self) -> None:
         self._shutdown_complete = False
@@ -351,14 +350,8 @@ class SpawnWorker:
         self.invalidate()
         stopped = self._stop_process()
         self._inflight = None
-        if (
-            stopped
-            and type(now_ros_ns) is int
-            and now_ros_ns > 0
-            and math.isfinite(now_steady)
-            and now_steady > 0
-        ):
-            self._fresh_after = (now_ros_ns, now_steady)
+        if stopped and math.isfinite(now_steady) and now_steady > 0:
+            self._fresh_after = now_steady
             try:
                 self._start_process()
             except (OSError, RuntimeError):
@@ -412,7 +405,6 @@ class SpawnWorker:
         *,
         now_ros_ns: int,
         now_steady: float,
-        ros_deadline_ns: int,
         steady_deadline: float,
     ) -> bool:
         if (
@@ -421,10 +413,8 @@ class SpawnWorker:
             or not self._process.is_alive()
             or type(frame) is not Frame
             or type(now_ros_ns) is not int
-            or type(ros_deadline_ns) is not int
             or not math.isfinite(now_steady)
             or not math.isfinite(steady_deadline)
-            or not 0 < now_ros_ns <= ros_deadline_ns
             or now_steady > steady_deadline
         ):
             return False
@@ -435,20 +425,12 @@ class SpawnWorker:
             frame.depth_info_header,
         )
         if self._fresh_after is not None and any(
-            h.stamp_ns <= self._fresh_after[0]
-            or h.received_ros_ns <= self._fresh_after[0]
-            or h.received_steady <= self._fresh_after[1]
-            for h in headers
+            h.start_steady <= self._fresh_after for h in headers
         ):
             return False
         if any(
             not math.isfinite(h.received_steady)
-            or ros_deadline_ns
-            > min(h.stamp_ns, h.received_ros_ns) + round(default_policy().hard_age_s * 1e9)
-            or steady_deadline
-            > h.received_steady
-            + default_policy().hard_age_s
-            - (h.received_ros_ns - h.stamp_ns) / 1e9
+            or steady_deadline > h.measurement_steady + (default_policy().hard_age_ms / 1000)
             for h in headers
         ):
             return False
@@ -461,7 +443,6 @@ class SpawnWorker:
             frame,
             now_ros_ns,
             now_steady,
-            ros_deadline_ns,
             steady_deadline,
         )
         self._report_queue(now_steady)
@@ -492,11 +473,7 @@ class SpawnWorker:
         if (
             job is not None
             and not self._timed_out
-            and (
-                not math.isfinite(now_steady)
-                or now_steady > job.steady_deadline
-                or not 0 < now_ros_ns <= job.ros_deadline_ns
-            )
+            and (not math.isfinite(now_steady) or now_steady > job.steady_deadline)
         ):
             self._timed_out = True
             self._restart(now_ros_ns, now_steady)
@@ -558,17 +535,14 @@ class SpawnWorker:
         if (
             job.generation != self.generation
             or not math.isfinite(now_steady)
-            or not 0 < now_ros_ns <= job.ros_deadline_ns
             or now_steady > job.steady_deadline
         ):
             self._dispatch()
             return None
         if any(
             not sensor_current(
-                stamp_ros=h.stamp_ns / 1e9,
-                received_ros=h.received_ros_ns / 1e9,
+                measured_steady=h.measurement_steady,
                 received_steady=h.received_steady,
-                now_ros=now_ros_ns / 1e9,
                 now_steady=now_steady,
             )
             for group in result.headers

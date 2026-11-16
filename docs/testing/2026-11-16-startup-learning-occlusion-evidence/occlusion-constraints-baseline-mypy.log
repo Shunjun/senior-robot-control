@@ -1,0 +1,3 @@
+/tmp/learning-occlusion-start/src/senior_control/motion/constraints.py:188: error: Incompatible return value type (got "tuple[tuple[float, ...], ...]", expected "tuple[tuple[float, float], ...]")  [return-value]
+/tmp/learning-occlusion-start/src/senior_control/motion/constraints.py:190: error: Argument "join_style" to "buffer" of "BaseGeometry" has incompatible type "Literal[2]"; expected "Literal['round', 'mitre', 'bevel'] | BufferJoinStyle"  [arg-type]
+Found 2 errors in 1 file (checked 1 source file)

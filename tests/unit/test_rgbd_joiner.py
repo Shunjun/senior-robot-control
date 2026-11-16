@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_joiner import CaptureJoiner
 
@@ -18,6 +20,9 @@ def header(sequence, stamp, *, generation=1, valid=True):
         sequence,
         valid,
         "",
+        timing=capture_time(
+            stamp / 1e9, sequence=max(1, sequence), epoch="source", tick=(stamp) / 1e9
+        ),
     )
 
 
@@ -129,28 +134,24 @@ def test_old_pending_stamp_eviction_does_not_create_a_false_join():
     assert result.kind != "ready"
 
 
-def test_unjoined_stream_time_regression_immediately_invalidates():
-    for field in ("stamp_ns", "received_ros_ns", "received_steady"):
+def test_unjoined_monotonic_regression_invalidates_but_ros_correction_does_not():
+    for field in ("stamp_ns", "received_ros_ns", "received_steady", "timing"):
         join = CaptureJoiner(capacity=4)
         for stream in range(4):
             ready = offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
         assert ready.kind == "ready"
-        before = join.generation
         newer = header(2, 1_200_000_000)
         assert offer(join, 0, newer, 0, bridge_gid="02").kind == "pending"
-        values = {
-            "stamp_ns": 1_300_000_000,
-            "received_ros_ns": 1_300_000_000,
-            "received_steady": 1.3,
-        }
-        values[field] = 1.1 if field == "received_steady" else 1_100_000_000
-        older = replace(header(3, 1_300_000_000), **values)
-        result = offer(join, 0, older, 0, bridge_gid="02")
-        assert result.kind == "invalid", field
-        assert join.generation > before
-        for stream in range(1, 4):
-            result = offer(join, stream, header(2, 1_200_000_000), stream, bridge_gid="02")
-        assert result.kind != "ready"
+        value = (
+            1.1
+            if field == "received_steady"
+            else capture_time(1.1, tick=1.1)
+            if field == "timing"
+            else 1_100_000_000
+        )
+        changed = replace(header(3, 1_300_000_000), **{field: value})
+        result = offer(join, 0, changed, 0, bridge_gid="02")
+        assert result.kind == ("invalid" if field in {"received_steady", "timing"} else "pending")
 
 
 def test_mutating_image_and_info_after_offer_cannot_change_joined_snapshot():
@@ -341,5 +342,6 @@ def test_new_raw_source_can_establish_own_frontier_after_bridge_restart():
         stamp_ns=1_150_000_000,
         received_ros_ns=1_150_000_000,
         received_steady=1.15,
+        timing=capture_time(1.15, tick=1.15),
     )
     assert offer(join, 0, later, 0, bridge_gid="04").kind == "pending"

@@ -706,7 +706,7 @@ async def test_capture_freeze_is_released_before_uncooperative_backend_finishes(
     archive = MapArchive(
         StalledGraph(store.map_ref),
         source_robot_id="robot-a",
-        capture_timeout_seconds=1.0 if cancel_caller else 0.05,
+        capture_timeout_ms=(1.0 if cancel_caller else 0.05) * 1000,
     )
     destination = tmp_path / "stalled.zip"
     task = asyncio.create_task(archive.export_bundle(store, store.map_ref, destination))

@@ -1,0 +1,41 @@
+{
+  "head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "files": {
+    "src/senior_control/motion/learning_record.py": "010ba40eb91ab260c8d51574200bee447d0f640a5f2ced18219f729835e18dbc",
+    "src/senior_control/motion/startup_learning.py": "b25087981a2525552fc49b7c445c608925b4143e6198a9b6ea097916b82d31dd",
+    "src/senior_control/motion/learning_pose_history.py": "455c1b0b3507faccc5747b547a78d5a70b9703a379495959f0d9ac6f8eed0e8f",
+    "src/senior_control/safety/self_learning.py": "f2c5bd3c2d9b4ed4841dc5ed7e2a939a7c5061c90b318d68d1c1ad5845af348c",
+    "src/senior_control/safety/external_motion_features.py": "38e55ed34c06de31034c0ce9cc38a0dc51470ee21872f563e1526f6e18ceef89",
+    "src/senior_control/safety/learning_view.py": "0f4299e09fcd259b7031b6afe691e6ef70c64e5ff88a6418b781cf5593422818",
+    "src/senior_control/runtime/learning_cleanup.py": "2f78adf0caee9fe59b6ace62a9d24921c3a54352baaeef7d1066b3cd5389d36b",
+    "src/senior_control/runtime/learning_client.py": "ae9b493bff038c3a5e8ebd5615e1a4ba34ed977d08ccceb7d588e34f90d36f66",
+    "src/senior_control/runtime/learning_mailbox.py": "584572d9fea1988c061aeeaba3499860b5c12d15d992f29c8b0c9c493e119ce4",
+    "src/senior_control/runtime/learning_owner.py": "7af34e1051539087a5ba1044ef00e9bc7ed479b4b7c83f0862f3ee1bd303cece",
+    "src/senior_control/runtime/learning_service.py": "abbef160a052ae89b79975037e777ecbc11f0058d006bb0901535d4975160cf9",
+    "src/senior_control/runtime/learning_store.py": "fb977f323a48a14c67300cb8eeb37e072c930c075ff50b5d948571d2e30cfcd5",
+    "src/senior_control/runtime/learning_wire.py": "8ececc9eac062ef233fcd3e1a74c6fb9fb672e36484b240f9f9402b3913d8834",
+    "src/senior_control/docker_start_helper.py": "3d0d5bfd0272a4d8e1a7d553c9016c510dd5366098776a48c63a2b1e2b400301",
+    "src/senior_control/simulation_cli.py": "6711e4db8649d350ddcb5719a4e91fe93c6c00ab36e67d56b5aef632869b1a1e",
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py": "7df191fca78a9b8422f585871f104598c23303d0b20d1d9767e424f43e2ebcb7",
+    "tests/unit/learning_test_support.py": "5ecaadf1ef1d8a31187f2ccebc26020a67e504a06addbf019a73363fc943ffbf",
+    "tests/unit/test_learning_client.py": "7e71c85cb54f0b12d68b8496338d016de993fdecaf7f0bbd4c965f4cb6bb9bf7",
+    "tests/unit/test_learning_record_owner.py": "3c8b4dfd27533ef7c97b86480665afeae06110dd97ceb729a2c4b270734915b0",
+    "tests/unit/test_learning_revocation_mailbox.py": "4946fd6f1ebabbe618d4fa01271bcc9a9ac87e35b9bc920f66880c023457cc21",
+    "tests/unit/test_learning_service_linux.py": "42ef720fbc08150d168eaa55d50034d93752834934a7061cfcc200ac0da5ece7",
+    "tests/unit/test_learning_cleanup.py": "9a65758ddd5bd44552ec203d46668494437b0ebafdd85fcf5396681919961ae3",
+    "tests/unit/test_startup_learning_timed.py": "fd83011456a8c1a197e61d399460dbef4eb2c799fa484bfca2c5be1bf054868d",
+    "tests/unit/test_startup_learning.py": "c6887123f61d79a1bc5861f0876a14cdebf5aca1ad45cd3d4a117e6ea3e5e5fe",
+    "tests/unit/test_startup_learning_chain.py": "ab5e4c67c412ab723f1eef3eb949919e4d6a23cd5bcc9e503c782f5c58d4e605",
+    "tests/unit/test_startup_learning_cycle.py": "1aa0e8130694728a0cf48155b5c64eef282dc62de118b85b48c5757ed870914c",
+    "tests/unit/test_startup_learning_latch.py": "0e545847bf3e928491f97c39633a81e1ab9769ae9378e276a02fc6e3b4ca8b0f",
+    "tests/unit/test_startup_learning_review.py": "89bba6236b8a6f8e4b1a5dbfe1a631746ea73e9bb2ffd2e6f76fef772122de26",
+    "tests/unit/test_body_return_geometry_only.py": "567c71f4899eda477590daf6c5ad81cae9117a668ff2cae48e16e4c1db91086c",
+    "tests/unit/test_self_return_process_revocation.py": "6569d6fc7a4e5b16d7956cf02a72898a00b12daf993d943ada2ea5dd2c5215e4"
+  },
+  "shared_paths": [
+    "src/senior_control/motion/learning_pose_history.py",
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+    "src/senior_control/docker_start_helper.py",
+    "src/senior_control/simulation_cli.py"
+  ]
+}

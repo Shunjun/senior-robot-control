@@ -1,0 +1,237 @@
+{
+  "task_id": "task_8a48448b5365",
+  "dispatch_id": "ctx_0a993da4d662",
+  "head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "startup_snapshot": "/tmp/frozen-learning-start",
+  "startup_manifest_sha256": "48b01d33fe10ceca4c104fcece5a68b278fb2f53abce55956d6c09e342537e8c",
+  "files": [
+    {
+      "path": "docs/superpowers/plans/2026-11-12-vehicle-motion-redesign.md",
+      "status": "modified",
+      "startup_sha256": "7d8822283f7d71e433aefdfcac33e607021711649b645c451a0e7f4791a9feb0",
+      "final_sha256": "dd4e7c830107db4276f042055861ace3130ba1696ee9aca046a33d558c60d98a"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-11-16-body-return-geometry-only.md",
+      "status": "modified",
+      "startup_sha256": "938ce9711717e2160346ada9ee13971a2c22cf1749bfc4ee2e20d238f82f1479",
+      "final_sha256": "8aad2d1aa0e2aa3e6001394778d2f06cdacb3df8fdd97a00ac82dda67dd0194c"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-12-vehicle-motion-redesign.md",
+      "status": "modified",
+      "startup_sha256": "594702cb91ae14d49196d5bfc7a381376c45f6a5f2dccf6a73fa34cad3f8f06f",
+      "final_sha256": "1ab75b6695f74b53e962dbce56e88b855f66e57d25c89b2ec1265d92caa1c4d6"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-16-learning-shared-state-design.md",
+      "status": "modified",
+      "startup_sha256": "32c3a31c4fa3e145b069c8b69a56b141c6a8447f431463b4faba0bec77c60122",
+      "final_sha256": "9e1b00201ddd136e7a681955c01230c31299163d01543e2ae90dd2245bc48175"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-16-self-return-matching-design.md",
+      "status": "modified",
+      "startup_sha256": "28dc462a1ff1e0395a73caac6718830042feb6bded2c3b27fc81ebb4ea3a5f85",
+      "final_sha256": "4b34044531f401f89ba2158523b2bdeed2f8dccc981d5baab0921c09c4c95309"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-frozen-reference.md",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "640c8a2210b202dab3e3e8899c8f24da478b1da1335abd30a9507ac5c0a418ee"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+      "status": "modified",
+      "startup_sha256": "f1e87f8ae58258b08d631d5c3e37b5bd1bf2a35f24404323fb1b5dd712d254f2",
+      "final_sha256": "464c9d4b09bdd475e9a5d33ba70c9f09d5b2153301aa04e03e931969d0a56adb"
+    },
+    {
+      "path": "src/senior_control/motion/learning_pose_history.py",
+      "status": "deleted",
+      "startup_sha256": "0a3bf4a4b338248d440535ca736d62b21bdee8a565a053c27ebe6896bbe026a4",
+      "final_sha256": null
+    },
+    {
+      "path": "src/senior_control/motion/learning_record.py",
+      "status": "modified",
+      "startup_sha256": "010ba40eb91ab260c8d51574200bee447d0f640a5f2ced18219f729835e18dbc",
+      "final_sha256": "64fa926a3acb8d0ee78665fafc9a6bb1b51c8935a27af85e51f6eebbf5ff663e"
+    },
+    {
+      "path": "src/senior_control/motion/startup_learning.py",
+      "status": "modified",
+      "startup_sha256": "311a90c698e73d58ca09ee02762be36db0a2ab4ae1437b1e00d5320ad4524849",
+      "final_sha256": "f2bcea7ebe414a052fa2dc5ac518fea8188aa79d9646bd9d4d5b6c52145b801a"
+    },
+    {
+      "path": "src/senior_control/runtime/learning_client.py",
+      "status": "modified",
+      "startup_sha256": "ae9b493bff038c3a5e8ebd5615e1a4ba34ed977d08ccceb7d588e34f90d36f66",
+      "final_sha256": "67de3d41f5ce8c8eed16c8a593d7458613d45bbc3e16d41325a541c611d548cf"
+    },
+    {
+      "path": "src/senior_control/runtime/learning_mailbox.py",
+      "status": "deleted",
+      "startup_sha256": "584572d9fea1988c061aeeaba3499860b5c12d15d992f29c8b0c9c493e119ce4",
+      "final_sha256": null
+    },
+    {
+      "path": "src/senior_control/runtime/learning_owner.py",
+      "status": "modified",
+      "startup_sha256": "7af34e1051539087a5ba1044ef00e9bc7ed479b4b7c83f0862f3ee1bd303cece",
+      "final_sha256": "f862e1e30cdc9270704513ff4634d76ee6018e04c605706a4aa06375b2fc2de9"
+    },
+    {
+      "path": "src/senior_control/runtime/learning_service.py",
+      "status": "modified",
+      "startup_sha256": "abbef160a052ae89b79975037e777ecbc11f0058d006bb0901535d4975160cf9",
+      "final_sha256": "d1ed99d01fd830466dd1469dfd46c88419419b22427653a8112ff0094ca8f192"
+    },
+    {
+      "path": "src/senior_control/safety/learning_view.py",
+      "status": "modified",
+      "startup_sha256": "0f4299e09fcd259b7031b6afe691e6ef70c64e5ff88a6418b781cf5593422818",
+      "final_sha256": "ba79636a378b8750bbce38e304d326baff2fcf3ffeded03baa9348aec52d1c13"
+    },
+    {
+      "path": "src/senior_control/safety/self_learning.py",
+      "status": "modified",
+      "startup_sha256": "dd315d4f7f5f5f2ef173faf634039f6d75321f983b226e428c57421eb116d553",
+      "final_sha256": "eacc8529bb2a093c102e5430734929845f3b49878bb523d3b4ea4c4bfa5f23b9"
+    },
+    {
+      "path": "tests/unit/learning_test_support.py",
+      "status": "modified",
+      "startup_sha256": "d5daabacd481011bcc19f284dabb83538af308f13880bae6641873fe76ed5e10",
+      "final_sha256": "ce0bf7566efcfcec61bd89d6c6cf88f7f34c1101fa3c268bea272b3e4821722f"
+    },
+    {
+      "path": "tests/unit/test_body_return_geometry_only.py",
+      "status": "modified",
+      "startup_sha256": "567c71f4899eda477590daf6c5ad81cae9117a668ff2cae48e16e4c1db91086c",
+      "final_sha256": "92341ef6de97264b179ecf1e73039078a66947c50870ac694fd92cf360c4a628"
+    },
+    {
+      "path": "tests/unit/test_learning_client.py",
+      "status": "modified",
+      "startup_sha256": "7e71c85cb54f0b12d68b8496338d016de993fdecaf7f0bbd4c965f4cb6bb9bf7",
+      "final_sha256": "eb44656bc7d1472435f722eab97bccaff99bbae9cc1c2c818c9d46182da0c3eb"
+    },
+    {
+      "path": "tests/unit/test_learning_dual_clock.py",
+      "status": "modified",
+      "startup_sha256": "ee0d8400e05ba1052d03e226e10edf3829c88a5860e827daa29a54d17bc79ac3",
+      "final_sha256": "e310bbedd0cfa69cb4cfae01d84943cff2e2af7c6e00830841ffb1934567da38"
+    },
+    {
+      "path": "tests/unit/test_learning_frozen_reference.py",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "cdba5bd811b1ba8951c31cdc70a5f522c3adb87614ce37b26bcef50af86f2d63"
+    },
+    {
+      "path": "tests/unit/test_learning_record_owner.py",
+      "status": "modified",
+      "startup_sha256": "3c8b4dfd27533ef7c97b86480665afeae06110dd97ceb729a2c4b270734915b0",
+      "final_sha256": "d6d5c9b0164e94af2d3b6852a321ecb1ddb6b31bac171ef22877a078f64626c7"
+    },
+    {
+      "path": "tests/unit/test_learning_recorded_path.py",
+      "status": "deleted",
+      "startup_sha256": "341bb8f227e11ff7115eb820b573c9cbdae725c831b9a90865057f3b7f9ea2f9",
+      "final_sha256": null
+    },
+    {
+      "path": "tests/unit/test_learning_revocation_mailbox.py",
+      "status": "deleted",
+      "startup_sha256": "4946fd6f1ebabbe618d4fa01271bcc9a9ac87e35b9bc920f66880c023457cc21",
+      "final_sha256": null
+    },
+    {
+      "path": "tests/unit/test_learning_service_linux.py",
+      "status": "modified",
+      "startup_sha256": "42ef720fbc08150d168eaa55d50034d93752834934a7061cfcc200ac0da5ece7",
+      "final_sha256": "ee43fc3af41c64ad3cabaf6ef83dc0ee9fca49a07362fa0e7f4a1ca894a4b7c4"
+    },
+    {
+      "path": "tests/unit/test_self_return_process_revocation.py",
+      "status": "deleted",
+      "startup_sha256": "6569d6fc7a4e5b16d7956cf02a72898a00b12daf993d943ada2ea5dd2c5215e4",
+      "final_sha256": null
+    },
+    {
+      "path": "tests/unit/test_startup_learning.py",
+      "status": "modified",
+      "startup_sha256": "c2e058e37675778143851543f87776916277cd8c2bb4925993dc09be69168f61",
+      "final_sha256": "8d6ff084c8767a5fa187902b5b4651e4b47a55952b41a13745fda594c072d9bb"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_chain.py",
+      "status": "modified",
+      "startup_sha256": "ab5e4c67c412ab723f1eef3eb949919e4d6a23cd5bcc9e503c782f5c58d4e605",
+      "final_sha256": "3cce812432f3531dadc7479e6dc8255565148c880aa5cecea6d3b82aa929cf0d"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_cycle.py",
+      "status": "modified",
+      "startup_sha256": "132a53774a6df962fe8634bbeb394ccb57d797c1a9a2902c037aa5dc8bbbca64",
+      "final_sha256": "f0bac66f5396ab3a8742c04f94d70f8db46a4a6c17f6c54241377710db59496e"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_latch.py",
+      "status": "modified",
+      "startup_sha256": "f296e1f31b01d645591cf4f78172efd039bbd025d16942de319753b4095a5265",
+      "final_sha256": "bb081cda042c6ec5298abce4fe47aaa1308c85d5b7e885b8b405e53c2f826279"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_review.py",
+      "status": "modified",
+      "startup_sha256": "2cd790a6341e20ab590b0c9a35241b85288da5c5c290434e6c7e381a824c03a9",
+      "final_sha256": "82dcdb87228047cbf720c47dee6ce41524602667049646278cf2140b706c95ed"
+    },
+    {
+      "path": "tests/unit/test_startup_learning_timed.py",
+      "status": "modified",
+      "startup_sha256": "22a0725ba5f2683a78236fb6c4805393c8b27cc339dc410b9a977f916c52abbb",
+      "final_sha256": "97375825f9d445e397eefe9c2cb6962bfd30ab48917d599211815abe584206fc"
+    }
+  ],
+  "protected": [
+    {
+      "path": "ros2/src/senior_robot/senior_robot/native_receipt.py",
+      "startup_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "final_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "unchanged": true
+    },
+    {
+      "path": "tests/test_native_receipt_diagnostics.py",
+      "startup_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "final_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "unchanged": true
+    },
+    {
+      "path": "docs/reviews/2026-11-16-software-estop-owner.md",
+      "startup_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "final_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "unchanged": true
+    }
+  ],
+  "incremental_diff": {
+    "path": "docs/testing/2026-11-16-learning-frozen-reference-owned.diff",
+    "sha256": "a0b96f57ec3acfab816db33f39664e805da7c2cf72d6c233f4bb47b87376a69c"
+  },
+  "verification": {
+    "pytest": "136 passed, 1 skipped in 50.12s",
+    "mypy": "Success: no issues found in 11 source files",
+    "ruff": "All checks passed",
+    "format": "23 files already formatted",
+    "python310_syntax": "all changed Python sources/tests parsed; not Python3.10 runtime evidence"
+  },
+  "limitations": [
+    "Linux IPC target test skipped on macOS",
+    "Additional interior-return plus missing-neighbor full-core probe did not issue action; retained failing evidence separately; no safety changes made",
+    "No ROS/simulation/vehicle verification"
+  ]
+}

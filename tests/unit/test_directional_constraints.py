@@ -58,14 +58,13 @@ def snapshot(
     motion = BodyMotion(
         BodyTwist(current, 0, 0), None, now - 0.1, now, now, now + 2, "motion", True, "synthetic"
     )
-    response = ResponseBounds(0.4, 0.5, 2.0, 0.5, 0.6, 2.0, 0.1, 20.0, "synthetic-response")
+    response = ResponseBounds(0.4, 0.5, 2.0, 0.5, 0.6, 2.0, 0.1, "synthetic-response")
     risk = RiskEnvelope(
         "synthetic-floor",
         "independent synthetic exact plant; not wheel truth",
         "motion",
         (SourceMode.LASER_REFERENCE, SourceMode.WHEEL_IMU_LIMITED),
         "synthetic-response",
-        20.0,
         10.0,
         (current, current),
         (0.0, 0.0),
@@ -179,15 +178,15 @@ def test_residual_acceleration_at_zero_speed_and_nonpositive_intervals_are_not_l
     assert engine().refine(negative, 0).brake.kind is BrakeKind.EMERGENCY
 
 
-def test_model_and_response_must_cover_stop_horizon_not_just_current_time():
-    s = snapshot(now=0.5)
-    for field in ("model", "response"):
-        short = (
-            replace(s, envelope=replace(s.envelope, valid_until_steady=0.51))
-            if field == "model"
-            else replace(s, response=replace(s.response, valid_until_steady=0.51))
-        )
-        assert engine().refine(short, 0.5).permit is None
+def test_static_models_survive_one_hour_while_dynamic_evidence_expires():
+    original = snapshot()
+    fresh = snapshot(now=7200)
+    fresh = replace(fresh, response=original.response, envelope=original.envelope)
+    assert engine().refine(fresh, 7200).permit is not None
+    assert engine().refine(original, 7200).permit is None
+    for field in ("motion", "perception", "target"):
+        stale = replace(fresh, **{field: getattr(original, field)})
+        assert engine().refine(stale, 7200).permit is None
 
 
 def test_fast_recheck_brakes_for_new_definite_reversal_and_accepts_moving_pose():
@@ -345,14 +344,23 @@ def test_pure_t3b_partial_motion_to_direction_constraint_example():
 
     policy = replay_policy()
     policy = replace(
-        policy, admission=replace(policy.admission, recovery_samples=1, recovery_span_s=0)
+        policy, admission=replace(policy.admission, recovery_samples=1, recovery_span_ms=0)
     )
     chain = ReplayChain(policy)
     events = [
-        replace(point(Source.IMU, i / 50, i + 1, (0,)), received_steady=i / 50) for i in range(6)
+        replace(
+            point(Source.IMU, i / 50, i + 1, (0,)),
+            received_steady=i / 50,
+            measurement_steady=i / 50,
+        )
+        for i in range(6)
     ]
     events += [
-        replace(point(Source.WHEEL, i / 30, i + 1, (0.3, 0)), received_steady=i / 30)
+        replace(
+            point(Source.WHEEL, i / 30, i + 1, (0.3, 0)),
+            received_steady=i / 30,
+            measurement_steady=i / 30,
+        )
         for i in range(4)
     ]
     for p in sorted(events, key=lambda p: p.end_ros):
@@ -555,3 +563,23 @@ def test_full_scan_occupied_squares_preserve_exact_coordinates_and_evidence():
     assert perception.free_space.is_empty
     assert (perception.stamp_steady, perception.deadline_steady) == (100.0, 100.8)
     assert (perception.source_epoch, perception.revision) == ("original-scan", 301)
+
+
+@pytest.mark.parametrize("source", ["manual", "navigation"])
+def test_overspeed_target_is_scaled_before_combined_collision_search(source):
+    s = snapshot(target=Velocity(80, 40), hits=((0.4, 0.25),))
+    s = replace(
+        s,
+        target=replace(s.target, source=source),
+        envelope=replace(
+            s.envelope,
+            linear_cap_mps=0.2,
+            yaw_cap_rps=0.4,
+        ),
+    )
+    result = engine().refine(s, 0)
+    clear = engine().refine(replace(s, perception=scene()), 0)
+    assert clear.permit is not None
+    assert clear.permit.velocities[0] == Velocity(0.2, 0.1)
+    # The scaled target still undergoes actual footprint/obstacle sweeping.
+    assert result.permit is None or result.permit.velocities != clear.permit.velocities

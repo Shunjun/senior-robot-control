@@ -1,0 +1,17 @@
+# 学习分段路径积分返修
+
+任务`task_54c39bc5b1a4 / ctx_b961930eda71`，分支fix/degraded-drive-speed，HEAD593e8f13f385892f0bd62cf75c593f7b07efd2da。返修代码与必要定向证据已完成，待负责人亲审，未提交推送、不启ROS/服务。
+
+已实际复现负责人探针：同一三点轨迹，逐帧消费pose_x=.005、跳过中间帧pose_x=0，而position_error同为.000282842712474619。根因是MotionEstimate.measurement_interval只证明覆盖，未包含区间内速率变化；学习把当前endpoint速度乘任意长未消费尾段，不足以构造轨迹或误差支持。
+
+本轮明确退役该积分路径，host3秒窗口、原根TTL、1cm冻结模型及共享owner/mailbox不变。Nav原owner在MotionEstimation接收侧、历史淘汰前维护至多256个原始对齐物理段，以既有快照交接MotionPath，不建第二运动估计owner、不建无界队列。path_id绑定连续路径；每段含真实MeasurementInterval与原始两端host标签、fused与independent三轴视图及各自误差/roots。学习只消费独立段，重复控制计算不改变已记录路径。
+
+当前消费规则：首次观测选本地原点；随后path.tail(previous)返回全部未消费原始段，以各段自己的rates作SE2 compose、按每段误差累计，绝不拉伸最新速度。历史段不按今天TTL追溯拒绝；当前独立轴是否有效单列，不用它抹去过去认证段。缺独立段、历史淘汰或换代只隔离未知部分，完整保留尾段从新局部原点继续，不拼回未知前缀，不重开学习动作。中间历史采样不回填当前wheel/IMU静止状态，最新endpoint才消费当前静止确认；不把独立速度当静止证明。
+
+接口边界：Nav拥有estimator/pose/runtime/core生产接线，本worker只改StartupLearning消费及学习测试。纯scalar连续覆盖不再作为可积分速度历史；旧手写endpoint-N fixtures必须迁为显式真实有状态MotionFeed，经实际MotionEstimation.ingest/estimate记录各接收点。控制consumer可稀疏读取这些不可变快照，不要求消费每帧。
+
+已新增变速、转弯+侧移、停走dense/sparse同轨迹与误差对照、同端点重复不双算、仅coverage无history拒绝、缺独立段后已知尾段继续、256段历史淘汰前缀不伪造等案例。新路径首批8项通过；完整本轮必要42项首轮32通过10失败，其余仍在按生产/fixture契约核查，证据/tmp/learning-path-batch.log/.xml。
+
+仍在核查的真实契约：严格reference JSON链反复切换path_id导致每帧采样被清；真正interval/delta测量应直接使用其已证明区间增量，而非把它当瞬时端点rate再作上一值预测；point ZOH需要实际预测误差预算，不可把预算调小让理想测试通过。待产品与fixture语义全部一致后再补必要集中验证，最终结果另行更新，不把首批失败藏为“已通过”。
+
+最终实施与全部失败修复证据见`docs/testing/2026-11-16-learning-recorded-path.md`；9项路径补测通过，本轮按节点去重43通过。本文中首轮待查项保留为调查历史，不能解读为当前未修或实车验收。

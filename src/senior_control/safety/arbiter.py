@@ -1,13 +1,7 @@
-"""Persistent estop, final publisher fence and local task navigation arbitration."""
+"""Final publisher fence and local task navigation arbitration."""
 
-import fcntl
-import json
 import math
-import os
-import tempfile
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from senior_control.errors import ErrorCode
@@ -16,7 +10,7 @@ from senior_control.protocol import (
     Envelope,
 )
 
-ModeName = Literal["estop", "navigation", "idle"]
+ModeName = Literal["navigation", "idle"]
 _ZERO = Velocity(0.0, 0.0)
 
 
@@ -36,126 +30,6 @@ def _ok() -> CommandResult:
 
 def _reject(error: ErrorCode) -> CommandResult:
     return CommandResult(False, error)
-
-
-class PersistentEstop:
-    """Single-owner durable latch; missing, invalid, or foreign state is latched."""
-
-    def __init__(self, path: Path, robot_id: str) -> None:
-        if not path.is_absolute() or not robot_id or len(robot_id) > 128:
-            raise ValueError("absolute state path and robot identity required")
-        self._path, self._robot_id = path, robot_id
-        self._lock = open(str(path) + ".lock", "a+b")
-        try:
-            fcntl.flock(self._lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BaseException:
-            self._lock.close()
-            raise
-        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="estop-state")
-        self._pending: Future[None] | None = None
-        self._pending_request: tuple[str, int, int] | None = None
-        self.latched, self.revision = True, 0
-        try:
-            with path.open("r", encoding="utf-8") as stream:
-                value = json.load(stream)
-            if (
-                set(value) == {"version", "robot_id", "latched", "revision"}
-                and value["version"] == 1
-                and value["robot_id"] == robot_id
-                and type(value["latched"]) is bool
-                and type(value["revision"]) is int
-                and value["revision"] >= 0
-            ):
-                self.latched, self.revision = value["latched"], value["revision"]
-        except (OSError, ValueError, TypeError):
-            pass
-
-    @staticmethod
-    def initialize(path: Path, robot_id: str) -> None:
-        if not path.is_absolute() or not robot_id or len(robot_id) > 128:
-            raise ValueError("absolute state path and robot identity required")
-        with open(str(path) + ".lock", "a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            fd = os.open(path, flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(
-                    {"version": 1, "robot_id": robot_id, "latched": False, "revision": 0},
-                    stream,
-                )
-                stream.flush()
-                os.fsync(stream.fileno())
-            PersistentEstop._sync_directory(path.parent)
-
-    @staticmethod
-    def _sync_directory(directory: Path) -> None:
-        fd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-
-    def estop(self) -> None:
-        self.latched = True
-        self._write(True)
-
-    def clear_confirmed(self) -> Future[None]:
-        """Only a trusted local reset confirmation may request durable unlatch."""
-        return self._worker.submit(self._write, False)
-
-    def _write(self, latched: bool) -> None:
-        revision = self.revision + 1
-        fd, name = tempfile.mkstemp(prefix=".estop-", dir=self._path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(
-                    {
-                        "version": 1,
-                        "robot_id": self._robot_id,
-                        "latched": latched,
-                        "revision": revision,
-                    },
-                    stream,
-                )
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(name, self._path)
-            self._sync_directory(self._path.parent)
-            self.latched, self.revision = latched, revision
-        finally:
-            try:
-                os.unlink(name)
-            except FileNotFoundError:
-                pass
-
-    def commit(self, command: Envelope, result: CommandResult) -> CommandResult:
-        """Acknowledge an accepted estop only after its latch is durable."""
-        if not result.accepted and (
-            result.error is not ErrorCode.CONFLICT or self._pending is None
-        ):
-            return result
-        request = (command.session_id, command.connection_epoch, command.seq)
-        retry = request == self._pending_request
-        if result.accepted:
-            self._pending_request = request
-        pending = self._pending
-        if pending is None or (pending.done() and pending.exception() is not None):
-            pending = self._pending = self._worker.submit(self.estop)
-        try:
-            pending.result(timeout=0.2)
-        except Exception:
-            # Retain the write and its identity so a replay can finish it.
-            return _reject(ErrorCode.UNAVAILABLE)
-        self._pending = None
-        self._pending_request = None
-        return _ok() if retry else result
-
-    def close(self) -> None:
-        self._worker.shutdown(wait=False, cancel_futures=True)
-        if self._pending is not None and not self._pending.done():
-            self._pending.add_done_callback(lambda _future: self._lock.close())
-        else:
-            self._lock.close()
 
 
 class FinalCommandFence:
@@ -254,18 +128,17 @@ class FinalCommandFence:
 
 
 class Arbiter:
-    """Own the local navigation source and software estop fence.
+    """Own local navigation samples and retire them on explicit stop requests.
 
     Manual authority belongs to ManualIngress. Accepted tasks retain their local
     sample TTL through cloud disconnects; a heartbeat never grants motion here.
     """
 
-    def __init__(self, robot_id: str, command_ttl_seconds: float, initial_estop: bool = False):
-        if not math.isfinite(command_ttl_seconds) or command_ttl_seconds <= 0:
+    def __init__(self, robot_id: str, command_ttl_ms: float):
+        if not math.isfinite(command_ttl_ms) or command_ttl_ms <= 0:
             raise ValueError("command TTL must be positive")
         self._robot_id = robot_id
-        self._command_ttl_seconds = command_ttl_seconds
-        self._estop = initial_estop
+        self._command_ttl_seconds = command_ttl_ms / 1000
         self._history: dict[tuple[str, int], int] = {}
         self._navigation_run: str | None = None
         self._navigation_seq = 0
@@ -283,24 +156,15 @@ class Arbiter:
         if command.connection_epoch <= 0 or command.seq <= self._history.get(key, -1):
             return _reject(ErrorCode.CONFLICT)
         self._history[key] = command.seq
-        self.confirm_local_estop(True)
+        self.shutdown()
         return _ok()
-
-    @property
-    def estop_latched(self) -> bool:
-        return self._estop
-
-    def confirm_local_estop(self, latched: bool) -> None:
-        if latched:
-            self.shutdown()
-        self._estop = latched
 
     @property
     def task_navigation_active(self) -> bool:
         return self._navigation_run is not None
 
     def task_navigation_allowed(self, now: float) -> bool:
-        return math.isfinite(now) and not self._estop
+        return math.isfinite(now)
 
     def navigation_source_active(self, execution_id: str, now: float) -> bool:
         return self.task_navigation_allowed(now) and self._navigation_run == execution_id
@@ -355,8 +219,6 @@ class Arbiter:
         )
 
     def mode(self, now: float) -> ModeName:
-        if self._estop:
-            return "estop"
         return "navigation" if self._navigation_run and math.isfinite(now) else "idle"
 
     def shutdown(self) -> None:

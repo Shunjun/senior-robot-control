@@ -11,24 +11,32 @@ from typing import Any
 
 from senior_control.hardware_navigation import load_navigation_reference
 from senior_control.models import Pose2D
+from senior_control.sensors.policy import sensor_current
+from senior_control.sensors.time_proof import source_time
 from senior_robot.motion_lifecycle import with_dds_info
 from senior_robot.motion_observation_adapter import observation_origin, stamp_seconds
 
 
 class HardwareReference:
     def __init__(self, node: Any, path: Path):
-        from geometry_msgs.msg import PoseWithCovarianceStamped
         from nav_msgs.msg import OccupancyGrid
+        from senior_motion_msgs.msg import TimedPose
 
         self._node = node
         self.config = load_navigation_reference(path)
+        if self.config.pose_publisher == "amcl":
+            from senior_robot.navigation_overlay import require_overlay_package
+
+            require_overlay_package("nav2_amcl")
         self._grid = self.config.grid()
         self._map_gid = None
         self._pose_gid = None
         self._pose = None
         self._pose_at = float("-inf")
         self._pose_ros = float("-inf")
-        self._last_ros = float("-inf")
+        self._pose_proof = None
+        self._retired_pose_epochs = set()
+        self._pose_topic = self.config.pose_topic + "/timed"
         self._map_serial = 0
         self._pose_map_serial = -1
         self.safety_reason = "motion runtime qualification required"
@@ -47,8 +55,8 @@ class HardwareReference:
         )
         subscribe(
             node,
-            PoseWithCovarianceStamped,
-            self.config.pose_topic,
+            TimedPose,
+            self._pose_topic,
             self._on_pose,
             writer=self.config.pose_publisher,
             namespace=self.config.source_namespace,
@@ -129,11 +137,14 @@ class HardwareReference:
         )
 
     @with_dds_info
-    def _on_pose(self, msg, info):
+    def _on_pose(self, timed, info):
+        msg = timed.data
         self._pose = None
-        gid = self._source(self.config.pose_topic, self.config.pose_publisher, info)
-        now_ros = self._node.get_clock().now().nanoseconds / 1e9
+        gid = self._source(self._pose_topic, self.config.pose_publisher, info)
+        from senior_robot.native_receipt import received_steady
+
         try:
+            proof = source_time(timed.timing)
             stamp = stamp_seconds(msg.header.stamp)
             p, q = msg.pose.pose.position, msg.pose.pose.orientation
             c = msg.pose.covariance
@@ -141,8 +152,21 @@ class HardwareReference:
                 gid is None
                 or self.grid() is None
                 or msg.header.frame_id != "map"
-                or stamp <= self._pose_ros
-                or not 0 <= now_ros - stamp <= self.config.max_age_s
+                or proof.source_epoch in self._retired_pose_epochs
+                or (
+                    self._pose_proof is not None
+                    and proof.source_epoch == self._pose_proof.source_epoch
+                    and (
+                        proof.sequence <= self._pose_proof.sequence
+                        or proof.end_steady < self._pose_proof.end_steady
+                    )
+                )
+                or not sensor_current(
+                    measured_steady=proof.end_steady,
+                    received_steady=received_steady(info),
+                    now_steady=time.monotonic(),
+                    max_age_ms=self.config.max_age_s * 1000,
+                )
                 or not all(math.isfinite(v) for v in c)
                 or not all(0 < c[i] <= self.config.max_position_variance for i in (0, 7))
                 or not 0 < c[35] <= self.config.max_yaw_variance
@@ -152,24 +176,23 @@ class HardwareReference:
             pose = Pose2D(p.x, p.y, math.atan2(2 * q.w * q.z, 1 - 2 * q.z * q.z))
         except (ValueError, TypeError, OverflowError):
             return
+        if self._pose_proof is not None and proof.source_epoch != self._pose_proof.source_epoch:
+            if len(self._retired_pose_epochs) >= 256:
+                return
+            self._retired_pose_epochs.add(self._pose_proof.source_epoch)
+        self._pose_proof = proof
         self._pose, self._pose_gid = pose, gid
         from senior_robot.native_receipt import received_steady
 
-        self._pose_ros, self._pose_at = stamp, received_steady(info)
+        self._pose_ros, self._pose_at = stamp, proof.end_steady
         self._pose_map_serial = self._map_serial
 
     def pose(self):
-        now_ros = self._node.get_clock().now().nanoseconds / 1e9
-        if now_ros < self._last_ros:
-            self._pose = None
-            self._pose_ros = float("-inf")
-        self._last_ros = now_ros
         if (
             self.grid() is None
             or self._pose_map_serial != self._map_serial
-            or not 0 <= now_ros - self._pose_ros <= self.config.max_age_s
             or not 0 <= time.monotonic() - self._pose_at <= self.config.max_age_s
-            or self._pose_gid != self._source(self.config.pose_topic, self.config.pose_publisher)
+            or self._pose_gid != self._source(self._pose_topic, self.config.pose_publisher)
         ):
             return None
         return self._pose

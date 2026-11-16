@@ -1,0 +1,88 @@
+mypy head archive 2026-11-16T18:17:27Z
+DRIFT before-mypy-head source_drift=False changed=[] missing=[] added=[]
+$ git archive HEAD | tar -x -C /tmp/startup-final-validation-head
+TAR_EXIT 0
+PYPROJECT_WORKTREE fa2ed95d49c1c16b04283c3cab3e75fc69eed2c5339d1251469846fb6ade6bc5
+PYPROJECT_HEAD fa2ed95d49c1c16b04283c3cab3e75fc69eed2c5339d1251469846fb6ade6bc5
+MATCH True
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/mypy --no-incremental --cache-dir /tmp/startup-final-mypy-head src/senior_control
+CWD /tmp/startup-final-validation-head
+AT 2026-11-16T18:17:28Z
+src/senior_control/tasks/lifecycle.py:318: error: Incompatible types in assignment (expression has type "Literal['succeeded', 'canceled', 'failed'] | None", variable has type "Literal['empty', 'starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']")  [assignment]
+src/senior_control/motion/learning_pose_history.py:23: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/learning_pose_history.py:23: note: Use "-> None" if function does not return a value
+src/senior_control/motion/learning_pose_history.py:26: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:15: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:22: error: Call to untyped function "LearningPoseHistory" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:24: error: Need type annotation for "_frame_stamps" (hint: "_frame_stamps: set[<type>] = ...")  [var-annotated]
+src/senior_control/motion/startup_learning.py:56: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:60: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:64: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:72: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:76: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:79: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:83: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:83: note: Use "-> None" if function does not return a value
+src/senior_control/motion/startup_learning.py:89: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:93: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:105: error: Call to untyped function "interrupt" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:118: error: Call to untyped function "interrupt" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:123: error: Incompatible types in assignment (expression has type "tuple[tuple[Any, Any, Any], ...]", variable has type "None")  [assignment]
+src/senior_control/motion/startup_learning.py:129: error: Call to untyped function "_record_pose" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:140: error: Call to untyped function "_record_pose" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:142: error: Call to untyped function "interrupt" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:164: error: Item "None" of "Any | None" has no attribute "error"  [union-attr]
+src/senior_control/motion/startup_learning.py:177: error: Item "None" of "Any | None" has no attribute "value"  [union-attr]
+src/senior_control/motion/startup_learning.py:186: error: Call to untyped function "interrupt" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:194: error: Call to untyped function "_record_pose" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:196: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:209: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/motion/startup_learning.py:219: error: Call to untyped function "interrupt" in typed context  [no-untyped-call]
+src/senior_control/motion/startup_learning.py:265: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:11: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:36: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:36: note: Use "-> None" if function does not return a value
+src/senior_control/localization/gps_course.py:43: error: Need type annotation for "motion"  [var-annotated]
+src/senior_control/localization/gps_course.py:48: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:52: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:56: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:63: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:73: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:73: note: Use "-> None" if function does not return a value
+src/senior_control/localization/gps_course.py:78: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/localization/gps_course.py:78: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/localization/gps_course.py:93: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:104: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:111: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:123: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:125: error: Item "None" of "Any | None" has no attribute "origin"  [union-attr]
+src/senior_control/localization/gps_course.py:127: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:136: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:141: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:154: error: Call to untyped function "wrap" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:155: error: Call to untyped function "reset" in typed context  [no-untyped-call]
+src/senior_control/localization/gps_course.py:158: error: Call to untyped function "wrap" in typed context  [no-untyped-call]
+src/senior_control/tasks/lifecycle_store.py:647: error: Value of type "Row | None" is not indexable  [index]
+src/senior_control/safety/self_learning.py:23: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/safety/self_learning.py:38: error: Need type annotation for "frame_observations" (hint: "frame_observations: list[<type>] = ...")  [var-annotated]
+src/senior_control/safety/self_learning.py:63: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/safety/self_learning.py:63: note: Use "-> None" if function does not return a value
+src/senior_control/safety/self_learning.py:73: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/safety/self_learning.py:73: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/safety/self_learning.py:104: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/safety/self_learning.py:115: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/safety/self_learning.py:161: error: Call to untyped function "_observed_free" in typed context  [no-untyped-call]
+src/senior_control/safety/self_learning.py:169: error: Function is missing a type annotation  [no-untyped-def]
+src/senior_control/safety/external_motion_features.py:20: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/safety/external_motion_features.py:33: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/safety/external_motion_features.py:41: error: Function is missing a return type annotation  [no-untyped-def]
+src/senior_control/safety/external_motion_features.py:41: error: Function is missing a type annotation for one or more parameters  [no-untyped-def]
+src/senior_control/motion/constraints.py:188: error: Incompatible return value type (got "tuple[tuple[float, ...], ...]", expected "tuple[tuple[float, float], ...]")  [return-value]
+src/senior_control/motion/constraints.py:190: error: Argument "join_style" to "buffer" of "BaseGeometry" has incompatible type "Literal[2]"; expected "Literal['round', 'mitre', 'bevel'] | BufferJoinStyle"  [arg-type]
+src/senior_control/motion/controller.py:454: error: Argument 1 to "validate_output" of "TickEvaluation" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+src/senior_control/motion/controller.py:456: error: Argument 1 to "validate_output" of "ConstraintEngine" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+Found 68 errors in 9 files (checked 159 source files)
+
+EXIT 1 AT 2026-11-16T18:17:43Z
+DRIFT after-mypy-head source_drift=False changed=[] missing=[] added=[]

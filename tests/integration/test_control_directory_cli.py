@@ -42,7 +42,6 @@ def test_default_directory_reads_config_and_derives_data_paths(control_dir, monk
     assert seen[0].credentials == root / "device.json"
     assert seen[0].database == root / "agent.db"
     assert seen[0].socket == root / "agent.sock"
-    assert seen[0].estop_state == root / "estop-state.json"
 
 
 def test_explicit_directory_does_not_read_default_home(control_dir, monkeypatch):

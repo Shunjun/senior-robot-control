@@ -4,7 +4,9 @@ No second lease or actuator: ManualAuthorityManager admits samples, and T5
 consumes the frozen target/deadline and owns closed-loop braking on source close.
 """
 
+import math
 from dataclasses import dataclass
+from typing import Literal
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import AcceptedManualIntent, ManualIntent
@@ -13,7 +15,7 @@ from senior_control.motion.manual_authority import (
     ManualAuthorityManager,
     ManualAuthorityReceipt,
 )
-from senior_control.protocol import MotionRuntimeState
+from senior_control.protocol import MotionRuntimeState, RuntimeObservation
 from senior_control.settings.models import DrivingSettings
 
 
@@ -120,7 +122,7 @@ class MotionRuntimeReceiver:
         self._available = False
 
     def accept(self, value: "MotionRuntimeState", publisher: bytes, now: float) -> bool:
-        if not value.sampled_steady <= now < value.valid_until:
+        if not math.isfinite(now) or value.sampled_steady > now:
             return False
         identity = publisher.hex() + ":" + value.boot_id
         if not self._sources.accept(identity):
@@ -142,29 +144,26 @@ class MotionRuntimeReceiver:
         """Withdraw availability without losing the replay/revision frontier."""
         self._available = False
 
+    def observation(self, now: float) -> RuntimeObservation:
+        value = self.value
+        if value is None:
+            return RuntimeObservation(status="missing")
+        status: Literal["current", "revoked"] = "current"
+        if not self._available:
+            status = "revoked"
+        elif not math.isfinite(now) or value.sampled_steady > now:
+            status = "revoked"
+        return RuntimeObservation(status=status, last_sampled_steady=value.sampled_steady)
+
     def current(self, now: float) -> "MotionRuntimeState | None":
         value = self.value
         return (
-            value
-            if self._available
-            and value is not None
-            and value.sampled_steady <= now < value.valid_until
-            else None
+            value if self._available and value is not None and value.sampled_steady <= now else None
         )
 
 
-def runtime_healthy(value: "MotionRuntimeState | None", now: float) -> bool:
-    return bool(
-        value is not None
-        and value.healthy
-        and value.evidence_stamp_steady is not None
-        and value.evidence_deadline_steady is not None
-        and value.evidence_stamp_steady <= now < value.evidence_deadline_steady
-    )
-
-
 def vehicle_frame(
-    runtime: MotionRuntimeState,
+    runtime: MotionRuntimeState | None,
     *,
     sequence: int,
     connected: bool,
@@ -175,6 +174,7 @@ def vehicle_frame(
     runtime_enabled: bool,
     safety_revisions: tuple[int, int],
     now: float,
+    observation: RuntimeObservation | None = None,
 ) -> dict[str, object]:
     """Use T7's motion projection; wire body averages retain their actual times."""
     from senior_control.agent.vehicle_state import (
@@ -184,19 +184,52 @@ def vehicle_frame(
     )
     from senior_control.motion.contracts import MotionMode, MotionState
 
+    capabilities = ["runtime.v1"] if runtime_enabled else []
+    if tasks_enabled:
+        capabilities.append("task.execution.v1")
+    if manual_enabled:
+        capabilities.append("motion.intent.v1")
+    # //Compatible: older IPC producers omit reporting metadata.
+    if observation is None:
+        observation = RuntimeObservation(
+            status="missing" if runtime is None else "current",
+            last_sampled_steady=None if runtime is None else runtime.sampled_steady,
+        )
+    reporting = observation.model_dump()
+    reporting["age_seconds"] = (
+        None
+        if observation.last_sampled_steady is None
+        else max(0.0, now - observation.last_sampled_steady)
+    )
+    if runtime is None or observation.status != "current":
+        return {
+            "schema": 1,
+            "sequence": sequence,
+            "mode": "unknown",
+            "reason": observation.status,
+            "estop_revision": safety_revisions[0],
+            "fault_revision": safety_revisions[1],
+            "confirmed_estop_status": "unknown",
+            "body_reference": None,
+            "wheel_linear_mps": None,
+            "task": task,
+            "allowed_actions": [],
+            "capabilities": capabilities,
+            "manual_authority": None,
+            "observation": reporting,
+        }
+
     motion = MotionState(
         MotionMode(runtime.mode),
         runtime.reason,
         runtime.task_id,
         safety_revisions[0],
         safety_revisions[1],
-        runtime.stationary and runtime_healthy(runtime, now),
+        runtime.stationary,
         tuple(runtime.allowed_actions),
     )
     view = project_vehicle_state(
-        RuntimeSnapshot(
-            sequence, motion, hardware_estop=runtime.confirmed_estop_status == "hardware_latched"
-        ),
+        RuntimeSnapshot(sequence, motion),
         ConnectionState(connected),
         now_steady=now,
     )
@@ -212,13 +245,9 @@ def vehicle_frame(
             "stale": not reference.computed_steady <= now < reference.valid_until_steady,
         }
     )
-    capabilities = ["runtime.v1"] if runtime_enabled else []
-    if tasks_enabled:
-        capabilities.append("task.execution.v1")
-    if manual_enabled:
-        capabilities.append("motion.intent.v1")
     return {
         "schema": 1,
+        "observation": reporting,
         "sequence": view.sequence,
         "mode": view.mode.value,
         "reason": view.detail_reason,

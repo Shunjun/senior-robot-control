@@ -21,14 +21,16 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
     rclpy = pytest.importorskip("rclpy")
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
-    from senior_robot.motion_core_output import MotionCoreOutput
     from senior_robot.motion_lifecycle import MotionExecutor, run, with_dds_info
     from senior_robot.motion_observation_adapter import (
         NativeObservationRosBridge,
         NativeObservations,
     )
+    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
     from senior_robot.simulation_motion_profile import SimulationMotionProfile
     from std_msgs.msg import String
+
+    from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
     assert os.environ.get("ROS_DOMAIN_ID") == "173" and os.environ.get("ROS_LOCALHOST_ONLY") == "1"
     original = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/senior_robot"
@@ -42,12 +44,14 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
             super().__init__("native_dds_smoke")
             self.declare_parameter("robot_id", "route-sim")
             p = SimulationMotionProfile()
-            self.output = MotionCoreOutput(self, p)
+            self.sensors = MotionSensorRuntime(p, RuntimeDiagnostics(lambda *_: None))
             self.bridge = object.__new__(NativeObservationRosBridge)
             self.bridge.node = self
             self.bridge.allow_topology_only = True
             self.bridge._warn_at = 0.0
-            self.bridge.core = NativeObservations(p.admission(), p.temporal(), p.fusion())
+            self.bridge.core = NativeObservations(
+                p.admission(), p.temporal(), p.fusion(), sample_sink=self.sensors.ingest
+            )
             self.wheel_sub = self.create_subscription(
                 Odometry,
                 "/wheel/odom",
@@ -57,18 +61,15 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
 
             @with_dds_info
             def inspect(msg, info):
-                metadata.append(info)
+                metadata.append((info, json.loads(msg.data)["sequence"]))
 
-            self.inspect_sub = self.create_subscription(
-                String, "/motion/core_reference", inspect, 10
-            )
+            self.inspect_sub = self.create_subscription(String, "/motion/test_report", inspect, 10)
             self.drive = Node("drive")
-            self.fusion = Node("motion_fusion")
+            self.fusion = Node("motion_reporter")
             self.wheel = self.drive.create_publisher(Odometry, "/wheel/odom", 10)
-            self.reference = self.fusion.create_publisher(String, "/motion/core_reference", 10)
+            self.reference = self.fusion.create_publisher(String, "/motion/test_report", 10)
 
         def destroy_node(self):
-            self.output.close()
             self.drive.destroy_node()
             self.fusion.destroy_node()
             return super().destroy_node()
@@ -102,8 +103,8 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
             sources = node.bridge.core.snapshot(
                 node.get_clock().now().nanoseconds / 1e9, time.monotonic()
             )["sources"]
-            if sources and node.output._reference_sequence and metadata:
-                sample = metadata[-1]
+            if sources and metadata:
+                sample, sequence = metadata[-1]
                 keys = sorted(sample.keys()) if isinstance(sample, dict) else ["MessageInfo"]
                 print(
                     "DDS_SMOKE "
@@ -114,7 +115,7 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
                             executor=type(executor).__name__,
                             metadata_keys=keys,
                             source_epoch=sources[0]["sample"]["epoch"],
-                            reference_sequence=node.output._reference_sequence,
+                            notification_sequence=sequence,
                         )
                     )
                 )

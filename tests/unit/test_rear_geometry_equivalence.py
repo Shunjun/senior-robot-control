@@ -5,7 +5,6 @@ import math
 import random
 from pathlib import Path
 
-import pytest
 from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
@@ -127,18 +126,16 @@ def _boundary_cases():
     return result
 
 
-@pytest.mark.parametrize("overflow", ["endpoint", "uncertainty_extension"])
-def test_nonfinite_geometry_extremes_preserve_legacy_filter_behavior(overflow):
+def test_nonfinite_geometry_extremes_preserve_legacy_filter_behavior():
     mask = [[(-2.0, -1.0), (-1.0, -1.0), (-1.0, 1.0), (-2.0, 1.0)]]
-    origin = Pose2D(1e308 if overflow == "endpoint" else 0.0, 0.0, 0.0)
+    origin = Pose2D(1e308, 0.0, 0.0)
     scan = ScanObservation(
         (1e308,), 0.0, 0.01, 0.1, 1e308, 10.0, "ros", origin, 10.0, "base_link", 10.0
     )
-    uncertainty = 0.1 if overflow == "endpoint" else 1e308
 
     def outcome(function):
         try:
-            return function(scan, _profile(mask), self_mask_range_uncertainty=uncertainty)
+            return function(scan, _profile(mask))
         except (ValueError, RuntimeWarning, GEOSException) as exc:
             # //Compatible: GEOS versions differ in handling nonfinite coordinates.
             return (type(exc), str(exc))
@@ -224,7 +221,7 @@ def test_near_degenerate_triangle_keeps_legacy_mask_intersection_path(monkeypatc
 
 def test_c12_rear_filter_avoids_unrelated_linestring_construction(monkeypatch):
     scan, profile, _ = _captured_case()
-    reference = legacy_filter_self(scan, profile, self_mask_range_uncertainty=0.01)
+    reference = legacy_filter_self(scan, profile)
     original = self_filter.LineString
     count = 0
 
@@ -234,14 +231,14 @@ def test_c12_rear_filter_avoids_unrelated_linestring_construction(monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(self_filter, "LineString", counted)
-    actual = self_filter.filter_self(scan, profile, self_mask_range_uncertainty=0.01)
+    actual = self_filter.filter_self(scan, profile)
     assert actual == reference
     assert count < 720, f"unnecessary per-ray LineString work: {count}"
 
 
 def test_c12_rear_fan_avoids_mask_intersection_for_disjoint_triangles(monkeypatch):
     scan, profile, _ = _captured_case()
-    observed = legacy_filter_self(scan, profile, self_mask_range_uncertainty=0.01)
+    observed = legacy_filter_self(scan, profile)
     pairs = list(zip(observed.rays, observed.rays[1:], strict=False))
     masks = [Polygon(vertices) for vertices in profile.self_mask]
     reference = legacy_exact_partial_fans(pairs, masks, False)

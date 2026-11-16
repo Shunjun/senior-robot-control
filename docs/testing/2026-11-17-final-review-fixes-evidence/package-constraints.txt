@@ -1,0 +1,9 @@
+PyYAML==6.0.3
+aiosqlite==0.22.1
+annotated-types==0.8.0
+pydantic-settings==2.16.3
+pydantic==2.14.3
+pydantic_core==2.50.4
+python-dotenv==1.2.4
+typing-inspection==0.4.5
+typing_extensions==4.16.0

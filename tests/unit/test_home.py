@@ -1656,7 +1656,11 @@ async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
         await migrate_core(database, CORE_MIGRATIONS[:3])
         journal = AgentJournal(database, robot_id=ROBOT)
         await journal.prepare()
-        await journal.safety.mark()
+        await database.connection.execute(
+            "CREATE TABLE IF NOT EXISTS agent_safety_intent (robot_id TEXT PRIMARY KEY)"
+        )
+        await database.connection.execute("INSERT INTO agent_safety_intent VALUES ('historical')")
+        await database.connection.commit()
         await database.connection.execute(
             "INSERT INTO home_execution_guard (robot_id, execution_id) VALUES (?, ?)",
             (ROBOT, execution_id),
@@ -1670,7 +1674,8 @@ async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
             row = await cursor.fetchone()
         assert row is not None and row[0] == execution_id
         assert isinstance(row[1], str) and len(row[1]) == 32
-        assert await journal.safety.pending()
+        async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
+            assert await cursor.fetchone() == ("historical",)
 
 
 async def test_navigation_adapter_cancels_route_when_reference_changes():

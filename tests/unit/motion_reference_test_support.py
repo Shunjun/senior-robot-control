@@ -21,3 +21,15 @@ class ReadySubscription:
     def take_message(self, _type, _raw):
         self.takes += 1
         return self.ready.popleft() if self.ready else None
+
+
+def final_command_message(**values):
+    """Generated FinalCommand scalar defaults, with no admission behavior."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        **dict(
+            {"manual_linear": 0.0, "manual_linear_limit": 0.0, "degraded_linear_limit": 0.0},
+            **values,
+        )
+    )

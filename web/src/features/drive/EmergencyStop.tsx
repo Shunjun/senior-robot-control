@@ -41,7 +41,6 @@ export function EmergencyStop({ link, compact = false }: EmergencyStopProps): Re
     }
   }
   return <div className={styles.estopDock} data-compact={compact}>
-    {confirmed === 'hardware_latched' && <p className={styles.estopFailure}>实体急停已锁存，请现场释放；网页无法解除</p>}
     {confirmed === 'software_latched' && <p className={styles.estopConfirmed}>软件急停已锁存</p>}
     {pending && <p role="status">急停等待确认</p>}
     {note && <p role={note.startsWith('急停未确认') ? 'alert' : 'status'}>{note}</p>}
@@ -49,7 +48,7 @@ export function EmergencyStop({ link, compact = false }: EmergencyStopProps): Re
       <span className={styles.estopCap}>急停</span>
       <span className={styles.estopTag}>E-STOP</span>
     </button>
-    {confirmed !== 'hardware_latched' && (confirmed === 'software_latched' || resetAllowed) && <>
+    {(confirmed === 'software_latched' || resetAllowed) && <>
       <button className={styles.ghost} disabled={!connected || !available || !resetAllowed} onClick={() => void recover('estop_reset')}>复位软件急停</button>
       {confirmed === 'software_latched' && !resetAllowed && <p className={styles.quiet}>车端尚未许可复位，等待运动证据有效并确认停稳。</p>}
     </>}

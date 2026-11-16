@@ -51,7 +51,6 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
     node = SemanticIngress(
         parameter_overrides=[
             Parameter("registered_profile", value=True),
-            Parameter("max_age_s", value=0.3),
         ],
         _worker=worker,
     )
@@ -328,7 +327,6 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
     semantic = SemanticIngress(
         parameter_overrides=[
             Parameter("registered_profile", value=True),
-            Parameter("max_age_s", value=0.3),
         ],
         _worker=worker,
     )
@@ -339,7 +337,6 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
             Parameter("range_error_m", value=0.01),
             Parameter("row_stride", value=1),
             Parameter("column_stride", value=1),
-            Parameter("max_age_s", value=0.3),
             Parameter("transform_static", value=True),
         ]
     )

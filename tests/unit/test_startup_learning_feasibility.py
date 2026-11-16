@@ -1,18 +1,27 @@
 """Baseline feasibility probes, not acceptance of startup motion or learned filtering."""
 
+from test_directional_constraints import engine, snapshot
+
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
 from senior_control.safety.self_filter import ScanObservation, filter_self
-from test_directional_constraints import engine, snapshot
-
 
 BOUNDARY = [(-0.3, -0.2), (0.3, -0.2), (0.3, 0.2), (-0.3, 0.2)]
 
 
 def forward_scan(distance):
     return ScanObservation(
-        (distance,), 0.0, 0.01, 0.05, 5.0, 10.0, "ros", Pose2D(0, 0, 0),
-        10.0, "base_link", 10.0,
+        (distance,),
+        0.0,
+        0.01,
+        0.05,
+        5.0,
+        10.0,
+        "ros",
+        Pose2D(0, 0, 0),
+        10.0,
+        "base_link",
+        10.0,
     )
 
 
@@ -20,7 +29,8 @@ def test_unlearned_interior_return_blocks_first_motion_even_with_external_free_s
     observation = filter_self(forward_scan(0.15), DeviceProfile(footprint=BOUNDARY))
     assert observation.external_hits == observation.rays
     context = snapshot(
-        target=Velocity(0.05, 0), current=0,
+        target=Velocity(0.05, 0),
+        current=0,
         hits=tuple(ray.endpoint for ray in observation.external_hits),
     )
     # The existing synthetic scene supplies generous free space: this isolates

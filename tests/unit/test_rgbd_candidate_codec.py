@@ -1,5 +1,7 @@
 from types import SimpleNamespace as NS
 
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_candidate_codec import fill_candidate
 from senior_control.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
@@ -12,7 +14,7 @@ def stamp():
 
 
 def header():
-    return NS(stamp=stamp(), received_ros=stamp())
+    return NS(stamp=stamp(), received_ros=stamp(), timing=NS())
 
 
 def wire_message():
@@ -37,8 +39,36 @@ def wire_message():
 
 
 def test_candidate_serialization_retains_original_headers_digests_and_static_receipt():
-    one = RawCaptureHeader(100, 101, 1.1, "camera", "01", "02", "source", "boot", 1, 1, True, "")
-    two = RawCaptureHeader(200, 201, 1.2, "camera", "01", "02", "source", "boot", 1, 2, True, "")
+    one = RawCaptureHeader(
+        100,
+        101,
+        1.1,
+        "camera",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        1,
+        True,
+        "",
+        timing=capture_time(1.1, sequence=max(1, 1), epoch="source", tick=(100) / 1e9),
+    )
+    two = RawCaptureHeader(
+        200,
+        201,
+        1.2,
+        "camera",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        2,
+        True,
+        "",
+        timing=capture_time(1.2, sequence=max(1, 2), epoch="source", tick=(200) / 1e9),
+    )
 
     def info(h):
         return CameraInfoSnapshot(
@@ -120,3 +150,39 @@ def test_candidate_with_missing_original_metadata_is_not_serialized_as_valid():
             edge_factory=lambda: NS(stamp=stamp()),
         )
     assert not message.valid
+
+
+def test_original_source_nanoseconds_survive_python_ros_copy_after_a_long_boot():
+    from types import SimpleNamespace
+
+    from senior_control.sensors.time_proof import SourceTime
+    from senior_control.vision.rgbd_candidate_codec import _header
+
+    # Beyond exact float-integer ns precision: copying a seconds view back would
+    # alter the original producer front and its immutable wire evidence.
+    exact = 10_000_000_000_000_001
+    proof = SourceTime(
+        "00000000-0000-0000-0000-000000000001", "driver", 1, exact, exact + 2, "driver_read"
+    )
+    capture = RawCaptureHeader(
+        100,
+        100,
+        proof.end_steady + 0.01,
+        "camera",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        1,
+        True,
+        "",
+        timing=proof,
+    )
+    out = SimpleNamespace(
+        stamp=SimpleNamespace(), received_ros=SimpleNamespace(), timing=SimpleNamespace()
+    )
+    _header(out, capture)
+    assert out.timing.capture_start_steady_ns == exact
+    assert out.timing.capture_end_steady_ns == exact + 2
+    assert out.timing.source_epoch == "driver" and out.timing.sequence == 1

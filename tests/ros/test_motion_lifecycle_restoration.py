@@ -161,7 +161,7 @@ def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkey
             yaw_limit=0.12,
         )
     elif module == "depth_ingress":
-        values = dict(min_range_m=0.1, max_range_m=8.0, range_error_m=0.01, max_age_s=0.5)
+        values = dict(min_range_m=0.1, max_range_m=8.0, range_error_m=0.01)
     monkeypatch.setattr(
         multiprocessing.process.BaseProcess,
         "start",

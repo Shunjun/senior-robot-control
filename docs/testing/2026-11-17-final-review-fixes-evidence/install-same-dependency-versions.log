@@ -1,0 +1,10 @@
+AT 2026-11-16T18:44:51.569492+00:00
+CWD /tmp
+COMMAND ["uv", "pip", "install", "--offline", "--python", "/tmp/final-review-fixes-wheel-venv/bin/python", "--constraint", "/tmp/final-review-fixes-package-constraints.txt", "/tmp/final-review-fixes-dist/senior_control-0.1.0-py3-none-any.whl"]
+Using Python 3.12.15 environment at: /tmp/final-review-fixes-wheel-venv
+error: No solution found when resolving dependencies
+  cause: Because there is no version of pydantic-settings==2.16.3 and senior-control==0.1.0 depends on pydantic-settings==2.16.3, we can conclude that senior-control==0.1.0 cannot be used.
+         And because only senior-control==0.1.0 is available and you require senior-control, we can conclude that your requirements are unsatisfiable.
+
+EXIT 1
+ELAPSED 0.035090874996967614

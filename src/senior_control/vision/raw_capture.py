@@ -1,10 +1,11 @@
 """Identity and first-receipt fences for a per-message-verified raw bridge."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from senior_control.sensors.policy import sensor_current
+from senior_control.sensors.time_proof import SourceTime, source_time
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,19 @@ class RawCaptureHeader:
     sequence: int
     valid: bool
     reason: str
+    timing: SourceTime = field(kw_only=True)
+
+    @property
+    def measurement_steady(self) -> float:
+        return self.timing.end_steady
+
+    @property
+    def start_steady(self) -> float:
+        return self.timing.start_steady
+
+    @property
+    def end_steady(self) -> float:
+        return self.timing.end_steady
 
 
 def capture_from_message(message: Any) -> RawCaptureHeader:
@@ -45,6 +59,7 @@ def capture_from_message(message: Any) -> RawCaptureHeader:
         sequence=int(message.sequence),
         valid=bool(message.valid),
         reason=str(message.reason),
+        timing=source_time(message.timing),
     )
 
 
@@ -66,20 +81,19 @@ def _text(value: str, maximum: int) -> bool:
 class RawCaptureAdmission:
     """Only accept a bridge payload naming the currently unique bridge endpoint.
 
-    Source epochs are retired on replacement, and sequence frontiers survive
-    temporary graph loss. Measurements with a future stamp can be *queued* by
-    a bounded synchronizer but cannot be projected until ROS clock catch-up.
+    Source epochs are retired on replacement and sequence frontiers survive
+    temporary graph loss. Host capture age is independent of ROS/TF labels.
     """
 
-    def __init__(self, *, max_age_s: float, hard_limit_s: float = 1.0) -> None:
+    def __init__(self, *, max_age_ms: float, hard_limit_ms: float = 1000.0) -> None:
         if (
-            not math.isfinite(max_age_s)
-            or not math.isfinite(hard_limit_s)
-            or not 0 < hard_limit_s <= 5.0
-            or not 0 < max_age_s <= hard_limit_s
+            not math.isfinite(max_age_ms)
+            or not math.isfinite(hard_limit_ms)
+            or not 0 < hard_limit_ms <= 5000
+            or not 0 < max_age_ms <= hard_limit_ms
         ):
             raise ValueError("invalid_raw_age")
-        self.max_age_s = max_age_s
+        self.max_age_ms = max_age_ms
         self.latest: RawCaptureHeader | None = None
         self.generation = 0
         self._bridge_gid = ""
@@ -165,17 +179,15 @@ class RawCaptureAdmission:
         if (
             not _gid(header.raw_gid)
             or not _text(header.frame_id, 128)
-            or header.stamp_ns <= 0
-            or header.received_ros_ns <= 0
+            or header.stamp_ns < 0
+            or header.received_ros_ns < 0
             or not math.isfinite(header.received_steady)
             or not math.isfinite(now_steady)
             or not sensor_current(
-                stamp_ros=header.stamp_ns / 1e9,
-                received_ros=header.received_ros_ns / 1e9,
+                measured_steady=header.measurement_steady,
                 received_steady=header.received_steady,
-                now_ros=now_ros_ns / 1e9,
                 now_steady=now_steady,
-                max_age_s=self.max_age_s,
+                max_age_ms=self.max_age_ms,
             )
         ):
             self.latest = None
@@ -193,12 +205,17 @@ def compatible_captures(*headers: RawCaptureHeader) -> bool:
         return False
     first = headers[0]
     return (
-        first.stamp_ns > 0
+        first.stamp_ns >= 0
         and _text(first.bridge_boot_id, 64)
         and first.capture_generation > 0
         and all(
             header.valid
             and header.stamp_ns == first.stamp_ns
+            and header.timing.measurement.same_axis(first.timing.measurement)
+            and (
+                first.timing.time_basis != "sim_step"
+                or header.timing.measurement.seconds == first.timing.measurement.seconds
+            )
             and header.bridge_boot_id == first.bridge_boot_id
             and header.capture_generation == first.capture_generation
             for header in headers
@@ -209,10 +226,10 @@ def compatible_captures(*headers: RawCaptureHeader) -> bool:
 class RawCaptureGroup:
     """Keep a shared capture generation across separately verified streams."""
 
-    def __init__(self, streams: tuple[str, ...], *, max_age_s: float) -> None:
+    def __init__(self, streams: tuple[str, ...], *, max_age_ms: float) -> None:
         if not streams or len(set(streams)) != len(streams):
             raise ValueError("invalid_capture_streams")
-        self._admissions = {name: RawCaptureAdmission(max_age_s=max_age_s) for name in streams}
+        self._admissions = {name: RawCaptureAdmission(max_age_ms=max_age_ms) for name in streams}
         self._latest: dict[str, RawCaptureHeader] = {}
         self._boot = ""
         self._retired_boots: set[str] = set()

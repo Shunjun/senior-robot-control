@@ -8,19 +8,16 @@ scan_adapter:
   ros__parameters:
     use_sim_time: true
     body_frame: base_link
-    max_age_seconds: 0.8
     no_return_clear: false
 safety_scan_ingress:
   ros__parameters:
     use_sim_time: true
     body_frame: base_link
-    observation_max_age: 0.8
 scan_motion_node:
   ros__parameters:
     use_sim_time: true
     body_frame: base_link
-    scan_max_age: 0.8
-    max_interval: 0.4
+    max_interval_ms: 400.0
     max_linear_speed: 0.5
     max_yaw_rate: 0.8
     range_limit: 8.0
@@ -34,19 +31,14 @@ scan_motion_node:
     reanchor_distance: 0.12
     reanchor_yaw: 0.1
     min_rays: 100
-motion_fusion:
-  ros__parameters:
-    # Explicit launch selection only; no real/hardware implicit activation.
-    motion_core_profile: fortress-candidate-unvalidated-v1
-    use_sim_time: true
-    body_frame: base_link
-    wheel_frame: odom
-    imu_frame: imu_link
 safety_gate:
   ros__parameters:
+    wheel_frame: odom
     # fortress-candidate-unvalidated-v1 requires localhost + simulated clock.
     # See simulation_motion_profile.py for individual evidence vs assumptions.
     motion_core_profile: fortress-candidate-unvalidated-v1
+    startup_learning_front_occlusion_stop: true
+    startup_learning_rear_occlusion_stop: true
     use_sim_time: true
     # This earlier motion-only fixture deliberately does not qualify low obstacles.
     depth_policy: laser_only
@@ -57,4 +49,4 @@ command_node:
   ros__parameters:
     use_sim_time: true
     command_rate_hz: 10.0
-    command_ttl_seconds: 0.3
+    command_ttl_ms: 300.0

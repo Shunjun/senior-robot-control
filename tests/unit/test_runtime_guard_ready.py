@@ -29,7 +29,7 @@ def ready(request, monkeypatch):
     node._runtime_subscription = ReadySubscription(object, node._on_motion_runtime, depth=5)
     node._consuming_runtime = False
     node._motion_runtime = MotionRuntimeReceiver()
-    node._arbiter = Arbiter("route-sim", 0.3)
+    node._arbiter = Arbiter("route-sim", 300)
     node._manual_ingress = ManualIngress("route-sim", "command-boot", ttl=0.3)
     node._manual_target = None
     node._navigation_source = None
@@ -39,7 +39,7 @@ def ready(request, monkeypatch):
     node._close_reason = "prepared"
     node.get_parameter = lambda _: N(value="route-sim")
     node.get_publishers_info_by_topic = lambda _: [
-        N(node_name="safety_gate", node_namespace="/", endpoint_gid=b"gate")
+        N(node_name="motion_reporter", node_namespace="/", endpoint_gid=b"gate")
     ]
     barriers = []
     node._final_publisher = N(publish=barriers.append)
@@ -61,20 +61,20 @@ def enqueue(rig, packet, info=None):
     rig.subscription.ready.append((N(data=json.dumps(packet)), {} if info is None else info))
 
 
-def test_guard_consumes_captured_ready199_before_sampling_current_state(ready):
-    assert ready.node._motion_runtime.current(ready.clock.mono) is None
+def test_report_is_historical_without_a_150ms_motion_gate(ready):
+    cached = ready.node._motion_runtime.value
+    assert ready.node._motion_runtime.current(ready.clock.mono) is cached
+    assert not hasattr(cached, "valid_until")
     enqueue(ready, CASE["packets"][1])
     assert ready.node.task_motion_allowed(continuing=True)
-    value = ready.node._motion_runtime.value
-    assert value.sequence == 199
-    assert value.sampled_steady == CASE["packets"][1]["sampled_steady"]
-    assert value.valid_until == CASE["packets"][1]["valid_until"]
-    assert value.evidence_deadline_steady == CASE["packets"][1]["evidence_deadline_steady"]
+    assert ready.subscription.takes == 0
+    ready.node._consume_ready_runtime()
+    assert ready.node._motion_runtime.value.sequence == 199
 
 
-def test_no_ready_packet_keeps_expired_cache_rejected(ready):
-    assert not ready.node.task_motion_allowed(continuing=True)
-    assert ready.node._motion_runtime.value.sequence == 198
+def test_missing_report_does_not_close_command_entry(ready):
+    ready.node._motion_runtime.value = None
+    assert ready.node.task_motion_allowed(continuing=True)
 
 
 def test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver(ready):
@@ -86,7 +86,7 @@ def test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver(ready):
     other = copy.deepcopy(packet)
     other.update(sequence=200, robot_id="other-robot")
     enqueue(ready, other)
-    assert ready.node.task_motion_allowed(continuing=True)
+    ready.node._consume_ready_runtime()
     assert ready.node._motion_runtime.value is expected
 
 
@@ -106,9 +106,8 @@ def manual_target(ready):
         now,
     )
     assert target is not None
-    assert ingress.view(now).state is ManualAuthorityState.ACTIVE
     ready.node._manual_target = target
-    return receipt.authority_id
+    return target
 
 
 def negative(mode):
@@ -121,38 +120,31 @@ def negative(mode):
     return packet
 
 
-@pytest.mark.parametrize(
-    "mode,reason", [("feedback_stop", "expiry"), ("execution_fault", "fault"), ("estop", "estop")]
-)
-def test_negative_runtime_executes_original_revocation_and_barrier(ready, mode, reason):
-    authority = manual_target(ready)
+@pytest.mark.parametrize("mode", ["feedback_stop", "execution_fault", "estop"])
+def test_negative_report_does_not_revoke_live_source_or_publish_barrier(ready, mode):
+    target = manual_target(ready)
     enqueue(ready, negative(mode))
-    assert not ready.node.task_motion_allowed(continuing=True)
-    assert ready.node._manual_target is None
-    assert ready.node._manual_ingress.view(ready.clock.mono).state is ManualAuthorityState.CLOSED
-    assert ready.barriers[-1].close_reason == reason
-    assert ready.barriers[-1].source_id == authority
+    ready.node._consume_ready_runtime()
+    assert ready.node._manual_target is target
+    assert ready.node._manual_ingress.view(ready.clock.mono).state is ManualAuthorityState.ACTIVE
+    assert not ready.barriers
     assert ready.node._motion_runtime.value.mode == mode
-    if mode == "estop":
-        assert ready.node._arbiter.estop_latched
+    assert not ready.node.task_motion_allowed(continuing=True)  # Manual ownership still wins.
 
 
-def test_reentrant_guard_does_not_drain_past_negative_callback(ready):
-    manual_target(ready)
-    ready.clock.mono = CASE["packets"][2]["sampled_steady"] + 0.001
-    nested = []
+def test_reentrant_report_consumer_does_not_reenter(ready):
+    original = ready.node._observe_retirement_core
+    calls = []
 
-    def publish(message):
-        ready.barriers.append(message)
-        nested.append(ready.node.task_motion_allowed(continuing=True))
+    def observe(*args):
+        calls.append(ready.subscription.takes)
+        ready.node._consume_ready_runtime()
+        original(*args)
 
-    ready.node._final_publisher = N(publish=publish)
-    enqueue(ready, negative("feedback_stop"))
-    enqueue(ready, CASE["packets"][2])
-    assert ready.node.task_motion_allowed(continuing=True)
-    assert nested == [False]
-    assert ready.node._manual_target is None
-    assert ready.node._manual_ingress.view(ready.clock.mono).state is ManualAuthorityState.CLOSED
+    ready.node._observe_retirement_core = observe
+    enqueue(ready, CASE["packets"][1])
+    ready.node._consume_ready_runtime()
+    assert calls == [1]
     assert not ready.node._consuming_runtime
 
 
@@ -166,20 +158,20 @@ def test_continuous_arrival_is_bounded_by_original_qos_depth(ready):
         return N(data=json.dumps(packet)), {}
 
     ready.subscription.take_message = take
-    assert ready.node.task_motion_allowed(continuing=True)
+    ready.node._consume_ready_runtime()
     assert len(calls) == ready.module.qos_profile_sensor_data.depth == 5
     assert ready.node._motion_runtime.value.sequence == 203
 
 
-def test_predicate_time_is_sampled_after_original_callback_work(ready):
-    original = ready.node._settle_local_reset
+def test_old_report_deadline_does_not_reappear_after_callback_work(ready):
+    original = ready.node._observe_retirement_core
 
-    def settle():
-        original()
-        ready.clock.mono = CASE["packets"][1]["valid_until"] + 0.001
+    def settle(*args):
+        original(*args)
+        ready.clock.mono += 60
 
-    ready.node._settle_local_reset = settle
+    ready.node._observe_retirement_core = settle
     enqueue(ready, CASE["packets"][1])
-    assert not ready.node.task_motion_allowed(continuing=True)
-    assert ready.node._motion_runtime.value.sequence == 199
-    assert ready.node._motion_runtime.value.valid_until == CASE["packets"][1]["valid_until"]
+    ready.node._consume_ready_runtime()
+    assert ready.node.task_motion_allowed(continuing=True)
+    assert ready.node._motion_runtime.current(ready.clock.mono).sequence == 199

@@ -1,0 +1,111 @@
+group unit files 149 2026-11-16T18:17:27Z
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/pytest -q -p no:cacheprovider --tb=short --junitxml=/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-unit.xml --basetemp=/tmp/startup-final-validation-pytest-unit --durations=20 tests/unit/test_acceptance_manual_exchange.py tests/unit/test_agent_config.py tests/unit/test_agent_ports.py tests/unit/test_arbiter.py tests/unit/test_body_return_geometry_only.py tests/unit/test_cloud_epoch.py tests/unit/test_common_sensor_composition.py tests/unit/test_constraint_scheduling.py tests/unit/test_continuous_scan_control.py tests/unit/test_control_cadence_gate.py tests/unit/test_control_clock_domains.py tests/unit/test_control_process_resources.py tests/unit/test_coverage.py tests/unit/test_database_ownership.py tests/unit/test_deferred_sources.py tests/unit/test_degraded_manual_speed.py tests/unit/test_depth_producer.py tests/unit/test_direct_navigation.py tests/unit/test_directional_constraints.py tests/unit/test_docker_start_helper.py tests/unit/test_drive_challenge.py tests/unit/test_egress_receipt.py tests/unit/test_estimation_review_contracts.py tests/unit/test_geometry.py tests/unit/test_gps_course.py tests/unit/test_heartbeat_wire.py tests/unit/test_home.py tests/unit/test_independent_motion.py tests/unit/test_ipc_frames.py tests/unit/test_laser_reference_publication.py tests/unit/test_learning_cleanup.py tests/unit/test_learning_client.py tests/unit/test_learning_core_surface_review.py tests/unit/test_learning_dual_clock.py tests/unit/test_learning_frozen_reference.py tests/unit/test_learning_record_owner.py tests/unit/test_learning_service_linux.py tests/unit/test_learning_surface_review.py tests/unit/test_limited_manual_rearm.py tests/unit/test_limited_motion_core.py tests/unit/test_live_map_geometry.py tests/unit/test_localization.py tests/unit/test_logging_diagnostics.py tests/unit/test_manual_authority.py tests/unit/test_manual_session.py tests/unit/test_map_archive.py tests/unit/test_map_references.py tests/unit/test_motion_cli_lifecycle.py tests/unit/test_motion_contracts.py tests/unit/test_motion_controller.py tests/unit/test_motion_core_chain.py tests/unit/test_motion_core_event_time.py tests/unit/test_motion_core_exit_deadline.py tests/unit/test_motion_core_handoff.py tests/unit/test_motion_core_perception.py tests/unit/test_motion_core_startup.py tests/unit/test_motion_core_stop_fallback.py tests/unit/test_motion_fusion.py tests/unit/test_motion_fusion_replay.py tests/unit/test_motion_guard_to_owner.py tests/unit/test_motion_launch_profile.py tests/unit/test_motion_path_convergence.py tests/unit/test_motion_reference_backlog.py tests/unit/test_motion_ros_twist_output.py tests/unit/test_motion_sources.py tests/unit/test_motion_state_machine.py tests/unit/test_motion_temporal.py tests/unit/test_motion_trajectory.py tests/unit/test_native_motion_observation_adapter.py tests/unit/test_native_output_protocol.py tests/unit/test_native_sensor_age_boundary.py tests/unit/test_navigation_collision_qualification.py tests/unit/test_navigation_command_clock.py tests/unit/test_navigation_completion_handoff.py tests/unit/test_navigation_core_output.py tests/unit/test_navigation_limits.py tests/unit/test_navigation_overlay.py tests/unit/test_navigation_small_intent.py tests/unit/test_occupancy.py tests/unit/test_optional_motion_inputs.py tests/unit/test_perception.py tests/unit/test_perception_window_union.py tests/unit/test_pose_space_estimation.py tests/unit/test_prepared_control.py tests/unit/test_protocol.py tests/unit/test_raw_capture.py tests/unit/test_rear_fan_optimization.py tests/unit/test_rear_geometry_equivalence.py tests/unit/test_reference_clock_frontier.py tests/unit/test_reference_nanosecond_boundary.py tests/unit/test_relative_interval_regressions.py tests/unit/test_rgbd_body_motion.py tests/unit/test_rgbd_bounded_inbox.py tests/unit/test_rgbd_candidate_codec.py tests/unit/test_rgbd_coordinator.py tests/unit/test_rgbd_frame_builder.py tests/unit/test_rgbd_joiner.py tests/unit/test_rgbd_message_contract.py tests/unit/test_rgbd_parent_ledger.py tests/unit/test_rgbd_producer_engine.py tests/unit/test_rgbd_runtime.py tests/unit/test_rgbd_spawn_worker.py tests/unit/test_rgbd_sync_ordering.py tests/unit/test_rgbd_transport_config.py tests/unit/test_runtime_diagnostics.py tests/unit/test_runtime_guard_ready.py tests/unit/test_runtime_identity.py tests/unit/test_safety_freshness.py tests/unit/test_scan_geometry_scope.py tests/unit/test_scan_matcher_replay.py tests/unit/test_schedule.py tests/unit/test_self_filter.py tests/unit/test_semantic_candidates.py tests/unit/test_sensor_timing.py tests/unit/test_settings.py tests/unit/test_shared_sensor_cpp.py tests/unit/test_sim_contract.py tests/unit/test_simulation_clock_overlay.py tests/unit/test_simulation_reference.py tests/unit/test_simulation_reference_admission.py tests/unit/test_simulation_video.py tests/unit/test_software_estop_owner.py tests/unit/test_spawn_detector.py tests/unit/test_startup_learning.py tests/unit/test_startup_learning_chain.py tests/unit/test_startup_learning_cycle.py tests/unit/test_startup_learning_feasibility.py tests/unit/test_startup_learning_latch.py tests/unit/test_startup_learning_review.py tests/unit/test_startup_learning_timed.py tests/unit/test_startup_visibility.py tests/unit/test_static_tf_binding.py tests/unit/test_static_tf_wire.py tests/unit/test_stopping_fused_input.py tests/unit/test_task_lifecycle.py tests/unit/test_task_terminal_release.py tests/unit/test_terminal_collection_capacity.py tests/unit/test_terminal_native_channel.py tests/unit/test_terminal_release_collection.py tests/unit/test_terminal_release_wire.py tests/unit/test_tick_evaluation.py tests/unit/test_unified_estimator.py tests/unit/test_unified_motion_runtime.py tests/unit/test_vehicle_motion_analyze.py tests/unit/test_vehicle_motion_calibrate.py tests/unit/test_vehicle_motion_fixture.py tests/unit/test_vehicle_state.py tests/unit/test_websocket_link.py tests/unit/test_wheel_imu_stillness.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:27Z
+..........FF............................................................ [  3%]
+........................................................................ [  7%]
+........................................................................ [ 11%]
+....................................................................s... [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+.....................................s......................FF.F........ [ 26%]
+........................................................................ [ 30%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+.........................F.............................................. [ 42%]
+........................................................................ [ 46%]
+..................................................ssssss................ [ 49%]
+.............................................................ss......... [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 65%]
+........................................................................ [ 69%]
+.......................................................................s [ 72%]
+........................................................................ [ 76%]
+........................................................................ [ 80%]
+........................................................................ [ 84%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 96%]
+........................................................................ [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+_______ test_composition_starts_reporting_without_adapter_identity[True] _______
+tests/unit/test_agent_config.py:121: in test_composition_starts_reporting_without_adapter_identity
+    from agent_fakes import FakeConnector, FakeLink, until
+E   ModuleNotFoundError: No module named 'agent_fakes'
+______ test_composition_starts_reporting_without_adapter_identity[False] _______
+tests/unit/test_agent_config.py:121: in test_composition_starts_reporting_without_adapter_identity
+    from agent_fakes import FakeConnector, FakeLink, until
+E   ModuleNotFoundError: No module named 'agent_fakes'
+________ test_completed_stop_uses_raw_wheel_imu_stillness_without_body _________
+tests/unit/test_limited_manual_rearm.py:102: in test_completed_stop_uses_raw_wheel_imu_stillness_without_body
+    c, now, deadlines = stopped_controller()
+                        ^^^^^^^^^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:83: in stopped_controller
+    ctx = context(now)
+          ^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:37: in context
+    p.lag,
+    ^^^^^
+E   AttributeError: 'SimulationMotionProfile' object has no attribute 'lag'
+____________ test_epoch_change_and_missing_model_remove_permission _____________
+tests/unit/test_limited_manual_rearm.py:110: in test_epoch_change_and_missing_model_remove_permission
+    c, now, _ = stopped_controller()
+                ^^^^^^^^^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:83: in stopped_controller
+    ctx = context(now)
+          ^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:37: in context
+    p.lag,
+    ^^^^^
+E   AttributeError: 'SimulationMotionProfile' object has no attribute 'lag'
+__________ test_static_stop_model_does_not_manufacture_raw_stillness ___________
+tests/unit/test_limited_manual_rearm.py:166: in test_static_stop_model_does_not_manufacture_raw_stillness
+    c, now, _ = stopped_controller()
+                ^^^^^^^^^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:83: in stopped_controller
+    ctx = context(now)
+          ^^^^^^^^^^^^
+tests/unit/test_limited_manual_rearm.py:37: in context
+    p.lag,
+    ^^^^^
+E   AttributeError: 'SimulationMotionProfile' object has no attribute 'lag'
+______ test_unified_feedback_does_not_repeat_pair_qualification_at_output ______
+tests/unit/test_motion_core_event_time.py:111: in test_unified_feedback_does_not_repeat_pair_qualification_at_output
+    assert state["healthy"] and state["fault_revision"] == 0, (
+E   AssertionError: ("test_unified_feedback_does_not_repeat_pair_qualification_at_output.<locals>.bounded() got an unexpected keyword argument 'visibility'", [])
+E   assert (False)
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-unit.xml -
+============================= slowest 20 durations =============================
+26.57s call     tests/unit/test_relative_interval_regressions.py::test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_seconds
+8.07s call     tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]
+8.05s call     tests/unit/test_motion_core_chain.py::test_native_recovery_then_intent_and_local_release_are_actually_consumed
+7.97s call     tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]
+7.84s call     tests/unit/test_learning_core_surface_review.py::test_nonempty_complete_core_action_saves_and_filters_reference[none]
+7.67s call     tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]
+7.65s call     tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]
+7.46s call     tests/unit/test_learning_core_surface_review.py::test_loaded_disabled_direction_allows_over_50_percent_nonempty_learning[front]
+7.31s call     tests/unit/test_limited_motion_core.py::test_release_rearm_prepared_neutral_new_gesture_and_second_release
+7.23s call     tests/unit/test_learning_core_surface_review.py::test_loaded_disabled_direction_allows_over_50_percent_nonempty_learning[rear]
+7.01s call     tests/unit/test_startup_learning_chain.py::test_startup_flows_through_real_tick_and_safety_checks[True]
+6.80s call     tests/unit/test_learning_core_surface_review.py::test_nonempty_complete_core_action_saves_and_filters_reference[right]
+6.63s call     tests/unit/test_learning_core_surface_review.py::test_nonempty_complete_core_action_saves_and_filters_reference[left]
+5.87s call     tests/unit/test_motion_controller.py::test_combined_wheel_limit_reaches_curvature_preserving_target_without_tick_clipping
+5.66s call     tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]
+5.10s call     tests/unit/test_learning_core_surface_review.py::test_nonempty_complete_core_action_saves_and_filters_reference[both]
+4.70s call     tests/unit/test_continuous_scan_control.py::test_slow_scan_with_real_wheel_pose_anchors_and_mailbox_eventually_drives[0.12-10]
+4.49s call     tests/unit/test_simulation_clock_overlay.py::test_engine_and_two_plugins_share_one_real_dynamic_epoch_library
+4.01s call     tests/unit/test_continuous_scan_control.py::test_slow_scan_with_real_wheel_pose_anchors_and_mailbox_eventually_drives[0.08-20]
+3.86s call     tests/unit/test_startup_learning_chain.py::test_startup_flows_through_real_tick_and_safety_checks[False]
+=========================== short test summary info ============================
+FAILED tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[True]
+FAILED tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[False]
+FAILED tests/unit/test_limited_manual_rearm.py::test_completed_stop_uses_raw_wheel_imu_stillness_without_body
+FAILED tests/unit/test_limited_manual_rearm.py::test_epoch_change_and_missing_model_remove_permission
+FAILED tests/unit/test_limited_manual_rearm.py::test_static_stop_model_does_not_manufacture_raw_stillness
+FAILED tests/unit/test_motion_core_event_time.py::test_unified_feedback_does_not_repeat_pair_qualification_at_output
+6 failed, 1858 passed, 15 skipped in 268.69s (0:04:28)
+
+EXIT 1 AT 2026-11-16T18:21:58Z

@@ -1,0 +1,5 @@
+tests/e2e/test_drive.py
+tests/e2e/test_gps.py
+tests/e2e/test_home.py
+tests/e2e/test_maps.py
+tests/e2e/test_occlusion.py

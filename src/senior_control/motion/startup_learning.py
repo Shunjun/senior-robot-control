@@ -1,250 +1,346 @@
-"""One start-owned attempt. This owner proposes targets, never actuator commands."""
+"""Run-owned timed scan collection; no displacement integration or actuator ownership."""
+
+from __future__ import annotations
 
 import math
-import os
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
+from uuid import uuid4
 
-from senior_control.models import Pose2D
-from senior_control.motion.learning_pose_history import LearningPose, LearningPoseHistory
-from senior_control.sensors.policy import default_policy
+from senior_control.motion.learning_record import LearningRecord, Phase
+from senior_control.sensors.time_proof import MeasurementTime, SourceTime
+
+if TYPE_CHECKING:
+    from senior_control.safety.self_filter import FilteredObservation
+    from senior_control.safety.self_learning import SelfReturnModel
+
+
+class LearningSession(Protocol):
+    error: str | None
+
+    @property
+    def record(self) -> LearningRecord | None: ...
+    @property
+    def ready(self) -> bool: ...
+    def reserve_action(self) -> bool: ...
+    def phase(self, phase: Phase, reason: str, segment_id: str | None = None) -> None: ...
+    def action(self, start_ns: int, interval_ns: int, *, finished: bool) -> None: ...
+    def complete(self, points: tuple[tuple[float, float], ...]) -> None: ...
 
 
 class StartupLearning:
-    active_states = {"initializing", "sampling", "moving", "braking", "validating"}
+    active_states = {"initializing", "sampling", "moving", "braking", "validating", "unconfirmed"}
+    duration_s = 3.0
 
-    def __init__(self, claim: Path | None, *, linear_error_mps=0.02, yaw_error_rps=0.02):
-        self.state = "disabled"
-        self.reason = "no_program_start_context"
-        self.distance = 0.0
-        self.motion_error = 0.0
-        self.position_error = 0.0
-        self.yaw_error = 0.0
-        self.pose_history = LearningPoseHistory()
-        self.validation_after_ros = None
-        self._frame_stamps = set()
-        self.previous_ros = None
-        self.motion_radius = 0.0
-        self.linear_error_mps = linear_error_mps
-        self.yaw_error_rps = yaw_error_rps
-        self.independent_distance = 0.0
-        self.yaw = 0.0
-        self.pose_x = 0.0
-        self.pose_y = 0.0
-        self.pose_yaw = 0.0
-        self.started = None
-        self.previous = None
-        self.key = None
-        self.samples = 0
+    def __init__(
+        self,
+        session: LearningSession | None,
+    ) -> None:
+        self.session = session
+        self.state = "disabled" if session is None else "initializing"
+        self.reason = "no_program_start_context" if session is None else "learning_record_pending"
+        self.validation_after_steady: float | None = None
+        self.started: float | None = None
+        self.deadline: float | None = None
+        self.motion_withdrawn = False
+        self.segment_id = uuid4().hex
+        self.resample_required = False
+        self._last_now: float | None = None
+        self._first_now: float | None = None
+        self._stationary = False
+        self._frame_keys: set[tuple[str, str, int]] = set()
+        self._capture_origin: tuple[str, str] | None = None
+        self._capture_frontier = 0.0
+        self._capture_measurement: MeasurementTime | None = None
+        self._segment_floor = 0.0
         self.validation_samples = 0
-        self.motion_verified = True
-        self.generation = None
-        if claim is not None:
-            try:
-                fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "w") as file:
-                    file.write("attempt_claimed_before_motion\n")
-                    file.flush()
-                    os.fsync(file.fileno())
-                self.state, self.reason = "initializing", "start_owned_attempt"
-            except FileExistsError:
-                self.state, self.reason = "interrupted", "previous_attempt_no_automatic_retry"
-            except OSError:
-                self.state, self.reason = "failed", "claim_unavailable"
+        self._motion_frames = 0
+        self._record_seen = False
+        self._action_granted = False
+        self._reservation_requested = False
+        self._completion_pending = False
+        self._reported_finished = False
+        self._last_output: float | None = None
+        self._last_output_deadline = 0.0
+        self._submitted_duration = 0.0
+        self._stop_confirmed = False
 
     @property
-    def active(self):
+    def active(self) -> bool:
         return self.state in self.active_states
 
     @property
-    def provisional(self):
-        return self.state in {"sampling", "moving", "braking", "validating"}
+    def provisional(self) -> bool:
+        return self.state in {"sampling", "moving"} and not self.motion_withdrawn
 
     @property
-    def velocity(self):
-        return min(0.05, max(0.0, self.distance_remaining)) if self.state == "moving" else 0.0
+    def velocity(self) -> float:
+        return 0.05 if self.state == "moving" and not self.motion_withdrawn else 0.0
+
+    def prepare_action(self) -> bool:
+        # Only the final owner calls this after selecting a qualified nonzero
+        # learning output. Waiting under estop/obstacles does not consume a run.
+        if self._action_granted:
+            return self.state == "moving" and not self.motion_withdrawn
+        if (
+            self.state == "moving"
+            and not self.motion_withdrawn
+            and self.session is not None
+            and self.session.ready
+        ):
+            self._reservation_requested = True
+            self._action_granted = self.session.reserve_action()
+        return self._action_granted
 
     @property
-    def distance_remaining(self):
-        return 0.15 - self.distance
+    def action_permitted(self) -> bool:
+        return self._action_granted and self.state == "moving" and not self.motion_withdrawn
 
-    def interrupt(self, reason):
+    @property
+    def motion_started(self) -> bool:
+        return self.started is not None
+
+    def _phase(self) -> None:
+        if self.session is None:
+            return
+        phases: dict[str, Phase] = {
+            "initializing": "not_started",
+            "sampling": "sampling",
+            "moving": "moving",
+            "braking": "validating",
+            "validating": "validating",
+            "unconfirmed": "unconfirmed",
+            "completed": "completed",
+            "interrupted": "failed",
+            "failed": "failed",
+        }
+        phase = phases.get(self.state)
+        if phase is not None and phase != "completed":
+            self.session.phase(phase, self.reason, self.segment_id)
+
+    def _restore(self) -> None:
+        if self.session is None:
+            return
+        record = self.session.record
+        if record is None:
+            if self.session.error is not None:
+                self.state, self.reason = "unconfirmed", "learning_record_unavailable"
+            return
+        if record.phase == "completed" and record.model is not None:
+            self.state, self.reason = "completed", "restored_completed_record"
+            self.motion_withdrawn = True
+            self._completion_pending = False
+        elif not self._record_seen and record.action.consumed:
+            self.motion_withdrawn = True
+            self.state, self.reason = "validating", "consumed_action_no_replay"
+        self._record_seen = True
+        if self.session.error is not None and self.active:
+            self.motion_withdrawn = True
+            self.state, self.reason = "unconfirmed", "learning_record_unavailable"
+
+    def _accrue_output(self, now: float) -> None:
+        if self._last_output is not None:
+            end = min(now, self._last_output_deadline)
+            self._submitted_duration += max(0.0, end - self._last_output)
+            self._last_output = now if now < self._last_output_deadline else None
+
+    def motion_emitted(self, now: float, *, deadline: float | None = None) -> None:
+        """Called only AFTER the private output frame was successfully submitted."""
+        if not math.isfinite(now) or now < 0 or not self._action_granted:
+            raise ValueError("learning_output_clock_or_reservation")
+        self._accrue_output(now)
+        if self.started is None:
+            self._segment("learning_collection_started")
+            self.started, self.deadline = now, now + self.duration_s
+            if self.session is not None:
+                self.session.action(round(now * 1e9), 0, finished=False)
+        assert self.deadline is not None
+        self._last_output = now
+        self._last_output_deadline = min(
+            self.deadline, self.deadline if deadline is None else deadline
+        )
+
+    @property
+    def action_tail_active(self) -> bool:
+        return self.started is not None and not self._stop_confirmed
+
+    def output_stopped(self, now: float) -> None:
+        self._accrue_output(now)
+        self._last_output = None
+
+    def _finish_action(self) -> None:
+        if self.started is not None and not self._reported_finished and self.session is not None:
+            self.session.action(
+                round(self.started * 1e9),
+                min(3_000_000_000, round(self._submitted_duration * 1e9)),
+                finished=True,
+            )
+            self._reported_finished = True
+
+    def hold_motion(self) -> None:
+        if self.motion_started or self._reservation_requested:
+            self.motion_withdrawn = True
+            self.state, self.reason = "braking", "learning_output_withdrawn"
+
+    def interrupt(self, reason: str) -> None:
         if self.active:
+            if reason in {"control_takeover", "other_control_source"}:
+                self._stop_confirmed = True
+            self.motion_withdrawn = True
             self.state, self.reason = "interrupted", reason
+            self._finish_action()
+            self._phase()
 
-    def advance(self, estimate, wheel, *, now, stationary):
+    def evidence_gap(self, reason: str) -> None:
+        if self.active:
+            self._segment(reason)
+
+    def _segment(self, reason: str) -> None:
+        self.segment_id = uuid4().hex
+        self._segment_floor = 0.0 if self._last_now is None else self._last_now
+        self.resample_required = True
+        self.validation_samples = 0
+        self._motion_frames = 0
+        self._frame_keys.clear()
+        self._capture_origin = None
+        self._capture_measurement = None
+        self.reason = reason
+
+    def advance(self, wheel: float | None, *, now: float, stationary: bool) -> None:
+        self._restore()
         if not self.active:
             return
-        if self.started is not None and (now < self.started or now - self.started > 30):
-            self.state, self.reason = "failed", "learning_time_budget"
-            return
-        if estimate is None or not estimate.healthy:
-            if self.state != "initializing":
-                self.interrupt("motion_feedback_unavailable")
-            return
-        if self.generation is not None and estimate.generation != self.generation:
-            self.interrupt("motion_generation_changed")
-            return
-        self.generation = estimate.generation
-        axis, gyro = estimate.vx, estimate.wz
         if (
-            axis.value is None
-            or gyro.value is None
-            or now >= min(axis.deadline_steady, gyro.deadline_steady)
+            not math.isfinite(now)
+            or now < 0
+            or (self._last_now is not None and now < self._last_now)
         ):
-            if self.state != "initializing":
-                self.interrupt("motion_axis_unavailable")
+            self.interrupt("learning_monotonic_clock_regressed")
             return
-        key = tuple((r.family, r.epoch, r.sequence) for a in (axis, gyro) for r in a.roots)
-        if key == self.key:
-            return
-        self.key = key
-        if self.state == "initializing":
-            self.samples = self.samples + 1 if stationary else 0
-            if self.samples >= 5:
-                self.state, self.reason = "sampling", "physical_interior_prior"
-                self.started = now
-            self.previous = now
-            self.previous_ros = estimate.computed_ros
-            self._record_pose(estimate, stationary)
-            return
-        steady_gap = now - self.previous if self.previous is not None else 0
-        dt = estimate.computed_ros - self.previous_ros if self.previous_ros is not None else 0
-        self.previous, self.previous_ros = now, estimate.computed_ros
-        if dt < 0 or steady_gap < 0 or steady_gap >= default_policy().hard_age_s:
-            self.interrupt("motion_integration_gap")
-            return
-        if self.state in {"moving", "braking", "validating"}:
-            self.distance += max(0.0, axis.value) * dt
-            self.yaw += gyro.value * dt
-            independent = estimate.independent_axes
-            lateral = getattr(estimate, "vy", None)
-            valid = (
-                independent is not None
-                and all(a.observed for a in independent)
-                and lateral is not None
-                and lateral.observed
-                and lateral.independent
-                and now < min(lateral.deadline_steady, *(a.deadline_steady for a in independent))
-            )
-            # Wheel/IMU-only progress is an estimate, never independent proof.
-            if valid:
-                v = independent[0].value
-                linear_error = math.hypot(
-                    independent[0].error
-                    if independent[0].error is not None
-                    else self.linear_error_mps,
-                    lateral.error if lateral.error is not None else self.linear_error_mps,
-                )
-                yaw_error = (
-                    independent[1].error if independent[1].error is not None else self.yaw_error_rps
-                )
-                self.position_error += linear_error * dt
-                self.yaw_error += yaw_error * dt
-                self.motion_error = self.position_error + self.motion_radius * self.yaw_error
-                from senior_control.models import Pose2D
-                from senior_control.motion.kinematics import compose, exponential
+        self._last_now = now
+        if self._first_now is None:
+            self._first_now = now
+        self._stationary = stationary and wheel is not None and math.isfinite(wheel)
+        self._accrue_output(now)
+        if self.deadline is not None and now >= self.deadline:
+            if self.state == "moving":
+                self.state, self.reason = "braking", "action_window_finished"
+            self._finish_action()
+        if (
+            self._stationary
+            and self.started is not None
+            and (self.motion_withdrawn or (self.deadline is not None and now >= self.deadline))
+        ):
+            self._stop_confirmed = True
+        if self.state == "initializing" and self._stationary:
+            self.state, self.reason = "sampling", "physical_interior_prior"
+        if self.state == "braking" and self._stationary:
+            self.state, self.reason = "validating", "post_motion_validation"
+            self.validation_after_steady = now
+        if self.state == "validating" and self.validation_after_steady is None and self._stationary:
+            self.validation_after_steady = now
+        self._phase()
 
-                pose = compose(
-                    Pose2D(self.pose_x, self.pose_y, self.pose_yaw),
-                    exponential(v, lateral.value, independent[1].value, dt),
-                )
-                self.pose_x, self.pose_y, self.pose_yaw = pose.x, pose.y, pose.yaw
-                self.independent_distance += max(0.0, v) * dt
-                if wheel is None or abs(v - wheel) > max(0.03, abs(v) * 0.35):
-                    self.motion_verified = False
-            else:
-                self.motion_verified = False
-            if abs(self.yaw) > 0.05 or axis.value < -0.01:
-                self.interrupt("not_straight_forward")
-            elif self.state == "moving" and self.distance >= 0.148:
-                self.state, self.reason = "braking", "target_distance_reached"
-            if self.state == "braking" and stationary:
-                self.state, self.reason = "validating", "post_motion_validation"
-                self.validation_after_ros = estimate.computed_ros
-        self._record_pose(estimate, stationary)
-
-    def _record_pose(self, estimate, stationary):
-        self.pose_history.add(
-            LearningPose(
-                estimate.computed_ros,
-                Pose2D(self.pose_x, self.pose_y, self.pose_yaw),
-                self.position_error,
-                self.yaw_error,
-                stationary,
-                self.motion_verified,
-                estimate.generation,
-            )
+    def frame(
+        self, model: SelfReturnModel, observation: FilteredObservation, *, capture: SourceTime
+    ) -> None:
+        self._restore()
+        if (
+            not self.active
+            or self._completion_pending
+            or self.validation_samples >= 5
+            and self.state == "unconfirmed"
+        ):
+            return
+        if self._first_now is None or capture.end_steady < max(
+            self._first_now, self._segment_floor
+        ):
+            return
+        origin = capture.clock_domain, capture.source_epoch
+        physical = capture.measurement
+        changed_source = self._capture_origin is not None and self._capture_origin != origin
+        changed_axis = self._capture_measurement is not None and not physical.same_axis(
+            self._capture_measurement
         )
-
-    def frame(self, model, observation):
-        stamp = observation.scan.stamp
-        key = round(stamp * 1e9)
-        sample = self.pose_history.at(stamp)
-        if sample is None or key in self._frame_stamps or not self.provisional:
+        if changed_source or changed_axis:
+            if capture.end_steady < self._capture_frontier:
+                return  # Late old segment cannot reset the current one.
+            self._segment("scan_evidence_segment_changed")
+            self._segment_floor = capture.start_steady
+        self._capture_origin = origin
+        self._capture_measurement = physical
+        self._capture_frontier = max(self._capture_frontier, capture.end_steady)
+        if self.resample_required or model.segment_id != self.segment_id:
+            model.begin_segment(self.segment_id)
+            self.resample_required = False
+        key = capture.clock_domain, capture.source_epoch, capture.sequence
+        if key in self._frame_keys:
             return
-        if len(self._frame_stamps) >= 2048:
-            self.interrupt("learning_frame_budget")
-            return
-        self._frame_stamps.add(key)
-        retained = model.observe(
-            observation,
-            sample.pose,
-            pose_error_m=sample.position_error_m,
-            pose_yaw_error_rad=sample.yaw_error_rad,
-            force=self.state in {"sampling", "validating"},
+        collecting = (
+            self.started is not None
+            and self.deadline is not None
+            and self.started <= capture.start_steady <= capture.end_steady < self.deadline
         )
-        if self.state == "sampling" and len(model.frames) >= 5:
-            self.state, self.reason = "moving", "learning_forward"
+        if self.started is None or collecting:
+            if not model.observe(observation, capture=capture, segment_id=self.segment_id):
+                return
+            self._frame_keys = set(model.frame_keys)
+            if collecting:
+                self._motion_frames += 1
+            elif self.state == "moving":
+                model.retain_recent(5)
+                self._frame_keys = set(model.frame_keys)
+            if self.state == "sampling" and len(model.frames) >= 5:
+                self.state, self.reason = "moving", "learning_forward_window"
         elif (
-            self.state == "validating"
-            and retained
-            and self.validation_after_ros is not None
-            and stamp >= self.validation_after_ros
-            and sample.stationary
+            self.state in {"validating", "unconfirmed"}
+            and self.validation_after_steady is not None
+            and capture.start_steady >= self.validation_after_steady
+            and self._stationary
         ):
+            # These fresh post-stop frames confirm the collection lifecycle,
+            # never reclassify or revoke the surface measured during the action.
+            self._frame_keys.add(key)
             self.validation_samples += 1
             if self.validation_samples >= 5:
-                count = model.validate(
-                    independent_motion=(self.motion_verified and self.independent_distance >= 0.08),
+                count = model.validate() if self._motion_frames else 0
+                no_interior = any(model.frames) and not any(
+                    model.interior(point) for points in model.frames for point in points
                 )
-                self.state = (
-                    "completed"
-                    if count
-                    or not any(model.interior(p) for _, points in model.frames for p in points)
-                    else "ambiguous"
-                )
-                self.reason = "verified_local_returns" if count else "classification_unverified"
+                if self._motion_frames and (count or no_interior):
+                    if self.session is not None:
+                        self.session.complete(model.learned)
+                        self._completion_pending = True
+                        self.reason = "learning_completion_pending_commit"
+                else:
+                    self.state, self.reason = "unconfirmed", "classification_unverified"
+        self._phase()
 
-    def summary(self, learned_count=0):
+    def summary(self, learned_count: int = 0) -> dict[str, object]:
         return dict(
             state=self.state,
             reason=self.reason,
-            estimated_distance_m=self.distance,
-            independent_distance_m=self.independent_distance,
-            independent_motion_verified=self.motion_verified and self.independent_distance >= 0.08,
-            classification=(
-                "provisional"
-                if self.provisional
-                else "learned"
-                if learned_count
-                else "ambiguous"
-                if self.state == "ambiguous"
-                else "prior"
-                if self.state == "initializing"
-                else "none"
+            action_elapsed_s=0.0
+            if self.started is None or self._last_now is None
+            else min(3.0, max(0.0, self._last_now - self.started)),
+            action_consumed=bool(
+                self.session and self.session.record and self.session.record.action.consumed
             ),
+            classification="provisional"
+            if self.provisional
+            else "learned"
+            if learned_count
+            else "unconfirmed"
+            if self.state == "unconfirmed"
+            else "prior"
+            if self.state == "initializing"
+            else "none",
             learned_local_returns=learned_count,
         )
 
 
 def start_environment(environment: dict[str, str], root: Path) -> dict[str, str]:
-    """Called once by the program-start owner; children inherit the same claim.
-
-    A fresh explicit start is a fresh attempt. Reconnection and child restarts
-    retain the run's consumed path; no component may manufacture a new run id.
-    """
-    from uuid import uuid4
-
+    """One explicit program start allocates one shared-record identity."""
     result = dict(environment)
     result["SENIOR_STARTUP_LEARNING_CLAIM"] = str(root / (".startup-learning-" + uuid4().hex))
     return result

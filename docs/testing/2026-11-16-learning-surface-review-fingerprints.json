@@ -1,0 +1,224 @@
+{
+  "task_id": "task_dfab27221feb",
+  "dispatch_id": "ctx_977083177671",
+  "startup_snapshot": "/tmp/frozen-learning-review-start",
+  "files": [
+    {
+      "path": "docs/superpowers/specs/2026-11-16-learning-shared-state-design.md",
+      "status": "modified",
+      "startup_sha256": "9e1b00201ddd136e7a681955c01230c31299163d01543e2ae90dd2245bc48175",
+      "final_sha256": "e33645345c243f2c260b1756f247a57dc8fba8a032b4ade91d3bc4de106fbda3"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-16-self-return-matching-design.md",
+      "status": "modified",
+      "startup_sha256": "4b34044531f401f89ba2158523b2bdeed2f8dccc981d5baab0921c09c4c95309",
+      "final_sha256": "d11d94618814a3af51f57be39c7a02b5f67f915e987b9fed7b428a31779d2f58"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/frozen-learning-extra-raw-gap-probe.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "7baf35f6862cc78d5776a2a11f6ff10953c4aaabd50c28be3eed7ed2f6c64b10"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/frozen-learning-extra-raw-gap-probe.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "56b8685eea7b2ceb021135cf870c2c33e26cca77f18ab4c9b051c992c7b72f1f"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/learning-core-contrast.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "4d3e5fce0b4aa35143a39d48538109dcf4bdbd5d0597c924f14398f756861de2"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/learning-core-contrast.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "c9378ed7bcb0fb96f17804888e71e6a71fc23bc84fa284e6da8a100e3661d3c8"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-before.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "83a59b8b405442ecd76de0d829bb5c5d334897b2c8bf8e7d7d2ddbcbd984a31c"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-before.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "5ce0b0962e5f19f97ae09e4decaf3c02827b01597778116d71016d6a3997ef0f"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-exact-gap.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "05d4cbfa14e8c7e9ed1b2b7da809b4231cd4829a38acee14b8b2641ff20927a9"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/original-gap-diagnostic.py.txt",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "8c7b962a3effb602dd760bf69a75e669b2acb774974ef3b70017d344ae418cd0"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "5a63cd40ca013d7ce1646c89460919946b1de1506c4812aa60f4c06e79895dd7"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "49cda5a1ea761a28c5cd8315b6448e8f8bb13fa50fa3c8f4742ec49852e4858f"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-format.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "8e93d18ae56550d4eef2feac77e6630617c7e169246e56e39c75d58b46167985"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-mypy.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "71144743c83babea384888a735db0c4daba3d4d7b7942b6839984bd5c21b52bb"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-physical-final.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "a6a9d7c7aa5df0a068667e266ad180cc24f20459a742917f196847e01b25fbd6"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-physical-final.xml",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "db7fd635fe65e7dae0b4302dc95362d43b2a2dffb9e206b9068bbec1813ee936"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-ruff.log",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-surface-review.md",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "d7075d907ad843c3e30711c86c9cb4b0340eedbf153356bca70eb5b1dd82e89b"
+    },
+    {
+      "path": "src/senior_control/motion/learning_record.py",
+      "status": "modified",
+      "startup_sha256": "64fa926a3acb8d0ee78665fafc9a6bb1b51c8935a27af85e51f6eebbf5ff663e",
+      "final_sha256": "609f993a6a55ed66834848a58a61c1947cca7f338906a9e13283a9bc039a6f02"
+    },
+    {
+      "path": "src/senior_control/runtime/learning_client.py",
+      "status": "modified",
+      "startup_sha256": "67de3d41f5ce8c8eed16c8a593d7458613d45bbc3e16d41325a541c611d548cf",
+      "final_sha256": "968e10b45cb714eb2845e23551b734f779cb5ea25b40c7b9cc00f0566329cbaa"
+    },
+    {
+      "path": "src/senior_control/runtime/learning_wire.py",
+      "status": "modified",
+      "startup_sha256": "8ececc9eac062ef233fcd3e1a74c6fb9fb672e36484b240f9f9402b3913d8834",
+      "final_sha256": "830f291f25c384981d06f2b152e73d51cb5b5c0719a55a7e569d9718384e8b93"
+    },
+    {
+      "path": "src/senior_control/safety/self_learning.py",
+      "status": "modified",
+      "startup_sha256": "eacc8529bb2a093c102e5430734929845f3b49878bb523d3b4ea4c4bfa5f23b9",
+      "final_sha256": "3da303a8a75af35910589c3e396b5248e05711e4238613d2a96e87c52ac88483"
+    },
+    {
+      "path": "tests/unit/test_learning_core_surface_review.py",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "761636fbdf717eadd4a47c50f4b5e27278d31c5838ba6ba45b79917d7585d644"
+    },
+    {
+      "path": "tests/unit/test_learning_frozen_reference.py",
+      "status": "modified",
+      "startup_sha256": "cdba5bd811b1ba8951c31cdc70a5f522c3adb87614ce37b26bcef50af86f2d63",
+      "final_sha256": "328b78e78f13892ef93bb76f1d46802ee2be453f1153471d5ec8866587048f62"
+    },
+    {
+      "path": "tests/unit/test_learning_record_owner.py",
+      "status": "modified",
+      "startup_sha256": "d6d5c9b0164e94af2d3b6852a321ecb1ddb6b31bac171ef22877a078f64626c7",
+      "final_sha256": "0adbc332ec6b639b887c4035785fc5a78096186f5e5efefc70cc5b3b1aaaa102"
+    },
+    {
+      "path": "tests/unit/test_learning_surface_review.py",
+      "status": "added",
+      "startup_sha256": null,
+      "final_sha256": "356ccd50f16a336db04d8442eac395069753a5932c8261cd781909182a20437c"
+    }
+  ],
+  "protected_and_unchanged_policy_files": [
+    {
+      "path": "ros2/src/senior_robot/senior_robot/native_receipt.py",
+      "startup_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "final_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "unchanged": true
+    },
+    {
+      "path": "tests/test_native_receipt_diagnostics.py",
+      "startup_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "final_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "unchanged": true
+    },
+    {
+      "path": "docs/reviews/2026-11-16-software-estop-owner.md",
+      "startup_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "final_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "unchanged": true
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/motion_core_output.py",
+      "startup_sha256": "464c9d4b09bdd475e9a5d33ba70c9f09d5b2153301aa04e03e931969d0a56adb",
+      "final_sha256": "464c9d4b09bdd475e9a5d33ba70c9f09d5b2153301aa04e03e931969d0a56adb",
+      "unchanged": true
+    },
+    {
+      "path": "src/senior_control/motion/stopping_input.py",
+      "startup_sha256": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc",
+      "final_sha256": "81fcc34b16720c85d2a0e09f49ac12912b3d0175019467a85e2563ba6db0fefc",
+      "unchanged": true
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/simulation_motion_profile.py",
+      "startup_sha256": "fe0fa1b300dff711851116a98bed055d8e5878f0a3fe8c44feef5d5aa7d64bb7",
+      "final_sha256": "fe0fa1b300dff711851116a98bed055d8e5878f0a3fe8c44feef5d5aa7d64bb7",
+      "unchanged": true
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/motion_core_perception.py",
+      "startup_sha256": "4d07cad83a1d946bdfb8e609aa68c36fd646d92d4d2ad00a9a94a8216a0c937b",
+      "final_sha256": "4d07cad83a1d946bdfb8e609aa68c36fd646d92d4d2ad00a9a94a8216a0c937b",
+      "unchanged": true
+    }
+  ],
+  "incremental_diff": {
+    "path": "docs/testing/2026-11-16-learning-surface-review-owned.diff",
+    "sha256": "28b0e0dcee633176815c741a123e33cf8962a05461cff0b64833fde1d2377025"
+  },
+  "evidence": {
+    "before": "4 failed, 2 passed; stride/seam/stable bridge",
+    "concentrated": "147 passed, 1 skipped in 59.23s",
+    "strengthened_physical_and_size_tests": "15 passed in 2.66s; test-only strengthening after batch",
+    "mypy": "4 source files passed",
+    "ruff": "All checks passed",
+    "format": "8 files already formatted"
+  },
+  "limits": [
+    "Original nonempty full core scenario still fails to issue action due to observed stopping-space deficit; not claimed passing",
+    "No parking-risk, uncertainty, perception or output policy changes",
+    "Target Linux IPC larger payload and ROS/vehicle remain unverified"
+  ]
+}

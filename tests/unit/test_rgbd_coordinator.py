@@ -2,6 +2,7 @@ import time
 from types import SimpleNamespace as NS
 
 import numpy as np
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 from test_independent_motion import scene
 
 from senior_control.vision.independent_motion import Profile
@@ -16,7 +17,21 @@ def capture(seq, shift=0):
     rgb = np.repeat(mono[:, :, None], 3, axis=2)
     stamp = 1_000_000_000 + seq * 100_000_000
     header = RawCaptureHeader(
-        stamp, stamp, 1.0 + seq * 0.1, "optical", "01", "02", "source", "boot", 1, seq, True, ""
+        stamp,
+        stamp,
+        1.0 + seq * 0.1,
+        "optical",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        seq,
+        True,
+        "",
+        timing=capture_time(
+            1.0 + seq * 0.1, sequence=max(1, seq), epoch="source", tick=(stamp) / 1e9
+        ),
     )
     image = NS(
         capture=header,

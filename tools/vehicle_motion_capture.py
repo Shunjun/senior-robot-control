@@ -234,7 +234,7 @@ async def capture(socket: Path, seconds: float, writer: TraceWriter) -> dict[str
     except (ImportError, RuntimeError) as exc:
         ros_error = f"ROS subscriptions unavailable: {type(exc).__name__}"
         writer.emit({"kind": "error", "component": "ros", "detail": ros_error})
-    client = IpcClient(socket, timeout=min(0.2, seconds))
+    client = IpcClient(socket, timeout_ms=(min(0.2, seconds)) * 1000)
     deadline, next_poll = time.monotonic() + seconds, time.monotonic()
     pending: asyncio.Task[dict[str, Any]] | None = None
     try:

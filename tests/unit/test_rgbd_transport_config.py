@@ -175,14 +175,14 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
         for item in description.args[0]
         if isinstance(item, actions.DeclareLaunchArgument)
     }
-    assert {"agent_socket", "robot_id", "safety_state_path"} <= declared
+    assert {"agent_socket", "robot_id"} <= declared
     group = next(item for item in description.args[0] if isinstance(item, actions.GroupAction))
     assert group.kwargs["scoped"] is True
     children = group.kwargs["actions"]
     assert isinstance(children[0], actions.OpaqueFunction)
     motion = next(item for item in children if isinstance(item, actions.IncludeLaunchDescription))
     forwarded = dict(motion.kwargs["launch_arguments"])
-    for name in ("agent_socket", "robot_id", "safety_state_path"):
+    for name in ("agent_socket", "robot_id"):
         assert forwarded[name].args == (name,)
     assert sum(isinstance(item, ros_actions.Node) for item in children) == 3
     context = SimpleNamespace(

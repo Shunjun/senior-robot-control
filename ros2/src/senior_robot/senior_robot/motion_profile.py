@@ -22,3 +22,27 @@ def select_motion_profile(
     return select_simulation_profile(
         name, simulated_clock=simulated_clock, localhost_only=localhost_only, domain_id=domain_id
     )
+
+
+def configure_startup_learning(
+    profile: HardwareMotionProfile | SimulationMotionProfile,
+    *,
+    front_stop: bool,
+    rear_stop: bool,
+) -> HardwareMotionProfile | SimulationMotionProfile:
+    """Apply typed ROS overrides after selecting the file or simulation profile."""
+    from dataclasses import replace
+
+    if type(front_stop) is not bool or type(rear_stop) is not bool:
+        raise ValueError("learning occlusion settings must be boolean")
+    values = dict(
+        startup_learning_front_occlusion_stop=front_stop,
+        startup_learning_rear_occlusion_stop=rear_stop,
+    )
+    if isinstance(profile, HardwareMotionProfile):
+        return profile.model_copy(update=values)
+    return replace(
+        profile,
+        startup_learning_front_occlusion_stop=front_stop,
+        startup_learning_rear_occlusion_stop=rear_stop,
+    )

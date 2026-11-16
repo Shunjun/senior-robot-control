@@ -39,21 +39,22 @@ class SemanticCoordinator:
     """Keep inference metadata in-process; invalidate it on source/epoch changes."""
 
     def __init__(
-        self, worker: SpawnInferenceWorker, *, registered_profile: bool, max_age_s: float
+        self, worker: SpawnInferenceWorker, *, registered_profile: bool, max_age_ms: float
     ) -> None:
-        if not math.isfinite(max_age_s) or not 0 < max_age_s <= default_policy().hard_age_s:
+        hard_age_ms = default_policy().hard_age_ms
+        if not math.isfinite(max_age_ms) or not 0 < max_age_ms <= hard_age_ms:
             raise ValueError("invalid_semantic_age")
         self._worker = worker
         self._registered = registered_profile
         # //Compatible: old age argument cannot impose an earlier sensor expiry.
-        self._max_age = default_policy().hard_age_s
+        self._max_age_ms = hard_age_ms
         self.epoch = uuid.uuid4().hex
         self._lineage: tuple[str, ...] | None = None
         self._issued: OrderedDict[int, tuple[BoundSemanticCandidate, BoundDetectionResult]] = (
             OrderedDict()
         )
         self._frames: OrderedDict[
-            int, tuple[RetainedFrame, ColorCapture, CameraInfoFrame, DepthSnapshot, str]
+            float, tuple[RetainedFrame, ColorCapture, CameraInfoFrame, DepthSnapshot, str]
         ] = OrderedDict()
 
     @property
@@ -82,10 +83,8 @@ class SemanticCoordinator:
             or rgb.image.stamp != rgb.stamp_ns / 1e9
             or (rgb.image.width, rgb.image.height) != (depth.width, depth.height)
             or not sensor_current(
-                stamp_ros=rgb.stamp_ns / 1e9,
-                received_ros=rgb.received_ros_ns / 1e9,
+                measured_steady=rgb.measurement_steady,
                 received_steady=rgb.received_steady,
-                now_ros=now_ros_ns / 1e9,
                 now_steady=now_steady,
             )
         ):
@@ -98,7 +97,7 @@ class SemanticCoordinator:
             registered_profile=self._registered,
             now_ros_ns=now_ros_ns,
             now_steady=now_steady,
-            max_age_s=self._max_age,
+            max_age_ms=self._max_age_ms,
         )
 
     def submit(
@@ -142,13 +141,15 @@ class SemanticCoordinator:
             depth_received_ros_ns=depth.received_ros_ns,
             rgb_received_steady=rgb.received_steady,
             depth_received_steady=depth.received_steady,
+            rgb_measurement_steady=rgb.measurement_steady,
+            depth_measurement_steady=depth.measurement_steady,
         )
         frame = RetainedFrame(
             identity, rgb.image, SampledGeometry(depth.stamp_ns / 1e9, depth.samples)
         )
         if not self._worker.submit(frame):
             return False
-        self._frames[rgb.stamp_ns] = (frame, rgb, info, depth, registration)
+        self._frames[rgb.measurement_steady] = (frame, rgb, info, depth, registration)
         while len(self._frames) > 4:
             self._frames.popitem(last=False)
         return True
@@ -157,13 +158,16 @@ class SemanticCoordinator:
         result = self._worker.take_result()
         if result is None:
             return None
-        retained = self._frames.pop(result.frame.identity.rgb_stamp_ns, None)
+        retained = self._frames.pop(result.frame.identity.rgb_measurement_steady, None)
         if (
             retained is None
             or retained[0] is not result.frame
             or result.frame.identity.source_epoch != self.epoch
             or not self._worker.result_qualified(
-                result, now_ros_ns=now_ros_ns, now_steady=now_steady, max_age_s=self._max_age
+                result,
+                now_ros_ns=now_ros_ns,
+                now_steady=now_steady,
+                max_age_ms=self._max_age_ms,
             )
         ):
             return None
@@ -193,7 +197,10 @@ class SemanticCoordinator:
         if issued is None or candidate.epoch != self.epoch:
             return False
         if not self._worker.result_qualified(
-            issued[1], now_ros_ns=now_ros_ns, now_steady=now_steady, max_age_s=self._max_age
+            issued[1],
+            now_ros_ns=now_ros_ns,
+            now_steady=now_steady,
+            max_age_ms=self._max_age_ms,
         ):
             return False
         try:

@@ -118,7 +118,7 @@ class MapArchive:
         home_waypoint_id: str | None = None,
         sensor_summary: tuple[tuple[str, str], ...] = (),
         max_uncompressed_bytes: int = MAX_BUNDLE_BYTES,
-        capture_timeout_seconds: float = 1.0,
+        capture_timeout_ms: float = 1000,
     ) -> None:
         self._pose_graph = pose_graph
         self._source_robot_id = source_robot_id
@@ -126,9 +126,9 @@ class MapArchive:
         self._home_waypoint_id = home_waypoint_id
         self._sensor_summary = sensor_summary
         self._max_uncompressed_bytes = max_uncompressed_bytes
-        if not math.isfinite(capture_timeout_seconds) or capture_timeout_seconds <= 0:
+        if not math.isfinite(capture_timeout_ms) or capture_timeout_ms <= 0:
             raise ValueError("map capture timeout must be finite and positive")
-        self._capture_timeout_seconds = capture_timeout_seconds
+        self._capture_timeout_seconds = capture_timeout_ms / 1000
         self._capture_work: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]] | None = None
 
     async def export_bundle(

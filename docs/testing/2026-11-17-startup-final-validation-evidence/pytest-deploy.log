@@ -1,0 +1,16 @@
+group deploy files 1 2026-11-16T18:22:44Z
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/pytest -q -p no:cacheprovider --tb=short --junitxml=/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-deploy.xml --basetemp=/tmp/startup-final-validation-pytest-deploy --durations=20 tests/deploy/test_jenkins_config.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:22:44Z
+........                                                                 [100%]
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-deploy.xml -
+============================= slowest 20 durations =============================
+2.23s call     tests/deploy/test_jenkins_config.py::test_credential_validation_and_compose_preserve_scrypt
+0.04s call     tests/deploy/test_jenkins_config.py::test_credential_rejects_truncated_scrypt_hash_without_logging_it
+0.03s call     tests/deploy/test_jenkins_config.py::test_diagnostics_redacts_credential_values
+
+(17 durations < 0.005s hidden.  Use -vv to show these durations.)
+8 passed in 2.34s
+
+EXIT 0 AT 2026-11-16T18:22:47Z

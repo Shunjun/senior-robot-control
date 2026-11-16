@@ -18,11 +18,11 @@ public:
   using Header = senior_motion_msgs::msg::RawCaptureHeader;
   enum class Match {exact, retired, missing};
 
-  explicit CaptureLedger(size_t capacity = 128, double age_limit = 1.0)
-  : capacity_(capacity), age_limit_(age_limit)
+  explicit CaptureLedger(size_t capacity = 128, double age_limit_ms = 1000.0)
+  : capacity_(capacity), age_limit_(age_limit_ms / 1000)
   {
-    if (capacity == 0 || capacity > 128 || !std::isfinite(age_limit) ||
-        age_limit <= 0.0 || age_limit > 1.0) {
+    if (capacity == 0 || capacity > 128 || !std::isfinite(age_limit_ms) ||
+        age_limit_ms <= 0.0 || age_limit_ms > 1000.0) {
       throw std::invalid_argument("invalid capture ledger limits");
     }
   }
@@ -55,7 +55,7 @@ public:
     if (stream >= entries_.size() || !header.valid || header.sequence == 0 ||
         !std::isfinite(now_steady) || !std::isfinite(header.received_steady) ||
         now_steady < header.received_steady ||
-        now_steady - header.received_steady > age_limit_ ||
+        now_steady - (static_cast<double>(header.timing.capture_end_steady_ns) / 1e9) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     auto & values = entries_[stream];
     expire(stream, now_steady);
@@ -102,7 +102,7 @@ private:
     auto & values = entries_[stream];
     while (!values.empty() &&
            (now_steady < values.front().received_steady ||
-            now_steady - values.front().received_steady > age_limit_)) {
+            now_steady - (static_cast<double>(values.front().timing.capture_end_steady_ns) / 1e9) > age_limit_)) {
       retire_front(stream);
     }
   }

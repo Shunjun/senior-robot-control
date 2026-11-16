@@ -10,10 +10,17 @@ def observation(source, values, stamp=9.9, quality=1.0, root=None, sequence=1):
         stamp,
         (
             Origin(
-                root or source, "boot", sequence, stamp, max(10.0, stamp), 20.0 + max(0, stamp - 10)
+                root or source,
+                "boot",
+                sequence,
+                stamp,
+                max(10.0, stamp),
+                20.0 + max(0, stamp - 10),
+                measurement_steady=(stamp + 10.0),
             ),
         ),
         quality,
+        measured_steady=(stamp + 10.0),
     )
 
 
@@ -138,8 +145,14 @@ def test_interval_conflict_uses_latest_original_endpoint_not_predicted_timestamp
     from dataclasses import replace
 
     older = observation("interval", (0.4, None, None), 9.8)
-    end = replace(older.roots[0], stamp_ros=9.99)
-    interval = replace(older, measured_ros=9.895, roots=older.roots + (end,), interval_half_s=0.095)
+    end = replace(older.roots[0], stamp_ros=9.99, measurement_steady=19.99)
+    interval = replace(
+        older,
+        measured_ros=9.895,
+        measured_steady=19.895,
+        roots=older.roots + (end,),
+        interval_half_s=0.095,
+    )
     e = MotionEstimation()
     e.ingest(interval)
     e.ingest(observation("point", (0.9, None, None), 9.95))
@@ -196,11 +209,20 @@ def test_new_producer_clock_context_arriving_before_local_reset_is_not_discarded
     e = MotionEstimation()
     e.ingest(observation("wheel", (0.4, None, 0.1)))
     e.estimate(10, 20)
-    root = Origin("wheel", "new-clock", 1, 4.9, 5.0, 20.1)
-    e.ingest(MotionObservation("wheel", (0.3, None, 0.1), 4.9, (root,)))
-    # The local clock has not caught up; this source cannot be used yet.
-    e.estimate(10, 20.15)
+    root = Origin("wheel", "new-clock", 1, 4.9, 5.0, 20.1, measurement_steady=20.0)
+    e.ingest(
+        MotionObservation(
+            "wheel",
+            (0.3, None, 0.1),
+            4.9,
+            (root,),
+            measured_steady=((root,))[-1].measurement_steady,
+            measurement=((root,))[-1].coordinate,
+        )
+    )
+    # ROS correction does not postpone a fresh physical source or change generation.
+    assert e.estimate(10, 20.15).healthy
     result = e.estimate(5.0, 20.2)
-    assert result.healthy and result.generation == 2
+    assert result.healthy and result.generation == 1
     assert result.vx.roots == (root,)
     assert result.vx.deadline_steady <= 21.0

@@ -1,0 +1,11 @@
+{
+  "src/senior_control/agent/main.py": "0f621b6307f505678eb5929afcf50fa2ccf0ef4ac556e2dfb2ee0bd79677e1a3",
+  "src/senior_control/agent/composition.py": "2bfb29e593020ae937e61637de5ae7c832312d0332614d6ce7f0557ef43cbd73",
+  "src/senior_control/runtime/ipc.py": "eb34a2aec5a0e0c3adedd16a0510b2c93cc03376a3b53bbdc3d50cfaa05b4a83",
+  "src/senior_control/runtime/supervisor.py": "c9bcaf6f6e310ca76ed21374ff9ba80cdb41bf6ae4df978e3a59d25a3b32e635",
+  "src/senior_control/runtime/lifecycle_events.py": "a121ea95a5c64210d9ef6e2db46ddf5db10434128d29ecdc2a15d60d5ca91fef",
+  "src/senior_control/docker_start_helper.py": "ae5d84a2098715aab81520532451194de99f3ae4919bffd105d017d477fbfb2d",
+  "src/senior_control/simulation_cli.py": "dd3c562944ee3312d551bac1b5f16b5bd825f0c9cb83070882b855e10f2b54d2",
+  "ros2/src/senior_robot/launch/safety_motion.launch.py": "6d8bc4f50ae0bc9b0278ef5bb1e64ba8a1aad35c3728a70ae21b8aec85bb43f7",
+  "ros2/src/senior_robot/launch/simulation_motion.launch.py": "85657f01a3f83387f6a2636efbaa0d8809c753ce47a6720511c79f5d110d76cb"
+}

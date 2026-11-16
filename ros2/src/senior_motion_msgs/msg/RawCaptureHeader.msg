@@ -14,3 +14,6 @@ uint64 capture_generation
 uint64 sequence
 bool valid
 string<=64 reason
+
+# Original producer proof; bridge receipt does not replace its clock or sequence.
+senior_motion_msgs/SourceTime timing

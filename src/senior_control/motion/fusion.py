@@ -16,6 +16,7 @@ from senior_control.motion.temporal import (
     TemporalResolver,
     Values,
 )
+from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def covariance_intersection(m1: float, p1: float, m2: float, p2: float) -> tuple[float, float]:
@@ -71,9 +72,9 @@ class ComponentEstimate:
 @dataclass(frozen=True)
 class CurrentReference:
     components: Values
-    source_times_ros: tuple[float | None, float | None, float | None]
-    requested_ros: float
-    predicted_at_ros: float | None
+    source_times_steady: tuple[float | None, float | None, float | None]
+    requested_steady: float
+    predicted_at_steady: float | None
     reason: str
 
 
@@ -81,8 +82,8 @@ class CurrentReference:
 class SourceHealth:
     source: Source
     ready: bool
-    age_ros_s: float
-    age_steady_s: float
+    measurement_age_s: float
+    receipt_age_s: float
     valid_until_steady: float
     epoch: str
     sequence: int
@@ -90,8 +91,8 @@ class SourceHealth:
 
 @dataclass(frozen=True)
 class FusionSnapshot:
-    start_ros: float
-    end_ros: float
+    start_ros: float | None
+    end_ros: float | None
     average: BodyTwist | None
     components: tuple[ComponentEstimate, ...]
     statistical_covariance: tuple[float, ...] | None
@@ -105,6 +106,7 @@ class FusionSnapshot:
     original_covariances: tuple[tuple[Key, Covariance | None], ...]
     current_reference: CurrentReference
     source_health: tuple[SourceHealth, ...]
+    measurement_interval: MeasurementInterval | None = None
 
 
 @dataclass(frozen=True)
@@ -244,13 +246,16 @@ class NumericalFusion:
             if view is None or not view.ready:
                 continue
             o = view.observation.original
-            if isinstance(o, PointObservation) and 0 <= snapshot.now_ros - o.stamp_ros <= horizon:
+            if (
+                isinstance(o, PointObservation)
+                and 0 <= snapshot.now_steady - o.measurement_steady <= horizon
+            ):
                 values[axis] = o.values[index]
-                times[axis] = o.stamp_ros
+                times[axis] = o.measurement_steady
         return CurrentReference(
             (values[0], values[1], values[2]),
             (times[0], times[1], times[2]),
-            snapshot.now_ros,
+            snapshot.now_steady,
             None,
             "held_points_not_a_current_estimate_no_acceleration_model",
         )
@@ -356,12 +361,12 @@ class NumericalFusion:
                 for source, axis in sorted(blocked, key=lambda item: (item[0].value, item[1]))
             ),
             tuple(raw.items()),
-            self.current_reference(snapshot, resolver.config.prediction_horizon_s),
+            self.current_reference(snapshot, (resolver.config.prediction_horizon_ms / 1000)),
             tuple(
                 SourceHealth(
                     source,
                     view.ready,
-                    snapshot.now_ros - view.observation.original.end_ros,
+                    snapshot.now_steady - view.observation.original.end_steady,
                     snapshot.now_steady - view.observation.original.received_steady,
                     view.observation.valid_until_steady,
                     view.observation.original.epoch,
@@ -369,4 +374,5 @@ class NumericalFusion:
                 )
                 for source, view in snapshot.sources
             ),
+            window.measurement_interval,
         )

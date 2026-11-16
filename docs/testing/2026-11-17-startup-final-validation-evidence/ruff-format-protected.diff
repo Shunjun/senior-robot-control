@@ -1,0 +1,163 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/ruff format --check --diff --no-cache ros2/src/senior_robot/senior_robot/native_receipt.py tests/test_native_receipt_diagnostics.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:28Z
+--- [31mros2/src/senior_robot/senior_robot/native_receipt.py[0m
++++ [32mros2/src/senior_robot/senior_robot/native_receipt.py[0m
+@@ -311,12 +311,17 @@
+             rows = self._receipt_stats
+             self._receipt_stats = [_ReceiptStats() for _ in self.inputs]
+             self._receipt_report_at = now
+[31m-[0m[31m        active = [(entry, stats) for entry, stats in zip(self.inputs, rows)
+[0m[31m-[0m[31m                  if stats.frames or stats.attempted or stats.silence_timeouts]
+[0m[32m+[0m[32m        active = [
+[0m[32m+[0m[32m            (entry, stats)
+[0m[32m+[0m[32m            for entry, stats in zip(self.inputs, rows)
+[0m[32m+[0m[32m            if stats.frames or stats.attempted or stats.silence_timeouts
+[0m[32m+[0m[32m        ]
+[0m         if not active:
+             return
+[31m-[0m[31m        warning = any(s.rejected or s.negative_zero_gid or s.late_control or s.silence_timeouts
+[0m[31m-[0m[31m                      for _, s in active)
+[0m[32m+[0m[32m        warning = any(
+[0m[32m+[0m[32m            s.rejected or s.negative_zero_gid or s.late_control or s.silence_timeouts
+[0m[32m+[0m[32m            for _, s in active
+[0m[32m+[0m[32m        )
+[0m         summary = "; ".join(
+             f"topic={entry.topic} expected={entry.namespace.rstrip('/')}/{entry.writer} "
+             + " ".join(f"{name}={value}" for name, value in vars(stats).items())
+@@ -324,8 +329,10 @@
+         )
+         logger = self.node.get_logger()
+         emit = logger.warning if warning else logger.debug
+[31m-[0m[31m        emit(f"native DDS receipt summary window_s={elapsed:.3f} "
+[0m[31m-[0m[31m             f"overlapping_rejection_reasons=true; {summary}")
+[0m[32m+[0m[32m        emit(
+[0m[32m+[0m[32m            f"native DDS receipt summary window_s={elapsed:.3f} "
+[0m[32m+[0m[32m            f"overlapping_rejection_reasons=true; {summary}"
+[0m[32m+[0m[32m        )
+[0m 
+     def _drain(self):
+         process_diagnostics().pump(time.monotonic())
+
+--- [31mtests/test_native_receipt_diagnostics.py[0m
++++ [32mtests/test_native_receipt_diagnostics.py[0m
+@@ -1,4 +1,5 @@
+ """Offline SDR1 frames exercise the real receiver/drain without starting ROS."""
+[32m+[0m[32m
+[0m import importlib.util
+ import sys
+ import threading
+@@ -7,37 +8,44 @@
+ 
+ 
+ def test_native_receipt_reasons_and_periodic_summary(monkeypatch):
+[31m-[0m[31m    path = Path(__file__).parents[1] / 'ros2/src/senior_robot/senior_robot/native_receipt.py'
+[0m[31m-[0m[31m    spec = importlib.util.spec_from_file_location('receipt_probe', path)
+[0m[32m+[0m[32m    path = Path(__file__).parents[1] / "ros2/src/senior_robot/senior_robot/native_receipt.py"
+[0m[32m+[0m[32m    spec = importlib.util.spec_from_file_location("receipt_probe", path)
+[0m     module = importlib.util.module_from_spec(spec)
+     monkeypatch.setitem(sys.modules, spec.name, module)
+     spec.loader.exec_module(module)
+[31m-[0m[31m    serialization = ModuleType('rclpy.serialization')
+[0m[32m+[0m[32m    serialization = ModuleType("rclpy.serialization")
+[0m     serialization.deserialize_message = lambda data, cls: data
+[31m-[0m[31m    monkeypatch.setitem(sys.modules, 'rclpy.serialization', serialization)
+[0m[32m+[0m[32m    monkeypatch.setitem(sys.modules, "rclpy.serialization", serialization)
+[0m     clock = SimpleNamespace(now=100.0)
+[31m-[0m[31m    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock.now))
+[0m[31m-[0m[31m    monkeypatch.setattr(module, 'process_diagnostics', lambda: SimpleNamespace(
+[0m[31m-[0m[31m        pump=lambda *a: None, duration=lambda *a: None))
+[0m[32m+[0m[32m    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock.now))
+[0m[32m+[0m[32m    monkeypatch.setattr(
+[0m[32m+[0m[32m        module,
+[0m[32m+[0m[32m        "process_diagnostics",
+[0m[32m+[0m[32m        lambda: SimpleNamespace(pump=lambda *a: None, duration=lambda *a: None),
+[0m[32m+[0m[32m    )
+[0m     log, delivered = [], []
+     logger = SimpleNamespace(warning=log.append, debug=log.append)
+     group = module.NativeReceiptGroup.__new__(module.NativeReceiptGroup)
+     group.node = SimpleNamespace(get_logger=lambda: logger)
+[31m-[0m[31m    group.inputs = [module._Input(bytes, '/odom', 'driver', '/', 'sensor',
+[0m[31m-[0m[31m                                 lambda *a: delivered.append(a), lambda: None)]
+[0m[32m+[0m[32m    group.inputs = [
+[0m[32m+[0m[32m        module._Input(
+[0m[32m+[0m[32m            bytes, "/odom", "driver", "/", "sensor", lambda *a: delivered.append(a), lambda: None
+[0m[32m+[0m[32m        )
+[0m[32m+[0m[32m    ]
+[0m     group._lock = threading.Lock()
+     group._pending, group._invalid = {}, set()
+     group._queued_bytes = 0
+     group._failed = group._closed = False
+     group._started_at = group._receipt_report_at = 100.0
+     group._receipt_stats = [module._ReceiptStats()]
+[31m-[0m[31m    group._last_receipt = float('-inf')
+[0m[32m+[0m[32m    group._last_receipt = float("-inf")
+[0m 
+     class EndFrames(BaseException):
+         pass
+ 
+     def receive(*frames):
+[31m-[0m[31m        stream = bytearray(b''.join(frames))
+[0m[32m+[0m[32m        stream = bytearray(b"".join(frames))
+[0m[32m+[0m[32m
+[0m         def read(size):
+             if not stream:
+                 raise EndFrames
+@@ -45,6 +53,7 @@
+             del stream[:size]
+             assert len(result) == size
+             return result
+[32m+[0m[32m
+[0m         group._read = read
+         try:
+             group._receive()
+@@ -52,10 +61,14 @@
+             pass
+ 
+     def frame(kind, generation=1, sequence=0, stamp=100.0):
+[31m-[0m[31m        payload = b'x' if kind == 1 else b''
+[0m[31m-[0m[31m        gid = b'G' * 24 if kind != 0 else bytes(24)
+[0m[31m-[0m[31m        return module._HEADER.pack(b'SDR1', kind, 0, generation, sequence,
+[0m[31m-[0m[31m                                   int(stamp * 1e9), 0, 0, gid, len(payload)) + payload
+[0m[32m+[0m[32m        payload = b"x" if kind == 1 else b""
+[0m[32m+[0m[32m        gid = b"G" * 24 if kind != 0 else bytes(24)
+[0m[32m+[0m[32m        return (
+[0m[32m+[0m[32m            module._HEADER.pack(
+[0m[32m+[0m[32m                b"SDR1", kind, 0, generation, sequence, int(stamp * 1e9), 0, 0, gid, len(payload)
+[0m[32m+[0m[32m            )
+[0m[32m+[0m[32m            + payload
+[0m[32m+[0m[32m        )
+[0m 
+     # Stable heartbeat neither changes the barrier nor revokes a fresh sample.
+     receive(frame(1, sequence=1), frame(2))
+@@ -77,18 +90,19 @@
+     assert (stats.rejected, stats.expired, stats.delivery_wait_max_s) == (3, 1, 1.0)
+     # An invalid edge arriving during callbacks is independently observable.
+     group.inputs[0].callback = lambda *a: group._invalid.add(0)
+[31m-[0m[31m    receive(frame(1, generation=2, sequence=5, stamp=101),
+[0m[31m-[0m[31m            frame(1, generation=2, sequence=6, stamp=101))
+[0m[32m+[0m[32m    receive(
+[0m[32m+[0m[32m        frame(1, generation=2, sequence=5, stamp=101), frame(1, generation=2, sequence=6, stamp=101)
+[0m[32m+[0m[32m    )
+[0m     group._drain()
+     assert stats.invalid == 1 and stats.rejected == 4
+     assert not log  # No per-packet warnings.
+     clock.now = 105.0
+     group._drain()
+     assert len(log) == 1
+[31m-[0m[31m    assert 'expired=1' in log[0] and 'generation=1' in log[0]
+[0m[31m-[0m[31m    assert 'barrier=2' in log[0] and 'invalid=1' in log[0]
+[0m[31m-[0m[31m    assert 'delivery_wait_max_s=1.0' in log[0]
+[0m[31m-[0m[31m    assert 'negative_zero_gid=1' in log[0] and 'expected=/driver' in log[0]
+[0m[32m+[0m[32m    assert "expired=1" in log[0] and "generation=1" in log[0]
+[0m[32m+[0m[32m    assert "barrier=2" in log[0] and "invalid=1" in log[0]
+[0m[32m+[0m[32m    assert "delivery_wait_max_s=1.0" in log[0]
+[0m[32m+[0m[32m    assert "negative_zero_gid=1" in log[0] and "expected=/driver" in log[0]
+[0m     group._drain()
+     assert len(log) == 1
+     assert group._receipt_stats[0].attempted == 0
+
+2 files would be reformatted
+
+EXIT 1 AT 2026-11-16T18:17:28Z

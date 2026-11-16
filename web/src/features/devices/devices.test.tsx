@@ -459,6 +459,11 @@ class FakeSocket implements SocketLike {
   open(): void {
     this.readyState = 1;
     this.onopen?.();
+    const robot = new URL(this.url, 'http://local').searchParams.get('robot_id');
+    this.connection(3, robot ?? 'robot-alpha');
+  }
+  connection(epoch: number, robot = 'robot-alpha'): void {
+    this.receive({ v: 1, type: 'control.connection', robot_id: robot, connection_epoch: epoch });
   }
   receive(frame: unknown): void {
     this.onmessage?.({ data: typeof frame === "string" ? frame : JSON.stringify(frame) });
@@ -636,22 +641,25 @@ describe("RobotClient", () => {
     const { stale: _stale, last_synced_at: _synced, ...bare } = wirePayload;
     socket.receive(frame("snapshot", "robot-alpha", bare));
     expect(seen).toHaveLength(0);
-    await expect(client.request("control.acquire", {})).rejects.toMatchObject({ code: "offline" });
+    expect(client.vehicle.getSnapshot().manual_connected).toBe(true);
   });
 
-  it("sends a command with the epoch the snapshot frame delivered", async () => {
+  it("sends a command with the independent connection epoch", async () => {
     const { client, socket } = await connected({ snapshot: false });
+    socket.connection(3);
     socket.receive(frame("snapshot", "robot-alpha", wirePayload));
     void client.request("drive.stop", {}).catch(() => undefined);
     expect(socket.lastSent()["connection_epoch"]).toBe(AGENT_EPOCH);
+    socket.connection(4);
     socket.receive({ ...frame("snapshot", "robot-alpha", wirePayload), connection_epoch: 4 });
     void client.request("drive.stop", {}).catch(() => undefined);
     expect(socket.lastSent()["connection_epoch"]).toBe(4);
     client.disconnect();
   });
 
-  it("sends urgent commands before a snapshot and waits for a real response", async () => {
+  it("sends urgent commands before connection identity and waits for a real response", async () => {
     const { client, socket } = await connected({ snapshot: false });
+    socket.connection(0);
     await expect(client.request("control.acquire", {})).rejects.toMatchObject({ code: "offline" });
     const estop = client.request("safety.estop", {});
     const sent = socket.lastSent();
@@ -771,6 +779,7 @@ describe("cached snapshot delivered by the cloud", () => {
     await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
     const socket = FakeSocket.instances[0]!;
     act(() => socket.open());
+    act(() => socket.connection(9));
     act(() =>
       socket.receive({
         ...frame("snapshot", "robot-alpha", { ...wirePayload, last_synced_at: Date.now() / 1000 }),
@@ -892,9 +901,11 @@ it("does not repaint a current robot with an older agent epoch after an offline 
   const seen: RobotSnapshot[] = [];
   client.subscribe((value) => seen.push(value));
   try {
+    socket.connection(4);
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "new" }), connection_epoch: 4 });
     socket.receive({ ...frame("snapshot", "robot-alpha", { ...wirePayload, execution_status: "old" }), connection_epoch: 3 });
     expect(seen.map((value) => value.execution_status)).toEqual(["new"]);
+    socket.connection(0);
     socket.receive({
       ...frame("snapshot", "robot-alpha", {
         ...wirePayload,

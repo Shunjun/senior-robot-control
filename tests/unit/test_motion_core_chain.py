@@ -5,7 +5,9 @@ import math
 from concurrent.futures import Future
 from types import SimpleNamespace as N
 
+from control_process_test_support import capture_inputs, publish_inputs
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from source_time_test_support import capture_time, wire_time
 from test_motion_core_handoff import barrier, core  # noqa: F401 -- shared fake ROS fixture
 
 from senior_control.config import DeviceProfile
@@ -37,13 +39,34 @@ def feed(adapter, t, vx=0.0, wz=0.0):
         b"wheel",
         t,
         t,
+        timing=capture_time(t, sequence=round(t * 1e9)),
     )
     adapter.imu(
         N(header=N(stamp=timestamp(t), frame_id="base_link"), angular_velocity=N(z=wz)),
         b"imu",
         t,
         t,
+        timing=capture_time(t, sequence=round(t * 1e9)),
     )
+    captures = {}
+    if True:
+
+        def capture(stamp):
+            return N(
+                valid=True,
+                raw_gid="ab" * 24,
+                source_epoch="raw-scan",
+                bridge_boot_id="capture-boot",
+                capture_generation=1,
+                sequence=round(stamp * 1e9),
+                stamp=timestamp(stamp),
+                received_ros=timestamp(stamp),
+                received_steady=stamp,
+                frame_id="laser_link",
+                timing=wire_time(stamp, sequence=round(stamp * 1e9), epoch="raw-scan"),
+            )
+
+        captures = {"first_capture": capture(t - 0.05), "second_capture": capture(t)}
     adapter.laser(
         N(
             header=N(stamp=timestamp(t), frame_id="base_link"),
@@ -53,6 +76,7 @@ def feed(adapter, t, vx=0.0, wz=0.0):
             body_delta=N(x=vx * 0.05, y=0.0, theta=wz * 0.05),
             covariance=[0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001],
             response=0.9,
+            **captures,
         ),
         b"laser",
         t,
@@ -63,7 +87,7 @@ def feed(adapter, t, vx=0.0, wz=0.0):
 def test_native_recovery_then_intent_and_local_release_are_actually_consumed(core, monkeypatch):  # noqa: F811
     p = core.profile
     a = NativeObservations(p.admission(), p.temporal(), p.fusion())
-    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
+    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
     node = core.node
     node._depth_policy = "laser_only"
     node._scan_topology_ready = lambda: True
@@ -77,15 +101,17 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     def tick(t):
         now[0] = t
         feed(a, t)
-        core._on_reference(
-            N(data=strict_reference_json(a.snapshot(t, t))), {"publisher_gid": b"fusion"}
-        )
+        capture_inputs(core, N(data=strict_reference_json(a.snapshot(t, t))))
         node._scans = [
             N(
                 received=t,
                 received_ros=t,
+                measurement_steady=t,
                 stamp=t,
                 message=N(
+                    raw_capture=N(
+                        timing=wire_time(t, sequence=round(t * 100), epoch="scan-driver")
+                    ),
                     source_epoch="scan",
                     frame_id="laser_link",
                     sequence=round(t * 100),
@@ -101,6 +127,8 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
                 ),
             )
         ]
+        publish_inputs(core)
+        core.prefetch_scan()
         core.tick()
         return json.loads(node.publishers["/motion/runtime"].messages[-1].data)
 
@@ -135,3 +163,19 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     assert core.target.source == "idle"
     assert state["body_reference"] is not None
     assert core.sensors.latest.vx.error is None  # No invented physical error bound.
+
+
+def test_disabled_learning_prefetch_submits_latest_scan_before_control_tick(core, monkeypatch):  # noqa: F811
+    from control_process_test_support import LocalWorker
+    from senior_robot.motion_core_perception import ScanGeometry
+    from test_continuous_scan_control import scan
+
+    assert core.startup.state == "disabled" and core._learning_geometry is None
+    core.scan_geometry.worker.close()
+    core.scan_geometry = ScanGeometry(LocalWorker())
+    core.node._profile = lambda: DeviceProfile(self_mask_calibrated=True)
+    core.node._scans = [scan(10, 1)]
+    core.prefetch_scan()
+    assert core.scan_geometry.flight is not None and core.scan_geometry.flight.done()
+    assert core.scan_geometry.flight_key[:2] == ("scan", 1)
+    assert core._learning_geometry is None

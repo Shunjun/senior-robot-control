@@ -7,11 +7,15 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import capture_inputs, local_resources, make_core, read_inputs
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_capture_schedule
 from test_motion_reference_backlog import Node
 
-CASE = json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
+CASE = synthetic_capture_schedule(
+    json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
+)
 
 
 @pytest.fixture
@@ -28,8 +32,9 @@ def replay(monkeypatch):
     node.get_clock = lambda: N(now=lambda: N(nanoseconds=clock.ns))
     scan = CASE["scan"]["body"]
     node._scans[0].stamp = scan["stamp"]["sec"] + scan["stamp"]["nanosec"] / 1e9
-    core = module.MotionCoreOutput(node, SimulationMotionProfile(), ingress_factory=None)
-    core._on_reference(N(data=json.dumps(CASE["packet"])), {"publisher_gid": b"fusion"})
+    local_resources(monkeypatch)
+    core = make_core(monkeypatch, node, SimulationMotionProfile())
+    capture_inputs(core, N(data=json.dumps(CASE["packet"])))
     core._startup_motion_unconfirmed = False
     core.controller._last_now = clock.steady - 0.05
     yield N(core=core, clock=clock, node=node)
@@ -43,25 +48,38 @@ def replay(monkeypatch):
 def test_raw_original_nanosecond_boundary_is_shared_one_second(replay, age_ns, allowed):
     from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
 
-    replay.core.sensors.estimator = MotionEstimation()
-    replay.core.sensors.estimator.ingest(
+    replay.core.node._reception_test.sensors.estimator = MotionEstimation()
+    replay.core.node._reception_test.sensors.estimator.ingest(
         MotionObservation(
             "laser",
             (0.0, None, 0.0),
             5.0,
-            (Origin("laser", "boundary", 1, 5.0, 5.0, replay.clock.steady),),
+            (
+                Origin(
+                    "laser",
+                    "boundary",
+                    1,
+                    5.0,
+                    5.0,
+                    replay.clock.steady,
+                    measurement_steady=replay.clock.steady,
+                ),
+            ),
             independent=(True, True, True),
+            measured_steady=replay.clock.steady,
         )
     )
+    original = replay.clock.steady
+    replay.clock.steady += age_ns / 1e9
     replay.clock.ns = 5_000_000_000 + age_ns
-    body = replay.core._inputs(replay.clock.steady)[1]
+    body = read_inputs(replay.core, replay.clock.steady)[1]
     assert (body is not None) is allowed
     if body is not None:
-        assert body.deadline_steady <= replay.clock.steady + (1 - age_ns / 1e9)
+        assert body.deadline_steady <= original + 1
 
 
 def test_captured_raw_rows_remain_usable_beyond_old_150ms_cutoff(replay):
     replay.clock.ns = 5_200_000_000
-    _, body, _ = replay.core._inputs(replay.clock.steady)
+    _, body, _ = read_inputs(replay.core, replay.clock.steady)
     assert body is not None
     assert replay.core.sensors.independent is not None

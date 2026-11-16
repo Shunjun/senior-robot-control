@@ -15,9 +15,8 @@ def rig(monkeypatch):
 
     r = clock_fixture.__wrapped__(monkeypatch)
     node = r.node
-    node._arbiter = Arbiter("robot", 0.3)
+    node._arbiter = Arbiter("robot", 300)
     assert node._arbiter.begin_navigation("private-execution", r.clock.mono, task_epoch=1)
-    node._settle_local_reset = lambda: None
     node._publish_manual_target = lambda: False
     node.get_parameter = lambda _: N(value="robot")
     node._owner_boot = "command-owner"
@@ -34,19 +33,19 @@ def rig(monkeypatch):
 @pytest.mark.parametrize("vx,wz", [(0.0049, 0.0), (-0.0049, 0.0), (0.0, -0.0037), (0.0099, 0.0037)])
 def test_subcentimeter_nonzero_intent_keeps_exact_twist_and_original_deadline(rig, vx, wz):
     r = rig.r
-    r.msg.linear.x, r.msg.angular.z = vx, wz
+    r.msg.vx, r.msg.wz = vx, wz
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert len(rig.final) == 1 and not rig.barriers
     final = rig.final[0]
     assert Velocity(final.vx, final.wz) == Velocity(vx, wz)
     assert final.source_kind == "navigation" and final.sequence == 1
-    assert final.steady_deadline == pytest.approx(9.99 + 0.3)
+    assert final.steady_deadline == pytest.approx(10.0 + 0.3)
 
 
 def test_small_nonzero_keeps_existing_supersedence_interval(rig):
     r = rig.r
     r.node._navigation_source.last_forwarded = r.clock.mono
-    r.msg.linear.x = 0.0049
+    r.msg.vx = 0.0049
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert r.node._navigation_source.sequence == 0
     assert not rig.final and not rig.barriers
@@ -60,7 +59,7 @@ def test_exact_producer_zero_still_stops_immediately(rig):
     r.node._navigation_source.sequence = 1
     r.node._navigation_source.last_forwarded = r.clock.mono
     r.node._active = True
-    r.msg.linear.x = r.msg.angular.z = 0.0
+    r.msg.vx = r.msg.wz = 0.0
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert r.node._navigation_source.sequence == 2
     assert not rig.final and len(rig.barriers) == 1

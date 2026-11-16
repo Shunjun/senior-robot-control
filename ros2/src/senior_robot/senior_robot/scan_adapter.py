@@ -28,10 +28,10 @@ class ScanAdapter(Node):
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("scan_topic", "/safety/raw/scan")
         self.declare_parameter("filtered_candidate_topic", "/perception/scan_candidate")
-        self.declare_parameter("max_age_seconds", 0.5)
         self.declare_parameter("no_return_clear", False)
         self.body = self.get_parameter("body_frame").value
-        self.max_age = default_policy().hard_age_s
+        hard_age_ms = default_policy().hard_age_ms
+        self.max_age = hard_age_ms / 1000
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         # Self-return models belong to the motion output owner; transport never
         # trusts operator masks or labels all body-interior points as learned.
@@ -44,7 +44,7 @@ class ScanAdapter(Node):
             or not 0 < self.max_age <= 5.0
         ):
             raise ValueError("invalid body frame or max age")
-        self._admission = RawCaptureAdmission(max_age_s=self.max_age, hard_limit_s=5.0)
+        self._admission = RawCaptureAdmission(max_age_ms=hard_age_ms, hard_limit_ms=5000)
         self._bridge_gid = ""
         self._lineage = None
         self._epoch = uuid.uuid4().hex
@@ -160,7 +160,7 @@ class ScanAdapter(Node):
             else:
                 ranges = list(msg.ranges)
             for ray in filtered.rays:
-                if ray.kind in ("self", "ambiguous_self_overlap", "invalid"):
+                if ray.kind in ("self", "invalid"):
                     ranges[ray.index] = float("nan")
             result = BoundedFilteredScan()
             self._sequence += 1

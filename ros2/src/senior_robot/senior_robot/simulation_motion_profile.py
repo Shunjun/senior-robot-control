@@ -28,24 +28,24 @@ class SimulationMotionProfile:
     gps_input: OptionalMotionInput | None = None
     rgbd_input: OptionalMotionInput | None = None
     diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
-    max_age: float = field(default_factory=lambda: default_policy().hard_age_s)
     accel: float = 0.3
     decel: float = 0.3
     jerk: float = 1.0
     yaw_accel: float = 0.5
     yaw_decel: float = 0.5
     yaw_jerk: float = 2.0
-    lag: float = 0.2
+    lag_ms: float = 200.0
     cap: float = 25 / 18
     degraded_cap: float = 0.3
     yaw_cap: float = 2.0
     length: float = 0.674
     width: float = 0.552
+    startup_learning_front_occlusion_stop: bool = True
+    startup_learning_rear_occlusion_stop: bool = True
     linear_error: float = 0.1
     yaw_error: float = 0.1
     sensor_error: float = 0.02
     position_error: float = 0.03
-    model_seconds: float = 175.0
     # Independent passive-drive hypotheses, NOT wheel +/- sensor error bounds.
     assumed_body_cap: float = 1.52
     drive_linear_overshoot: float = 0.1
@@ -53,7 +53,7 @@ class SimulationMotionProfile:
     horizon_s: float = 12.0
     orientation_error_rad: float = 0.0
     lateral_drift_mps: float = 0.0
-    lateral_stop_s: float | None = None
+    lateral_stop_ms: float | None = None
     perception_basis: str = "simulation-only static scene; original raw scan"
     risk_basis: str = "unvalidated simulation passive drive/error envelope"
     brake_tracking_basis: str = "simulation-only whole drive stop family; unvalidated"
@@ -63,9 +63,13 @@ class SimulationMotionProfile:
     simulation_only: bool = True
     unvalidated: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        if (
+            type(self.startup_learning_front_occlusion_stop) is not bool
+            or type(self.startup_learning_rear_occlusion_stop) is not bool
+        ):
+            raise ValueError("learning occlusion settings must be boolean")
         # //Compatible: preserve old constructor shape, not its independent age policy.
-        object.__setattr__(self, "max_age", default_policy().hard_age_s)
 
     def perception_no_return_policy(self, frame_id: str, range_max: float) -> NoReturnPolicy:
         # //Compatible: ideal GPU lidar sensors6 6.9.0 SetClamp(false),
@@ -86,22 +90,25 @@ class SimulationMotionProfile:
         # using the same acceleration policy as hardware.
         return AccelerationModel(self.accel, self.yaw_accel, self.accel, self.yaw_accel)
 
+    @property
+    def max_age_ms(self) -> float:
+        return default_policy().hard_age_ms
+
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(
-            tuple(SourceRule(s, self.max_age, 0.4, 0.1, 2.0) for s in Source),
+            tuple(SourceRule(s, self.max_age_ms, 400, 0.1, 2.0) for s in Source),
             1,
-            0.0,
+            0,
             self.cap,
             self.degraded_cap,
-            self.max_age,
-            self.max_age,
+            self.max_age_ms,
+            self.max_age_ms,
             0.05,
-            self.max_age,
             16,
         )
 
     def temporal(self) -> TemporalConfig:
-        return TemporalConfig(2.0, 512, self.max_age, self.max_age, self.max_age, True)
+        return TemporalConfig(2.0, 512, self.max_age_ms, self.max_age_ms, self.max_age_ms, True)
 
     def fusion(self) -> FusionConfig:
         return FusionConfig((), self.cap, self.degraded_cap, 0.4, 0.2)
@@ -114,11 +121,8 @@ class SimulationMotionProfile:
             Velocity(0, 0),
             0.481154,
             1.52,
-            0.15,
             0.02,
             0.03,
-            5,
-            0.5,
             0.3,
             "unvalidated simulation-only passive drive hypothesis",
             True,

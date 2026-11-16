@@ -5,9 +5,11 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
+    RegisterEventHandler,
     SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -15,6 +17,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
 
 
@@ -69,9 +72,9 @@ def generate_launch_description():
     )
     return LaunchDescription(
         [
+            RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("robot_id"),
-            DeclareLaunchArgument("safety_state_path"),
             DeclareLaunchArgument("headless", default_value="true"),
             DeclareLaunchArgument("qualified_reference", default_value="false"),
             DeclareLaunchArgument(
@@ -134,19 +137,6 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="senior_robot",
-                executable="motion_fusion",
-                parameters=[
-                    params,
-                    ros_sensor_parameters(),
-                    {
-                        "motion_core_profile": ParameterValue(
-                            LaunchConfiguration("motion_core_profile"), value_type=str
-                        )
-                    },
-                ],
-            ),
-            Node(
                 package="senior_sensor_ingress",
                 executable="scan_receipt_node",
                 parameters=[params, ros_sensor_parameters()],
@@ -182,7 +172,6 @@ def generate_launch_description():
                     ros_sensor_parameters(),
                     {
                         "robot_id": robot_id,
-                        "safety_state_path": LaunchConfiguration("safety_state_path"),
                         "ipc_replace_existing_socket": False,
                         "use_sim_time": True,
                         "simulation_baseline_world": ParameterValue(world, value_type=str),

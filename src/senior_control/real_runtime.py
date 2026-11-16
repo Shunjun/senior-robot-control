@@ -7,29 +7,14 @@ import yaml
 from pydantic import ValidationError
 
 from senior_control.motion.hardware_profile import HardwareMotionProfile, load_hardware_profile
-from senior_control.sensors.policy import default_policy
 
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
+# Strip these old draft names before validation. They are not live consumers.
 RETIRED_PARAMETERS = {
-    "scan_adapter": {"self_mask_range_uncertainty"},
-    "motion_fusion": {
-        "max_yaw_error",
-        "startup_window",
-        "progress_stationary_max_yaw_rate",
-        "sensor_max_age",
-        "alignment_max_gap",
-        "imu_frame",
-        "pending_wait",
-        "wheel_motion_limit",
-        "stall_distance",
-        "progress_stationary_max_linear_speed",
-        "imu_zero_variance",
-        "yaw_limit",
-        "max_variance",
-        "lateral_limit",
-        "min_quality",
-    },
+    "scan_adapter": {"max_age_seconds"},
+    "safety_scan_ingress": {"observation_max_age"},
+    "scan_motion_node": {"scan_max_age"},
     "safety_gate": {
         "motion_max_variance",
         "evidence_topic",
@@ -41,7 +26,6 @@ RETIRED_PARAMETERS = {
         "physical_cap_context",
         "measurement_max_age",
         "max_yaw_rate",
-        "self_mask_range_uncertainty",
         "braking_deceleration",
         "hard_margin",
         "observation_max_age",
@@ -58,12 +42,11 @@ RETIRED_PARAMETERS = {
 
 REQUIRED_PARAMETERS = {
     "scan_receipt": ("scan_topic", "scan_ledger_max_age_s"),
-    "scan_adapter": ("body_frame", "max_age_seconds"),
-    "safety_scan_ingress": ("body_frame", "observation_max_age"),
+    "scan_adapter": ("body_frame",),
+    "safety_scan_ingress": ("body_frame",),
     "scan_motion_node": (
         "body_frame",
-        "scan_max_age",
-        "max_interval",
+        "max_interval_ms",
         "max_linear_speed",
         "max_yaw_rate",
         "range_limit",
@@ -78,14 +61,14 @@ REQUIRED_PARAMETERS = {
         "reanchor_yaw",
         "min_rays",
     ),
-    "motion_fusion": ("body_frame", "wheel_frame"),
     "safety_gate": (
         "body_frame",
+        "wheel_frame",
         "simulation_rate_hz",
         "footprint_xy",
         "depth_policy",
     ),
-    "command_node": ("command_rate_hz", "command_ttl_seconds"),
+    "command_node": ("command_rate_hz", "command_ttl_ms"),
 }
 
 
@@ -98,7 +81,6 @@ def real_parameter_defaults(
     they do not certify covariance, braking, installation, or sensor coverage.
     Nominal frames are from the WHEELTEC driver/URDF and require site verification.
     """
-    age = default_policy().hard_age_s
     common = {"use_sim_time": False, "body_frame": "base_link"}
     return {
         "scan_receipt": {
@@ -108,14 +90,12 @@ def real_parameter_defaults(
         },
         "scan_adapter": {
             **common,
-            "max_age_seconds": age,
             "no_return_clear": False,
         },
-        "safety_scan_ingress": {**common, "observation_max_age": age},
+        "safety_scan_ingress": {**common},
         "scan_motion_node": {
             **common,
-            "scan_max_age": age,
-            "max_interval": 0.4,
+            "max_interval_ms": 400.0,
             "max_linear_speed": profile.assumed_body_cap if profile else None,
             "max_yaw_rate": profile.yaw_cap if profile else None,
             "range_limit": 8.0,
@@ -130,12 +110,9 @@ def real_parameter_defaults(
             "reanchor_yaw": 0.1,
             "min_rays": 100,
         },
-        "motion_fusion": {
-            **common,
-            "wheel_frame": "odom_combined",
-        },
         "safety_gate": {
             **common,
+            "wheel_frame": "odom_combined",
             "simulation_rate_hz": 20.0,
             "depth_policy": "laser_only",
             "footprint_xy": (
@@ -156,7 +133,7 @@ def real_parameter_defaults(
         "command_node": {
             "use_sim_time": False,
             "command_rate_hz": 10.0,
-            "command_ttl_seconds": 0.3,
+            "command_ttl_ms": 300.0,
         },
     }
 
@@ -188,31 +165,26 @@ def load_real_parameters(
         params.pop("self_mask_calibrated", None)
         # //Compatible: hand-written filter polygons no longer drive production filtering.
         params.pop("self_mask_xy", None)
-        # //Compatible: the shipped real YAML used odom, but the WHEELTEC
-        # base_serial launch publishes /odom with header.frame_id=odom_combined.
-        if node == "motion_fusion" and params.get("wheel_frame") == "odom":
-            params["wheel_frame"] = "odom_combined"
-        # //Compatible: legacy YAML age copies now share one policy in memory.
-        for field in (
-            "max_age_seconds",
-            "observation_max_age",
-            "scan_max_age",
-            "sensor_max_age",
-            "measurement_max_age",
-            "alignment_max_gap",
-            "pending_wait",
+        # //Compatible: wheel-frame configuration moved with the sole receiver.
+        # Persisted real YAML used a motion_fusion section; no node or second
+        # estimation path is started for it. Preserve only its actual frame value.
+        explicit = entry.get("ros__parameters", {}) if isinstance(entry, dict) else {}
+        if node == "safety_gate" and (
+            not isinstance(explicit, dict) or "wheel_frame" not in explicit
         ):
-            if field in params:
-                params[field] = default_policy().hard_age_s
+            legacy_entry = value.get("motion_fusion", {})
+            legacy = (
+                legacy_entry.get("ros__parameters", {}) if isinstance(legacy_entry, dict) else {}
+            )
+            frame = (
+                legacy.get("wheel_frame", params["wheel_frame"])
+                if isinstance(legacy, dict)
+                else params["wheel_frame"]
+            )
+            params["wheel_frame"] = "odom_combined" if frame == "odom" else frame
         result[node] = params
-        # Response-related duplicates must retain the model's single value.
-        if profile is not None:
-            owned = {
-                "scan_adapter": ("max_age_seconds",),
-                "safety_scan_ingress": ("observation_max_age",),
-                "scan_motion_node": ("scan_max_age", "max_linear_speed", "max_yaw_rate"),
-            }
-            for field in owned.get(node, ()):
+        if profile is not None and node == "scan_motion_node":
+            for field in ("max_linear_speed", "max_yaw_rate"):
                 if params.get(field) != defaults[node][field]:
                     errors.append(
                         f"{node}.{field}: modify the owning hardware profile, not a duplicate"
@@ -230,14 +202,18 @@ def load_real_parameters(
     # silently claim required depth is included in the T4 sweep.
     if result["safety_gate"].get("depth_policy") != "laser_only":
         errors.append("safety_gate.depth_policy: shared core currently supports laser_only")
-    if result["safety_gate"].get("output_topic", "/cmd_vel") != "/cmd_vel":
-        errors.append("safety_gate.output_topic must stay /cmd_vel (sole actuator owner)")
+    if (
+        result["safety_gate"].get("output_topic", "/control/actuator_target")
+        != "/control/actuator_target"
+    ):
+        errors.append(
+            "safety_gate.output_topic must stay /control/actuator_target (sole actuator owner)"
+        )
     for node in ("command_node", "safety_gate"):
         p = result[node]
         for key, expected in (("final_command_topic", "/safety/final_command"),):
             if p.get(key, expected) != expected:
                 errors.append(f"{node}.{key} must stay {expected}")
-    result["safety_gate"]["wheel_frame"] = result["motion_fusion"]["wheel_frame"]
     if errors:
         raise ValueError("Real ROS configuration incomplete:\n" + "\n".join(errors))
     return result

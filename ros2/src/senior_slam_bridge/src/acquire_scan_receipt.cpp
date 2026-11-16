@@ -16,7 +16,7 @@ using admission::Message;
 
 Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
 {
-  const auto raw = node->declare_parameter<std::string>("raw_topic", "/scan");
+  const auto raw = node->declare_parameter<std::string>("raw_topic", "/scan") + "/timed";
   const auto bounded = node->declare_parameter<std::string>("bounded_topic", "/safety/raw/scan");
   const auto frame = node->declare_parameter<std::string>("expected_frame", "laser_link");
   if (raw.empty() || raw.front() != '/' || bounded.empty() || bounded.front() != '/' ||
@@ -27,8 +27,6 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
 
   const auto deadline = std::chrono::steady_clock::now() + 8s;
   std::optional<admission::ScanOwner> owner;
-  std::int64_t ready_ros = 0;
-  std::int64_t last_ros = 0;
   double ready_steady = 0;
   Message::ConstSharedPtr baseline, acquired;
   bool retired = false;
@@ -43,12 +41,10 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
       if (!owner || retired || acquired) {
         return;
       }
-      const auto now_ros = node->now().nanoseconds();
-      if (now_ros < last_ros || !check_owner()) {
+      if (!check_owner()) {
         retired = true;
         return;
       }
-      last_ros = now_ros;
       const auto & receipt = scan->capture;
       const auto actual = admission::gid_hex(info.get_rmw_message_info().publisher_gid.data);
       if (actual != owner->bridge_gid || receipt.bridge_gid != owner->bridge_gid) {
@@ -58,13 +54,11 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
         retired = true;
         return;
       }
-      const auto stamp = admission::time_ns(receipt.stamp);
-      if (!receipt.valid || !owner->matches(receipt) || stamp <= ready_ros ||
-        admission::time_ns(receipt.received_ros) <= ready_ros ||
+      if (!receipt.valid || !owner->matches(receipt) || static_cast<double>(receipt.timing.capture_start_steady_ns) / 1e9 <= ready_steady ||
         !(receipt.received_steady > ready_steady) || receipt.sequence == 0 ||
         receipt.capture_generation == 0 || receipt.frame_id != frame ||
         !admission::text_ok(receipt.bridge_boot_id) || !admission::text_ok(receipt.source_epoch) ||
-        !admission::fresh(receipt, now_ros, admission::steady_seconds()) ||
+        !admission::fresh(receipt, admission::steady_seconds()) ||
         !admission::layout_ok(*scan))
       {
         return;
@@ -74,7 +68,7 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
         // Pin the resulting epoch and require a later scan in that exact epoch.
         baseline = std::move(scan);
       } else if (receipt.sequence > baseline->capture.sequence &&
-        stamp > admission::time_ns(baseline->capture.stamp))
+        receipt.timing.capture_end_steady_ns > baseline->capture.timing.capture_end_steady_ns)
       {
         acquired = std::move(scan);
       }
@@ -83,25 +77,22 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
   executor.add_node(node);
   while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline && !retired) {
     executor.spin_once(20ms);
-    const auto now_ros = node->now().nanoseconds();
-    if (owner && (now_ros < last_ros || !check_owner())) {
+    if (owner && !check_owner()) {
       break;
     }
-    last_ros = now_ros;
     if (acquired) {
       if (std::chrono::steady_clock::now() < deadline && rclcpp::ok() &&
-        admission::fresh(acquired->capture, now_ros, admission::steady_seconds()))
+        admission::fresh(acquired->capture, admission::steady_seconds()))
       {
         return acquired;
       }
       break;
     }
-    if (!owner && now_ros > 0) {
+    if (!owner) {
       owner = admission::unique_scan_owner(*node, bounded, raw);
       if (owner) {
-        ready_ros = now_ros;
-        ready_steady = admission::steady_seconds();
-        std::cerr << "Scan receipt armed " << ready_ros << '\n';
+          ready_steady = admission::steady_seconds();
+        std::cerr << "Scan receipt armed at steady " << ready_steady << '\n';
       }
     }
   }

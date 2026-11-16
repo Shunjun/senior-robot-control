@@ -13,7 +13,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,6 +49,8 @@ class CaptureIdentity:
     depth_received_ros_ns: int
     rgb_received_steady: float
     depth_received_steady: float
+    rgb_measurement_steady: float = field(kw_only=True)
+    depth_measurement_steady: float = field(kw_only=True)
 
 
 class SampleGeometry(Protocol):
@@ -103,6 +105,8 @@ def _qualified(frame: RetainedFrame, max_skew_ns: int) -> bool:
             identity.depth_received_ros_ns,
         )
         > 0
+        and math.isfinite(identity.rgb_measurement_steady)
+        and math.isfinite(identity.depth_measurement_steady)
         and math.isfinite(identity.rgb_received_steady)
         and math.isfinite(identity.depth_received_steady)
         and abs(identity.rgb_stamp_ns - identity.depth_stamp_ns) <= max_skew_ns
@@ -201,21 +205,21 @@ class SpawnInferenceWorker:
         device: str = "cpu",
         timeout_s: float = 5.0,
         retained_capacity: int = 4,
-        max_skew_s: float = 0.03,
-        max_result_age_s: float | None = None,
+        max_skew_ms: float = 30,
+        max_result_age_ms: float | None = None,
         processor: Processor | None = None,
     ) -> None:
-        max_result_age_s = (
-            default_policy().hard_age_s if max_result_age_s is None else max_result_age_s
+        max_result_age_ms = (
+            default_policy().hard_age_ms if max_result_age_ms is None else max_result_age_ms
         )
         if (
             not math.isfinite(timeout_s)
             or not 0.05 <= timeout_s <= 30
             or not 1 <= retained_capacity <= 8
-            or not math.isfinite(max_skew_s)
-            or not 0 <= max_skew_s <= 0.2
-            or not math.isfinite(max_result_age_s)
-            or not 0 < max_result_age_s <= default_policy().hard_age_s
+            or not math.isfinite(max_skew_ms)
+            or not 0 <= max_skew_ms <= 200
+            or not math.isfinite(max_result_age_ms)
+            or not 0 < max_result_age_ms <= default_policy().hard_age_ms
             or not _bounded(device, 32)
         ):
             raise ValueError("invalid inference limits")
@@ -223,8 +227,8 @@ class SpawnInferenceWorker:
         self._device = device
         self._timeout = timeout_s
         self._capacity = retained_capacity
-        self._max_skew_ns = int(max_skew_s * 1e9)
-        self._max_result_age_s = max_result_age_s
+        self._max_skew_ns = int(max_skew_ms * 1e6)
+        self._max_result_age_s = max_result_age_ms / 1000
         self._processor = processor
         self._context = multiprocessing.get_context("spawn")
         self._condition = threading.Condition()
@@ -240,7 +244,7 @@ class SpawnInferenceWorker:
         self._retired: set[str] = set()
         self._identity: tuple[str, ...] | None = None
         self._identity_failed = False
-        self._last_rgb_ns = self._last_depth_ns = 0
+        self._last_rgb_steady = self._last_depth_steady = 0.0
         self._retained: OrderedDict[int, RetainedFrame] = OrderedDict()
         self._results: deque[BoundDetectionResult] = DiagnosticDeque(
             "vision.spawn_detector.results", maxlen=retained_capacity
@@ -281,7 +285,7 @@ class SpawnInferenceWorker:
         self._active = None
         self._identity = None
         self._identity_failed = False
-        self._last_rgb_ns = self._last_depth_ns = 0
+        self._last_rgb_steady = self._last_depth_steady = 0.0
         self._discard_pending()
         self._retained.clear()
         self._results.clear()
@@ -332,13 +336,16 @@ class SpawnInferenceWorker:
                 return False
             if (
                 self._identity_failed
-                or identity.rgb_stamp_ns <= self._last_rgb_ns
-                or identity.depth_stamp_ns <= self._last_depth_ns
+                or identity.rgb_measurement_steady <= self._last_rgb_steady
+                or identity.depth_measurement_steady <= self._last_depth_steady
             ):
                 self._retire_locked()
                 return False
             self._identity = lineage
-            self._last_rgb_ns, self._last_depth_ns = identity.rgb_stamp_ns, identity.depth_stamp_ns
+            self._last_rgb_steady, self._last_depth_steady = (
+                identity.rgb_measurement_steady,
+                identity.depth_measurement_steady,
+            )
             self._serial += 1
             serial = self._serial
             if self._pending is not None:
@@ -366,9 +373,10 @@ class SpawnInferenceWorker:
         *,
         now_ros_ns: int,
         now_steady: float,
-        max_age_s: float,
+        max_age_ms: float,
     ) -> bool:
         """Recheck original clocks and generation immediately before association."""
+        max_age_s = max_age_ms / 1000
         if not math.isfinite(now_steady) or not math.isfinite(max_age_s) or max_age_s <= 0:
             return False
         max_age_s = min(max_age_s, self._max_result_age_s)
@@ -382,17 +390,11 @@ class SpawnInferenceWorker:
                 and capture.source_epoch == self._active
                 and not self._identity_failed
                 and all(
-                    0 <= now_ros_ns - stamp <= max_age_s * 1e9
-                    for stamp in (
-                        capture.rgb_stamp_ns,
-                        capture.depth_stamp_ns,
-                        capture.rgb_received_ros_ns,
-                        capture.depth_received_ros_ns,
+                    0 <= measured <= received <= now_steady and now_steady - measured <= max_age_s
+                    for measured, received in (
+                        (capture.rgb_measurement_steady, capture.rgb_received_steady),
+                        (capture.depth_measurement_steady, capture.depth_received_steady),
                     )
-                )
-                and all(
-                    0 <= now_steady - stamp <= max_age_s
-                    for stamp in (capture.rgb_received_steady, capture.depth_received_steady)
                 )
             )
 

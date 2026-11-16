@@ -1,0 +1,123 @@
+--- a/src/Sensor.cc
++++ b/src/Sensor.cc
+@@ -15,6 +15,8 @@
+  *
+ */
+ 
++#include "senior_motion_msgs/source_timing.hpp"
++#include "senior_motion_msgs/source_transport.hpp"
+ #include "gz/sensors/Sensor.hh"
+ 
+ #include <chrono>
+@@ -31,6 +33,12 @@
+ 
+ class gz::sensors::SensorPrivate
+ {
++  public: std::unique_ptr<senior_motion_msgs::timing::DriverClock> sourceClock;
++  public: senior_motion_msgs::msg::SourceTime sourceProof;
++  public: uint64_t sourceInputSteady = 0;
++  public: std::chrono::steady_clock::duration sourceInputSim{};
++  public: bool sourceInputSeen = false;
++  public: std::string sourceMeasurementEpoch;
+   /// \brief Populates fields from a <sensor> DOM
+   public: bool PopulateFromSDF(const sdf::Sensor &_sdf);
+ 
+@@ -448,6 +456,28 @@
+ }
+ 
+ //////////////////////////////////////////////////
++void Sensor::SetSourceTimingStart(const std::chrono::steady_clock::duration &_simTime,
++                                  uint64_t _hostSteady, const std::string &_measurementEpoch)
++{
++  if (_hostSteady == 0 || _measurementEpoch.empty()) {
++    this->dataPtr->sourceInputSteady = 0; this->dataPtr->sourceProof = {}; return;
++  }
++  if (!this->dataPtr->sourceClock)
++    this->dataPtr->sourceClock = std::make_unique<senior_motion_msgs::timing::DriverClock>();
++  if (this->dataPtr->sourceMeasurementEpoch != _measurementEpoch)
++    this->dataPtr->nextUpdateTime = _simTime;
++  this->dataPtr->sourceMeasurementEpoch = _measurementEpoch;
++  this->dataPtr->sourceInputSeen = true;
++  this->dataPtr->sourceInputSim = _simTime;
++  this->dataPtr->sourceInputSteady = _hostSteady;
++}
++
++void Sensor::AddSourceTiming(gz::msgs::Header *_msg) const
++{
++  if (this->dataPtr->sourceProof.sequence > 0)
++    senior_motion_msgs::timing::attach(_msg, this->dataPtr->sourceProof);
++}
++
+ bool Sensor::Update(const std::chrono::steady_clock::duration &_now,
+                   const bool _force)
+ {
+@@ -464,6 +494,16 @@
+   // prevent update if not active, unless forced
+   if (!this->dataPtr->active && !_force)
+     return result;
++
++  // The producer supplied this before scene/worker queues. Do not stamp it here.
++  this->dataPtr->sourceProof = {};
++  if (this->dataPtr->sourceInputSteady != 0) {
++    this->dataPtr->sourceProof = this->dataPtr->sourceClock->sample(
++      this->dataPtr->sourceInputSteady, this->dataPtr->sourceInputSteady, "sim_step",
++      this->dataPtr->sourceMeasurementEpoch, std::chrono::duration_cast<std::chrono::nanoseconds>(
++        this->dataPtr->sourceInputSim).count());
++    this->dataPtr->sourceInputSteady = 0;
++  }
+ 
+   // Make the update happen
+   result = this->Update(_now);
+@@ -496,6 +536,7 @@
+ void Sensor::AddSequence(gz::msgs::Header *_msg,
+                          const std::string &_seqKey)
+ {
++  this->AddSourceTiming(_msg);
+   std::string value = "0";
+ 
+   if (this->dataPtr->sequences.find(_seqKey) == this->dataPtr->sequences.end())
+--- a/include/gz/sensors/Sensor.hh
++++ b/include/gz/sensors/Sensor.hh
+@@ -198,6 +198,10 @@
+       /// and is incremented by one each time this function is called.
+       /// \param[in,out] _msg The header which will receive the sequence.
+       /// \param[in] _seqKey Name of the sequence to use.
++      // Host monotonic input frontier is provided before the producer worker queue.
++      public: void SetSourceTimingStart(const std::chrono::steady_clock::duration &_simTime,
++                                       uint64_t _hostSteady, const std::string &_measurementEpoch);
++      public: void AddSourceTiming(gz::msgs::Header *_msg) const;
+       public: void AddSequence(gz::msgs::Header *_msg,
+                   const std::string &_seqKey = "default");
+ 
+--- a/src/CameraSensor.cc
++++ b/src/CameraSensor.cc
+@@ -770,6 +770,7 @@
+ {
+   *this->dataPtr->infoMsg.mutable_header()->mutable_stamp() =
+     msgs::Convert(_now);
++  this->AddSourceTiming(this->dataPtr->infoMsg.mutable_header());
+   this->dataPtr->infoPub.Publish(this->dataPtr->infoMsg);
+ }
+ 
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,6 +4,7 @@
+ # Initialize the project
+ #============================================================================
+ project(ignition-sensors6 VERSION 6.8.1)
++find_package(senior_motion_msgs 0.2.0 EXACT REQUIRED)
+ 
+ #============================================================================
+ # Find ignition-cmake
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -37,7 +37,8 @@
+ endif()
+ 
+ # Create the library target.
+-ign_create_core_library(SOURCES ${sources} CXX_STANDARD 14)
++ign_create_core_library(SOURCES ${sources} CXX_STANDARD 17)
++target_link_libraries(${PROJECT_LIBRARY_TARGET_NAME} PUBLIC senior_motion_msgs::sensor_timing)
+ 
+ target_link_libraries(${PROJECT_LIBRARY_TARGET_NAME}
+   PUBLIC

@@ -166,7 +166,7 @@ def make_session(
         viewer=viewer or Viewer("control", "robot-a"),
         source=camera,
         factory=factory,
-        limits=limits or VideoLimits(frame_poll_s=0.01, push_timeout_s=0.05),
+        limits=limits or VideoLimits(frame_poll_ms=10, push_timeout_ms=50),
         budget=budget,
         turn=turn,
         now=clock,
@@ -297,7 +297,7 @@ async def test_congested_video_keeps_heartbeat_and_stop() -> None:
     supervisor = Supervisor(
         send_heartbeat=heartbeat,
         call_ros=ros,
-        heartbeat_seconds=0.01,
+        heartbeat_ms=10,
     )
     async with supervisor:
         for index in range(300):
@@ -453,7 +453,7 @@ def test_codec_follows_what_the_client_actually_offers() -> None:
 
 
 async def test_negotiated_codec_and_bitrate_cap_reach_the_peer() -> None:
-    limits = VideoLimits(max_bitrate_bps=800_000, frame_poll_s=0.01, push_timeout_s=0.05)
+    limits = VideoLimits(max_bitrate_bps=800_000, frame_poll_ms=10, push_timeout_ms=50)
     session, factory, _, _ = make_session(limits=limits)
     answer = await session.offer("robot-a", video_offer("H264"))
     request = factory.peers[0].request
@@ -469,9 +469,7 @@ async def test_negotiated_codec_and_bitrate_cap_reach_the_peer() -> None:
 
 
 async def test_offer_and_candidates_are_bounded() -> None:
-    limits = VideoLimits(
-        max_sdp_bytes=2048, max_candidates=2, frame_poll_s=0.01, push_timeout_s=0.05
-    )
+    limits = VideoLimits(max_sdp_bytes=2048, max_candidates=2, frame_poll_ms=10, push_timeout_ms=50)
     session, factory, _, _ = make_session(limits=limits)
     huge = SessionDescription("offer", video_offer("VP8").sdp + "a=x:" + "y" * 4096 + "\r\n")
     with pytest.raises(ValueError):
@@ -753,7 +751,7 @@ def drain_outbox(connection: object) -> list[bytes]:
 
     outbox = connection.outbox  # type: ignore[attr-defined]
     assert isinstance(outbox, Outbox)
-    items = [item for _, item in list(outbox._items)]
+    items = [item for kind, item in list(outbox._items) if kind != "control.connection"]
     return items
 
 
@@ -774,6 +772,8 @@ class WireRig:
         assert controller is not None
         self.controller = controller
         self.agent = self.hub.attach_agent("robot-a")
+        kind, _ = self.controller.outbox._items.popleft()
+        assert kind == "control.connection"
 
 
 async def test_video_offer_on_control_connection_is_accepted_not_closed() -> None:
@@ -802,6 +802,8 @@ async def test_video_answer_reaches_only_the_viewer_that_offered() -> None:
     rig = WireRig()
     bystander = rig.hub.attach_controller("robot-a", "other-session-hash")
     assert bystander is not None
+    kind, _ = bystander.outbox._items.popleft()
+    assert kind == "control.connection"
     rig.hub.handle_control_frame(rig.controller, offer_frame())
     rig.hub.handle_agent_frame(
         rig.agent, wire_frame("video.answer", {"sdp": "a"}, connection_epoch=1)
@@ -966,6 +968,8 @@ async def test_close_is_only_sent_for_the_viewer_that_ended() -> None:
     rig = WireRig()
     bystander = rig.hub.attach_controller("robot-a", "other-hash")
     assert bystander is not None
+    kind, _ = bystander.outbox._items.popleft()
+    assert kind == "control.connection"
     rig.hub.close_session("other-hash")  # never offered, so nothing to stop
     assert close_frames(rig.agent) == []
     rig.hub.handle_control_frame(rig.controller, offer_frame())

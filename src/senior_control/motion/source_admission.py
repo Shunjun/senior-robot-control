@@ -16,8 +16,9 @@ from senior_control.motion.observations import (
     metadata_error,
     validate,
 )
-from senior_control.motion.sample_types import MotionSample
+from senior_control.motion.sample_types import MotionSample, physical_support
 from senior_control.motion.source_modes import SourceView
+from senior_control.sensors.time_proof import MeasurementTime
 
 
 @dataclass(frozen=True)
@@ -31,11 +32,12 @@ class _State:
     epoch: str | None = None
     retired: set[str] = field(default_factory=set)
     sequence: int = 0
-    end_ros: float = -math.inf
+    end_steady: float = -math.inf
     received_steady: float = -math.inf
+    measurement: MeasurementTime | None = None
     observation: AdaptedObservation | None = None
     count: int = 0
-    first_ros: float = 0.0
+    first_measurement_steady: float = 0.0
     first_steady: float = 0.0
     ready: bool = False
 
@@ -55,9 +57,7 @@ class AdmissionOwner:
         self._cursor = 0
         self.config = config
         self._states = {source: _State() for source in Source}
-        self._now_ros: float | None = None
         self._now_steady: float | None = None
-        self._last_advance_steady: float | None = None
         self._heading_epoch: str | None = None
         self._retired_headings: set[str] = set()
         self._heading_stamp = -math.inf
@@ -65,25 +65,15 @@ class AdmissionOwner:
 
     def _clock(self, now_ros: float, now_steady: float) -> bool:
         finite = math.isfinite(now_ros) and math.isfinite(now_steady)
-        rollback = (
-            finite
-            and self._now_ros is not None
-            and self._now_steady is not None
-            and (now_ros < self._now_ros or now_steady < self._now_steady)
-        )
-        paused = (
-            self._now_ros == now_ros
-            and self._last_advance_steady is not None
-            and now_steady - self._last_advance_steady > self.config.clock_pause_s
-        )
-        if not finite or rollback or paused:
+        rollback = finite and self._now_steady is not None and now_steady < self._now_steady
+        if not finite or rollback:
             for state in self._states.values():
                 state.interrupt()
                 if rollback and state.epoch is not None:
                     state.retired.add(state.epoch)
                     state.epoch = None
                     state.sequence = 0
-                    state.end_ros = -math.inf
+                    state.end_steady = -math.inf
                     state.received_steady = -math.inf
         if rollback and self._heading_epoch is not None:
             self._retired_headings.add(self._heading_epoch)
@@ -91,18 +81,24 @@ class AdmissionOwner:
             self._heading_stamp = -math.inf
             self._heading_received = -math.inf
         if finite:
-            if self._now_ros is None or now_ros != self._now_ros:
-                self._last_advance_steady = now_steady
-            self._now_ros, self._now_steady = now_ros, now_steady
-        return finite and not rollback and not paused
+            self._now_steady = now_steady
+        return finite and not rollback
 
     @staticmethod
     def _source_order(observation: MotionSample, state: _State) -> str | None:
         if observation.epoch in state.retired:
             return "retired_epoch"
+        coordinate = physical_support(observation).end
+        if (
+            observation.epoch == state.epoch
+            and state.measurement is not None
+            and coordinate.same_axis(state.measurement)
+            and coordinate.seconds < state.measurement.seconds
+        ):
+            return "physical_measurement_reordering"
         if observation.epoch == state.epoch and (
             observation.sequence <= state.sequence
-            or observation.end_ros <= state.end_ros
+            or observation.end_steady <= state.end_steady
             or observation.received_steady < state.received_steady
         ):
             return "replay_or_reordering"
@@ -123,17 +119,19 @@ class AdmissionOwner:
         # Structure and ordering are already valid. Fresh negative evidence
         # fences older packets; future timestamps never poison the watermark.
         if (
-            state.end_ros < observation.end_ros <= now_ros
+            state.end_steady < observation.end_steady <= now_steady
             and state.received_steady <= observation.received_steady <= now_steady
         ):
             state.sequence = observation.sequence
-            state.end_ros = observation.end_ros
+            state.end_steady = observation.end_steady
+            state.measurement = physical_support(observation).end
             state.received_steady = observation.received_steady
         state.interrupt()
 
     def _admit_heading(self, heading: Heading, state: _State) -> str | None:
         if heading.received_steady < self._heading_received or (
-            heading.epoch == self._heading_epoch and heading.stamp_ros < self._heading_stamp
+            heading.epoch == self._heading_epoch
+            and heading.measurement_steady < self._heading_stamp
         ):
             return "heading_reordering"
         if heading.epoch in self._retired_headings:
@@ -145,7 +143,7 @@ class AdmissionOwner:
             self._retired_headings.add(self._heading_epoch)
             state.interrupt()
         self._heading_epoch = heading.epoch
-        self._heading_stamp = heading.stamp_ros
+        self._heading_stamp = heading.measurement_steady
         self._heading_received = heading.received_steady
         return None
 
@@ -160,7 +158,8 @@ class AdmissionOwner:
         state.interrupt()
         state.epoch = observation.epoch
         state.sequence = 0
-        state.end_ros = -math.inf
+        state.end_steady = -math.inf
+        state.measurement = None
         state.received_steady = -math.inf
         return None
 
@@ -186,18 +185,22 @@ class AdmissionOwner:
     ) -> None:
         self._expire(state, now_ros=now_ros, now_steady=now_steady)
         if state.count == 0:
-            state.first_ros = observation.end_ros
+            state.first_measurement_steady = observation.end_steady
             state.first_steady = observation.received_steady
         state.count += 1
-        state.sequence, state.end_ros = observation.sequence, observation.end_ros
+        state.sequence, state.end_steady = observation.sequence, observation.end_steady
         state.received_steady = observation.received_steady
+        state.measurement = physical_support(observation).end
         state.observation = adapt(
             observation, now_ros=now_ros, now_steady=now_steady, rule=rule, heading=heading
         )
-        span = self.config.recovery_span_s
+        span = self.config.recovery_span_ms / 1000
         state.ready = (
             state.count >= self.config.recovery_samples
-            and observation.end_ros - state.first_ros + math.ulp(observation.end_ros) >= span
+            and observation.end_steady
+            - state.first_measurement_steady
+            + math.ulp(observation.end_steady)
+            >= span
             and observation.received_steady
             - state.first_steady
             + math.ulp(observation.received_steady)

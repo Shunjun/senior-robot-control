@@ -1,0 +1,82 @@
+wheel 2026-11-16T18:17:27Z
+DRIFT before-wheel source_drift=False changed=[] missing=[] added=[]
+COPIED 173 files
+
+$ uv build --offline --out-dir /tmp/startup-final-validation-dist --cache-dir /tmp/startup-final-validation-uv-cache
+CWD /tmp/startup-final-validation-pkgsrc
+AT 2026-11-16T18:17:28Z
+Building source distribution...
+error: Failed to build `/private/tmp/startup-final-validation-pkgsrc`
+  cause: Failed to resolve requirements from `build-system.requires`
+  cause: No solution found when resolving: `hatchling`
+  cause: Because hatchling was not found in the cache and you require hatchling, we can conclude that your requirements are unsatisfiable.
+
+hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+EXIT 2 AT 2026-11-16T18:17:28Z
+OFFLINE_BUILD_FAILED retrying with network into isolated cache
+
+$ uv build --out-dir /tmp/startup-final-validation-dist --cache-dir /tmp/startup-final-validation-uv-cache
+CWD /tmp/startup-final-validation-pkgsrc
+AT 2026-11-16T18:17:28Z
+Building source distribution...
+Building wheel from source distribution...
+Successfully built /tmp/startup-final-validation-dist/senior_control-0.1.0.tar.gz
+Successfully built /tmp/startup-final-validation-dist/senior_control-0.1.0-py3-none-any.whl
+
+EXIT 0 AT 2026-11-16T18:17:34Z
+WHEELS senior_control-0.1.0-py3-none-any.whl
+WHEEL_SHA256 de55d6687beb68c06de6d09c2f67faa5277c5bca13eacb92f4d6afa816a4f79d senior_control-0.1.0-py3-none-any.whl 445870
+
+$ uv venv --offline --python /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/python /tmp/startup-final-validation-wheel-venv
+CWD /tmp
+AT 2026-11-16T18:17:34Z
+Using CPython 3.12.15 interpreter at: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/python
+Creating virtual environment at: /tmp/startup-final-validation-wheel-venv
+Activate with: source /tmp/startup-final-validation-wheel-venv/bin/activate
+
+EXIT 0 AT 2026-11-16T18:17:34Z
+
+$ uv pip install --offline --python /tmp/startup-final-validation-wheel-venv/bin/python /tmp/startup-final-validation-dist/senior_control-0.1.0-py3-none-any.whl
+CWD /tmp
+AT 2026-11-16T18:17:34Z
+Using Python 3.12.15 environment at: /tmp/startup-final-validation-wheel-venv
+error: No solution found when resolving dependencies
+  cause: Because aiosqlite was not found in the cache and senior-control==0.1.0 depends on aiosqlite>=0.20,<1, we can conclude that senior-control==0.1.0 cannot be used.
+         And because only senior-control==0.1.0 is available and you require senior-control, we can conclude that your requirements are unsatisfiable.
+
+hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+EXIT 1 AT 2026-11-16T18:17:34Z
+OFFLINE_INSTALL_FAILED retrying with network
+
+$ uv pip install --python /tmp/startup-final-validation-wheel-venv/bin/python /tmp/startup-final-validation-dist/senior_control-0.1.0-py3-none-any.whl
+CWD /tmp
+AT 2026-11-16T18:17:34Z
+Using Python 3.12.15 environment at: /tmp/startup-final-validation-wheel-venv
+Resolved 10 packages in 1.71s
+Downloading pydantic-core (2.0MiB)
+ Downloaded pydantic-core
+Prepared 10 packages in 663ms
+Installed 10 packages in 67ms
+ + aiosqlite==0.22.1
+ + annotated-types==0.8.0
+ + pydantic==2.14.3
+ + pydantic-core==2.50.4
+ + pydantic-settings==2.16.3
+ + python-dotenv==1.2.4
+ + pyyaml==6.0.3
+ + senior-control==0.1.0 (from file:///tmp/startup-final-validation-dist/senior_control-0.1.0-py3-none-any.whl)
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.5
+
+EXIT 0 AT 2026-11-16T18:17:37Z
+
+$ /tmp/startup-final-validation-wheel-venv/bin/python -I -c import senior_control.protocol, senior_control.config, senior_control; import importlib.util; assert importlib.util.find_spec('shapely') is None; print(senior_control.__file__)
+CWD /tmp
+AT 2026-11-16T18:17:37Z
+/tmp/startup-final-validation-wheel-venv/lib/python3.12/site-packages/senior_control/__init__.py
+
+EXIT 0 AT 2026-11-16T18:17:40Z
+DRIFT after-wheel source_drift=False changed=[] missing=[] added=[]
+BUILD 0 VENV 0 INSTALL 0 IMPORT 0

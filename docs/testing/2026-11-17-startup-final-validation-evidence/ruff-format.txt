@@ -1,0 +1,142 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/ruff format --check . --no-cache
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:28Z
+[1m[91munformatted:[0m[1m File would be reformatted[0m
+   [1m[94m--> [0mros2/src/senior_robot/senior_robot/native_receipt.py:314:19
+[1m[94m   [0m [1m[94m|[0m
+[1m[94m313[0m [1m[94m|[0m             self._receipt_report_at = now
+[1m[94m   [0m [1m[31m-[0m [31m        active = [0m[1m[31m[(entry,[0m[0m[31m stats)[0m[1m[31m [0m[0m[31mfor entry, stats in zip(self.inputs, rows)
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m                  [0m[0m[31mif stats.frames or stats.attempted or [0m[1m[31mstats.silence_timeouts][0m[0m[31m
+[0m[1m[94m314[0m [1m[32m+[0m [32m        active = [0m[1m[32m[[0m[0m[32m
+[0m[1m[94m315[0m [1m[32m+[0m [1m[32m            (entry,[0m[0m[32m stats)[0m[32m
+[0m[1m[94m316[0m [1m[32m+[0m [1m[32m            [0m[0m[32mfor entry, stats in zip(self.inputs, rows)
+[0m[1m[94m317[0m [1m[32m+[0m [1m[32m            [0m[0m[32mif stats.frames or stats.attempted or [0m[1m[32mstats.silence_timeouts[0m[0m[32m
+[0m[1m[94m318[0m [1m[32m+[0m [1m[32m        ][0m[0m[32m
+[0m[1m[94m319[0m [1m[94m|[0m         if not active:
+[1m[94m320[0m [1m[94m|[0m             return
+[1m[94m   [0m [1m[31m-[0m [31m        warning = [0m[1m[31many(s.rejected[0m[0m[31m or s.negative_zero_gid or s.late_control or s.silence_timeouts
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m                      [0m[0m[31mfor _, s in [0m[1m[31mactive)[0m[0m[31m
+[0m[1m[94m321[0m [1m[32m+[0m [32m        warning = [0m[1m[32many([0m[0m[32m
+[0m[1m[94m322[0m [1m[32m+[0m [1m[32m            s.rejected[0m[0m[32m or s.negative_zero_gid or s.late_control or s.silence_timeouts
+[0m[1m[94m323[0m [1m[32m+[0m [1m[32m            [0m[0m[32mfor _, s in [0m[1m[32mactive[0m[0m[32m
+[0m[1m[94m324[0m [1m[32m+[0m [1m[32m        )[0m[0m[32m
+[0m[1m[94m325[0m [1m[94m|[0m         summary = "; ".join(
+--------------------------------------------------------------------------------
+[1m[94m331[0m [1m[94m|[0m         emit = logger.warning if warning else logger.debug
+[1m[94m   [0m [1m[31m-[0m [31m        [0m[1m[31memit(f"native[0m[0m[31m DDS receipt summary window_s={elapsed:.3f} "
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m             [0m[0m[31mf"overlapping_rejection_reasons=true; [0m[1m[31m{summary}")[0m[0m[31m
+[0m[1m[94m332[0m [1m[32m+[0m [32m        [0m[1m[32memit([0m[0m[32m
+[0m[1m[94m333[0m [1m[32m+[0m [1m[32m            f"native[0m[0m[32m DDS receipt summary window_s={elapsed:.3f} "
+[0m[1m[94m334[0m [1m[32m+[0m [1m[32m            [0m[0m[32mf"overlapping_rejection_reasons=true; [0m[1m[32m{summary}"[0m[0m[32m
+[0m[1m[94m335[0m [1m[32m+[0m [1m[32m        )[0m[0m[32m
+[0m[1m[94m336[0m [1m[94m|[0m
+[1m[94m   [0m [1m[94m|[0m
+
+[1m[91munformatted:[0m[1m File would be reformatted[0m
+   [1m[94m--> [0mtests/test_native_receipt_diagnostics.py:2:1
+[1m[94m   [0m [1m[94m|[0m
+[1m[94m1  [0m [1m[94m|[0m """Offline SDR1 frames exercise the real receiver/drain without starting ROS."""
+[1m[94m2  [0m [1m[32m+[0m[32m
+[0m[1m[94m3  [0m [1m[94m|[0m import importlib.util
+--------------------------------------------------------------------------------
+[1m[94m10 [0m [1m[94m|[0m def test_native_receipt_reasons_and_periodic_summary(monkeypatch):
+[1m[94m   [0m [1m[31m-[0m [31m    path = Path(__file__).parents[1] / [0m[1m[31m'ros2/src/senior_robot/senior_robot/native_receipt.py'[0m[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [31m    spec = [0m[1m[31mimportlib.util.spec_from_file_location('receipt_probe',[0m[0m[31m path)
+[0m[1m[94m11 [0m [1m[32m+[0m [32m    path = Path(__file__).parents[1] / [0m[1m[32m"ros2/src/senior_robot/senior_robot/native_receipt.py"[0m[0m[32m
+[0m[1m[94m12 [0m [1m[32m+[0m [32m    spec = [0m[1m[32mimportlib.util.spec_from_file_location("receipt_probe",[0m[0m[32m path)
+[0m[1m[94m13 [0m [1m[94m|[0m     module = importlib.util.module_from_spec(spec)
+[1m[94m14 [0m [1m[94m|[0m     monkeypatch.setitem(sys.modules, spec.name, module)
+[1m[94m15 [0m [1m[94m|[0m     spec.loader.exec_module(module)
+[1m[94m   [0m [1m[31m-[0m [31m    serialization = [0m[1m[31mModuleType('rclpy.serialization')[0m[0m[31m
+[0m[1m[94m16 [0m [1m[32m+[0m [32m    serialization = [0m[1m[32mModuleType("rclpy.serialization")[0m[0m[32m
+[0m[1m[94m17 [0m [1m[94m|[0m     serialization.deserialize_message = lambda data, cls: data
+[1m[94m   [0m [1m[31m-[0m [31m    monkeypatch.setitem(sys.modules, [0m[1m[31m'rclpy.serialization',[0m[0m[31m serialization)
+[0m[1m[94m18 [0m [1m[32m+[0m [32m    monkeypatch.setitem(sys.modules, [0m[1m[32m"rclpy.serialization",[0m[0m[32m serialization)
+[0m[1m[94m19 [0m [1m[94m|[0m     clock = SimpleNamespace(now=100.0)
+[1m[94m   [0m [1m[31m-[0m [31m    monkeypatch.setattr(module, [0m[1m[31m'time',[0m[0m[31m SimpleNamespace(monotonic=lambda: clock.now))
+[0m[1m[94m   [0m [1m[31m-[0m [31m    [0m[1m[31mmonkeypatch.setattr(module, 'process_diagnostics', [0m[0m[31mlambda: [0m[1m[31mSimpleNamespace([0m[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m        pump=lambda[0m[0m[31m *a: None, duration=lambda *a: [0m[1m[31mNone))[0m[0m[31m
+[0m[1m[94m20 [0m [1m[32m+[0m [32m    monkeypatch.setattr(module, [0m[1m[32m"time",[0m[0m[32m SimpleNamespace(monotonic=lambda: clock.now))
+[0m[1m[94m21 [0m [1m[32m+[0m [32m    [0m[1m[32mmonkeypatch.setattr([0m[0m[32m
+[0m[1m[94m22 [0m [1m[32m+[0m [1m[32m        module,[0m[0m[32m
+[0m[1m[94m23 [0m [1m[32m+[0m [1m[32m        "process_diagnostics",[0m[0m[32m
+[0m[1m[94m24 [0m [1m[32m+[0m [1m[32m        [0m[0m[32mlambda: [0m[1m[32mSimpleNamespace(pump=lambda[0m[0m[32m *a: None, duration=lambda *a: [0m[1m[32mNone),[0m[0m[32m
+[0m[1m[94m25 [0m [1m[32m+[0m [1m[32m    )[0m[0m[32m
+[0m[1m[94m26 [0m [1m[94m|[0m     log, delivered = [], []
+[1m[94m27 [0m [1m[94m|[0m     logger = SimpleNamespace(warning=log.append, debug=log.append)
+[1m[94m28 [0m [1m[94m|[0m     group = module.NativeReceiptGroup.__new__(module.NativeReceiptGroup)
+[1m[94m29 [0m [1m[94m|[0m     group.node = SimpleNamespace(get_logger=lambda: logger)
+[1m[94m   [0m [1m[31m-[0m [31m    group.inputs = [0m[1m[31m[module._Input(bytes,[0m[0m[31m [0m[1m[31m'/odom',[0m[0m[31m [0m[1m[31m'driver',[0m[0m[31m [0m[1m[31m'/',[0m[0m[31m [0m[1m[31m'sensor',[0m[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m                                 [0m[0m[31mlambda *a: delivered.append(a), lambda: [0m[1m[31mNone)][0m[0m[31m
+[0m[1m[94m30 [0m [1m[32m+[0m [32m    group.inputs = [0m[1m[32m[[0m[0m[32m
+[0m[1m[94m31 [0m [1m[32m+[0m [1m[32m        module._Input([0m[0m[32m
+[0m[1m[94m32 [0m [1m[32m+[0m [1m[32m            bytes,[0m[0m[32m [0m[1m[32m"/odom",[0m[0m[32m [0m[1m[32m"driver",[0m[0m[32m [0m[1m[32m"/", "sensor",[0m[0m[32m [0m[32mlambda *a: delivered.append(a), lambda: [0m[1m[32mNone[0m[0m[32m
+[0m[1m[94m33 [0m [1m[32m+[0m [1m[32m        )[0m[0m[32m
+[0m[1m[94m34 [0m [1m[32m+[0m [1m[32m    ][0m[0m[32m
+[0m[1m[94m35 [0m [1m[94m|[0m     group._lock = threading.Lock()
+--------------------------------------------------------------------------------
+[1m[94m40 [0m [1m[94m|[0m     group._receipt_stats = [module._ReceiptStats()]
+[1m[94m   [0m [1m[31m-[0m [31m    group._last_receipt = [0m[1m[31mfloat('-inf')[0m[0m[31m
+[0m[1m[94m41 [0m [1m[32m+[0m [32m    group._last_receipt = [0m[1m[32mfloat("-inf")[0m[0m[32m
+[0m[1m[94m42 [0m [1m[94m|[0m
+--------------------------------------------------------------------------------
+[1m[94m46 [0m [1m[94m|[0m     def receive(*frames):
+[1m[94m   [0m [1m[31m-[0m [31m        stream = [0m[1m[31mbytearray(b''.join(frames))[0m[0m[31m
+[0m[1m[94m47 [0m [1m[32m+[0m [32m        stream = [0m[1m[32mbytearray(b"".join(frames))[0m[0m[32m
+[0m[1m[94m48 [0m [1m[32m+[0m[32m
+[0m[1m[94m49 [0m [1m[94m|[0m         def read(size):
+--------------------------------------------------------------------------------
+[1m[94m55 [0m [1m[94m|[0m             return result
+[1m[94m56 [0m [1m[32m+[0m[32m
+[0m[1m[94m57 [0m [1m[94m|[0m         group._read = read
+--------------------------------------------------------------------------------
+[1m[94m63 [0m [1m[94m|[0m     def frame(kind, generation=1, sequence=0, stamp=100.0):
+[1m[94m   [0m [1m[31m-[0m [31m        payload = [0m[1m[31mb'x'[0m[0m[31m if kind == 1 else [0m[1m[31mb''[0m[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [31m        gid = [0m[1m[31mb'G'[0m[0m[31m * 24 if kind != 0 else bytes(24)
+[0m[1m[94m   [0m [1m[31m-[0m [31m        return [0m[1m[31mmodule._HEADER.pack(b'SDR1',[0m[0m[31m kind, 0, generation, sequence,[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m                                   [0m[0m[31mint(stamp * 1e9), 0, 0, gid, [0m[1m[31mlen(payload)) [0m[0m[31m+ payload
+[0m[1m[94m64 [0m [1m[32m+[0m [32m        payload = [0m[1m[32mb"x"[0m[0m[32m if kind == 1 else [0m[1m[32mb""[0m[0m[32m
+[0m[1m[94m65 [0m [1m[32m+[0m [32m        gid = [0m[1m[32mb"G"[0m[0m[32m * 24 if kind != 0 else bytes(24)
+[0m[1m[94m66 [0m [1m[32m+[0m [32m        return [0m[1m[32m([0m[0m[32m
+[0m[1m[94m67 [0m [1m[32m+[0m [1m[32m            module._HEADER.pack([0m[0m[32m
+[0m[1m[94m68 [0m [1m[32m+[0m [1m[32m                b"SDR1",[0m[0m[32m kind, 0, generation, sequence,[0m[1m[32m [0m[0m[32mint(stamp * 1e9), 0, 0, gid, [0m[1m[32mlen(payload)[0m[0m[32m
+[0m[1m[94m69 [0m [1m[32m+[0m [1m[32m            )[0m[0m[32m
+[0m[1m[94m70 [0m [1m[32m+[0m [1m[32m            [0m[0m[32m+ payload
+[0m[1m[94m71 [0m [1m[32m+[0m [1m[32m        )[0m[0m[32m
+[0m[1m[94m72 [0m [1m[94m|[0m
+--------------------------------------------------------------------------------
+[1m[94m92 [0m [1m[94m|[0m     group.inputs[0].callback = lambda *a: group._invalid.add(0)
+[1m[94m   [0m [1m[31m-[0m [31m    [0m[1m[31mreceive(frame(1,[0m[0m[31m generation=2, sequence=5, stamp=101),[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m            [0m[0m[31mframe(1, generation=2, sequence=6, [0m[1m[31mstamp=101))[0m[0m[31m
+[0m[1m[94m93 [0m [1m[32m+[0m [32m    [0m[1m[32mreceive([0m[0m[32m
+[0m[1m[94m94 [0m [1m[32m+[0m [1m[32m        frame(1,[0m[0m[32m generation=2, sequence=5, stamp=101),[0m[1m[32m [0m[0m[32mframe(1, generation=2, sequence=6, [0m[1m[32mstamp=101)[0m[0m[32m
+[0m[1m[94m95 [0m [1m[32m+[0m [1m[32m    )[0m[0m[32m
+[0m[1m[94m96 [0m [1m[94m|[0m     group._drain()
+--------------------------------------------------------------------------------
+[1m[94m101[0m [1m[94m|[0m     assert len(log) == 1
+[1m[94m   [0m [1m[31m-[0m [31m    assert [0m[1m[31m'expired=1'[0m[0m[31m in log[0] and [0m[1m[31m'generation=1'[0m[0m[31m in log[0]
+[0m[1m[94m   [0m [1m[31m-[0m [31m    assert [0m[1m[31m'barrier=2'[0m[0m[31m in log[0] and [0m[1m[31m'invalid=1'[0m[0m[31m in log[0]
+[0m[1m[94m   [0m [1m[31m-[0m [31m    assert [0m[1m[31m'delivery_wait_max_s=1.0'[0m[0m[31m in log[0]
+[0m[1m[94m   [0m [1m[31m-[0m [31m    assert [0m[1m[31m'negative_zero_gid=1'[0m[0m[31m in log[0] and [0m[1m[31m'expected=/driver'[0m[0m[31m in log[0]
+[0m[1m[94m102[0m [1m[32m+[0m [32m    assert [0m[1m[32m"expired=1"[0m[0m[32m in log[0] and [0m[1m[32m"generation=1"[0m[0m[32m in log[0]
+[0m[1m[94m103[0m [1m[32m+[0m [32m    assert [0m[1m[32m"barrier=2"[0m[0m[32m in log[0] and [0m[1m[32m"invalid=1"[0m[0m[32m in log[0]
+[0m[1m[94m104[0m [1m[32m+[0m [32m    assert [0m[1m[32m"delivery_wait_max_s=1.0"[0m[0m[32m in log[0]
+[0m[1m[94m105[0m [1m[32m+[0m [32m    assert [0m[1m[32m"negative_zero_gid=1"[0m[0m[32m in log[0] and [0m[1m[32m"expected=/driver"[0m[0m[32m in log[0]
+[0m[1m[94m106[0m [1m[94m|[0m     group._drain()
+[1m[94m   [0m [1m[94m|[0m
+
+[1m[91munformatted:[0m[1m File would be reformatted[0m
+   [1m[94m--> [0mtests/unit/test_agent_config.py:148:20
+[1m[94m   [0m [1m[94m|[0m
+[1m[94m147[0m [1m[94m|[0m             await until(lambda: bool(link.snapshots))
+[1m[94m   [0m [1m[31m-[0m [31m            assert [0m[1m[31m([0m[0m[31m
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m                [0m[0m[31mlink.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
+[0m[1m[94m   [0m [1m[31m-[0m [1m[31m            )[0m[0m[31m
+[0m[1m[94m148[0m [1m[32m+[0m [32m            assert [0m[32mlink.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
+[0m[1m[94m149[0m [1m[94m|[0m             assert not runner.done() and not link.closed
+[1m[94m   [0m [1m[94m|[0m
+
+3 files would be reformatted, 618 files already formatted
+
+EXIT 1 AT 2026-11-16T18:17:28Z

@@ -1,0 +1,15 @@
+group e2e files 5 2026-11-16T18:22:48Z
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/pytest -q -p no:cacheprovider --tb=short --junitxml=/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-e2e.xml --basetemp=/tmp/startup-final-validation-pytest-e2e --durations=20 tests/e2e/test_drive.py tests/e2e/test_gps.py tests/e2e/test_home.py tests/e2e/test_maps.py tests/e2e/test_occlusion.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:22:48Z
+s.......                                                                 [100%]
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-e2e.xml -
+============================= slowest 20 durations =============================
+0.06s call     tests/e2e/test_maps.py::test_cross_robot_home_import_stays_pending_confirmation
+0.04s call     tests/e2e/test_home.py::test_home_returns_after_restart
+
+(18 durations < 0.005s hidden.  Use -vv to show these durations.)
+7 passed, 1 skipped in 0.31s
+
+EXIT 0 AT 2026-11-16T18:22:48Z

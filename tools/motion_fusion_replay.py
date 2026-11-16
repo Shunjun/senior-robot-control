@@ -36,18 +36,17 @@ class ReplayPolicy:
 def replay_policy() -> ReplayPolicy:
     return ReplayPolicy(
         AdmissionConfig(
-            tuple(SourceRule(s, 0.5, 0.3, 0.1, 2.0) for s in Source),
+            tuple(SourceRule(s, 500, 300, 0.1, 2.0) for s in Source),
             2,
-            0.1,
+            100,
             1.0,
             0.2,
-            0.2,
-            0.1,
+            200,
+            100,
             0.05,
-            0.3,
             8,
         ),
-        TemporalConfig(1.0, 128, 0.08, 0.08, 0.08, True),
+        TemporalConfig(1.0, 128, 80, 80, 80, True),
         FusionConfig((), 1.0, 0.2, 0.4, 0.15),
         8192,
     )

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.time_proof import SourceTime
 from senior_control.vision.raw_capture import (
     RawCaptureAdmission,
     RawCaptureHeader,
@@ -223,6 +224,7 @@ class Result:
 def _immutable_header(header: Any) -> bool:
     return (
         type(header) is RawCaptureHeader
+        and type(header.timing) is SourceTime
         and all(
             type(getattr(header, name)) is int
             for name in ("stamp_ns", "received_ros_ns", "capture_generation", "sequence")
@@ -317,7 +319,7 @@ def _headers_valid(
     for h in headers:
         if not _finite(h.received_steady):
             return False
-        admission = RawCaptureAdmission(max_age_s=default_policy().hard_age_s)
+        admission = RawCaptureAdmission(max_age_ms=default_policy().hard_age_ms)
         if not admission.offer(
             h, bridge_gid=h.bridge_gid, now_ros_ns=now_ros_ns, now_steady=now_steady
         ):
@@ -329,9 +331,8 @@ def _headers_valid(
             or h.sequence <= 0
             or not math.isfinite(h.received_steady)
             or not math.isfinite(now_steady)
-            or not 0 <= now_ros_ns - h.stamp_ns < round(default_policy().hard_age_s * 1e9)
-            or not 0 <= now_ros_ns - h.received_ros_ns < round(default_policy().hard_age_s * 1e9)
-            or not 0 <= now_steady - h.received_steady < default_policy().hard_age_s
+            or not 0 <= h.measurement_steady <= h.received_steady <= now_steady
+            or now_steady - h.measurement_steady >= (default_policy().hard_age_ms / 1000)
         ):
             return False
     return True
@@ -363,6 +364,8 @@ class IndependentMotion:
             header.bridge_boot_id,
             header.capture_generation,
             header.frame_id,
+            header.timing.measurement.clock_domain,
+            header.timing.measurement.epoch,
         )
 
     def _advance(self, incoming: tuple[RawCaptureHeader, ...]) -> tuple[bool, bool]:
@@ -376,8 +379,7 @@ class IndependentMotion:
         for index, (old, new) in enumerate(zip(self._frontier, incoming, strict=True)):
             old_key, new_key = self._source(old), self._source(new)
             if (
-                new.stamp_ns <= old.stamp_ns
-                or new.received_ros_ns <= old.received_ros_ns
+                new.measurement_steady <= old.measurement_steady
                 or new.received_steady <= old.received_steady
                 or new_key in self._retired[index]
                 or new.raw_gid in self._retired_raw_gids[index]
@@ -386,23 +388,30 @@ class IndependentMotion:
             ):
                 return False, False
             if old_key == new_key:
-                if new.sequence <= old.sequence:
+                if new.sequence <= old.sequence or (
+                    new.timing.measurement.same_axis(old.timing.measurement)
+                    and new.timing.measurement.seconds < old.timing.measurement.seconds
+                ):
                     return False, False
                 continue
             # A new lineage must have an unambiguous source/bridge generation change.
             same_boot = new.bridge_boot_id == old.bridge_boot_id
             valid_replacement = (
-                same_boot
-                and new.bridge_gid == old.bridge_gid
-                and (
-                    new.capture_generation > old.capture_generation
-                    or (
-                        new.capture_generation == old.capture_generation
-                        and new.raw_gid != old.raw_gid
-                        and new.source_epoch != old.source_epoch
+                (
+                    same_boot
+                    and new.bridge_gid == old.bridge_gid
+                    and (
+                        new.capture_generation > old.capture_generation
+                        or (
+                            new.capture_generation == old.capture_generation
+                            and new.raw_gid != old.raw_gid
+                            and new.source_epoch != old.source_epoch
+                        )
                     )
                 )
-            ) or (not same_boot and new.bridge_gid != old.bridge_gid)
+                or (not same_boot and new.bridge_gid != old.bridge_gid)
+                or (same_boot and not new.timing.measurement.same_axis(old.timing.measurement))
+            )
             if not valid_replacement:
                 return False, False
             replacements.append((index, old_key))
@@ -487,7 +496,9 @@ class IndependentMotion:
                 b.sequence <= a.sequence
                 for a, b in zip(_headers(previous), _headers(frame), strict=True)
             )
-            or not 0 < frame.rgb_header.stamp_ns - previous.rgb_header.stamp_ns <= 200_000_000
+            or not 0
+            < frame.rgb_header.timing.measurement.elapsed(previous.rgb_header.timing.measurement)
+            <= 0.2
         ):
             return Result("pair_revoked")
         self._previous = frame
@@ -496,7 +507,9 @@ class IndependentMotion:
             self._previous = None
         if result.camera_transform is not None:
             translation = [result.camera_transform[i][3] for i in range(3)]
-            elapsed = (frame.rgb_header.stamp_ns - previous.rgb_header.stamp_ns) / 1e9
+            elapsed = frame.rgb_header.timing.measurement.elapsed(
+                previous.rgb_header.timing.measurement
+            )
             if math.sqrt(sum(v * v for v in translation)) / elapsed > self.profile.max_speed_m_s:
                 self._previous = None
                 return Result("profile_domain_exceeded")

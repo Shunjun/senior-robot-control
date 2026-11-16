@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_parent_ledger import CaptureLedger
 
@@ -7,7 +9,21 @@ from senior_control.vision.rgbd_parent_ledger import CaptureLedger
 def header(seq):
     stamp = 1_000_000_000 + seq * 100_000_000
     return RawCaptureHeader(
-        stamp, stamp, 1.0 + seq * 0.1, "optical", "01", "02", "source", "boot", 1, seq, True, ""
+        stamp,
+        stamp,
+        1.0 + seq * 0.1,
+        "optical",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        seq,
+        True,
+        "",
+        timing=capture_time(
+            1.0 + seq * 0.1, sequence=max(1, seq), epoch="source", tick=(stamp) / 1e9
+        ),
     )
 
 
@@ -16,7 +32,7 @@ def bundle(seq):
 
 
 def test_new_frame_keeps_live_earlier_ticket_and_original_deadline():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -33,11 +49,11 @@ def test_new_frame_keeps_live_earlier_ticket_and_original_deadline():
     )
     assert first is not None and second is not None
     assert ledger.current(first, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
-    assert not ledger.current(first, binding_generation=4, now_ros_ns=1_400_000_001, now_steady=1.4)
+    assert not ledger.current(first, binding_generation=4, now_ros_ns=2_100_000_001, now_steady=2.1)
 
 
 def test_source_replacement_revokes_old_and_retired_replay_does_not_revoke_new():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -67,7 +83,7 @@ def test_source_replacement_revokes_old_and_retired_replay_does_not_revoke_new()
 
 
 def test_mixed_retired_stream_is_ignored_without_revoking_successor():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -96,7 +112,7 @@ def test_mixed_retired_stream_is_ignored_without_revoking_successor():
 
 
 def test_current_malformed_header_revokes_without_raising():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -118,8 +134,8 @@ def test_current_malformed_header_revokes_without_raising():
     assert not ledger.current(first, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.2)
 
 
-def test_clock_rollback_revokes_ticket_even_on_replayed_capture():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+def test_system_clock_correction_keeps_ticket_until_original_monotonic_expiry():
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -137,13 +153,12 @@ def test_clock_rollback_revokes_ticket_even_on_replayed_capture():
         )
         is None
     )
-    assert not ledger.current(
-        first, binding_generation=4, now_ros_ns=1_200_000_000, now_steady=1.22
-    )
+    assert ledger.current(first, binding_generation=4, now_ros_ns=1, now_steady=1.22)
+    assert not ledger.current(first, binding_generation=4, now_ros_ns=1, now_steady=2.1)
 
 
 def test_capacity_eviction_revokes_only_old_ticket():
-    ledger = CaptureLedger(capacity=1, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=1, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -164,7 +179,7 @@ def test_capacity_eviction_revokes_only_old_ticket():
 
 
 def test_tf_generation_change_revokes_and_cannot_be_rewound():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -177,7 +192,7 @@ def test_tf_generation_change_revokes_and_cannot_be_rewound():
 
 
 def test_pair_rechecks_both_tickets_and_same_binding_lifetime():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     first = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -204,7 +219,7 @@ def test_pair_rechecks_both_tickets_and_same_binding_lifetime():
 
 
 def test_bounded_ticket_eviction_supports_sustained_stream_without_epoch_churn():
-    ledger = CaptureLedger(capacity=2, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=2, fresh_after_steady=0.1)
     issued = []
     for seq in range(1, 3001):
         h = header(seq)
@@ -254,7 +269,7 @@ def test_bounded_ticket_eviction_supports_sustained_stream_without_epoch_churn()
 
 
 def test_restart_capture_floor_rejects_old_original_receipts():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1_150_000_000, fresh_after_steady=1.15)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=1.15)
     assert (
         ledger.offer(
             bundle(1),
@@ -278,7 +293,7 @@ def test_restart_capture_floor_rejects_old_original_receipts():
 
 
 def test_retired_raw_gid_cannot_reappear_under_new_generation():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     assert ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -306,7 +321,7 @@ def test_retired_raw_gid_cannot_reappear_under_new_generation():
 
 
 def test_bridge_restart_can_keep_same_raw_source_with_new_boot_and_capture():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     assert ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -337,7 +352,7 @@ def test_bridge_restart_can_keep_same_raw_source_with_new_boot_and_capture():
 
 
 def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets():
-    ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=1, fresh_after_steady=0.1)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     old = ledger.offer(
         bundle(1),
         bridges=("02",) * 4,
@@ -353,7 +368,7 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
     )
     assert old is not None and successor is not None
     for index in range(1000):
-        ledger.advance_fresh_floor(1_200_000_000 + index, 1.2 + index * 0.000001)
+        ledger.advance_fresh_floor(1.2 + index * 0.000001)
     assert not ledger.current(
         successor, binding_generation=4, now_ros_ns=1_300_000_000, now_steady=1.3
     )
@@ -363,6 +378,7 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
             stamp_ns=1_300_000_000,
             received_ros_ns=1_300_000_000,
             received_steady=1.3,
+            timing=capture_time(1.3, tick=1.3, sequence=3),
             sequence=3,
         )
         for h in bundle(1)
@@ -383,6 +399,7 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
             stamp_ns=1_300_000_000,
             received_ros_ns=1_300_000_000,
             received_steady=1.3,
+            timing=capture_time(1.3, tick=1.3, sequence=3),
             sequence=3,
         )
         for h in new
@@ -399,10 +416,9 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
     )
 
 
-def test_recovery_floor_rejects_either_clock_rollback():
+def test_recovery_floor_rejects_true_monotonic_rollback():
     import pytest
 
-    for ros, steady in ((99, 2.0), (100, 0.9)):
-        ledger = CaptureLedger(capacity=4, fresh_after_ros_ns=100, fresh_after_steady=1.0)
-        with pytest.raises(ValueError):
-            ledger.advance_fresh_floor(ros, steady)
+    ledger = CaptureLedger(capacity=4, fresh_after_steady=1.0)
+    with pytest.raises(ValueError):
+        ledger.advance_fresh_floor(0.9)

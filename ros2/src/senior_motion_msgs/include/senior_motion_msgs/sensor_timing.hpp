@@ -12,35 +12,29 @@ namespace sensor_timing {
 struct Policy {
   double soft, hard, period;
   int64_t soft_ns, hard_ns;
-  Policy(double s, double h, double p) : soft(s), hard(h), period(p),
+  Policy(double soft_ms, double hard_ms, double p) : soft(soft_ms / 1000), hard(hard_ms / 1000), period(p),
     soft_ns(0), hard_ns(0) {
-    if (!std::isfinite(s) || !std::isfinite(h) || !std::isfinite(p) || s<0 || h<=s || h>1e6 || p<=0)
+    if (!std::isfinite(soft_ms) || !std::isfinite(hard_ms) || !std::isfinite(p) || soft_ms<0 || hard_ms<=soft_ms || hard_ms>1e9 || p<=0)
       throw std::invalid_argument("shared sensor policy is required");
-    soft_ns=static_cast<int64_t>(std::llround(s*1e9));
-    hard_ns=static_cast<int64_t>(std::llround(h*1e9));
+    soft_ns=static_cast<int64_t>(std::llround(soft_ms*1e6));
+    hard_ns=static_cast<int64_t>(std::llround(hard_ms*1e6));
   }
-  std::optional<int64_t> try_age_ns(int64_t stamp, int64_t received_ros,
-      double received_steady, int64_t now_ros, double now_steady) const noexcept {
-    if (stamp<0 || received_ros<stamp || now_ros<received_ros ||
-        !std::isfinite(received_steady) || !std::isfinite(now_steady) || now_steady<received_steady)
+  std::optional<int64_t> try_age_ns(uint64_t measured_ns,
+      double received_steady, double now_steady) const noexcept {
+    if (!std::isfinite(received_steady) || !std::isfinite(now_steady) ||
+        received_steady < 0 || now_steady < received_steady || now_steady > 9e9)
       return std::nullopt;
-    const double elapsed_seconds=now_steady-received_steady;
-    if (!std::isfinite(elapsed_seconds) || elapsed_seconds>9e9)
-      return std::nullopt;
-    const auto elapsed = static_cast<int64_t>(std::llround(elapsed_seconds*1e9));
-    const auto initial=received_ros-stamp;
-    const auto combined=elapsed>std::numeric_limits<int64_t>::max()-initial ?
-      std::numeric_limits<int64_t>::max() : initial+elapsed;
-    return std::max(now_ros-stamp,combined);
+    const auto received = static_cast<uint64_t>(std::llround(received_steady * 1e9));
+    const auto now = static_cast<uint64_t>(std::llround(now_steady * 1e9));
+    if (measured_ns > received) return std::nullopt;
+    return static_cast<int64_t>(now - measured_ns);
   }
-  //Compatible: explicit programmer callers retain the throwing API. Runtime
-  // input boundaries use try_age_ns; unrelated program failures are not caught.
-  int64_t age_ns(int64_t stamp, int64_t received_ros, double received_steady,
-      int64_t now_ros, double now_steady) const {
-    const auto age = try_age_ns(stamp, received_ros, received_steady, now_ros, now_steady);
-    if (!age) throw std::invalid_argument("invalid or out-of-range sensor clock");
+  int64_t age_ns(uint64_t measured_ns, double received_steady, double now_steady) const {
+    const auto age = try_age_ns(measured_ns, received_steady, now_steady);
+    if (!age) throw std::invalid_argument("invalid monotonic sensor clock");
     return *age;
   }
+
 };
 struct AgeSummary {
   uint64_t count=0, over_soft=0, over_hard=0, invalid_clock=0;

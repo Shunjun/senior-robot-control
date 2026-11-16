@@ -68,7 +68,7 @@ def depth(
 
 
 def aligned(frame: DepthFrame, stamp: float | None = None) -> AlignedRgbdFrame:
-    return align(rgb(frame.stamp if stamp is None else stamp), frame, max_skew_s=0.05)
+    return align(rgb(frame.stamp if stamp is None else stamp), frame, max_skew_ms=50)
 
 
 def person_scene(u: int, v: int) -> float:
@@ -81,15 +81,15 @@ def person_box(stamp: float) -> Detection:
 
 def test_rgb_depth_time_mismatch_rejected() -> None:
     with pytest.raises(FrameSyncError, match="skew"):
-        align(rgb(1.0), depth(1.2), max_skew_s=0.05)
+        align(rgb(1.0), depth(1.2), max_skew_ms=50)
     with pytest.raises(FrameSyncError, match="size"):
-        align(rgb(1.0, width=4), depth(1.0), max_skew_s=0.05)
+        align(rgb(1.0, width=4), depth(1.0), max_skew_ms=50)
     with pytest.raises(FrameSyncError, match="stamp"):
-        align(rgb(math.nan), depth(1.0), max_skew_s=0.05)
-    pair = align(rgb(1.0), depth(1.02), max_skew_s=0.05)
+        align(rgb(math.nan), depth(1.0), max_skew_ms=50)
+    pair = align(rgb(1.0), depth(1.02), max_skew_ms=50)
     assert pair.skew_s == pytest.approx(0.02)
 
-    sync = RgbdSynchronizer(max_skew_s=0.05, capacity=2)
+    sync = RgbdSynchronizer(max_skew_ms=50, capacity=2)
     assert sync.offer_rgb(rgb(1.0)) is None
     assert sync.offer_depth(depth(1.2)) is None
     assert sync.rejected == 1
@@ -224,7 +224,7 @@ def test_person_mask_does_not_erase_occluded_wall() -> None:
 
 def test_stale_low_confidence_and_other_labels_do_not_mask() -> None:
     geometry = project_depth(aligned(depth(5.0, person_scene)), calibration(), CONFIG)
-    config = TrackingConfig(max_detection_age_s=0.3, min_confidence=0.5)
+    config = TrackingConfig(min_confidence=0.5)
 
     stale = track([person_box(1.0)], geometry, config=config)
     assert stale.semantics_available is False
@@ -349,7 +349,7 @@ def test_slow_detector_does_not_block_geometry() -> None:
     worker = InferenceWorker(blocking, max_pending=1)
     adapter = module.PerceptionAdapter(  # type: ignore[attr-defined]
         calibration=calibration(),
-        synchronizer=RgbdSynchronizer(max_skew_s=0.05, capacity=4),
+        synchronizer=RgbdSynchronizer(max_skew_ms=50, capacity=4),
         geometry_config=CONFIG,
         tracking_config=TrackingConfig(),
         worker=worker,
@@ -391,7 +391,7 @@ def test_absent_detector_keeps_geometry_rate(tmp_path: Path) -> None:
     worker = InferenceWorker(load_detector(tmp_path / "none.pt"), max_pending=1)
     adapter = module.PerceptionAdapter(  # type: ignore[attr-defined]
         calibration=calibration(),
-        synchronizer=RgbdSynchronizer(max_skew_s=0.05, capacity=4),
+        synchronizer=RgbdSynchronizer(max_skew_ms=50, capacity=4),
         geometry_config=CONFIG,
         tracking_config=TrackingConfig(),
         worker=worker,

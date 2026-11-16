@@ -1,7 +1,8 @@
 """ROS-independent composition of the one current-motion estimation owner.
 
-No consumer selects raw sources. Tracking and independent-body evidence are
-separate views; this module never supplies a stopping envelope or a truth bound.
+No consumer selects raw sources. Tracking, independent-body diagnostics and
+raw wheel/IMU stillness are separate views. This module never supplies a
+stopping envelope or a truth bound.
 """
 
 from dataclasses import asdict
@@ -14,7 +15,14 @@ from senior_control.motion.observations import Frame, Source, SourceStatus
 from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
 from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
 from senior_control.motion.source_modes import SourceMode
+from senior_control.motion.stillness import stationary
 from senior_control.runtime.diagnostics import QueueSnapshot, RuntimeDiagnostics
+from senior_control.sensors.time_proof import (
+    MeasurementInterval,
+    MeasurementTime,
+    measurement_interval,
+    measurement_time,
+)
 
 
 class MotionSensorRuntime:
@@ -31,14 +39,13 @@ class MotionSensorRuntime:
         self.independent = None
         self.tracking = None
         self.raw_wheel = None
+        self.raw_imu = None
+        self._raw_evidence_sequence = 0
         self.sequence = 0
         self._evidence_key = None
         self._evidence_sequence = 0
         self._independent_key = None
         self._independent_sequence = 0
-        self._still_axes = [None, None]
-        self.stationary_supported = False
-        self._still_generation = None
         self.poses = []
         self.pose_estimator = PoseEstimation(
             unknown_speed_mps=profile.assumed_body_cap,
@@ -54,6 +61,8 @@ class MotionSensorRuntime:
         self.estimator.invalidate(source.value)
         if source is Source.WHEEL:
             self.raw_wheel = None
+        if source is Source.IMU:
+            self.raw_imu = None
 
     def ingest(
         self,
@@ -71,13 +80,41 @@ class MotionSensorRuntime:
             and sample.frame is not Frame.BODY
         ):
             raise ValueError("motion sample needs an actual body-frame transform")
+        physical = None if isinstance(sample, PointObservation) else sample.measurement_interval
+        endpoint = sample.measurement if isinstance(sample, PointObservation) else None
+        if endpoint is None and physical is None:
+            physical = MeasurementInterval(
+                MeasurementTime("host", None, sample.start_steady),
+                MeasurementTime("host", None, sample.end_steady),
+            )
+        coordinate = (
+            endpoint
+            if endpoint is not None
+            else MeasurementTime(
+                physical.end.clock_domain, physical.end.epoch, physical.end.seconds
+            )
+        )
         roots = origins or tuple(
-            Origin(source, sample.epoch, sample.sequence, t, receipt_ros, sample.received_steady)
-            for t in dict.fromkeys((sample.start_ros, sample.end_ros))
+            Origin(
+                source,
+                sample.epoch,
+                sample.sequence,
+                ros,
+                receipt_ros,
+                sample.received_steady,
+                measurement_steady=steady,
+                measurement=endpoint
+                if endpoint is not None
+                else (physical.start if steady == sample.start_steady else physical.end),
+            )
+            for ros, steady in dict.fromkeys(
+                ((sample.start_ros, sample.start_steady), (sample.end_ros, sample.end_steady))
+            )
         )
         if isinstance(sample, DeltaObservation):
             values = logarithm(
-                body_delta(sample.delta, sample.body_from_sensor), sample.end_ros - sample.start_ros
+                body_delta(sample.delta, sample.body_from_sensor),
+                physical.duration,
             )
         elif isinstance(sample, PointObservation):
             if sample.source is Source.IMU:
@@ -105,13 +142,25 @@ class MotionSensorRuntime:
             roots,
             quality,
             independent=independent,
-            interval_half_s=(sample.end_ros - sample.start_ros) / 2,
+            measured_steady=sample.end_steady,
+            interval_half_s=0 if physical is None else physical.duration / 2,
+            measurement=coordinate,
+            measurement_interval=physical,
+            measurement_delta=(
+                body_delta(sample.delta, sample.body_from_sensor)
+                if isinstance(sample, DeltaObservation)
+                else getattr(sample, "measurement_delta", None)
+            ),
             epoch=sample.epoch,
             sequence=sample.sequence,
         )
         accepted = self.ingest_observation(o, now_ros, now_steady)
+        if accepted and sample.source in {Source.WHEEL, Source.IMU}:
+            self._raw_evidence_sequence += 1
         if accepted and sample.source is Source.WHEEL:
             self.raw_wheel = o if quality != 0 else None
+        if accepted and sample.source is Source.IMU:
+            self.raw_imu = o if quality != 0 else None
         return accepted
 
     def ingest_observation(
@@ -160,7 +209,11 @@ class MotionSensorRuntime:
         self.pose_estimator.advance(r)
         gyro = None if r.independent_axes is None else r.independent_axes[1]
         self.gps_course.record_motion(
-            stamp_ros=now_ros,
+            measurement_steady=r.measurement_host_steady
+            if r.measurement_host_steady is not None
+            else now_steady,
+            measurement=r.measurement,
+            interval=r.measurement_interval,
             wheel_vx=self.wheel_linear(now_steady),
             imu_wz=(
                 gyro.value
@@ -187,9 +240,6 @@ class MotionSensorRuntime:
             self.diagnostics.sensor_attempt(
                 attempt.observation.source, "use", attempt.age, attempt.outcomes
             )
-        if self._still_generation != r.generation:
-            self._still_axes = [None, None]
-            self._still_generation = r.generation
         observed = [a for a in (r.vx, r.wz) if a.observed]
         roots = tuple(dict.fromkeys(root for a in observed for root in a.roots))
         key = tuple((root.family, root.epoch, root.sequence) for root in roots)
@@ -241,14 +291,13 @@ class MotionSensorRuntime:
             )
             self.independent = Feedback(
                 Velocity(independent[0].value, independent[1].value),
-                min(root.received_steady for root in independent_roots),
+                min(root.measurement_steady for root in independent_roots),
                 min(a.deadline_steady for a in independent),
                 independent_epoch,
                 self._independent_sequence,
                 True,
                 "independent-sensor current prediction; not a guaranteed speed bound",
             )
-        self._observe_stillness(independent)
         mode = (
             SourceMode.UNAVAILABLE
             if not r.healthy
@@ -262,26 +311,26 @@ class MotionSensorRuntime:
         ]
         ref = dict(
             mode=mode.value,
-            start_ros=min(
+            start_steady=min(
                 (
-                    a.support_start_ros
-                    if a.support_start_ros is not None
-                    else min(root.stamp_ros for root in a.roots)
+                    a.support_start_steady
+                    if a.support_start_steady is not None
+                    else min(root.measurement_steady for root in a.roots)
                 )
                 for a in observed
             )
             if observed
-            else now_ros,
-            end_ros=max(
+            else now_steady,
+            end_steady=max(
                 (
-                    a.support_end_ros
-                    if a.support_end_ros is not None
-                    else max(root.stamp_ros for root in a.roots)
+                    a.support_end_steady
+                    if a.support_end_steady is not None
+                    else max(root.measurement_steady for root in a.roots)
                 )
                 for a in observed
             )
             if observed
-            else now_ros,
+            else now_steady,
             computed_ros=now_ros,
             estimate_kind="current_prediction",
             average=dict(vx=r.vx.value or 0.0, vy=r.vy.value, wz=r.wz.value or 0.0),
@@ -289,34 +338,61 @@ class MotionSensorRuntime:
         )
         return ref, self.tracking, self.tracking
 
-    def _observe_stillness(self, axes):
-        # Existing physical reset/stillness evidence, never a driving admission
-        # gate. New wheel ticks or projections cannot count as new independent vx.
+    def raw_feedback(self, source, now):
+        observation = self.raw_wheel if source == "wheel" else self.raw_imu
+        if observation is None or self.latest is None:
+            return None
+        try:
+            age = self.estimator._age(observation.roots, self.latest.computed_ros, now)
+        except ValueError:
+            return None
+        if age.band == "invalid":
+            return None
+        vx = observation.values[0] if source == "wheel" else 0.0
+        wz = observation.values[2]
+        if vx is None or wz is None:
+            return None
+        return Feedback(
+            Velocity(vx, wz),
+            observation.measured_steady,
+            age.deadline_steady,
+            observation.identity_epoch,
+            observation.identity_sequence,
+            True,
+            "raw wheel odometry" if source == "wheel" else "raw IMU yaw rate",
+            observed_axes=(source == "wheel", True),
+        )
+
+    def stationary(self, now):
+        if (
+            self.raw_wheel is None
+            or self.raw_imu is None
+            or not self.raw_wheel.coordinate.same_axis(self.raw_imu.coordinate)
+        ):
+            return False
         config = self.profile.controller()
-        for i, limit in enumerate((config.still_speed_mps, config.still_yaw_rps)):
-            axis = None if axes is None else axes[i]
-            if axis is None or not axis.observed or abs(axis.value) > limit:
-                self._still_axes[i] = None
-                continue
-            key = tuple((r.family, r.epoch, r.sequence) for r in axis.roots)
-            domain = tuple(sorted({(r.family, r.epoch) for r in axis.roots}))
-            stamp = min(r.received_steady for r in axis.roots)
-            prior = self._still_axes[i]
-            if prior is None or prior[0] != domain:
-                self._still_axes[i] = (domain, key, stamp, stamp, 1)
-            elif prior[1] != key:
-                self._still_axes[i] = (
-                    domain,
-                    key,
-                    prior[2],
-                    stamp,
-                    min(config.still_samples, prior[4] + 1),
-                )
-        self.stationary_supported = all(
-            row is not None
-            and row[4] >= config.still_samples
-            and row[3] >= row[2] + config.still_span_s
-            for row in self._still_axes
+        return stationary(
+            self.raw_feedback("wheel", now),
+            self.raw_feedback("imu", now),
+            now,
+            linear_limit=config.still_speed_mps,
+            yaw_limit=config.still_yaw_rps,
+        )
+
+    def recovery(self, now):
+        wheel, imu = self.raw_feedback("wheel", now), self.raw_feedback("imu", now)
+        if wheel is None or imu is None:
+            return None
+        from senior_control.motion.state_machine import RecoveryObservation
+
+        return RecoveryObservation(
+            wheel.epoch + "|" + imu.epoch,
+            self._raw_evidence_sequence,
+            min(wheel.stamp_steady, imu.stamp_steady),
+            min(wheel.deadline_steady, imu.deadline_steady),
+            True,
+            self.stationary(now),
+            manual_rearm_ready=True,
         )
 
     def ingest_poses(self, rows):
@@ -328,10 +404,17 @@ class MotionSensorRuntime:
                 row["stamp_ros"],
                 row["received_ros"],
                 row["received_steady"],
+                measurement_steady=row["measurement_steady"],
+                measurement=measurement_time(row["measurement"]),
             )
             self.pose_estimator.ingest(
                 PoseObservation(
-                    "wheel_pose", Pose2D(row["x"], row["y"], row["yaw"]), row["stamp_ros"], (root,)
+                    "wheel_pose",
+                    Pose2D(row["x"], row["y"], row["yaw"]),
+                    row["stamp_ros"],
+                    (root,),
+                    measurement_steady=row["measurement_steady"],
+                    measurement=measurement_time(row["measurement"]),
                 )
             )
 
@@ -354,39 +437,86 @@ class MotionSensorRuntime:
     def ingest_packet(self, packet):
         """//Compatible: offline tools can supply old raw-source snapshots, not fused votes."""
         for row in packet.get("sources", []):
-            s = row["sample"]
-            source = row["source"]
-            stamp = s.get("stamp_ros", s.get("end_ros"))
-            if stamp is None or "values" not in s and "delta" not in s:
-                # Condensed historical captures omitted raw values. Never invert
-                # their fused interval into an invented independent observation.
+            try:
+                self._ingest_packet_sample(row, packet)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                # An invalid offline row cannot advance or replace live evidence.
                 continue
-            start = s.get("start_ros", stamp)
-            # //Compatible: historical captures lack the receipt ROS clock. The
-            # later snapshot clock conservatively charges delay; never assume RTF=1.
-            receipt_ros = s.get("received_ros", packet["sampled_ros"])
-            values = s.get("values")
-            if "delta" in s:
-                d = s["delta"]
-                values = logarithm(Pose2D(d["x"], d["y"], d["yaw"]), stamp - start)
-            elif source == "wheel":
-                values = (values[0], None, values[-1])
-            elif source == "imu":
-                values = (None, None, values[0])
-            roots = tuple(
-                Origin(source, s["epoch"], s["sequence"], t, receipt_ros, s["received_steady"])
-                for t in dict.fromkeys((start, stamp))
-            )
-            o = MotionObservation(
-                source,
-                tuple(values),
-                (start + stamp) / 2,
-                roots,
-                s.get("quality", 0.5) if s.get("status", "valid") == "valid" else 0.0,
-                independent=(source != "wheel",) * 3,
-                interval_half_s=(stamp - start) / 2,
-            )
-            self.estimator.ingest(o)
-            if source == "wheel":
-                self.raw_wheel = o
         self.poses = packet.get("poses", [])
+
+    def _ingest_packet_sample(self, row, packet):
+        s = row["sample"]
+        source = row["source"]
+        stamp = s.get("stamp_ros", s.get("end_ros"))
+        if stamp is None or "values" not in s and "delta" not in s:
+            # Condensed historical captures omitted raw values. Never invert
+            # their fused interval into an invented independent observation.
+            return
+        start = s.get("start_ros", stamp)
+        end_steady = s.get("measurement_steady", s.get("end_steady"))
+        start_steady = s.get("start_steady", s.get("measurement_steady"))
+        if start_steady is None or end_steady is None:
+            return  # Historical snapshots cannot establish original monotonic support.
+        # //Compatible: historical captures lack the receipt ROS clock. The
+        # later snapshot clock conservatively charges delay; never assume RTF=1.
+        receipt_ros = s.get("received_ros", packet["sampled_ros"])
+        coordinate = (
+            measurement_time(s["measurement"]) if s.get("measurement") is not None else None
+        )
+        support = (
+            measurement_interval(s["measurement_interval"])
+            if s.get("measurement_interval") is not None
+            else None
+        )
+        if coordinate is None:
+            coordinate = (
+                MeasurementTime(support.end.clock_domain, support.end.epoch, support.end.seconds)
+                if support
+                else MeasurementTime("host", None, (start_steady + end_steady) / 2)
+            )
+        values = s.get("values")
+        if "delta" in s:
+            d = s["delta"]
+            values = logarithm(
+                Pose2D(d["x"], d["y"], d["yaw"]),
+                support.duration if support else end_steady - start_steady,
+            )
+        elif source == "wheel":
+            values = (values[0], None, values[-1])
+        elif source == "imu":
+            values = (None, None, values[0])
+        roots = tuple(
+            Origin(
+                source,
+                s["epoch"],
+                s["sequence"],
+                t,
+                receipt_ros,
+                s["received_steady"],
+                measurement_steady=steady,
+                measurement=(support.start if steady == start_steady else support.end)
+                if support
+                else coordinate,
+            )
+            for t, steady in dict.fromkeys(((start, start_steady), (stamp, end_steady)))
+        )
+        o = MotionObservation(
+            source,
+            tuple(values),
+            (start + stamp) / 2,
+            roots,
+            s.get("quality", 0.5) if s.get("status", "valid") == "valid" else 0.0,
+            independent=(source != "wheel",) * 3,
+            measured_steady=end_steady,
+            interval_half_s=0 if support is None else support.duration / 2,
+            measurement=coordinate,
+            measurement_interval=support,
+            measurement_delta=Pose2D(**s["delta"])
+            if "delta" in s
+            else Pose2D(**s["measurement_delta"])
+            if s.get("measurement_delta") is not None
+            else None,
+        )
+        self.estimator.ingest(o)
+        if source == "wheel":
+            self.raw_wheel = o

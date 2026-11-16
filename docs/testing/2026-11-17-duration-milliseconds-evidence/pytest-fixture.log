@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.15, pytest-8.4.2, pluggy-1.7.0
+rootdir: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+configfile: pyproject.toml
+plugins: asyncio-0.26.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 9 items
+
+tests/unit/test_vehicle_motion_fixture.py ........                       [ 88%]
+tests/unit/test_sim_contract.py .                                        [100%]
+
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-fixture.xml -
+============================== 9 passed in 0.31s ===============================
+PYTEST:0

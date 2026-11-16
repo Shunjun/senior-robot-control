@@ -1,0 +1,32 @@
+[
+  {
+    "group": "unit",
+    "exit": 1,
+    "files": 149,
+    "source_drift": false
+  },
+  {
+    "group": "integration",
+    "exit": 0,
+    "files": 35,
+    "source_drift": false
+  },
+  {
+    "group": "deploy",
+    "exit": 0,
+    "files": 1,
+    "source_drift": false
+  },
+  {
+    "group": "e2e",
+    "exit": 0,
+    "files": 5,
+    "source_drift": false
+  },
+  {
+    "group": "ros",
+    "exit": 0,
+    "files": 27,
+    "source_drift": false
+  }
+]

@@ -1,0 +1,42 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/ruff check . --no-cache --output-format json
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:28Z
+[
+  {
+    "cell": null,
+    "code": "B905",
+    "end_location": {
+      "column": 76,
+      "row": 314
+    },
+    "filename": "/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/ros2/src/senior_robot/senior_robot/native_receipt.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ", strict=False",
+          "end_location": {
+            "column": 75,
+            "row": 314
+          },
+          "location": {
+            "column": 75,
+            "row": 314
+          }
+        }
+      ],
+      "message": "Add explicit value for parameter `strict=`"
+    },
+    "location": {
+      "column": 54,
+      "row": 314
+    },
+    "message": "`zip()` without an explicit `strict=` parameter",
+    "name": "zip-without-explicit-strict",
+    "noqa_row": 314,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/zip-without-explicit-strict"
+  }
+]
+EXIT 1 AT 2026-11-16T18:17:28Z

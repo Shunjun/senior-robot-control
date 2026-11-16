@@ -1,0 +1,107 @@
+{
+  "baseline_head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "baseline_snapshot": "/tmp/fault-isolation-start",
+  "files": {
+    "ros2/src/senior_robot/launch/safety_motion.launch.py": {
+      "start_sha256": "70feb3aa150869e26411402c1ab59a68f786d30ce54a89456906bbce49aa7a49",
+      "final_sha256": "6d8bc4f50ae0bc9b0278ef5bb1e64ba8a1aad35c3728a70ae21b8aec85bb43f7"
+    },
+    "ros2/src/senior_robot/launch/simulation_motion.launch.py": {
+      "start_sha256": "b5f9359dab44be03b0a5579b17d9eb388332776fd4afcb32a20e61e06053aa53",
+      "final_sha256": "85657f01a3f83387f6a2636efbaa0d8809c753ce47a6720511c79f5d110d76cb"
+    },
+    "src/senior_control/agent/composition.py": {
+      "start_sha256": "a13a3a33a34450806bba8586d4c8026286df0fb4e97f7e9aaaca120eb4441d40",
+      "final_sha256": "2bfb29e593020ae937e61637de5ae7c832312d0332614d6ce7f0557ef43cbd73"
+    },
+    "src/senior_control/agent/main.py": {
+      "start_sha256": "cb21588a5cecce1df69db7589ead72ff792cd1b2b083781c31b2b6fc2af4d367",
+      "final_sha256": "0f621b6307f505678eb5929afcf50fa2ccf0ef4ac556e2dfb2ee0bd79677e1a3"
+    },
+    "src/senior_control/docker_start_helper.py": {
+      "start_sha256": "3d0d5bfd0272a4d8e1a7d553c9016c510dd5366098776a48c63a2b1e2b400301",
+      "final_sha256": "ae5d84a2098715aab81520532451194de99f3ae4919bffd105d017d477fbfb2d"
+    },
+    "src/senior_control/runtime/ipc.py": {
+      "start_sha256": "0515be5dc9248ab52d1d3b0962d0ee74c600a3f53e6485fadcff20e59c27a3cc",
+      "final_sha256": "eb34a2aec5a0e0c3adedd16a0510b2c93cc03376a3b53bbdc3d50cfaa05b4a83"
+    },
+    "src/senior_control/runtime/lifecycle_events.py": {
+      "start_sha256": null,
+      "final_sha256": "a121ea95a5c64210d9ef6e2db46ddf5db10434128d29ecdc2a15d60d5ca91fef"
+    },
+    "src/senior_control/runtime/supervisor.py": {
+      "start_sha256": "8af45125545c3f4dd94b6ccccf31517795bd4893e5abb5c86511a3dbaf61f103",
+      "final_sha256": "c9bcaf6f6e310ca76ed21374ff9ba80cdb41bf6ae4df978e3a59d25a3b32e635"
+    },
+    "src/senior_control/simulation_cli.py": {
+      "start_sha256": "6711e4db8649d350ddcb5719a4e91fe93c6c00ab36e67d56b5aef632869b1a1e",
+      "final_sha256": "dd3c562944ee3312d551bac1b5f16b5bd825f0c9cb83070882b855e10f2b54d2"
+    },
+    "tests/integration/test_runtime.py": {
+      "start_sha256": "969d8584341fe3827a3b0fb83cfc33bb7b45e414f978fc95666fe06a8f779ff8",
+      "final_sha256": "1ab91a23767a96aa5fca50781d0ec2ba76bb0007ab45e062ed53a23d2a7a9a67"
+    },
+    "tests/integration/test_runtime_fault_isolation.py": {
+      "start_sha256": null,
+      "final_sha256": "a6fcb84c6af599920f5fb7a9c660e4de5721790b51443ae1f61c8e01259bb747"
+    },
+    "tests/integration/test_shutdown.py": {
+      "start_sha256": "fbfa1fb7a8bafc679bf2cb3163c739ff6a0dd223ff45f645c47ff83ed3d11d04",
+      "final_sha256": "18b539c4338bcef5f3eb5c1faff337196f01b75a7af89b15ef7f641195041ab9"
+    },
+    "tests/integration/test_task_ownership.py": {
+      "start_sha256": "d775a3eb3f1e6ff6e4f33db84a411069285e132eb21a2952113704924621ff6c",
+      "final_sha256": "71375b2747ed32d732c6be1d223ca6b1888d199e8cc8742d7a874d8532c4dbab"
+    },
+    "tests/integration/test_vehicle_cli.py": {
+      "start_sha256": "54eff05e36e3725aed1bdc74d44ec79dd51863ca895d4c06a2ef688ef9443a00",
+      "final_sha256": "7bf935b0135cb89e9a365664d0ccc0796031f902b5aa11ae243a05835478aa4b"
+    },
+    "tests/unit/test_agent_config.py": {
+      "start_sha256": "2f51f4ba5cdc4766360114b1c01e9f152d721bf031660845cdcdbdd80eaded25",
+      "final_sha256": "88c92e743234e4e14f0d30abda66e190ec17a66db80bc18192d6e2cfa16949a8"
+    },
+    "tests/unit/test_docker_start_helper.py": {
+      "start_sha256": "8c1af3ec311cdd1b35c7611e7c8885c88393fe8cf3fe42c60a30d31312be0bc6",
+      "final_sha256": "9216a0f0492770799083ac5dbc87be2525ca3c0261c3b54f259f821206497dc7"
+    },
+    "tests/unit/test_learning_cleanup.py": {
+      "start_sha256": "9a65758ddd5bd44552ec203d46668494437b0ebafdd85fcf5396681919961ae3",
+      "final_sha256": "84b3cb310ffc6637e3d6510c2935cf16b92f46b81c279b7d9dc23f92754c62fd"
+    },
+    "tests/unit/test_logging_diagnostics.py": {
+      "start_sha256": "678a186d075c369ffe7802566ab8c61cbc7e9085f21fe7dab3a8309e7a710887",
+      "final_sha256": "ac89fdc6fa3b829e1e615dda71c4828933bee0b4fd75eb093c9984852ddb0921"
+    },
+    "tests/unit/test_runtime_identity.py": {
+      "start_sha256": null,
+      "final_sha256": "a435cfae168122978001c7fa4476dadda9ab4436d58e40e0640fdbdcf1bb8e38"
+    }
+  },
+  "protected_unchanged": {
+    "ros2/src/senior_robot/senior_robot/native_receipt.py": {
+      "start_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "final_sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a"
+    },
+    "tests/test_native_receipt_diagnostics.py": {
+      "start_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "final_sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408"
+    },
+    "docs/reviews/2026-11-16-software-estop-owner.md": {
+      "start_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "final_sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1"
+    }
+  },
+  "frozen_test_source_sha256": {
+    "src/senior_control/agent/main.py": "0f621b6307f505678eb5929afcf50fa2ccf0ef4ac556e2dfb2ee0bd79677e1a3",
+    "src/senior_control/agent/composition.py": "2bfb29e593020ae937e61637de5ae7c832312d0332614d6ce7f0557ef43cbd73",
+    "src/senior_control/runtime/ipc.py": "eb34a2aec5a0e0c3adedd16a0510b2c93cc03376a3b53bbdc3d50cfaa05b4a83",
+    "src/senior_control/runtime/supervisor.py": "c9bcaf6f6e310ca76ed21374ff9ba80cdb41bf6ae4df978e3a59d25a3b32e635",
+    "src/senior_control/runtime/lifecycle_events.py": "a121ea95a5c64210d9ef6e2db46ddf5db10434128d29ecdc2a15d60d5ca91fef",
+    "src/senior_control/docker_start_helper.py": "ae5d84a2098715aab81520532451194de99f3ae4919bffd105d017d477fbfb2d",
+    "src/senior_control/simulation_cli.py": "dd3c562944ee3312d551bac1b5f16b5bd825f0c9cb83070882b855e10f2b54d2",
+    "ros2/src/senior_robot/launch/safety_motion.launch.py": "6d8bc4f50ae0bc9b0278ef5bb1e64ba8a1aad35c3728a70ae21b8aec85bb43f7",
+    "ros2/src/senior_robot/launch/simulation_motion.launch.py": "85657f01a3f83387f6a2636efbaa0d8809c753ce47a6720511c79f5d110d76cb"
+  }
+}

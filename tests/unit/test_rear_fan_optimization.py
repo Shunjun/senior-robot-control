@@ -161,7 +161,7 @@ def make_observation(scenario):
     )
     if scenario == "reframed":
         scan = replace(scan, sensor_to_body=Pose2D(-0.03, -0.02, -0.2))
-    observation = filter_self(scan, profile, self_mask_range_uncertainty=0.01)
+    observation = filter_self(scan, profile)
     if scenario in {"different_origin", "reversed_rays"}:
         rays = list(observation.rays)
         if scenario == "different_origin":

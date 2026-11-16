@@ -15,6 +15,7 @@ from senior_control.motion.observations import (
     SourceStatus,
 )
 from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
+from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
 
 
 def stamp(value: dict[str, Any]) -> float:
@@ -61,6 +62,8 @@ class NativeAdapter:
                     None,
                     None,
                     None,
+                    measurement_steady=steady,
+                    measurement=MeasurementTime("offline-recording", self.recording_id, t),
                 )
             d = m["body_delta"]
             return DeltaObservation(
@@ -82,6 +85,14 @@ class NativeAdapter:
                 ),
                 None,
                 Pose2D(0, 0, 0),
+                start_steady=steady - (t - stamp(m["interval_start"])),
+                end_steady=steady,
+                measurement_interval=MeasurementInterval(
+                    MeasurementTime(
+                        "offline-recording", self.recording_id, stamp(m["interval_start"])
+                    ),
+                    MeasurementTime("offline-recording", self.recording_id, t),
+                ),
             )
         values: tuple[float, ...]
         covariance: Covariance | None = None
@@ -126,6 +137,8 @@ class NativeAdapter:
             covariance,
             None,
             None,
+            measurement_steady=steady,
+            measurement=MeasurementTime("offline-recording", self.recording_id, t),
         )
 
 

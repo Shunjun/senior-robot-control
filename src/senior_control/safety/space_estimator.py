@@ -100,14 +100,17 @@ class SpaceEstimation:
             and (not math.isfinite(o.software_error_m) or o.software_error_m < 0)
         ):
             raise ValueError("invalid aligned space evidence")
-        root = max(o.roots, key=lambda r: (r.stamp_ros, r.family))
+        root = max(o.roots, key=lambda r: (r.measurement_steady, r.family))
         old = self._frontiers.get(o.source)
         retired = self._retired.setdefault(o.source, set())
         if root.epoch in retired:
             return False
         if old is not None:
             if root.epoch == old.epoch:
-                if root.sequence <= old.sequence or root.stamp_ros < old.stamp_ros:
+                if (
+                    root.sequence <= old.sequence
+                    or root.measurement_steady < old.measurement_steady
+                ):
                     return False
             else:
                 if root.received_steady < old.received_steady or len(retired) >= 32:
@@ -147,10 +150,8 @@ class SpaceEstimation:
             try:
                 ages = [
                     p.age(
-                        stamp_ros=r.stamp_ros,
-                        received_ros=r.received_ros,
+                        measured_steady=r.measurement_steady,
                         received_steady=r.received_steady,
-                        now_ros=now_ros,
                         now_steady=now_steady,
                     )
                     for r in o.roots

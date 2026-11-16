@@ -1,0 +1,20 @@
+AT 2026-11-16T18:42:26.829955+00:00
+CWD /tmp
+COMMAND ["uv", "pip", "install", "--offline", "--python", "/tmp/final-review-fixes-wheel-venv/bin/python", "/tmp/final-review-fixes-dist/senior_control-0.1.0-py3-none-any.whl"]
+Using Python 3.12.15 environment at: /tmp/final-review-fixes-wheel-venv
+Resolved 10 packages in 9ms
+Prepared 1 package in 25ms
+Installed 10 packages in 15ms
+ + aiosqlite==0.22.1
+ + annotated-types==0.8.0
+ + pydantic==2.14.2
+ + pydantic-core==2.50.2
+ + pydantic-settings==2.16.2
+ + python-dotenv==1.2.4
+ + pyyaml==6.0.3
+ + senior-control==0.1.0 (from file:///tmp/final-review-fixes-dist/senior_control-0.1.0-py3-none-any.whl)
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.4
+
+EXIT 0
+ELAPSED 0.12784783300594427

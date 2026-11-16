@@ -1,20 +1,20 @@
-"""Shared motion output composition; safety_gate remains the sole actuator writer.
+"""Single control decision owner; private native transport publishes its output.
 
 Deployment profiles supply response evidence; no ground truth enters this module.
 """
 
-import json
 import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraint_worker import ConstraintScheduler, ExecutorWorker
+from senior_control.motion.constraint_worker import ConstraintScheduler
 from senior_control.motion.constraints import (
     ConstraintConfig,
     ConstraintEngine,
@@ -22,7 +22,6 @@ from senior_control.motion.constraints import (
     Footprint,
     Perception,
     RiskEnvelope,
-    prepare_perception,
 )
 from senior_control.motion.contracts import (
     BodyMotion,
@@ -37,27 +36,39 @@ from senior_control.motion.contracts import (
 from senior_control.motion.controller import Feedback, MotionController
 from senior_control.motion.estimator import Origin
 from senior_control.motion.kinematics import compose, inverse
+from senior_control.motion.learning_record import LearningGeometry
 from senior_control.motion.manual_target import ManualLinearTarget
-from senior_control.motion.source_fences import SourceEpochFence
+from senior_control.motion.process_resources import ProcessWorker
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.startup_learning import StartupLearning
-from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+from senior_control.motion.state_machine import MotionStateMachine
 from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
+from senior_control.runtime.learning_client import LearningClient
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.time_proof import source_time
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
-from senior_robot.motion_observation_adapter import NativeObservationRosBridge, observation_origin
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-
-_REFERENCE_DEPTH = 10
 
 
 class MotionCoreOutput:
-    def __init__(self, node: Any, profile: Any, *, ingress_factory=NativeObservationRosBridge):
+    def __init__(self, node: Any, profile: Any):
+        self._resources = ExitStack()
+        try:
+            self._initialize(node, profile)
+        except BaseException:
+            self._resources.close()
+            raise
+
+    def _own(self, resource):
+        self._resources.callback(resource.close)
+        return resource
+
+    def _initialize(self, node, profile):
         from std_msgs.msg import String
 
         self.node, self.profile = node, profile
@@ -70,38 +81,31 @@ class MotionCoreOutput:
             time.monotonic(),
             owner=self,
         )
-        self._ingress = None
         self._last_tick_diagnostic = None
         self.acceleration_model = profile.acceleration_model()
         self.stopping = StoppingRisk()
         self.boot = uuid4().hex
         claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
-        self._startup_claim_path = Path(claim) if claim else None
+        self._learning_client = self._own(LearningClient(Path(claim))) if claim else None
         self.startup = StartupLearning(
-            Path(claim) if claim else None,
-            linear_error_mps=profile.linear_error,
-            yaw_error_rps=profile.yaw_error,
+            self._learning_client,
         )
         self.self_returns = None
         self._learning_scan_key = None
         self._filter_signature = None
         self._learning_geometry = None
-        self._learning_motion_emitted = False
         self.sequence = 0
         self.event_sequence = 0
-        self.model_deadline = time.monotonic() + profile.model_seconds
         self.engine = ConstraintEngine(
             ConstraintConfig((1.0, 0.75, 0.5, 0.25), 0.15, 0.05, 256, 0.005)
         )
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="directional-refine")
-        self.scheduler = ConstraintScheduler(
-            self.engine, ExecutorWorker(self.executor), worker_budget_s=0.25
-        )
+        self.worker = self._own(ProcessWorker())
+        self.scheduler = ConstraintScheduler(self.engine, self.worker, worker_budget_ms=250)
         self.controller = MotionController(
             self.engine, profile.controller(), Velocity(0, 0), Velocity(0, 0)
         )
         self.machine = MotionStateMachine()
-        self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
+        self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
         self.output_generation = 0
         self._task_identity: tuple[str, int] | None = None
         # Proofs are in-flight only; explicit durable collection never recreates identity.
@@ -109,19 +113,14 @@ class MotionCoreOutput:
         self._terminal_released: set[tuple[str, str, int, str]] = set()
         self._input_boot = ""
         self._input_floor = -1
-        self._manual_motion_source: str | None = None
         # One-way startup phase. Zero commands never establish body stillness;
-        # only independent stillness or an accepted nonzero source ends it.
+        # only wheel/IMU stillness or an accepted nonzero source ends it.
         self._startup_motion_unconfirmed = True
-        self._reference: dict[str, Any] | None = None
-        self._reference_boot = ""
-        self._reference_sequence = 0
-        self._reference_boot_fence = SourceEpochFence(
-            max_retired=profile.admission().epoch_history_limit
-        )
-        self._reference_warning_at = float("-inf")
         self._perception_key: tuple[Any, ...] | None = None
         self._perception_pose = None
+        from senior_robot.motion_core_perception import ScanGeometry
+
+        self.scan_geometry = self._own(ScanGeometry())
         self._space_estimate = None
         self._perception: Perception | None = None
         self.space_estimator = SpaceEstimation(
@@ -134,118 +133,15 @@ class MotionCoreOutput:
         self._barrier_complete = False
         self._last_fault_condition: tuple[str, str] | None = None
         self._closed = False
-        self._hardware = False
-        self._hardware_seen = float("-inf")
-        self._hardware_gid = None
         self._last_healthy = False
         self._body_epoch_used: str | None = None
         self._wheel_epoch_used: str | None = None
-        self._runtime = node.create_publisher(String, "/motion/runtime", 10)
+        from senior_control.motion.diagnostic_pump import DiagnosticPump
+        from senior_robot.runtime_reports import RuntimeReports
+
+        self._runtime = self._own(RuntimeReports(node))
+        self._diagnostic_pump = self._own(DiagnosticPump(self.diagnostics))
         self._runtime_type = String
-        from senior_robot.motion_lifecycle import with_dds_info
-
-        with_dds_info(type(self)._on_reference)
-        # The estimator is local to the output cycle. No subscription to a second
-        # node's already-selected /motion/core_reference drives this owner.
-        self._subscription = None
-        if ingress_factory is not None:
-            if not node.has_parameter("wheel_frame"):
-                node.declare_parameter("wheel_frame", "odom")
-            if not hasattr(node, "_tf"):
-                from tf2_ros import Buffer, TransformListener
-
-                node._tf = Buffer()
-                self._tf_listener = TransformListener(node._tf, node)
-            self._ingress = ingress_factory(
-                node,
-                profile,
-                sample_sink=self.sensors.ingest,
-                source_invalidated=self.sensors.invalidate,
-                publish=False,
-            )
-        self._optional_inputs = None
-        if ingress_factory is not None and (
-            profile.gps_input is not None or profile.rgbd_input is not None
-        ):
-            from senior_robot.optional_motion_inputs import OptionalMotionInputs
-
-            self._optional_inputs = OptionalMotionInputs(node, profile, self.sensors)
-        if not profile.simulation_only and profile.hardware_estop.mode == "readable":
-            from std_msgs.msg import Bool
-
-            from senior_robot.native_receipt import subscribe
-
-            self._hardware_subscription = subscribe(
-                node,
-                Bool,
-                profile.hardware_estop.topic,
-                self._on_hardware_estop,
-                writer=profile.hardware_estop.publisher,
-                namespace=profile.hardware_estop.namespace,
-                qos="reliable",
-                invalidate=self._invalidate_hardware_status,
-                expired=self._on_expired_hardware_estop,
-            )
-
-    def _on_expired_hardware_estop(self, msg: Any, info: Any) -> None:
-        # A delayed assertion still latches. A delayed release never clears or
-        # refreshes hardware status; the original receipt stays unchanged.
-        if bool(msg.data):
-            self._on_hardware_estop(msg, info)
-
-    def _warn_reference(self, reason: str) -> None:
-        now = time.monotonic()
-        if now - self._reference_warning_at >= 2.0:
-            self._reference_warning_at = now
-            self.node.get_logger().warning(f"motion core reference rejected: {reason}")
-
-    def _invalidate_hardware_status(self) -> None:
-        self._hardware_seen = float("-inf")
-        self._hardware_gid = None
-
-    def _hardware_status_ready(self, now: float) -> bool:
-        if self.profile.simulation_only:
-            return True
-        capability = self.profile.hardware_estop
-        if capability.mode != "readable":
-            # No physical state channel selected: keep observation unknown,
-            # without turning missing operator confirmation into a motion gate.
-            return True
-        endpoints = self.node.get_publishers_info_by_topic(capability.topic)
-        return (
-            now - self._hardware_seen <= capability.max_age_s
-            and len(endpoints) == 1
-            and endpoints[0].node_name == capability.publisher
-            and endpoints[0].node_namespace == capability.namespace
-            and bytes(endpoints[0].endpoint_gid) == self._hardware_gid
-        )
-
-    def _on_hardware_estop(self, msg: Any, info: Any) -> None:
-        from senior_robot.native_receipt import received_steady
-
-        capability = self.profile.hardware_estop
-        origin = observation_origin(
-            info,
-            self.node.get_publishers_info_by_topic(capability.topic),
-            capability.publisher,
-            allow_topology_only=False,
-            expected_namespace=capability.namespace,
-        )
-        if origin is None:
-            return
-        now = time.monotonic()
-        self._hardware_seen = received_steady(info)
-        self._hardware_gid = origin.topology_gid
-        active = bool(msg.data)
-        if active and not self._hardware:
-            self._hardware = True
-            self._event(K.HARDWARE_ESTOP, now)
-            # Physical release never automatically resumes an old authority.
-            self._event(K.SOFTWARE_ESTOP, now)
-            self.revoke("hardware_estop", now=now)
-        elif not active and self._hardware:
-            self._hardware = False
-            self._event(K.HARDWARE_RELEASE, now)
 
     def _event(self, kind: K, now: float, source: str = "", revision: int = 0) -> None:
         self.event_sequence += 1
@@ -262,73 +158,6 @@ class MotionCoreOutput:
                 # readiness may arrive later; safety state still records loss.
                 return
             self.revoke(kind.value, now=now)
-
-    def _on_reference(self, msg: Any, info: Any) -> None:
-        # //Compatible: retained offline replay transport carries raw sources only.
-        origin = observation_origin(
-            info,
-            self.node.get_publishers_info_by_topic("/motion/core_reference"),
-            "motion_fusion",
-            allow_topology_only=bool(self.profile.simulation_only and self.profile.unvalidated),
-        )
-        if origin is None:
-            return
-        try:
-            if len(msg.data) > 131072:
-                raise ValueError("oversize raw reference")
-            packet = json.loads(msg.data)
-            if (
-                type(packet.get("schema")) is not int
-                or packet["schema"] != 1
-                or type(packet.get("sequence")) is not int
-                or packet["sequence"] < 1
-                or not isinstance(packet.get("boot_id"), str)
-                or not packet["boot_id"]
-                or len(packet["boot_id"]) > 128
-            ):
-                raise ValueError("invalid offline raw snapshot")
-            ros = self.node.get_clock().now().nanoseconds / 1e9
-            default_policy().age(
-                stamp_ros=packet["sampled_ros"],
-                received_ros=packet["sampled_ros"],
-                received_steady=packet["sampled_steady"],
-                now_ros=ros,
-                now_steady=time.monotonic(),
-            )
-            if (
-                max(ros - packet["sampled_ros"], time.monotonic() - packet["sampled_steady"])
-                >= default_policy().hard_age_s
-            ):
-                return
-            if (
-                packet["boot_id"] == self._reference_boot
-                and packet["sequence"] <= self._reference_sequence
-            ):
-                return
-            if not self._reference_boot_fence.accept(packet["boot_id"]):
-                return
-            self.sensors.ingest_packet(packet)
-            self._reference_boot, self._reference_sequence = packet["boot_id"], packet["sequence"]
-        except (ValueError, TypeError, KeyError) as exc:
-            self._warn_reference(str(exc))
-
-    def _stationary(self, body: Feedback | None, wheel: Feedback | None, now: float) -> bool:
-        c = self.controller.config
-        # Physical reset/stillness uses independent observed evidence. A wheel
-        # estimate remains useful for control without becoming physical truth.
-        body = self.sensors.independent
-        return bool(
-            body is not None
-            and body.fresh(now)
-            and all(body.observed_axes)
-            and self.sensors.stationary_supported
-            and abs(body.velocity.vx) <= c.still_speed_mps
-            and abs(body.velocity.wz) <= c.still_yaw_rps
-        )
-
-    def _consume_ready_reference(self) -> None:
-        # Native ingress callbacks feed the single owner. No second snapshot queue.
-        return
 
     def command(self, msg: Any) -> bool:
         """Called only AFTER the existing authenticated FinalCommand generation fence."""
@@ -353,6 +182,8 @@ class MotionCoreOutput:
         }:
             return False
         if msg.source_kind not in {"manual", "navigation", "idle"}:
+            return False
+        if reason == "estop" and (not msg.request_id or msg.source_kind == "navigation"):
             return False
         if (
             not all(
@@ -413,14 +244,6 @@ class MotionCoreOutput:
         if not all(math.isfinite(x) for x in (velocity.vx, velocity.wz)):
             return False
         source_id = f"{msg.source_id}:{msg.source_epoch}"
-        if msg.source_kind == "manual" and source_id != self._manual_motion_source:
-            try:
-                _, body, wheel = self._inputs(now)
-                imu = self._imu_feedback(now)
-                if body is None and not self._limited_ready(now, wheel, imu):
-                    return False
-            except (ValueError, KeyError, TypeError):
-                return False
         if self.target.source_id != source_id:
             self._interrupt_learning("control_takeover")
             self._retire_startup(now)
@@ -477,24 +300,14 @@ class MotionCoreOutput:
             return False
         self.revoke(reason, now=now)
         if reason in {"estop_reset", "fault_recover"}:
-            if not self._hardware_status_ready(now):
-                return False
             try:
                 _, body, wheel = self._inputs(now)
-                if not self._stationary(body, wheel, now):
+                if not self.sensors.stationary(now):
                     return False
-                assert body is not None and wheel is not None
-                self.machine.observe(
-                    RecoveryObservation(
-                        body.epoch,
-                        body.sequence,
-                        body.stamp_steady,
-                        body.deadline_steady,
-                        True,
-                        True,
-                    ),
-                    now,
-                )
+                evidence = self.sensors.recovery(now)
+                if evidence is None:
+                    return False
+                self.machine.observe(evidence, now)
                 self._event(
                     K.ESTOP_RESET if reason == "estop_reset" else K.FAULT_RECOVER,
                     now,
@@ -503,13 +316,15 @@ class MotionCoreOutput:
                 )
                 if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
                     return False
-                return self.controller.reset_at_stillness(body, wheel, now)
+                return self.controller.reset_at_stillness(
+                    self.sensors.raw_feedback("wheel", now),
+                    self.sensors.raw_feedback("imu", now),
+                    now,
+                )
             except (ValueError, KeyError, TypeError):
                 return False
         elif reason == "estop":
-            explicit = bool(msg.request_id) and msg.source_kind != "navigation"
-            if self.machine.state.mode is not MotionMode.ESTOP or explicit:
-                self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
+            self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
         elif reason == "fault":
             # Producer fault close is a latch reflection, not a new detector event.
             state = self.machine.state
@@ -651,24 +466,6 @@ class MotionCoreOutput:
             self.profile.length, self.profile.width, tuple(boundary) if boundary else None
         )
 
-    def _startup_permission_lost(self, permission, now=None):
-        if self.startup.state == "validating":
-            return (
-                False  # Stationary post-sampling proposes zero; controller still checks stopping.
-            )
-        if (
-            self.startup.state == "braking"
-            and permission.brake is not None
-            and permission.brake.stop_verified
-        ):
-            return False  # Planned, verified stopping does not need a driving permit.
-        if self.startup.active and self._learning_motion_emitted and permission.permit is None:
-            self._interrupt_learning("learning_permission_lost")
-            self._startup_target(time.monotonic() if now is None else now)
-            self.scheduler.stop()
-            return True
-        return False
-
     def _retire_startup(self, now):
         if self.machine.state.task_id == self.boot:
             self._event(K.TASK_RETIRED, now, self.boot)
@@ -679,8 +476,12 @@ class MotionCoreOutput:
                 self._interrupt_learning("other_control_source")
                 return
             if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
-                self._interrupt_learning("latched_stop")
-            elif self.startup.state != "initializing":
+                self.startup.hold_motion()
+                self._retire_startup(now)
+                if self.target.source == "startup_learning":
+                    self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
+                return
+            elif self.startup.state not in {"initializing", "unconfirmed"}:
                 if self.machine.state.task_id != self.boot:
                     self._event(K.TASK_START, now, self.boot)
                 if self.machine.state.task_id != self.boot:
@@ -689,12 +490,12 @@ class MotionCoreOutput:
                     Velocity(self.startup.velocity, 0),
                     "startup_learning",
                     self.boot,
-                    self.model_deadline,
+                    None,
                 )
                 return
         if self.target.source == "startup_learning":
             self._retire_startup(now)
-            self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
+            self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
 
     def _interrupt_learning(self, reason):
         was_active = self.startup.active
@@ -705,7 +506,12 @@ class MotionCoreOutput:
             self._perception_key = None
 
     def revoke(self, reason: str, *, now: float | None = None) -> None:
-        self._interrupt_learning(reason)
+        if reason in {"estop", "fault", "estop_reset", "fault_recover", K.EXECUTION_FAULT.value}:
+            self.startup.hold_motion()
+        elif reason == K.FEEDBACK_LOST.value:
+            self.startup.evidence_gap("motion_feedback_temporarily_unavailable")
+        else:
+            self._interrupt_learning(reason)
         # One logical transition uses one steady instant. Resampling inside a
         # close followed by its event would make that event appear to go back.
         now = time.monotonic() if now is None else now
@@ -733,54 +539,137 @@ class MotionCoreOutput:
                 now_steady=now,
             )
         self.scheduler.stop()
-        self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
+        self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
 
     def _sync_learning_model(self, message):
         if self.startup.state == "disabled":
             return
-        boundary = tuple(self.node._profile().footprint)
-        geometry = (
-            message.source_epoch,
-            message.sensor_x,
-            message.sensor_y,
-            message.sensor_yaw,
-            message.angle_min,
-            message.angle_increment,
-            len(message.ranges),
-            boundary,
-            self.profile.sensor_error,
-            self.profile.orientation_error_rad,
-            self.profile.linear_error,
-            self.profile.yaw_error,
+        geometry = LearningGeometry(
+            body_frame=str(self.node.get_parameter("body_frame").value),
+            sensor_frame=message.frame_id,
+            source_kind="scan",
+            physical_polygon=tuple(self.node._profile().footprint),
+            sensor_to_body=(message.sensor_x, message.sensor_y, message.sensor_yaw),
+            angle_min=message.angle_min,
+            angle_increment=message.angle_increment,
+            count=len(message.ranges),
+            range_min=message.range_min,
+            range_max=message.range_max,
         )
+        if self._learning_client is not None:
+            self._learning_client.poll()
+            self._learning_client.geometry(geometry)
         if geometry == self._learning_geometry:
             return
         if self._learning_geometry is not None:
-            self._interrupt_learning("scan_or_body_geometry_changed")
-            self.startup.state, self.startup.reason = "interrupted", "scan_or_body_geometry_changed"
-            if self.self_returns is not None:
-                self.self_returns.clear()
+            self.startup.hold_motion()
+            self.startup.evidence_gap("scan_or_body_geometry_changed")
             self._perception_key = None
             self._filter_signature = None
             self.space_estimator.invalidate("scan")
         self._learning_geometry = geometry
-        self.self_returns = None
-        if len(boundary) < 3:
-            self.startup.state, self.startup.reason = "failed", "physical_polygon_missing"
-            raise ValueError("physical_polygon_missing")
-        radius = max(math.hypot(x, y) for x, y in boundary)
-        error = self.profile.sensor_error + radius * abs(
-            math.sin(self.profile.orientation_error_rad)
-        )
-        model = SelfReturnModel(boundary, error_m=error)
-        if self._startup_claim_path is not None:
-            from senior_control.safety.external_motion_features import write_feature_boundary
+        self.self_returns = SelfReturnModel(geometry.physical_polygon)
 
-            write_feature_boundary(self._startup_claim_path, boundary, error)
-        self.self_returns = model
-        self.startup.motion_radius = radius
-        self.startup.linear_error_mps = self.profile.linear_error
-        self.startup.yaw_error_rps = self.profile.yaw_error
+    def _filter_key(self):
+        view = None if self._learning_client is None else self._learning_client.view
+        return (
+            self._learning_geometry,
+            self.startup.provisional,
+            None if view is None else view.catalog.model_id,
+        )
+
+    def _filtered_scan(self, raw):
+        m = raw.message
+        self._sync_learning_model(m)
+        key = (m.source_epoch, m.sequence, self._filter_key())
+        if getattr(self, "_latest_filtered_key", None) == key:
+            return self._latest_unmasked, self._latest_masked
+        scan = ScanObservation(
+            tuple(m.ranges),
+            m.angle_min,
+            m.angle_increment,
+            m.range_min,
+            m.range_max,
+            raw.stamp,
+            "ros",
+            Pose2D(m.sensor_x, m.sensor_y, m.sensor_yaw),
+            m.transform_stamp,
+            str(self.node.get_parameter("body_frame").value),
+            raw.stamp,
+            True,
+            0.01,
+            False,
+            True,
+        )
+        unmasked = filter_self(scan, self.node._profile())
+        masked = unmasked
+        view = None if self._learning_client is None else self._learning_client.view
+        if view is not None:
+            masked = view.filter(unmasked)
+        elif self.self_returns is not None and self.startup.provisional:
+            masked = self.self_returns.filter(unmasked, provisional=True)
+        self._latest_filtered_key = (m.source_epoch, m.sequence, self._filter_key())
+        self._latest_unmasked, self._latest_masked = unmasked, masked
+        return unmasked, masked
+
+    def _scan_geometry_result(self, raw, key, deadline):
+        from senior_robot.motion_core_perception import prepare_scan_geometry
+
+        m = raw.message
+        _, masked = self._filtered_scan(raw)
+        key = (m.source_epoch, m.sequence, key[2], self._filter_key())
+        policy = self.profile.perception_no_return_policy(m.frame_id, m.range_max)
+        return self.scan_geometry.update(
+            key,
+            partial(
+                prepare_scan_geometry,
+                masked,
+                self.profile.sensor_error,
+                policy,
+                dict(
+                    stamp_steady=raw.received,
+                    deadline_steady=deadline,
+                    source_epoch=m.source_epoch,
+                    frame_id="scan_reference",
+                    revision=m.sequence,
+                    forecast_horizon_s=self.profile.horizon_s,
+                    basis=self.profile.perception_basis + "; " + policy.value,
+                ),
+            ),
+            snapshot=raw,
+        )
+
+    def prefetch_scan(self):
+        """Feed geometry between control slots; never wait for a Future.
+
+        This avoids a mandatory one-control-period dispatch lag. The control
+        slot fences source/frame/filter changes and tightens an older completed
+        scan against the newest observation, without renewing its deadline.
+        """
+        # Reception/geometry prefetch is independent of optional startup learning.
+        if not self.node._scans:
+            return
+        motion = self.sensors.latest
+        if motion is None:
+            return
+        raw = self.node._scans[-1]
+        m = raw.message
+        signature = self._filter_key()
+        alignment = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
+        key = (m.source_epoch, m.sequence, alignment, signature)
+        if key == self._perception_key:
+            return
+        now = time.monotonic()
+        try:
+            age = default_policy().age(
+                measured_steady=raw.measurement_steady,
+                received_steady=raw.received,
+                now_steady=now,
+            )
+            if age.band != "invalid":
+                self._scan_geometry_result(raw, key, age.deadline_steady)
+        except (ValueError, TypeError, KeyError):
+            return  # Tick owns evidence errors and output selection.
 
     def _observation(self, now: float) -> tuple[Any, Pose2D]:
         if self.node._depth_policy != "laser_only":
@@ -792,14 +681,21 @@ class MotionCoreOutput:
         raw = self.node._scans[-1]
         m = raw.message
         ros = self.node.get_clock().now().nanoseconds / 1e9
-        root = Origin("scan", m.source_epoch, m.sequence, raw.stamp, raw.received_ros, raw.received)
+        root = Origin(
+            "scan",
+            m.source_epoch,
+            m.sequence,
+            raw.stamp,
+            raw.received_ros,
+            raw.received,
+            measurement_steady=raw.measurement_steady,
+            measurement=source_time(raw.message.raw_capture.timing).measurement,
+        )
         raw_key = (root.epoch, root.sequence)
         try:
             age = default_policy().age(
-                stamp_ros=root.stamp_ros,
-                received_ros=root.received_ros,
+                measured_steady=root.measurement_steady,
                 received_steady=root.received_steady,
-                now_ros=ros,
                 now_steady=now,
             )
         except ValueError:
@@ -814,79 +710,71 @@ class MotionCoreOutput:
             raise ValueError("scan_expired")
         self._sync_learning_model(m)
         motion = self.sensors.latest
-        current = self.sensors.pose_estimator.at(ros, now_ros=ros, now_steady=now, motion=motion)
+        current = self.sensors.pose_estimator.at(
+            ros,
+            measurement_steady=motion.measurement_host_steady,
+            measurement=motion.measurement,
+            now_ros=ros,
+            now_steady=now,
+            motion=motion,
+        )
         alignment_epoch = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
         self.space_estimator.reset_frame(alignment_epoch)
-        signature = (
-            self.startup.provisional,
-            None if self.self_returns is None else self.self_returns.revision,
-        )
+        key = (m.source_epoch, m.sequence, alignment_epoch, self._filter_key())
+        result = self._scan_geometry_result(raw, key, age.deadline_steady)
+        signature = self._filter_key()
         if self._filter_signature is not None and signature != self._filter_signature:
             self.space_estimator.invalidate("scan")
         self._filter_signature = signature
-        key = (m.source_epoch, m.sequence, alignment_epoch, signature)
-        old = self._perception_pose if key == self._perception_key else None
+        if result is None:
+            raise ValueError("scan_geometry_pending")
+        selected = result.snapshot
+        selected_message = selected.message
+        selected_age = default_policy().age(
+            measured_steady=selected.measurement_steady,
+            received_steady=selected.received,
+            now_steady=now,
+        )
+        if selected_age.band == "invalid" or now >= result.perception.deadline_steady:
+            raise ValueError("scan_geometry_pending")
+        if self.startup.state != "disabled" and self.self_returns is not None:
+            if self._learning_scan_key != raw_key:
+                self._learning_scan_key = raw_key
+                unmasked, _ = self._filtered_scan(raw)
+                self.startup.frame(
+                    self.self_returns, unmasked, capture=source_time(m.raw_capture.timing)
+                )
+                if signature != self._filter_key():
+                    raise ValueError("scan_geometry_pending")
+        old = self._perception_pose if result.key == self._perception_key else None
         if old is None:
             old = self.sensors.pose_estimator.at(
-                raw.stamp, now_ros=ros, now_steady=now, motion=motion
+                selected.stamp,
+                measurement_steady=selected.measurement_steady,
+                measurement=source_time(selected.message.raw_capture.timing).measurement,
+                now_ros=ros,
+                now_steady=now,
+                motion=motion,
             )
         pose = compose(inverse(old.pose), current.pose)
-        if key != self._perception_key:
-            scan = ScanObservation(
-                tuple(m.ranges),
-                m.angle_min,
-                m.angle_increment,
-                m.range_min,
-                m.range_max,
-                raw.stamp,
-                "ros",
-                Pose2D(m.sensor_x, m.sensor_y, m.sensor_yaw),
-                m.transform_stamp,
-                str(self.node.get_parameter("body_frame").value),
-                raw.stamp,
-                True,
-                0.01,
-                False,
-                True,
-            )
-            filtered = filter_self(
-                scan, self.node._profile(), self_mask_range_uncertainty=self.profile.sensor_error
-            )
-            if self.startup.state != "disabled":
-                if self.self_returns is not None:
-                    if self._learning_scan_key != raw_key:
-                        self._learning_scan_key = raw_key
-                        self.startup.frame(self.self_returns, filtered)
-                    filtered = self.self_returns.filter(
-                        filtered, provisional=self.startup.provisional
-                    )
-            from senior_robot.motion_core_perception import scan_free_patches
-
-            policy = self.profile.perception_no_return_policy(m.frame_id, m.range_max)
-            patches = scan_free_patches(filtered, no_return_policy=policy)
-            hits = tuple(r.endpoint for r in filtered.external_hits if r.endpoint is not None)
-            self._perception = prepare_perception(
-                patches,
-                hits,
-                error_m=self.profile.sensor_error,
-                stamp_steady=raw.received,
-                deadline_steady=age.deadline_steady,
-                source_epoch=m.source_epoch,
-                frame_id="scan_reference",
-                revision=m.sequence,
-                forecast_horizon_s=self.profile.horizon_s,
-                no_return_policy=policy,
-                basis=(self.profile.perception_basis + "; " + policy.value),
-                max_patches=2048,
-                max_vertices=8192,
-                max_hits=2048,
+        if result.key != self._perception_key:
+            self._perception = result.perception
+            selected_root = Origin(
+                "scan",
+                selected_message.source_epoch,
+                selected_message.sequence,
+                selected.stamp,
+                selected.received_ros,
+                selected.received,
+                measurement_steady=selected.measurement_steady,
+                measurement=source_time(selected.message.raw_capture.timing).measurement,
             )
             self.space_estimator.ingest(
                 SpaceObservation(
                     "scan",
                     self._perception.occupied,
                     self._perception.free_space,
-                    (root,),
+                    (selected_root,),
                     error_m=old.error_m,
                     software_error_m=self.profile.position_error
                     + old.prediction_error.software_position_m,
@@ -895,10 +783,7 @@ class MotionCoreOutput:
                     frame_epoch=alignment_epoch,
                 )
             )
-            # Keep the geometry's original pose association stable. A later
-            # re-evaluation of historical pose must not silently move its frame.
-            self._perception_pose = old
-            self._perception_key = key
+            self._perception_pose, self._perception_key = old, result.key
         assert self._perception is not None
         relative_error = self.sensors.pose_estimator.relative_error(old, current)
         # Convert current-body orientation uncertainty in the scan frame using
@@ -922,35 +807,53 @@ class MotionCoreOutput:
             alignment_error_m=known_error,
             software_alignment_error_m=software_error,
         )
+        from shapely.affinity import rotate, translate
+        from shapely.geometry import GeometryCollection
+
+        from senior_robot.motion_core_perception import fast_scan_guard
+
+        latest_pose = self.sensors.pose_estimator.at(
+            raw.stamp,
+            measurement_steady=raw.measurement_steady,
+            measurement=source_time(raw.message.raw_capture.timing).measurement,
+            now_ros=ros,
+            now_steady=now,
+            motion=motion,
+        )
+        latest_error = self.sensors.pose_estimator.relative_error(latest_pose, current)
+        guard_error = (
+            latest_error.software_position_m
+            + 2 * radius * math.sin(min(math.pi, latest_error.software_yaw_rad) / 2)
+            if latest_error.position_m is None or latest_error.yaw_rad is None
+            else latest_error.position_m
+            + 2 * radius * math.sin(min(math.pi, latest_error.yaw_rad) / 2)
+        )
+        _, masked = self._filtered_scan(raw)
+        policy = self.profile.perception_no_return_policy(m.frame_id, m.range_max)
+        free, occupied = fast_scan_guard(
+            masked, policy, error_m=self.profile.sensor_error + guard_error
+        )
+        transform = compose(inverse(old.pose), latest_pose.pose)
+
+        def aligned(geometry):
+            return translate(
+                rotate(geometry, transform.yaw, origin=(0, 0), use_radians=True),
+                transform.x,
+                transform.y,
+            )
+
         return replace(
             self._perception,
-            occupied=space.occupied,
-            free_space=space.free,
-            deadline_steady=space.deadline_steady,
+            occupied=GeometryCollection((space.occupied, aligned(occupied))),
+            free_space=space.free.intersection(aligned(free)),
+            deadline_steady=min(space.deadline_steady, age.deadline_steady),
+            revision=m.sequence,
         ), pose
 
-    def _reference_age_ns(self, ref: dict[str, Any], ros: int | None = None) -> int:
-        # The wire carries float seconds: round the serialized endpoint to its
-        # nearest ROS nanosecond. Precision already lost on the wire is not recovered.
-        now = self.node.get_clock().now().nanoseconds if ros is None else ros
-        return now - round(ref["end_ros"] * 1_000_000_000)
-
-    def _reference_time_valid(
-        self, ref: dict[str, Any], ros: int | None = None, *, future: bool = False
-    ) -> bool:
-        age = self._reference_age_ns(ref, ros)
-        horizon = round(self.profile.temporal().prediction_horizon_s * 1_000_000_000)
-        return age < 0 if future else 0 <= age <= horizon
-
-    def _reference_age_ros(self, ref: dict[str, Any]) -> float:
-        return self._reference_age_ns(ref) / 1_000_000_000
-
     def _inputs(self, now: float) -> tuple[Any, Any, Any]:
-        ros = self.node.get_clock().now().nanoseconds / 1e9
-        if self._ingress is not None:
-            self.sensors.poses = list(self._ingress.core.poses)
-            self.sensors.ingest_poses(self.sensors.poses)
-        ref, tracking, secondary = self.sensors.estimate(ros, now)
+        if not hasattr(self.sensors, "input_reference"):
+            raise ValueError("input_snapshot_missing")
+        ref, tracking, secondary = self.sensors.input_reference
         # Remember motion even if perception later fails before _snapshot.
         self.stopping.domains(
             self.sensors.latest,
@@ -959,36 +862,28 @@ class MotionCoreOutput:
             linear_error=self.profile.linear_error,
             yaw_error=self.profile.yaw_error,
         )
-        self._reference = dict(
-            sampled_steady=now, sampled_ros=ros, reference=ref, poses=self.sensors.poses
-        )
         return ref, tracking, secondary
 
-    def _imu_feedback(self, now: float) -> Feedback | None:
-        r = self.sensors.latest
-        if r is None or r.wz.value is None:
-            return None
-        return Feedback(
-            Velocity(0.0, r.wz.value),
-            now,
-            r.wz.deadline_steady,
-            str(r.generation),
-            self.sensors._evidence_sequence,
-            True,
-            "unified yaw estimate",
-            observed_axes=(False, r.wz.observed),
-            unified=True,
-        )
+    def _startup_visibility(self):
+        visibility = None
+        if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+            from senior_control.motion.constraints import NoReturnPolicy
+            from senior_control.safety.startup_visibility import startup_visibility
 
-    def _limited_ready(self, now: float, wheel: Feedback | None, imu: Feedback | None) -> bool:
-        return bool(
-            self.sensors.latest is not None
-            and self.sensors.latest.healthy
-            and self.sensors.tracking is not None
-            and self.sensors.tracking.fresh(now)
-        )
+            raw = self.node._scans[-1]
+            _, masked = self._filtered_scan(raw)
+            visibility = startup_visibility(
+                masked,
+                front_stop=self.profile.startup_learning_front_occlusion_stop,
+                rear_stop=self.profile.startup_learning_rear_occlusion_stop,
+                no_return_clear=self.profile.perception_no_return_policy(
+                    raw.message.frame_id, raw.message.range_max
+                )
+                is NoReturnPolicy.VALIDATED_FREE_TO_RANGE,
+            )
+        return visibility
 
-    def _snapshot(self, ref, body, wheel, imu, imu_current, now, perception, pose):
+    def _snapshot(self, ref, wheel, now, perception, pose, *, visibility=None):
         mode = SourceMode(ref["mode"])
         if wheel is None:
             raise ValueError("all_relevant_motion_feedback_unavailable")
@@ -997,8 +892,8 @@ class MotionCoreOutput:
         motion = BodyMotion(
             None,
             None,
-            ref["start_ros"],
-            ref["end_ros"],
+            ref["start_steady"],
+            ref["end_steady"],
             now,
             wheel.deadline_steady,
             epoch,
@@ -1049,7 +944,6 @@ class MotionCoreOutput:
                 SourceMode.WHEEL_IMU_LIMITED,
             ),
             p.profile_id,
-            self.model_deadline,
             p.horizon_s,
             linear,
             angular,
@@ -1060,7 +954,7 @@ class MotionCoreOutput:
             cap,
             p.yaw_cap,
             bool(p.simulation_only and p.unvalidated),
-            lateral_stop_s=p.lateral_stop_s,
+            lateral_stop_s=None if p.lateral_stop_ms is None else p.lateral_stop_ms / 1000,
             brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
             brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
         )
@@ -1076,6 +970,7 @@ class MotionCoreOutput:
             p.profile_id,
             p.profile_id,
             risk,
+            startup_visibility=visibility,
         )
         return ctx
 
@@ -1089,8 +984,7 @@ class MotionCoreOutput:
             a.wz,
             p.yaw_decel,
             p.yaw_jerk,
-            p.lag,
-            self.model_deadline,
+            p.lag_ms / 1000,
             p.profile_id,
         )
 
@@ -1134,25 +1028,14 @@ class MotionCoreOutput:
             )
         self.diagnostics.summary("stopping", values)
 
-    def _imu_state(self, packet, now):
-        # //Compatible: retain the old raw-shaped independent yaw view for
-        # existing controller diagnostics. Stopping consumes the fused estimate.
-        estimate = self.sensors.latest
-        axis = (
-            None
-            if estimate is None or estimate.independent_axes is None
-            else estimate.independent_axes[1]
-        )
-        usable = axis is not None and axis.observed and now < axis.deadline_steady
-        return (None if not usable else {"sample": {"values": [axis.value]}}, usable)
-
-    def _stop_fallback(self, prepared, packet, now):
+    def _stop_fallback(self, prepared, now):
         # Recompute from original raw roots once at output time. A tick projection
         # may change its object identity; that is not a new sensor observation.
         ref, body, wheel = self._inputs(now)
-        imu, imu_current = self._imu_state(packet, now)
         perception, pose = self._observation(now)
-        ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+        ctx = self._snapshot(
+            ref, wheel, now, perception, pose, visibility=self._startup_visibility()
+        )
         if ctx.mode is not prepared.context.mode:
             # A prediction leaving its original ROS window cannot become a
             # different feedback mode just to salvage this same output.
@@ -1171,7 +1054,7 @@ class MotionCoreOutput:
         # is explicitly unverified stop/fault output, not a safe-stop claim.
         elif (
             self.startup.active
-            and not self._learning_motion_emitted
+            and not self.startup.motion_started
             and self.target.source in {"idle", "startup_learning"}
         ):
             # Pre-movement sampling holds zero on blocked/unknown space. No
@@ -1197,7 +1080,6 @@ class MotionCoreOutput:
         return output
 
     def tick(self) -> None:
-        self._consume_ready_reference()
         now = time.monotonic()
         if self._last_tick_diagnostic is not None:
             self.diagnostics.duration("control_period", now - self._last_tick_diagnostic)
@@ -1214,27 +1096,20 @@ class MotionCoreOutput:
         output = Velocity(0, 0)
         prepared = None
         try:
-            if not self._hardware_status_ready(now):
-                raise ValueError("hardware_estop_status_missing_or_expired")
-            if now >= self.target.deadline_steady and self.target.source != "idle":
+            if (
+                self.target.deadline_steady is not None
+                and now >= self.target.deadline_steady
+                and self.target.source != "idle"
+            ):
                 self.scheduler.stop()
                 self._event(
                     K.MANUAL_EXPIRED if self.target.source == "manual" else K.TASK_PAUSE,
                     now,
                     self.target.source_id.rsplit(":", 1)[0],
                 )
-                self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, self.model_deadline)
+                self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
             ref, body, wheel = self._inputs(now)
-            imu_point = self._imu_feedback(now)
-            packet = self._reference
-            if packet is None:
-                raise ValueError("reference_missing")
-            imu, imu_current = self._imu_state(packet, now)
-            healthy = (
-                self.sensors.latest is not None
-                and self.sensors.latest.healthy
-                and now < self.model_deadline
-            )
+            healthy = self.sensors.latest is not None and self.sensors.latest.healthy
             if body is not None:
                 independent = self.sensors.independent
                 body_state = (
@@ -1252,18 +1127,10 @@ class MotionCoreOutput:
                     }
                 )
                 stamp, deadline = body.stamp_steady, body.deadline_steady
-                self.machine.observe(
-                    RecoveryObservation(
-                        body.epoch,
-                        body.sequence,
-                        body.stamp_steady,
-                        body.deadline_steady,
-                        healthy,
-                        self._stationary(body, wheel, event_now),
-                        manual_rearm_ready=healthy,
-                    ),
-                    now,
-                )
+            recovery = self.sensors.recovery(now)
+            if recovery is not None:
+                self.machine.observe(recovery, now)
+                stamp, deadline = recovery.stamp_steady, recovery.deadline_steady
             if healthy:
                 if body is None and wheel is not None:
                     stamp, deadline = wheel.stamp_steady, wheel.deadline_steady
@@ -1272,35 +1139,27 @@ class MotionCoreOutput:
             elif self._last_healthy:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
-            estimate = self.sensors.latest
-            stationary = (
-                estimate is not None
-                and estimate.vx.observed
-                and estimate.wz.observed
-                and abs(estimate.vx.value or 0) < 0.01
-                and abs(estimate.wz.value or 0) < 0.02
-            )
-            self.startup.advance(
-                estimate, self.sensors.wheel_linear(now), now=now, stationary=stationary
-            )
+            stationary = self.sensors.stationary(now)
+            self.startup.advance(self.sensors.wheel_linear(now), now=now, stationary=stationary)
+            if self.startup.deadline is not None and now >= self.startup.deadline and stationary:
+                self.controller.reset_at_stillness(
+                    self.sensors.raw_feedback("wheel", now),
+                    self.sensors.raw_feedback("imu", now),
+                    now,
+                )
             self._startup_target(now)
             perception, pose = self._observation(now)
             self._startup_target(now)
-            ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
+            ctx = self._snapshot(
+                ref, wheel, now, perception, pose, visibility=self._startup_visibility()
+            )
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
-            if self._startup_permission_lost(permission, now):
-                # Rebuild with provisional filtering revoked before proposing
-                # any output. The current raw sequence is never re-stamped.
-                perception, pose = self._observation(now)
-                ctx = self._snapshot(ref, body, wheel, imu, imu_current, now, perception, pose)
-                evaluation = self.engine.evaluate(ctx, now)
-                permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
-            estop = self.machine.state.mode is MotionMode.ESTOP
+            estop = self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
             prepared = self.controller.propose_tick(
                 ctx.target.velocity,
                 ctx,
@@ -1310,8 +1169,8 @@ class MotionCoreOutput:
                 now,
                 estop=estop,
                 evaluation=evaluation,
-                imu=imu_point,
-                require_limited_rearm=False,
+                imu=self.sensors.raw_feedback("imu", now),
+                still_wheel=self.sensors.raw_feedback("wheel", now),
             )
             decision = prepared.decision
             reason = decision.reason
@@ -1346,7 +1205,7 @@ class MotionCoreOutput:
                     and self.machine.state.mode
                     not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
                 ):
-                    prepared = self._stop_fallback(prepared, packet, emit_now)
+                    prepared = self._stop_fallback(prepared, emit_now)
                     decision = prepared.decision
                     output = self._decision_output(
                         decision,
@@ -1368,53 +1227,56 @@ class MotionCoreOutput:
                     not decision.verified or not emit_now < decision.evidence_deadline
                 ):
                     raise ValueError("motion_expired_or_unqualified")
-            if self.startup.active and output != Velocity(0, 0):
-                self._learning_motion_emitted = True
-            self.node._emit_motion_core(output, reason)
+            output_now = time.monotonic()
+            output_deadline = decision.evidence_deadline
+            learning_output = self.target.source == "startup_learning"
+            if (
+                self.target.source == "idle"
+                and self.startup.action_tail_active
+                and self.startup.deadline is not None
+                and output_now >= self.startup.deadline
+                and output != Velocity(0, 0)
+            ):
+                raise ValueError("learning_action_window_finished")
+            if learning_output and output != Velocity(0, 0):
+                if not self.startup.action_permitted and not self.startup.prepare_action():
+                    raise ValueError("learning_action_not_reserved")
+                end = self.startup.deadline
+                if end is not None and output_now >= end:
+                    raise ValueError("learning_action_window_finished")
+                output_deadline = min(output_deadline, output_now + 3.0 if end is None else end)
+            self.node._emit_motion_core(output, reason, output_deadline, computed_steady=now)
+            if learning_output and output != Velocity(0, 0):
+                self.startup.motion_emitted(output_now, deadline=output_deadline)
+            else:
+                self.startup.output_stopped(output_now)
             self._record_stopping_output(output, time.monotonic())
             self.controller.commit(prepared)
-            if self.target.source == "manual" and output != Velocity(0, 0):
-                self._manual_motion_source = self.target.source_id
-            if body is None and wheel is not None and imu_point is not None:
-                ready = self._limited_ready(event_now, wheel, imu_point)
-                readiness_deadline = min(wheel.deadline_steady, imu_point.deadline_steady)
-                if ready:
-                    readiness_deadline = min(readiness_deadline, decision.evidence_deadline)
-                    deadline = (
-                        min(deadline, readiness_deadline)
-                        if deadline is not None
-                        else readiness_deadline
-                    )
-                self.machine.observe(
-                    RecoveryObservation(
-                        epoch,
-                        self.sequence,
-                        min(wheel.stamp_steady, imu_point.stamp_steady),
-                        readiness_deadline,
-                        False,
-                        False,
-                        manual_rearm_ready=ready,
-                    ),
-                    event_now,
-                )
-                if healthy:
-                    self._event(K.FEEDBACK_HEALTHY, event_now)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
             if prepared is not None:
                 self.controller.discard(prepared)
-            self.controller.invalidate_limited_rearm()
             reason = str(exc)[:256] or type(exc).__name__
-            if self.startup.state != "initializing":
-                self._interrupt_learning(reason)
-            self.node._emit_motion_core(Velocity(0, 0), reason)
+            if reason not in {
+                "scan_geometry_pending",
+                "learning_action_window_finished",
+                "learning_action_not_reserved",
+            }:
+                self.startup.evidence_gap(reason)
+            self.node._emit_motion_core(Velocity(0, 0), reason, computed_steady=now)
+            self.startup.output_stopped(time.monotonic())
             self._record_stopping_output(Velocity(0, 0), time.monotonic())
-            if self._last_healthy:
-                self._event(K.FEEDBACK_LOST, event_now)
-                self._last_healthy = False
-            healthy = False
+            if reason not in {
+                "scan_geometry_pending",
+                "learning_action_window_finished",
+                "learning_action_not_reserved",
+            }:
+                if self._last_healthy:
+                    self._event(K.FEEDBACK_LOST, event_now)
+                    self._last_healthy = False
+                healthy = False
         state = self.machine.state
         actions = list(state.allowed_actions)
-        actual_stationary = healthy and self._stationary(body, wheel, event_now)
+        actual_stationary = self.sensors.stationary(event_now)
         if actual_stationary:
             self._startup_motion_unconfirmed = False
         if not actual_stationary:
@@ -1429,7 +1291,6 @@ class MotionCoreOutput:
                 "boot_id": self.boot,
                 "sequence": self.sequence,
                 "sampled_steady": now,
-                "valid_until": now + 0.15,
                 "mode": state.mode.value,
                 "reason": reason,
                 "stationary": bool(actual_stationary),
@@ -1438,24 +1299,9 @@ class MotionCoreOutput:
                 "evidence_deadline_steady": deadline,
                 "estop_revision": state.estop_revision,
                 "fault_revision": state.fault_revision,
-                "confirmed_estop_status": "hardware_latched"
-                if self._hardware
-                else "software_latched"
+                "confirmed_estop_status": "software_latched"
                 if state.mode is MotionMode.ESTOP
                 else "clear",
-                "hardware_estop_observation": (
-                    "not_configured"
-                    if self.profile.simulation_only
-                    else "unknown"
-                    if self.profile.hardware_estop.mode == "unknown"
-                    else "independent_unreadable"
-                    if self.profile.hardware_estop.mode == "independent_unreadable"
-                    else "unavailable"
-                    if not self._hardware_status_ready(now)
-                    else "latched"
-                    if self._hardware
-                    else "clear"
-                ),
                 "allowed_actions": actions,
                 "task_id": state.task_id,
                 "output_generation": self.output_generation,
@@ -1469,18 +1315,20 @@ class MotionCoreOutput:
         self.diagnostics.summary(
             "startup_learning",
             self.startup.summary(
-                learned_count=0 if self.self_returns is None else len(self.self_returns.learned)
+                learned_count=(
+                    0
+                    if self._learning_client is None or self._learning_client.view is None
+                    else len(self._learning_client.view.catalog.anchors)
+                )
             ),
         )
         self.diagnostics.duration("control_compute", time.monotonic() - now)
-        self.diagnostics.pump(time.monotonic())
+
+    def report_status(self, value):
+        self._runtime.status(value)
 
     def close(self) -> None:
         self._closed = True
         self._interrupt_learning("shutdown")
         self.scheduler.stop()
-        self.executor.shutdown(wait=False, cancel_futures=True)
-
-
-def data_time(value: dict[str, Any] | None) -> float:
-    return float(value["sampled_steady"]) if value is not None else 0.0
+        self._resources.close()

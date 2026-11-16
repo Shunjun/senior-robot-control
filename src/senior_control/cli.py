@@ -30,7 +30,6 @@ class VehicleProfile(BaseModel):
     database: Path | None = None
     socket: Path | None = None
     cloud_url: str | None = None
-    estop_state: Path | None = None
     ros_domain: int | None = None
     motion_profile: Path | None = None
     safety_parameters: Path | None = None
@@ -60,7 +59,6 @@ def load_profile(path: Path, *, control_dir: Path | None = None) -> VehicleProfi
             "credentials": control_dir / "device.json",
             "database": control_dir / "agent.db",
             "socket": control_dir / "agent.sock",
-            "estop_state": control_dir / "estop-state.json",
         }
         for name, value in paths.items():
             if name in values:

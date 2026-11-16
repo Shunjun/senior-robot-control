@@ -16,6 +16,8 @@ from pydantic import (
 from senior_control.errors import ErrorCode
 from senior_control.navigation import RouteProgress
 
+HEARTBEAT_WINDOW_SECONDS = 5.0
+HEARTBEAT_INTERVAL_MS = 1000.0
 DEVICE_REVOKED_CLOSE_CODE = 4403
 _MAX_SAFE_WEB_INTEGER = 2**53 - 1
 
@@ -368,6 +370,13 @@ class BodyReferenceState(StrictModel):
         return self
 
 
+class RuntimeObservation(StrictModel):
+    """Reporting metadata only: never an input to motion admission or recovery."""
+
+    status: Literal["current", "missing", "revoked", "ipc_unavailable"]
+    last_sampled_steady: float | None = None
+
+
 class MotionRuntimeState(StrictModel):
     """Trusted local /motion/runtime JSON; never accepted from a control socket."""
 
@@ -376,7 +385,6 @@ class MotionRuntimeState(StrictModel):
     boot_id: str = Field(min_length=1, max_length=128)
     sequence: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
     sampled_steady: float
-    valid_until: float
     mode: Literal[
         "idle",
         "manual",
@@ -394,11 +402,7 @@ class MotionRuntimeState(StrictModel):
     evidence_deadline_steady: float | None
     estop_revision: int = Field(ge=0)
     fault_revision: int = Field(ge=0)
-    confirmed_estop_status: Literal["clear", "software_latched", "hardware_latched"]
-    # //Compatible: older producers omitted physical observation; omission is unknown.
-    hardware_estop_observation: Literal[
-        "not_configured", "clear", "latched", "independent_unreadable", "unknown", "unavailable"
-    ] = "unknown"
+    confirmed_estop_status: Literal["clear", "software_latched"]
     allowed_actions: list[
         Literal["acquire", "estop_reset", "fault_recover", "replan_task", "resume_task"]
     ]
@@ -416,8 +420,6 @@ class MotionRuntimeState(StrictModel):
 
     @model_validator(mode="after")
     def evidence_window(self) -> "MotionRuntimeState":
-        if self.valid_until <= self.sampled_steady:
-            raise ValueError("runtime observation interval is invalid")
         if (self.evidence_stamp_steady is None) != (self.evidence_deadline_steady is None):
             raise ValueError("runtime evidence interval must be paired")
         if (
@@ -461,7 +463,6 @@ class PreparedAuthorityPayload(StrictModel):
 
 class ResponsePayload(StrictModel):
     request_type: Literal[
-        "drive.intent",
         "safety.estop.reset",
         "safety.fault.recover",
         "task.execution.command",

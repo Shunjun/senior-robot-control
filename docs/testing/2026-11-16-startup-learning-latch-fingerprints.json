@@ -1,0 +1,9 @@
+{
+  "ros2/src/senior_robot/senior_robot/motion_core_output.py": "4a6c3ccb0dc7e18659e18774c02064a9d894d5285274392707172128cda2f00a",
+  "src/senior_control/motion/startup_learning.py": "3d50e5f2b2028d26f8633d7c05d0ec3f7c9d02a9960f2b763faf3511e708c484",
+  "src/senior_control/safety/self_learning.py": "9c1532bf0b0f12f1c4e7f9ab4418ae19dd4f96ea726a0e8244b4d72ce6ee10b7",
+  "tests/unit/test_startup_learning.py": "ef922aa9e93a6502e81fc4062a3a5a6aece4ef7f43204054fedf4a769550d04c",
+  "tests/unit/test_startup_learning_chain.py": "1dccad765fe2e23f88e7c15dbfd1bfa6599f93d7af75b6d3792fb943cc8e16f1",
+  "tests/unit/test_startup_learning_review.py": "799dc961c10b99b7be3ae5a2d9deecce58f0619ce848d0abc9a2e0d59d8b6f57",
+  "tests/unit/test_startup_learning_latch.py": "50a568ada44f41dd9f1c1a1819d4e2400d3861ecee525e281436440c538b569a"
+}

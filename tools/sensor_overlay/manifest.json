@@ -1,0 +1,363 @@
+{
+  "source_root_hint": "/Users/zhangshunjun/Wheel 机器人/1.WHEELTEC ROS机器人通用资料/7.ROS源码/ROS2源码/Humble源码/src",
+  "hardware_path": "N10Plus UART 460800 (site log; actual installed binary unverified)",
+  "patches": {
+    "driver-monotonic.patch": "cf52c1c31741506d85f1ba77e8647e37fb7122d2b87bedf989a2c739a60828fe",
+    "optional-gps.patch": "140ad9f4cd56327209393d8fad118110e569def2de4ca45a953cde3bf4730bec",
+    "optional-ahrs.patch": "8c16f6428bdbb9074293db9ebf054471eebd9f4fd89655d3eaa12b30987feb5d"
+  },
+  "files": {
+    "turn_on_wheeltec_robot/src/wheeltec_robot.cpp": {
+      "before": "c96da6f956f3568f0ba2fe3de2c151c41127fe5a0b3f386f1213c5b3609ee55d",
+      "after": "3f9914a179730a924fd36a077655cf34cc70220d7cea0935118aadeb0b82cd31"
+    },
+    "turn_on_wheeltec_robot/include/turn_on_wheeltec_robot/wheeltec_robot.h": {
+      "before": "82c9c92b7832bfe23a26952cbb6b5ebabbfb7c0d20abe6bdbf0c1377d5f940ae",
+      "after": "65e8397abd5d11ea670bcdc94f19a880847119ea3dc6eb09b240c3a823054d50"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/input.hpp": {
+      "before": "1a4ef6a0353bac11ed2ced31da038aec437e9d68e5a622ca7c926db1a650f6d5",
+      "after": "499816737c6b0ea1e88fb9402ce39ae498656efe879e3c3cc9593fbe847fe489"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lsiosr.hpp": {
+      "before": "db0d4e24314405a4ce5e422c6ff5223b7def44dee29c471bb8d05c347e6ee181",
+      "after": "19a8c8476b0435428180c40f44194db0c6757af4ca4eb2051862d2a1b6082ec2"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/input.cpp": {
+      "before": "7c1d770beb33ce346cfac82e3976931fdbc43af77bdf589771a7b6fb27b40bc8",
+      "after": "d248ef46ceb1b33ff0afd6f4bc2f249129e305bca29eac7913b312d70e442a90"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lsiosr.cpp": {
+      "before": "8ba2ca4ecdc88c00f6ebcbc873abb751e2278c2df78b054e4f923f551133596a",
+      "after": "beacf583b4ffd5dc11e3611473a281b78316355a6ababe96783ba9cf4731216c"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/data_acquisition_strategy.hpp": {
+      "before": "7fdcb2f0c7945d3424e08158f3b14c8cee17fa75e6c94a0d6745f2e654934be1",
+      "after": "37f1e30b014197302d5dd734bea626aa93048120f93e841cb0860c56a85e077d"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_x10_driver.hpp": {
+      "before": "f1ba383729b9735cbcf22a508c48d8bc7551fbd47c2cf062cb1da250c426fd45",
+      "after": "81f8bd4d53737dfb6c4627efc047bd6a62f6c0c122e4da16362de293eb24b799"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_x10_driver.cpp": {
+      "before": "c1ba073b29c8621ce74f28734811f9d8bcca686e01d1c24913c87df214a5bcae",
+      "after": "c83f410c0f34f4b21d0e542536ec385cda6668067e3f6535581756cb15dc4bf2"
+    },
+    "turn_on_wheeltec_robot/package.xml": {
+      "before": "ddc974e19a89e62b55369e86d3d7c3c688dbb488f16763b28c35222088692e46",
+      "after": "bf4321b209d4fa4d7d0d2070b814432bdd86ca55b52292741a6a08097db43dc9"
+    },
+    "turn_on_wheeltec_robot/CMakeLists.txt": {
+      "before": "8782c74b307b21557b3549657e4e1faf0b709a197fe3d6d9808c7451a3f53656",
+      "after": "c6ff013564b26c842d7906cd8f26db412c3d8e06781f7c9aa10c362ab5442a81"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/package.xml": {
+      "before": "61075a31bcc5f9f4be36d94e6c510188516072ce8ed28fb2161b599d0ba6147b",
+      "after": "dcd638b061f393245ac9f357b8503118d3562e5e123ed426dc88d883c491c223"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/CMakeLists.txt": {
+      "before": "567b253d02a9896597fe4f5f3c3b9915982d1500af978ca02d3010350bcc8f01",
+      "after": "fe1998db0d4cebe98ec47715c47ea72df6d9a66d3c550d60fb6a858c5f09f74f"
+    },
+    "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_camera_node.h": {
+      "before": "d2995875f9fcdadb38835b5d322e4c5e63184cc5d74049cb3cd217e1b8922dfa",
+      "after": "000d8c6f1377d7fce8af1da51dc26e3260c8e3e009d1d7689e4f93c41e52b2ed"
+    },
+    "ros2_astra_camera-master/astra_camera/src/ob_camera_node.cpp": {
+      "before": "903c5e1630d91b391bcf207497c4639e9782f6021b3f0ba3b652140699d25df6",
+      "after": "97b95f0d7e6284cfe951b4520e5631dc55b43e12cb74ecba11300ab624ade606"
+    },
+    "ros2_astra_camera-master/astra_camera/include/astra_camera/uvc_camera_driver.h": {
+      "before": "5fbcdb2aec776db2f613a35f1adb95345275076577363240d72a91bc23b78d59",
+      "after": "ae119babf5a68c5ca42440064a0adc1b7173cd92f1eb0d8bdb5b5584e6dca7f9"
+    },
+    "ros2_astra_camera-master/astra_camera/src/uvc_camera_driver.cpp": {
+      "before": "1c932e6a0f5797d1997b5c2183c046b874b3e14d1e6f9602247e55f6be0c840f",
+      "after": "68821edce904c4816eb0341a98de5caafc04161d0907f3d1709a94d7fa921f53"
+    },
+    "ros2_astra_camera-master/astra_camera/CMakeLists.txt": {
+      "before": "a205d5fa07b69a7e8bd51886e1ce518fd627136001fa66c6f68df7a0173c6fda",
+      "after": "604931a5039c95c9d28c85c776a419ae9801be69d3d00f55d2967ebab62726fc"
+    },
+    "ros2_astra_camera-master/astra_camera/package.xml": {
+      "before": "a7be77006a84f2f476e8aec9b46859f308f51e67ba05033db9d469891e96378d",
+      "after": "0fffc858ef7e7ae1c50640024e7b47456ecef05ab55971a8f9e1a36ca7f55cdc"
+    },
+    "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_serial_driver.py": {
+      "before": "66113541243a06f35d5e9267ea74a5616106c5cac0917dc018eec3afafb8b02c",
+      "after": "f0319cafec8a71ae72ea2125e43579f86f8abc55e51288fdfe8323acfb0f1c42"
+    },
+    "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/driver.py": {
+      "before": "ecdd292067e27724665dad8657e3423bb473a56d1f3669741e7d20987f3700e4",
+      "after": "7280f3494a2615ede0ecae3639cbe43b3e131aafb397b24f2bace56de6562635"
+    },
+    "wheeltec_gps/nmea_navsat_driver/package.xml": {
+      "before": "ea979693a3197fe398d29470c430cb9cbd52ee29ed225bd397b4aff7d105e8df",
+      "after": "d964a6f842e8f83e774ff0e5b6f22571f126762967f931edb281118da981a630"
+    },
+    "wheeltec_imu/fdilink_ahrs_ros-ros2/src/ahrs_driver.cpp": {
+      "before": "515f16b04a03321d35907466e7195f01e840eac458388625fe33229e25f556c1",
+      "after": "2bac22501167a7264ae2087950925818939ddbb50d2b92668c7332a0a2377f4f"
+    },
+    "wheeltec_imu/fdilink_ahrs_ros-ros2/include/ahrs_driver.h": {
+      "before": "94f83c30d57df4a9901f2149c54ec78ba8125cc9f67577c79abf5aa8d0c15f17",
+      "after": "fd9c8d15ecfd070b963c82964513a18ab74a070067ceaa292836657a073e4211"
+    },
+    "wheeltec_imu/fdilink_ahrs_ros-ros2/CMakeLists.txt": {
+      "before": "a1c2dc3040bff54d5960d242d987c46118e53ac0ecb38265e2ccb67d41261acf",
+      "after": "ad308c24a2f198f41013c2542550cb2abcfe9aa2d07e5892b5f13c948af82c50"
+    },
+    "wheeltec_imu/fdilink_ahrs_ros-ros2/package.xml": {
+      "before": "54369cfd3834fed84f45addd55fd52e99d8e4db54c63366b6fc1814398ac6a07",
+      "after": "ec294daf2c97e2347840f7a3845fe9635176f9f70bda2b95189f1819c0ecc423"
+    },
+    "turn_on_wheeltec_robot/src/Quaternion_Solution.cpp": {
+      "before": "21857d55cde9698af983167a6ca3ba7134064ca4a6dbdc59688550fa9a5ff7fd",
+      "after": "e5cc37a5f8a4e1788c209783ddd78540f6a8ed8bf5e7cf5108c6b8f007300d80"
+    },
+    "turn_on_wheeltec_robot/include/turn_on_wheeltec_robot/Quaternion_Solution.h": {
+      "before": "06c510b279ad4589b8498c577ad5561b06fef45dc74eb662160685a1e8630496",
+      "after": "d2e8691865f2910f6d4992b561f243615f22098392de476f88b85fe2fcfbe91f"
+    },
+    "turn_on_wheeltec_robot/src/ImuProcessor.cpp": {
+      "before": "aeea380f2d63c57e16569ecf25829d990931836d434dc4ddc9a3341a3d023512",
+      "after": "7228fcdd95a52441fb0a83a50af85c11dbfcee755980eae477b0b986e3878717"
+    }
+  },
+  "default_packages": [
+    "turn_on_wheeltec_robot",
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver",
+    "ros2_astra_camera-master/astra_camera"
+  ],
+  "optional_packages": {
+    "gps": "wheeltec_gps/nmea_navsat_driver",
+    "ahrs": "wheeltec_imu/fdilink_ahrs_ros-ros2"
+  },
+  "packages": {
+    "turn_on_wheeltec_robot": {
+      "turn_on_wheeltec_robot/CMakeLists.txt": "8782c74b307b21557b3549657e4e1faf0b709a197fe3d6d9808c7451a3f53656",
+      "turn_on_wheeltec_robot/config/camera_info.yaml": "c142cd2f6305b369d365dabbeadf4b1ab14c8749f228e1666340212d3f3c1cb1",
+      "turn_on_wheeltec_robot/config/ekf.yaml": "bd07d02442dc31860934d9b85759554b32a241e1efba57d433dba81b09a89aa5",
+      "turn_on_wheeltec_robot/config/ekf_carto.yaml": "486ce54761d56f22c6d816d673a05bc3cf94e8a8afedad85e4191b701188d44d",
+      "turn_on_wheeltec_robot/config/ekf_nav.yaml": "bb6710ddd46c505b6d7cda14eb1e08459ad619d6e8ca2e66c368ae44a88458ba",
+      "turn_on_wheeltec_robot/config/imu.yaml": "81c0aa390b15db17a3e9cd49e7eca161a87b0c27792ea82f8dcca2d6f7065cb6",
+      "turn_on_wheeltec_robot/config/robot_model.yaml": "d6af59928e008e1701ac9b82f0e29c21ec165f03965582079ad7d647cc26c1a2",
+      "turn_on_wheeltec_robot/config/wheeltec_param.yaml": "85c40c9504a324a0bbe21bde388c2098da5b052d174134dc7f26cb1dbb10607f",
+      "turn_on_wheeltec_robot/config/wheeltec_param_back.yaml": "0404dd66fb6805d6dc816a0a751a4ff943655aad8088d00879dffe2bca507508",
+      "turn_on_wheeltec_robot/include/turn_on_wheeltec_robot/Quaternion_Solution.h": "06c510b279ad4589b8498c577ad5561b06fef45dc74eb662160685a1e8630496",
+      "turn_on_wheeltec_robot/include/turn_on_wheeltec_robot/wheeltec_robot.h": "82c9c92b7832bfe23a26952cbb6b5ebabbfb7c0d20abe6bdbf0c1377d5f940ae",
+      "turn_on_wheeltec_robot/launch/base_serial.launch.py": "1728c5cad17fd957ccf565c1331f4cc1f7c62235c233d73e68e0d0698a21c89a",
+      "turn_on_wheeltec_robot/launch/imu_processor.launch.py": "6593aa7d7244800810020eb17dbc7cc2a117ab49064e9bbfdbb95ec99cf46eaf",
+      "turn_on_wheeltec_robot/launch/robot_mode_description.launch.py": "c7184c4e70600658a9933e70ad77679706c4e32b41ed169eac20ee258c6cd1ae",
+      "turn_on_wheeltec_robot/launch/turn_on_wheeltec_robot.launch.py": "24162aa3c2bb285c929746805d0ff8671833f7fa775d6b88e2737b6b4e2a79a5",
+      "turn_on_wheeltec_robot/launch/wheeltec_camera.launch.py": "f921d4cb23409d6418dbf8e7c667f52a0f99e468e3e3c4efc3c6d96cbbb590ac",
+      "turn_on_wheeltec_robot/launch/wheeltec_ekf.launch.py": "f779f108cb64d5284039e4b166f8480615540ca63125a8db37aafb4506e8285c",
+      "turn_on_wheeltec_robot/launch/wheeltec_lidar.launch.py": "4759004aea726cfd6cf5f0422a70846faa3205837d3ddf31ad9e65d0489a2b16",
+      "turn_on_wheeltec_robot/launch/wheeltec_sensors.launch.py": "e8f7d2ffea7b6f88d00cdb535f26f2ae77525d967dde2942a275a47cf4bb5b26",
+      "turn_on_wheeltec_robot/msg/Position.msg": "efb7be732555e791a4506665776d39b4216c4d99d6869f7001c0cc1e7cec7e3d",
+      "turn_on_wheeltec_robot/package.xml": "ddc974e19a89e62b55369e86d3d7c3c688dbb488f16763b28c35222088692e46",
+      "turn_on_wheeltec_robot/src/ImuProcessor.cpp": "aeea380f2d63c57e16569ecf25829d990931836d434dc4ddc9a3341a3d023512",
+      "turn_on_wheeltec_robot/src/Quaternion_Solution.cpp": "21857d55cde9698af983167a6ca3ba7134064ca4a6dbdc59688550fa9a5ff7fd",
+      "turn_on_wheeltec_robot/src/wheeltec_robot.cpp": "c96da6f956f3568f0ba2fe3de2c151c41127fe5a0b3f386f1213c5b3609ee55d",
+      "turn_on_wheeltec_robot/wheeltec_udev.sh": "55ebc01ec6d0951470c72ecfc176b564296f4f91ac2643e3255c48066ddb3c43"
+    },
+    "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver": {
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/CMakeLists.txt": "567b253d02a9896597fe4f5f3c3b9915982d1500af978ca02d3010350bcc8f01",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/README.md": "32483bbdcfaca6d87ae4970db68f2e373beeb05d59d7b80b30163eb634ff4e24",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/README_EN.md": "052eeb9b8dfbc8228b362579c2adcbe8ea2b114ed3e74da8b13097da9fa8f660",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/filter_angle.yaml": "bcef7a020da12e42f70a473abbb54d06cb392cc716e1a4003564fb7496210793",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_ch.yaml": "288563676455013c944a9e02d05729eb1ac076abc8b9bbe3ee0779091bfce237",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_cx.yaml": "d0453fbd2243ce9c5c92828f2e716e567d415410cda2667d37911678bc7d33e2",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_cx_left.yaml": "b13c1dae563b2462f00ed317521e584c88df9e13b04d1e6967d75e7c986bddef",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_cx_right.yaml": "53df0f3ad1c363cead13a0b67bf161d5ddf978340e9258701b06584d9a13104b",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_ls.yaml": "7187c45911de16d5cd86e52e5ffb9a4741fb111cea00f82aefe5dee932a299bd",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_m10p_left.yaml": "6529deb3f41bcab29f67d55e9fb32029a96247891a80231457dc6b380f151662",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_m10p_right.yaml": "b55913332dbc24184da133f1d854d88973f6d7a317f70cb84407594408d89c26",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/lslidar_x10.yaml": "50f8243ee5a1874aadfb53d3c28f825ac5dee8fcbf1685b52d56ce7a0851b84f",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/config/network_setup.yaml": "ea5dfe5e8b0f23b9c8ade848ec97341c60ee4f6a26fcb2fea4625d4535d5bd12",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/ThreadPool.h": "39ed9b40268cb8b759794ea5b9e76072afa643a97b77810eaef7a9b671085702",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/data_acquisition_strategy.hpp": "7fdcb2f0c7945d3424e08158f3b14c8cee17fa75e6c94a0d6745f2e654934be1",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/input.hpp": "1a4ef6a0353bac11ed2ced31da038aec437e9d68e5a622ca7c926db1a650f6d5",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lsiosr.hpp": "db0d4e24314405a4ce5e422c6ff5223b7def44dee29c471bb8d05c347e6ee181",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_ch_driver.hpp": "19bdb8646f493c5cf6136d778b8cbbefcf9cb06c5517225f0c283762238c19ac",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_cx_driver.hpp": "9821c3a00955503428855c1fecf1a8cd8e433e9cfdf8a90fa9dc15c93c3f156b",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_device_info.hpp": "6839f930ad0af515e916af6181665671410090a1d9288279ba49faa665c3f19f",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_driver.hpp": "b787f75aa787fc529f0c16327f7ffa0fb833f5c7256c1d4d08e0b358c3c146bc",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_log.hpp": "e7de0d6112e4571aeed69070ecb75b949e70035f7898ac6148ca393e7d127fa1",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_ls_driver.hpp": "bb1214fb9e2e07ff0d130ac503faf9b6b517b049a5c5deea70abc31c5d8e9ebe",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_pointcloud.hpp": "8e4fcfc802c5b33825a37865a367a524c024400ee585fb585e016c426f1fe021",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_services.hpp": "bf87cd724e46bdc400e880e739343faaa72019a428f505fec25bdd47dc2a57f2",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_x10_driver.hpp": "f1ba383729b9735cbcf22a508c48d8bc7551fbd47c2cf062cb1da250c426fd45",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/pointcloud_transform.hpp": "6eb0f1fc48738dd69601f14e27a72e1d8f8e6b60a45d620dafac86fbe8f6055b",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_ch_launch.py": "f25645bbb5c36f70a8fe9451c691303b2dd0a3a7e19bdac48021c232b6733a7b",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_cx_launch.py": "21be04f2356097e5c8e575faf7dc1976477f7e176a3dce0517893b123c28e8b0",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_double_launch.py": "b0851cb5a6baa74f06ddc9b1f2ff857cce35a0667ec004e2c77d258505adab56",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_ls_launch.py": "8d75e0cbaab7e3d27e544e00391c5fc1c0fc8ddb63ac26943dfe57a95280ba23",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_m10p_double.launch.py": "028d7d05c0bf115ac3bab523e56f1eeef02ebb6bbb4bb49be34e1b70baeac9a5",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/launch/lslidar_x10_launch.py": "a1f94082413e10974f9b49fd67b285a4b90d3285e5865d0edbbdbce7409d3776",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/package.xml": "61075a31bcc5f9f4be36d94e6c510188516072ce8ed28fb2161b599d0ba6147b",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/rviz/lslidar_ch.rviz": "587d80c6f54aa05bdc96537fd9088276b4f8e12423e4dbce9795653b8d4d11f7",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/rviz/lslidar_cx.rviz": "3f70e462075ec8b071ab3e786810ce2f12f1635a34a114e7a50111235053a51e",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/rviz/lslidar_ls.rviz": "51f5d1a40ca5e4fc35f32c99ec6b61975a47d5c719f2eaba6216a58abe8eacb3",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/rviz/lslidar_x10.rviz": "b8524a255506958cf08f82661127129945c26b3f04f9394c45189624f4f0bd35",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/input.cpp": "7c1d770beb33ce346cfac82e3976931fdbc43af77bdf589771a7b6fb27b40bc8",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lsiosr.cpp": "8ba2ca4ecdc88c00f6ebcbc873abb751e2278c2df78b054e4f923f551133596a",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_ch_driver.cpp": "f7e1c261e792399a33b81aa9b60035fab41f6325ad3fd5fdb46f89dff19e3db4",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_cx_driver.cpp": "c37cf04ee9167487d5e4dffa8df10c723fadc7bd651857fc391f6862fcd3a76c",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_device_info.cpp": "b69953a0799f9b7e48c6954bda41ccf87c88149c1965c61b9a2619117ff715fe",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_driver_node.cpp": "ad4932c777a94cfd50d44f5a3b542d9f1a2421ed86ebf859c7eb957d2cbb6919",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_ls_driver.cpp": "cc42d9b18456b6b57c0c80130f6c8681043b6be6c4ff7a863501c6739ab68040",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_services.cpp": "f9063103ee257a26d75039dd60119ef496c15218db8e764ed1db13cb0cf5de2d",
+      "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_x10_driver.cpp": "c1ba073b29c8621ce74f28734811f9d8bcca686e01d1c24913c87df214a5bcae"
+    },
+    "ros2_astra_camera-master/astra_camera": {
+      "ros2_astra_camera-master/astra_camera/.clang-format": "a6a74e4552c76344fb64b60f00c9479c4c7fa24b1653f2c9b196c6ab5a071b2f",
+      "ros2_astra_camera-master/astra_camera/.clang-tidy": "b806eeac995afd467c01b00386db2adfbf554f905b21960ca329944e5415b2f9",
+      "ros2_astra_camera-master/astra_camera/CMakeLists.txt": "a205d5fa07b69a7e8bd51886e1ce518fd627136001fa66c6f68df7a0173c6fda",
+      "ros2_astra_camera-master/astra_camera/CMakeLists.zip": "38cad6790f7e05ab51c160c291dd50deabfde00ce2033575060c7a632cb4549b",
+      "ros2_astra_camera-master/astra_camera/config/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/constants.h": "521ece5903b09d255e47be70b2581c2c4d648439d7868e2db4d8f62345a6a2bb",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/dynamic_params.h": "bd1e3f286339b96c1a64316a7173533cb86cb883181bd0ca3d5a1195dae53367",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/json.hpp": "9279dc616aac67efce68967f118051b50236612b90572e059783d368bd78687e",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_camera_node.h": "d2995875f9fcdadb38835b5d322e4c5e63184cc5d74049cb3cd217e1b8922dfa",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_camera_node_factory.h": "26937a5a793c69c4ea2c821cd89f16dc3d6afcdbf8d08f7f188a36c9555f1da7",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_context.h": "c9b9b24ab6826558f3cdb3d4cfa5f7c77cc8008db598eb31b73ba3c94e8b6058",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_timer_filter.h": "a4e36ffe47a89d62435ebb8382a645bbf8482c172cc494d7dd0d3af3239f4896",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/point_cloud_proc/depth_traits.h": "2c129ef093ecdf78a545c24539584fdbbf01a3dd2a15ccb38d9e82af4a9d23b0",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/point_cloud_proc/point_cloud_proc.h": "000f727a3a0fcee8a5dfb565da1fca401d2656b475da6deaa42a4f833381b851",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/point_cloud_proc/point_cloud_xyz.h": "a98602d6e3545588346aa8eaa9ad55ee394944af67db446f83516ce562d62439",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/point_cloud_proc/point_cloud_xyzrgb.h": "082b89bb6b8ce686c96b3be46f2a2842d6a3c9b729a7f5dac1a562e139aa2bdc",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/ros_param_backend.h": "751d2c14866384f221bc24893cf3e4d268d0d6af24f49d1c5229bd84e5e628d5",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/types.h": "0c17ba91b6fcb9763c6fb382abf598f94d987721ac559a5959b4e50185e53f8c",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/utils.h": "895f4ef07a0110589d776ad09735e2bb8155a26e87d2eeb997d7e4b2214886da",
+      "ros2_astra_camera-master/astra_camera/include/astra_camera/uvc_camera_driver.h": "5fbcdb2aec776db2f613a35f1adb95345275076577363240d72a91bc23b78d59",
+      "ros2_astra_camera-master/astra_camera/include/magic_enum/magic_enum.hpp": "44730b6613a6bd6d0cbbf8d4f138d665a9475bfb14c97ee392d95728c064a274",
+      "ros2_astra_camera-master/astra_camera/include/openni2/Android-Arm/OniPlatformAndroid-Arm.h": "1ec4d9e46f8d4f967e2381097379d483e8f631631301fda776219db6f958cdb7",
+      "ros2_astra_camera-master/astra_camera/include/openni2/Driver/OniDriverAPI.h": "5d02bfa4b0ddeabe3b0be650e287bf3a178e9b942543dad95b1246e5d5c802f0",
+      "ros2_astra_camera-master/astra_camera/include/openni2/Driver/OniDriverTypes.h": "9f34b4b77c4fd7f3a692e584617c56bd77b992ca8f8cbf85c004e4215dbd5856",
+      "ros2_astra_camera-master/astra_camera/include/openni2/KinectProperties.h": "1e122afab1a1c74677dc94280c8f9ec7c904fd2dc54240d6bbe006fa0f66a5cb",
+      "ros2_astra_camera-master/astra_camera/include/openni2/Linux-Arm/OniPlatformLinux-Arm.h": "10465ff0183aa35eb65f9ffcf456124f647d466fa0b6e2c86296b280e86fc6e5",
+      "ros2_astra_camera-master/astra_camera/include/openni2/Linux-x86/OniPlatformLinux-x86.h": "73c72660bc66d6c181c7dac014a9e0fb6685d3a93bcc8a261bd9084294992185",
+      "ros2_astra_camera-master/astra_camera/include/openni2/MacOSX/OniPlatformMacOSX.h": "ad18841d9103ef5e3fcfb8d90a44ea20ef210a2a87f18f1bf85dddc44f21dcea",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniCAPI.h": "4337420b665affac519896bcfd27c56b9563c6a3943102b943e8cfe2353230b9",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniCEnums.h": "8bcfdad8084adf4faee0560803c7fbb67f627f4a57b491b297d52085b112bc84",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniCProperties.h": "891d1b8126e5519d9806554d9229239b911add5469b66fc9913be55ad0f63d24",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniCTypes.h": "2a27d328cdd65879d5d3f611f350a7163b55b5d5f4081ff33252b11114eeab11",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniEnums.h": "5a8d5897a2929c3153a8091354e1b1153a1c94892feeaa58430475606d2e82da",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniPlatform.h": "4524691db715b4f446a596c7d39455c68884d626c7c2526c5a10bc2afabc3ce2",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniProperties.h": "4b67377c3b1de95c59b944437e41dd408be1d55eb74bc565379c40ad529ccc93",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniTest.h": "27843eb2d009d5c88399b1b123930b6ab7db9b5a2131028428b4f8dc2818bed2",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OniVersion.h": "14ccf820e0fd907b5e488028d0d45978d2103c3bc1c90a65f19ac0aedbcc988b",
+      "ros2_astra_camera-master/astra_camera/include/openni2/OpenNI.h": "fc9309dff65b175efaf75a0f29065482dab6afa22fb84f1cf9342308068fbac3",
+      "ros2_astra_camera-master/astra_camera/include/openni2/PS1080.h": "5fb8fb8fffe5b7c77d5971701edff0bd4b688e92e583d94a808f8491c0f83322",
+      "ros2_astra_camera-master/astra_camera/include/openni2/PSLink.h": "8235eed426c9880fae76ba88a8dcf6fd0176afaccbbbe40645b99b473546752e",
+      "ros2_astra_camera-master/astra_camera/include/openni2/PrimeSense.h": "b8250a2f6ad1b90875854a8de616e7ed3a71040a5561cb00ada216d2eace8479",
+      "ros2_astra_camera-master/astra_camera/include/openni2/SonixCamera.h": "810402eb694fbe185d21360dfcc262fb14fcbc3c17efdeb315fbdb0108870b1c",
+      "ros2_astra_camera-master/astra_camera/include/openni2/util.h": "fe69cc8eef16900c5009ce2557ba5c06654083e4ba7762f296b10d89dd160c72",
+      "ros2_astra_camera-master/astra_camera/launch/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/launch/astra.launch.xml": "72d0250d40f69ec854ffa0dabd9a21d475ca74011c1c9e589e5962db43b93b44",
+      "ros2_astra_camera-master/astra_camera/launch/astra_pro.launch.xml": "e51e82416fe2883912c67dee2ea77c790b435b6bbddc86c034aa06772d32bcb5",
+      "ros2_astra_camera-master/astra_camera/launch/astra_pro_plus.launch.xml": "a08bf8ed1217d10ce41b23220ddb4794a38d655e24d022b9b764f0a8a50e472a",
+      "ros2_astra_camera-master/astra_camera/launch/dabai_dc1.launch.xml": "3811c5397324252946bb2eb12432fdffee70f446ee85a06c0b610c0fbbbd0be5",
+      "ros2_astra_camera-master/astra_camera/launch/dabai_dcw.launch.xml": "7419dd499cc3d9aa41d816ac857c1e7d512cbc3f280158ebbbb93f6229418379",
+      "ros2_astra_camera-master/astra_camera/launch/dabai_dw.launch.xml": "82305df173c01a04acdffa2b829636a6b5c22ffe6698d4153d57747492a2bf63",
+      "ros2_astra_camera-master/astra_camera/launch/dabai_pro.launch.xml": "a1cd9bc4b205b6b239fca90cd062be6939aaf1e0881447f7e28a4ba8e4a16130",
+      "ros2_astra_camera-master/astra_camera/launch/dabai_u3.launch.xml": "3811c5397324252946bb2eb12432fdffee70f446ee85a06c0b610c0fbbbd0be5",
+      "ros2_astra_camera-master/astra_camera/launch/deeyea.launch.xml": "9df7bb60f61c8c72cdbdd0d4c2ae9c147772801780371e06cf4e99d6c6ed712a",
+      "ros2_astra_camera-master/astra_camera/launch/embedded_s.launch.xml": "54ebda4a202f78943819abe8dd64bbb698a5eb0e699990e82d2319256bf60f18",
+      "ros2_astra_camera-master/astra_camera/launch/embedded_u3.launch.xml": "54ebda4a202f78943819abe8dd64bbb698a5eb0e699990e82d2319256bf60f18",
+      "ros2_astra_camera-master/astra_camera/launch/gemini.launch.xml": "dd04695ced1a75b1b944cac5cdd15064e032930cc91a6fbfd458033afa09cad8",
+      "ros2_astra_camera-master/astra_camera/launch/gemini_arm.launch.xml": "428e7b2bf26d631f6f2f804330eaa0864dff23b6c0ce36a21faf52f8c8bbbe65",
+      "ros2_astra_camera-master/astra_camera/launch/gemini_car.launch.xml": "ae715eebec8b9292c4830b3259d2c78ceae307e91a6f2ff6b13b58aff75a9ad5",
+      "ros2_astra_camera-master/astra_camera/launch/gemini_e.launch.xml": "070ce6c271cdef3477ebce3556711cd26413b9dde9fdb2365759b7e70eb0599b",
+      "ros2_astra_camera-master/astra_camera/launch/gemini_e_lite.launch.xml": "753d34344198e71764f747e32275af819e0ce35d3e142939ee542d2fadb58940",
+      "ros2_astra_camera-master/astra_camera/launch/list_devices.launch.xml": "2641d6bac918b7bc057982f1bb96e38edc20c19692912ed3c3351cf5179300c8",
+      "ros2_astra_camera-master/astra_camera/launch/multi_astra.launch.xml": "1853fe243a59248a9dcbd501d1071f0afb36a06df818b7e4f0a8b6d9a5650c37",
+      "ros2_astra_camera-master/astra_camera/launch/multi_dabai_dcw.launch.xml": "53810dce93c385f8faadeddd12779919345f8a68e143b9c7979678bfc688bda2",
+      "ros2_astra_camera-master/astra_camera/launch/multi_dabai_pro.launch.xml": "8cdfe30ef34f9da0884362736a49511b17a90b3855ea9910548056cfa81b6ac6",
+      "ros2_astra_camera-master/astra_camera/launch/multi_deeyea.launch.xml": "a31872389eb28c7d7e0d32004d2976621f817e2e12d3397b0a3fa935c1eb3960",
+      "ros2_astra_camera-master/astra_camera/launch/multi_gemini.launch.xml": "329f325f1e263dc3824b6439b8e2e4777988f5c08b11704d2c5a777d3c6607a4",
+      "ros2_astra_camera-master/astra_camera/launch/stereo_s.launch.xml": "9c5cdb7901f13b5ba7d35f8eb2a0a28b3de5256e8cf3236211f9f7f8e4906835",
+      "ros2_astra_camera-master/astra_camera/launch/stereo_s_u3.launch.xml": "9ac467771ef0d11f76d919f025611b69e72dca073741402d92408d7ff10d6528",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/OpenNI.ini": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/OpenNI2/Drivers/OniFile.ini": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/OpenNI2/Drivers/libOniFile.so": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/OpenNI2/Drivers/liborbbec.so": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/OpenNI2/Drivers/orbbec.ini": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm/libOpenNI2.so": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/OpenNI.ini": "3896e8f831c6a56576e9e93a2e5b3e1d3fa72041e7d01e1d7f23b7cd907e7eff",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/OpenNI2/Drivers/OniFile.ini": "f50a20ca76350f8e5e81b50477714f9a1b1db9b49047f5089b90644526ba9505",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/OpenNI2/Drivers/libOniFile.so": "e22b61f2d86ac17befdf43c02c64aff99a6e7a28c4b4f15c12f62e5216834133",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/OpenNI2/Drivers/liborbbec.so": "b6511b00891360bda20f452847db5f25d67d588597bad5991a9756ef5dffa95b",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/OpenNI2/Drivers/orbbec.ini": "b6a1cc4ed8ee62c7c4b2596e43727362ee489bd1733f59633794b005224d1e9b",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/arm64/libOpenNI2_astra.so": "d7231df09a6a242990507fce4eb75329a67c8f298bd8f110baa8dddc344f6bda",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/OpenNI.ini": "3896e8f831c6a56576e9e93a2e5b3e1d3fa72041e7d01e1d7f23b7cd907e7eff",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/OpenNI2/Drivers/OniFile.ini": "f50a20ca76350f8e5e81b50477714f9a1b1db9b49047f5089b90644526ba9505",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/OpenNI2/Drivers/libOniFile.so": "f3ae75b04745bea74b05cfc9ca975cb1f145d420e84068bcbe8da36eef096c6b",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/OpenNI2/Drivers/liborbbec.so": "2ea323068c05d71466e84f4155d0d37b273549f916c0480c8fe2b98ddc45ebde",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/OpenNI2/Drivers/orbbec.ini": "b6a1cc4ed8ee62c7c4b2596e43727362ee489bd1733f59633794b005224d1e9b",
+      "ros2_astra_camera-master/astra_camera/openni2_redist/x64/libOpenNI2.so": "b807fd0b3ec32cdb7928ee3b654f259e491406eb6c6848aeb21250e481013d40",
+      "ros2_astra_camera-master/astra_camera/package.xml": "a7be77006a84f2f476e8aec9b46859f308f51e67ba05033db9d469891e96378d",
+      "ros2_astra_camera-master/astra_camera/rviz/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ros2_astra_camera-master/astra_camera/rviz/multi_camera.rviz": "b1043e4bc1508fa99afc5a282fb014264f366428cbed65454f74cfeeb200d484",
+      "ros2_astra_camera-master/astra_camera/rviz/pointcloud.rviz": "5c3acce360c4cc3b3c7a93f880cd9017a7fdd941c3af4993a725e7cb47476eaf",
+      "ros2_astra_camera-master/astra_camera/scripts/56-orbbec-usb.rules": "fd5bcd51b7b6bb7115868d210c68c0ef87d1706580d6d8bb2a777fbdb0590bcf",
+      "ros2_astra_camera-master/astra_camera/scripts/depth_to_color.py": "b92c269abf4a6da4b9d1e3211bafa2c81aeb4c365eae2ac370e5bfdf8251eda2",
+      "ros2_astra_camera-master/astra_camera/scripts/format_output_camera_params.py": "88314508919f24d500b75eddc33f5483b79ea68ef5b6ab000aa9bc4c5b376bda",
+      "ros2_astra_camera-master/astra_camera/scripts/format_output_supported_video_modes.py": "5e7bce6c64096b2a79547d54f8c555e558e13af87fc451e39a21582edb26ced0",
+      "ros2_astra_camera-master/astra_camera/scripts/install.sh": "34fdde225689769dbc00713c00310d7e03d183ad48a97c54fee142d6a55a7166",
+      "ros2_astra_camera-master/astra_camera/src/clean_up_shm_node.cpp": "438d972ea7adb5dcb3ab683ac9bac5a871dd9db95e9d673e2cefa83a006fd95e",
+      "ros2_astra_camera-master/astra_camera/src/dynamic_params.cpp": "4066371784f9d25964aa78753819a2887a371293b1fd6ab16f7765d6919186c8",
+      "ros2_astra_camera-master/astra_camera/src/list_devices_node.cpp": "21c4a68f3594aaf0766042831528a79b4ba1e02a35d6bab53ab45457c5080f0a",
+      "ros2_astra_camera-master/astra_camera/src/main.cpp": "df6c9b30e958824bdacd61ecf2d45e2cc13e709a701dd53f8a59c484a95d9f9f",
+      "ros2_astra_camera-master/astra_camera/src/ob_camera_info.cpp": "848e9c2aa2a8988814b72f6d3432943f5476acaabe38aee70b4e85ce27c4fef6",
+      "ros2_astra_camera-master/astra_camera/src/ob_camera_node.cpp": "903c5e1630d91b391bcf207497c4639e9782f6021b3f0ba3b652140699d25df6",
+      "ros2_astra_camera-master/astra_camera/src/ob_camera_node_factory.cpp": "9058a77e3350c1ba7552451184ff356e1fdbf85bcf1a11fec706ee798e4d151c",
+      "ros2_astra_camera-master/astra_camera/src/ob_context.cpp": "8fd6722f0e1d6376e3e1811910ba501cffcdce0feb93754ac3c467881bb90470",
+      "ros2_astra_camera-master/astra_camera/src/ob_timer_filter.cpp": "1f69dc5616657b0669fe4f889ea37403c803981c294e80f5526f6d5706000b6d",
+      "ros2_astra_camera-master/astra_camera/src/point_cloud_proc/point_cloud_xyz.cpp": "6897a61a62a275038aa50ef10a3405fe91ea314194e6115f0586a909edaf947d",
+      "ros2_astra_camera-master/astra_camera/src/point_cloud_proc/point_cloud_xyzrgb.cpp": "8ad42d83e165ec13f757b2ff67d68bd5c493af449462d5810d15e6c25ce01d9f",
+      "ros2_astra_camera-master/astra_camera/src/ros_param_backend.cpp": "7764247c6fefa2fc80d76b22ee2c4e4c43c344a0a24775ba3814dd9b4b84232f",
+      "ros2_astra_camera-master/astra_camera/src/ros_service.cpp": "2b9feed45f443c0f98df7612e2215e0c93b4573d7611d49820290cab7e429833",
+      "ros2_astra_camera-master/astra_camera/src/utils.cpp": "f2e7ec93d30803765a61c90c4aac39d362aabb89d8caafe27ac0a0e1049e1025",
+      "ros2_astra_camera-master/astra_camera/src/uvc_camera_driver.cpp": "1c932e6a0f5797d1997b5c2183c046b874b3e14d1e6f9602247e55f6be0c840f"
+    },
+    "wheeltec_gps/nmea_navsat_driver": {
+      "wheeltec_gps/nmea_navsat_driver/CHANGELOG.rst": "30b088c2af80a7e6abd1585fbad42ccfc87f69d2bb4ddf305095fdd4426719f9",
+      "wheeltec_gps/nmea_navsat_driver/README.rst": "76579329f12f2666acac8584e538ef90b78469d7225681178564c4d03b864d23",
+      "wheeltec_gps/nmea_navsat_driver/config/nmea_serial_driver.yaml": "a83ca00c56c699c08ddef67420dea09f3b13e46009470a04ee2dc8bf1784a14b",
+      "wheeltec_gps/nmea_navsat_driver/launch/nmea_serial_driver.launch.py": "03e30fd96a075e125395f893d336beef624a2dcc78eded6d3b060e336eff57f2",
+      "wheeltec_gps/nmea_navsat_driver/package.xml": "ea979693a3197fe398d29470c430cb9cbd52ee29ed225bd397b4aff7d105e8df",
+      "wheeltec_gps/nmea_navsat_driver/resource/nmea_navsat_driver": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "wheeltec_gps/nmea_navsat_driver/setup.cfg": "1e4382ea0decc0c599def99d974c96440c4d25fc3eb3eb54217ad3bd303a1f14",
+      "wheeltec_gps/nmea_navsat_driver/setup.py": "609d6973aaf3aaf5ac0e5e76cf21231eb068fbd848f2d22265c4af20dfac774d",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/checksum_utils.py": "06a51438fe8240b75cd84287c27660df05d74df40d874cc8be5183158c7cd486",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/driver.py": "ecdd292067e27724665dad8657e3423bb473a56d1f3669741e7d20987f3700e4",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/gps_path.py": "69b5b107749440082eeb3c777e556e7d2d0908ec3f45e2b2ee3335516aeeb311",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_serial_driver.py": "66113541243a06f35d5e9267ea74a5616106c5cac0917dc018eec3afafb8b02c",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_socket_driver.py": "9c57936cd6ab2e8008eda96d080853535c3f32b13ac864fb578459c70480b0b9",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_tcpclient_driver.py": "305ada1fc3700cf64a40ba91002181b323a7c7b88f9a8f6a30779fc0db1faa9a",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_topic_driver.py": "4e2d93ee58757a6dae8cb4a12687da2b19cde20efb9a1baf68a64497e3301a68",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_topic_serial_reader.py": "3704ab2b5d2f1cbf3ee9310d36a0b6179d76cc4329170531dd1f7fb6aba42d23",
+      "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/parser.py": "e7bed0d679fead3ff68eeb0d040f1b90088001c767901aa2241708310f5c8db7"
+    },
+    "wheeltec_imu/fdilink_ahrs_ros-ros2": {
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/.gitignore": "2ef767385125df7d546a79f251e267fab5c0e68a652128987a6982cb61d53584",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/CMakeLists.txt": "a1c2dc3040bff54d5960d242d987c46118e53ac0ecb38265e2ccb67d41261acf",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/include/ahrs_driver.h": "94f83c30d57df4a9901f2149c54ec78ba8125cc9f67577c79abf5aa8d0c15f17",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/include/crc_table.h": "d93965bd78fcaf00a31209a2677d2c4df7b5dc7dd2466f0342f603a4f9de13f4",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/include/fdilink_data_struct.h": "6824ee09cf631cb069765be19fee38426f7c792a093a4324f7cb715004d17c77",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/launch/ahrs_driver.launch.py": "78e14a3204b8c115eeca720ef3bb69b523e4a6bef484c6071325f2cb696228d4",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/launch/imu_tf.launch.py": "4b38952a80a8e911b1a65ed4042d4371bf519af7822c47cf71b4623753740f4b",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/package.xml": "54369cfd3834fed84f45addd55fd52e99d8e4db54c63366b6fc1814398ac6a07",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/readme.md": "1bbb1936c91c610e67665ddc349cf99087d4ce720163d5314ba995abafa77559",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/src/ahrs_driver.cpp": "515f16b04a03321d35907466e7195f01e840eac458388625fe33229e25f556c1",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/src/crc_table.cpp": "4f168dd47c48623059a625921763b1891d745cf3e2329c3ed432ed93bc636327",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/src/imu_tf.cpp": "96f1f63e5f4d98b2d1e32303ab9ab8fd74c474550ea24e529d842f9644f7c9ea",
+      "wheeltec_imu/fdilink_ahrs_ros-ros2/wheeltec_udev.sh": "59d267180312c35544afa30f6bc2a0616774f3129c9feebee174cfcecb0fc37b"
+    }
+  }
+}

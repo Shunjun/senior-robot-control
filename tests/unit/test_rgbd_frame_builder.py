@@ -1,6 +1,7 @@
 from types import SimpleNamespace as NS
 
 import numpy as np
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_frame_builder import build_frame
@@ -8,7 +9,19 @@ from senior_control.vision.rgbd_frame_builder import build_frame
 
 def inputs():
     header = RawCaptureHeader(
-        100, 101, 1.1, "optical", "01", "02", "source", "boot", 1, 1, True, ""
+        100,
+        101,
+        1.1,
+        "optical",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        1,
+        True,
+        "",
+        timing=capture_time(1.1, sequence=max(1, 1), epoch="source", tick=(100) / 1e9),
     )
     w, h = 80, 80
     rgb = NS(

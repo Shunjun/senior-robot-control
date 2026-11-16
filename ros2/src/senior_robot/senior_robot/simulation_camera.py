@@ -49,7 +49,7 @@ class SimulationCamera(Node):
         if (
             stamp <= 0
             or stamp == self._last_stamp
-            or not 0 <= age < round(default_policy().hard_age_s * 1e9)
+            or not 0 <= age < round(default_policy().hard_age_ms * 1_000_000)
         ):
             return
         try:

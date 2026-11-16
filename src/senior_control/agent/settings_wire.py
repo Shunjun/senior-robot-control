@@ -3,7 +3,6 @@
 import time
 from typing import TYPE_CHECKING, Any
 
-from senior_control.agent.manual_control import runtime_healthy
 from senior_control.agent.ports import IpcState, RuntimeState
 from senior_control.errors import DomainError
 from senior_control.protocol import SettingsApplyEnvelope, SettingsEnvelope, SettingsResultEnvelope
@@ -39,8 +38,9 @@ class SettingsRuntime:
         runtime = live.motion_runtime if live else None
         if (
             runtime is None
-            or not runtime.sampled_steady <= now < runtime.valid_until
-            or not runtime_healthy(runtime, now)
+            or runtime.evidence_stamp_steady is None
+            or runtime.evidence_deadline_steady is None
+            or not runtime.evidence_stamp_steady <= now < runtime.evidence_deadline_steady
         ):
             return RuntimeCheck()
         assert live is not None

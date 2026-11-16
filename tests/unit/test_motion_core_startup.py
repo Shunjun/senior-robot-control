@@ -14,9 +14,11 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import make_core, publish_inputs
 from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_capture_schedule
 from test_navigation_command_clock import navigation  # noqa: F401
 
 from senior_control.agent.manual_control import MotionRuntimeReceiver
@@ -51,17 +53,15 @@ class Node:
     def get_parameter(self, _name):
         return N(value="route-sim")
 
-    def _emit_motion_core(self, velocity, reason):
+    def _emit_motion_core(self, velocity, reason, deadline=0.0, *, computed_steady):
         self.output.append((velocity, reason))
 
 
 class Replay:
-    def __init__(self, capture, clock):
+    def __init__(self, capture, clock, monkeypatch):
         self.capture, self.clock = capture, clock
         self.node = Node(clock)
-        self.core = module.MotionCoreOutput(
-            self.node, SimulationMotionProfile(), ingress_factory=None
-        )
+        self.core = make_core(monkeypatch, self.node, SimulationMotionProfile())
         self.core.controller._last_now = clock.steady - 0.05
         self.free = False
         self.collision = False
@@ -112,36 +112,56 @@ class Replay:
             self.clock.ros = packet["sampled_ros"]
         else:
             self.clock.ros = ros
-        self.core.sensors.ingest_packet(copy.deepcopy(packet))
+        self.core.node._reception_test.capture(copy.deepcopy(packet))
         if self.free:
             # Synthetic raw interval: the capture retained fused output only.
             # It proves controller composition, never a physical laser replay.
+            from source_time_test_support import capture_time
+
             from senior_control.motion.estimator import MotionObservation, Origin
+            from senior_control.motion.kinematics import exponential
+            from senior_control.sensors.time_proof import MeasurementInterval
 
             ref = packet["reference"]
             row = next(r["sample"] for r in packet["sources"] if r["source"] == "laser")
+            end_host = row["received_steady"]
+            duration = ref["end_ros"] - ref["start_ros"]
+            physical = MeasurementInterval(
+                capture_time(end_host - duration, tick=ref["start_ros"]).measurement,
+                capture_time(end_host, tick=ref["end_ros"]).measurement,
+            )
             roots = tuple(
                 Origin(
                     "laser",
                     row["epoch"],
                     row["sequence"],
-                    stamp,
+                    label,
                     packet["sampled_ros"],
-                    row["received_steady"],
+                    end_host,
+                    measurement_steady=host,
+                    measurement=coordinate,
                 )
-                for stamp in (ref["start_ros"], ref["end_ros"])
+                for label, host, coordinate in (
+                    (ref["start_ros"], end_host - duration, physical.start),
+                    (ref["end_ros"], end_host, physical.end),
+                )
             )
             avg = ref["average"]
             if avg is not None:
-                self.core.sensors.estimator.ingest(
+                self.core.node._reception_test.sensors.estimator.ingest(
                     MotionObservation(
                         "laser",
                         (avg["vx"], avg["vy"], avg["wz"]),
                         sum((ref["start_ros"], ref["end_ros"])) / 2,
                         roots,
                         independent=(True, True, True),
+                        measured_steady=end_host,
+                        measurement=physical.end,
+                        measurement_interval=physical,
+                        measurement_delta=exponential(avg["vx"], avg["vy"], avg["wz"], duration),
                     )
                 )
+        publish_inputs(self.core, self.clock.steady, self.clock.ros)
         self.core.tick()
         return MotionRuntimeState.model_validate_json(self.node.messages[-1].data)
 
@@ -152,7 +172,7 @@ class Replay:
     def blocked_again(self):
         self.clock.steady += 0.05
         packet = copy.deepcopy(self.capture["recovery_references"][-1])
-        self.core.sensors.estimator.invalidate("laser")
+        self.core.node._reception_test.sensors.estimator.invalidate("laser")
         self.free = False
         self.collision = True
         packet["reference"]["end_ros"] = packet["sampled_ros"] - 1.0
@@ -168,10 +188,12 @@ def replay(monkeypatch):
     lifecycle = ModuleType("senior_robot.motion_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
-    capture = json.loads(Path("tests/fixtures/navigation_startup_reference.json").read_text())
+    capture = synthetic_capture_schedule(
+        json.loads(Path("tests/fixtures/navigation_startup_reference.json").read_text())
+    )
     clock = N(steady=capture["fault_steady"], ros=capture["blocked_ros"])
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
-    value = Replay(capture, clock)
+    value = Replay(capture, clock, monkeypatch)
     yield value
     value.core.close()
 
@@ -187,8 +209,8 @@ def test_captured_startup_unknown_stop_denies_motion_without_fault(replay):
     assert replay.core.scheduler.current.brake.kind is BrakeKind.CONTROLLED
     assert not replay.core.scheduler.current.brake.stop_verified
     assert replay.node.output[-1][0] == Velocity(0, 0)
-    assert not state.stationary and state.body_reference is None
-    assert state.mode == "braking"
+    assert state.stationary and state.body_reference is None
+    assert state.mode == "idle"
     assert state.healthy and state.fault_revision == 0
     assert "acquire" in state.allowed_actions
 
@@ -212,7 +234,7 @@ def test_captured_startup_recovers_to_real_navigation_admission(replay, navigati
     assert receiver.accept(state, b"real-core-test-output", replay.clock.steady)
     navigation.node._motion_runtime = receiver
     navigation.node._monotonic_clock = N(monotonic=lambda: replay.clock.steady)
-    navigation.node._arbiter = N(estop_latched=False)
+    navigation.node._arbiter = N()
     navigation.node._manual_target = None
     assert navigation.node.task_motion_allowed(continuing=False)
 
@@ -244,7 +266,8 @@ def test_source_intent_then_release_preserves_one_way_startup(
     # Use captured current body/wheel evidence for the real 9555 ingress check,
     # without claiming independent stillness or bypassing conditional recovery.
     replay.clock.ros = 1.44
-    core.sensors.ingest_packet(copy.deepcopy(replay.capture["reference"]))
+    core.node._reception_test.capture(copy.deepcopy(replay.capture["reference"]))
+    publish_inputs(core, now, replay.clock.ros)
     _, body, wheel = core._inputs(now)
     assert body is not None and wheel is not None
     core.machine.observe(

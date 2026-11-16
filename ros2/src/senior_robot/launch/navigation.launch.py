@@ -4,6 +4,8 @@ The controller output is /control/navigation_cmd. safety_node remains the only
 /cmd_vel publisher. The behavior tree has no rotation before the path.
 """
 
+import secrets
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
@@ -52,7 +54,7 @@ def generate_launch_description():
                 executable="controller_server",
                 name="controller_server",
                 output="screen",
-                parameters=[params],
+                parameters=[params, {"navigation_run_id": secrets.token_hex(16)}],
                 remappings=remappings,
             ),
             Node(

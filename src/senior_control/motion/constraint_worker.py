@@ -4,6 +4,7 @@ import math
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Protocol
 
 from senior_control.models import Velocity
@@ -54,12 +55,12 @@ def _merge_refinement(current: ConstraintResult, refined: ConstraintResult) -> C
 
 
 class ConstraintScheduler:
-    def __init__(self, engine: ConstraintEngine, worker: Worker, *, worker_budget_s: float):
-        if not math.isfinite(worker_budget_s) or worker_budget_s <= 0:
+    def __init__(self, engine: ConstraintEngine, worker: Worker, *, worker_budget_ms: float):
+        if not math.isfinite(worker_budget_ms) or worker_budget_ms <= 0:
             raise ValueError("worker budget must be explicitly positive")
         self.engine = engine
         self.worker = worker
-        self.budget = worker_budget_s
+        self.budget = worker_budget_ms / 1000
         self.current = ConstraintResult(
             None, BrakeRequest(BrakeKind.CONTROLLED, "not_started", False)
         )
@@ -94,7 +95,7 @@ class ConstraintScheduler:
             # No closure over mutable scheduler state; captured snapshot/time are immutable.
             try:
                 future = self.worker.submit(
-                    lambda: engine.refine(pending.snapshot, pending.submitted_at)
+                    partial(engine.refine, pending.snapshot, pending.submitted_at)
                 )
             except Exception:
                 self._worker_failure("worker_unavailable")

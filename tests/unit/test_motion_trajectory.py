@@ -8,7 +8,7 @@ from senior_control.motion.trajectory import Trajectory, scale_wheels
 
 
 def response():
-    return ResponseBounds(0.4, 0.5, 2, 0.5, 0.6, 2, 0.1, 100, "synthetic")
+    return ResponseBounds(0.4, 0.5, 2, 0.5, 0.6, 2, 0.1, "synthetic")
 
 
 def test_accelerate_then_stop_obeys_derivatives_and_reaches_zero():

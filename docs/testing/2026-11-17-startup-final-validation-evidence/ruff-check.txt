@@ -1,0 +1,27 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/ruff check . --no-cache --output-format full
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:27Z
+[1m[91m]8;;https://docs.astral.sh/ruff/rules/zip-without-explicit-strict\B905]8;;\[0m[1m `zip()` without an explicit `strict=` parameter[0m
+   [1m[94m--> [0mros2/src/senior_robot/senior_robot/native_receipt.py:314:54
+    [1m[94m|[0m
+[1m[94m312[0m [1m[94m|[0m             self._receipt_stats = [_ReceiptStats() for _ in self.inputs]
+[1m[94m313[0m [1m[94m|[0m             self._receipt_report_at = now
+[1m[94m314[0m [1m[94m|[0m         active = [(entry, stats) for entry, stats in zip(self.inputs, rows)
+    [1m[94m|[0m                                                      [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m315[0m [1m[94m|[0m                   if stats.frames or stats.attempted or stats.silence_timeouts]
+[1m[94m316[0m [1m[94m|[0m         if not active:
+    [1m[94m|[0m
+[1m[96mhelp[0m[1m: Add explicit value for parameter `strict=`[0m
+[1m[94m   [0m [1m[94m|[0m
+[1m[94m313[0m [1m[94m|[0m             self._receipt_report_at = now
+[1m[94m   [0m [1m[31m-[0m [31m        active = [(entry, stats) for entry, stats in zip(self.inputs, [0m[1m[31mrows)[0m[0m[31m
+[0m[1m[94m314[0m [1m[32m+[0m [32m        active = [(entry, stats) for entry, stats in zip(self.inputs, [0m[1m[32mrows, strict=False)[0m[0m[32m
+[0m[1m[94m315[0m [1m[94m|[0m                   if stats.frames or stats.attempted or stats.silence_timeouts]
+[1m[94m   [0m [1m[94m|[0m
+[1m[33mnote[0m[1m: This is an unsafe fix and may change runtime behavior[0m
+
+Found 1 error.
+1 unsafe fix available with `--fix --unsafe-fixes`.
+
+EXIT 1 AT 2026-11-16T18:17:28Z

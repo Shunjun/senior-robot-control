@@ -36,14 +36,14 @@ _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 @dataclass(frozen=True)
 class Deadlines:
-    """Seconds each work queue may spend on one request before it is abandoned."""
+    """Request budgets: edit/map in seconds, safety in milliseconds."""
 
     edit: float = 5.0
     map: float = 120.0
-    safety: float = 0.5
+    safety_ms: float = 500.0
 
     def __post_init__(self) -> None:
-        if min(self.edit, self.map, self.safety) <= 0:
+        if min(self.edit, self.map, self.safety_ms / 1000) <= 0:
             raise ValueError("deadlines must be positive")
 
 

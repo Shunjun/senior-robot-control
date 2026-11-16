@@ -1,0 +1,40 @@
+group integration files 35 2026-11-16T18:21:59Z
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/pytest -q -p no:cacheprovider --tb=short --junitxml=/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-integration.xml --basetemp=/tmp/startup-final-validation-pytest-integration --durations=20 tests/integration/test_agent.py tests/integration/test_agent_pairing.py tests/integration/test_agent_snapshots.py tests/integration/test_backend_observability.py tests/integration/test_cloud.py tests/integration/test_control_directory_cli.py tests/integration/test_deployment_config.py tests/integration/test_estop_process_lifetime.py tests/integration/test_estop_recovery.py tests/integration/test_intent_ipc_stream.py tests/integration/test_ipc_exclusive_bind.py tests/integration/test_ipc_lifecycle.py tests/integration/test_limited_manual_ingress.py tests/integration/test_manual_wire.py tests/integration/test_map_operations.py tests/integration/test_runtime.py tests/integration/test_runtime_fault_isolation.py tests/integration/test_runtime_reporting.py tests/integration/test_settings_logs_review.py tests/integration/test_settings_logs_wire.py tests/integration/test_short_admission.py tests/integration/test_shutdown.py tests/integration/test_storage.py tests/integration/test_task_lifecycle_service.py tests/integration/test_task_lifecycle_store.py tests/integration/test_task_ownership.py tests/integration/test_task_runner.py tests/integration/test_terminal_metadata_runtime.py tests/integration/test_terminal_release_outbox.py tests/integration/test_vehicle_cli.py tests/integration/test_vehicle_logs.py tests/integration/test_vehicle_settings.py tests/integration/test_video.py tests/integration/test_waypoint_store.py tests/integration/test_workspace_data.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:21:59Z
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 43%]
+........................................................................ [ 54%]
+........................................................................ [ 65%]
+........................................................................ [ 76%]
+........................................................................ [ 87%]
+...........................................s............................ [ 98%]
+.........                                                                [100%]
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-integration.xml -
+============================= slowest 20 durations =============================
+1.35s call     tests/integration/test_agent.py::test_idle_connected_robot_stays_fresh_past_stale_after
+1.09s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[real-spawn]
+1.07s call     tests/integration/test_settings_logs_wire.py::test_authenticated_real_agent_logs_query_follow_pause_download_and_revocation
+1.05s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[real-identity]
+1.04s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[simulation-exit]
+1.03s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[real-exit]
+1.03s call     tests/integration/test_settings_logs_review.py::test_directory_log_database_does_not_abort_composed_control
+1.03s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[real-adapter_exit]
+1.03s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[simulation-spawn]
+1.03s call     tests/integration/test_runtime_fault_isolation.py::test_supervise_local_fault_keeps_actual_agent_and_log_transport[simulation-identity]
+0.77s call     tests/integration/test_agent.py::test_failed_collect_does_not_end_the_keepalive[OSError]
+0.77s call     tests/integration/test_agent.py::test_failed_collect_does_not_end_the_keepalive[TimeoutError]
+0.65s call     tests/integration/test_cloud.py::test_wrong_robot_command_rejected
+0.64s call     tests/integration/test_agent.py::test_recovery_after_five_failed_attempts_preserves_ros_adapter
+0.60s call     tests/integration/test_runtime.py::test_auth_failure_does_not_retry_forever
+0.53s call     tests/integration/test_vehicle_logs.py::test_download_scan_budget_is_explicit_for_empty_filtered_result
+0.52s call     tests/integration/test_agent.py::test_agent_release_is_bounded_for_cancellation_resistant_work
+0.51s call     tests/integration/test_short_admission.py::test_task_port_waits_do_not_starve_fresh_manual_intents[tick]
+0.50s call     tests/integration/test_agent.py::test_agent_release_is_bounded_for_stubborn_cleanup
+0.50s call     tests/integration/test_agent.py::test_replay_of_needs_review_is_not_acknowledged_as_success
+656 passed, 1 skipped in 43.54s
+
+EXIT 0 AT 2026-11-16T18:22:44Z

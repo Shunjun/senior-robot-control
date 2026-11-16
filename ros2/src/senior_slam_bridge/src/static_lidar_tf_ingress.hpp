@@ -38,7 +38,6 @@ private:
   Receipt::ConstSharedPtr active_, pending_, startup_cursor_;
   std::chrono::steady_clock::time_point pending_deadline_{};
   LaserTransform mount_{};
-  std::int64_t last_ros_{0};
   bool retired_{false};
   rclcpp::Subscription<Receipt>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;

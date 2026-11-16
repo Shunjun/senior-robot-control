@@ -1,14 +1,13 @@
-"""Agent seams: the cloud link, per-robot heartbeat eligibility, and the ROS IPC motion port."""
+"""Agent seams: the cloud link and the ROS IPC motion port."""
 
-import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from senior_control.agent.snapshots import RobotSnapshot
-from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
     Envelope,
+    ManualIntentEnvelope,
     ResponseEnvelope,
     SimpleEnvelope,
     VideoEnvelope,
@@ -22,7 +21,6 @@ class HeartbeatFrame:
     """A cloud heartbeat addressed to one robot."""
 
     robot_id: str
-    deadline: float
 
 
 class Link(Protocol):
@@ -45,34 +43,6 @@ class Link(Protocol):
     async def close(self) -> None: ...
 
 
-class HeartbeatLedger:
-    """Remembers when each robot id last had a heartbeat; ids never borrow each other's."""
-
-    def __init__(self, clock: Clock, window: float) -> None:
-        if window <= 0:
-            raise ValueError("heartbeat window must be positive")
-        self._clock = clock
-        self._window = window
-        self._seen: dict[str, tuple[float, float]] = {}
-
-    def note(self, robot_id: str, *, deadline: float | None = None) -> None:
-        now = self._clock.monotonic()
-        # //Compatible: direct test callers without a cloud deadline retain the bounded window.
-        expires = min(now + self._window, deadline) if deadline is not None else now + self._window
-        if not math.isfinite(now) or not math.isfinite(expires) or expires <= now:
-            self.forget(robot_id)
-            return
-        self._seen[robot_id] = (now, expires)
-
-    def eligible(self, robot_id: str) -> bool:
-        seen = self._seen.get(robot_id)
-        now = self._clock.monotonic()
-        return seen is not None and math.isfinite(now) and seen[0] <= now <= seen[1]
-
-    def forget(self, robot_id: str) -> None:
-        self._seen.pop(robot_id, None)
-
-
 class MotionPort(Protocol):
     """The only way the agent reaches motion: through the ROS-side adapter."""
 
@@ -84,6 +54,14 @@ class MotionPort(Protocol):
         deadline_steady: float | None = None,
         **fields: Any,
     ) -> dict[str, Any]: ...
+
+    async def send_intent(
+        self,
+        envelope: ManualIntentEnvelope,
+        *,
+        received_steady: float,
+        deadline_steady: float,
+    ) -> None: ...
 
     async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None: ...
 
@@ -115,10 +93,12 @@ class IpcMotion:
         self,
         client: IpcClient,
         *,
+        intent_client: IpcClient,
         disable_client: IpcClient | None = None,
         safety_client: IpcClient | None = None,
     ) -> None:
         self._client = client
+        self._intent_client = intent_client
         # //Compatible: isolated callers can still supply one serialized IPC client.
         self._disable_client = disable_client if disable_client is not None else client
         self._safety_client = safety_client if safety_client is not None else client
@@ -160,6 +140,24 @@ class IpcMotion:
             received_at=received_steady,
         )
 
+    async def send_intent_frame(
+        self,
+        envelope: ManualIntentEnvelope,
+        *,
+        received_steady: float,
+        deadline_steady: float,
+        driving: dict[str, Any],
+        driving_version: int,
+    ) -> None:
+        await self._intent_client.send(
+            "manual_intent",
+            envelope=serialize_envelope(envelope).decode(),
+            received_steady=received_steady,
+            deadline_steady=deadline_steady,
+            driving=driving,
+            driving_version=driving_version,
+        )
+
     async def manual(
         self,
         envelope: Envelope,
@@ -198,6 +196,7 @@ class IpcMotion:
     async def close(self) -> None:
         for client in {
             self._client,
+            self._intent_client,
             self._disable_client,
             self._safety_client,
         }:

@@ -82,13 +82,13 @@ class VideoLimits:
     max_sdp_bytes: int = 16384
     max_candidates: int = 64
     max_frame_age_s: float = 2.0
-    frame_poll_s: float = 0.1
-    push_timeout_s: float = 0.5
+    frame_poll_ms: float = 100
+    push_timeout_ms: float = 500
 
     def __post_init__(self) -> None:
         if self.max_bitrate_bps <= 0 or self.max_sdp_bytes <= 0 or self.max_candidates <= 0:
             raise ValueError("video limits must be positive")
-        if self.max_frame_age_s <= 0 or self.frame_poll_s <= 0 or self.push_timeout_s <= 0:
+        if self.max_frame_age_s <= 0 or self.frame_poll_ms <= 0 or self.push_timeout_ms <= 0:
             raise ValueError("video timing limits must be positive")
 
 
@@ -380,7 +380,7 @@ class VideoSession:
     async def _read_loop(self, source: CameraSource) -> None:
         limits = self._limits
         while True:
-            frame = await source.next_frame(limits.frame_poll_s)
+            frame = await source.next_frame(limits.frame_poll_ms / 1000)
             if frame is None:
                 continue
             self._last_stamp = frame.stamp
@@ -400,7 +400,7 @@ class VideoSession:
             if frame is None:
                 continue
             try:
-                await asyncio.wait_for(peer.push(frame), self._limits.push_timeout_s)
+                await asyncio.wait_for(peer.push(frame), self._limits.push_timeout_ms / 1000)
             except asyncio.TimeoutError:
                 self._dropped += 1
             except Exception:

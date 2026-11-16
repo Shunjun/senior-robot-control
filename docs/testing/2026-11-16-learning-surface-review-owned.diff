@@ -1,0 +1,2117 @@
+--- a/docs/superpowers/specs/2026-11-16-learning-shared-state-design.md
++++ b/docs/superpowers/specs/2026-11-16-learning-shared-state-design.md
+@@ -37,3 +37,7 @@
+ ## 验证边界
+ 
+ 集中验证学习→保存→恢复、邻近方向和车外连续段、无效束断连、位置不稳定反例、1cm内外、遮挡/缺帧后回归、未匹配外部点保留、运行多帧无写入、完成后只读、动作不重放、host3秒与实际core链。Linux原生SO_PEERCRED/abstract SEQPACKET和spawn I/O在macOS不能声称通过；本地线程到真实owner适配测试不代替目标Linux部署或ROS/实车执行。
++
++## 亲审后明确bug返修
++
++参考目录上限与原扫描点预算统一为2048，保存全部稳定点而非从128个抽样点冒充完整表面。规范记录/IPC统一使用256KiB有界载荷；Complete及anchor id上限同步，客户端不再保留64KiB收包截断。空间索引仅加速完全相同的1cm逐点距离判断，不扩大过滤区域。新证据与非空core可用性未解决限制见[本轮报告](../../testing/2026-11-16-learning-surface-review.md)，旧136项报告不改写。
+--- a/docs/superpowers/specs/2026-11-16-self-return-matching-design.md
++++ b/docs/superpowers/specs/2026-11-16-self-return-matching-design.md
+@@ -4,10 +4,12 @@
+ 
+ 固定0.05m/s、host steady 3秒动作期间，根据每帧实际角度和距离转换的雷达/车体相对端点比较位置；同一参考位置在每个接纳帧的回波云中均须有硬编码1cm以内支持。支持可来自邻近方向，不要求角度、浮点坐标或数组序号逐帧完全相等。不计算车辆前进距离，不以世界坐标反假设或精确独立位移作学习条件。
+ 
+-同一扫描中相邻有效命中点连续组成离散段；包含实际车体内部回波的段可向车外延伸，无效/缺失/非命中束或缺失序号中断连接。不新增欧氏连接距离、角度阈值或亚束实体填充证明。候选在各学习帧都要同时满足位置稳定及上述连接规则；无需证明物理同一物体，不能再因远墙可能邻接或激光离散性额外拒绝已批准的离散判据。实际车体内部是连接种子，不能继续作为所有候选或运行期端点的边界裁剪。
++同一扫描中相邻有效命中点连续组成离散段；包含实际车体内部回波的段可向车外延伸，无效/缺失/非命中束或缺失序号中断连接。完整360°扫描按实际采样拓扑连接首尾，支持周期采样和重复端点两种表示；局部扫描不跨端点连接。不新增欧氏连接距离、角度阈值或亚束实体填充证明。候选在各学习帧都要同时满足位置稳定及上述连接规则；中间回波不稳定剔除后，以剩余稳定支持重新分段和检查车内连接，失去连接的外侧片段也删除，有其他稳定车内连接路径的部分保留；无需证明物理同一物体，不能再因远墙可能邻接或激光离散性额外拒绝已批准的离散判据。实际车体内部是连接种子，不能继续作为所有候选或运行期端点的边界裁剪。
+ 
+-参考点取自学习实际观测，学习期间固定参考坐标并逐帧求稳定候选交集；至多2048个初始候选，最终沿用最多128个参考点。近期64帧采集身份有界保留，但早期帧对候选交集的影响不能因窗口滚动丢失；已丢弃身份由原采集前沿拒绝重放。来源/物理时钟轴变化仍分段，ROS标签跳变不替代源采集时间。3秒动作从首次成功提交非零私有输出起算，沿用动作结束和停车后新帧的生命周期确认，停车后帧不再核验或删除3秒期间采集的候选。
++参考点取自学习实际观测，学习期间固定参考坐标并逐帧求稳定候选交集；至多2048个初始候选，最终保存全部稳定候选（最多2048点），不以stride抽样丢失已学表面。近期64帧采集身份有界保留，但早期帧对候选交集的影响不能因窗口滚动丢失；已丢弃身份由原采集前沿拒绝重放。来源/物理时钟轴变化仍分段，ROS标签跳变不替代源采集时间。3秒动作从首次成功提交非零私有输出起算，沿用动作结束和停车后新帧的生命周期确认，停车后帧不再核验或删除3秒期间采集的候选。
+ 
+ 学习完成后保存并冻结参考位置。正常运行只读完成模型，当前命中点距任一参考点不超过1cm即直接标记self；缺帧、无匹配、遮挡、手挡后拿开均不修改参考位置。未匹配点保留既有普通扫描处理；不将整束其他距离或整个扇区当作self，不按物体身份重验，不把未观测方向当作自由空间。只有将来明确重新学习才替换结果，本次不新增重新学习入口。
+ 
+ sensor_error/orientation_error_rad继续承担既有外部避障预算，不参与学习模型或1cm过滤；1cm是用户位置匹配政策，不是传感器实测精度。浮点边界只允许数值表示舍入保护，不增加物理容差。
++
++亲审后返修证据见[稳定表面与真实core限制报告](../../testing/2026-11-16-learning-surface-review.md)：局部机制通过不等于非空完整core运动周期通过，现有laser_only场景仍有停车扫掠未知区限制，风险/自由区政策未改变。
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/frozen-learning-extra-raw-gap-probe.log
+@@ -0,0 +1,444 @@
++.......................s................................................ [ 52%]
++......................F.F.F.......................................       [100%]
++=================================== FAILURES ===================================
++_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed] _
++
++core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10b6a4830>
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela0')
++monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b6a6de0>
++delay_pattern = (0.0,), late_device = False, motion_reordering = False
++expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) > 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError
++_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed] _
++
++core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10b787020>
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela2')
++monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b786f60>
++delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
++motion_reordering = False, expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) > 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError
++_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed] _
++
++core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10b8bfd40>
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela4')
++monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b8be180>
++delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
++motion_reordering = True, expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) > 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError
++-------------- generated xml file: /tmp/frozen-learning-final.xml --------------
++=========================== short test summary info ============================
++FAILED tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]
++FAILED tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]
++FAILED tests/unit/test_startup_learning_cycle.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]
++3 failed, 134 passed, 1 skipped in 94.88s (0:01:34)
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/frozen-learning-extra-raw-gap-probe.xml
+@@ -0,0 +1,427 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="1" tests="138" time="94.873" timestamp="2026-11-16T18:22:46.368775+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_frozen_reference" name="test_adjacent_valid_returns_extend_outside_without_connection_distance_threshold" time="0.007" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_invalid_gap_and_no_interior_seed_keep_disconnected_points_external" time="0.004" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_unstable_connected_return_is_excluded_but_stable_neighbors_remain" time="0.010" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_neighbor_direction_and_changed_beam_indices_match_same_surface_position" time="0.002" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_learning_checks_early_instability_even_after_bounded_capture_window_moves" time="0.004" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_saved_restored_view_survives_missing_mismatched_occluded_frames_without_writes" time="2.136" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[0.1]" time="0.106" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[1.0]" time="0.050" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[nan]" time="0.035" /><testcase classname="tests.unit.test_learning_record_owner" name="test_strict_record_roundtrip_and_corrupt_or_unknown_inputs" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_corrupt_record_and_duplicate_writer_are_nonfatal_objects" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_atomic_write_failure_keeps_previous_complete_snapshot" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_pending_symlink_never_overwrites_unrelated_file" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_commit_failure_is_local_and_never_confirms_action_consumption" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_action_consumption_requires_commit_and_survives_client_rebind" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_completed_catalog_is_published_only_after_commit_and_attach_is_read_only" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action" time="0.004" /><testcase classname="tests.unit.test_learning_client" name="test_real_client_thread_completion_fixed_filter_and_same_run_rebind" time="0.125" /><testcase classname="tests.unit.test_learning_client" name="test_completed_model_ignores_runtime_geometry_reports" time="0.066" /><testcase classname="tests.unit.test_learning_service_linux" name="test_native_service_restores_frozen_model_without_replaying_action" time="0.000"><skipped type="pytest.skip" message="requires Linux abstract SEQPACKET and SO_PEERCRED">/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_service_linux.py:30: requires Linux abstract SEQPACKET and SO_PEERCRED</skipped></testcase><testcase classname="tests.unit.test_learning_dual_clock" name="test_pause_tick_zero_has_no_motion_and_does_not_extend_three_host_seconds" time="0.020" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-0.5]" time="0.014" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-1]" time="0.013" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-2]" time="0.012" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-0.5]" time="0.010" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-1]" time="0.010" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-2]" time="0.010" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_model_late_capture_replay_and_reset_use_physical_axis_and_producer_identity" time="0.005" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_scan_producer_restart_and_world_reset_are_separate_segment_changes" time="0.007" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_paused_retention_frontier_does_not_reaccept_trimmed_capture_identity" time="0.007" /><testcase classname="tests.unit.test_startup_learning" name="test_provisional_is_endpoint_local_and_preserves_occlusion" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_model_uses_body_position_stability_and_freezes_reference" time="0.012" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_interior_returns_do_not_require_displacement" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_consumed_record_restores_without_replaying_possible_motion" time="0.004" /><testcase classname="tests.unit.test_startup_learning" name="test_program_start_context_is_explicit_and_run_owned" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_connected_returns_do_not_require_world_hypothesis" time="0.002" /><testcase classname="tests.unit.test_startup_learning" name="test_outside_following_object_and_device_removal_do_not_leave_a_mask" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_owner_finishes_using_scans_without_independent_displacement" time="0.009" /><testcase classname="tests.unit.test_startup_learning" name="test_collision_footprint_preserves_actual_physical_polygon" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_geometry_requires_strict_interior_and_never_expands_boundary" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_learned_local_support_never_hides_an_obstacle_behind_equipment" time="0.011" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_body_return_needs_no_world_free_space" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_owner_completes_verified_side_return_after_target_and_post_frames" time="0.046" /><testcase classname="tests.unit.test_startup_learning" name="test_matcher_features_exclude_body_points_without_changing_raw_obstacles" time="0.002" /><testcase classname="tests.unit.test_startup_learning" name="test_prior_diagnostic_never_claims_verified_translation" time="0.002" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_fixed_three_seconds_never_waits_for_exact_displacement" time="0.005" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_latched_wait_does_not_consume_action_without_final_nonzero_selection" time="0.003" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_feedback_changes_do_not_reset_collection_or_repeat_action" time="0.006" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_small_yaw_and_brief_reverse_are_geometry_not_attempt_termination" time="0.011" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_same_run_reconstruction_does_not_replay_consumed_window" time="0.005" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_reliable_unmoved_record_can_continue_first_learning" time="0.004" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_real_monotonic_regression_still_stops_action" time="0.005" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_ros_labels_do_not_order_or_deduplicate_learning_frames" time="0.007" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_less_than_eight_centimeters_and_real_turn_can_classify_attachment" time="0.011" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_completed_result_restores_same_run_without_replaying_action" time="0.004" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_single_interior_echo_is_not_lost_by_external_point_subsampling" time="0.011" /><testcase classname="tests.unit.test_startup_learning_review" name="test_capture_order_is_independent_of_delivery_order_and_current_tick[delivery0]" time="0.005" /><testcase classname="tests.unit.test_startup_learning_review" name="test_capture_order_is_independent_of_delivery_order_and_current_tick[delivery1]" time="0.003" /><testcase classname="tests.unit.test_startup_learning_review" name="test_old_moving_scans_cannot_fill_post_stop_validation" time="0.004" /><testcase classname="tests.unit.test_startup_learning_review" name="test_initialization_wait_does_not_consume_learning_budget" time="0.005" /><testcase classname="tests.unit.test_startup_learning_review" name="test_body_change_rebuilds_model_but_global_errors_do_not" time="0.017" /><testcase classname="tests.unit.test_startup_learning_review" name="test_planned_stopping_keeps_validation_without_new_forward" time="0.016" /><testcase classname="tests.unit.test_startup_learning_review" name="test_initial_scan_alignment_wait_does_not_retire_attempt" time="0.016" /><testcase classname="tests.unit.test_startup_learning_review" name="test_feature_boundary_replacement_is_not_hidden_by_same_mtime" time="0.004" /><testcase classname="tests.unit.test_startup_learning_review" name="test_unstarted_action_cannot_use_post_frames_as_moving_evidence" time="0.009" /><testcase classname="tests.unit.test_startup_learning_review" name="test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache" time="0.079" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.0-0.0]" time="0.025" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.05-0.05]" time="0.023" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.5-0.7]" time="0.027" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_actual_geometry_has_only_user_match_tolerance_and_no_outside_mask" time="0.002" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_mask_does_not_extend_ray_towards_nearby_body_geometry" time="0.000" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_nonzero_measurement_changes_learn_and_remain_usable_without_drift" time="0.016" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[-0.01-self]" time="0.011" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[0.01-self]" time="0.010" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[-0.01001-hit]" time="0.010" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[0.01001-hit]" time="0.010" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_frozen_match_applies_across_body_boundary_within_one_centimeter[0.2]" time="0.001" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_frozen_match_applies_across_body_boundary_within_one_centimeter[0.201]" time="0.001" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_new_adjacent_and_moving_nearby_external_hits_remain_obstacles" time="0.012" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_learning_uses_same_one_centimeter_range_as_runtime[0.01-1]" time="0.010" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_learning_uses_same_one_centimeter_range_as_runtime[0.01001-0]" time="0.010" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_core_preserves_unmoved_learning_on_estop" time="0.013" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_initial_interior_stop_does_not_latch_execution_fault" time="0.012" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[False]" time="3.042" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[True]" time="2.643" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[front]" time="2.035" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_temporary_feedback_loss_segments_without_replaying_action" time="0.022" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_component_reconstruction_restores_consumption_without_repeat" time="0.016" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_registers_and_retires_shared_runtime_task" time="0.014" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_geometry_pending_does_not_interrupt_started_learning" time="0.018" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]" time="15.788"><failure message="AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10b6a4830&gt;
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela0')
++monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10b6a6de0&gt;
++delay_pattern = (0.0,), late_device = False, motion_reordering = False
++expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) &gt; 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError</failure></testcase><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]" time="4.902" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]" time="22.617"><failure message="AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10b787020&gt;
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela2')
++monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10b786f60&gt;
++delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
++motion_reordering = False, expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) &gt; 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError</failure></testcase><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]" time="6.839" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]" time="22.636"><failure message="AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10b8bfd40&gt;
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-204/test_full_core_cycle_with_dela4')
++monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10b8be180&gt;
++delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
++motion_reordering = True, expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []  # Final output reasons are retained without a retired admission hook.
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 301):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) &gt; 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = 0.15
++                ranges[1] = ranges[-1] = float("nan")  # Explicit gap isolates this rear attachment.
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}, [], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++tests/unit/test_startup_learning_cycle.py:157: AssertionError</failure></testcase><testcase classname="tests.unit.test_startup_learning_latch" name="test_latched_unmoved_learning_survives_wait_and_static_sampling[software_estop]" time="0.020" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_latched_unmoved_learning_survives_wait_and_static_sampling[execution_fault]" time="0.016" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_explicit_reset_continues_only_unmoved_attempt" time="0.015" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_lock_after_emitted_motion_never_replays_forward" time="0.022" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_actual_tick_samples_under_latch_and_never_drives[software_estop]" time="1.536" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_actual_tick_samples_under_latch_and_never_drives[execution_fault]" time="1.529" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_withdrawn_move_validates_delayed_frames_without_restarting_budget" time="0.005" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_pending_motion_keeps_a_fresh_bounded_static_window" time="0.012" /><testcase classname="tests.unit.test_learning_cleanup" name="test_only_exact_old_generated_regular_files_are_removed" time="0.006" /><testcase classname="tests.unit.test_learning_cleanup" name="test_orphaned_real_sidecars_are_removed_but_symlink_sidecars_are_not" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_invalid_current_claim_skips_all_deletion[other]" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_invalid_current_claim_skips_all_deletion[../.startup-learning-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_symlink_root_is_not_followed" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_active_peer_supervisor_protects_all_run_markers" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_unlink_failure_logs_and_continues" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_enumeration_failure_is_nonfatal" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[success]" time="0.078" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[adapter_failed]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[agent_exited]" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[cleanup_failed]" time="0.003" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[success]" time="0.004" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[adapter_failed]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[agent_exited]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_active_record_writer_preserves_entire_old_run_until_closed" time="0.002" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_release_installs_local_owner_without_emitting_hard_zero_or_resetting_trajectory" time="0.009" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_identical_close_and_latched_source_echo_are_not_new_events[estop-estop_revision]" time="0.011" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_identical_close_and_latched_source_echo_are_not_new_events[fault-fault_revision]" time="0.011" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_new_explicit_estop_request_advances_version_and_closed_owner_never_acks" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_failed_handoff_can_retry_exact_payload_but_cannot_change_it" time="0.011" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_missing_real_reference_publishes_strict_unhealthy_state_not_old_drive" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_new_physical_fault_after_recovery_is_not_ignored_forever" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_feedback_pause_retains_task_replan_intent_but_source_is_fenced" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_control_owner_only_accepts_reception_snapshot_and_has_no_fused_subscription" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_explicit_idle_estop_uses_original_request_without_inventing_authority" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_release_uses_one_steady_instant_and_does_not_create_clock_fault" time="0.011" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_body_projection_keeps_original_monotonic_expiry_across_ros_correction[1.0]" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_body_projection_keeps_original_monotonic_expiry_across_ros_correction[1000000000.0]" time="0.013" /><testcase classname="tests.unit.test_motion_core_chain" name="test_native_recovery_then_intent_and_local_release_are_actually_consumed" time="6.951" /><testcase classname="tests.unit.test_motion_core_chain" name="test_disabled_learning_prefetch_submits_latest_scan_before_control_tick" time="0.022" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/learning-core-contrast.log
+@@ -0,0 +1,7 @@
++STOPPING_UNKNOWN none (0.004844128980066649, (-0.43005240222245733, -0.02684556532947094, -0.337, 0.02684556532947113), (-0.1, 0.1), (-0.1, 0.1))
++.STOPPING_UNKNOWN left (0.0051564948672433684, (-0.43005240222245733, -0.030609227188718776, -0.337, 0.02684556532947113), (-0.1, 0.1), (-0.1, 0.1))
++.STOPPING_UNKNOWN right (0.004844128980066649, (-0.43005240222245733, -0.02684556532947094, -0.337, 0.02684556532947113), (-0.1, 0.1), (-0.1, 0.1))
++.STOPPING_UNKNOWN both (0.0051564948672433684, (-0.43005240222245733, -0.030609227188718776, -0.337, 0.02684556532947113), (-0.1, 0.1), (-0.1, 0.1))
++.
++------------- generated xml file: /tmp/learning-core-contrast.xml --------------
++4 passed in 12.03s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/learning-core-contrast.xml
+@@ -0,0 +1 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="4" time="12.028" timestamp="2026-11-16T20:49:23.489443+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[none]" time="3.779" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[left]" time="3.564" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[right]" time="3.567" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[both]" time="0.767" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-before.log
+@@ -0,0 +1,80 @@
++FFF.F.                                                                   [100%]
++=================================== FAILURES ===================================
++_ test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference _
++
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-209/test_dense_long_learned_surfac0')
++
++    def test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference(tmp_path):
++        observation = dense_surface()
++        model = learn([observation] * 12)
++>       assert model.validate() == len(observation.rays)
++E       AssertionError: assert 125 == 1000
++E        +  where 125 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c593830>.validate
++E        +  and   1000 = len((RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...))
++E        +    where (RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...) = FilteredObservation(scan=ScanObservation(ranges=(5.0007500787574735, 4.756301600106132, 4.534648075640032, 4.332743542...n=(0, 0), endpoint=(9.184850993605149e-18, 0.15), kind='hit')), occluded_regions=(), invalid_regions=(), self_masks=()).rays
++
++tests/unit/test_learning_surface_review.py:29: AssertionError
++_____ test_complete_scan_connects_surface_across_first_last_samples[False] _____
++
++inclusive = False
++
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
++        count = 720
++        step = math.tau / (count - 1 if inclusive else count)
++        # The only interior seed is at the end; the outside extension is at the start.
++        obs = cloud(((0.0, .4), None, (0.0, .15)))
++        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
++        rays[0] = replace(obs.rays[0], index=0)
++        rays[-1] = replace(obs.rays[-1], index=count - 1)
++        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
++        obs = replace(obs, scan=scan, rays=tuple(rays))
++        model = learn([obs] * 12)
++>       assert model.validate() == 2
++E       assert 1 == 2
++E        +  where 1 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c63dbb0>.validate
++
++tests/unit/test_learning_surface_review.py:57: AssertionError
++_____ test_complete_scan_connects_surface_across_first_last_samples[True] ______
++
++inclusive = True
++
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
++        count = 720
++        step = math.tau / (count - 1 if inclusive else count)
++        # The only interior seed is at the end; the outside extension is at the start.
++        obs = cloud(((0.0, .4), None, (0.0, .15)))
++        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
++        rays[0] = replace(obs.rays[0], index=0)
++        rays[-1] = replace(obs.rays[-1], index=count - 1)
++        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
++        obs = replace(obs, scan=scan, rays=tuple(rays))
++        model = learn([obs] * 12)
++>       assert model.validate() == 2
++E       assert 1 == 2
++E        +  where 1 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c660560>.validate
++
++tests/unit/test_learning_surface_review.py:57: AssertionError
++____________ test_unstable_bridge_disconnects_stable_outside_piece _____________
++
++    def test_unstable_bridge_disconnects_stable_outside_piece():
++        frames = [cloud(((0.0, .15), (0.0, .3), (0.0, .8)))] * 12
++        frames[5] = cloud(((0.0, .15), (0.0, .33), (0.0, .8)))
++        model = learn(frames)
++>       assert model.validate() == 1
++E       assert 2 == 1
++E        +  where 2 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c6676e0>.validate
++
++tests/unit/test_learning_surface_review.py:71: AssertionError
++------------- generated xml file: /tmp/learning-surface-before.xml -------------
++=========================== short test summary info ============================
++FAILED tests/unit/test_learning_surface_review.py::test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference
++FAILED tests/unit/test_learning_surface_review.py::test_complete_scan_connects_surface_across_first_last_samples[False]
++FAILED tests/unit/test_learning_surface_review.py::test_complete_scan_connects_surface_across_first_last_samples[True]
++FAILED tests/unit/test_learning_surface_review.py::test_unstable_bridge_disconnects_stable_outside_piece
++4 failed, 2 passed in 0.43s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-before.xml
+@@ -0,0 +1,60 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="6" time="0.431" timestamp="2026-11-16T20:43:06.661479+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference" time="0.170"><failure message="AssertionError: assert 125 == 1000&#10; +  where 125 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c593830&gt;.validate&#10; +  and   1000 = len((RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...))&#10; +    where (RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...) = FilteredObservation(scan=ScanObservation(ranges=(5.0007500787574735, 4.756301600106132, 4.534648075640032, 4.332743542...n=(0, 0), endpoint=(9.184850993605149e-18, 0.15), kind='hit')), occluded_regions=(), invalid_regions=(), self_masks=()).rays">tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-209/test_dense_long_learned_surfac0')
++
++    def test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference(tmp_path):
++        observation = dense_surface()
++        model = learn([observation] * 12)
++&gt;       assert model.validate() == len(observation.rays)
++E       AssertionError: assert 125 == 1000
++E        +  where 125 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c593830&gt;.validate
++E        +  and   1000 = len((RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...))
++E        +    where (RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...) = FilteredObservation(scan=ScanObservation(ranges=(5.0007500787574735, 4.756301600106132, 4.534648075640032, 4.332743542...n=(0, 0), endpoint=(9.184850993605149e-18, 0.15), kind='hit')), occluded_regions=(), invalid_regions=(), self_masks=()).rays
++
++tests/unit/test_learning_surface_review.py:29: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[False]" time="0.002"><failure message="assert 1 == 2&#10; +  where 1 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c63dbb0&gt;.validate">inclusive = False
++
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
++        count = 720
++        step = math.tau / (count - 1 if inclusive else count)
++        # The only interior seed is at the end; the outside extension is at the start.
++        obs = cloud(((0.0, .4), None, (0.0, .15)))
++        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
++        rays[0] = replace(obs.rays[0], index=0)
++        rays[-1] = replace(obs.rays[-1], index=count - 1)
++        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
++        obs = replace(obs, scan=scan, rays=tuple(rays))
++        model = learn([obs] * 12)
++&gt;       assert model.validate() == 2
++E       assert 1 == 2
++E        +  where 1 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c63dbb0&gt;.validate
++
++tests/unit/test_learning_surface_review.py:57: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[True]" time="0.002"><failure message="assert 1 == 2&#10; +  where 1 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c660560&gt;.validate">inclusive = True
++
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
++        count = 720
++        step = math.tau / (count - 1 if inclusive else count)
++        # The only interior seed is at the end; the outside extension is at the start.
++        obs = cloud(((0.0, .4), None, (0.0, .15)))
++        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
++        rays[0] = replace(obs.rays[0], index=0)
++        rays[-1] = replace(obs.rays[-1], index=count - 1)
++        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
++        obs = replace(obs, scan=scan, rays=tuple(rays))
++        model = learn([obs] * 12)
++&gt;       assert model.validate() == 2
++E       assert 1 == 2
++E        +  where 1 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c660560&gt;.validate
++
++tests/unit/test_learning_surface_review.py:57: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_partial_scan_does_not_join_first_last_samples" time="0.001" /><testcase classname="tests.unit.test_learning_surface_review" name="test_unstable_bridge_disconnects_stable_outside_piece" time="0.002"><failure message="assert 2 == 1&#10; +  where 2 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c6676e0&gt;.validate">def test_unstable_bridge_disconnects_stable_outside_piece():
++        frames = [cloud(((0.0, .15), (0.0, .3), (0.0, .8)))] * 12
++        frames[5] = cloud(((0.0, .15), (0.0, .33), (0.0, .8)))
++        model = learn(frames)
++&gt;       assert model.validate() == 1
++E       assert 2 == 1
++E        +  where 2 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c6676e0&gt;.validate
++
++tests/unit/test_learning_surface_review.py:71: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_outside_piece_with_another_stable_route_to_interior_is_retained" time="0.002" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/learning-surface-exact-gap.log
+@@ -0,0 +1,218 @@
++TRACE_PERMISSION 50.1 sweep_unknown target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.1, deadline_steady=51.1, source_epoch='scan', frame_id='scan_reference', revision=50100, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.15 sweep_unknown target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.15 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.15) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.15, deadline_steady=51.15, source_epoch='scan', frame_id='scan_reference', revision=50150, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++EXACT_UNKNOWN 0.006171487959207388 (-0.4476008504370064, -0.031070626477677436, -0.337, 0.02715353786169763) linear (-0.1, 0.1) yaw (-0.1, 0.1) padded 0.005265893194175434 physical 0.0051564948672433684
++TRACE_PERMISSION 50.2 sweep_unknown target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.2 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.2) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.2, deadline_steady=51.2, source_epoch='scan', frame_id='scan_reference', revision=50200, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++EXACT_UNKNOWN 0.006171487959207388 (-0.4476008504370064, -0.031070626477677436, -0.337, 0.02715353786169763) linear (-0.1, 0.1) yaw (-0.1, 0.1) padded 0.005265893194175434 physical 0.0051564948672433684
++TRACE_PERMISSION 50.25 sweep_unknown target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.25 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.25) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.25, deadline_steady=51.25, source_epoch='scan', frame_id='scan_reference', revision=50250, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++EXACT_UNKNOWN 0.006171487959207388 (-0.4476008504370064, -0.031070626477677436, -0.337, 0.02715353786169763) linear (-0.1, 0.1) yaw (-0.1, 0.1) padded 0.005265893194175434 physical 0.0051564948672433684
++TRACE_PERMISSION 50.3 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.3 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.3) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.3, deadline_steady=51.3, source_epoch='scan', frame_id='scan_reference', revision=50300, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.35 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.35 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.35) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.35, deadline_steady=51.35, source_epoch='scan', frame_id='scan_reference', revision=50350, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.4 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.4 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.4) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.4, deadline_steady=51.4, source_epoch='scan', frame_id='scan_reference', revision=50400, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.45 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.45 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.45) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.45, deadline_steady=51.45, source_epoch='scan', frame_id='scan_reference', revision=50450, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.5 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.5 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.5) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.5, deadline_steady=51.5, source_epoch='scan', frame_id='scan_reference', revision=50500, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.55 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.55 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.55) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.55, deadline_steady=51.55, source_epoch='scan', frame_id='scan_reference', revision=50550, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.6 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.6 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.6) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.6, deadline_steady=51.6, source_epoch='scan', frame_id='scan_reference', revision=50600, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.65 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.65 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.65) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.65, deadline_steady=51.65, source_epoch='scan', frame_id='scan_reference', revision=50650, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.7 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.7 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.7) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.7, deadline_steady=51.7, source_epoch='scan', frame_id='scan_reference', revision=50700, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.75 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.75 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.75) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.75, deadline_steady=51.75, source_epoch='scan', frame_id='scan_reference', revision=50750, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.8 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.8 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.8) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.8, deadline_steady=51.8, source_epoch='scan', frame_id='scan_reference', revision=50800, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.85 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.85 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.85) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.85, deadline_steady=51.85, source_epoch='scan', frame_id='scan_reference', revision=50850, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.9 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.9 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.9) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.9, deadline_steady=51.9, source_epoch='scan', frame_id='scan_reference', revision=50900, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 50.95 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 50.95 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=51.95) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.95, deadline_steady=51.95, source_epoch='scan', frame_id='scan_reference', revision=50950, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++TRACE_PERMISSION 51.0 sweep_unknown target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
++TRACE_OUTPUT 51.0 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '8b99df94e5e449ad97c5f647f4946973'), evidence_deadline=52.0) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=51.0, deadline_steady=52.0, source_epoch='scan', frame_id='scan_reference', revision=51000, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
++F
++=================================== FAILURES ===================================
++_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed] _
++
++core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x108514410>
++tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-210/test_full_core_cycle_with_dela0')
++monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107fad520>
++delay_pattern = (0.0,), late_device = False, motion_reordering = False
++expected = 'completed'
++
++    @pytest.mark.parametrize(
++        "delay_pattern,late_device,motion_reordering,expected",
++        [
++            ((0.0,), False, False, "completed"),
++            ((0.0,), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++        ],
++    )
++    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++        core,  # noqa: F811
++        tmp_path,
++        monkeypatch,
++        delay_pattern,
++        late_device,
++        motion_reordering,
++        expected,
++    ):
++        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++        bind_core(core, tmp_path / "claim")
++        core.node._depth_policy = "laser_only"
++        core.node._scan_topology_ready = lambda: True
++        core.node._profile = lambda: DeviceProfile(
++            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++        )
++        now = [10.0]
++        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++        losses = []
++        original_diagnose = core._diagnose_stopping
++        original_output = core._decision_output
++        def diagnose(ctx, reason, evaluation):
++            if len(losses) < 24:
++                print("TRACE_PERMISSION", now[0], reason, "target", ctx.target.velocity,
++                      "body", ctx.motion, "footprint", ctx.footprint)
++            return original_diagnose(ctx, reason, evaluation)
++        def output(decision, body, ctx, epoch, stamp):
++            if len(losses) < 24:
++                print("TRACE_OUTPUT", now[0], decision, "covered", ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception)
++            if decision.reason == "sweep_unknown" and len(losses) < 4:
++                from senior_control.motion.constraints import _world
++                from senior_control.models import Velocity
++                from shapely.geometry import Polygon
++                cert = core.engine._sweep(ctx, Velocity(0, 0), stop_only=True, coarse=True)
++                physical = _world(cert.physical_sweep, ctx.pose).difference(_world(Polygon(ctx.footprint.physical_vertices), ctx.pose))
++                padded = _world(cert.sweep, ctx.pose).difference(_world(Polygon(ctx.footprint.vertices), ctx.pose))
++                missing = padded.union(physical).difference(ctx.perception.free_space)
++                print("EXACT_UNKNOWN", missing.area, missing.bounds,
++                      "linear", cert.linear_domain, "yaw", cert.yaw_domain,
++                      "padded", padded.difference(ctx.perception.free_space).area,
++                      "physical", physical.difference(ctx.perception.free_space).area)
++            losses.append(decision.reason)
++            return original_output(decision, body, ctx, epoch, stamp)
++        core._diagnose_stopping = diagnose
++        core._decision_output = output
++        phases = set()
++        captures = []
++        stopped_stamp = None
++        outputs = []
++        positions = [(50.0, 0.0)]
++        # Real core initialization may wait longer than the learning budget.
++        for t in (10.0, 50.0):
++            now[0] = t
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++        assert core.startup.state == "initializing" and core.startup.started is None
++        for i in range(1, 21):
++            t = now[0] = 50 + i * 0.05
++            # Explicit synthetic zero-order plant: the preceding actual core output
++            # supplies the next measured speed. No permit or obstacle is patched.
++            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++            positions.append((t, positions[-1][1] + v * 0.05))
++            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++            core.node._reception_test.sensors.ingest_observation(
++                MotionObservation(
++                    "laser",
++                    (v, 0.0, 0.0),
++                    t,
++                    (
++                        Origin(
++                            "laser",
++                            "native",
++                            i,
++                            t,
++                            t,
++                            t,
++                            measurement_steady=t,
++                            measurement=capture_time(t).measurement,
++                        ),
++                    ),
++                    quality=1.0,
++                    independent=(True, True, True),
++                    measured_steady=t,
++                    measurement=capture_time(t).measurement,
++                    # v is the preceding output actually applied throughout this
++                    # completed plant interval, not an instantaneous new rate.
++                    measurement_interval=MeasurementInterval(
++                        capture_time(t - 0.05).measurement, capture_time(t).measurement
++                    ),
++                    measurement_delta=Pose2D(v * 0.05, 0, 0),
++                ),
++                t,
++                t,
++            )
++            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++            if (
++                core.startup.state in {"moving", "sampling"}
++                and len(delay_pattern) > 1
++                and not motion_reordering
++            ):
++                delay = 0.025
++            stamp = t - delay
++            ranges = [10.0] * 720
++            if not late_device:
++                ranges[0] = .15
++                ranges[1] = ranges[-1] = float("nan")
++            if late_device and core.startup.state == "validating":
++                ranges[0] = 0.15  # new equipment appears after the move: unverified
++            core.node._scans = [
++                N(
++                    received=t,
++                    received_ros=t,
++                    stamp=stamp,
++                    message=N(
++                        source_epoch="scan",
++                        frame_id="laser_link",
++                        sequence=max(1, round(stamp * 1000)),
++                        ranges=ranges,
++                        angle_min=-math.pi,
++                        angle_increment=2 * math.pi / 719,
++                        range_min=0.08,
++                        range_max=20.0,
++                        sensor_x=0.0,
++                        sensor_y=0.0,
++                        sensor_yaw=0.0,
++                        transform_stamp=stamp,
++                        raw_capture=N(
++                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                        ),
++                    ),
++                    measurement_steady=stamp,
++                )
++            ]
++            publish_inputs(core)
++            core.prefetch_scan()
++            core.tick()
++            phases.add(core.startup.state)
++            captures.append(stamp)
++            outputs.append(core.node.emitted[-1][0].vx)
++            if core.startup.state == "validating" and stopped_stamp is None:
++                stopped_stamp = core.startup.validation_after_steady
++            if not core.startup.active:
++                break
++>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++E       AssertionError: ({'action_consumed': False, 'action_elapsed_s': 0.0, 'classification': 'provisional', 'learned_local_returns': 0, ...}...ed', 'sweep_unknown', 'sweep_unknown', 'sweep_unknown', 'sweep_unknown', 'sweep_unknown', ...], {'moving', 'sampling'})
++E       assert 'moving' == 'completed'
++E         
++E         - completed
++E         + moving
++
++/tmp/test_review_gap_probe.py:183: AssertionError
++=========================== short test summary info ============================
++FAILED ::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]
++!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
++1 failed, 4 deselected in 1.09s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/original-gap-diagnostic.py.txt
+@@ -0,0 +1,217 @@
++"""Synthetic raw measurements and fake transport through the real unified/core chain."""
++
++import math
++from types import SimpleNamespace as N
++
++import pytest
++from control_process_test_support import publish_inputs
++from learning_test_support import (  # noqa: F401
++    begin_action,
++    bind_core,
++    learning_runs,
++    startup_for,
++    write_geometry_record,
++)
++from learning_test_support import simulation_point as point
++from source_time_test_support import capture_time, wire_time
++from test_motion_core_chain import InlineWorker
++from test_motion_core_handoff import core  # noqa: F401
++
++from senior_control.config import DeviceProfile
++from senior_control.models import Pose2D
++from senior_control.motion.constraint_worker import ConstraintScheduler
++from senior_control.motion.estimator import MotionObservation, Origin
++from senior_control.motion.observations import Source
++from senior_control.sensors.time_proof import MeasurementInterval
++
++
++@pytest.mark.parametrize(
++    "delay_pattern,late_device,motion_reordering,expected",
++    [
++        ((0.0,), False, False, "completed"),
++        ((0.0,), True, False, "completed"),
++        ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
++        ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
++        ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
++    ],
++)
++def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
++    core,  # noqa: F811
++    tmp_path,
++    monkeypatch,
++    delay_pattern,
++    late_device,
++    motion_reordering,
++    expected,
++):
++    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++    bind_core(core, tmp_path / "claim")
++    core.node._depth_policy = "laser_only"
++    core.node._scan_topology_ready = lambda: True
++    core.node._profile = lambda: DeviceProfile(
++        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++    )
++    now = [10.0]
++    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++    losses = []
++    original_diagnose = core._diagnose_stopping
++    original_output = core._decision_output
++    def diagnose(ctx, reason, evaluation):
++        if len(losses) < 24:
++            print("TRACE_PERMISSION", now[0], reason, "target", ctx.target.velocity,
++                  "body", ctx.motion, "footprint", ctx.footprint)
++        return original_diagnose(ctx, reason, evaluation)
++    def output(decision, body, ctx, epoch, stamp):
++        if len(losses) < 24:
++            print("TRACE_OUTPUT", now[0], decision, "covered", ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception)
++        if decision.reason == "sweep_unknown" and len(losses) < 4:
++            from senior_control.motion.constraints import _world
++            from senior_control.models import Velocity
++            from shapely.geometry import Polygon
++            cert = core.engine._sweep(ctx, Velocity(0, 0), stop_only=True, coarse=True)
++            physical = _world(cert.physical_sweep, ctx.pose).difference(_world(Polygon(ctx.footprint.physical_vertices), ctx.pose))
++            padded = _world(cert.sweep, ctx.pose).difference(_world(Polygon(ctx.footprint.vertices), ctx.pose))
++            missing = padded.union(physical).difference(ctx.perception.free_space)
++            print("EXACT_UNKNOWN", missing.area, missing.bounds,
++                  "linear", cert.linear_domain, "yaw", cert.yaw_domain,
++                  "padded", padded.difference(ctx.perception.free_space).area,
++                  "physical", physical.difference(ctx.perception.free_space).area)
++        losses.append(decision.reason)
++        return original_output(decision, body, ctx, epoch, stamp)
++    core._diagnose_stopping = diagnose
++    core._decision_output = output
++    phases = set()
++    captures = []
++    stopped_stamp = None
++    outputs = []
++    positions = [(50.0, 0.0)]
++    # Real core initialization may wait longer than the learning budget.
++    for t in (10.0, 50.0):
++        now[0] = t
++        publish_inputs(core)
++        core.prefetch_scan()
++        core.tick()
++    assert core.startup.state == "initializing" and core.startup.started is None
++    for i in range(1, 21):
++        t = now[0] = 50 + i * 0.05
++        # Explicit synthetic zero-order plant: the preceding actual core output
++        # supplies the next measured speed. No permit or obstacle is patched.
++        v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++        positions.append((t, positions[-1][1] + v * 0.05))
++        core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++        core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++        core.node._reception_test.sensors.ingest_observation(
++            MotionObservation(
++                "laser",
++                (v, 0.0, 0.0),
++                t,
++                (
++                    Origin(
++                        "laser",
++                        "native",
++                        i,
++                        t,
++                        t,
++                        t,
++                        measurement_steady=t,
++                        measurement=capture_time(t).measurement,
++                    ),
++                ),
++                quality=1.0,
++                independent=(True, True, True),
++                measured_steady=t,
++                measurement=capture_time(t).measurement,
++                # v is the preceding output actually applied throughout this
++                # completed plant interval, not an instantaneous new rate.
++                measurement_interval=MeasurementInterval(
++                    capture_time(t - 0.05).measurement, capture_time(t).measurement
++                ),
++                measurement_delta=Pose2D(v * 0.05, 0, 0),
++            ),
++            t,
++            t,
++        )
++        delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++        if (
++            core.startup.state in {"moving", "sampling"}
++            and len(delay_pattern) > 1
++            and not motion_reordering
++        ):
++            delay = 0.025
++        stamp = t - delay
++        ranges = [10.0] * 720
++        if not late_device:
++            ranges[0] = .15
++            ranges[1] = ranges[-1] = float("nan")
++        if late_device and core.startup.state == "validating":
++            ranges[0] = 0.15  # new equipment appears after the move: unverified
++        core.node._scans = [
++            N(
++                received=t,
++                received_ros=t,
++                stamp=stamp,
++                message=N(
++                    source_epoch="scan",
++                    frame_id="laser_link",
++                    sequence=max(1, round(stamp * 1000)),
++                    ranges=ranges,
++                    angle_min=-math.pi,
++                    angle_increment=2 * math.pi / 719,
++                    range_min=0.08,
++                    range_max=20.0,
++                    sensor_x=0.0,
++                    sensor_y=0.0,
++                    sensor_yaw=0.0,
++                    transform_stamp=stamp,
++                    raw_capture=N(
++                        timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                    ),
++                ),
++                measurement_steady=stamp,
++            )
++        ]
++        publish_inputs(core)
++        core.prefetch_scan()
++        core.tick()
++        phases.add(core.startup.state)
++        captures.append(stamp)
++        outputs.append(core.node.emitted[-1][0].vx)
++        if core.startup.state == "validating" and stopped_stamp is None:
++            stopped_stamp = core.startup.validation_after_steady
++        if not core.startup.active:
++            break
++    assert core.startup.state == expected, (core.startup.summary(), losses, phases)
++    assert core.startup.started > 50.0
++    assert {"sampling", "moving", "validating"} <= phases
++    assert max(outputs) > outputs[-2]  # actual controller deceleration to zero
++    assert any(v > 0 for v in outputs) and outputs[-1] == 0
++    assert core.startup.deadline - core.startup.started == 3.0
++    assert all(
++        v == 0
++        for t, v in zip([50 + (i + 1) * 0.05 for i in range(len(outputs))], outputs, strict=True)
++        if t >= core.startup.deadline
++    )
++    assert core.startup.validation_samples >= 5
++    assert stopped_stamp is not None
++    assert [m.seconds for m in core.self_returns.frame_measurements] == sorted(
++        set([m.seconds for m in core.self_returns.frame_measurements])
++    )
++    # Completion can occur while consuming the exit geometry snapshot. The
++    # next fixed control slot retires its lifecycle identity and stays zero.
++    now[0] += 0.05
++    publish_inputs(core)
++    core.tick()
++    assert core.machine.state.task_id is None
++    assert core.target.source == "idle" and core.node.emitted[-1][0].vx == 0
++    if len(delay_pattern) > 1:
++        assert any(a > b for a, b in zip(captures, captures[1:], strict=False))
++
++    assert all(
++        core.startup.started <= m.seconds < core.startup.deadline
++        for m in core.self_returns.frame_measurements
++    )
++    assert core._learning_client.record.model is not None
++    if late_device:
++        # Equipment first seen after collection cannot enter the frozen model.
++        assert core._learning_client.record.model.points == ()
++        assert core._latest_masked.rays[0].kind == "hit"
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-final.log
+@@ -0,0 +1,5 @@
++..................................s..................................... [ 48%]
++........................................................................ [ 97%]
++....                                                                     [100%]
++--------------- generated xml file: /tmp/review-977083-final.xml ---------------
++147 passed, 1 skipped in 59.23s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-final.xml
+@@ -0,0 +1 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="1" tests="148" time="59.221" timestamp="2026-11-16T20:52:33.599688+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[1000]" time="0.613" /><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[2048]" time="1.624" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[False]" time="0.016" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[True]" time="0.010" /><testcase classname="tests.unit.test_learning_surface_review" name="test_partial_scan_does_not_join_first_last_samples" time="0.002" /><testcase classname="tests.unit.test_learning_surface_review" name="test_unstable_bridge_disconnects_stable_outside_piece" time="0.003" /><testcase classname="tests.unit.test_learning_surface_review" name="test_outside_piece_with_another_stable_route_to_interior_is_retained" time="0.003" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[none]" time="1.342" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[left]" time="1.255" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[right]" time="1.263" /><testcase classname="tests.unit.test_learning_core_surface_review" name="test_nonempty_scan_requires_observed_stopping_space[both]" time="0.909" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_adjacent_valid_returns_extend_outside_without_connection_distance_threshold" time="0.004" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_invalid_gap_and_no_interior_seed_keep_disconnected_points_external" time="0.005" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_unstable_connected_bridge_excludes_disconnected_outside_point" time="0.009" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_neighbor_direction_and_changed_beam_indices_match_same_surface_position" time="0.003" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_learning_checks_early_instability_even_after_bounded_capture_window_moves" time="0.008" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_saved_restored_view_survives_missing_mismatched_occluded_frames_without_writes" time="2.032" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[0.1]" time="0.102" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[1.0]" time="0.094" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[nan]" time="0.104" /><testcase classname="tests.unit.test_learning_record_owner" name="test_strict_record_roundtrip_and_corrupt_or_unknown_inputs" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_corrupt_record_and_duplicate_writer_are_nonfatal_objects" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_atomic_write_failure_keeps_previous_complete_snapshot" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_pending_symlink_never_overwrites_unrelated_file" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_commit_failure_is_local_and_never_confirms_action_consumption" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_action_consumption_requires_commit_and_survives_client_rebind" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_completed_catalog_is_published_only_after_commit_and_attach_is_read_only" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action" time="0.003" /><testcase classname="tests.unit.test_learning_client" name="test_real_client_thread_completion_fixed_filter_and_same_run_rebind" time="0.125" /><testcase classname="tests.unit.test_learning_client" name="test_completed_model_ignores_runtime_geometry_reports" time="0.067" /><testcase classname="tests.unit.test_learning_service_linux" name="test_native_service_restores_frozen_model_without_replaying_action" time="0.000"><skipped type="pytest.skip" message="requires Linux abstract SEQPACKET and SO_PEERCRED">/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_service_linux.py:30: requires Linux abstract SEQPACKET and SO_PEERCRED</skipped></testcase><testcase classname="tests.unit.test_learning_dual_clock" name="test_pause_tick_zero_has_no_motion_and_does_not_extend_three_host_seconds" time="0.006" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-0.5]" time="0.057" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-1]" time="0.051" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[True-2]" time="0.050" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-0.5]" time="0.026" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-1]" time="0.010" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_real_geometry_classification_is_rate_independent_with_ros_corrections[False-2]" time="0.010" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_model_late_capture_replay_and_reset_use_physical_axis_and_producer_identity" time="0.011" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_scan_producer_restart_and_world_reset_are_separate_segment_changes" time="0.007" /><testcase classname="tests.unit.test_learning_dual_clock" name="test_paused_retention_frontier_does_not_reaccept_trimmed_capture_identity" time="0.028" /><testcase classname="tests.unit.test_startup_learning" name="test_provisional_is_endpoint_local_and_preserves_occlusion" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_model_uses_body_position_stability_and_freezes_reference" time="0.057" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_interior_returns_do_not_require_displacement" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_consumed_record_restores_without_replaying_possible_motion" time="0.003" /><testcase classname="tests.unit.test_startup_learning" name="test_program_start_context_is_explicit_and_run_owned" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_connected_returns_do_not_require_world_hypothesis" time="0.006" /><testcase classname="tests.unit.test_startup_learning" name="test_outside_following_object_and_device_removal_do_not_leave_a_mask" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_owner_finishes_using_scans_without_independent_displacement" time="0.011" /><testcase classname="tests.unit.test_startup_learning" name="test_collision_footprint_preserves_actual_physical_polygon" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_geometry_requires_strict_interior_and_never_expands_boundary" time="0.000" /><testcase classname="tests.unit.test_startup_learning" name="test_learned_local_support_never_hides_an_obstacle_behind_equipment" time="0.050" /><testcase classname="tests.unit.test_startup_learning" name="test_stable_body_return_needs_no_world_free_space" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_owner_completes_verified_side_return_after_target_and_post_frames" time="0.159" /><testcase classname="tests.unit.test_startup_learning" name="test_matcher_features_exclude_body_points_without_changing_raw_obstacles" time="0.001" /><testcase classname="tests.unit.test_startup_learning" name="test_prior_diagnostic_never_claims_verified_translation" time="0.002" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_fixed_three_seconds_never_waits_for_exact_displacement" time="0.005" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_latched_wait_does_not_consume_action_without_final_nonzero_selection" time="0.003" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_brief_reverse_feedback_does_not_repeat_or_extend_collection" time="0.004" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_same_run_reconstruction_does_not_replay_consumed_window" time="0.003" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_reliable_unmoved_record_can_continue_first_learning" time="0.002" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_real_monotonic_regression_still_stops_action" time="0.003" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_ros_labels_do_not_order_or_deduplicate_learning_frames" time="0.018" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_stable_attachment_classifies_without_displacement_or_turn_proof" time="0.044" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_completed_result_restores_same_run_without_replaying_action" time="0.003" /><testcase classname="tests.unit.test_startup_learning_timed" name="test_single_interior_echo_is_not_lost_by_external_point_subsampling" time="0.043" /><testcase classname="tests.unit.test_startup_learning_review" name="test_capture_order_is_independent_of_delivery_order_and_current_tick[delivery0]" time="0.003" /><testcase classname="tests.unit.test_startup_learning_review" name="test_capture_order_is_independent_of_delivery_order_and_current_tick[delivery1]" time="0.002" /><testcase classname="tests.unit.test_startup_learning_review" name="test_old_moving_scans_cannot_fill_post_stop_validation" time="0.003" /><testcase classname="tests.unit.test_startup_learning_review" name="test_initialization_wait_does_not_consume_learning_budget" time="0.004" /><testcase classname="tests.unit.test_startup_learning_review" name="test_body_change_rebuilds_model_but_global_errors_do_not" time="0.016" /><testcase classname="tests.unit.test_startup_learning_review" name="test_planned_stopping_keeps_validation_without_new_forward" time="0.016" /><testcase classname="tests.unit.test_startup_learning_review" name="test_initial_scan_alignment_wait_does_not_retire_attempt" time="0.013" /><testcase classname="tests.unit.test_startup_learning_review" name="test_feature_boundary_replacement_is_not_hidden_by_same_mtime" time="0.002" /><testcase classname="tests.unit.test_startup_learning_review" name="test_unstarted_action_cannot_use_post_frames_as_moving_evidence" time="0.009" /><testcase classname="tests.unit.test_startup_learning_review" name="test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache" time="0.082" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.0-0.0]" time="0.069" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.05-0.05]" time="0.061" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_global_errors_preserve_model_learning_and_classification[0.5-0.7]" time="0.063" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_actual_geometry_has_only_user_match_tolerance_and_no_outside_mask" time="0.002" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_mask_does_not_extend_ray_towards_nearby_body_geometry" time="0.000" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_nonzero_measurement_changes_learn_and_remain_usable_without_drift" time="0.075" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[-0.01-self]" time="0.047" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[0.01-self]" time="0.047" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[-0.01001-hit]" time="0.047" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_user_one_centimeter_matching_bound_is_inclusive[0.01001-hit]" time="0.048" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_frozen_match_applies_across_body_boundary_within_one_centimeter[0.2]" time="0.003" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_frozen_match_applies_across_body_boundary_within_one_centimeter[0.201]" time="0.004" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_new_adjacent_and_moving_nearby_external_hits_remain_obstacles" time="0.050" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_learning_uses_same_one_centimeter_range_as_runtime[0.01-1]" time="0.043" /><testcase classname="tests.unit.test_body_return_geometry_only" name="test_learning_uses_same_one_centimeter_range_as_runtime[0.01001-0]" time="0.010" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_core_preserves_unmoved_learning_on_estop" time="0.018" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_initial_interior_stop_does_not_latch_execution_fault" time="0.014" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[False]" time="2.511" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[True]" time="3.286" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_flows_through_real_tick_and_safety_checks[front]" time="2.121" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_temporary_feedback_loss_segments_without_replaying_action" time="0.025" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_component_reconstruction_restores_consumption_without_repeat" time="0.017" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_startup_registers_and_retires_shared_runtime_task" time="0.026" /><testcase classname="tests.unit.test_startup_learning_chain" name="test_geometry_pending_does_not_interrupt_started_learning" time="0.020" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]" time="3.957" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]" time="4.443" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]" time="7.187" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]" time="6.372" /><testcase classname="tests.unit.test_startup_learning_cycle" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]" time="6.334" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_latched_unmoved_learning_survives_wait_and_static_sampling[software_estop]" time="0.020" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_latched_unmoved_learning_survives_wait_and_static_sampling[execution_fault]" time="0.022" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_explicit_reset_continues_only_unmoved_attempt" time="0.018" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_lock_after_emitted_motion_never_replays_forward" time="0.018" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_actual_tick_samples_under_latch_and_never_drives[software_estop]" time="2.084" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_actual_tick_samples_under_latch_and_never_drives[execution_fault]" time="1.976" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_withdrawn_move_validates_delayed_frames_without_restarting_budget" time="0.007" /><testcase classname="tests.unit.test_startup_learning_latch" name="test_pending_motion_keeps_a_fresh_bounded_static_window" time="0.014" /><testcase classname="tests.unit.test_learning_cleanup" name="test_only_exact_old_generated_regular_files_are_removed" time="0.005" /><testcase classname="tests.unit.test_learning_cleanup" name="test_orphaned_real_sidecars_are_removed_but_symlink_sidecars_are_not" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_invalid_current_claim_skips_all_deletion[other]" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_invalid_current_claim_skips_all_deletion[../.startup-learning-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_symlink_root_is_not_followed" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_active_peer_supervisor_protects_all_run_markers" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_unlink_failure_logs_and_continues" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_enumeration_failure_is_nonfatal" time="0.001" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[success]" time="0.074" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[adapter_failed]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[agent_exited]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_hardware_cleanup_only_once_after_verified_live_agent_under_lock[cleanup_failed]" time="0.003" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[success]" time="0.004" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[adapter_failed]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_simulation_boundary_preserves_failures_and_cleans_once[agent_exited]" time="0.002" /><testcase classname="tests.unit.test_learning_cleanup" name="test_active_record_writer_preserves_entire_old_run_until_closed" time="0.002" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_release_installs_local_owner_without_emitting_hard_zero_or_resetting_trajectory" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_identical_close_and_latched_source_echo_are_not_new_events[estop-estop_revision]" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_identical_close_and_latched_source_echo_are_not_new_events[fault-fault_revision]" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_new_explicit_estop_request_advances_version_and_closed_owner_never_acks" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_failed_handoff_can_retry_exact_payload_but_cannot_change_it" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_missing_real_reference_publishes_strict_unhealthy_state_not_old_drive" time="0.014" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_new_physical_fault_after_recovery_is_not_ignored_forever" time="0.011" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_feedback_pause_retains_task_replan_intent_but_source_is_fenced" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_control_owner_only_accepts_reception_snapshot_and_has_no_fused_subscription" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_explicit_idle_estop_uses_original_request_without_inventing_authority" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_release_uses_one_steady_instant_and_does_not_create_clock_fault" time="0.012" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_body_projection_keeps_original_monotonic_expiry_across_ros_correction[1.0]" time="0.013" /><testcase classname="tests.unit.test_motion_core_handoff" name="test_body_projection_keeps_original_monotonic_expiry_across_ros_correction[1000000000.0]" time="0.014" /><testcase classname="tests.unit.test_motion_core_chain" name="test_native_recovery_then_intent_and_local_release_are_actually_consumed" time="6.750" /><testcase classname="tests.unit.test_motion_core_chain" name="test_disabled_learning_prefetch_submits_latest_scan_before_control_tick" time="0.022" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-format.log
+@@ -0,0 +1 @@
++8 files already formatted
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-mypy.log
+@@ -0,0 +1 @@
++Success: no issues found in 4 source files
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-physical-final.log
+@@ -0,0 +1,3 @@
++...............                                                          [100%]
++---------- generated xml file: /tmp/review-977083-physical-final.xml -----------
++15 passed in 2.66s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-physical-final.xml
+@@ -0,0 +1 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="15" time="2.662" timestamp="2026-11-16T20:57:03.209565+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[1000]" time="0.623" /><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[2048]" time="1.643" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[False]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[True]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_partial_scan_does_not_join_first_last_samples" time="0.002" /><testcase classname="tests.unit.test_learning_surface_review" name="test_unstable_bridge_disconnects_stable_outside_piece" time="0.002" /><testcase classname="tests.unit.test_learning_surface_review" name="test_outside_piece_with_another_stable_route_to_interior_is_retained" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_strict_record_roundtrip_and_corrupt_or_unknown_inputs" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_corrupt_record_and_duplicate_writer_are_nonfatal_objects" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_atomic_write_failure_keeps_previous_complete_snapshot" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_pending_symlink_never_overwrites_unrelated_file" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_commit_failure_is_local_and_never_confirms_action_consumption" time="0.001" /><testcase classname="tests.unit.test_learning_record_owner" name="test_action_consumption_requires_commit_and_survives_client_rebind" time="0.002" /><testcase classname="tests.unit.test_learning_record_owner" name="test_completed_catalog_is_published_only_after_commit_and_attach_is_read_only" time="0.003" /><testcase classname="tests.unit.test_learning_record_owner" name="test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action" time="0.004" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review-evidence/review-977083-ruff.log
+@@ -0,0 +1 @@
++All checks passed!
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-surface-review.md
+@@ -0,0 +1,66 @@
++# 固定学习表面亲审返修与core可用性限制
++
++任务 `task_dfab27221feb / ctx_977083177671`；分支fix/degraded-drive-speed，HEAD `593e8f13f385892f0bd62cf75c593f7b07efd2da`。本轮明确bug及调查已交付待亲审；**不宣称非空学习的完整core运动周期通过**。未改停车风险、误差或未知空间规则，未启服务/ROS/仿真/车辆，未暂存、提交、推送。
++
++## 三处明确bug：先失败后修复
++
++本轮开始快照 `/tmp/frozen-learning-review-start` 含792份文件及sha256.json，保留前轮返修和其它工作区改动。初始定向测试4失败、2通过（`learning-surface-before.log/.xml`），对应下列实际问题；旧失败证据保留在本报告的[evidence目录](2026-11-16-learning-surface-review-evidence)。
++
++| 问题 | 根因 | 本轮修复与直接证据 |
++| --- | --- | --- |
++| 密集长表面过滤空洞 | validate用stable[::stride]把1000个稳定端点压成125点，原点间距已超过1cm，未选点变成hit | 取消抽样，保存全部稳定参考点；上限与原扫描预算统一为2048。1000及2048束真实极坐标的约5m连续表面，所有原端点在重复运行及保存恢复后仍是self，参考点逐个相同 |
++| 360°首尾断连 | connected_points只切线性run，未处理采样周期接缝 | 使用实际扫描束数/角步长识别完整一周，合并首尾有效run；周期及重复端点两种真实角度/距离fixture通过，局部扫描及无效束仍断连。仅数值ulp处理舍入，不增加连接距离/角阈值 |
++| 不稳定桥剔除后外侧点仍保留 | 旧实现只检查原有效命中run的车内种子，独立剔除不稳定坐标后不再检查连接 | 在同帧剩余稳定支持上重新分段，迭代至候选固定；中间桥失稳后外侧断开部分删除，有另一条稳定车内连接的部分保留。原错误“外侧总保留”断言改为断连必须剔除，并新增另一路径正例 |
++
++2048点规范记录可以超过原64KiB，故同步调整记录容量为256KiB、Complete和anchor id上限为2048、客户端接收上限使用统一常量；没有只扩模型却截断IPC的隐性失败。强断言包括2048点记录实际超过65536字节、真实owner保存恢复、parse_record与Complete JSON往返。原“超记录容量”负例改为MAX_RECORD_BYTES+1，保留实际大小约束，不再用失效的旧常量假覆盖。
++
++固定目录的运行匹配使用缓存STRtree查找最近参考点，仍按该参考点原硬编码1cm距离判断；不把点连线变成新mask，不扩大过滤区域，不添加新的控制或模型资格门。学习候选也使用同样位置支持加速连接复核。完成模型仍只读，无运行撤销/持久化回写；旧已保存抽样目录不自动补点或替换，新学习结果才包含全目录。
++
++## 原三个失败core探针的根因
++
++完整原始失败报告 `frozen-learning-extra-raw-gap-probe.log/.xml` 保留。重新执行原输入：rear index0=0.15，index1及末束NaN，其余ranges=10；仅添加只读诊断，不修改输出/permit/风险。复现命令如下，退出1表示保留的“预期completed”诊断断言失败，不是通过：
++
++```sh
++PYTHONPATH=tests/unit .venv/bin/pytest -c pyproject.toml -q -s /tmp/test_review_gap_probe.py -k delay_pattern0 --maxfail=1
++```
++
++诊断源完整保留为 `evidence/original-gap-diagnostic.py.txt`；重新运行时复制到 `/tmp/test_review_gap_probe.py`，在仓库根目录执行上述命令。`learning-surface-exact-gap.log` 给出实际链：
++
++`ConstraintEngine._stop_certificate` → 原 `_sweep(stop_only=True)` → `_clear`检查车体外新增扫掠是否被free_space覆盖 → `sweep_unknown` → stop_verified=False → 不发drive permit → 最终零输出 → 不预消耗动作。每个控制周期都会重新检查，不是学习记录会话、动作防重放或算法不返回的死循环；处于moving表示等待实际首次输出，3秒计时尚未开始。
++
++原双侧缺束输入的padded+physical未覆盖扫掠面积为0.006171487959207388 m²，bounds=(-0.4476008504370064,-0.031070626477677436,-0.337,0.02715353786169763)。这部分实际在物理车体之外，不能因车内回波被标self就伪称自由空间。
++
++按负责人要求补原非空回波的最小对照，每组20个真实core控制周期，均断言反复sweep_unknown、全零输出、动作未消费，未恢复空输入当作解决：
++
++| 相邻扫描 | physical未知扫掠面积 m² | physical未知bounds |
++| --- | --- | --- |
++| 相邻有效原值不变 | 0.004844128980066649 | (-0.43005240222245733,-0.02684556532947094,-0.337,0.02684556532947113) |
++| 仅index1缺束 | 0.0051564948672433684 | (-0.43005240222245733,-0.030609227188718776,-0.337,0.02684556532947113) |
++| 仅末束缺束 | 0.004844128980066649 | 同无缺束 |
++| 双侧缺束 | 0.0051564948672433684 | 同index1缺束 |
++
++这里的角度、距离及NaN均由现有扫描接口接纳，失败不是无效消息或字段不合法；同角度重复端点的包容式扫描数据也没有在本轮擅自“修好”来改变原输入。即使不叠加缺束，self回波后的未知区域仍与停车支持相交，因此不能把根因只归于额外NaN。
++
++原linear/yaw支持均为(-0.1,0.1)。来源明确是 `SimulationMotionProfile.linear_error/yaw_error=0.1` 与 `StoppingRisk._axis_domain` 的 `max(配置误差+prediction_error, axis.error)`；这些是现有明确标注unvalidated simulation的风险假设，不是物理实测界或学习资格门。wheel/IMU静止证据由MotionSensorRuntime单独提供，并不按当前风险规则自动把上述误差域归零。此处没有证实可在不改变风险政策下修复的实现错误，故未减误差、未假造自由区、未改stop证书或学习等待策略。
++
++结论仅限定在已测输入和当前laser_only路径：**该非空完整运动学习场景仍未成功，存在尚未解决的可用性限制**；不外推所有非空传感器布局不可用，也不将合法未知观测等同已确认安全。协调者已将此缺口记入根交接，要求本轮保持原政策。原空模型完整周期、非空模型局部学习/保存/恢复、实际core只读过滤分别通过，不能拼成“非空完整core通过”。
++
++## 集中验证与范围
++
++产品修复后集中组 `/tmp/review-977083-final.log/.xml`：**147 passed、1 skipped，59.23秒**。
++
++```sh
++.venv/bin/pytest -q tests/unit/test_learning_surface_review.py tests/unit/test_learning_core_surface_review.py tests/unit/test_learning_frozen_reference.py tests/unit/test_learning_record_owner.py tests/unit/test_learning_client.py tests/unit/test_learning_service_linux.py tests/unit/test_learning_dual_clock.py tests/unit/test_startup_learning.py tests/unit/test_startup_learning_timed.py tests/unit/test_startup_learning_review.py tests/unit/test_body_return_geometry_only.py tests/unit/test_startup_learning_chain.py tests/unit/test_startup_learning_cycle.py tests/unit/test_startup_learning_latch.py tests/unit/test_learning_cleanup.py tests/unit/test_motion_core_handoff.py tests/unit/test_motion_core_chain.py --junitxml=/tmp/review-977083-final.xml
++```
++
++随后仅补强测试：改为真实360°极坐标及一致重复端点、补记录容量强断言，产品未再修改；定向 `test_learning_surface_review.py test_learning_record_owner.py` 为15通过（2.66秒），日志 `review-977083-physical-final.log/.xml`。这些是有原因定向补测，不伪称147项整套再次执行。原4失败负例已变成明确机制正例，原非空core场景则保留为安全拒绝/可用性未解决的负例。
++
++严格mypy检查4个本轮产品文件通过；Ruff检查8个修改源码/测试通过，format --check为8 files already formatted。日志分别为 `review-977083-mypy.log`、`review-977083-ruff.log`、`review-977083-format.log`，均已复制到evidence目录。无ignore、错误预算放宽或断言弱化。
++
++唯一跳过仍为目标Linux abstract SOCK_SEQPACKET/SO_PEERCRED+spawn文件I/O端到端测试。当前macOS/CPython3.12软件证据不代替Linux/aarch64/Python3.10运行、ROS、仿真、实车或硬实时上界，新的较大IPC载荷在目标Linux也仍待验证。
++
++## 精确增量与保护
++
++本轮实际增量相对 `/tmp/frozen-learning-review-start`，见 `2026-11-16-learning-surface-review-owned.diff`；逐文件启动/最终SHA及证据文件清单见 `2026-11-16-learning-surface-review-fingerprints.json`。旧固定参考报告、旧指纹与旧增量作为历史证据保留，不回写为本轮验收通过。原临时 `test_learning_gap_debug.py` 是任务前已有诊断文件，本轮未改动，不将其旧completed断言计入当前回归通过。
++
++三保护文件与本轮快照字节一致；motion_core_output.py、stopping_input.py、simulation_motion_profile.py、motion_core_perception.py也均与本轮快照相同。共享工作区的test_learning_gap_debug.py仅作为诊断输入读取，本worker未编写或修改；它不在本轮启动快照内，不纳入本worker增量或“相对启动未变”校验。其它任务工作区改动保留。文件写owner、动作0.05m/s host3秒、防重放与原清理未改；未新增学习接管、等待超时、感知或安全放行条件。
+--- a/src/senior_control/motion/learning_record.py
++++ b/src/senior_control/motion/learning_record.py
+@@ -6,8 +6,8 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field, model_validator
+ 
+-MAX_ANCHORS = 128
+-MAX_RECORD_BYTES = 65536
++MAX_ANCHORS = 2048
++MAX_RECORD_BYTES = 262144
+ RUN_ID = r"^[0-9a-f]{32}$"
+ RunId = Annotated[str, Field(pattern=RUN_ID)]
+ Nonnegative = Annotated[int, Field(strict=True, ge=0)]
+--- a/src/senior_control/runtime/learning_client.py
++++ b/src/senior_control/runtime/learning_client.py
+@@ -7,6 +7,7 @@
+ from pathlib import Path
+ 
+ from senior_control.motion.learning_record import (
++    MAX_RECORD_BYTES,
+     LearningGeometry,
+     LearningRecord,
+     Phase,
+@@ -35,8 +36,8 @@
+         channel.settimeout(2)
+         channel.connect(address(run_id))
+         channel.sendall(request.model_dump_json().encode())
+-        raw = channel.recv(65537)
+-        if len(raw) > 65536:
++        raw = channel.recv(MAX_RECORD_BYTES + 1)
++        if len(raw) > MAX_RECORD_BYTES:
+             raise ValueError("learning_reply_truncated")
+         return Reply.model_validate_json(raw)
+ 
+--- a/src/senior_control/runtime/learning_wire.py
++++ b/src/senior_control/runtime/learning_wire.py
+@@ -5,6 +5,7 @@
+ from pydantic import Field, TypeAdapter
+ 
+ from senior_control.motion.learning_record import (
++    MAX_ANCHORS,
+     FrozenFact,
+     LearningGeometry,
+     LearningRecord,
+@@ -57,7 +58,7 @@
+ 
+ class Complete(SessionRequest):
+     type: Literal["complete"] = "complete"
+-    points: tuple[Point, ...] = Field(max_length=128)
++    points: tuple[Point, ...] = Field(max_length=MAX_ANCHORS)
+ 
+ 
+ Request: TypeAlias = Annotated[
+--- a/src/senior_control/safety/self_learning.py
++++ b/src/senior_control/safety/self_learning.py
+@@ -6,7 +6,9 @@
+ from dataclasses import replace
+ 
+ from shapely.geometry import MultiPoint, Point, Polygon
+-
++from shapely.strtree import STRtree
++
++from senior_control.motion.learning_record import MAX_ANCHORS
+ from senior_control.safety.self_filter import FilteredObservation, Point2D
+ from senior_control.sensors.time_proof import MeasurementTime, SourceTime
+ 
+@@ -23,6 +25,11 @@
+         for value in point
+         for offset in (-SELF_RETURN_MATCH_DISTANCE_M, SELF_RETURN_MATCH_DISTANCE_M)
+     )
++
++
++def _matches(point: Point2D, references: tuple[Point2D, ...], tree: STRtree) -> bool:
++    reference = references[int(tree.nearest(Point(point)))]
++    return math.dist(point, reference) <= _match_limit(reference)
+ 
+ 
+ class SelfReturnModel:
+@@ -43,6 +50,8 @@
+         self._candidates: tuple[Point2D, ...] | None = None
+         self._observed_count = 0
+         self.learned: tuple[tuple[float, float], ...] = ()
++        self._filter_points: tuple[Point2D, ...] = ()
++        self._filter_tree: STRtree | None = None
+ 
+     def interior(self, xy: Point2D) -> bool:
+         # Boundary points remain ambiguous; no sensor/extrinsic margin applies.
+@@ -74,7 +83,7 @@
+         points = tuple(
+             r.endpoint for r in observation.rays if r.kind == "hit" and r.endpoint is not None
+         )
+-        if len(points) > 2048:
++        if len(points) > MAX_ANCHORS:
+             raise ValueError("self-return point budget exceeded")
+         if self.segment_id is None:
+             self.segment_id = segment_id
+@@ -124,6 +133,29 @@
+                 for p in self._candidates
+                 if not cloud.is_empty and cloud.distance(Point(p)) <= _match_limit(p)
+             )
++            # A removed unstable bridge is a gap in the STABLE surface. Prune
++            # disconnected pieces too, without inventing distance/angle links.
++            while self._candidates:
++                stable = self._candidates
++                tree = STRtree(tuple(Point(p) for p in stable))
++                supported = replace(
++                    observation,
++                    rays=tuple(
++                        ray
++                        if ray.endpoint is not None and _matches(ray.endpoint, stable, tree)
++                        else replace(ray, kind="invalid")
++                        for ray in observation.rays
++                    ),
++                )
++                connected_cloud = MultiPoint(self.connected_points(supported))
++                self._candidates = tuple(
++                    p
++                    for p in stable
++                    if not connected_cloud.is_empty
++                    and connected_cloud.distance(Point(p)) <= _match_limit(p)
++                )
++                if self._candidates == stable:
++                    break
+         self._observed_count += 1
+         self.frames.insert(i, points)
+         self.frame_measurements.insert(i, measurement)
+@@ -172,6 +204,25 @@
+             previous = ray.index
+         if run:
+             runs.append(run)
++        scan = observation.scan
++        count = len(scan.ranges)
++        span = (count - 1) * scan.angle_increment
++        # Both common full-turn representations are accepted: periodic samples
++        # and an inclusive duplicate endpoint. This is sampling topology, not a
++        # new angular connection threshold; ulps only absorb float roundoff.
++        rounding = 4 * math.ulp(2 * math.pi)
++        complete = -rounding <= 2 * math.pi - span <= scan.angle_increment + rounding
++        if (
++            len(runs) > 1
++            and complete
++            and len(observation.rays) == count
++            and observation.rays[0].index == 0
++            and observation.rays[-1].index == count - 1
++            and observation.rays[0].kind == observation.rays[-1].kind == "hit"
++            and observation.rays[0].endpoint is not None
++            and observation.rays[-1].endpoint is not None
++        ):
++            runs = [runs[-1] + runs[0], *runs[1:-1]]
+         return tuple(
+             point for group in runs if any(self.interior(p) for p in group) for point in group
+         )
+@@ -181,21 +232,26 @@
+         self.learned = ()
+         if self._observed_count < 10:
+             return 0
+-        stable = self._candidates or ()
+-        stride = max(1, math.ceil(len(stable) / 128))
+-        self.learned = stable[::stride]
++        self.learned = self._candidates or ()
+         return len(self.learned)
+ 
+     def filter(self, observation: FilteredObservation, *, provisional: bool) -> FilteredObservation:
+         """Match frozen positions directly; scans never modify the learned catalog."""
+-        limits = {p: _match_limit(p) for p in self.learned}
++        if self.learned != self._filter_points:
++            self._filter_points = self.learned
++            self._filter_tree = (
++                STRtree(tuple(Point(p) for p in self.learned)) if self.learned else None
++            )
+         rays = tuple(
+             replace(r, kind="self")
+             if r.kind == "hit"
+             and r.endpoint is not None
+             and (
+                 (provisional and self.interior(r.endpoint))
+-                or any(math.dist(r.endpoint, p) <= limits[p] for p in self.learned)
++                or (
++                    self._filter_tree is not None
++                    and _matches(r.endpoint, self.learned, self._filter_tree)
++                )
+             )
+             else r
+             for r in observation.rays
+--- /dev/null
++++ b/tests/unit/test_learning_core_surface_review.py
+@@ -0,0 +1,173 @@
++"""Synthetic raw measurements and fake transport through the real unified/core chain."""
++
++import math
++from types import SimpleNamespace as N
++
++import pytest
++from control_process_test_support import publish_inputs
++from learning_test_support import (  # noqa: F401
++    begin_action,
++    bind_core,
++    learning_runs,
++    startup_for,
++    write_geometry_record,
++)
++from learning_test_support import simulation_point as point
++from source_time_test_support import capture_time, wire_time
++from test_motion_core_chain import InlineWorker
++from test_motion_core_handoff import core  # noqa: F401
++
++from senior_control.config import DeviceProfile
++from senior_control.models import Pose2D
++from senior_control.motion.constraint_worker import ConstraintScheduler
++from senior_control.motion.estimator import MotionObservation, Origin
++from senior_control.motion.observations import Source
++from senior_control.sensors.time_proof import MeasurementInterval
++
++
++@pytest.mark.parametrize("gap", ["none", "left", "right", "both"])
++def test_nonempty_scan_requires_observed_stopping_space(core, tmp_path, monkeypatch, gap):  # noqa: F811
++    delay_pattern, motion_reordering = (0.0,), False
++    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
++    bind_core(core, tmp_path / "claim")
++    core.node._depth_policy = "laser_only"
++    core.node._scan_topology_ready = lambda: True
++    core.node._profile = lambda: DeviceProfile(
++        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
++    )
++    now = [10.0]
++    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
++    losses = []
++    missing = []
++    original = core._decision_output
++
++    def diagnostic(decision, body, ctx, epoch, stamp):
++        losses.append(decision.reason)
++        if decision.reason == "sweep_unknown" and not missing:
++            from shapely.geometry import Polygon
++
++            from senior_control.models import Velocity
++            from senior_control.motion.constraints import _world
++
++            cert = core.engine._sweep(ctx, Velocity(0, 0), stop_only=True, coarse=True)
++            required = _world(cert.physical_sweep, ctx.pose).difference(
++                _world(Polygon(ctx.footprint.physical_vertices), ctx.pose)
++            )
++            missing.append(
++                (
++                    required.difference(ctx.perception.free_space).area,
++                    required.difference(ctx.perception.free_space).bounds,
++                    cert.linear_domain,
++                    cert.yaw_domain,
++                )
++            )
++        return original(decision, body, ctx, epoch, stamp)
++
++    core._decision_output = diagnostic
++    phases = set()
++    captures = []
++    stopped_stamp = None
++    outputs = []
++    positions = [(50.0, 0.0)]
++    # Real core initialization may wait longer than the learning budget.
++    for t in (10.0, 50.0):
++        now[0] = t
++        publish_inputs(core)
++        core.prefetch_scan()
++        core.tick()
++    assert core.startup.state == "initializing" and core.startup.started is None
++    for i in range(1, 21):
++        t = now[0] = 50 + i * 0.05
++        # Explicit synthetic zero-order plant: the preceding actual core output
++        # supplies the next measured speed. No permit or obstacle is patched.
++        v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
++        positions.append((t, positions[-1][1] + v * 0.05))
++        core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
++        core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
++        core.node._reception_test.sensors.ingest_observation(
++            MotionObservation(
++                "laser",
++                (v, 0.0, 0.0),
++                t,
++                (
++                    Origin(
++                        "laser",
++                        "native",
++                        i,
++                        t,
++                        t,
++                        t,
++                        measurement_steady=t,
++                        measurement=capture_time(t).measurement,
++                    ),
++                ),
++                quality=1.0,
++                independent=(True, True, True),
++                measured_steady=t,
++                measurement=capture_time(t).measurement,
++                # v is the preceding output actually applied throughout this
++                # completed plant interval, not an instantaneous new rate.
++                measurement_interval=MeasurementInterval(
++                    capture_time(t - 0.05).measurement, capture_time(t).measurement
++                ),
++                measurement_delta=Pose2D(v * 0.05, 0, 0),
++            ),
++            t,
++            t,
++        )
++        delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
++        if (
++            core.startup.state in {"moving", "sampling"}
++            and len(delay_pattern) > 1
++            and not motion_reordering
++        ):
++            delay = 0.025
++        stamp = t - delay
++        ranges = [10.0] * 720
++        ranges[0] = 0.15
++        if gap in {"left", "both"}:
++            ranges[1] = float("nan")
++        if gap in {"right", "both"}:
++            ranges[-1] = float("nan")
++        core.node._scans = [
++            N(
++                received=t,
++                received_ros=t,
++                stamp=stamp,
++                message=N(
++                    source_epoch="scan",
++                    frame_id="laser_link",
++                    sequence=max(1, round(stamp * 1000)),
++                    ranges=ranges,
++                    angle_min=-math.pi,
++                    angle_increment=2 * math.pi / 719,
++                    range_min=0.08,
++                    range_max=20.0,
++                    sensor_x=0.0,
++                    sensor_y=0.0,
++                    sensor_yaw=0.0,
++                    transform_stamp=stamp,
++                    raw_capture=N(
++                        timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
++                    ),
++                ),
++                measurement_steady=stamp,
++            )
++        ]
++        publish_inputs(core)
++        core.prefetch_scan()
++        core.tick()
++        phases.add(core.startup.state)
++        captures.append(stamp)
++        outputs.append(core.node.emitted[-1][0].vx)
++        if core.startup.state == "validating" and stopped_stamp is None:
++            stopped_stamp = core.startup.validation_after_steady
++        if not core.startup.active:
++            break
++    assert core.startup.state == "moving" and core.startup.started is None
++    assert not core.startup.session.record.action.consumed
++    assert outputs and all(v == 0 for v in outputs)
++    assert losses.count("sweep_unknown") >= 5
++    assert missing and missing[0][0] > 0
++    assert missing[0][2:] == ((-0.1, 0.1), (-0.1, 0.1))
++    print("STOPPING_UNKNOWN", gap, missing[0])
+--- a/tests/unit/test_learning_frozen_reference.py
++++ b/tests/unit/test_learning_frozen_reference.py
+@@ -50,13 +50,13 @@
+     assert outside.validate() == 0
+ 
+ 
+-def test_unstable_connected_return_is_excluded_but_stable_neighbors_remain():
++def test_unstable_connected_bridge_excludes_disconnected_outside_point():
+     frames = [
+         cloud(((0.0, 0.15), (0.0, 0.3 + (0.03 if i == 5 else 0)), (0.0, 0.8))) for i in range(12)
+     ]
+     model = learn(frames)
+-    assert model.validate() == 2
+-    assert model.learned == ((0.0, 0.15), (0.0, 0.8))
++    assert model.validate() == 1
++    assert model.learned == ((0.0, 0.15),)
+ 
+ 
+ def test_neighbor_direction_and_changed_beam_indices_match_same_surface_position():
+--- a/tests/unit/test_learning_record_owner.py
++++ b/tests/unit/test_learning_record_owner.py
+@@ -7,7 +7,12 @@
+ from source_time_test_support import DOMAIN
+ from test_startup_learning_feasibility import BOUNDARY
+ 
+-from senior_control.motion.learning_record import LearningAction, LearningRecord, parse_record
++from senior_control.motion.learning_record import (
++    MAX_RECORD_BYTES,
++    LearningAction,
++    LearningRecord,
++    parse_record,
++)
+ from senior_control.runtime.learning_owner import LearningRecordOwner
+ from senior_control.runtime.learning_store import read_record, write_record
+ 
+@@ -41,7 +46,7 @@
+         b'{"value":NaN}',
+         b'{"schema_version":2}',
+         b"{",
+-        b"x" * 65537,
++        b"x" * (MAX_RECORD_BYTES + 1),
+     ):
+         with pytest.raises(ValueError):
+             parse_record(data)
+--- /dev/null
++++ b/tests/unit/test_learning_surface_review.py
+@@ -0,0 +1,107 @@
++"""Regressions for dense surfaces, circular scans and stable connectivity."""
++
++import math
++from dataclasses import replace
++
++import pytest
++from learning_test_support import TestRun, geometry
++from test_learning_frozen_reference import cloud, learn
++from test_startup_learning_feasibility import BOUNDARY
++
++from senior_control.config import DeviceProfile
++from senior_control.models import Pose2D
++from senior_control.safety.self_filter import ScanObservation, filter_self
++
++
++def dense_surface(count=1000):
++    step = (math.pi / 2 - 0.03) / (count - 1)
++    scan = ScanObservation(
++        tuple(0.15 / math.sin(0.03 + i * step) for i in range(count)),
++        0.03,
++        step,
++        0.05,
++        20.0,
++        10.0,
++        "ros",
++        Pose2D(0, 0, 0),
++        10.0,
++        "base_link",
++        10.0,
++    )
++    return filter_self(scan, DeviceProfile(footprint=BOUNDARY))
++
++
++@pytest.mark.parametrize("count", [1000, 2048])
++def test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference(
++    tmp_path, count
++):
++    observation = dense_surface(count)
++    model = learn([observation] * 12)
++    assert model.validate() == len(observation.rays)
++    for _ in range(10):
++        result = model.filter(observation, provisional=False)
++        assert all(ray.kind == "self" for ray in result.rays)
++    run = TestRun(tmp_path / "dense-surface")
++    try:
++        client = run.client()
++        client.geometry(geometry(BOUNDARY))
++        client.complete(model.learned)
++        restored = run.client()
++        assert restored.record.model.points == model.learned
++        from senior_control.motion.learning_record import parse_record
++        from senior_control.runtime.learning_wire import REQUEST, Complete
++
++        assert parse_record(run.path.read_bytes()) == restored.record
++        request = Complete(session="a" * 32, points=model.learned)
++        assert REQUEST.validate_json(request.model_dump_json()).points == model.learned
++        if count == 2048:
++            assert len(run.path.read_bytes()) > 65536
++        assert all(r.kind == "self" for r in restored.view.filter(observation).rays)
++    finally:
++        run.close()
++
++
++@pytest.mark.parametrize("inclusive", [False, True])
++def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
++    count = 720
++    step = math.tau / (count - 1 if inclusive else count)
++    # Generate real angle/range endpoints, including a consistent duplicate
++    # end sample for inclusive scans. The interior seed lives near the end.
++    ranges = [float("nan")] * count
++    ranges[0], ranges[1] = 0.4, 0.5
++    if inclusive:
++        ranges[-2], ranges[-1] = 0.15, 0.4
++    else:
++        ranges[-1] = 0.15
++    template = dense_surface().scan
++    obs = filter_self(
++        replace(template, ranges=tuple(ranges), angle_min=0.0, angle_increment=step),
++        DeviceProfile(footprint=BOUNDARY),
++    )
++    model = learn([obs] * 12)
++    assert model.validate() == (4 if inclusive else 3)
++    filtered = model.filter(obs, provisional=False)
++    assert filtered.rays[1].kind == "self"
++    assert all(r.kind == "self" for r in filtered.rays if r.endpoint is not None)
++
++
++def test_partial_scan_does_not_join_first_last_samples():
++    obs = cloud(((0.0, 0.4), None, (0.0, 0.15)))
++    model = learn([obs] * 12)
++    assert model.validate() == 1 and model.learned == ((0.0, 0.15),)
++
++
++def test_unstable_bridge_disconnects_stable_outside_piece():
++    frames = [cloud(((0.0, 0.15), (0.0, 0.3), (0.0, 0.8)))] * 12
++    frames[5] = cloud(((0.0, 0.15), (0.0, 0.33), (0.0, 0.8)))
++    model = learn(frames)
++    assert model.validate() == 1
++    assert model.learned == ((0.0, 0.15),)
++
++
++def test_outside_piece_with_another_stable_route_to_interior_is_retained():
++    frames = [cloud(((0.0, 0.15), (0.0, 0.3), (0.0, 0.8), (0.0, 0.16)))] * 12
++    frames[5] = cloud(((0.0, 0.15), (0.0, 0.33), (0.0, 0.8), (0.0, 0.16)))
++    model = learn(frames)
++    assert model.validate() == 3
++    assert set(model.learned) == {(0.0, 0.15), (0.0, 0.8), (0.0, 0.16)}

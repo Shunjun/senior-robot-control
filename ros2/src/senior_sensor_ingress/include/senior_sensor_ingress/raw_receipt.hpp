@@ -13,6 +13,9 @@
 #include <rmw/types.h>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <senior_motion_msgs/msg/timed_image.hpp>
+#include <senior_motion_msgs/msg/timed_camera_info.hpp>
+#include <senior_motion_msgs/source_timing.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <senior_motion_msgs/msg/bounded_depth_evidence.hpp>
 #include <senior_motion_msgs/msg/bounded_semantic_evidence.hpp>
@@ -41,6 +44,7 @@ public:
 
 private:
   struct Source {
+    senior_motion_msgs::timing::SourceOrder timing_order;
     bool active = false;
     std::string raw_gid;
     std::string epoch;
@@ -65,11 +69,9 @@ private:
                       int64_t received_ros_ns = 0, double received_steady = 0.0,
                       const std::string & raw_gid = "");
   Header header(size_t index, const std::string & reason);
-  bool clock_ok(size_t trigger = 4, const std_msgs::msg::Header * source_header = nullptr,
-                int64_t received_ros_ns = 0, double received_steady = 0.0,
-                const std::string & raw_gid = "");
-  void on_image(size_t index, const Image & message, const rclcpp::MessageInfo & info);
-  void on_info(size_t index, const Info & message, const rclcpp::MessageInfo & info);
+  bool clock_ok();
+  void on_image(size_t index, const senior_motion_msgs::msg::TimedImage & timed, const rclcpp::MessageInfo & info);
+  void on_info(size_t index, const senior_motion_msgs::msg::TimedCameraInfo & timed, const rclcpp::MessageInfo & info);
   void on_depth(const senior_motion_msgs::msg::BoundedDepthEvidence & message,
                 const rclcpp::MessageInfo & info);
   void inspect_depth_owner();
@@ -109,13 +111,12 @@ private:
   std::string boot_id_;
   uint64_t counter_ = 0;
   uint64_t capture_generation_ = 1;
-  int64_t last_ros_ns_ = 0;
-  bool clock_bad_ = false;
+  double last_steady_ = 0;
   bool failed_ = false;
   rclcpp::Publisher<RawImage>::SharedPtr rgb_publisher_, depth_publisher_;
   rclcpp::Publisher<RawInfo>::SharedPtr rgb_info_publisher_, depth_info_publisher_;
-  rclcpp::Subscription<Image>::SharedPtr rgb_subscription_, depth_subscription_;
-  rclcpp::Subscription<Info>::SharedPtr rgb_info_subscription_, depth_info_subscription_;
+  rclcpp::Subscription<senior_motion_msgs::msg::TimedImage>::SharedPtr rgb_subscription_, depth_subscription_;
+  rclcpp::Subscription<senior_motion_msgs::msg::TimedCameraInfo>::SharedPtr rgb_info_subscription_, depth_info_subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 }  // namespace senior_sensor_ingress

@@ -1,0 +1,89 @@
+{
+  "task_id": "task_9aae08045c99",
+  "dispatch_id": "ctx_c224884bf0ce",
+  "startup_snapshot": "/tmp/learning-wire-float32-start",
+  "files": [
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/learning-wire-float32-before.log",
+      "startup_sha256": null,
+      "final_sha256": "098b73d62fcd92db4d44d7253b8e8dc809856e793be84a749aed0c2dceba538e"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/learning-wire-float32-before.xml",
+      "startup_sha256": null,
+      "final_sha256": "ace95cd423158842ba9dc2551a835b5420497c8fe2a398c2c4cbc5d9cbe8ba0e"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-final.log",
+      "startup_sha256": null,
+      "final_sha256": "84623e726b25a764e1f87fafd64aae33002a8315013412808560349641db0029"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-final.xml",
+      "startup_sha256": null,
+      "final_sha256": "eee12160294f0d41bb9653ffb950bba12b1f0fe5bbeb8257cbebe232ab6f1af4"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-format.log",
+      "startup_sha256": null,
+      "final_sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-mypy.log",
+      "startup_sha256": null,
+      "final_sha256": "5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-ruff.log",
+      "startup_sha256": null,
+      "final_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "docs/testing/2026-11-16-learning-float32-seam.md",
+      "startup_sha256": null,
+      "final_sha256": "c6276daa9d74b805713207473596ed341e12a2e026d231e455af1ec7e2cc14ca"
+    },
+    {
+      "path": "src/senior_control/safety/self_learning.py",
+      "startup_sha256": "3da303a8a75af35910589c3e396b5248e05711e4238613d2a96e87c52ac88483",
+      "final_sha256": "f19536628813014a690b14a22eaa0593d09d875ded64480020a580b230e7ac33"
+    },
+    {
+      "path": "tests/unit/test_learning_surface_review.py",
+      "startup_sha256": "356ccd50f16a336db04d8442eac395069753a5932c8261cd781909182a20437c",
+      "final_sha256": "3640952d15f7a1b5852c17a9b014c6fa6731921f761592543fdd0ecfc9cc25d4"
+    }
+  ],
+  "protected": [
+    {
+      "path": "ros2/src/senior_robot/senior_robot/native_receipt.py",
+      "sha256": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "unchanged": true
+    },
+    {
+      "path": "tests/test_native_receipt_diagnostics.py",
+      "sha256": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "unchanged": true
+    },
+    {
+      "path": "docs/reviews/2026-11-16-software-estop-owner.md",
+      "sha256": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "unchanged": true
+    }
+  ],
+  "incremental_diff": {
+    "path": "docs/testing/2026-11-16-learning-float32-seam-owned.diff",
+    "sha256": "30cbbd3a1014810ea9083b2f022c3808b7b46e0436bed78ca72696b207c1f6d4"
+  },
+  "verification": {
+    "pytest": "35 passed in 5.08s",
+    "mypy": "Success: no issues found in 1 source file",
+    "ruff": "All checks passed",
+    "format": "2 files already formatted",
+    "python310_syntax": "parsed; not target runtime evidence"
+  },
+  "limitations": [
+    "No Linux/ROS/driver deployment verification",
+    "Previous nonempty core availability limitation unchanged"
+  ]
+}

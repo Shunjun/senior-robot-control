@@ -15,7 +15,6 @@ from typing import Any
 
 from senior_control.agent.connection import (
     HeartbeatFrame,
-    HeartbeatLedger,
     Link,
     MotionPort,
     MotionRejected,
@@ -40,6 +39,8 @@ from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.observability import Metrics
 from senior_control.protocol import (
+    HEARTBEAT_INTERVAL_MS,
+    EmptyPayload,
     Envelope,
     ManualIntentEnvelope,
     OperationEnvelope,
@@ -62,6 +63,7 @@ from senior_control.runtime.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
+from senior_control.runtime.ipc import IpcError
 from senior_control.runtime.supervisor import AuthRejected, Supervisor
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
@@ -72,8 +74,6 @@ logger = logging.getLogger("senior_control.agent")
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
 MAX_SAFETY_PENDING = 64
-# Browser commands may be admitted for this long. The vehicle does not execute for that long:
-# a velocity older than command_ttl_seconds is refused on the local clock.
 
 
 def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
@@ -130,13 +130,12 @@ class Agent:
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
-        on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
-        heartbeat_seconds: float = 1.0,
-        retry_delay: float = 1.0,
-        heartbeat_window: float = 2.0,
-        command_ttl_seconds: float = 0.3,
+        background_fault: Callable[[str], Awaitable[None]] | None = None,
+        heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
+        retry_delay_ms: float = 1000,
+        command_ttl_ms: float = 300,
         snapshot_seconds: float = 2.0,
-        state_poll_seconds: float = 0.25,
+        state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         wall_clock: Callable[[], float] = time.time,
@@ -147,7 +146,6 @@ class Agent:
         self._settings = settings
         # //Compatible: callers injecting only settings still share that owner's gate.
         self._runtime_gate = runtime_gate or (settings.runtime if settings is not None else None)
-        self._native_reset_token: int | None = None
         self._intent_queue = PendingCounter("agent.manual_intent", 1)
         self._queued_intent: tuple[Link, ManualIntentEnvelope, float, float] | None = None
         self._intent_task: asyncio.Task[None] | None = None
@@ -163,24 +161,24 @@ class Agent:
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
-        self._on_eligibility_lost = on_eligibility_lost
-        self._loss_tasks: set[asyncio.Task[None]] = set()
+        self._background_fault_handler = background_fault
+        self.module_faults: dict[str, dict[str, Any]] = {}
+        self._failed_modules: set[str] = set()
+        self._failed_manual_authority: str | None = None
+        self._manual_epoch_failed: int | None = None
+        self._safety_fault_task: asyncio.Task[None] | None = None
         self._stragglers: set[asyncio.Task[Any]] = set()
-        self._continuity_generation = 0
-        self._was_eligible = False
-        self._heartbeat_seconds = heartbeat_seconds
-        self._retry_delay = retry_delay
-        if command_ttl_seconds <= 0:
+        self._heartbeat_ms = heartbeat_ms
+        self._retry_delay_ms = retry_delay_ms
+        if command_ttl_ms <= 0:
             raise ValueError("command ttl must be positive")
-        self._command_ttl_seconds = command_ttl_seconds
+        self._command_ttl_seconds = command_ttl_ms / 1000
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
         # //Compatible: isolated/non-native MotionPort implementations have no admission clock.
         bind_clock = getattr(motion, "bind_clock", None)
         if bind_clock is not None:
             bind_clock(self._clock.monotonic)
-        self._heartbeat_window = heartbeat_window
-        self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
         self._home = home
         self._dispatcher = Dispatcher(
             robot_id,
@@ -203,24 +201,19 @@ class Agent:
         self._stopping = False
         self.auth_rejected = False
         self.runtime_failed = False
-        self.recovery_required = False
         self._stop = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
         self._safety_task: asyncio.Task[None] | None = None
         self._safety_pending: dict[tuple[str, int, str], tuple[Link, Envelope]] = DiagnosticPending(
             "agent.safety_pending", MAX_SAFETY_PENDING
         )
-        self._safety_cleanups: set[asyncio.Task[None]] = set()
-        self._safety_lock = asyncio.Lock()
-        self._safety_admitting = 0
-        self._safety_receipts = 0
-        self._safety_resolving = False
+        self._estop_receipts: dict[str, tuple[str, bool]] = {}
         self._estop_inflight = False
         self._signals: list[signal.Signals] = []
-        if snapshot_seconds <= 0 or state_poll_seconds <= 0:
+        if snapshot_seconds <= 0 or state_poll_ms <= 0:
             raise ValueError("snapshot intervals must be positive")
         self._snapshot_seconds = snapshot_seconds
-        self._state_poll_seconds = state_poll_seconds
+        self._state_poll_seconds = state_poll_ms / 1000
 
     # ------------------------------------------------------------------ state
 
@@ -233,87 +226,34 @@ class Agent:
         return self._epoch
 
     @property
+    def failed_modules(self) -> frozenset[str]:
+        # Local lifecycle policy is never sourced from reporting-channel messages.
+        return frozenset(self._failed_modules)
+
+    @property
     def motion_allowed(self) -> bool:
         supervisor = self._supervisor
         return supervisor is not None and supervisor.motion_allowed and not self._stopping
 
     @property
-    def eligible_for_motion(self) -> bool:
-        """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
-        self._expire_eligibility()
-        return (
-            self._link is not None
-            and self.motion_allowed
-            and not self._safety_blocked
-            and self._ledger.eligible(self.robot_id)
-        )
-
-    @property
     def _safety_blocked(self) -> bool:
-        return (
-            self.recovery_required
-            or self._safety_admitting > 0
-            or self._safety_resolving
-            or self._estop_inflight
-            or any(key[0] == "safety.estop" for key in self._safety_pending)
-        )
-
-    @property
-    def continuity_generation(self) -> int:
-        self._expire_eligibility()
-        return self._continuity_generation
-
-    def _expire_eligibility(self) -> None:
-        if self._was_eligible and not self._ledger.eligible(self.robot_id):
-            self._lose_eligibility()
+        return self._estop_inflight or any(key[0] == "safety.estop" for key in self._safety_pending)
 
     def _invalidate_gate(self) -> None:
         if self._runtime_gate is not None:
             self._runtime_gate.invalidate()
 
-    def _lose_eligibility(self) -> None:
-        self._invalidate_gate()
-        if not self._was_eligible:
-            return
-        self._was_eligible = False
-        lost_generation = self._continuity_generation
-        self._continuity_generation += 1
-        self._revoked_link = self._link
-        self._ledger.forget(self.robot_id)
-        if self._on_eligibility_lost is not None:
-            task = asyncio.ensure_future(self._on_eligibility_lost(lost_generation))
-            self._loss_tasks.add(task)
-            task.add_done_callback(self._loss_finished)
-
-    def _loss_finished(self, task: asyncio.Task[None]) -> None:
-        self._loss_tasks.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            self._supervisor_fault("failed to persist connection loss")
-
-    def note_heartbeat(self, robot_id: str) -> None:
-        self._ledger.note(robot_id)
-
     # ------------------------------------------------------------------ lifecycle
 
     async def run(self) -> None:
-        try:
-            unresolved = await self._safety_storage(self._journal.safety.pending())
-        except Exception:
-            logger.exception("could not read persistent safety state")
-            self._safety_fault()
-            await self._release()
-            return
-        if unresolved:
-            logger.warning("unresolved safety intent: status-only recovery channel")
-            self.recovery_required = True
         supervisor = Supervisor(
             send_heartbeat=self._beat,
             call_ros=self._motion.call,
             connect=self._session,
             background=self._background,
-            heartbeat_seconds=self._heartbeat_seconds,
-            retry_delay=self._retry_delay,
-            on_fault=self._supervisor_fault,
+            heartbeat_ms=self._heartbeat_ms,
+            retry_delay_ms=self._retry_delay_ms,
+            on_fault=self._background_fault,
         )
         self._supervisor = supervisor
         self._log("startup")
@@ -326,20 +266,63 @@ class Agent:
         finally:
             await self._release()
 
+    def report_runtime_event(self, event: dict[str, Any]) -> None:
+        # Only reporting metadata. No event grants motion or changes the safety owner.
+        module = event["module"]
+        if module not in self.module_faults and len(self.module_faults) >= 32:
+            module = "observer"
+        if event["phase"] == "ready":
+            if module in self.failed_modules:
+                return  # Reporting cannot revive a stopped local module.
+            self.module_faults.pop(module, None)
+        else:
+            self.module_faults[module] = dict(event)
+        level = logging.INFO if event["phase"] in {"ready", "starting"} else logging.ERROR
+        logger.log(
+            level, "runtime module %s: %s %s", module, event["phase"], event.get("detail", "")
+        )
+
+    async def _background_fault(self, name: str, reason: str) -> None:
+        self._failed_modules.add(name)
+        if name != "observer" or "observer" not in self.module_faults:
+            self.report_runtime_event({"module": name, "phase": "failed", "detail": reason})
+        if name == "tasks" and self._background_fault_handler is not None:
+            await self._quietly(
+                self._background_fault_handler(name), context="failed task revocation"
+            )
+
     def _supervisor_fault(self, reason: str) -> None:
-        self.runtime_failed = True
-        self.request_shutdown()
+        self.report_runtime_event(
+            {"module": "motion_delivery", "phase": "unconfirmed", "detail": reason}
+        )
+        self._manual_epoch_failed = self._last_epoch
+        self._discard_queued_intent()
+        self._invalidate_gate()
+        if not self._stopping and (
+            self._safety_fault_task is None or self._safety_fault_task.done()
+        ):
+            self._safety_fault_task = self._spawn(self._retire_failed_delivery(self._last_epoch))
+
+    async def _retire_failed_delivery(self, epoch: int) -> None:
+        async def disable() -> None:
+            await self._quietly(self._motion.disable(epoch), context="manual source retirement")
+
+        async def pause_tasks() -> None:
+            if self._background_fault_handler is not None:
+                await self._quietly(
+                    self._background_fault_handler("motion_delivery"),
+                    context="task source revocation",
+                )
+
+        await asyncio.gather(disable(), pause_tasks())
 
     def _safety_fault(self) -> None:
-        self.recovery_required = True
-        self.auth_rejected = True
-        self.runtime_failed = True
-        self.request_shutdown()
+        self._supervisor_fault("safety delivery unconfirmed; vehicle owner state is unknown")
 
     def request_shutdown(self) -> None:
         """Synchronous and signal-safe: motion is revoked before anything else happens."""
         self._stopping = True
-        self._lose_eligibility()
+        self._invalidate_gate()
         if self._supervisor is not None:
             self._supervisor.revoke("shutdown requested")
         self._stop.set()
@@ -357,15 +340,14 @@ class Agent:
         await self._settle_safety()
 
     async def _release(self) -> None:
+        self._stopping = True
         self._log("shutdown")
         inflight = list(self._inflight)
         for task in inflight:
             if task is not self._safety_task:
                 task.cancel()
         await self._settle_safety()
-        await self._wait_inflight(list(self._safety_cleanups))
         await self._wait_inflight(inflight)
-        await self._wait_inflight(list(self._loss_tasks))
         link, self._link = self._link, None
         if link is not None:
             await self._quietly(link.close())
@@ -381,26 +363,32 @@ class Agent:
     async def _wait_inflight(self, tasks: list[asyncio.Task[None]]) -> None:
         if not tasks:
             return
-        done, pending = await asyncio.wait(tasks, timeout=self._deadlines.safety)
+        done, pending = await asyncio.wait(tasks, timeout=self._deadlines.safety_ms / 1000)
         if done:
             await asyncio.gather(*done, return_exceptions=True)
         if pending:
             self._stragglers.update(pending)
             for task in pending:
                 task.add_done_callback(self._straggler_finished)
-            self.runtime_failed = True
-            self.request_shutdown()
-            logger.error("inflight work did not stop before shutdown deadline")
+            if self._stopping:
+                self.runtime_failed = True
+            self.report_runtime_event(
+                {
+                    "module": "retired_work",
+                    "phase": "unconfirmed",
+                    "detail": "inflight work did not stop before shutdown deadline",
+                }
+            )
 
     def _straggler_finished(self, task: asyncio.Task[Any]) -> None:
         self._stragglers.discard(task)
         if not task.cancelled():
             task.exception()
 
-    async def _quietly(self, call: Awaitable[Any]) -> None:
+    async def _quietly(self, call: Awaitable[Any], *, context: str = "shutdown step") -> None:
         task = asyncio.ensure_future(call)
         try:
-            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
         except BaseException:
             task.cancel()
             self._stragglers.add(task)
@@ -410,13 +398,14 @@ class Agent:
             task.cancel()
             self._stragglers.add(task)
             task.add_done_callback(self._straggler_finished)
-            self.runtime_failed = True
-            logger.error("shutdown step exceeded its deadline")
+            if self._stopping:
+                self.runtime_failed = True
+            logger.error("%s exceeded its deadline", context)
             return
         try:
             task.result()
         except Exception:
-            logger.exception("shutdown step failed")
+            logger.exception("%s failed", context)
 
     # ------------------------------------------------------------------ cloud link
 
@@ -424,23 +413,12 @@ class Agent:
         link = self._link
         if link is None:
             return
-        self._expire_eligibility()
-        if self._revoked_link is link:
-            await self._quietly(self._motion.disable(link.epoch))
-            await self._quietly(link.close())
-            return
         try:
             await link.send_heartbeat()
         except Exception:
-            if self._link is not link:
-                raise
-            self._revoked_link = link
-            self._lose_eligibility()
-            self._ledger.forget(self.robot_id)
-            epoch = link.epoch
-            if epoch:
-                await self._quietly(self._motion.disable(epoch))
-            await self._quietly(link.close())
+            if self._link is link:
+                self._revoked_link = link
+                await self._quietly(link.close())
             raise
 
     async def _session(self) -> bool:
@@ -462,15 +440,9 @@ class Agent:
             while True:
                 frame = await link.recv()
                 if isinstance(frame, HeartbeatFrame):
-                    if (
-                        frame.robot_id != self.robot_id
-                        or frame.deadline <= self._clock.monotonic()
-                        or self._revoked_link is link
-                    ):
+                    if frame.robot_id != self.robot_id or self._revoked_link is link:
                         raise ConnectionError("invalid heartbeat")
                     received_heartbeat = True
-                    self._ledger.note(frame.robot_id, deadline=frame.deadline)
-                    self._was_eligible = self._ledger.eligible(frame.robot_id)
                 elif isinstance(frame, VideoEnvelope):
                     if video is None:
                         video = VideoSignaling(
@@ -491,13 +463,13 @@ class Agent:
         finally:
             epoch = link.epoch
             if self._link is link:
-                self._lose_eligibility()
+                self._invalidate_gate()
                 self._link, self._epoch = None, 0
-                self._ledger.forget(self.robot_id)
             self._log("connection_closed")
             if video is not None:
                 video.retire()
             keepalive.cancel()
+            self._discard_queued_intent()
             inflight = list(self._inflight)
             for task in inflight:
                 if task is not self._safety_task:
@@ -554,53 +526,10 @@ class Agent:
                 continue
             last_key, last_sent = key, loop.time()
 
-    async def _safety_storage(self, work: Awaitable[Any], deadline: float | None = None) -> Any:
-        """Bound storage waits without assuming cancellation can stop SQLite immediately."""
-        task = asyncio.ensure_future(work)
-        loop = asyncio.get_running_loop()
-        timeout = self._deadlines.safety if deadline is None else max(0.0, deadline - loop.time())
-        try:
-            done, _ = await asyncio.wait({task}, timeout=timeout)
-        except BaseException:
-            task.cancel()
-            self._stragglers.add(task)
-            task.add_done_callback(self._straggler_finished)
-            raise
-        if not done:
-            task.cancel()
-            self._stragglers.add(task)
-            task.add_done_callback(self._straggler_finished)
-            raise TimeoutError("safety storage deadline exceeded")
-        if deadline is not None and loop.time() >= deadline:
-            if not task.cancelled():
-                task.exception()
-            raise TimeoutError("safety storage deadline exceeded")
-        return task.result()
-
-    async def _acquire_safety_lock(self, deadline: float) -> None:
-        """Wait for the lock within the receipt budget, including cancellation races."""
-        loop = asyncio.get_running_loop()
-        task = asyncio.create_task(self._safety_lock.acquire())
-        try:
-            done, _ = await asyncio.wait({task}, timeout=max(0.0, deadline - loop.time()))
-        except BaseException:
-            if task.done() and not task.cancelled() and task.exception() is None:
-                self._safety_lock.release()
-            else:
-                task.cancel()
-            raise
-        if not done:
-            task.cancel()
-            raise TimeoutError("safety lock deadline exceeded")
-        task.result()
-        if loop.time() >= deadline:
-            self._safety_lock.release()
-            raise TimeoutError("safety lock deadline exceeded")
-
     def _safety_key(self, envelope: Envelope) -> tuple[str, int, str]:
         identity = envelope.session_id
         if envelope.type == "safety.estop":
-            # Distinct user events require distinct durable receipts, even when
+            # Distinct user events require distinct request receipts, even when
             # queued in the same session. Only identical transport retries merge.
             identity = json.dumps((envelope.request_id, envelope.seq))
         return envelope.type, envelope.connection_epoch, identity
@@ -609,7 +538,8 @@ class Agent:
         if envelope._received_steady is None:
             envelope._received_steady = self._clock.monotonic()
         if envelope.robot_id != self.robot_id or envelope.connection_epoch != link.epoch:
-            self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
+            if not isinstance(envelope, ManualIntentEnvelope):
+                self._spawn(self._reply(link, envelope, error=ErrorCode.CONFLICT))
             return
         if envelope.type in HALT_TYPES | {
             "control.release",
@@ -626,42 +556,20 @@ class Agent:
         if envelope.type != "safety.estop" and not overflow:
             self._accept(link, envelope)
             return
-        # From receipt until durable admission, no new motion or ROS heartbeat is authorized.
-        deadline = asyncio.get_running_loop().time() + self._deadlines.safety
-        # Fence an older marker clear even if this receipt is canceled while waiting
-        # for its lock, before durable admission can complete.
-        self._safety_receipts += 1
-        self._safety_admitting += 1
-        try:
-            await self._acquire_safety_lock(deadline)
-            try:
-                if envelope.type == "safety.estop":
-                    try:
-                        replay = await self._admit_native_estop(envelope, deadline)
-                    except DomainError as exc:
-                        self._spawn(self._reply(link, envelope, error=exc.code))
-                        return
-                    if replay:
-                        self._spawn(self._reply(link, envelope, status=OperationStatus.SUCCEEDED))
-                        return
-                else:
-                    await self._safety_storage(self._journal.safety.mark(), deadline)
-                if overflow:
-                    self.recovery_required = True
-                    self._native_reset_token = None
-                self._accept(link, envelope)
-            finally:
-                self._safety_lock.release()
-        except BaseException as exc:
+        if overflow:
             self._safety_fault()
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            raise ConnectionError("safety admission failed") from exc
-        finally:
-            self._safety_admitting -= 1
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+            return
+        try:
+            if self._admit_native_estop(envelope):
+                self._spawn(self._reply(link, envelope, status=OperationStatus.SUCCEEDED))
+                return
+            self._accept(link, envelope)
+        except DomainError as exc:
+            self._spawn(self._reply(link, envelope, error=exc.code))
 
-    async def _admit_native_estop(self, envelope: Envelope, deadline: float | None = None) -> bool:
-        # Transport seq/expiry/connection can change on retry; event content cannot.
+    def _admit_native_estop(self, envelope: Envelope) -> bool:
+        # Process-local event deduplication, never a second software estop latch.
         fingerprint = json.dumps(
             {
                 "type": envelope.type,
@@ -671,82 +579,13 @@ class Agent:
             sort_keys=True,
             separators=(",", ":"),
         )
-        return bool(
-            await self._safety_storage(
-                self._journal.safety.admit(envelope.request_id, fingerprint), deadline
-            )
-        )
-
-    async def _clear_replayed_safety(self) -> None:
-        interrupted = asyncio.Event()
-        task = asyncio.create_task(self._clear_replayed_safety_locked(interrupted))
-        self._safety_cleanups.add(task)
-        task.add_done_callback(self._safety_cleanups.discard)
-        self._stragglers.add(task)
-        task.add_done_callback(self._straggler_finished)
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            self._safety_fault()
-            interrupted.set()
-            raise
-
-    async def _clear_replayed_safety_locked(self, interrupted: asyncio.Event) -> None:
-        async with self._safety_lock:
-            if (
-                self.recovery_required
-                or self._safety_admitting
-                or self._estop_inflight
-                or any(key[0] == "safety.estop" for key in self._safety_pending)
-            ):
-                return
-            receipts = self._safety_receipts
-            clear = asyncio.create_task(self._journal.safety.clear_rejected())
-            interruption: BaseException | None = None
-            cancel = asyncio.create_task(interrupted.wait())
-            try:
-                done, _ = await asyncio.wait(
-                    {clear, cancel},
-                    timeout=self._deadlines.safety,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if cancel in done:
-                    raise asyncio.CancelledError()
-                if clear not in done:
-                    raise TimeoutError("safety storage deadline exceeded")
-                clear.result()
-            except BaseException as exc:
-                interruption = exc
-                logger.exception("could not resolve rejected safety intent")
-                self._safety_fault()
-                if not clear.done():
-                    clear.cancel()
-                while not clear.done():
-                    try:
-                        await asyncio.shield(clear)
-                    except asyncio.CancelledError:
-                        continue
-                    except BaseException:
-                        break
-                if clear.done() and not clear.cancelled():
-                    clear.exception()
-            finally:
-                cancel.cancel()
-            if self._safety_receipts != receipts:
-                # A canceled or timed-out receipt still needs the old delete's outcome repaired.
-                repair = asyncio.create_task(self._safety_storage(self._journal.safety.mark()))
-                try:
-                    while not repair.done():
-                        try:
-                            await asyncio.shield(repair)
-                        except asyncio.CancelledError:
-                            self._safety_fault()
-                    repair.result()
-                except BaseException:
-                    logger.exception("could not retain safety intent after interrupted clear")
-                    self._safety_fault()
-            if isinstance(interruption, asyncio.CancelledError):
-                raise interruption
+        previous = self._estop_receipts.get(envelope.request_id)
+        if previous is not None:
+            if previous[0] != fingerprint:
+                raise DomainError(ErrorCode.CONFLICT, "safety request content changed")
+            return previous[1]
+        self._estop_receipts[envelope.request_id] = (fingerprint, False)
+        return False
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
@@ -770,14 +609,14 @@ class Agent:
                 if envelope._received_steady is not None
                 else self._clock.monotonic()
             )
-            self._settle_queued_intent(overwritten=True)
+            self._discard_queued_intent(overwritten=True)
             self._queued_intent = (link, envelope, now, now + self._command_ttl_seconds)
             self._intent_queue.enqueue(id(envelope), time.monotonic())
             if self._intent_task is None or self._intent_task.done():
                 self._intent_task = self._spawn(self._drain_intent())
             return
         if envelope.type in HALT_TYPES or envelope.type == "control.release":
-            self._settle_queued_intent()
+            self._discard_queued_intent()
         if envelope.type in HALT_TYPES:
             key = self._safety_key(envelope)
             existing = self._safety_pending.get(key)
@@ -785,10 +624,8 @@ class Agent:
                 if envelope.seq > existing[1].seq:
                     self._safety_pending[key] = (link, envelope)
             elif len(self._safety_pending) >= MAX_SAFETY_PENDING:
-                self.auth_rejected = True
-                self.runtime_failed = True
-                self.request_shutdown()
-                raise ConnectionError("agent safety capacity exceeded")
+                self._safety_fault()
+                raise DomainError(ErrorCode.UNAVAILABLE, "agent safety capacity exceeded")
             else:
                 self._safety_pending[key] = (link, envelope)
             if self._safety_task is None or self._safety_task.done():
@@ -801,13 +638,10 @@ class Agent:
             raise ConnectionError("agent command capacity exceeded")
         self._spawn(self._answer(link, envelope))
 
-    def _settle_queued_intent(self, *, overwritten: bool = False) -> None:
+    def _discard_queued_intent(self, *, overwritten: bool = False) -> None:
         pending, self._queued_intent = self._queued_intent, None
         if pending is not None:
             self._intent_queue.discard(id(pending[1]), time.monotonic(), overwritten=overwritten)
-            # Same successful transport settlement as relay coalescing: no
-            # execution claim, no authority rejection, no resend of an old target.
-            self._spawn(self._reply(pending[0], pending[1]))
 
     async def _drain_intent(self) -> None:
         while self._queued_intent is not None:
@@ -815,22 +649,53 @@ class Agent:
             self._queued_intent = None
             self._intent_queue.start(id(envelope), time.monotonic())
             try:
-                result = await self._manual_control(envelope, received, deadline)
+                self._admit(envelope)
+                if link is not self._link or self._clock.monotonic() >= deadline:
+                    continue
+                # Completion is local socket handoff only; status travels independently.
+                await self._motion.send_intent(
+                    envelope,
+                    received_steady=received,
+                    deadline_steady=deadline,
+                )
             except DomainError as exc:
-                await self._reply(link, envelope, error=exc.code)
-            else:
-                await self._reply(link, envelope, result=result)
+                logger.debug("manual stream sample discarded: %s", exc.code.value)
+            except (OSError, ConnectionError, IpcError):
+                logger.exception("manual stream transport failed")
+                self._invalidate_gate()
+                self._failed_manual_authority = envelope.payload.authority_id
+                self._discard_queued_intent()
+                self.report_runtime_event(
+                    {
+                        "module": "manual",
+                        "phase": "unconfirmed",
+                        "detail": "manual IPC failed",
+                    }
+                )
+                # Retire exactly this authority through the existing native owner.
+                release = SimpleEnvelope(
+                    **envelope.model_dump(exclude={"type", "payload"}),
+                    type="control.release",
+                    payload=EmptyPayload(authority_id=envelope.payload.authority_id),
+                )
+                await self._quietly(
+                    self._motion.manual(release), context="manual authority release"
+                )
+                return
             finally:
                 self._intent_queue.finish(id(envelope), time.monotonic())
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
-        if task.cancelled() or task.exception() is not None:
+        if task.cancelled():
+            self._safety_fault()
+        elif (error := task.exception()) is not None:
+            logger.error("safety delivery worker failed", exc_info=error)
             self._safety_fault()
 
     async def _drain_safety(self) -> None:
+        # Revoking motion or faulting the transport does not revoke accepted halt
+        # events. Shutdown's _settle_safety bounds this drain before IPC is closed.
         while self._safety_pending:
-            if self.recovery_required and self._stopping:
-                return
             key = next(
                 (key for key in self._safety_pending if key[0] == "safety.estop"),
                 next(iter(self._safety_pending)),
@@ -838,14 +703,24 @@ class Agent:
             kind = key[0]
             link, envelope = self._safety_pending.pop(key)
             self._estop_inflight = kind == "safety.estop"
-            replay = False
             try:
                 result = await self.dispatch(envelope)
-                # Native success may be a durable replay admitted while the
-                # original event was still pending. Resolve only if recovery and
-                # all other safety obligations are already clear.
-                replay = True
+            except asyncio.CancelledError:
+                logger.error(
+                    "safety delivery interrupted; request_id=%s type=%s pending=%d; "
+                    "vehicle owner state is unconfirmed",
+                    envelope.request_id,
+                    kind,
+                    len(self._safety_pending),
+                )
+                raise
             except DomainError as exc:
+                logger.error(
+                    "safety delivery not confirmed; request_id=%s type=%s error=%s",
+                    envelope.request_id,
+                    kind,
+                    exc.code.value,
+                )
                 if len(self._inflight) < MAX_INFLIGHT + 1:
                     self._spawn(self._reply(link, envelope, error=exc.code))
                 if (
@@ -854,17 +729,9 @@ class Agent:
                     and kind == "safety.estop"
                 ):
                     self._safety_fault()
-                replay = exc.code is ErrorCode.CONFLICT
                 continue
             finally:
-                if kind == "safety.estop":
-                    self._estop_inflight = False
-                    if replay:
-                        self._safety_resolving = True
-                        try:
-                            await self._clear_replayed_safety()
-                        finally:
-                            self._safety_resolving = False
+                self._estop_inflight = False
             if len(self._inflight) < MAX_INFLIGHT + 1:
                 self._spawn(self._reply(link, envelope, result=result))
 
@@ -872,16 +739,20 @@ class Agent:
         task = self._safety_task
         if task is None:
             return True
-        done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+        done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
         failed = task not in done or task.cancelled()
         if not failed:
-            failed = task.exception() is not None
+            failed = task.exception() is not None or bool(self._safety_pending)
         if failed:
             self._safety_fault()
-            logger.error("safety command did not complete; restart is disabled")
+            logger.error(
+                "safety drain did not complete; pending=%d; "
+                "vehicle owner state is unconfirmed; restart is disabled",
+                len(self._safety_pending),
+            )
             if not task.done():
                 task.cancel()
-                done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
+                done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
                 if not done:
                     self._stragglers.add(task)
                     task.add_done_callback(self._straggler_finished)
@@ -912,8 +783,13 @@ class Agent:
         self._inflight.add(task)
         self._report_queues()
         task.add_done_callback(self._inflight.discard)
+        task.add_done_callback(self._work_finished)
         task.add_done_callback(lambda _: self._report_queues())
         return task
+
+    def _work_finished(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("agent request failed", exc_info=error)
 
     async def _answer(self, link: Link, envelope: Envelope) -> None:
         try:
@@ -982,6 +858,12 @@ class Agent:
         status: OperationStatus | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
+        if (
+            link is not self._link
+            or envelope.connection_epoch != self._epoch
+            or asyncio.current_task() in self._stragglers
+        ):
+            return
         request_type: Any = envelope.type
         shown = result.status if result is not None else status
         operation_id = (
@@ -1055,7 +937,9 @@ class Agent:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "command is not for this robot")
-        if isinstance(envelope, (ManualIntentEnvelope, RecoveryEnvelope)) or envelope.type in {
+        if isinstance(envelope, ManualIntentEnvelope):
+            raise DomainError(ErrorCode.VALIDATION, "intent uses the send-only stream")
+        if isinstance(envelope, RecoveryEnvelope) or envelope.type in {
             "control.acquire",
             "control.release",
         }:
@@ -1093,17 +977,13 @@ class Agent:
         if envelope.robot_id != self.robot_id:
             raise DomainError(ErrorCode.VALIDATION, "manual command is for another robot")
         self._admit(envelope)
-        if isinstance(envelope, ManualIntentEnvelope) and self._clock.monotonic() >= deadline:
-            raise DomainError(ErrorCode.TIMEOUT, "intent expired before local handoff")
         if self._safety_blocked and envelope.type not in {
             "control.release",
             "safety.estop.reset",
             "safety.fault.recover",
         }:
             raise DomainError(ErrorCode.SAFETY_REJECTED, "local safety recovery is pending")
-        recovery_token = None
         if isinstance(envelope, RecoveryEnvelope):
-            recovery_token = envelope.payload.revision
             resolver = getattr(self._state, "recovery_revision", None)
             if resolver is None:
                 raise DomainError(ErrorCode.UNAVAILABLE, "motion recovery projection is not wired")
@@ -1119,15 +999,17 @@ class Agent:
                 self._motion.manual(envelope, received_steady=received, deadline_steady=deadline),
                 timeout=self._deadlines.edit
                 if envelope.type == "control.acquire"
-                else self._deadlines.safety,
+                else self._deadlines.safety_ms / 1000,
             )
         except asyncio.TimeoutError as exc:
             raise DomainError(
                 ErrorCode.OPERATION_UNKNOWN, "manual acknowledgement is unknown"
             ) from exc
-        if envelope.type == "safety.estop.reset":
-            self._native_reset_token = recovery_token
         if envelope.type == "control.acquire":
+            if reply["authority_id"] == self._failed_manual_authority:
+                raise DomainError(
+                    ErrorCode.UNAVAILABLE, "manual authority retirement is unconfirmed"
+                )
             return ManualOperationResult(
                 envelope.request_id,
                 OperationStatus.SUCCEEDED,
@@ -1138,7 +1020,7 @@ class Agent:
     async def _control(self, envelope: SimpleEnvelope) -> OperationResult:
         request_id = envelope.request_id
         if envelope.type == "safety.estop":
-            if await self._admit_native_estop(envelope):
+            if self._admit_native_estop(envelope):
                 return OperationResult(request_id, OperationStatus.SUCCEEDED)
         if isinstance(envelope, SimpleEnvelope) and envelope.type in HALT_TYPES:
             # A stop is honored whatever the epoch, expiry, or link state: it only removes motion.
@@ -1150,13 +1032,14 @@ class Agent:
                         received = envelope._received_steady = self._clock.monotonic()
                     await asyncio.wait_for(
                         self._motion.estop_received(envelope, received_steady=received),
-                        self._deadlines.safety,
+                        self._deadlines.safety_ms / 1000,
                     )
-                    self.recovery_required = True
-                    self._native_reset_token = None
-                    await self._safety_storage(self._journal.safety.complete(request_id))
+                    fingerprint, _ = self._estop_receipts[request_id]
+                    self._estop_receipts[request_id] = (fingerprint, True)
                 else:
-                    await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
+                    await asyncio.wait_for(
+                        self._motion.stop(envelope), self._deadlines.safety_ms / 1000
+                    )
             except MotionRejected as exc:
                 raise DomainError(
                     exc.code or ErrorCode.SAFETY_REJECTED, "stop was rejected"
@@ -1170,6 +1053,21 @@ class Agent:
 
     def _admit(self, envelope: Envelope) -> None:
         """A first-time command needs a live link, the current epoch, and an unexpired deadline."""
+        if asyncio.current_task() in self._stragglers:
+            raise DomainError(ErrorCode.CONFLICT, "retired work cannot issue commands")
+        starts_task = envelope.type in {"navigation.goal", "navigation.return_home"} or (
+            isinstance(envelope, TaskExecutionEnvelope) and envelope.payload.action == "resume"
+        )
+        if starts_task and "tasks" in self.failed_modules:
+            raise DomainError(ErrorCode.UNAVAILABLE, "task runtime is unavailable")
+        if envelope.type in {"control.acquire", "drive.intent"}:
+            if self._manual_epoch_failed == envelope.connection_epoch:
+                raise DomainError(ErrorCode.UNAVAILABLE, "manual delivery is unavailable")
+            if (
+                isinstance(envelope, ManualIntentEnvelope)
+                and envelope.payload.authority_id == self._failed_manual_authority
+            ):
+                raise DomainError(ErrorCode.UNAVAILABLE, "manual authority was retired")
         if self._link is None or self._revoked_link is self._link:
             raise DomainError(ErrorCode.OFFLINE, "robot is not connected to the server")
         if envelope.connection_epoch != self._epoch:
@@ -1200,17 +1098,17 @@ class Agent:
         if deleted is None:
             deleted = await self._journal.deleted_task_ids()
         home = live.home
-        if (
-            live.vehicle_ui is not None
-            and live.vehicle_ui.get("confirmed_estop_status") == "clear"
-            and "acquire" in live.vehicle_ui.get("allowed_actions", ())
-            and self._native_reset_token is not None
-            and live.vehicle_ui.get("estop_revision", -1) > self._native_reset_token
-            and not self._estop_inflight
-        ):
-            self.recovery_required = False
-            self._native_reset_token = None
-            await self._clear_replayed_safety()
+        ui = dict(live.vehicle_ui or {})
+        if self.module_faults:
+            ui["module_faults"] = dict(self.module_faults)
+            capabilities = list(ui.get("capabilities", []))
+            if "tasks" in self.failed_modules:
+                capabilities = [c for c in capabilities if c != "task.execution.v1"]
+            if self._manual_epoch_failed == self._epoch:
+                capabilities = [c for c in capabilities if c != "motion.intent.v1"]
+            if "logs" in self.failed_modules:
+                capabilities = [c for c in capabilities if c != "logs.v1"]
+            ui["capabilities"] = capabilities
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
             connected=self.connected,
@@ -1229,7 +1127,7 @@ class Agent:
             robot_pose=live.robot_pose,
             navigation_block_reason=live.navigation_block_reason,
             scan_points=live.scan_points,
-            vehicle_ui=live.vehicle_ui,
+            vehicle_ui=ui if self.module_faults else live.vehicle_ui,
             manual_controller_generation=live.manual_controller_generation,
             manual_agent_epoch=live.manual_agent_epoch,
         )

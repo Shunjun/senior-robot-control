@@ -55,28 +55,29 @@ class AlignedRgbdFrame:
         return self.depth.stamp
 
 
-def align(rgb: ImageFrame, depth: DepthFrame, *, max_skew_s: float) -> AlignedRgbdFrame:
-    if not math.isfinite(max_skew_s) or max_skew_s < 0.0:
-        raise ValueError("max_skew_s must be finite and non-negative")
+def align(rgb: ImageFrame, depth: DepthFrame, *, max_skew_ms: float) -> AlignedRgbdFrame:
+    if not math.isfinite(max_skew_ms) or max_skew_ms < 0.0:
+        raise ValueError("max_skew_ms must be finite and non-negative")
     if not math.isfinite(rgb.stamp) or not math.isfinite(depth.stamp):
         raise FrameSyncError("frame stamp is not finite")
     if (rgb.width, rgb.height) != (depth.width, depth.height):
         raise FrameSyncError("rgb and depth size differ; depth is not registered to color")
     skew = abs(rgb.stamp - depth.stamp)
-    if skew > max_skew_s:
-        raise FrameSyncError(f"rgb/depth skew {skew:.3f}s exceeds {max_skew_s:.3f}s")
+    limit_s = max_skew_ms / 1000
+    if skew > limit_s:
+        raise FrameSyncError(f"rgb/depth skew {skew:.3f}s exceeds {limit_s:.3f}s")
     return AlignedRgbdFrame(rgb, depth, skew)
 
 
 class RgbdSynchronizer:
     """Pairs the nearest frames inside the skew bound. Buffers are bounded."""
 
-    def __init__(self, *, max_skew_s: float, capacity: int = 4) -> None:
+    def __init__(self, *, max_skew_ms: float, capacity: int = 4) -> None:
         if capacity <= 0:
             raise ValueError("capacity must be positive")
-        if not math.isfinite(max_skew_s) or max_skew_s < 0.0:
-            raise ValueError("max_skew_s must be finite and non-negative")
-        self._max_skew_s = max_skew_s
+        if not math.isfinite(max_skew_ms) or max_skew_ms < 0.0:
+            raise ValueError("max_skew_ms must be finite and non-negative")
+        self._max_skew_ms = max_skew_ms
         self._rgb: DiagnosticDeque[ImageFrame] = DiagnosticDeque(
             "vision.rgb_depth_pair.rgb", maxlen=capacity
         )
@@ -107,7 +108,7 @@ class RgbdSynchronizer:
 
     def _try(self, rgb: ImageFrame, depth: DepthFrame) -> AlignedRgbdFrame | None:
         try:
-            return align(rgb, depth, max_skew_s=self._max_skew_s)
+            return align(rgb, depth, max_skew_ms=self._max_skew_ms)
         except FrameSyncError:
             self.rejected += 1
             return None

@@ -1,206 +1,268 @@
-"""Endpoint-local self-return evidence. Physical containment is a startup prior only."""
+"""Discrete body-connected learning and immutable 1cm position filtering."""
 
 import math
 from bisect import bisect_left
+from collections.abc import Sequence
 from dataclasses import replace
 
 from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.strtree import STRtree
 
-from senior_control.models import Pose2D
-from senior_control.safety.self_filter import FilteredObservation
+from senior_control.motion.learning_record import MAX_ANCHORS
+from senior_control.safety.self_filter import FilteredObservation, Point2D
+from senior_control.sensors.time_proof import MeasurementTime, SourceTime
+
+# User-specified body-return position matching tolerance; not sensor accuracy
+# or a margin on the physical body / external obstacle geometry.
+SELF_RETURN_MATCH_DISTANCE_M = 0.01
+
+
+def _match_limit(point: Point2D) -> float:
+    # Only floating-point representation roundoff at the 1cm boundary, not an
+    # additional physical tolerance. Nearby coordinates lie within these bounds.
+    return SELF_RETURN_MATCH_DISTANCE_M + sum(
+        math.ulp(value + offset)
+        for value in point
+        for offset in (-SELF_RETURN_MATCH_DISTANCE_M, SELF_RETURN_MATCH_DISTANCE_M)
+    )
+
+
+def _matches(point: Point2D, references: tuple[Point2D, ...], tree: STRtree) -> bool:
+    reference = references[int(tree.nearest(Point(point)))]
+    return math.dist(point, reference) <= _match_limit(reference)
 
 
 class SelfReturnModel:
-    def __init__(self, vertices, *, error_m: float):
+    def __init__(self, vertices: Sequence[Point2D]) -> None:
         self.body = Polygon(vertices)
-        if (
-            not self.body.is_valid
-            or self.body.area <= 0
-            or not math.isfinite(error_m)
-            or error_m < 0
-        ):
-            raise ValueError("invalid self-return boundary or error")
-        self.error = error_m
+        if not self.body.is_valid or self.body.area <= 0:
+            raise ValueError("invalid self-return boundary")
         self.bounds = self.body.bounds
-        self.frames: list[tuple[Pose2D, tuple[tuple[float, float], ...]]] = []
-        self.frame_stamps: list[float] = []
-        self.frame_errors: list[float] = []
-        self.frame_yaw_errors: list[float] = []
-        self.frame_observations = []
+        self.frames: list[tuple[tuple[float, float], ...]] = []
+        self.frame_measurements: list[MeasurementTime] = []
+        self.frame_keys: list[tuple[str, str, int]] = []
+        self.segment_id: str | None = None
+        self._capture_origin: tuple[str, str] | None = None
+        self._capture_floor: tuple[MeasurementTime, int] | None = None
+        self._max_sequence = 0
+        self._frontier_host = 0.0
+        self._frontier_measurement: MeasurementTime | None = None
+        self._candidates: tuple[Point2D, ...] | None = None
+        self._observed_count = 0
         self.learned: tuple[tuple[float, float], ...] = ()
-        self.revision = 0
-        self.first_observation = None
+        self._filter_points: tuple[Point2D, ...] = ()
+        self._filter_tree: STRtree | None = None
 
-    def interior(self, xy):
-        # A square encloses the circular error support without polygonal buffer
-        # under-approximation. Touching the physical boundary remains ambiguous.
-        from shapely.geometry import box
-
+    def interior(self, xy: Point2D) -> bool:
+        # Boundary points remain ambiguous; no sensor/extrinsic margin applies.
         x, y = xy
         left, bottom, right, top = self.bounds
-        if not (
-            left + self.error < x < right - self.error
-            and bottom + self.error < y < top - self.error
-        ):
-            return False
-        support = (
-            Point(x, y)
-            if self.error == 0
-            else box(x - self.error, y - self.error, x + self.error, y + self.error)
-        )
-        return self.body.contains(support) and self.body.boundary.disjoint(support)
+        return left < x < right and bottom < y < top and self.body.contains(Point(x, y))
 
-    def clear(self):
+    def clear(self) -> None:
         self.learned = ()
         self.frames.clear()
-        self.frame_stamps.clear()
-        self.frame_errors.clear()
-        self.frame_yaw_errors.clear()
-        self.frame_observations.clear()
-        self.first_observation = None
-        self.revision += 1
+        self.frame_measurements.clear()
+        self.frame_keys.clear()
+        self.segment_id = None
+        self._capture_origin = None
+        self._capture_floor = None
+        self._max_sequence = 0
+        self._frontier_host = 0.0
+        self._frontier_measurement = None
+        self._candidates = None
+        self._observed_count = 0
 
     def observe(
         self,
         observation: FilteredObservation,
-        pose: Pose2D,
         *,
-        force=False,
-        pose_error_m=0.0,
-        pose_yaw_error_rad=0.0,
-    ):
+        capture: SourceTime,
+        segment_id: str,
+    ) -> bool:
         points = tuple(
             r.endpoint for r in observation.rays if r.kind == "hit" and r.endpoint is not None
         )
-        if len(points) > 2048:
+        if len(points) > MAX_ANCHORS:
             raise ValueError("self-return point budget exceeded")
-        stamp = observation.scan.stamp
-        i = bisect_left(self.frame_stamps, stamp)
-        if i < len(self.frame_stamps) and self.frame_stamps[i] == stamp:
-            return
-        if len(self.frames) >= 5 and not force:
-            if any(math.hypot(pose.x - p.x, pose.y - p.y) < 0.005 for p, _ in self.frames):
-                return
-        if len(self.frames) < 64:
-            self.frames.insert(i, (pose, points))
-            self.frame_stamps.insert(i, stamp)
-            self.frame_errors.insert(i, pose_error_m)
-            self.frame_yaw_errors.insert(i, pose_yaw_error_rad)
-            self.frame_observations.insert(i, observation)
-            self.first_observation = self.frame_observations[0]
-            return True
-        return False
+        if self.segment_id is None:
+            self.segment_id = segment_id
+        if self.segment_id != segment_id:
+            return False  # Caller must explicitly establish a new evidence segment.
+        origin = capture.clock_domain, capture.source_epoch
+        if self._capture_origin is None:
+            self._capture_origin = origin
+        if origin != self._capture_origin:
+            return False
+        key = (*origin, capture.sequence)
+        measurement = capture.measurement
+        frontier = self._frontier_measurement
+        if frontier is not None and not measurement.same_axis(frontier):
+            return False  # Caller must open a new evidence segment on world reset.
+        if key in self.frame_keys or (
+            self._capture_floor is not None
+            and (measurement.seconds, capture.sequence)
+            < (self._capture_floor[0].seconds, self._capture_floor[1])
+        ):
+            return False
+        if capture.sequence > self._max_sequence:
+            if capture.end_steady < self._frontier_host or (
+                frontier is not None and measurement.elapsed(frontier) < 0
+            ):
+                raise ValueError("learning_capture_clock_regressed")
+            self._max_sequence = capture.sequence
+            self._frontier_host, self._frontier_measurement = capture.end_steady, measurement
+        elif capture.end_steady > self._frontier_host or (
+            frontier is not None and measurement.elapsed(frontier) > 0
+        ):
+            raise ValueError("learning_capture_sequence_time_mismatch")
+        i = bisect_left(
+            [
+                (time.seconds, identity[2])
+                for time, identity in zip(self.frame_measurements, self.frame_keys, strict=True)
+            ],
+            (measurement.seconds, capture.sequence),
+        )
+        connected = self.connected_points(observation)
+        if self._candidates is None:
+            self._candidates = tuple(dict.fromkeys(connected))
+        else:
+            cloud = MultiPoint(connected)
+            self._candidates = tuple(
+                p
+                for p in self._candidates
+                if not cloud.is_empty and cloud.distance(Point(p)) <= _match_limit(p)
+            )
+            # A removed unstable bridge is a gap in the STABLE surface. Prune
+            # disconnected pieces too, without inventing distance/angle links.
+            while self._candidates:
+                stable = self._candidates
+                tree = STRtree(tuple(Point(p) for p in stable))
+                supported = replace(
+                    observation,
+                    rays=tuple(
+                        ray
+                        if ray.endpoint is not None and _matches(ray.endpoint, stable, tree)
+                        else replace(ray, kind="invalid")
+                        for ray in observation.rays
+                    ),
+                )
+                connected_cloud = MultiPoint(self.connected_points(supported))
+                self._candidates = tuple(
+                    p
+                    for p in stable
+                    if not connected_cloud.is_empty
+                    and connected_cloud.distance(Point(p)) <= _match_limit(p)
+                )
+                if self._candidates == stable:
+                    break
+        self._observed_count += 1
+        self.frames.insert(i, points)
+        self.frame_measurements.insert(i, measurement)
+        self.frame_keys.insert(i, key)
+        # The fixed candidate intersection retains evidence from EVERY frame,
+        # including frames whose capture metadata leaves the bounded window.
+        self.retain_recent(64)
+        return True
 
-    def validate(self, *, independent_motion: bool, motion_error_m=0.0) -> int:
+    def retain_recent(self, count: int) -> None:
+        trimmed = len(self.frames) > count
+        for values in (
+            self.frames,
+            self.frame_measurements,
+            self.frame_keys,
+        ):
+            del values[:-count]
+        if trimmed and self.frame_measurements:
+            self._capture_floor = self.frame_measurements[0], self.frame_keys[0][2]
+
+    def begin_segment(self, segment_id: str) -> None:
+        if self.segment_id != segment_id:
+            self.clear()
+            self.segment_id = segment_id
+
+    def connected_points(self, observation: FilteredObservation) -> tuple[Point2D, ...]:
+        """Adjacent valid hits form a discrete run; an interior hit seeds it.
+
+        No distance/angle threshold is added between neighboring samples. An
+        invalid/missing/non-hit ray breaks the run. No sub-beam surface is inferred.
+        """
+        runs: list[list[Point2D]] = []
+        run: list[Point2D] = []
+        previous: int | None = None
+        for ray in observation.rays:
+            if (
+                ray.kind != "hit"
+                or ray.endpoint is None
+                or (previous is not None and ray.index != previous + 1)
+            ):
+                if run:
+                    runs.append(run)
+                run = []
+            if ray.kind == "hit" and ray.endpoint is not None:
+                run.append(ray.endpoint)
+            previous = ray.index
+        if run:
+            runs.append(run)
+        scan = observation.scan
+        count = len(scan.ranges)
+        step = scan.angle_increment
+        span = (count - 1) * step
+        periodic_span = count * step
+        # LaserScan.angle_increment crosses the wire as float32. Propagate its
+        # half-ulp quantization interval through BOTH endpoint conventions;
+        # binary64 arithmetic roundoff alone cannot cover n accumulated errors.
+        # The float32 subnormal spacing is 2**-149. angle_min cancels from the
+        # relative span, so its wire quantization does not enlarge this budget.
+        step_error = math.ldexp(1.0, max(-149, math.frexp(step)[1] - 24)) / 2
+        arithmetic_error = math.ulp(span) + math.ulp(periodic_span) + math.ulp(math.tau)
+        complete = (
+            math.isfinite(span)
+            and math.isfinite(periodic_span)
+            and span <= math.tau + (count - 1) * step_error + arithmetic_error
+            and periodic_span >= math.tau - count * step_error - arithmetic_error
+        )
+        if (
+            len(runs) > 1
+            and complete
+            and len(observation.rays) == count
+            and observation.rays[0].index == 0
+            and observation.rays[-1].index == count - 1
+            and observation.rays[0].kind == observation.rays[-1].kind == "hit"
+            and observation.rays[0].endpoint is not None
+            and observation.rays[-1].endpoint is not None
+        ):
+            runs = [runs[-1] + runs[0], *runs[1:-1]]
+        return tuple(
+            point for group in runs if any(self.interior(p) for p in group) for point in group
+        )
+
+    def validate(self) -> int:
+        """Freeze body-stable returns connected to an interior return in every frame."""
         self.learned = ()
-        if not independent_motion or len(self.frames) < 10:
+        if self._observed_count < 10:
             return 0
-        first, last = self.frames[0][0], self.frames[-1][0]
-        baseline = math.hypot(last.x - first.x, last.y - first.y)
-        tolerance = max(2 * self.error, 0.003)
-        if baseline < 0.08:
-            return 0
-        if abs(math.atan2(math.sin(last.yaw - first.yaw), math.cos(last.yaw - first.yaw))) > 0.05:
-            return 0
-        clouds = [(p, MultiPoint(points)) for p, points in self.frames]
-        selected = []
-        candidates = self.frames[-1][1]
-        # Bounded classification work; unselected returns remain external.
-        stride = max(1, math.ceil(len(candidates) / 128))
-        for point in candidates[::stride]:
-            if not self.interior(point):
-                continue
-            if not all(
-                not cloud.is_empty and cloud.distance(Point(point)) <= tolerance
-                for _, cloud in clouds
-            ):
-                continue
-            # World-fixed predicts a different body point at the first frame.
-            # Compare against ALL returns, so repeated surfaces cannot pass just
-            # because a beam index stayed constant. World-compatible => ambiguous.
-            c, s = math.cos(last.yaw), math.sin(last.yaw)
-            wx = last.x + c * point[0] - s * point[1]
-            wy = last.y + s * point[0] + c * point[1]
-            c, s = math.cos(first.yaw), math.sin(first.yaw)
-            predicted = Point(
-                c * (wx - first.x) + s * (wy - first.y), -s * (wx - first.x) + c * (wy - first.y)
-            )
-            # The exact same complete transformed support drives BOTH tests.
-            # Rotation uncertainty acts at the point's lever arm in each frame.
-            world_error = (
-                tolerance
-                + motion_error_m
-                + self.frame_errors[0]
-                + self.frame_errors[-1]
-                + 2
-                * math.hypot(predicted.x, predicted.y)
-                * math.sin(min(math.pi, self.frame_yaw_errors[0]) / 2)
-                + 2 * math.hypot(*point) * math.sin(min(math.pi, self.frame_yaw_errors[-1]) / 2)
-            )
-            if clouds[0][1].distance(predicted) > world_error and self._observed_free(
-                predicted, world_error
-            ):
-                selected.append(point)
-        self.learned = tuple(selected)
-        self.revision += 1
+        self.learned = self._candidates or ()
         return len(self.learned)
 
-    def _observed_free(self, point, error):
-        """Absence of a match behind an occluder is not world-model rejection."""
-        from shapely.geometry import box
-
-        observation = self.first_observation
-        if observation is None:
-            return False
-        scan = observation.scan
-        step = scan.angle_increment
-        if not scan.interpolate or step > scan.max_angular_gap or step > 0.01:
-            return False
-        ox, oy = scan.sensor_to_body.x, scan.sensor_to_body.y
-        distance = math.hypot(point.x - ox, point.y - oy)
-        if distance <= scan.range_min + error:
-            return False
-        bearing = math.atan2(point.y - oy, point.x - ox) - scan.sensor_to_body.yaw
-        center = (bearing - scan.angle_min) / step
-        span = math.asin(min(1.0, math.sqrt(2) * error / distance)) / step
-        low, high = math.floor(center - span) - 1, math.ceil(center + span) + 1
-        if low < 0 or high >= len(observation.rays) or high - low > 256:
-            return False
-        rays = observation.rays[low : high + 1]
-        if any(r.kind != "hit" or r.endpoint is None for r in rays):
-            return False
-        half = (high - low) * step / 2
-        if not 0 < half < math.pi / 2:
-            return False
-        far = min(math.dist((ox, oy), r.endpoint) for r in rays) - self.error
-        near = scan.range_min / math.cos(half)
-        angles = [scan.sensor_to_body.yaw + scan.angle_min + i * step for i in (low, high)]
-        a, b = [(math.cos(t), math.sin(t)) for t in angles]
-        patch = Polygon(
-            (
-                (ox + a[0] * near, oy + a[1] * near),
-                (ox + a[0] * far, oy + a[1] * far),
-                (ox + b[0] * far, oy + b[1] * far),
-                (ox + b[0] * near, oy + b[1] * near),
+    def filter(self, observation: FilteredObservation, *, provisional: bool) -> FilteredObservation:
+        """Match frozen positions directly; scans never modify the learned catalog."""
+        if self.learned != self._filter_points:
+            self._filter_points = self.learned
+            self._filter_tree = (
+                STRtree(tuple(Point(p) for p in self.learned)) if self.learned else None
             )
-        )
-        return far > near and patch.covers(
-            box(point.x - error, point.y - error, point.x + error, point.y + error)
-        )
-
-    def filter(self, observation: FilteredObservation, *, provisional: bool):
-        hits = [r.endpoint for r in observation.rays if r.kind == "hit" and r.endpoint is not None]
-        tolerance = max(2 * self.error, 0.003)
-        retained = tuple(p for p in self.learned if any(math.dist(p, h) <= tolerance for h in hits))
-        if retained != self.learned:
-            self.learned = retained
-            self.revision += 1
         rays = tuple(
             replace(r, kind="self")
             if r.kind == "hit"
             and r.endpoint is not None
-            and self.interior(r.endpoint)
-            and (provisional or any(math.dist(r.endpoint, p) <= tolerance for p in self.learned))
+            and (
+                (provisional and self.interior(r.endpoint))
+                or (
+                    self._filter_tree is not None
+                    and _matches(r.endpoint, self.learned, self._filter_tree)
+                )
+            )
             else r
             for r in observation.rays
         )
@@ -210,6 +272,5 @@ class SelfReturnModel:
             external_hits=tuple(r for r in rays if r.kind == "hit"),
             free_rays=tuple(r for r in rays if r.kind in {"hit", "clear"}),
             occluded_regions=tuple(r for r in rays if r.kind == "self"),
-            # No invented mask polygon: blocked beams themselves preserve unknown.
             self_masks=(),
         )

@@ -557,3 +557,18 @@ export function parseVideoInbound(raw: unknown): VideoSignalEnvelope | null {
 export function isRequestType(value: string): value is RequestType {
   return (REQUEST_TYPES as readonly string[]).includes(value);
 }
+
+/** Relay-owned transport identity, independent of runtime report delivery. */
+export function parseControlConnection(raw: unknown): { robot_id: string; connection_epoch: number } | null {
+  if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > MAX_MESSAGE_BYTES) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || Object.keys(value).length !== 4
+      || value.v !== PROTOCOL_VERSION || value.type !== 'control.connection'
+      || !isText(value.robot_id, 128) || !Number.isSafeInteger(value.connection_epoch)
+      || (value.connection_epoch as number) < 0) return null;
+    return { robot_id: value.robot_id as string, connection_epoch: value.connection_epoch as number };
+  } catch {
+    return null;
+  }
+}

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
@@ -31,12 +32,14 @@ from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.mapping.workspace_export import load_exported_grid
+from senior_control.protocol import MotionRuntimeState, RuntimeObservation
 from senior_control.runtime.diagnostics import (
     DiagnosticsSettings,
     configure_diagnostics,
     diagnostics_from_environment,
 )
-from senior_control.runtime.ipc import IpcClient, IpcError
+from senior_control.runtime.ipc import IpcClient
+from senior_control.runtime.lifecycle_events import READ_FD, observe
 from senior_control.settings.models import vehicle_settings_profile
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.settings.store import SettingsStore
@@ -145,6 +148,7 @@ class SnapshotState:
         self._settings_enabled, self._logs_enabled = settings_enabled, logs_enabled
         self._clock = clock
         self._sequence = 0
+        self._last_sampled_steady: float | None = None
         self._safety_frontiers: dict[str, tuple[str, int, int]] = {}
         self._recovery_tokens: dict[str, tuple[int, int]] = {}
 
@@ -164,13 +168,48 @@ class SnapshotState:
     async def recovery_revision(self, kind: str, token: int) -> int:
         # Read the current T5 boot/version before translating an opaque UI token;
         # a delayed command cannot reset another boot's equal numeric revision.
-        live = await self.collect()
-        if live.vehicle_ui is None:
-            raise DomainError(ErrorCode.UNAVAILABLE, "local motion state is not ready")
+        await self.collect()
         current = self._recovery_tokens.get(kind)
         if current is None or current[0] != token:
             raise DomainError(ErrorCode.CONFLICT, "motion recovery version changed")
         return current[1]
+
+    def _runtime_revisions(self, runtime: MotionRuntimeState | None) -> tuple[int, int]:
+        if runtime is not None:
+            return (
+                self._safety_token("estop_reset", runtime.boot_id, runtime.estop_revision),
+                self._safety_token("fault_recover", runtime.boot_id, runtime.fault_revision),
+            )
+        fallback = (self._epoch() * 1_000_000_000, 0)
+        return (
+            self._recovery_tokens.get("estop_reset", fallback)[0],
+            self._recovery_tokens.get("fault_recover", fallback)[0],
+        )
+
+    def _unavailable_frame(self) -> dict[str, object]:
+        self._sequence += 1
+        ui = vehicle_frame(
+            None,
+            sequence=self._epoch() * 1_000_000_000 + self._sequence,
+            connected=self._connected(),
+            task=None,
+            manual=None,
+            manual_enabled=False,
+            tasks_enabled=False,
+            runtime_enabled=False,
+            safety_revisions=self._runtime_revisions(None),
+            now=self._clock(),
+            observation=RuntimeObservation(
+                status="ipc_unavailable", last_sampled_steady=self._last_sampled_steady
+            ),
+        )
+        capabilities = ui["capabilities"]
+        assert isinstance(capabilities, list)
+        if self._settings_enabled:
+            capabilities.append("settings.v1")
+        if self._logs_enabled():
+            capabilities.append("logs.v1")
+        return ui
 
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
@@ -189,6 +228,7 @@ class SnapshotState:
                 tasks=summaries,
                 deleted_task_ids=deleted_task_ids,
                 navigation_ready=False,
+                vehicle_ui=self._unavailable_frame(),
             )
         # //Compatible: legacy IPC has no reference nonce, so runnable status is unproven.
         runnable: tuple[str, ...] = ()
@@ -197,53 +237,39 @@ class SnapshotState:
             and state.map_generation is not None
             and state.map_generation == state.localization_generation
         )
-        ui = None
-        if (
-            state.motion_runtime is not None
-            and state.motion_runtime.sampled_steady
-            <= self._clock()
-            < state.motion_runtime.valid_until
-        ):
-            self._sequence += 1
-            task_view = None
-            if self._navigation is not None:
-                self._navigation.executor.context = state.for_tasks(self._connected())
-                current = await self._tasks.current_execution()
-                if current is not None:
-                    try:
-                        task_view = await self._navigation.execution_view(current.execution_id)
-                    except KeyError:
-                        pass  # //Compatible: unmigrated execution has no lifecycle projection.
-            ui = vehicle_frame(
-                state.motion_runtime,
-                sequence=self._epoch() * 1_000_000_000 + self._sequence,
-                connected=self._connected(),
-                task=task_view,
-                manual=state.manual_authority,
-                manual_enabled=self._manual_enabled and state.manual_protocol_version == 1,
-                tasks_enabled=self._navigation is not None,
-                runtime_enabled=state.manual_protocol_version == 1,
-                safety_revisions=(
-                    self._safety_token(
-                        "estop_reset",
-                        state.motion_runtime.boot_id,
-                        state.motion_runtime.estop_revision,
-                    ),
-                    self._safety_token(
-                        "fault_recover",
-                        state.motion_runtime.boot_id,
-                        state.motion_runtime.fault_revision,
-                    ),
-                ),
-                now=self._clock(),
-            )
-        if ui is not None:
-            capabilities = ui["capabilities"]
-            assert isinstance(capabilities, list)
-            if self._settings_enabled:
-                capabilities.append("settings.v1")
-            if self._logs_enabled():
-                capabilities.append("logs.v1")
+        if state.runtime_observation is not None:
+            self._last_sampled_steady = state.runtime_observation.last_sampled_steady
+        elif state.motion_runtime is not None:
+            self._last_sampled_steady = state.motion_runtime.sampled_steady
+        self._sequence += 1
+        task_view = None
+        if self._navigation is not None:
+            self._navigation.executor.context = state.for_tasks(self._connected())
+            current = await self._tasks.current_execution()
+            if current is not None:
+                try:
+                    task_view = await self._navigation.execution_view(current.execution_id)
+                except KeyError:
+                    pass  # //Compatible: unmigrated execution has no lifecycle projection.
+        ui = vehicle_frame(
+            state.motion_runtime,
+            sequence=self._epoch() * 1_000_000_000 + self._sequence,
+            connected=self._connected(),
+            task=task_view,
+            manual=state.manual_authority,
+            manual_enabled=self._manual_enabled and state.manual_protocol_version == 1,
+            tasks_enabled=self._navigation is not None,
+            runtime_enabled=state.manual_protocol_version == 1,
+            safety_revisions=self._runtime_revisions(state.motion_runtime),
+            observation=state.runtime_observation,
+            now=self._clock(),
+        )
+        capabilities = ui["capabilities"]
+        assert isinstance(capabilities, list)
+        if self._settings_enabled:
+            capabilities.append("settings.v1")
+        if self._logs_enabled():
+            capabilities.append("logs.v1")
         return LiveState(
             localized,
             state.map_ref,
@@ -289,6 +315,16 @@ def build_task_runtime(
     return TaskRuntime(tasks, executor), executor
 
 
+async def pause_failed_tasks(executor: TaskExecutor) -> bool:
+    """Use the existing durable owner; absence of a revoke proof remains pending."""
+    retired = await executor.control_current("pause", "runtime-tasks-failed")
+    if retired is None:
+        return True
+    assert executor.lifecycle is not None
+    current = await executor.lifecycle.store.load(retired[0])
+    return current.phase in {"paused", "succeeded", "failed", "canceled"}
+
+
 async def run_agent(config: AgentConfig) -> int:
     configure_diagnostics(config.diagnostics)
     async with Database(config.database_path) as database:
@@ -300,44 +336,31 @@ async def run_agent(config: AgentConfig) -> int:
         try:
             await journal.prepare()
         except Exception:
-            logger.exception("could not initialize persistent agent safety state")
+            logger.exception("could not initialize agent operation journal")
             return 78
+        domain_value = os.environ.get("SENIOR_EXPECTED_ROS_DOMAIN")
+        domain = int(domain_value) if domain_value is not None else None
+
+        def ipc(*, timeout_ms: float = 1000.0) -> IpcClient:
+            return IpcClient(
+                config.socket_path,
+                timeout_ms=timeout_ms,
+                robot_id=config.robot_id,
+                ros_domain=domain,
+                owner_record=os.environ.get("SENIOR_VERIFIED_ADAPTER_RUN"),
+            )
+
         motion = TaskAwareMotion(
-            IpcClient(config.socket_path),
-            disable_client=IpcClient(config.socket_path),
-            safety_client=IpcClient(config.socket_path),
+            ipc(),
+            intent_client=ipc(),
+            disable_client=ipc(),
+            safety_client=ipc(),
         )
-        try:
-            await motion.verify_robot(config.robot_id)
-        except IpcError as exc:
-            await motion.close()
-            cause = exc.__cause__
-            while isinstance(cause, IpcError):
-                cause = cause.__cause__
-            # //Compatible: Python 3.10 has distinct asyncio and built-in timeout types.
-            if isinstance(
-                cause,
-                (
-                    FileNotFoundError,
-                    ConnectionError,
-                    asyncio.IncompleteReadError,
-                    asyncio.TimeoutError,
-                    TimeoutError,
-                ),
-            ):
-                logger.warning("ROS adapter identity check could not reach the adapter")
-                return 1
-            logger.exception("ROS adapter identity check failed")
-            return 78
-        except Exception:
-            logger.exception("ROS adapter identity check failed")
-            await motion.close()
-            return 78
-        state_client = IpcClient(config.socket_path)
-        map_client = IpcClient(config.socket_path)
-        navigation_client = IpcClient(config.socket_path, timeout=3.0)
-        workspace_client = IpcClient(config.socket_path)
-        display_client = IpcClient(config.socket_path)
+        state_client = ipc()
+        map_client = ipc()
+        navigation_client = ipc(timeout_ms=3000.0)
+        workspace_client = ipc()
+        display_client = ipc()
         state = IpcState(state_client)
         exported_grid = None
         if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
@@ -382,6 +405,8 @@ async def run_agent(config: AgentConfig) -> int:
                     local = ExecutionContext(False, False, False, False, None)
                 else:
                     local = sampled.for_tasks(agent.connected)
+                    if "tasks" in agent.failed_modules:
+                        local = replace(local, admission_ready=False)
                     authority = sampled.manual_authority
                     local = replace(
                         local,
@@ -501,6 +526,26 @@ async def run_agent(config: AgentConfig) -> int:
                     if video_factory is not None:
                         await asyncio.to_thread(video_factory.close)
 
+        async def background_fault(name: str) -> None:
+            # Stop the failed task driver, persist pause/revoke through its sole owner.
+            gate.invalidate()
+            executor.context = replace(context, admission_ready=False)
+            if not await pause_failed_tasks(executor):
+                agent.report_runtime_event(
+                    {
+                        "module": "tasks",
+                        "phase": "unconfirmed",
+                        "detail": "task pause/revocation is pending",
+                    }
+                )
+
+        event_fd = os.environ.get(READ_FD)
+
+        async def lifecycle_loop() -> None:
+            assert event_fd is not None
+            await observe(int(event_fd), agent.report_runtime_event)
+            # EOF is already recorded by observe; no global shutdown or restart.
+
         async def logs_loop() -> None:
             if log_connection is not None:
                 await log_connection.run(config.cloud_url, config.device_token)
@@ -537,14 +582,17 @@ async def run_agent(config: AgentConfig) -> int:
             motion=motion,
             video_session=video_session,
             map_root=config.database_path.parent / "map-transfer",
-            background={"tasks": task_loop, "logs": logs_loop}
-            if logs is not None
-            else {"tasks": task_loop},
+            background={
+                "tasks": task_loop,
+                **({"logs": logs_loop} if logs is not None else {}),
+                **({"observer": lifecycle_loop} if event_fd is not None else {}),
+            },
+            background_fault=background_fault,
             cleanup=cleanup,
             # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
         )
         agent.install_signal_handlers()
         await agent.run()
-        if agent.auth_rejected or agent.recovery_required:
+        if agent.auth_rejected or agent.runtime_failed:
             return 78
         return 1 if agent.runtime_failed else 0

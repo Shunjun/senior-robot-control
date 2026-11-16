@@ -7,9 +7,7 @@ export class ManualController {
   private generation = 0;
   private gesture = 0;
   private sequence = 0;
-  private busy = false;
-  private current: Intent | null = null;
-  private latest: Intent | null = null;
+  private current: Omit<Intent, 'sequence'> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   constructor(private readonly port: VehiclePort, private readonly changed: (phase: ManualPhase, error?: string) => void) {
@@ -50,8 +48,7 @@ export class ManualController {
     this.publish('active');
     this.timer = setInterval(() => {
       if (this.current) {
-        this.latest = { ...this.current, sequence: ++this.sequence };
-        this.flush();
+        this.sendCurrent();
       }
     }, 100);
     this.update(linear, turn, gear);
@@ -66,34 +63,25 @@ export class ManualController {
     this.current = {
       authority_id: this.authority.authority_id,
       gesture: this.gesture,
-      sequence: ++this.sequence,
       linear,
       turn,
       gear
     };
-    this.latest = this.current;
-    this.flush();
+    this.sendCurrent();
   }
-  private flush(): void {
-    if (this.busy || this.phase !== 'active' || !this.latest) return;
-    const generation = this.generation, intent = this.latest;
-    this.latest = null;
-    this.busy = true;
-    let backpressured = false;
+  private sendCurrent(): void {
+    if (this.phase !== 'active' || !this.current) return;
+    const generation = this.generation;
+    const intent = { ...this.current, sequence: ++this.sequence };
     void this.port.intent(intent).catch(error => {
       if (generation !== this.generation) return;
       if (error instanceof IntentBackpressureError) {
         // Discard queued samples. The held-input heartbeat generates a fresh
         // sample next tick; release/epoch retirement clears current as well.
-        backpressured = true;
-        this.latest = null;
         return;
       }
       this.release();
-      this.publish('none', `驾驶意图未确认：${String(error)}`);
-    }).finally(() => {
-      this.busy = false;
-      if (!backpressured && generation === this.generation) this.flush();
+      this.publish('none', `驾驶意图发送失败：${String(error)}`);
     });
   }
   observeClosed(authorityId: string): void {
@@ -103,7 +91,7 @@ export class ManualController {
     const generation = ++this.generation;
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
-    this.current = this.latest = null;
+    this.current = null;
     const authority = this.authority;
     this.authority = null;
     this.publish('none');

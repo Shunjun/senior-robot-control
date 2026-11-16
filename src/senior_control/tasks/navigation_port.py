@@ -18,10 +18,16 @@ class TaskNavigation(Protocol):
 
 
 class NavigationEffects:
-    def __init__(self, store: LifecycleStore, navigation: TaskNavigation, *, timeout: float = 0.3):
+    def __init__(
+        self,
+        store: LifecycleStore,
+        navigation: TaskNavigation,
+        *,
+        timeout_ms: float = 300.0,
+    ):
         self.store = store
         self.navigation = navigation
-        self.timeout = timeout
+        self.timeout = timeout_ms / 1000
 
     async def resolve(self, task: TaskDefinition) -> tuple[Pose2D, ...]:
         return await asyncio.wait_for(self.navigation.task_poses(task), self.timeout)

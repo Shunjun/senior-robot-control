@@ -29,17 +29,14 @@ def test_disconnect_keeps_runtime_and_never_substitutes_wheels():
     assert state.allowed_actions == ()
 
 
-def test_estop_pending_hardware_and_independent_revisions():
+def test_estop_pending_and_independent_revisions():
     state = project_vehicle_state(
-        replace(
-            runtime(mode=MotionMode.ESTOP, actions=("estop_reset", "fault_recover")),
-            hardware_estop=True,
-        ),
+        runtime(mode=MotionMode.ESTOP, actions=("estop_reset", "fault_recover")),
         ConnectionState(True),
         software_estop_pending=True,
     )
-    assert state.estop_status == "hardware_latched"
-    assert state.allowed_actions == ("fault_recover",)
+    assert state.estop_status == "software_latched"
+    assert state.allowed_actions == ("estop_reset", "fault_recover")
     assert (state.estop_revision, state.fault_revision) == (7, 9)
     pending = project_vehicle_state(runtime(), ConnectionState(False), software_estop_pending=True)
     assert pending.estop_status == "pending"
@@ -146,22 +143,18 @@ def test_pending_overlay_clears_without_new_telemetry(sequence, connected):
     assert reconnected.estop_status == "clear"
 
 
-@pytest.mark.parametrize("hardware", [True, False])
 @pytest.mark.parametrize("pending", [True, False])
-def test_pending_overlay_never_clears_or_relabels_confirmed_estop(hardware, pending):
-    confirmed = project_vehicle_state(
-        replace(runtime(10, MotionMode.ESTOP), hardware_estop=hardware), ConnectionState(True)
-    )
-    # Incoming hardware flag belongs only to this rejected old snapshot.
+def test_pending_overlay_never_clears_or_relabels_confirmed_estop(pending):
+    confirmed = project_vehicle_state(runtime(10, MotionMode.ESTOP), ConnectionState(True))
     stale = project_vehicle_state(
-        replace(runtime(9), hardware_estop=not hardware),
+        runtime(9),
         ConnectionState(False),
         previous=confirmed,
         software_estop_pending=pending,
     )
-    assert stale.estop_status == ("hardware_latched" if hardware else "software_latched")
+    assert stale.estop_status == "software_latched"
     same = project_vehicle_state(
-        replace(runtime(10), hardware_estop=not hardware),
+        runtime(10),
         ConnectionState(True),
         previous=stale,
         software_estop_pending=False,

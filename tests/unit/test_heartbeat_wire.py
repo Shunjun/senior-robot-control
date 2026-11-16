@@ -39,13 +39,24 @@ def test_missing_heartbeat_expires_connection_even_if_socket_is_open(
     monkeypatch.setattr("senior_control.cloud.relay.time.monotonic", lambda: now[0])
     hub = Hub(CloudLimits())
     connection = hub.attach_agent("robot-a")
-    now[0] = 11.1
-    hub.expire_stale_agent(connection)
-    assert not connection.outbox.closed
-    now[0] = 12.1
-    hub.expire_stale_agent(connection)
-    assert connection.outbox.closed
-    assert not hub.is_online("robot-a")
+    hub.handle_agent_frame(
+        connection,
+        json.dumps(
+            {
+                "v": 1,
+                "type": "heartbeat.request",
+                "robot_id": "robot-a",
+                "connection_epoch": connection.epoch,
+                "nonce": "current",
+                "sent_at": 100.0,
+            }
+        ).encode(),
+    )
+    for instant, online in [(14.999, True), (15.0, False), (15.001, False)]:
+        now[0] = instant
+        assert hub.is_online("robot-a") is online
+        hub.expire_stale_agent(connection)
+        assert connection.outbox.closed is not online
 
 
 def test_reconnect_grace_ends_without_a_fresh_epoch_heartbeat(
@@ -106,12 +117,12 @@ def test_expired_heartbeat_grace_starts_before_cleanup_and_cannot_restart(
     assert hub.is_online("robot-a")
     assert not hub.is_reconnecting("robot-a")
 
-    now[0] = 12.01
+    now[0] = 15.01
     assert not hub.is_online("robot-a")
     assert hub.is_reconnecting("robot-a")
     assert not previous.outbox.closed
 
-    now[0] = 71.9
+    now[0] = 74.9
     if transition == "replace":
         hub.attach_agent("robot-a")
         hub.detach(previous)  # Stale socket cleanup must preserve the replacement's state.
@@ -119,7 +130,7 @@ def test_expired_heartbeat_grace_starts_before_cleanup_and_cannot_restart(
         hub.expire_stale_agent(previous)
     assert hub.is_reconnecting("robot-a")
 
-    now[0] = 72.0
+    now[0] = 75.0
     assert not hub.is_online("robot-a")
     assert not hub.is_reconnecting("robot-a")
 
@@ -132,7 +143,7 @@ def test_revocation_clears_reconnect_grace_before_and_after_detach(
     hub = Hub(CloudLimits())
     agent = hub.attach_agent("robot-a")
     agent.heartbeat_at = now[0]
-    now[0] = 12.01
+    now[0] = 15.01
     hub.revoke_robot("robot-a")
     assert not hub.is_online("robot-a")
     assert not hub.is_reconnecting("robot-a")
@@ -147,3 +158,82 @@ async def test_retired_drive_clock_fields_are_rejected():
         agent, json.dumps({"type": "heartbeat.request", "drive_t1": 1.0}).encode()
     )
     assert agent.outbox.closed
+
+
+@pytest.mark.parametrize("elapsed", [5.0, 5.001])
+def test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher(monkeypatch, elapsed):
+    import time
+    from types import SimpleNamespace
+
+    now = [10.0]
+    monkeypatch.setattr(
+        "senior_control.cloud.relay.time",
+        SimpleNamespace(
+            monotonic=lambda: now[0],
+            time=time.time,
+        ),
+    )
+    hub = Hub(CloudLimits())
+    agent = hub.attach_agent("robot-a")
+    request = json.dumps(
+        {
+            "v": 1,
+            "type": "heartbeat.request",
+            "robot_id": "robot-a",
+            "connection_epoch": agent.epoch,
+            "nonce": "current",
+            "sent_at": 100.0,
+        }
+    ).encode()
+    hub.handle_agent_frame(agent, request)
+    assert hub.is_online("robot-a")
+    now[0] += elapsed
+    hub.handle_agent_frame(agent, request)
+    assert not hub.is_online("robot-a") and agent.outbox.closed
+
+
+async def test_watcher_sleeps_until_current_evidence_deadline(monkeypatch):
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from senior_control.cloud.relay import _watch_heartbeat
+
+    now = [10.0]
+    monkeypatch.setattr(
+        "senior_control.cloud.relay.time",
+        SimpleNamespace(
+            monotonic=lambda: now[0],
+            time=time.time,
+        ),
+    )
+    hub = Hub(CloudLimits())
+    agent = hub.attach_agent("robot-a")
+    request = json.dumps(
+        {
+            "v": 1,
+            "type": "heartbeat.request",
+            "robot_id": "robot-a",
+            "connection_epoch": agent.epoch,
+            "nonce": "current",
+            "sent_at": 100.0,
+        }
+    ).encode()
+    hub.handle_agent_frame(agent, request)
+    sleeps = []
+    original_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            now[0] = 12.0
+            hub.handle_agent_frame(agent, request)
+            now[0] = 15.0
+        else:
+            now[0] += delay
+        await original_sleep(0)
+
+    monkeypatch.setattr("senior_control.cloud.relay.asyncio.sleep", sleep)
+    await _watch_heartbeat(agent, hub)
+    assert sleeps == [5.0, 2.0] and now[0] == 17.0
+    assert agent.outbox.closed and not hub.is_online("robot-a")

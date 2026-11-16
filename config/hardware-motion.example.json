@@ -10,7 +10,6 @@
   "yaw_accel": null,
   "yaw_decel": null,
   "yaw_jerk": null,
-  "lag": null,
   "degraded_cap": null,
   "wheel_speed_mps": null,
   "stationary_linear_mps": null,
@@ -24,7 +23,6 @@
   "drive_yaw_overshoot": null,
   "orientation_error_rad": null,
   "lateral_drift_mps": null,
-  "lateral_stop_s": null,
   "reaction_linear_accel": null,
   "reaction_yaw_accel": null,
   "risk_basis": null,
@@ -37,11 +35,9 @@
   "wheel_publisher": "wheeltec_robot",
   "imu_publisher": "wheeltec_robot",
   "source_namespace": "/",
-  "max_age": 0.5,
   "requested_linear_mps": 1.3888888888888888,
   "yaw_cap": 2.0,
   "watchdog_mode": "unknown",
-  "hardware_estop": {
-    "mode": "unknown"
-  }
+  "lag_ms": null,
+  "lateral_stop_ms": null
 }

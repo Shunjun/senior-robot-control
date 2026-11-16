@@ -1,0 +1,298 @@
+{
+  "source_root": "/Users/zhangshunjun/Wheel 机器人/1.WHEELTEC ROS机器人通用资料/7.ROS源码/ROS2源码/Humble源码/src",
+  "scope": "read-only vendor source snapshot; installed vehicle versions unverified",
+  "groups": {
+    "wheel_imu": [
+      {
+        "path": "turn_on_wheeltec_robot/src/wheeltec_robot.cpp",
+        "sha256": "c96da6f956f3568f0ba2fe3de2c151c41127fe5a0b3f386f1213c5b3609ee55d",
+        "bytes": 41971
+      },
+      {
+        "path": "turn_on_wheeltec_robot/include/turn_on_wheeltec_robot/wheeltec_robot.h",
+        "sha256": "82c9c92b7832bfe23a26952cbb6b5ebabbfb7c0d20abe6bdbf0c1377d5f940ae",
+        "bytes": 12663
+      },
+      {
+        "path": "turn_on_wheeltec_robot/src/Quaternion_Solution.cpp",
+        "sha256": "21857d55cde9698af983167a6ca3ba7134064ca4a6dbdc59688550fa9a5ff7fd",
+        "bytes": 3527
+      },
+      {
+        "path": "turn_on_wheeltec_robot/CMakeLists.txt",
+        "sha256": "8782c74b307b21557b3549657e4e1faf0b709a197fe3d6d9808c7451a3f53656",
+        "bytes": 2507
+      },
+      {
+        "path": "turn_on_wheeltec_robot/package.xml",
+        "sha256": "ddc974e19a89e62b55369e86d3d7c3c688dbb488f16763b28c35222088692e46",
+        "bytes": 1437,
+        "package": "turn_on_wheeltec_robot",
+        "version": "0.0.0",
+        "licenses": [
+          "TODO: License declaration"
+        ]
+      },
+      {
+        "path": "depend/serial_ros2/src/impl/unix.cc",
+        "sha256": "afdc2b157831400116c45ed879f0eaaad450925ee0a15a2f033e362baecf11d2",
+        "bytes": 26194
+      },
+      {
+        "path": "depend/serial_ros2/include/serial/serial.h",
+        "sha256": "f4dcb008056f41fbb80357da817959e8cf5e2f6d04fb79a416b4fedd68a8a0d7",
+        "bytes": 23702
+      }
+    ],
+    "lidar": [
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/input.cpp",
+        "sha256": "7c1d770beb33ce346cfac82e3976931fdbc43af77bdf589771a7b6fb27b40bc8",
+        "bytes": 10697
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lsiosr.cpp",
+        "sha256": "8ba2ca4ecdc88c00f6ebcbc873abb751e2278c2df78b054e4f923f551133596a",
+        "bytes": 8205
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_x10_driver.cpp",
+        "sha256": "c1ba073b29c8621ce74f28734811f9d8bcca686e01d1c24913c87df214a5bcae",
+        "bytes": 50967
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_cx_driver.cpp",
+        "sha256": "c37cf04ee9167487d5e4dffa8df10c723fadc7bd651857fc391f6862fcd3a76c",
+        "bytes": 67093
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_ch_driver.cpp",
+        "sha256": "f7e1c261e792399a33b81aa9b60035fab41f6325ad3fd5fdb46f89dff19e3db4",
+        "bytes": 67650
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/src/lslidar_ls_driver.cpp",
+        "sha256": "cc42d9b18456b6b57c0c80130f6c8681043b6be6c4ff7a863501c6739ab68040",
+        "bytes": 38164
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/input.hpp",
+        "sha256": "1a4ef6a0353bac11ed2ced31da038aec437e9d68e5a622ca7c926db1a650f6d5",
+        "bytes": 3943
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lsiosr.hpp",
+        "sha256": "db0d4e24314405a4ce5e422c6ff5223b7def44dee29c471bb8d05c347e6ee181",
+        "bytes": 2506
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/lslidar_x10_driver.hpp",
+        "sha256": "f1ba383729b9735cbcf22a508c48d8bc7551fbd47c2cf062cb1da250c426fd45",
+        "bytes": 7653
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/include/lslidar_driver/ThreadPool.h",
+        "sha256": "39ed9b40268cb8b759794ea5b9e76072afa643a97b77810eaef7a9b671085702",
+        "bytes": 2674
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/CMakeLists.txt",
+        "sha256": "567b253d02a9896597fe4f5f3c3b9915982d1500af978ca02d3010350bcc8f01",
+        "bytes": 2941
+      },
+      {
+        "path": "wheeltec_lidar_ros2/lslidar_ros2/lslidar_driver/package.xml",
+        "sha256": "61075a31bcc5f9f4be36d94e6c510188516072ce8ed28fb2161b599d0ba6147b",
+        "bytes": 1177,
+        "package": "lslidar_driver",
+        "version": "5.1.1",
+        "licenses": [
+          "Apache-2.0"
+        ]
+      }
+    ],
+    "astra": [
+      {
+        "path": "ros2_astra_camera-master/astra_camera/src/ob_camera_node.cpp",
+        "sha256": "903c5e1630d91b391bcf207497c4639e9782f6021b3f0ba3b652140699d25df6",
+        "bytes": 25070
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/src/uvc_camera_driver.cpp",
+        "sha256": "1c932e6a0f5797d1997b5c2183c046b874b3e14d1e6f9602247e55f6be0c840f",
+        "bytes": 26586
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/include/astra_camera/ob_camera_node.h",
+        "sha256": "d2995875f9fcdadb38835b5d322e4c5e63184cc5d74049cb3cd217e1b8922dfa",
+        "bytes": 11795
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/include/astra_camera/uvc_camera_driver.h",
+        "sha256": "5fbcdb2aec776db2f613a35f1adb95345275076577363240d72a91bc23b78d59",
+        "bytes": 6456
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/include/openni2/OpenNI.h",
+        "sha256": "fc9309dff65b175efaf75a0f29065482dab6afa22fb84f1cf9342308068fbac3",
+        "bytes": 96027
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/CMakeLists.txt",
+        "sha256": "a205d5fa07b69a7e8bd51886e1ce518fd627136001fa66c6f68df7a0173c6fda",
+        "bytes": 6766
+      },
+      {
+        "path": "ros2_astra_camera-master/astra_camera/package.xml",
+        "sha256": "a7be77006a84f2f476e8aec9b46859f308f51e67ba05033db9d469891e96378d",
+        "bytes": 1196,
+        "package": "astra_camera",
+        "version": "1.1.0",
+        "licenses": [
+          "TODO: License declaration"
+        ]
+      }
+    ],
+    "usb_camera_optional": [
+      {
+        "path": "usb_cam-ros2/src/usb_cam.cpp",
+        "sha256": "4b83265acfcbe9dadd89f1c209db56147ad2aba86350bd57d2325732f128da4c",
+        "bytes": 22891
+      },
+      {
+        "path": "usb_cam-ros2/src/usb_cam_node.cpp",
+        "sha256": "c8e569b20184310dd7618813977659c88170dbd4d16275e6f106bd8865b749f3",
+        "bytes": 14897
+      },
+      {
+        "path": "usb_cam-ros2/include/usb_cam/usb_cam.hpp",
+        "sha256": "571a298e6f738f5b191f0e0abdbcb2521540037a0b58d65db7d8ec3f4db4e7ec",
+        "bytes": 9447
+      },
+      {
+        "path": "usb_cam-ros2/CMakeLists.txt",
+        "sha256": "fcbb8ab4556fa4b438e361fdf67b3cd8fdc241af7b4d10e7bf17f02ddd08e73b",
+        "bytes": 2442
+      },
+      {
+        "path": "usb_cam-ros2/package.xml",
+        "sha256": "1e282e54afc2b44d3dc0fe7fc9f547325d8783bdaf0596b3baf380fe61636602",
+        "bytes": 1478,
+        "package": "usb_cam",
+        "version": "0.6.1",
+        "licenses": [
+          "BSD"
+        ]
+      }
+    ],
+    "amcl": [
+      {
+        "path": "navigation2-humble/nav2_amcl/src/amcl_node.cpp",
+        "sha256": "29a6402bf643fc8ea0d2dcea29619d4cbdcaf7014c811332ed4e86e593d3f1af",
+        "bytes": 55150
+      },
+      {
+        "path": "navigation2-humble/nav2_amcl/include/nav2_amcl/amcl_node.hpp",
+        "sha256": "4cfa6e727e05e498444b1f35d659472bc34579f4000e22ec286c0c7207703bdb",
+        "bytes": 12775
+      },
+      {
+        "path": "navigation2-humble/nav2_amcl/CMakeLists.txt",
+        "sha256": "176d44755c99507bd9ff80461c4621a89b902c5d9f92391d1852638e2d0dfe2b",
+        "bytes": 2488
+      },
+      {
+        "path": "navigation2-humble/nav2_amcl/package.xml",
+        "sha256": "f8caaeb2a64e272f68b1f2e87da60598ab761a2a07ef4910fe025229af53039c",
+        "bytes": 1561,
+        "package": "nav2_amcl",
+        "version": "1.1.20",
+        "licenses": [
+          "LGPL-2.1-or-later"
+        ]
+      }
+    ],
+    "gps_optional": [
+      {
+        "path": "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/nodes/nmea_serial_driver.py",
+        "sha256": "66113541243a06f35d5e9267ea74a5616106c5cac0917dc018eec3afafb8b02c",
+        "bytes": 2907
+      },
+      {
+        "path": "wheeltec_gps/nmea_navsat_driver/src/libnmea_navsat_driver/driver.py",
+        "sha256": "ecdd292067e27724665dad8657e3423bb473a56d1f3669741e7d20987f3700e4",
+        "bytes": 17379
+      },
+      {
+        "path": "wheeltec_gps/nmea_navsat_driver/package.xml",
+        "sha256": "ea979693a3197fe398d29470c430cb9cbd52ee29ed225bd397b4aff7d105e8df",
+        "bytes": 1092,
+        "package": "nmea_navsat_driver",
+        "version": "2.0.0",
+        "licenses": [
+          "BSD"
+        ]
+      }
+    ],
+    "ahrs_optional": [
+      {
+        "path": "wheeltec_imu/fdilink_ahrs_ros-ros2/src/ahrs_driver.cpp",
+        "sha256": "515f16b04a03321d35907466e7195f01e840eac458388625fe33229e25f556c1",
+        "bytes": 27442
+      },
+      {
+        "path": "wheeltec_imu/fdilink_ahrs_ros-ros2/package.xml",
+        "sha256": "54369cfd3834fed84f45addd55fd52e99d8e4db54c63366b6fc1814398ac6a07",
+        "bytes": 818,
+        "package": "fdilink_ahrs",
+        "version": "0.0.0",
+        "licenses": [
+          "TODO: License declaration"
+        ]
+      }
+    ],
+    "vendor_selection": [
+      {
+        "path": "turn_on_wheeltec_robot/config/wheeltec_param.yaml",
+        "sha256": "85c40c9504a324a0bbe21bde388c2098da5b052d174134dc7f26cb1dbb10607f",
+        "bytes": 1897
+      },
+      {
+        "path": "turn_on_wheeltec_robot/launch/wheeltec_lidar.launch.py",
+        "sha256": "4759004aea726cfd6cf5f0422a70846faa3205837d3ddf31ad9e65d0489a2b16",
+        "bytes": 6867
+      },
+      {
+        "path": "turn_on_wheeltec_robot/launch/wheeltec_camera.launch.py",
+        "sha256": "f921d4cb23409d6418dbf8e7c667f52a0f99e468e3e3c4efc3c6d96cbbb590ac",
+        "bytes": 3744
+      }
+    ]
+  },
+  "local_simulation_files": [
+    {
+      "path": "ros2/src/senior_sim/launch/simulation.launch.py",
+      "sha256": "bdbaee0604ee2927c72708d2ed61dcb44b5e7a5669284e8e2046bfa14d6b3d45"
+    },
+    {
+      "path": "ros2/src/senior_sim/config/bridge.yaml",
+      "sha256": "de93a3522f45958fc181308a442d089d4b02629b7fc8b65d774e170714c44c2e"
+    },
+    {
+      "path": "ros2/src/senior_sim/config/controllers.yaml",
+      "sha256": "7bd5451758c7fdd4127e0c0c3b989710182fc41f1172d6ed96dad0921d913c9d"
+    },
+    {
+      "path": "ros2/src/senior_sim/urdf/senior.urdf.xacro",
+      "sha256": "44c58e0dc5ea10d5168162442c7a4004a0aee372bfd2162f7ca5e664f1aacdba"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/simulation_reference.py",
+      "sha256": "4ca31643a426f523d5b1b1fec6c0ab301570b24bc304caada475b9fca1fab344"
+    },
+    {
+      "path": "ros2/src/senior_robot/senior_robot/simulation_camera.py",
+      "sha256": "05e0ee8d29914167d790b961c67e4ed50317e9274d3692e263f9796b4070a10e"
+    }
+  ]
+}

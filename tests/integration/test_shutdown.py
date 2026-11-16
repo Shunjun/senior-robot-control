@@ -41,6 +41,7 @@ from agent_fakes import (
 from senior_control.agent import Agent
 from senior_control.agent.connection import IpcMotion
 from senior_control.agent.journal import AgentJournal
+from senior_control.errors import DomainError
 from senior_control.runtime.ipc import MAX_FRAME, IpcClient, IpcError, IpcServer
 from senior_control.storage.database import Database
 
@@ -98,9 +99,9 @@ async def build(
         home=FakeHome(),
         maps=FakeMaps(),
         state=FakeState(),
-        motion=IpcMotion(client),
-        heartbeat_seconds=0.02,
-        retry_delay=0.01,
+        motion=IpcMotion(client, intent_client=IpcClient(socket_path)),
+        heartbeat_ms=20,
+        retry_delay_ms=10,
         **extra,
     )
     return agent, connector, database
@@ -234,8 +235,8 @@ async def test_slow_encoder_does_not_delay_stop(tmp_path: Path) -> None:
             state=FakeState(),
             motion=motion,
             background={"encoder": slow_encoder},
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
+            heartbeat_ms=20,
+            retry_delay_ms=10,
         )
         runner = asyncio.ensure_future(agent.run())
         try:
@@ -325,12 +326,16 @@ class ArbiterRig:
         from senior_control.safety.arbiter import Arbiter
 
         self.now = 100.0
-        self.arbiter = Arbiter(ROBOT, 0.3)
+        self.arbiter = Arbiter(ROBOT, 300)
+        from senior_control.motion.state_machine import MotionStateMachine
+
+        self.machine = MotionStateMachine()
+        self.events = 0
         self.exits = []
         self.epoch = 0
         self.core = _load_adapter().AdapterCore(
             robot_id=ROBOT,
-            submit=lambda envelope, received_at=None: self.arbiter.accept(envelope, self.now),
+            submit=self.submit,
             disconnect=self.disconnect,
             request_exit=lambda: self.exits.append(True),
             manual=lambda message: {
@@ -339,6 +344,17 @@ class ArbiterRig:
                 "state": "prepared",
             },
         )
+
+    def submit(self, envelope, received_at=None):
+        from senior_control.motion.contracts import MotionEvent, MotionEventKind
+
+        if envelope.type == "safety.estop":
+            self.events += 1
+            self.machine.reduce(
+                MotionEvent(MotionEventKind.SOFTWARE_ESTOP, envelope.session_id, 0, self.events),
+                now_steady=self.now,
+            )
+        return self.arbiter.accept(envelope, self.now)
 
     def disconnect(self, epoch):
         pass  # Connection retirement does not clear a durable emergency stop.
@@ -358,14 +374,12 @@ def test_adapter_has_no_raw_velocity_write() -> None:
     assert "publish_velocity" not in COMMAND_NODE.read_text()
 
 
-async def test_background_failure_revokes_ros_heartbeat_and_stops_agent(
-    tmp_path: Path, socket_path: Path
-) -> None:
+async def test_background_failure_keeps_agent_reporting(tmp_path: Path, socket_path: Path) -> None:
     from senior_control.agent.connection import HeartbeatFrame
 
     local = ArbiterRig()
     local.now = time.monotonic()
-    arbiter, adapter = local.arbiter, local.core
+    _arbiter, adapter = local.arbiter, local.core
     server = IpcServer(socket_path, adapter.handle)
     await server.start()
     trigger = asyncio.Event()
@@ -386,19 +400,21 @@ async def test_background_failure_revokes_ros_heartbeat_and_stops_agent(
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
-            motion=IpcMotion(IpcClient(socket_path)),
-            heartbeat_seconds=0.02,
+            motion=IpcMotion(IpcClient(socket_path), intent_client=IpcClient(socket_path)),
+            heartbeat_ms=20,
             background={"tasks": background},
         )
         runner = asyncio.create_task(agent.run())
         try:
             await until(lambda: agent.connected)
-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+            await until(lambda: link.inbox.empty())
             trigger.set()
-            await asyncio.wait_for(asyncio.shield(runner), 1.5)
-            assert adapter._disabled_through_epoch >= 1
-            assert arbiter.final_command(time.monotonic()) is None
+            await until(lambda: "tasks" in agent.module_faults)
+            beats = link.heartbeats
+            await until(lambda: link.heartbeats > beats)
+            assert not runner.done() and not link.closed
+            assert not agent.auth_rejected
         finally:
             agent.request_shutdown()
             if not runner.done():
@@ -413,7 +429,7 @@ async def test_buffered_stop_then_estop_latches_estop(tmp_path: Path, socket_pat
 
     local = ArbiterRig()
     local.now = time.monotonic()
-    arbiter, adapter = local.arbiter, local.core
+    adapter = local.core
     server = IpcServer(socket_path, adapter.handle)
     await server.start()
     link = FakeLink(epoch=1)
@@ -428,18 +444,18 @@ async def test_buffered_stop_then_estop_latches_estop(tmp_path: Path, socket_pat
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
-            motion=IpcMotion(IpcClient(socket_path)),
-            heartbeat_seconds=0.05,
+            motion=IpcMotion(IpcClient(socket_path), intent_client=IpcClient(socket_path)),
+            heartbeat_ms=50,
         )
         runner = asyncio.create_task(agent.run())
         try:
             await until(lambda: agent.connected)
-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+            await until(lambda: link.inbox.empty())
             await agent.dispatch(simple("control.acquire", seq=1))
             link.inbox.put_nowait(simple("drive.stop", seq=2))
             link.inbox.put_nowait(simple("safety.estop", seq=3))
-            await until(lambda: arbiter.mode(time.monotonic()) == "estop", timeout=0.5)
+            await until(lambda: local.machine.state.mode.value == "estop", timeout=0.5)
         finally:
             agent.request_shutdown()
             await asyncio.wait_for(runner, 2)
@@ -455,7 +471,7 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
 
     local = ArbiterRig()
     local.now = time.monotonic()
-    arbiter, core = local.arbiter, local.core
+    core = local.core
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def handle(message: dict[str, Any]) -> dict[str, Any]:
@@ -478,14 +494,14 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
-            motion=IpcMotion(IpcClient(socket_path)),
-            heartbeat_seconds=0.05,
+            motion=IpcMotion(IpcClient(socket_path), intent_client=IpcClient(socket_path)),
+            heartbeat_ms=50,
         )
         runner = asyncio.create_task(agent.run())
         try:
             await until(lambda: agent.connected)
-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+            await until(lambda: link.inbox.empty())
             await agent.dispatch(simple("control.acquire", seq=1))
             link.inbox.put_nowait(simple("drive.stop", seq=2))
             await asyncio.wait_for(entered.wait(), 1)
@@ -493,7 +509,7 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
             link.drop()
             await asyncio.sleep(0.02)
             release.set()
-            await until(lambda: arbiter.mode(time.monotonic()) == "estop")
+            await until(lambda: local.machine.state.mode.value == "estop")
         finally:
             release.set()
             agent.request_shutdown()
@@ -501,7 +517,7 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
     await server.close()
 
 
-async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
+async def test_background_fault_preserves_cloud_while_safety_ipc_is_blocked(
     tmp_path: Path, socket_path: Path
 ) -> None:
     from agent_fakes import simple
@@ -532,6 +548,7 @@ async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
         motion = IpcMotion(
             IpcClient(socket_path),
             disable_client=IpcClient(socket_path),
+            intent_client=IpcClient(socket_path),
         )
         agent = Agent(
             ROBOT,
@@ -543,18 +560,21 @@ async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
             state=FakeState(),
             motion=motion,
             background={"tasks": background},
-            heartbeat_seconds=0.05,
+            heartbeat_ms=50,
         )
         runner = asyncio.create_task(agent.run())
         try:
             await until(lambda: agent.connected)
-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-            await until(lambda: agent.eligible_for_motion)
+            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+            await until(lambda: link.inbox.empty())
             await agent.dispatch(simple("control.acquire", seq=1))
             link.inbox.put_nowait(simple("drive.stop", seq=2))
             await asyncio.wait_for(entered.wait(), 1)
             fail.set()
-            await until(lambda: core._disabled_through_epoch >= 1, timeout=0.3)
+            await until(lambda: "tasks" in agent.module_faults)
+            assert not runner.done() and not link.closed
+            release.set()
+            await until(lambda: bool(link.responses))
         finally:
             release.set()
             agent.request_shutdown()
@@ -574,10 +594,10 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
     from senior_control.safety.arbiter import Arbiter
 
     rig = ArbiterRig()
-    rig.arbiter = Arbiter(ROBOT, 1.0)
+    rig.arbiter = Arbiter(ROBOT, 1000)
     rig.core = _load_adapter().AdapterCore(
         robot_id=ROBOT,
-        submit=lambda envelope, received_at=None: rig.arbiter.accept(envelope, rig.now),
+        submit=rig.submit,
         disconnect=rig.disconnect,
         request_exit=lambda: None,
         manual=lambda message: {"ok": True, "authority_id": "storage-test", "state": "prepared"},
@@ -605,7 +625,7 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
                 home=FakeHome(),
                 maps=FakeMaps(),
                 state=FakeState(),
-                motion=IpcMotion(IpcClient(socket_path)),
+                motion=IpcMotion(IpcClient(socket_path), intent_client=IpcClient(socket_path)),
             )
             agent._last_epoch = 1
             first = simple("safety.estop", seq=4).model_copy(update={"session_id": "page-a"})
@@ -629,19 +649,19 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
                                 }
                             ),
                         )
-                    with pytest.raises(ConnectionError, match="safety capacity"):
+                    with pytest.raises(DomainError, match="safety capacity"):
                         agent._accept(
                             link,
                             simple("safety.estop", seq=1).model_copy(
                                 update={"session_id": "overflow", "request_id": "overflow"}
                             ),
                         )
-                    assert agent.auth_rejected and agent.runtime_failed
+                    assert not agent.auth_rejected and not agent._stop.is_set()
                     assert len(agent._safety_pending) == MAX_SAFETY_PENDING
                 release.set()
                 assert agent._safety_task is not None
                 await asyncio.wait_for(agent._safety_task, 1)
-                assert rig.arbiter.mode(rig.now) == "estop"
+                assert rig.machine.state.mode.value == "estop"
             finally:
                 release.set()
                 await agent._release()
@@ -667,3 +687,96 @@ async def test_adapter_identity_reports_its_own_runtime_domain_only_for_matching
     expected = {"ok": True} if domain is None else {"ok": True, "ros_domain": domain}
     assert await core.handle({"type": "identity", "robot_id": ROBOT}) == expected
     assert await core.handle({"type": "identity", "robot_id": "other-robot"}) == {"ok": False}
+
+
+async def test_capacity_fault_then_immediate_release_delivers_every_accepted_estop(
+    tmp_path, socket_path
+):
+    from agent_fakes import simple
+
+    from senior_control.agent.main import MAX_SAFETY_PENDING
+
+    owner = ArbiterRig()
+    server = IpcServer(socket_path, owner.core.handle)
+    await server.start()
+    agent, _, database = await build(tmp_path, socket_path, [])
+    agent._last_epoch = 1
+    link = FakeLink(1)
+    try:
+        for seq in range(1, MAX_SAFETY_PENDING + 1):
+            agent._accept(link, simple("safety.estop", seq=seq))
+        with pytest.raises(DomainError, match="safety capacity"):
+            agent._accept(link, simple("safety.estop", seq=MAX_SAFETY_PENDING + 1))
+        assert owner.machine.state.mode.value == "idle"  # No task has been scheduled yet.
+        await agent._release()
+        assert owner.machine.state.mode.value == "estop"
+        assert owner.events == MAX_SAFETY_PENDING
+        assert not agent._safety_pending
+        assert agent._safety_task.done()
+    finally:
+        await database.__aexit__(None, None, None)
+        await server.close()
+
+
+async def test_real_transport_failure_reports_unconfirmed_without_success_reply(
+    tmp_path, socket_path, caplog
+):
+    from agent_fakes import simple
+
+    agent, _, database = await build(tmp_path, socket_path, [])
+    agent._last_epoch = 1
+    link = FakeLink(1)
+    agent._link, agent._epoch = link, 1
+    try:
+        agent._accept(link, simple("safety.estop", seq=1))
+        await agent._safety_task
+        await until(lambda: bool(link.responses))
+        assert not any(response.payload.ok for response in link.responses)
+        assert not agent.runtime_failed and not agent.auth_rejected
+        assert "safety delivery not confirmed" in caplog.text
+        await agent._release()
+    finally:
+        await database.__aexit__(None, None, None)
+
+
+async def test_blocked_estop_transport_has_bounded_release_and_explicit_unconfirmed_log(
+    tmp_path, socket_path, caplog
+):
+    from agent_fakes import simple
+
+    from senior_control.agent.dispatcher import Deadlines
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    owner = ArbiterRig()
+
+    async def handle(message):
+        if message["type"] == "estop":
+            entered.set()
+            await release.wait()
+        return await owner.core.handle(message)
+
+    server = IpcServer(socket_path, handle)
+    await server.start()
+    agent, _, database = await build(
+        tmp_path, socket_path, [], deadlines=Deadlines(safety_ms=300.0)
+    )
+    agent._last_epoch = 1
+    link = FakeLink(1)
+    agent._link, agent._epoch = link, 1
+    try:
+        agent._accept(link, simple("safety.estop", seq=1))
+        await asyncio.wait_for(entered.wait(), 1)
+        # The in-flight request retained its transport timeout; exercise the
+        # shorter shutdown drain/cancel boundary independently.
+        agent._deadlines = Deadlines(safety_ms=30.0)
+        began = time.monotonic()
+        await asyncio.wait_for(agent._release(), 0.5)
+        assert time.monotonic() - began < 0.5
+        assert owner.machine.state.mode.value == "idle"
+        assert not agent.auth_rejected and agent._safety_task.done()
+        assert not any(response.payload.ok for response in link.responses)
+        assert "vehicle owner state is unconfirmed" in caplog.text
+    finally:
+        release.set()
+        await database.__aexit__(None, None, None)
+        await server.close()

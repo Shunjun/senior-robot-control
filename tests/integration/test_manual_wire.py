@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from test_cloud import Cloud, cloud  # noqa: F401
@@ -42,10 +42,7 @@ async def ipc_pair(
     client = IpcClient(Path("/tmp/t2-unbound-test.sock"))
     serving = asyncio.create_task(server._serve(server_reader, server_writer))
 
-    async def connected(path: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        return client_reader, client_writer
-
-    monkeypatch.setattr(asyncio, "open_unix_connection", connected)
+    client._reader, client._writer = client_reader, client_writer
     try:
         yield client
     finally:
@@ -65,7 +62,6 @@ def runtime(now: float, sequence: int = 1, **changes: Any) -> MotionRuntimeState
             "boot_id": "t5-boot",
             "sequence": sequence,
             "sampled_steady": now,
-            "valid_until": now + 0.25,
             "mode": "idle",
             "reason": "standby",
             "stationary": True,
@@ -98,6 +94,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         "std_msgs.msg": {"String": object},
         "senior_motion_msgs.msg": {
             "DriveExecutionFeedback": object,
+            "NavigationSample": object,
             "FinalCommand": type("FinalCommand", (), {}),
         },
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -123,7 +120,6 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._terminal_requests, value._retirement_core = {}, None
     value._terminal_collections, value._settled_sequence = {}, 0
     value._retirement_feedback_gid = None
-    value._estop_store = None
     value._manual_ingress = ManualIngress("robot", "command-boot", ttl=0.3)
     value._manual_target = None
     value._consuming_runtime = False
@@ -131,7 +127,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._runtime_subscription.handle.take_message.return_value = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
-    value._arbiter = Arbiter("robot", 0.3)
+    value._arbiter = Arbiter("robot", 300)
     output: list[Any] = []
     value._final_publisher = SimpleNamespace(publish=output.append)
     value._publish = lambda velocity: None
@@ -247,7 +243,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
     assert await browser.connect() and await other.connect()
     node.value.get_parameter = lambda name: SimpleNamespace(value=robot_id)
     node.value._manual_ingress = ManualIngress(robot_id, "command-boot", ttl=0.3)
-    node.value._arbiter = Arbiter(robot_id, 0.3)
+    node.value._arbiter = Arbiter(robot_id, 300)
     node.value._motion_runtime = MotionRuntimeReceiver()
     node.value._motion_runtime.accept(runtime(10, robot_id=robot_id), b"t5", 10)
 
@@ -301,6 +297,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
 
     async with (
         ipc_pair(core.handle, monkeypatch) as requester,
+        ipc_pair(core.handle, monkeypatch) as intent_client,
         Database(tmp_path / "car.db") as database,
     ):
         store = TaskStore(database, robot_id=robot_id)
@@ -311,7 +308,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
         await journal.prepare()
         navigation = IpcNavigation(requester, waypoints, tasks=store)
         _, executor = build_task_runtime(database, store, navigation, boot_id="wire")
-        motion = TaskAwareMotion(cast(Any, requester))
+        motion = TaskAwareMotion(cast(Any, requester), intent_client=intent_client)
         motion.bind_tasks(executor)
         settings = SettingsService(
             SettingsStore(database), simulation_settings_profile(), RuntimeGate()
@@ -367,6 +364,12 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             if received is not None:
                 admitted._received_steady = received
             await agent._receive_command(cast(Any, link), admitted)
+            if kind == "drive.intent":
+                from agent_fakes import until
+
+                await until(lambda: node.value._manual_target is not None)
+                assert browser._outbound.empty()
+                return None
             response = await browser.receive()
             assert response is not None
             result = validate_envelope(response, robot_id)
@@ -407,7 +410,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             },
             2,
         )
-        assert moved.payload.ok
+        assert moved is None
         agent._wall_clock = original_wall
         assert node.output[-1].vx == 25 / 18 and node.output[-1].wz == -0.5
         released = await request("control.release", {"authority_id": authority}, 3)
@@ -417,7 +420,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
         assert node.output[-1].received_steady == 9.7
         node.value.get_publishers_info_by_topic = lambda topic: [
             SimpleNamespace(
-                node_name="safety_gate",
+                node_name="motion_reporter",
                 node_namespace="/",
                 endpoint_gid=b"t5",
             )
@@ -430,6 +433,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             reason="software_estop",
             confirmed_estop_status="software_latched",
             estop_revision=1,
+            output_generation=node.value._generation,
             allowed_actions=["estop_reset"],
         )
         node.value._on_motion_runtime(
@@ -445,25 +449,22 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
         reset = await request("safety.estop.reset", {"revision": token}, 5)
         assert reset.payload.ok and node.output[-1].close_reason == "estop_reset"
         assert node.output[-1].gesture == 1
-        assert agent.recovery_required  # Acceptance never clears the confirmed latch.
+        assert node.value._motion_runtime.value.mode == "estop"
         recovered = runtime(10, 3, robot_id=robot_id, estop_revision=2)
         node.value._on_motion_runtime(
             SimpleNamespace(data=recovered.model_dump_json()), {"publisher_gid": b"t5"}
         )
         await agent.publish_snapshot(robot_id)
         assert await browser.receive() is not None
-        assert not agent.recovery_required
         again = await request("control.acquire", {}, 6)
         assert again.payload.ok and again.payload.data is not None
         assert again.payload.data["authority_id"] != authority
         replayed = await request("safety.estop", {}, 4, received=10)
         assert replayed.payload.ok
-        assert not agent.recovery_required
-        assert not await journal.safety.pending()
         assert node.value.manual_view()["state"] == "prepared"
         fresh = await request("safety.estop", {}, 7, received=10)
-        assert fresh.payload.ok and agent.recovery_required
-        assert await journal.safety.pending()
+        assert fresh.payload.ok
+        assert node.value._pending_estop_request is not None
         await browser.send(
             serialize_envelope(
                 envelope(
@@ -525,7 +526,7 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
     assert vars(node.output[-1]) == previous_barrier  # No same-sequence payload mutation.
     node.value.get_publishers_info_by_topic = lambda topic: [
         SimpleNamespace(
-            node_name="safety_gate",
+            node_name="motion_reporter",
             node_namespace="/",
             endpoint_gid=b"t5",
         )
@@ -537,6 +538,7 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
         reason="software_estop",
         confirmed_estop_status="software_latched",
         estop_revision=1,
+        output_generation=node.value._generation,
         allowed_actions=["estop_reset"],
     )
     node.value._on_motion_runtime(
@@ -544,14 +546,16 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
     )
     reset = call(node, envelope("safety.estop.reset", {"revision": 1}, generation=None))
     assert reset["ok"] is True and node.output[-1].close_reason == "estop_reset"
-    assert call(node, envelope("control.acquire", {}, request="while-latched"))["ok"] is False
+    during_report = call(node, envelope("control.acquire", {}, request="while-latched"))
+    assert during_report["ok"] is True
+    assert during_report["authority_id"] != identity
     recovered = runtime(10, 3, estop_revision=2)
     node.value._on_motion_runtime(
         SimpleNamespace(data=recovered.model_dump_json(by_alias=True)), {"publisher_gid": b"t5"}
     )
     assert node.value.navigation_qualified()
-    assert node.value.manual_view()["authority_id"] == identity
-    assert node.value.manual_view()["state"] == "closed"
+    assert node.value.manual_view()["authority_id"] == during_report["authority_id"]
+    assert node.value.manual_view()["state"] == "prepared"
     fresh = call(node, envelope("control.acquire", {}, request="fresh"))
     assert fresh["state"] == "prepared" and fresh["authority_id"] != identity
     first = node.value._estop_requests["request"][0]
@@ -559,7 +563,7 @@ def test_estop_ack_does_not_recover_until_real_t5_state_then_new_input(node: Any
     node.clock.now += 0.01
     node.value.submit(envelope("safety.estop", {}, generation=None), received_at=node.clock.now)
     assert vars(node.output[-1]) == original_fields
-    assert not node.value._arbiter.estop_latched
+    assert node.value._motion_runtime.value.confirmed_estop_status == "clear"
     assert node.value.manual_view()["state"] == "prepared"
     node.value.submit(
         envelope("safety.estop", {}, generation=None, request="new-estop", seq=10),
@@ -615,7 +619,7 @@ async def test_native_acquire_consumes_durable_task_retirement_before_ipc(
             SettingsStore(database), simulation_settings_profile(), RuntimeGate()
         )
         await settings.prepare()
-        motion = TaskAwareMotion(cast(Any, Requester()))
+        motion = TaskAwareMotion(cast(Any, Requester()), intent_client=AsyncMock())
         motion.bind_tasks(executor)
         motion.settings = settings
         request = envelope("control.acquire", {}, request="task-takeover")
@@ -636,10 +640,10 @@ async def test_native_acquire_consumes_durable_task_retirement_before_ipc(
         await settings.close()
 
 
-def test_unready_t5_cannot_prepare_or_fabricate_a_body_reference(node: Any) -> None:
+def test_missing_report_allows_prepare_without_fabricating_body_reference(node: Any) -> None:
     node.value._motion_runtime.value = None
-    assert call(node, envelope("control.acquire", {}))["ok"] is False
-    assert node.value.manual_view() is None
+    assert call(node, envelope("control.acquire", {}))["ok"] is True
+    assert node.value.manual_view()["state"] == "prepared"
     assert node.value.motion_runtime() is None
 
 
@@ -723,9 +727,9 @@ async def test_t5_stop_during_feedback_retirement_cannot_auto_resume(
         navigation.retired = True
         await driver.tick(NOW + timedelta(seconds=61), 1.5, view.for_tasks(True))
         stopped = await executor.lifecycle.store.load(identity)
-        assert stopped.phase == "paused" and stopped.stopped_for == reason
-        await driver.tick(NOW + timedelta(seconds=61.5), 2, live)
-        assert (await executor.lifecycle.store.load(identity)).phase == "paused"
+        assert stopped.phase == "paused" and stopped.stopped_for == "feedback"
+        assert view.for_tasks(True).motion_halt_reason is None
+        # A historic report does not turn feedback retirement into a new explicit stop.
         assert len([effect for effect in navigation.effects if effect.kind == "plan"]) == 1
 
 
@@ -770,6 +774,8 @@ async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending()
     owner = hub.attach_controller("robot", "owner")
     peer = hub.attach_controller("robot", "peer")
     assert owner is not None and peer is not None
+    assert json.loads(await owner.outbox.get())["type"] == "control.connection"
+    assert json.loads(await peer.outbox.get())["type"] == "control.connection"
     for seq in range(1, 101):
         hub.handle_control_frame(
             owner,
@@ -790,19 +796,13 @@ async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending()
                 )
             ),
         )
-        assert len(owner.manual_requests) == 1
+        assert not owner.manual_requests
         assert agent.outbox.pending == 1
-        if seq > 1:
-            raw = await owner.outbox.get()
-            assert isinstance(raw, bytes)
-            settled = validate_envelope(raw, "robot")
-            assert isinstance(settled, ResponseEnvelope) and settled.payload.ok
-            assert settled.request_id == str(seq - 1)
+        assert owner.outbox.pending == 0
         assert not peer.manual_requests and peer.outbox.pending == 0
     latest = await agent.outbox.get()
     assert isinstance(latest, bytes) and validate_envelope(latest, "robot").request_id == "100"
-    # Once transmitted it stays pending for the vehicle's own receipt.
-    assert len(owner.manual_requests) == 1
+    assert not owner.manual_requests and owner.outbox.pending == 0
 
 
 @pytest.mark.parametrize("drop", ["release", "replace", "evict", "close"])
@@ -817,6 +817,8 @@ async def test_relay_dropped_intent_settles_only_its_original_owner(drop: str) -
     owner = hub.attach_controller("robot", "owner")
     peer = hub.attach_controller("robot", "peer")
     assert owner is not None and peer is not None
+    assert json.loads(await owner.outbox.get())["type"] == "control.connection"
+    assert json.loads(await peer.outbox.get())["type"] == "control.connection"
     hub.handle_control_frame(
         owner,
         serialize_envelope(
@@ -867,18 +869,13 @@ async def test_relay_dropped_intent_settles_only_its_original_owner(drop: str) -
     else:
         agent.outbox.close(1000)
     assert not owner.manual_requests
-    raw = await owner.outbox.get()
-    assert isinstance(raw, bytes)
-    settled = validate_envelope(raw, "robot")
-    assert isinstance(settled, ResponseEnvelope) and settled.payload.ok
-    assert settled.request_id == "request" and peer.outbox.pending == 0
+    assert owner.outbox.pending == 0 and peer.outbox.pending == 0
 
 
 @pytest.mark.parametrize("closing", ["control.release", "drive.stop", "safety.estop"])
-async def test_agent_receive_settles_queued_intents_on_replace_and_close(
-    tmp_path: Path,
-    closing: str,
-) -> None:
+async def test_agent_receive_discards_replaced_intents_without_receipts(
+    tmp_path: Path, closing: str
+):
     from agent_fakes import (
         FakeConnector,
         FakeHome,
@@ -892,12 +889,21 @@ async def test_agent_receive_settles_queued_intents_on_replace_and_close(
 
     from senior_control.agent.journal import AgentJournal
     from senior_control.agent.main import Agent
-    from senior_control.models import OperationResult, OperationStatus
     from senior_control.storage.database import Database
 
     async with Database(tmp_path / "queued.db") as database:
         journal = AgentJournal(database, robot_id="robot")
         await journal.prepare()
+        entered, release = asyncio.Event(), asyncio.Event()
+        seen = []
+
+        class HeldMotion(FakeMotion):
+            async def send_intent(self, envelope, *, received_steady, deadline_steady):
+                seen.append((envelope.request_id, received_steady, deadline_steady))
+                entered.set()
+                await release.wait()
+
+        motion = HeldMotion()
         agent = Agent(
             "robot",
             connector=cast(Any, FakeConnector()),
@@ -906,40 +912,26 @@ async def test_agent_receive_settles_queued_intents_on_replace_and_close(
             home=FakeHome(),
             maps=FakeMaps(),
             state=FakeState(),
-            motion=FakeMotion(),
+            motion=motion,
+            clock=cast(Any, SimpleNamespace(monotonic=lambda: 10.0)),
         )
         link = FakeLink(1)
-        entered, release = asyncio.Event(), asyncio.Event()
-        executed: list[str] = []
-
-        async def held(envelope: Any, received: float, deadline: float) -> OperationResult:
-            executed.append(envelope.request_id)
-            entered.set()
-            await release.wait()
-            return OperationResult(envelope.request_id, OperationStatus.SUCCEEDED)
-
-        agent._manual_control = held  # type: ignore[method-assign]
+        agent._link, agent._epoch = cast(Any, link), 1
         for seq in range(1, 4):
-            await agent._receive_command(
-                cast(Any, link),
-                envelope(
-                    "drive.intent",
-                    {
-                        "authority_id": "authority",
-                        "gesture": 1,
-                        "sequence": seq,
-                        "linear": 1,
-                        "turn": 0,
-                        "gear": "low",
-                    },
-                    seq=seq,
-                    request=str(seq),
+            sample = envelope(
+                "drive.intent",
+                dict(
+                    authority_id="authority", gesture=1, sequence=seq, linear=1, turn=0, gear="low"
                 ),
+                seq=seq,
+                request=str(seq),
             )
+            sample._received_steady = 9.95
+            await agent._receive_command(cast(Any, link), sample)
             if seq == 1:
-                await entered.wait()
-        await until(lambda: len(link.responses) == 1)
-        assert link.responses[0].request_id == "2" and link.responses[0].payload.ok
+                await asyncio.wait_for(entered.wait(), 1)
+        assert link.responses == []
+        assert agent._queued_intent[1].request_id == "3"
         await agent._receive_command(
             cast(Any, link),
             envelope(
@@ -950,13 +942,315 @@ async def test_agent_receive_settles_queued_intents_on_replace_and_close(
                 generation=1 if closing == "control.release" else None,
             ),
         )
-        await until(lambda: any(r.request_id == "3" for r in link.responses))
-        assert next(r for r in link.responses if r.request_id == "3").payload.ok
-        release.set()
-        await until(lambda: len(link.responses) == 4)
-        assert executed == (["1", "close"] if closing == "control.release" else ["1"])
         assert agent._queued_intent is None
-        assert agent._intent_task is not None
+        release.set()
         await agent._intent_task
+        await until(lambda: any(r.request_id == "close" for r in link.responses))
+        assert [r.request_id for r in link.responses] == ["close"]
+        assert len(seen) == 1 and seen[0][0] == "1"
+        assert seen[0][1] == 9.95 and seen[0][2] == pytest.approx(10.25)
         if agent._safety_task is not None:
             await agent._safety_task
+
+
+def test_inflight_estop_retransmits_original_event_until_output_owner_confirms(node):
+    def cannot_cleanup_yet():
+        raise AssertionError("navigation cleanup must not supersede the in-flight estop")
+
+    node.value._navigation_source = SimpleNamespace(qualified=cannot_cleanup_yet)
+    request = envelope("safety.estop", {}, generation=None, request="inflight", seq=9)
+    assert node.value.submit(request, received_at=10).accepted
+    original = node.output[-1]
+    node.value.disconnect(1)
+    node.value.publish_command()
+    assert node.output[-1] is original
+    assert node.value._pending_estop_request is original
+    node.value.get_publishers_info_by_topic = lambda _: [
+        SimpleNamespace(node_name="motion_reporter", node_namespace="/", endpoint_gid=b"t5")
+    ]
+    clear = runtime(10, 2, output_generation=original.generation + 1)
+    node.value._on_motion_runtime(SimpleNamespace(data=clear.model_dump_json()), {})
+    assert node.value._pending_estop_request is original
+    assert not node.value.task_motion_allowed(continuing=True)
+    stopped = runtime(
+        10,
+        3,
+        output_generation=original.generation,
+        mode="estop",
+        confirmed_estop_status="software_latched",
+        estop_revision=1,
+        allowed_actions=[],
+    )
+    node.value._on_motion_runtime(SimpleNamespace(data=stopped.model_dump_json()), {})
+    assert node.value._pending_estop_request is None
+    assert node.value._motion_runtime.value.mode == "estop"
+    assert node.value.navigation_qualified()
+    assert node.value.task_motion_allowed(continuing=True)
+
+
+async def test_agent_queued_intent_keeps_original_300ms_cutoff(tmp_path):
+    from agent_fakes import (
+        FakeConnector,
+        FakeHome,
+        FakeLink,
+        FakeMaps,
+        FakeMotion,
+        FakeState,
+        FakeTasks,
+    )
+
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.agent.main import Agent
+    from senior_control.storage.database import Database
+
+    clock = SimpleNamespace(now=10.0)
+    entered, released = asyncio.Event(), asyncio.Event()
+    delivered = []
+
+    class HeldTransport(FakeMotion):
+        async def send_intent(self, envelope, *, received_steady, deadline_steady):
+            delivered.append((envelope.seq, received_steady, deadline_steady))
+            entered.set()
+            await released.wait()
+
+    async with Database(tmp_path / "original-deadline.db") as database:
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        agent = Agent(
+            "robot",
+            connector=cast(Any, FakeConnector()),
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=HeldTransport(),
+            clock=cast(Any, SimpleNamespace(monotonic=lambda: clock.now)),
+        )
+        link = FakeLink(1)
+        agent._link, agent._epoch = cast(Any, link), 1
+        try:
+            for seq, received in ((1, 10.0), (2, 10.1)):
+                clock.now = received
+                sample = envelope(
+                    "drive.intent",
+                    dict(
+                        authority_id="authority",
+                        gesture=1,
+                        sequence=seq,
+                        linear=1,
+                        turn=0,
+                        gear="low",
+                    ),
+                    seq=seq,
+                )
+                sample._received_steady = received
+                await agent._receive_command(cast(Any, link), sample)
+                if seq == 1:
+                    await asyncio.wait_for(entered.wait(), 1)
+            assert agent._queued_intent[-1] == pytest.approx(10.4)
+            clock.now = 10.4
+            released.set()
+            await agent._intent_task
+            assert delivered == [(1, 10.0, 10.3)]
+            assert agent._queued_intent is None and link.responses == []
+        finally:
+            released.set()
+            await agent._release()
+
+
+async def test_heartbeat_window_keeps_manual_delivery_then_reconnect_retires_old_context(
+    node: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_fakes import FakeHome, FakeMaps, FakeState, FakeTasks, until
+    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
+    from test_task_ownership import Navigation
+
+    from senior_control.agent import Agent
+    from senior_control.agent.composition import build_task_runtime
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.agent.ports import TaskAwareMotion
+    from senior_control.agent.websocket import WebSocketLink
+    from senior_control.settings.service import RuntimeGate, SettingsService
+    from senior_control.settings.store import SettingsStore
+    from senior_control.storage.database import Database
+    from senior_control.tasks.store import TaskStore
+
+    clock = HeartbeatClock(monkeypatch)
+    hub = relay_hub(monkeypatch, clock)
+    first = RelaySocket(hub, "robot")
+    link = WebSocketLink(first, "robot", first.connection.epoch, clock=clock.monotonic)
+    connections: asyncio.Queue[Any] = asyncio.Queue()
+    connections.put_nowait(link)
+    disabled: list[int] = []
+
+    # Keep the actual IPC framing and native manual owner from this existing fixture.
+    AdapterCore = importlib.import_module("senior_robot.agent_adapter").AdapterCore
+
+    core = AdapterCore(
+        robot_id="robot",
+        submit=node.value.submit,
+        disconnect=node.value.disconnect,
+        request_exit=lambda: None,
+        manual=node.value.manual_request,
+    )
+
+    async def tracked_handle(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "disable_motion":
+            disabled.append(message["connection_epoch"])
+        return await core.handle(message)
+
+    async with (
+        ipc_pair(tracked_handle, monkeypatch) as client,
+        ipc_pair(tracked_handle, monkeypatch) as intent_client,
+        Database(tmp_path / "heartbeat-manual.db") as database,
+    ):
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        settings = SettingsService(
+            SettingsStore(database),
+            simulation_settings_profile(),
+            RuntimeGate(),
+        )
+        await settings.prepare()
+        motion = TaskAwareMotion(client, intent_client=intent_client)
+        motion.settings = settings
+        tasks = TaskStore(database, robot_id="robot")
+        await tasks.prepare()
+        _, executor = build_task_runtime(database, tasks, Navigation(), boot_id="heartbeat")
+        motion.bind_tasks(executor)
+        agent = Agent(
+            "robot",
+            connector=connections.get,
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=motion,
+            clock=clock,
+            heartbeat_ms=20,
+            retry_delay_ms=1,
+        )
+        runner = asyncio.create_task(agent.run())
+        controller = hub.attach_controller("robot", "controller-session")
+        assert controller is not None
+
+        async def command(kind: str, payload: dict[str, Any], seq: int, epoch: int) -> None:
+            frame = envelope(kind, payload, generation=None, seq=seq, request=str(seq))
+            frame.connection_epoch = epoch
+            hub.handle_control_frame(controller, serialize_envelope(frame))
+
+        async def response() -> Any:
+            while True:
+                raw = await controller.outbox.get()
+                assert isinstance(raw, bytes)
+                data = json.loads(raw)
+                if data["type"] == "response":
+                    return data["payload"]
+
+        try:
+            await until(
+                lambda: (
+                    any(frame["type"] == "heartbeat.request" for frame in first.sent)
+                    and not link._pending
+                )
+            )
+            first.drop_replies = True
+            await command("control.acquire", {}, 1, 1)
+            prepared = await asyncio.wait_for(response(), 1)
+            assert prepared["ok"]
+            authority = prepared["data"]["authority_id"]
+            # Fresh inputs span both retired thresholds, while subsequent replies are missing.
+            for seq, now in enumerate([10 + i / 10 for i in range(1, 50)] + [14.999], start=2):
+                clock.advance(now)
+                node.clock.now = now
+                node.value._motion_runtime.accept(runtime(now, seq), b"t5", now)
+                await command(
+                    "drive.intent",
+                    {
+                        "authority_id": authority,
+                        "gesture": 1,
+                        "sequence": seq,
+                        "linear": 0.4,
+                        "turn": 0.0,
+                        "gear": "low",
+                    },
+                    seq,
+                    1,
+                )
+                await until(lambda seq=seq: bool(node.output) and node.output[-1].sequence == seq)
+                assert node.output[-1].vx > 0 and not disabled
+                assert not first.closed and agent.connection_epoch == 1
+            clock.advance(15.0)
+            await until(lambda: first.closed and disabled == [1])
+            assert not agent.connected
+            assert node.value.manual_view()["state"] == "closed"
+            second = RelaySocket(hub, "robot")
+            connections.put_nowait(
+                WebSocketLink(
+                    second,
+                    "robot",
+                    second.connection.epoch,
+                    clock=clock.monotonic,
+                )
+            )
+            await until(lambda: agent.connection_epoch == 2 and hub.is_online("robot"))
+            node.clock.now = 15.0
+            node.value._motion_runtime.accept(runtime(15.0, 100), b"t5", 15.0)
+            count = len(node.output)
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 100,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                100,
+                1,
+            )
+            # Intent has no per-sample response, including rejection.
+            await asyncio.sleep(0.02)
+            assert len(node.output) == count
+            # Even a current transport epoch cannot resurrect the old authority.
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 101,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                101,
+                2,
+            )
+            await asyncio.sleep(0.02)
+            assert len(node.output) == count
+            await command("control.acquire", {}, 102, 2)
+            prepared = await asyncio.wait_for(response(), 1)
+            assert prepared["ok"]
+            fresh_authority = prepared["data"]["authority_id"]
+            assert fresh_authority != authority
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": fresh_authority,
+                    "gesture": 1,
+                    "sequence": 103,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                103,
+                2,
+            )
+            await until(lambda: len(node.output) > count and node.output[-1].vx > 0)
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+            await settings.close()

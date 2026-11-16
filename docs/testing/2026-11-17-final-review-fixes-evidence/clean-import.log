@@ -1,0 +1,7 @@
+AT 2026-11-16T18:43:28.397437+00:00
+CWD /tmp
+COMMAND ["/tmp/final-review-fixes-wheel-venv/bin/python", "-I", "-c", "import senior_control.protocol, senior_control.config, senior_control; import importlib.util; assert importlib.util.find_spec('shapely') is None; print(senior_control.__file__)"]
+/tmp/final-review-fixes-wheel-venv/lib/python3.12/site-packages/senior_control/__init__.py
+
+EXIT 0
+ELAPSED 1.3359752079995815

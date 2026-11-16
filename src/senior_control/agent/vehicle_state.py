@@ -25,7 +25,6 @@ class RuntimeSnapshot:
     body_source: str | None = None
     wheel_linear_mps: float | None = None
     received_steady: float | None = None
-    hardware_estop: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,8 +69,6 @@ def project_vehicle_state(
     Keep its exact allowed actions; never infer vehicle stopped from
     disconnection or from a pending browser command. Old snapshots cannot regress
     either safety revision. Transport must normalize reboot epochs before calling.
-    runtime.hardware_estop belongs to runtime.sequence and is admitted with that whole
-    snapshot; a rejected/same snapshot cannot relabel confirmed vehicle state.
     software_estop_pending is a current request overlay, independent of telemetry.
     """
     if previous is not None and (
@@ -104,12 +101,9 @@ def project_vehicle_state(
             ),
         )
     motion = runtime.motion
-    hardware_estop = runtime.hardware_estop
     actions = motion.allowed_actions
-    if hardware_estop:
-        actions = tuple(action for action in actions if action != "estop_reset")
     if motion.mode is MotionMode.ESTOP:
-        estop_status = "hardware_latched" if hardware_estop else "software_latched"
+        estop_status = "software_latched"
     else:
         estop_status = "clear"
     body = runtime.body
@@ -125,9 +119,7 @@ def project_vehicle_state(
     return VehicleState(
         sequence=runtime.sequence,
         mode=motion.mode,
-        reason=("hardware_estop" if hardware_estop else "software_estop")
-        if motion.mode is MotionMode.ESTOP
-        else motion.mode.value,
+        reason="software_estop" if motion.mode is MotionMode.ESTOP else motion.mode.value,
         detail_reason=motion.reason,
         task_id=motion.task_id,
         task_status=runtime.task_status,

@@ -49,7 +49,8 @@ def test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_cloc
     assert not any(reason == "clock_fault" for _, _, reason in events)
     assert events[-1][0] is K.FEEDBACK_LOST
     assert events[-1][1] == rig.clock.steady
-    assert state["sampled_steady"] == sampled and state["valid_until"] == sampled + 0.15
+    assert state["sampled_steady"] == sampled
+    assert "valid_until" not in state
 
 
 def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monkeypatch):
@@ -64,8 +65,8 @@ def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monk
     rig.core.sensors.estimator.invalidate("laser")
     snapshot = rig.core._snapshot
 
-    def bounded(*args):
-        ctx = snapshot(*args)
+    def bounded(*args, visibility=None):
+        ctx = snapshot(*args, visibility=visibility)
         return replace(
             ctx,
             envelope=replace(
@@ -90,15 +91,10 @@ def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monk
     monkeypatch.setattr(rig.core.controller, "prepare_stop", finish)
     seen = []
     observe = rig.core.machine.observe
-    ready = rig.core._limited_ready
 
     def observation(value, now):
         seen.append(("observe", now))
         return observe(value, now)
-
-    def qualification(now, *args):
-        seen.append(("ready", now))
-        return ready(now, *args)
 
     event = rig.core._event
 
@@ -108,7 +104,6 @@ def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monk
         return event(kind, now, *args)
 
     monkeypatch.setattr(rig.core.machine, "observe", observation)
-    monkeypatch.setattr(rig.core, "_limited_ready", qualification)
     monkeypatch.setattr(rig.core, "_event", record)
     sampled = rig.clock.steady
     rig.core.tick()
@@ -151,7 +146,8 @@ def test_real_sampled_clock_rollback_rejects_without_clamping(rig, monkeypatch, 
     assert not state["healthy"] and state["reason"] == "motion_clock_regressed"
     assert rig.node.output[-1][0].vx == rig.node.output[-1][0].wz == 0
     assert rig.core.controller._prepared is None
-    assert state["sampled_steady"] == sampled and state["valid_until"] == sampled + 0.15
+    assert state["sampled_steady"] == sampled
+    assert "valid_until" not in state
     if rollback_at == "t1":
         # The regressed instant still reaches the unmodified reducer guard.
         assert state["fault_revision"] == 1

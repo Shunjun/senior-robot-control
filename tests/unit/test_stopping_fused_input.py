@@ -31,7 +31,6 @@ def output(speed=0.0, yaw=0.0, imu=False):
     core.sensors = MotionSensorRuntime(p, core.diagnostics)
     core.acceleration_model = p.acceleration_model()
     core.stopping = StoppingRisk()
-    core.model_deadline = 3600.0
     core.engine = ConstraintEngine(ConstraintConfig((1.0, 0.75, 0.5, 0.25), 0.15, 0.05, 256, 0.005))
     core.controller = MotionController(core.engine, p.controller(), Velocity(0, 0), Velocity(0, 0))
     core.target = MotionTarget(Velocity(-0.15, 0), "test", "boot", 21.0)
@@ -55,7 +54,7 @@ def snapshot(core, now=20.0, obstacle=None):
         core.profile.horizon_s,
         "synthetic observed free space and obstacle",
     )
-    return core._snapshot(ref, body, wheel, None, False, now, scene, Pose2D(0, 0, 0))
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
 
 
 @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
@@ -114,8 +113,9 @@ def test_failed_laser_with_live_wheel_still_uses_unified_result():
         "laser",
         (0.02, None, 0.0),
         10,
-        (Origin("laser", "boot", 1, 10, 10, 20),),
+        (Origin("laser", "boot", 1, 10, 10, 20, measurement_steady=20),),
         independent=(True, True, True),
+        measured_steady=20,
     )
     core.sensors.ingest_observation(laser, 10, 20)
     snapshot(core)
@@ -139,8 +139,9 @@ def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
             name,
             (value, None, 0.0),
             stamp,
-            (Origin(name, "boot2", 1, stamp, stamp, stamp + 10),),
+            (Origin(name, "boot2", 1, stamp, stamp, stamp + 10, measurement_steady=stamp + 10),),
             independent=(name == "laser",) * 3,
+            measured_steady=stamp + 10,
         )
         core.sensors.ingest_observation(o, 10, 20)
     ctx = snapshot(core, obstacle=Point(1, 0))
@@ -199,7 +200,7 @@ def test_known_error_does_not_double_charge_projection_or_switch_to_independent_
     # Known total error already includes .15 age projection.
     ref, body, wheel = core.sensors.estimate(10.5, 20.5)
     core.sensors.latest = replace(r, vx=replace(r.vx, error=0.17))
-    ctx = core._snapshot(ref, body, wheel, None, False, 20.5, first.perception, Pose2D(0, 0, 0))
+    ctx = core._snapshot(ref, wheel, 20.5, first.perception, Pose2D(0, 0, 0))
     assert ctx.envelope.linear_interval == pytest.approx((-0.15, 0.19))
 
 
@@ -364,7 +365,7 @@ def test_only_actual_zero_output_can_start_missing_axis_response_and_settle(traj
     assert core.stopping.linear.support_deadline == 21
     assert core.sensors.latest.vx.value is None and not core.sensors.latest.vx.observed
     assert core.engine.refine(ctx, 30).permit is not None  # Other axis can continue.
-    assert not core.sensors.stationary_supported  # Model settling cannot reset a fault.
+    assert not core.sensors.stationary(now)  # Model settling cannot reset a fault.
 
 
 def test_nonzero_output_cancels_settling_and_fresh_observation_replaces_residual():

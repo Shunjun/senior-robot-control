@@ -1,0 +1,165 @@
+工作区：/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+分支：fix/degraded-drive-speed
+HEAD：593e8f13f385892f0bd62cf75c593f7b07efd2da
+Python：.venv/bin/python、.venv/bin/pytest、.venv/bin/ruff、.venv/bin/mypy
+未启动 ROS、仿真或车辆。未暂存、未提交、未推送。
+
+1. 定向回归（年龄、仿真 remap、心跳、故障隔离、学习链）
+命令：
+NO_COLOR=1 .venv/bin/pytest tests/unit/test_sim_contract.py tests/unit/test_sensor_timing.py tests/unit/test_semantic_candidates.py tests/unit/test_rgbd_runtime.py tests/unit/test_depth_producer.py tests/unit/test_raw_capture.py tests/unit/test_egress_receipt.py tests/unit/test_motion_temporal.py tests/unit/test_motion_sources.py tests/unit/test_common_sensor_composition.py tests/unit/test_gps_course.py tests/unit/test_heartbeat_wire.py tests/unit/test_startup_learning_chain.py tests/unit/test_learning_gap_debug.py tests/integration/test_runtime.py tests/integration/test_runtime_fault_isolation.py --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-targeted.xml
+日志：docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-targeted.log
+结果：205 tests，200 passed，5 failed，0 skipped，0 errors，29.552s，退出码 1。
+失败（全部）：
+tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans
+  delay_pattern0、delay_pattern1、delay_pattern2、delay_pattern3、delay_pattern4
+断言：state 为 moving，期望 completed。
+同次通过：test_drive_remapping_uses_humble_plugin_configuration；startup learning 9；heartbeat 10；runtime fault isolation 21；sensor timing 13。
+
+2. 标定 fixture 与 drive remap（fixture 改到 actuator_target 之后）
+命令：
+NO_COLOR=1 .venv/bin/pytest tests/unit/test_vehicle_motion_fixture.py tests/unit/test_sim_contract.py::test_drive_remapping_uses_humble_plugin_configuration --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-fixture.xml
+结果：9 passed，0.305s，退出码 0。
+
+3. 年龄校验改为毫秒比较、导航 max_age_s 类型修复之后
+命令：
+NO_COLOR=1 .venv/bin/pytest tests/unit/test_semantic_candidates.py tests/unit/test_raw_capture.py tests/unit/test_egress_receipt.py tests/unit/test_depth_producer.py tests/unit/test_rgbd_runtime.py tests/unit/test_spawn_detector.py tests/unit/test_vehicle_motion_fixture.py tests/unit/test_sim_contract.py::test_drive_remapping_uses_humble_plugin_configuration --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-followup.xml
+结果：79 passed，4.614s，退出码 0。
+
+4. 学习间隙诊断（格式化后重跑，断言未改）
+命令：
+NO_COLOR=1 .venv/bin/pytest tests/unit/test_learning_gap_debug.py --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-learning-gap.xml
+结果：5 tests，5 failed，8.918s，退出码 1。失败节点与第 1 条相同。
+
+5. 内容有变、且未进入第 1 条或第 3 条的现有单元/集成测试；不含 tests/ros
+命令：
+NO_COLOR=1 .venv/bin/pytest tests/unit/test_control_clock_domains.py tests/integration/test_agent.py tests/integration/test_backend_observability.py tests/integration/test_estop_recovery.py tests/integration/test_manual_wire.py tests/integration/test_shutdown.py tests/integration/test_task_ownership.py tests/integration/test_video.py tests/unit/test_arbiter.py tests/unit/test_constraint_scheduling.py tests/unit/test_directional_constraints.py tests/unit/test_map_archive.py tests/unit/test_motion_controller.py tests/unit/test_motion_core_chain.py tests/unit/test_navigation_small_intent.py tests/unit/test_perception.py tests/unit/test_rgbd_sync_ordering.py tests/unit/test_runtime_guard_ready.py tests/unit/test_settings.py tests/unit/test_startup_learning_cycle.py tests/unit/test_tick_evaluation.py --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-owned-gap.xml
+结果：456 tests，455 passed，1 skipped，0 failed，74.257s，退出码 0。
+跳过：tests/integration/test_video.py::test_aiortc_loopback_delivers_a_real_frame
+原因：could not import 'aiortc': No module named 'aiortc'
+
+6. Ruff（95 个迁移 Python 文件，路径见文末）
+NO_COLOR=1 .venv/bin/ruff check --output-format concise <文末 95 个路径>
+结果：All checks passed! 退出码 0。
+NO_COLOR=1 .venv/bin/ruff format --check <文末 95 个路径>
+结果：95 files already formatted，退出码 0。
+日志：ruff-check.log、ruff-format.log。
+
+7. mypy strict，Python 3.10
+NO_COLOR=1 .venv/bin/mypy src/senior_control/sensors/policy.py src/senior_control/vision/semantic_coordinator.py src/senior_control/vision/semantic_runtime.py src/senior_control/vision/depth_runtime.py src/senior_control/vision/raw_capture.py src/senior_control/vision/independent_motion.py src/senior_control/vision/rgbd_coordinator.py src/senior_control/vision/runtime_evidence.py src/senior_control/vision/egress_receipt.py src/senior_control/real_runtime.py src/senior_control/safety/arbiter.py src/senior_control/runtime/diagnostics.py src/senior_control/runtime/supervisor.py src/senior_control/motion/temporal.py src/senior_control/motion/estimator.py src/senior_control/motion/observations.py src/senior_control/motion/hardware_profile.py src/senior_control/motion/source_admission.py src/senior_control/localization/gps_course.py src/senior_control/tasks/navigation_port.py src/senior_control/agent/main.py src/senior_control/hardware_navigation.py
+结果：Success: no issues found in 22 source files，退出码 0。日志 mypy.log。
+tools/vehicle_motion_fixture.py --follow-imports=skip：Success: no issues found in 1 source file，退出码 0。日志 mypy-fixture.log。
+该工具 import tools.vehicle_motion_calibrate，后者 import rclpy；不跳过依赖时 mypy 报 7 个 import-not-found。这是本机没有 ROS 模块。
+
+8. 本机 C++ 传感器策略测试（不依赖 ROS / colcon）
+命令：
+NO_COLOR=1 .venv/bin/pytest -q -p no:cacheprovider tests/unit/test_shared_sensor_cpp.py tests/unit/test_native_sensor_age_boundary.py --junitxml=docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-native-sensor-cpp.xml
+日志：docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-native-sensor-cpp.log
+结果：2 passed，2.171s，退出码 0。
+mypy --follow-imports=skip 对这两个文件：Success: no issues found in 2 source files。
+ruff check 与 ruff format --check 对这两个文件通过。
+
+9. 环境
+command -v colcon：absent
+/opt/ros：absent
+.venv/bin/python -c 'import rclpy'：ModuleNotFoundError
+g++：Apple clang version 21.0.0
+C++ CaptureLedger、scan matcher 与 tests/ros 下 6 个内容有变的 ROS 测试未编译、未执行。
+
+先前终端里的 552 项记录没有落成仓库文件，本报告不把它当作可核验证据。
+
+Ruff 文件（95）
+tests/integration/test_runtime_fault_isolation.py
+tests/unit/test_control_clock_domains.py
+tests/unit/test_learning_gap_debug.py
+ros2/src/senior_robot/senior_robot/command_node.py
+ros2/src/senior_robot/senior_robot/depth_ingress.py
+ros2/src/senior_robot/senior_robot/hardware_reference.py
+ros2/src/senior_robot/senior_robot/motion_core_output.py
+ros2/src/senior_robot/senior_robot/perception_node.py
+ros2/src/senior_robot/senior_robot/safety_node.py
+ros2/src/senior_robot/senior_robot/safety_scan_ingress.py
+ros2/src/senior_robot/senior_robot/scan_adapter.py
+ros2/src/senior_robot/senior_robot/semantic_ingress.py
+ros2/src/senior_robot/senior_robot/simulation_camera.py
+ros2/src/senior_robot/senior_robot/simulation_motion_profile.py
+src/senior_control/agent/composition.py
+src/senior_control/agent/dispatcher.py
+src/senior_control/agent/main.py
+src/senior_control/config.py
+src/senior_control/docker_start_helper.py
+src/senior_control/localization/gps_course.py
+src/senior_control/mapping/archive.py
+src/senior_control/motion/cadence.py
+src/senior_control/motion/constraint_worker.py
+src/senior_control/motion/estimator.py
+src/senior_control/motion/fusion.py
+src/senior_control/motion/hardware_profile.py
+src/senior_control/motion/observations.py
+src/senior_control/motion/pose_estimator.py
+src/senior_control/motion/source_admission.py
+src/senior_control/motion/temporal.py
+src/senior_control/protocol.py
+src/senior_control/real_runtime.py
+src/senior_control/runtime/diagnostics.py
+src/senior_control/runtime/ipc.py
+src/senior_control/runtime/supervisor.py
+src/senior_control/safety/arbiter.py
+src/senior_control/sensors/policy.py
+src/senior_control/tasks/navigation_port.py
+src/senior_control/vision/depth_runtime.py
+src/senior_control/vision/egress_receipt.py
+src/senior_control/vision/independent_motion.py
+src/senior_control/vision/raw_capture.py
+src/senior_control/vision/rgbd_coordinator.py
+src/senior_control/vision/rgbd_spawn_worker.py
+src/senior_control/vision/runtime_evidence.py
+src/senior_control/vision/semantic_coordinator.py
+src/senior_control/vision/semantic_runtime.py
+src/senior_control/vision/spawn_detector.py
+src/senior_control/vision/stream.py
+src/senior_control/vision/synchronizer.py
+src/senior_control/vision/tracking.py
+tests/integration/test_agent.py
+tests/integration/test_backend_observability.py
+tests/integration/test_estop_recovery.py
+tests/integration/test_manual_wire.py
+tests/integration/test_runtime.py
+tests/integration/test_shutdown.py
+tests/integration/test_task_ownership.py
+tests/integration/test_video.py
+tests/ros/test_depth_ingress.py
+tests/ros/test_final_command_dds.py
+tests/ros/test_motion_lifecycle_restoration.py
+tests/ros/test_scan_ingress.py
+tests/ros/test_scan_native_end_to_end.py
+tests/ros/test_semantic_ingress.py
+tests/unit/test_arbiter.py
+tests/unit/test_common_sensor_composition.py
+tests/unit/test_constraint_scheduling.py
+tests/unit/test_depth_producer.py
+tests/unit/test_directional_constraints.py
+tests/unit/test_egress_receipt.py
+tests/unit/test_map_archive.py
+tests/unit/test_motion_controller.py
+tests/unit/test_motion_core_chain.py
+tests/unit/test_motion_sources.py
+tests/unit/test_motion_temporal.py
+tests/unit/test_navigation_small_intent.py
+tests/unit/test_perception.py
+tests/unit/test_raw_capture.py
+tests/unit/test_rgbd_runtime.py
+tests/unit/test_rgbd_sync_ordering.py
+tests/unit/test_runtime_guard_ready.py
+tests/unit/test_semantic_candidates.py
+tests/unit/test_sensor_timing.py
+tests/unit/test_settings.py
+tests/unit/test_sim_contract.py
+tests/unit/test_spawn_detector.py
+tests/unit/test_startup_learning_chain.py
+tests/unit/test_startup_learning_cycle.py
+tests/unit/test_tick_evaluation.py
+tools/motion_fusion_replay.py
+tools/scan_matcher_replay.py
+tools/vehicle_motion_capture.py
+tools/vehicle_motion_fixture.py
+tests/unit/test_vehicle_motion_fixture.py

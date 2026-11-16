@@ -12,6 +12,7 @@ from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
 from senior_control.protocol import (
     DEVICE_REVOKED_CLOSE_CODE,
+    HEARTBEAT_WINDOW_SECONDS,
     MAX_MESSAGE_BYTES,
     Envelope,
     ResponseEnvelope,
@@ -33,6 +34,10 @@ class Socket(Protocol):
     async def close(self) -> None: ...
 
 
+# A blocked transport owns this resource budget; it is not an online evidence window.
+SOCKET_SEND_TIMEOUT_SECONDS = 5.0
+
+
 class WebSocketLink:
     def __init__(
         self,
@@ -42,17 +47,14 @@ class WebSocketLink:
         *,
         wall_clock: Callable[[], float] = time.time,
         clock: Callable[[], float] = time.monotonic,
-        heartbeat_timeout: float = 1.0,
-        heartbeat_freshness: float = 2.0,
     ) -> None:
         self._socket = socket
         self._robot_id = robot_id
         self.epoch = epoch
         self._wall = wall_clock
         self._clock = clock
-        self._timeout = heartbeat_timeout
-        self._freshness = heartbeat_freshness
-        self._pending: tuple[str, float, float] | None = None
+        self._online_deadline = clock() + HEARTBEAT_WINDOW_SECONDS
+        self._pending: dict[str, tuple[float, float]] = {}
         self._heartbeat_timer: asyncio.TimerHandle | None = None
         self._heartbeat_expired: asyncio.Future[None] | None = None
         self._send_lock = DiagnosticLock("websocket.send_wait")
@@ -64,11 +66,12 @@ class WebSocketLink:
 
     async def _send(self, data: str) -> None:
         async with self._send_lock:
-            await asyncio.wait_for(self._socket.send(data), self._timeout)
+            await asyncio.wait_for(self._socket.send(data), SOCKET_SEND_TIMEOUT_SECONDS)
 
     def _expiry_signal(self) -> asyncio.Future[None]:
         if self._heartbeat_expired is None:
             self._heartbeat_expired = asyncio.get_running_loop().create_future()
+            self._arm_heartbeat_timer()
         return self._heartbeat_expired
 
     def _cancel_heartbeat_timer(self) -> None:
@@ -76,21 +79,34 @@ class WebSocketLink:
             self._heartbeat_timer.cancel()
             self._heartbeat_timer = None
 
+    def _arm_heartbeat_timer(self) -> None:
+        self._cancel_heartbeat_timer()
+        self._heartbeat_timer = asyncio.get_running_loop().call_later(
+            max(0.0, self._online_deadline - self._clock()), self._expire_heartbeat
+        )
+
+    def _expire_heartbeat(self) -> None:
+        expired = self._heartbeat_expired
+        if expired is not None and not expired.done():
+            expired.set_result(None)
+
+    def _check_heartbeat(self) -> None:
+        if self._clock() >= self._online_deadline or self._expiry_signal().done():
+            raise ConnectionError("heartbeat reply timed out")
+
     async def send_heartbeat(self) -> None:
+        self._check_heartbeat()
         now = self._clock()
-        if self._pending is not None:
-            if now - self._pending[1] >= self._timeout:
-                raise ConnectionError("heartbeat reply timed out")
-            return
+        # Sending keeps its cadence while earlier replies are in flight. Retain only
+        # request identities that can still supply evidence within the online window.
+        self._pending = {
+            nonce: sent
+            for nonce, sent in self._pending.items()
+            if now - sent[0] < HEARTBEAT_WINDOW_SECONDS
+        }
         nonce = secrets.token_hex(16)
         sent_at = self._wall()
-        self._pending = nonce, now, sent_at
-        expired = self._expiry_signal()
-        if expired.done():
-            raise ConnectionError("heartbeat reply timed out")
-        self._heartbeat_timer = asyncio.get_running_loop().call_later(
-            self._timeout, expired.set_result, None
-        )
+        self._pending[nonce] = now, sent_at
         request = {
             "v": 1,
             "type": "heartbeat.request",
@@ -105,6 +121,7 @@ class WebSocketLink:
         from websockets.exceptions import ConnectionClosed
 
         try:
+            self._check_heartbeat()
             expired = self._expiry_signal()
             reader = asyncio.ensure_future(self._socket.recv())
             try:
@@ -112,6 +129,7 @@ class WebSocketLink:
                 await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
                 if expired.done():
                     raise ConnectionError("heartbeat reply timed out")
+                self._check_heartbeat()
                 raw = reader.result()
             finally:
                 if not reader.done():
@@ -126,7 +144,8 @@ class WebSocketLink:
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and data.get("type") == "heartbeat.reply":
-                pending = self._pending
+                nonce = data.get("nonce")
+                pending = self._pending.get(nonce) if isinstance(nonce, str) else None
                 now = self._clock()
                 fields = {
                     "v",
@@ -138,24 +157,25 @@ class WebSocketLink:
                     "server_time",
                 }
                 if (
-                    pending is None
+                    not isinstance(nonce, str)
+                    or pending is None
                     or set(data) != fields
                     or data["v"] != 1
                     or data["robot_id"] != self._robot_id
                     or data["connection_epoch"] != self.epoch
-                    or data["nonce"] != pending[0]
-                    or data["sent_at"] != pending[2]
+                    or data["sent_at"] != pending[1]
                     or isinstance(data["server_time"], bool)
                     or not isinstance(data["server_time"], (int, float))
                 ):
                     raise ConnectionError("invalid heartbeat reply")
-                elapsed = now - pending[1]
+                elapsed = now - pending[0]
                 server_time = data["server_time"]
-                if not math.isfinite(server_time) or not 0 <= elapsed < self._timeout:
+                if not math.isfinite(server_time) or not 0 <= elapsed < HEARTBEAT_WINDOW_SECONDS:
                     raise ConnectionError("invalid heartbeat reply timestamp or reply timed out")
-                self._pending = None
-                self._cancel_heartbeat_timer()
-                return HeartbeatFrame(self._robot_id, pending[1] + self._freshness)
+                del self._pending[nonce]
+                self._online_deadline = now + HEARTBEAT_WINDOW_SECONDS
+                self._arm_heartbeat_timer()
+                return HeartbeatFrame(self._robot_id)
             envelope = validate_frame(raw.encode() if isinstance(raw, str) else raw, self._robot_id)
             if not isinstance(envelope, VideoEnvelope) and envelope.connection_epoch != self.epoch:
                 raise ValueError("wrong connection epoch")

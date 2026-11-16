@@ -1,18 +1,18 @@
 from senior_control.safety.freshness import SafetyFreshness
 
 
-def test_scan_and_measurement_expire_on_steady_clock_or_ros_rollback():
+def test_original_measurement_expiry_and_true_monotonic_regression():
     state = SafetyFreshness(0.5)
-    assert state.scan(10.0, 100.0, 10.0)
-    assert state.usable(10.1, 100.1)
-    assert not state.usable(10.1, 100.6)
-    assert state.scan(10.2, 100.7, 10.2)
-    assert not state.usable(9.0, 100.8)
-    assert not state.usable(10.2, 100.9)
+    assert state.scan(100, 100.1, 100.1)
+    assert state.usable(100.49)
+    assert not state.usable(100.5)
+    assert state.scan(100.6, 100.7, 100.7)
+    assert not state.usable(99)
+    assert not state.usable(100.8)
 
 
-def test_old_or_out_of_order_stamps_are_rejected():
+def test_queued_old_or_out_of_order_measurements_cannot_refresh():
     state = SafetyFreshness(0.5)
-    assert not state.scan(1.0, 5.0, 2.0)
-    assert state.scan(2.0, 5.1, 2.0)
-    assert not state.scan(1.9, 5.2, 2.0)
+    assert not state.scan(1, 5, 5)
+    assert state.scan(5, 5.1, 5.1)
+    assert not state.scan(4.9, 5.2, 5.2)

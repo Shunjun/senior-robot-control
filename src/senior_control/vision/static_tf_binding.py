@@ -180,7 +180,6 @@ class StaticBinding:
             )
             != (first.boot, first.relay_gid, first.source_gid, first.generation, first.edges)
             or effective_latest.sequence < prior_latest.sequence
-            or effective_latest.received_ros_ns < prior_latest.received_ros_ns
             or effective_latest.received_steady < prior_latest.received_steady
             or (
                 effective_latest.sequence == prior_latest.sequence
@@ -265,47 +264,21 @@ class StaticBinding:
         return True
 
     def admit(self, ros_ns: int, steady: float) -> bool:
-        if self.current is None or ros_ns <= 0 or not math.isfinite(steady) or steady <= 0:
+        if self.current is None or not math.isfinite(steady) or steady <= 0:
             return False
         if self._admitted is None:
             self._admitted = (ros_ns, steady)
         return True
 
     def pair_valid(
-        self,
-        first_ros_ns: int,
-        second_ros_ns: int,
-        first_steady: float,
-        second_steady: float,
-        *,
-        generation: int,
-        first_received_ros_ns: int,
-        second_received_ros_ns: int,
+        self, first_measurement_steady: float, second_measurement_steady: float, *, generation: int
     ) -> bool:
         if self.current is None or self._admitted is None or generation != self.generation:
             return False
-        if (
-            not all(
-                type(value) is int
-                for value in (
-                    first_ros_ns,
-                    second_ros_ns,
-                    first_received_ros_ns,
-                    second_received_ros_ns,
-                )
-            )
-            or not _finite(first_steady)
-            or not _finite(second_steady)
-        ):
-            return False
-        ros, steady = self._admitted
         return (
-            first_ros_ns >= ros
-            and second_ros_ns > first_ros_ns
-            and first_received_ros_ns >= ros
-            and second_received_ros_ns >= ros
-            and first_steady >= steady
-            and second_steady >= first_steady
+            _finite(first_measurement_steady)
+            and _finite(second_measurement_steady)
+            and self._admitted[1] <= first_measurement_steady < second_measurement_steady
         )
 
 

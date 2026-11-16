@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from senior_control.agent.connection import IpcMotion
-from senior_control.protocol import Envelope, MotionRuntimeState
+from senior_control.protocol import (
+    Envelope,
+    ManualIntentEnvelope,
+    MotionRuntimeState,
+    RuntimeObservation,
+)
 from senior_control.settings.service import SettingsService
 
 if TYPE_CHECKING:
@@ -241,6 +246,8 @@ class RuntimeState:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    # //Compatible: older IPC omits observation metadata.
+    runtime_observation: RuntimeObservation | None = None
     motion_runtime: MotionRuntimeState | None = None
     motion_runtime_version: int = 0
     manual_protocol_version: int = 0
@@ -250,21 +257,8 @@ class RuntimeState:
     valid_until: float | None = None
 
     def for_tasks(self, connected: bool) -> ExecutionContext:
-        from senior_control.agent.manual_control import runtime_healthy
-
-        runtime = self.motion_runtime
-        now = time.monotonic()
         healthy = self.task_evidence_ready
         admission = self.navigation_ready
-        if self.motion_runtime_version >= 1 and runtime is None:
-            healthy, admission = False, False
-        if runtime is not None:
-            healthy = (
-                healthy
-                and runtime_healthy(runtime, now)
-                and runtime.mode not in {"estop", "execution_fault", "feedback_stop"}
-            )
-            admission = admission and runtime.stationary
         return ExecutionContext(
             connected,
             self.localized,
@@ -277,15 +271,7 @@ class RuntimeState:
             valid_until=self.valid_until,
             task_lifecycle_version=self.task_lifecycle_version,
             admission_ready=admission,
-            motion_halt_reason=(
-                "estop"
-                if runtime is not None and runtime.mode == "estop"
-                else "fault"
-                if runtime is not None and runtime.mode == "execution_fault"
-                else "feedback_lost"
-                if self.motion_runtime_version >= 1 and not runtime_healthy(runtime, now)
-                else None
-            ),
+            motion_halt_reason=None,
         )
 
 
@@ -303,6 +289,8 @@ class StateReply(BaseModel):
     # //Compatible: older state replies have no qualified reference or navigation fields.
     map_generation: str | None = None
     localization_generation: str | None = None
+    # //Compatible: older IPC omits observation metadata.
+    runtime_observation: RuntimeObservation | None = None
     motion_runtime: MotionRuntimeState | None = None
     motion_runtime_version: int = 0
     manual_protocol_version: int = 0
@@ -355,15 +343,14 @@ class IpcState:
                 robot_pose=state.robot_pose if geometry_live else None,
                 scan_points=tuple(state.scan_points) if geometry_live else (),
                 navigation_block_reason=state.navigation_block_reason,
+                runtime_observation=state.runtime_observation,
                 motion_runtime=state.motion_runtime,
                 motion_runtime_version=state.motion_runtime_version,
                 manual_protocol_version=state.manual_protocol_version,
                 manual_authority=state.manual_authority,
                 task_lifecycle_version=state.task_lifecycle_version,
                 task_evidence_ready=state.task_evidence_ready,
-                valid_until=min(state.sampled_at + 0.5, state.motion_runtime.valid_until)
-                if state.motion_runtime is not None
-                else state.sampled_at + 0.5,
+                valid_until=state.sampled_at + 0.5,
             )
         except (IpcError, OSError, ValueError, ValidationError) as exc:
             raise DomainError(ErrorCode.UNAVAILABLE, "ROS state unavailable") from exc
@@ -447,6 +434,23 @@ class TaskAwareMotion(IpcMotion):
         """Use the same steady domain as Agent ingress/deadline construction."""
         self._manual_clock = clock
 
+    async def send_intent(
+        self, envelope: ManualIntentEnvelope, *, received_steady: float, deadline_steady: float
+    ) -> None:
+        """Select vehicle-owned settings, then hand a complete frame to the transport."""
+        if self.settings is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "vehicle driving profile is not selected")
+        if self._manual_clock() >= deadline_steady:
+            return
+        snapshot = self.settings.published_snapshot
+        await super().send_intent_frame(
+            envelope,
+            received_steady=received_steady,
+            deadline_steady=deadline_steady,
+            driving=snapshot.driving.model_dump(),
+            driving_version=snapshot.driving_version,
+        )
+
     async def manual(
         self,
         envelope: Envelope,
@@ -476,10 +480,6 @@ class TaskAwareMotion(IpcMotion):
                 if envelope.type == "control.acquire":
                     if not await self.tasks.manual_handoff_matches(retired):
                         continue  # Release the gate before retiring the changed owner.
-                if envelope.type == "drive.intent" and (
-                    deadline_steady is None or self._manual_clock() >= deadline_steady
-                ):
-                    raise DomainError(ErrorCode.TIMEOUT, "intent expired before local handoff")
                 snapshot = self.settings.published_snapshot
                 return await super().manual(
                     envelope,

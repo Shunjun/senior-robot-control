@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import LocalWorker, publish_inputs
 from test_constraint_scheduling import Worker
 from test_directional_constraints import engine, scene, snapshot
 from test_motion_controller import config, feedback
@@ -50,7 +51,7 @@ def test_real_core_shares_one_base_stop_but_keeps_independent_tracking(replay, m
     proof = core.engine.braking_proof
 
     def counted(snapshot, now):
-        if threading.current_thread().name == "MainThread":
+        if threading.current_thread().name == "MainThread" and not LocalWorker.executing:
             calls.append("tracking" if tracking.active else "base")
         return stop(snapshot, now)
 
@@ -64,7 +65,7 @@ def test_real_core_shares_one_base_stop_but_keeps_independent_tracking(replay, m
     monkeypatch.setattr(core.engine, "_stop_certificate", counted)
     monkeypatch.setattr(core.engine, "braking_proof", independent)
     core.tick()
-    core.executor.shutdown(wait=True)
+    core.worker.close()
     assert calls.count("base") == 1
     assert calls.count("tracking") == 1
 
@@ -162,7 +163,7 @@ def test_controller_mismatched_evaluation_uses_original_defensive_path(mismatch,
 
 def test_scheduler_perception_fallback_and_worker_never_retain_evaluation(monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
     newest = snapshot(0.2)
     q.update(newest, 0.2)
     old = snapshot(0.1)
@@ -178,7 +179,8 @@ def test_scheduler_perception_fallback_and_worker_never_retain_evaluation(monkey
     assert q._pending is not None
     assert all(value is not ev for value in vars(q._pending).values())
     for _, task in w.jobs:
-        assert all(cell.cell_contents is not ev for cell in task.__closure__)
+        assert ev not in task.args
+        assert ev not in task.keywords.values()
     w.complete()
     assert q.poll(0.4).permit is not None
 
@@ -225,7 +227,7 @@ def test_controller_decision_trajectory_and_deadlines_match_defensive_path(waiti
 
 def test_worker_admission_shares_stop_without_renewing_lease(monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
     first = snapshot(0)
     q.update(first, 0, evaluation=e.evaluate(first, 0))
     w.complete()
@@ -246,7 +248,7 @@ def test_worker_admission_shares_stop_without_renewing_lease(monkeypatch):
 @pytest.mark.parametrize("cause", ["expired", "veto"])
 def test_scheduler_no_permit_still_normalizes_in_controller_with_one_base_stop(cause, monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
 
     def tracking_context(now, target=None):
         ctx = snapshot(now, target=Velocity(0.6, 0) if target is None else target)
@@ -301,6 +303,10 @@ def test_scheduler_no_permit_still_normalizes_in_controller_with_one_base_stop(c
 
 def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypatch):
     core = replay.core
+    core._observation = lambda now: (
+        replace(scene(now), frame_id="scan_reference"),
+        Pose2D(0, 0, 0),
+    )
     core.tick()
     replay.clock.steady += 0.01
     assert core.command(
@@ -351,14 +357,14 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 
     monkeypatch.setattr(core.controller, "propose_tick", compare)
     core.tick()
-    core.executor.shutdown(wait=True)
+    core.worker.close()
     assert captured[0].brake.reason == "permit_expired_or_changed"
     state = json.loads(replay.node.messages[-1].data)
     assert state["reason"] == "fused_reference:" + decisions[0].reason
     assert state["reason"] == "fused_reference:waiting_refinement"
     assert replay.node.output[-1][0] == decisions[0].command
     assert state["sampled_steady"] == replay.clock.steady
-    assert state["valid_until"] == replay.clock.steady + 0.15
+    assert "valid_until" not in state
     assert state["healthy"] and state["fault_revision"] == 0
 
 
@@ -366,6 +372,7 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_response(
     replay, perception_failure
 ):
+    from source_time_test_support import capture_time
     from test_unified_motion_runtime import point
 
     from senior_control.motion.observations import Source
@@ -379,8 +386,25 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
 
     core._observation = observation
     t = clock.ns / 1e9
-    core.sensors.ingest(point(Source.WHEEL, t, clock.steady, (0.8, 0.0)), t, clock.steady, t)
-    core.sensors.ingest(point(Source.IMU, t, clock.steady, (0.0,)), t, clock.steady, t)
+    core.node._reception_test.sensors.ingest(
+        replace(
+            point(Source.WHEEL, t, clock.steady, (0.8, 0.0)),
+            measurement=capture_time(clock.steady, tick=t).measurement,
+        ),
+        t,
+        clock.steady,
+        t,
+    )
+    core.node._reception_test.sensors.ingest(
+        replace(
+            point(Source.IMU, t, clock.steady, (0.0,)),
+            measurement=capture_time(clock.steady, tick=t).measurement,
+        ),
+        t,
+        clock.steady,
+        t,
+    )
+    publish_inputs(core, clock.steady, clock.ns / 1e9)
     core.tick()
     assert core.stopping.linear.interval[1] >= 0.8
     assert core.stopping.linear.brake is None
@@ -388,9 +412,16 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     perception_failure = False
     clock.steady = deadline
     clock.ns = round((t + 1.0) * 1e9)
-    core.sensors.ingest(
-        point(Source.IMU, t + 1, clock.steady, (0.0,), 2), t + 1, clock.steady, t + 1
+    core.node._reception_test.sensors.ingest(
+        replace(
+            point(Source.IMU, t + 1, clock.steady, (0.0,), 2),
+            measurement=capture_time(clock.steady, tick=t + 1).measurement,
+        ),
+        t + 1,
+        clock.steady,
+        t + 1,
     )
+    publish_inputs(core, clock.steady, clock.ns / 1e9)
     core.tick()
     assert core.sensors.latest.vx.value is None
     assert core.sensors.latest.wz.observed

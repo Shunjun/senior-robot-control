@@ -24,7 +24,7 @@ int main()
     std::string command;
     MatcherLimits limits;
     if (!(std::cin >> command) || command != "L") throw std::runtime_error("limits header required");
-    if (!(std::cin >> limits.max_interval >> limits.range_limit >> limits.min_response >>
+    if (!(std::cin >> limits.max_interval_ms >> limits.range_limit >> limits.min_response >>
         limits.max_residual >> limits.min_inlier_fraction >> limits.min_spread >>
         limits.min_translation_observability >> limits.min_yaw_observability >>
         limits.max_variance >> limits.reanchor_distance >> limits.reanchor_yaw >> limits.min_rays))

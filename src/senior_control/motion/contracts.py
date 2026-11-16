@@ -41,8 +41,6 @@ class MotionEventKind(str, Enum):
     FAULT_RECOVER = "fault_recover"
     SOFTWARE_ESTOP = "software_estop"
     ESTOP_RESET = "estop_reset"
-    HARDWARE_ESTOP = "hardware_estop"
-    HARDWARE_RELEASE = "hardware_release"
 
 
 class TaskStatus(str, Enum):
@@ -97,7 +95,7 @@ class MotionTarget:
     velocity: Velocity
     source: Literal["manual", "navigation", "idle", "startup_learning"]
     source_id: str
-    deadline_steady: float
+    deadline_steady: float | None
     # //Compatible: non-manual pure callers need no normalized stick metadata.
     manual_linear: ManualLinearTarget | None = None
 
@@ -114,8 +112,8 @@ class BodyMotion:
     average: BodyTwist | None
     # //Compatible: pure T3a references may lack a supported current true-speed bound.
     upper: BodyTwist | None
-    interval_start_ros: float
-    interval_end_ros: float
+    interval_start_steady: float
+    interval_end_steady: float
     computed_steady: float
     valid_until_steady: float
     source_epoch: str
@@ -132,7 +130,6 @@ class ResponseBounds:
     yaw_decel: float
     yaw_jerk: float
     actuator_lag: float
-    valid_until_steady: float
     profile_id: str
 
 

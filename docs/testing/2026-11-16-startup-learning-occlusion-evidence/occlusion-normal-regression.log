@@ -1,0 +1,3678 @@
+........................................................................ [ 46%]
+......FFF.FFFFFFFFFFFFFFFFFFF.FFFFFFFFFFFF.............................. [ 93%]
+..........                                                               [100%]
+=================================== FAILURES ===================================
+_____ test_stationary_and_low_speed_do_not_invent_front_inertia[0.0-False] _____
+
+speed = 0.0, imu = False
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_stationary_and_low_speed_do_not_invent_front_inertia(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(1.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:63: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10abef7d0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+____ test_stationary_and_low_speed_do_not_invent_front_inertia[0.02-False] _____
+
+speed = 0.02, imu = False
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_stationary_and_low_speed_do_not_invent_front_inertia(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(1.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:63: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acb8f20>
+ref = {'average': {'vx': 0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.02, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequen...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_____ test_stationary_and_low_speed_do_not_invent_front_inertia[0.0-True] ______
+
+speed = 0.0, imu = True
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_stationary_and_low_speed_do_not_invent_front_inertia(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(1.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:63: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acbab40>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+___ test_reverse_with_front_obstacle_and_observed_rear_clearance[0.0-False] ____
+
+speed = 0.0, imu = False
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_reverse_with_front_obstacle_and_observed_rear_clearance(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(2.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad207a0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+___ test_reverse_with_front_obstacle_and_observed_rear_clearance[0.02-False] ___
+
+speed = 0.02, imu = False
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_reverse_with_front_obstacle_and_observed_rear_clearance(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(2.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ac9bb60>
+ref = {'average': {'vx': 0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.02, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequen...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+____ test_reverse_with_front_obstacle_and_observed_rear_clearance[0.0-True] ____
+
+speed = 0.0, imu = True
+
+    @pytest.mark.parametrize("speed,imu", [(0.0, False), (0.02, False), (0.0, True)])
+    def test_reverse_with_front_obstacle_and_observed_rear_clearance(speed, imu):
+        core = output(speed, imu=imu)
+>       ctx = snapshot(core, obstacle=Point(2.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acb9a60>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_____ test_real_forward_inertia_blocks_reverse_at_original_front_obstacle ______
+
+    def test_real_forward_inertia_blocks_reverse_at_original_front_obstacle():
+        core = output(0.8)
+>       ctx = snapshot(core, obstacle=Point(1.0, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:85: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad21760>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+__ test_forward_motion_requires_braking_before_reversing_even_in_clear_space ___
+
+    def test_forward_motion_requires_braking_before_reversing_even_in_clear_space():
+        core = output(0.2)
+>       ctx = snapshot(core)
+              ^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:94: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad23710>
+ref = {'average': {'vx': 0.2, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.2, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_________________ test_turning_sweep_keeps_real_side_obstacle __________________
+
+    def test_turning_sweep_keeps_real_side_obstacle():
+        core = output(0.0, 0.5, imu=True)
+        core.target = MotionTarget(Velocity(0, 0.5), "test", "boot", 21)
+>       ctx = snapshot(core, obstacle=Point(0.6, 0.4))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:103: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad2cad0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.5}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.5), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (0.6 0.4)>, stamp_steady=2...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_________ test_failed_laser_with_live_wheel_still_uses_unified_result __________
+
+    def test_failed_laser_with_live_wheel_still_uses_unified_result():
+        from senior_control.motion.estimator import MotionObservation, Origin
+    
+        core = output(0.02, imu=True)
+        laser = MotionObservation(
+            "laser",
+            (0.02, None, 0.0),
+            10,
+            (Origin("laser", "boot", 1, 10, 10, 20, measurement_steady=20),),
+            independent=(True, True, True),
+            measured_steady=20,
+        )
+        core.sensors.ingest_observation(laser, 10, 20)
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:121: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad2edb0>
+ref = {'average': {'vx': 0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.02, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|laser:boot...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_____ test_conflict_stopping_uses_owner_choice_not_independent_view[wheel] _____
+
+newer = 'wheel'
+
+    @pytest.mark.parametrize("newer", ["wheel", "laser"])
+    def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
+        from senior_control.motion.estimator import MotionObservation, Origin
+    
+        core = output()
+        core.sensors.invalidate(Source.WHEEL)
+        for name, value in (("wheel", -0.02), ("laser", 0.8)):
+            stamp = 10 if name == newer else 9.9
+            o = MotionObservation(
+                name,
+                (value, None, 0.0),
+                stamp,
+                (Origin(name, "boot2", 1, stamp, stamp, stamp + 10, measurement_steady=stamp + 10),),
+                independent=(name == "laser",) * 3,
+                measured_steady=stamp + 10,
+            )
+            core.sensors.ingest_observation(o, 10, 20)
+>       ctx = snapshot(core, obstacle=Point(1, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad2ce30>
+ref = {'average': {'vx': -0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=-0.02, wz=0.0), stamp_steady=20, deadline_steady=20.9, epoch='clock:1|laser:boot2|wheel:...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_____ test_conflict_stopping_uses_owner_choice_not_independent_view[laser] _____
+
+newer = 'laser'
+
+    @pytest.mark.parametrize("newer", ["wheel", "laser"])
+    def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
+        from senior_control.motion.estimator import MotionObservation, Origin
+    
+        core = output()
+        core.sensors.invalidate(Source.WHEEL)
+        for name, value in (("wheel", -0.02), ("laser", 0.8)):
+            stamp = 10 if name == newer else 9.9
+            o = MotionObservation(
+                name,
+                (value, None, 0.0),
+                stamp,
+                (Origin(name, "boot2", 1, stamp, stamp, stamp + 10, measurement_steady=stamp + 10),),
+                independent=(name == "laser",) * 3,
+                measured_steady=stamp + 10,
+            )
+            core.sensors.ingest_observation(o, 10, 20)
+>       ctx = snapshot(core, obstacle=Point(1, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad23920>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|laser:boot2', sequen...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+________ test_soft_age_is_usable_and_prediction_error_charged_once[0.3] ________
+
+age = 0.3
+
+    @pytest.mark.parametrize("age", [0.3, 0.6, 0.999])
+    def test_soft_age_is_usable_and_prediction_error_charged_once(age):
+        core = output()
+>       ctx = snapshot(core, 20 + age)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:161: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x1090e7e90>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.3, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.3
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+________ test_soft_age_is_usable_and_prediction_error_charged_once[0.6] ________
+
+age = 0.6
+
+    @pytest.mark.parametrize("age", [0.3, 0.6, 0.999])
+    def test_soft_age_is_usable_and_prediction_error_charged_once(age):
+        core = output()
+>       ctx = snapshot(core, 20 + age)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:161: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acbb470>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.600000000000001, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.6
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_______ test_soft_age_is_usable_and_prediction_error_charged_once[0.999] _______
+
+age = 0.999
+
+    @pytest.mark.parametrize("age", [0.3, 0.6, 0.999])
+    def test_soft_age_is_usable_and_prediction_error_charged_once(age):
+        core = output()
+>       ctx = snapshot(core, 20 + age)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:161: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad58c80>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.998999999999999, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.999
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+________________ test_one_second_expiry_is_not_renewed_by_model ________________
+
+    def test_one_second_expiry_is_not_renewed_by_model():
+        core = output()
+>       snapshot(core, 20.999)
+
+tests/unit/test_stopping_fused_input.py:172: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad5acf0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.998999999999999, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.999
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+__ test_missing_axis_hold_keeps_own_cutoff_then_closes_only_that_target_axis ___
+
+    def test_missing_axis_hold_keeps_own_cutoff_then_closes_only_that_target_axis():
+        core = output(0.04)
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad598b0>
+ref = {'average': {'vx': 0.04, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.04, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequen...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_known_error_does_not_double_charge_projection_or_switch_to_independent_axis _
+
+    def test_known_error_does_not_double_charge_projection_or_switch_to_independent_axis():
+        from dataclasses import replace
+    
+        core = output(0.02)
+>       first = snapshot(core, 20.5)
+                ^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:198: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acbb350>
+ref = {'average': {'vx': 0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.5, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.02, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequen...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.5
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+__ test_decel_changes_model_duration_without_changing_age_or_other_parameters __
+
+    def test_decel_changes_model_duration_without_changing_age_or_other_parameters():
+        from dataclasses import replace
+    
+        core = output(1.5)
+>       ctx = snapshot(core)
+              ^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10aae52b0>
+ref = {'average': {'vx': 1.5, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=1.5, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_stopping_diagnostics_share_periodic_debug_and_distinguish_geometry_age_and_horizon _
+
+    def test_stopping_diagnostics_share_periodic_debug_and_distinguish_geometry_age_and_horizon():
+        import logging
+    
+        events = []
+        core = output(0.8)
+        core.diagnostics = RuntimeDiagnostics(lambda level, values: events.append((level, values)))
+        core.diagnostics.pump(20)
+>       ctx = snapshot(core, obstacle=Point(1, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:229: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad2d5b0>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_actual_snapshot_constraints_and_controller_output[0.0-obstacle0-tracking] _
+
+speed = 0.0, obstacle = <POINT (2 0)>, expected = 'tracking'
+
+    @pytest.mark.parametrize(
+        "speed,obstacle,expected",
+        [(0.0, Point(2, 0), "tracking"), (0.8, Point(1, 0), "stop_envelope_blocked")],
+    )
+    def test_actual_snapshot_constraints_and_controller_output(speed, obstacle, expected):
+        core = output(speed)
+>       ctx = snapshot(core, obstacle=obstacle)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:252: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad78860>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_actual_snapshot_constraints_and_controller_output[0.8-obstacle1-stop_envelope_blocked] _
+
+speed = 0.8, obstacle = <POINT (1 0)>, expected = 'stop_envelope_blocked'
+
+    @pytest.mark.parametrize(
+        "speed,obstacle,expected",
+        [(0.0, Point(2, 0), "tracking"), (0.8, Point(1, 0), "stop_envelope_blocked")],
+    )
+    def test_actual_snapshot_constraints_and_controller_output(speed, obstacle, expected):
+        core = output(speed)
+>       ctx = snapshot(core, obstacle=obstacle)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:252: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad7a0c0>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[-1.0] _
+
+fraction = -1.0
+
+    @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])
+    def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting(fraction):
+        from senior_control.motion.manual_target import ManualLinearTarget
+    
+        core = output()
+        core.target = MotionTarget(
+            Velocity(fraction * 0.55, 0),
+            "manual",
+            "boot",
+            21,
+            ManualLinearTarget(fraction, 0.55, 0.3),
+        )
+>       ctx = snapshot(core, obstacle=Point(2, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:297: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10abfc560>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[-0.5] _
+
+fraction = -0.5
+
+    @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])
+    def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting(fraction):
+        from senior_control.motion.manual_target import ManualLinearTarget
+    
+        core = output()
+        core.target = MotionTarget(
+            Velocity(fraction * 0.55, 0),
+            "manual",
+            "boot",
+            21,
+            ManualLinearTarget(fraction, 0.55, 0.3),
+        )
+>       ctx = snapshot(core, obstacle=Point(2, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:297: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad2d640>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[0.5] _
+
+fraction = 0.5
+
+    @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])
+    def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting(fraction):
+        from senior_control.motion.manual_target import ManualLinearTarget
+    
+        core = output()
+        core.target = MotionTarget(
+            Velocity(fraction * 0.55, 0),
+            "manual",
+            "boot",
+            21,
+            ManualLinearTarget(fraction, 0.55, 0.3),
+        )
+>       ctx = snapshot(core, obstacle=Point(2, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:297: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad59eb0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[1.0] _
+
+fraction = 1.0
+
+    @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])
+    def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting(fraction):
+        from senior_control.motion.manual_target import ManualLinearTarget
+    
+        core = output()
+        core.target = MotionTarget(
+            Velocity(fraction * 0.55, 0),
+            "manual",
+            "boot",
+            21,
+            ManualLinearTarget(fraction, 0.55, 0.3),
+        )
+>       ctx = snapshot(core, obstacle=Point(2, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:297: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad7b9b0>
+ref = {'average': {'vx': 0.0, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.0, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (2 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+______ test_nonzero_trajectory_residual_survives_opposite_fused_velocity _______
+
+    def test_nonzero_trajectory_residual_survives_opposite_fused_velocity():
+        from senior_control.motion.trajectory import Trajectory
+    
+        core = output(-0.02)
+        core.controller.trajectory = Trajectory(Velocity(0.8, 0), Velocity(0.1, 0))
+>       ctx = snapshot(core, obstacle=Point(1, 0))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:308: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad69070>
+ref = {'average': {'vx': -0.02, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=-0.02, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', seque...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20.0,...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh[0.0] _
+
+trajectory = 0.0
+
+    @pytest.mark.parametrize("trajectory", [0.0, 0.2])
+    def test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh(trajectory):
+        from senior_control.motion.trajectory import Trajectory
+    
+        core = output(0.8, imu=True)
+        core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 30)
+        core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+>       snapshot(core, 20, Point(1, 0))
+
+tests/unit/test_stopping_fused_input.py:321: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad6aba0>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20, d...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh[0.2] _
+
+trajectory = 0.2
+
+    @pytest.mark.parametrize("trajectory", [0.0, 0.2])
+    def test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh(trajectory):
+        from senior_control.motion.trajectory import Trajectory
+    
+        core = output(0.8, imu=True)
+        core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 30)
+        core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+>       snapshot(core, 20, Point(1, 0))
+
+tests/unit/test_stopping_fused_input.py:321: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad69250>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20, d...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_only_actual_zero_output_can_start_missing_axis_response_and_settle[0.0] _
+
+trajectory = 0.0
+
+    @pytest.mark.parametrize("trajectory", [0.0, 0.2])
+    def test_only_actual_zero_output_can_start_missing_axis_response_and_settle(trajectory):
+        from senior_control.motion.trajectory import Trajectory
+    
+        core = output(0.8, imu=True)
+        core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 40)
+        core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:350: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad788f0>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_only_actual_zero_output_can_start_missing_axis_response_and_settle[0.2] _
+
+trajectory = 0.2
+
+    @pytest.mark.parametrize("trajectory", [0.0, 0.2])
+    def test_only_actual_zero_output_can_start_missing_axis_response_and_settle(trajectory):
+        from senior_control.motion.trajectory import Trajectory
+    
+        core = output(0.8, imu=True)
+        core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 40)
+        core.controller.trajectory = Trajectory(Velocity(trajectory, 0), Velocity(0, 0))
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:350: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10aae6b40>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_nonzero_output_cancels_settling_and_fresh_observation_replaces_residual _
+
+    def test_nonzero_output_cancels_settling_and_fresh_observation_replaces_residual():
+        core = output(0.8, imu=True)
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:373: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10acbbe90>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|imu:boot|wheel:boot'...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_ test_diagnostics_reuse_tick_prediction_and_keep_transient_reason_counts_and_peaks _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ad4c860>
+
+    def test_diagnostics_reuse_tick_prediction_and_keep_transient_reason_counts_and_peaks(monkeypatch):
+        events = []
+        core = output(0.8)
+        core.diagnostics = RuntimeDiagnostics(lambda _level, value: events.append(value))
+        core.diagnostics.pump(20)
+>       blocked = snapshot(core, 20, Point(1, 0))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_stopping_fused_input.py:391: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad4c9b0>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<POINT (1 0)>, stamp_steady=20, d...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+_____ test_model_settling_never_turns_total_feedback_loss_into_live_motion _____
+
+    def test_model_settling_never_turns_total_feedback_loss_into_live_motion():
+        core = output(0.8)
+>       snapshot(core)
+
+tests/unit/test_stopping_fused_input.py:417: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/unit/test_stopping_fused_input.py:57: in snapshot
+    return core._snapshot(ref, wheel, now, scene, Pose2D(0, 0, 0))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad4eb40>
+ref = {'average': {'vx': 0.8, 'vy': 0.0, 'wz': 0.0}, 'computed_ros': 10.0, 'end_steady': 20.0, 'estimate_kind': 'current_prediction', ...}
+wheel = Feedback(velocity=Velocity(vx=0.8, wz=0.0), stamp_steady=20, deadline_steady=21.0, epoch='clock:1|wheel:boot', sequenc...='unified control estimate; per-axis observed mask; no physical truth bound', observed_axes=(True, True), unified=True)
+now = 20.0
+perception = Perception(free_space=<POLYGON ((20 -20, 20 20, -20 20, -20 -20, 20 -20))>, occupied=<GEOMETRYCOLLECTION EMPTY>, stamp...n', frame_id='scan_reference', revision=1, forecast_horizon_s=12.0, basis='synthetic observed free space and obstacle')
+pose = Pose2D(x=0, y=0, yaw=0)
+
+    def _snapshot(self, ref, wheel, now, perception, pose):
+        mode = SourceMode(ref["mode"])
+        if wheel is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        epoch = wheel.epoch
+        # Keep the historical interval field separate from a current control estimate.
+        motion = BodyMotion(
+            None,
+            None,
+            ref["start_steady"],
+            ref["end_steady"],
+            now,
+            wheel.deadline_steady,
+            epoch,
+            True,
+            "unified current control estimate; no truth bound",
+        )
+        p = self.profile
+        response = self._response()
+        degraded = mode is SourceMode.WHEEL_IMU_LIMITED
+        cap = p.degraded_cap if degraded else p.cap
+        target = self.target
+        if target.source == "manual" and target.manual_linear is not None:
+            # Manual degraded speed has one policy owner: the saved driving setting.
+            # p.degraded_cap is the legacy navigation policy, not measured capability.
+            if degraded:
+                cap = min(p.cap, target.manual_linear.degraded_mps)
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.manual_linear.velocity(degraded=degraded, capability_mps=cap),
+                    target.velocity.wz,
+                ),
+            )
+        estimate = self.sensors.latest
+        if estimate is not None and (estimate.vx.value is None or estimate.wz.value is None):
+            target = replace(
+                target,
+                velocity=Velocity(
+                    target.velocity.vx if estimate.vx.value is not None else 0.0,
+                    target.velocity.wz if estimate.wz.value is not None else 0.0,
+                ),
+            )
+        a = self.controller.trajectory.acceleration
+        v = self.controller.trajectory.velocity
+        if estimate is None or not estimate.healthy:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
+        linear, angular = self.stopping.domains(
+            estimate, v, response, linear_error=p.linear_error, yaw_error=p.yaw_error
+        )
+        risk = RiskEnvelope(
+            p.profile_id,
+            p.risk_basis or p.profile_id,
+            epoch,
+            (
+                SourceMode.LASER_REFERENCE,
+                SourceMode.FUSED_REFERENCE,
+                SourceMode.GPS_IMU_REFERENCE,
+                SourceMode.WHEEL_IMU_LIMITED,
+            ),
+            p.profile_id,
+            p.horizon_s,
+            linear,
+            angular,
+            self.stopping.reaction(self.acceleration_model.reaction(a), response),
+            p.position_error,
+            p.orientation_error_rad,
+            p.lateral_drift_mps,
+            cap,
+            p.yaw_cap,
+            bool(p.simulation_only and p.unvalidated),
+            lateral_stop_s=p.lateral_stop_s,
+            brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
+            brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
+        )
+        visibility = None
+>       if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+           ^^^^^^^^^^^^
+E       AttributeError: 'MotionCoreOutput' object has no attribute 'startup'
+
+ros2/src/senior_robot/senior_robot/motion_core_output.py:943: AttributeError
+----------- generated xml file: /tmp/occlusion-normal-regression.xml -----------
+=========================== short test summary info ============================
+FAILED tests/unit/test_stopping_fused_input.py::test_stationary_and_low_speed_do_not_invent_front_inertia[0.0-False]
+FAILED tests/unit/test_stopping_fused_input.py::test_stationary_and_low_speed_do_not_invent_front_inertia[0.02-False]
+FAILED tests/unit/test_stopping_fused_input.py::test_stationary_and_low_speed_do_not_invent_front_inertia[0.0-True]
+FAILED tests/unit/test_stopping_fused_input.py::test_reverse_with_front_obstacle_and_observed_rear_clearance[0.0-False]
+FAILED tests/unit/test_stopping_fused_input.py::test_reverse_with_front_obstacle_and_observed_rear_clearance[0.02-False]
+FAILED tests/unit/test_stopping_fused_input.py::test_reverse_with_front_obstacle_and_observed_rear_clearance[0.0-True]
+FAILED tests/unit/test_stopping_fused_input.py::test_real_forward_inertia_blocks_reverse_at_original_front_obstacle
+FAILED tests/unit/test_stopping_fused_input.py::test_forward_motion_requires_braking_before_reversing_even_in_clear_space
+FAILED tests/unit/test_stopping_fused_input.py::test_turning_sweep_keeps_real_side_obstacle
+FAILED tests/unit/test_stopping_fused_input.py::test_failed_laser_with_live_wheel_still_uses_unified_result
+FAILED tests/unit/test_stopping_fused_input.py::test_conflict_stopping_uses_owner_choice_not_independent_view[wheel]
+FAILED tests/unit/test_stopping_fused_input.py::test_conflict_stopping_uses_owner_choice_not_independent_view[laser]
+FAILED tests/unit/test_stopping_fused_input.py::test_soft_age_is_usable_and_prediction_error_charged_once[0.3]
+FAILED tests/unit/test_stopping_fused_input.py::test_soft_age_is_usable_and_prediction_error_charged_once[0.6]
+FAILED tests/unit/test_stopping_fused_input.py::test_soft_age_is_usable_and_prediction_error_charged_once[0.999]
+FAILED tests/unit/test_stopping_fused_input.py::test_one_second_expiry_is_not_renewed_by_model
+FAILED tests/unit/test_stopping_fused_input.py::test_missing_axis_hold_keeps_own_cutoff_then_closes_only_that_target_axis
+FAILED tests/unit/test_stopping_fused_input.py::test_known_error_does_not_double_charge_projection_or_switch_to_independent_axis
+FAILED tests/unit/test_stopping_fused_input.py::test_decel_changes_model_duration_without_changing_age_or_other_parameters
+FAILED tests/unit/test_stopping_fused_input.py::test_stopping_diagnostics_share_periodic_debug_and_distinguish_geometry_age_and_horizon
+FAILED tests/unit/test_stopping_fused_input.py::test_actual_snapshot_constraints_and_controller_output[0.0-obstacle0-tracking]
+FAILED tests/unit/test_stopping_fused_input.py::test_actual_snapshot_constraints_and_controller_output[0.8-obstacle1-stop_envelope_blocked]
+FAILED tests/unit/test_stopping_fused_input.py::test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[-1.0]
+FAILED tests/unit/test_stopping_fused_input.py::test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[-0.5]
+FAILED tests/unit/test_stopping_fused_input.py::test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[0.5]
+FAILED tests/unit/test_stopping_fused_input.py::test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting[1.0]
+FAILED tests/unit/test_stopping_fused_input.py::test_nonzero_trajectory_residual_survives_opposite_fused_velocity
+FAILED tests/unit/test_stopping_fused_input.py::test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh[0.0]
+FAILED tests/unit/test_stopping_fused_input.py::test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh[0.2]
+FAILED tests/unit/test_stopping_fused_input.py::test_only_actual_zero_output_can_start_missing_axis_response_and_settle[0.0]
+FAILED tests/unit/test_stopping_fused_input.py::test_only_actual_zero_output_can_start_missing_axis_response_and_settle[0.2]
+FAILED tests/unit/test_stopping_fused_input.py::test_nonzero_output_cancels_settling_and_fresh_observation_replaces_residual
+FAILED tests/unit/test_stopping_fused_input.py::test_diagnostics_reuse_tick_prediction_and_keep_transient_reason_counts_and_peaks
+FAILED tests/unit/test_stopping_fused_input.py::test_model_settling_never_turns_total_feedback_loss_into_live_motion
+34 failed, 120 passed in 19.15s

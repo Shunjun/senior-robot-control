@@ -1,0 +1,15 @@
+{
+  "source_files": 755,
+  "changed": [
+    "src/senior_control/agent/websocket.py",
+    "tests/unit/test_agent_config.py",
+    "tests/unit/test_limited_manual_rearm.py",
+    "tests/unit/test_motion_core_event_time.py"
+  ],
+  "missing": [],
+  "added": [],
+  "protected_unchanged": true,
+  "preserved_original_evidence_files": 67,
+  "report_links_valid": true,
+  "report_sha256": "c0799f67cbf54ba83aaf89ac2f395017ad6f261008194f07bc30fa3f7af05d22"
+}

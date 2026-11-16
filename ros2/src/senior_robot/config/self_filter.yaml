@@ -2,7 +2,6 @@ scan_adapter:
   ros__parameters:
     use_sim_time: true
     body_frame: base_link
-    max_age_seconds: 0.5
     # Physical boundary is configured on safety_gate; startup learns local returns.
     # URDF robot_state_publisher chain laser_link -> base_link is fixed.
     transform_static: true

@@ -54,8 +54,8 @@ private:
   Message::ConstSharedPtr source_;
   std::deque<Message::ConstSharedPtr> pending_;
   std::uint64_t last_sequence_{0};
-  std::int64_t last_stamp_{0};
-  std::int64_t last_ros_{0};
+  std::int64_t last_measurement_ns_{0};
+  std::int64_t last_steady_ns_{0};
   bool closed_{false};
   rclcpp::Subscription<Message>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;

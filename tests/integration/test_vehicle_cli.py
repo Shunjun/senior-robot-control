@@ -153,33 +153,6 @@ def test_deploy_dry_run_leaves_files_and_services_untouched(tmp_path: Path, monk
     assert list(tmp_path.iterdir()) == [profile]
 
 
-async def test_simulation_waits_for_matching_adapter(tmp_path, monkeypatch):
-    from senior_control import simulation_cli
-
-    events = []
-
-    async def spawn(*args, **kwargs):
-        events.append("ros" if "simulation_motion.launch.py" in args else "agent")
-        return object()
-
-    async def verify(*args):
-        events.append("identity")
-        raise ValueError("foreign adapter")
-
-    async def cleanup(process, timeout):
-        events.append("cleanup")
-
-    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
-    monkeypatch.setattr(simulation_cli, "_stop", cleanup)
-    profile, credentials = _simulation_profile(tmp_path)
-    import pytest
-
-    with pytest.raises(ValueError, match="foreign adapter"):
-        await simulation_cli.supervise(profile, credentials)
-    assert events == ["ros", "identity", "cleanup"]
-
-
 def _simulation_profile(tmp_path):
     from senior_control.agent.pairing import Credentials
 
@@ -189,23 +162,10 @@ def _simulation_profile(tmp_path):
         ros_setup=tmp_path / "setup.bash",
         database=tmp_path / "state.db",
         socket=tmp_path / "adapter.sock",
-        estop_state=tmp_path / "estop.json",
         cloud_url="wss://example.test/ws/agent",
         ros_domain=73,
     )
     return profile, Credentials(robot_id="robot-a", device_token="secret")
-
-
-def test_restart_preserves_estop_state(tmp_path: Path):
-    from senior_control.simulation_cli import _initialize_estop
-
-    path = tmp_path / "estop.json"
-    _initialize_estop(path, "robot-a")
-    state = json.loads(path.read_text())
-    state.update(latched=True, revision=3)
-    path.write_text(json.dumps(state))
-    _initialize_estop(path, "robot-a")
-    assert json.loads(path.read_text()) == state
 
 
 async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
@@ -233,7 +193,7 @@ async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
 
     with pytest.raises(OSError, match="agent failed"):
         await simulation_cli.supervise(profile, credentials)
-    assert stopped == [owned_ros]
+    assert stopped == []  # Agent failed before any ROS child was created.
 
 
 async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_start(
@@ -268,7 +228,7 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
     profile, credentials = _simulation_profile(tmp_path)
     with pytest.raises(OSError, match="agent failed"):
         await simulation_cli.supervise(profile.model_copy(update={"video": True}), credentials)
-    assert len(slots) == 2 and slots[0] == slots[1]
+    assert len(slots) == 1
     assert not slots[0].parent.exists()
 
 
@@ -371,17 +331,19 @@ def test_windowed_start_does_not_duplicate_running_simulation(tmp_path, monkeypa
 
 @pytest.mark.parametrize("headless", [True, False])
 async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatch, headless):
-    from senior_control import simulation_cli
+    from test_runtime_fault_isolation import Child
+
+    from senior_control import docker_start_helper, simulation_cli
 
     calls = []
     monkeypatch.setenv("DISPLAY", ":7")
 
     async def spawn(*args, **kwargs):
         calls.append((args, kwargs))
-        return object()
+        return Child("fixture")
 
     async def verify(*args):
-        raise ValueError("stop after inspecting launch")
+        args[-1].set()
 
     async def cleanup(*args):
         pass
@@ -389,11 +351,11 @@ async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatc
     monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
     monkeypatch.setattr(simulation_cli, "_stop", cleanup)
+    monkeypatch.setattr(docker_start_helper, "_terminate_motion_stack", cleanup)
     profile, credentials = _simulation_profile(tmp_path)
-    with pytest.raises(ValueError, match="stop after inspecting launch"):
-        await simulation_cli.supervise(profile, credentials, headless=headless)
-    assert len(calls) == 1
-    argv, options = calls[0]
+    assert await simulation_cli.supervise(profile, credentials, headless=headless) == 0
+    assert len(calls) == 2
+    argv, options = calls[1]
     assert f"headless:={str(headless).lower()}" in argv
     assert ("xvfb-run" in argv) is headless
     assert options["env"]["DISPLAY"] == ":7"
@@ -631,7 +593,6 @@ def test_main_only_cleans_stale_socket_after_both_locks(
 
     monkeypatch.setattr(simulation_cli, "validate_simulation_profile", lambda _: None)
     monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
-    monkeypatch.setattr(simulation_cli, "_initialize_estop", lambda *_: None)
     monkeypatch.setattr(simulation_cli.os, "open", open_lock)
     monkeypatch.setattr(simulation_cli.fcntl, "flock", lock)
     monkeypatch.setattr(simulation_cli, "_remove_stale_socket", cleanup)

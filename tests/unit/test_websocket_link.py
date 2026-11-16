@@ -22,17 +22,26 @@ class Socket:
         pass
 
 
-async def test_reply_must_match_outstanding_nonce_and_epoch() -> None:
+@pytest.mark.parametrize(
+    "wrong",
+    [
+        {"nonce": "other"},
+        {"connection_epoch": 2},
+        {"robot_id": "other"},
+        {"sent_at": 99.0},
+    ],
+)
+async def test_reply_must_match_outstanding_nonce_and_epoch(wrong) -> None:
     socket = Socket()
     link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: 100.0, clock=lambda: 1.0)
     await link.send_heartbeat()
     request = json.loads(socket.sent[0])
     reply = {**request, "type": "heartbeat.reply", "server_time": 100.0}
-    socket.inbox.append(json.dumps({**reply, "nonce": "other"}))
+    socket.inbox.append(json.dumps({**reply, **wrong}))
     with pytest.raises(ConnectionError):
         await link.recv()
     socket.inbox.append(json.dumps(reply))
-    assert await link.recv() == HeartbeatFrame("robot-a", 3.0)
+    assert await link.recv() == HeartbeatFrame("robot-a")
 
 
 async def test_reply_rejects_nonfinite_server_clock() -> None:
@@ -84,7 +93,7 @@ async def test_only_explicit_revocation_is_terminal(code: int, terminal: bool) -
     assert isinstance(failure.value, AuthRejected) is terminal
 
 
-@pytest.mark.parametrize(("elapsed", "offset"), [(0.5, 0.0), (0.02, 1.0)])
+@pytest.mark.parametrize(("elapsed", "offset"), [(3.0, 0.0), (4.999, 1.0)])
 async def test_unqualified_command_clock_keeps_link_alive(elapsed: float, offset: float) -> None:
     socket = Socket()
     wall, mono = [100.0], [1.0]
@@ -95,10 +104,15 @@ async def test_unqualified_command_clock_keeps_link_alive(elapsed: float, offset
     socket.inbox.append(
         json.dumps({**request, "type": "heartbeat.reply", "server_time": 100.0 + offset})
     )
-    assert await link.recv() == HeartbeatFrame("robot-a", 3.0)
+    assert await link.recv() == HeartbeatFrame("robot-a")
+    # The next online deadline belongs to the receipt, not the original request.
+    mono[0] += 1.0
+    await link.send_heartbeat()
+    assert len(socket.sent) == 2
+    await link.close()
 
 
-async def test_missing_reply_times_out_even_if_receive_is_idle() -> None:
+async def test_missing_reply_times_out_even_if_receive_is_idle(monkeypatch) -> None:
     import asyncio
 
     class IdleSocket(Socket):
@@ -106,16 +120,34 @@ async def test_missing_reply_times_out_even_if_receive_is_idle() -> None:
             await asyncio.Future()
             raise AssertionError("receive should have been cancelled")
 
-    link = WebSocketLink(IdleSocket(), "robot-a", 3, heartbeat_timeout=0.01)
+    now = [10.0]
+    timers = []
+    loop = asyncio.get_running_loop()
+    original = loop.call_later
+
+    def call_later(delay, callback, *args, **kwargs):
+        if isinstance(getattr(callback, "__self__", None), WebSocketLink):
+            timers.append((delay, callback, args))
+            return asyncio.Handle(callback, args, loop)
+        return original(delay, callback, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "call_later", call_later)
+    link = WebSocketLink(IdleSocket(), "robot-a", 3, clock=lambda: now[0])
     reader = asyncio.create_task(link.recv())
     try:
-        await asyncio.sleep(0)
         await link.send_heartbeat()
-        done, _ = await asyncio.wait({reader}, timeout=0.2)
-        assert reader in done
+        await asyncio.sleep(0)
+        assert timers[0][0] == 5.0
+        now[0] = 14.999
+        await link.send_heartbeat()
+        assert not reader.done()
+        now[0] = 15.0
+        _, callback, args = timers[0]
+        callback(*args)
         with pytest.raises(ConnectionError, match="heartbeat reply timed out"):
             await reader
     finally:
+        await link.close()
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
 

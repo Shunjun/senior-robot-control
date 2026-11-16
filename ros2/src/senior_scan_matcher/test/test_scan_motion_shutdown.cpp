@@ -64,9 +64,9 @@ int entrypoint()
 {
   std::vector<std::string> args = {
     "scan_motion_test", "--ros-args",
-    "-p", "transform_static:=true", "-p", "scan_max_age:=0.8",
+    "-p", "transform_static:=true", "-p", "sensor_hard_age_ms:=1000",
     "-p", "max_linear_speed:=0.5", "-p", "max_yaw_rate:=0.8",
-    "-p", "max_interval:=0.4", "-p", "range_limit:=8.0", "-p", "min_response:=0.3",
+    "-p", "max_interval_ms:=400", "-p", "range_limit:=8.0", "-p", "min_response:=0.3",
     "-p", "max_residual:=0.09", "-p", "min_inlier_fraction:=0.55", "-p", "min_spread:=0.04",
     "-p", "min_translation_observability:=0.05", "-p", "min_yaw_observability:=0.01",
     "-p", "max_variance:=0.05", "-p", "reanchor_distance:=0.12", "-p", "reanchor_yaw:=0.1",

@@ -5,15 +5,13 @@ from senior_control.config import SettingsSource, load_settings
 
 def test_settings_precedence_and_redaction(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text("heartbeat_seconds: 0.4\nsecret: yaml-secret\n")
+    path.write_text("secret: yaml-secret\n")
     settings = load_settings(
         SettingsSource(
             yaml_path=path,
-            environment={"SENIOR_HEARTBEAT_SECONDS": "0.3", "SENIOR_SECRET": "env-secret"},
-            cli={"heartbeat_seconds": 0.2},
+            environment={"SENIOR_SECRET": "env-secret"},
         )
     )
-    assert settings.heartbeat_seconds == 0.2
     assert settings.secret.get_secret_value() == "env-secret"
     with pytest.raises(ValueError) as exc:
         load_settings(
@@ -25,14 +23,22 @@ def test_settings_precedence_and_redaction(tmp_path):
             )
         )
     assert "sensitive-value" not in str(exc.value)
+    with pytest.raises(ValueError):
+        load_settings(
+            SettingsSource(
+                cli={"secret": "x", "heartbeat_ms": 200, "command_ttl_ms": 300},
+                environment={},
+            )
+        )
 
 
 def test_retired_disconnect_setting_does_not_gate_connection_heartbeat():
-    settings = load_settings(
-        SettingsSource(cli={"secret": "x", "heartbeat_seconds": 2, "disconnect_seconds": 1})
-    )
-    assert settings.heartbeat_seconds == 2
+    settings = load_settings(SettingsSource(cli={"secret": "x", "disconnect_seconds": 1}))
     assert "disconnect_seconds" not in settings.model_dump()
+    assert "heartbeat_seconds" not in type(settings).model_fields
+    assert "heartbeat_ms" not in type(settings).model_fields
+    assert "command_ttl_seconds" not in type(settings).model_fields
+    assert "perception_stale_seconds" not in type(settings).model_fields
 
 
 def test_import_has_no_side_effects(tmp_path):

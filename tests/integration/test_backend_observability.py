@@ -75,8 +75,8 @@ async def agent_and_tasks(tmp_path: Path) -> AsyncIterator[tuple[Agent, FakeTask
             maps=FakeMaps(),
             state=FakeState(),
             motion=FakeMotion(),
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
+            heartbeat_ms=20,
+            retry_delay_ms=10,
         )
         runner = asyncio.ensure_future(agent.run())
         await until(lambda: agent.connected)

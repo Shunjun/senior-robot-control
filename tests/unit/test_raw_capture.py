@@ -1,6 +1,8 @@
 """Raw camera admission binds each bridge/source lifetime and first receipts."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 
 
 def raw_header(**changes):
@@ -19,6 +21,7 @@ def raw_header(**changes):
         sequence=1,
         valid=True,
         reason="",
+        timing=capture_time(10.0, sequence=max(1, 1), epoch="epoch-a", tick=(1_000_000_000) / 1e9),
     )
     return replace(base, **changes)
 
@@ -26,7 +29,7 @@ def raw_header(**changes):
 def test_bridge_and_raw_restart_retire_old_data_without_restamping():
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
-    admission = RawCaptureAdmission(max_age_s=0.3)
+    admission = RawCaptureAdmission(max_age_ms=300)
     old = raw_header()
     assert admission.offer(old, bridge_gid="02" * 24, now_ros_ns=1_100_000_000, now_steady=10.1)
     assert admission.latest is old
@@ -53,7 +56,7 @@ def test_bridge_and_raw_restart_retire_old_data_without_restamping():
 def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
-    admission = RawCaptureAdmission(max_age_s=0.3)
+    admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
     assert admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
@@ -78,7 +81,7 @@ def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
 def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
-    admission = RawCaptureAdmission(max_age_s=0.3)
+    admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
     assert admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
@@ -104,7 +107,7 @@ def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
 def test_graph_disappearing_revokes_current_source_without_old_queue_revival():
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
-    admission = RawCaptureAdmission(max_age_s=0.3)
+    admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
     assert admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
@@ -130,7 +133,7 @@ def test_same_stamp_cannot_pair_across_bridge_boot_or_global_capture_generation(
 def test_delayed_old_global_generation_cannot_reopen_after_replacement():
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
-    admission = RawCaptureAdmission(max_age_s=0.3)
+    admission = RawCaptureAdmission(max_age_ms=300)
     old = raw_header(bridge_boot_id="boot-a", capture_generation=1)
     assert admission.offer(
         old, bridge_gid=old.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
@@ -158,6 +161,7 @@ def test_capture_header_decoding_preserves_original_metadata_and_rejects_bad_tim
         stamp=SimpleNamespace(sec=1, nanosec=0),
         received_ros=SimpleNamespace(sec=1, nanosec=1),
         received_steady=original.received_steady,
+        timing=SimpleNamespace(**asdict(original.timing)),
         frame_id=original.frame_id,
         raw_gid=original.raw_gid,
         bridge_gid=original.bridge_gid,
@@ -177,7 +181,7 @@ def test_capture_header_decoding_preserves_original_metadata_and_rejects_bad_tim
 def test_group_revokes_all_streams_on_new_generation_and_rejects_old_packets():
     from senior_control.vision.raw_capture import RawCaptureGroup
 
-    group = RawCaptureGroup(("depth", "info"), max_age_s=0.3)
+    group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     depth = raw_header(source_epoch="depth", bridge_gid="02" * 24)
     info = raw_header(source_epoch="info", bridge_gid="03" * 24)
     args = {"now_ros_ns": 1_100_000_000, "now_steady": 10.1}
@@ -200,7 +204,7 @@ def test_group_revokes_all_streams_on_new_generation_and_rejects_old_packets():
 def test_group_rejects_same_stamp_from_different_bridge_boots():
     from senior_control.vision.raw_capture import RawCaptureGroup
 
-    group = RawCaptureGroup(("depth", "info"), max_age_s=0.3)
+    group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     first = raw_header(source_epoch="depth")
     other = raw_header(source_epoch="info", bridge_gid="03" * 24, bridge_boot_id="other")
     args = {"now_ros_ns": 1_100_000_000, "now_steady": 10.1}
@@ -212,7 +216,7 @@ def test_group_rejects_same_stamp_from_different_bridge_boots():
 def test_group_recovers_bridge_restart_without_reviving_retired_boot():
     from senior_control.vision.raw_capture import RawCaptureGroup
 
-    group = RawCaptureGroup(("depth", "info"), max_age_s=0.3)
+    group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     first = raw_header(source_epoch="depth")
     info = raw_header(source_epoch="info", bridge_gid="03" * 24)
     args = {"now_ros_ns": 1_100_000_000, "now_steady": 10.1}
@@ -232,7 +236,7 @@ def test_group_recovers_bridge_restart_without_reviving_retired_boot():
 def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
     from senior_control.vision.raw_capture import RawCaptureGroup
 
-    group = RawCaptureGroup(("depth", "info"), max_age_s=0.3)
+    group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     depth = raw_header(source_epoch="depth")
     info = raw_header(source_epoch="info", bridge_gid="03" * 24)
     args = {"now_ros_ns": 1_100_000_000, "now_steady": 10.1}
@@ -244,16 +248,16 @@ def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
     assert not group.offer("info", info, bridge_gid=info.bridge_gid, **args)
 
 
-def test_scan_profile_can_select_bounded_longer_receipt_age_without_changing_default():
+def test_legacy_receipt_age_override_cannot_extend_shared_one_second_policy():
     import pytest
 
     from senior_control.vision.raw_capture import RawCaptureAdmission
 
     with pytest.raises(ValueError):
-        RawCaptureAdmission(max_age_s=3.0)
-    admission = RawCaptureAdmission(max_age_s=3.0, hard_limit_s=5.0)
+        RawCaptureAdmission(max_age_ms=3000)
+    admission = RawCaptureAdmission(max_age_ms=3000, hard_limit_ms=5000)
     good = raw_header()
-    assert admission.offer(
+    assert not admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=3_000_000_000, now_steady=12.0
     )
     assert not admission.offer(

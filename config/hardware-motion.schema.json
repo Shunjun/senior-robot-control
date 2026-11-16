@@ -1,67 +1,5 @@
 {
   "$defs": {
-    "AdmissionConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "rules": {
-          "items": {
-            "$ref": "#/$defs/SourceRule"
-          },
-          "title": "Rules",
-          "type": "array"
-        },
-        "recovery_samples": {
-          "title": "Recovery Samples",
-          "type": "integer"
-        },
-        "recovery_span_s": {
-          "title": "Recovery Span S",
-          "type": "number"
-        },
-        "normal_cap_mps": {
-          "title": "Normal Cap Mps",
-          "type": "number"
-        },
-        "degraded_cap_mps": {
-          "title": "Degraded Cap Mps",
-          "type": "number"
-        },
-        "heading_max_age_s": {
-          "title": "Heading Max Age S",
-          "type": "number"
-        },
-        "alignment_max_skew_s": {
-          "title": "Alignment Max Skew S",
-          "type": "number"
-        },
-        "heading_max_variance_rad2": {
-          "title": "Heading Max Variance Rad2",
-          "type": "number"
-        },
-        "clock_pause_s": {
-          "title": "Clock Pause S",
-          "type": "number"
-        },
-        "epoch_history_limit": {
-          "title": "Epoch History Limit",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "rules",
-        "recovery_samples",
-        "recovery_span_s",
-        "normal_cap_mps",
-        "degraded_cap_mps",
-        "heading_max_age_s",
-        "alignment_max_skew_s",
-        "heading_max_variance_rad2",
-        "clock_pause_s",
-        "epoch_history_limit"
-      ],
-      "title": "AdmissionConfig",
-      "type": "object"
-    },
     "ControllerConfig": {
       "additionalProperties": false,
       "properties": {
@@ -82,24 +20,12 @@
           "title": "Wheel Speed Mps",
           "type": "number"
         },
-        "max_tick_s": {
-          "title": "Max Tick S",
-          "type": "number"
-        },
         "still_speed_mps": {
           "title": "Still Speed Mps",
           "type": "number"
         },
         "still_yaw_rps": {
           "title": "Still Yaw Rps",
-          "type": "number"
-        },
-        "still_samples": {
-          "title": "Still Samples",
-          "type": "integer"
-        },
-        "still_span_s": {
-          "title": "Still Span S",
           "type": "number"
         },
         "disagreement_mps": {
@@ -121,11 +47,8 @@
         "integral_limit",
         "track_width_m",
         "wheel_speed_mps",
-        "max_tick_s",
         "still_speed_mps",
         "still_yaw_rps",
-        "still_samples",
-        "still_span_s",
         "disagreement_mps",
         "basis",
         "synthetic"
@@ -189,70 +112,6 @@
         "conflict_yaw_rps"
       ],
       "title": "FusionConfig",
-      "type": "object"
-    },
-    "HardwareEstopCapability": {
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "default": "unknown",
-          "enum": [
-            "readable",
-            "independent_unreadable",
-            "unknown"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "basis": {
-          "default": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
-          "title": "Basis",
-          "type": "string"
-        },
-        "topic": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Topic"
-        },
-        "publisher": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Publisher"
-        },
-        "namespace": {
-          "default": "/",
-          "title": "Namespace",
-          "type": "string"
-        },
-        "max_age_s": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Age S"
-        }
-      },
-      "title": "HardwareEstopCapability",
       "type": "object"
     },
     "OptionalMotionInput": {
@@ -342,88 +201,6 @@
       "title": "QueueWarningPolicy",
       "type": "object"
     },
-    "Source": {
-      "enum": [
-        "laser",
-        "gps",
-        "imu",
-        "wheel"
-      ],
-      "title": "Source",
-      "type": "string"
-    },
-    "SourceRule": {
-      "additionalProperties": false,
-      "properties": {
-        "source": {
-          "$ref": "#/$defs/Source"
-        },
-        "max_age_s": {
-          "title": "Max Age S",
-          "type": "number"
-        },
-        "max_interval_s": {
-          "title": "Max Interval S",
-          "type": "number"
-        },
-        "min_quality": {
-          "title": "Min Quality",
-          "type": "number"
-        },
-        "max_variance": {
-          "title": "Max Variance",
-          "type": "number"
-        }
-      },
-      "required": [
-        "source",
-        "max_age_s",
-        "max_interval_s",
-        "min_quality",
-        "max_variance"
-      ],
-      "title": "SourceRule",
-      "type": "object"
-    },
-    "TemporalConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "history_s": {
-          "title": "History S",
-          "type": "number"
-        },
-        "max_samples": {
-          "title": "Max Samples",
-          "type": "integer"
-        },
-        "max_hold_s": {
-          "title": "Max Hold S",
-          "type": "number"
-        },
-        "max_gap_s": {
-          "title": "Max Gap S",
-          "type": "number"
-        },
-        "prediction_horizon_s": {
-          "title": "Prediction Horizon S",
-          "type": "number"
-        },
-        "assume_nonholonomic": {
-          "title": "Assume Nonholonomic",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "history_s",
-        "max_samples",
-        "max_hold_s",
-        "max_gap_s",
-        "prediction_horizon_s",
-        "assume_nonholonomic"
-      ],
-      "title": "TemporalConfig",
-      "type": "object"
-    },
     "Velocity": {
       "additionalProperties": false,
       "properties": {
@@ -474,11 +251,6 @@
     "diagnostics": {
       "$ref": "#/$defs/DiagnosticsSettings"
     },
-    "max_age": {
-      "exclusiveMinimum": 0,
-      "title": "Max Age",
-      "type": "number"
-    },
     "accel": {
       "exclusiveMinimum": 0,
       "title": "Accel",
@@ -509,9 +281,9 @@
       "title": "Yaw Jerk",
       "type": "number"
     },
-    "lag": {
+    "lag_ms": {
       "minimum": 0,
-      "title": "Lag",
+      "title": "Lag Ms",
       "type": "number"
     },
     "requested_linear_mps": {
@@ -564,6 +336,16 @@
       "title": "Stationary Yaw Rps",
       "type": "number"
     },
+    "startup_learning_front_occlusion_stop": {
+      "default": true,
+      "title": "Startup Learning Front Occlusion Stop",
+      "type": "boolean"
+    },
+    "startup_learning_rear_occlusion_stop": {
+      "default": true,
+      "title": "Startup Learning Rear Occlusion Stop",
+      "type": "boolean"
+    },
     "linear_error": {
       "minimum": 0,
       "title": "Linear Error",
@@ -582,13 +364,6 @@
     "position_error": {
       "minimum": 0,
       "title": "Position Error",
-      "type": "number"
-    },
-    "model_seconds": {
-      "default": 3600.0,
-      "description": "Startup model lease budget, seconds; not measured response",
-      "exclusiveMinimum": 0,
-      "title": "Model Seconds",
       "type": "number"
     },
     "assumed_body_cap": {
@@ -623,9 +398,9 @@
       "title": "Lateral Drift Mps",
       "type": "number"
     },
-    "lateral_stop_s": {
+    "lateral_stop_ms": {
       "minimum": 0,
-      "title": "Lateral Stop S",
+      "title": "Lateral Stop Ms",
       "type": "number"
     },
     "reaction_linear_accel": {
@@ -652,17 +427,6 @@
       "title": "Watchdog Basis",
       "type": "string"
     },
-    "hardware_estop": {
-      "$ref": "#/$defs/HardwareEstopCapability",
-      "default": {
-        "mode": "unknown",
-        "basis": "Target hardware ESTOP capability unconfirmed; see vehicle-hardware-audit",
-        "topic": null,
-        "publisher": null,
-        "namespace": "/",
-        "max_age_s": null
-      }
-    },
     "perception_basis": {
       "default": "original raw lidar; hardware no-return remains unknown",
       "title": "Perception Basis",
@@ -677,28 +441,6 @@
       "default": "",
       "title": "Brake Tracking Basis",
       "type": "string"
-    },
-    "admission_config": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AdmissionConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "temporal_config": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TemporalConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
     },
     "fusion_config": {
       "anyOf": [
@@ -785,7 +527,7 @@
     "yaw_accel",
     "yaw_decel",
     "yaw_jerk",
-    "lag",
+    "lag_ms",
     "degraded_cap",
     "wheel_speed_mps",
     "stationary_linear_mps",
@@ -799,7 +541,7 @@
     "drive_yaw_overshoot",
     "orientation_error_rad",
     "lateral_drift_mps",
-    "lateral_stop_s",
+    "lateral_stop_ms",
     "reaction_linear_accel",
     "reaction_yaw_accel"
   ],

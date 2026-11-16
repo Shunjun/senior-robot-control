@@ -100,14 +100,13 @@ Docker 模式可在 config.json 添加 `"container": "ros2"`，参照
 
 实车运动启动会先加载 `vendor_ros_setup`（默认 `/home/wheeltec/wheeltec_ros2/install/setup.bash`），再加载本项目 `ros_setup`。厂家底盘、雷达和相机分别复用 `turn_on_wheeltec_robot.launch.py`、`wheeltec_lidar.launch.py` 与 `wheeltec_camera.launch.py`，从厂家的 `wheeltec_param.yaml` 读取车型、IMU 和雷达型号，相机型号同样读取厂家配置；不启动键盘控制或独立厂家导航。相机在 Agent/IPC 就绪后启动，崩溃会报告视频不可用，不会关闭激光运动链；厂家相机驱动的段错误仍需独立排查。所有本次启动的驱动随服务联合停止；不要同时手动启动相同驱动。当前厂家底盘发布 `/odom`（帧 `odom_combined`）、`/imu/data_raw`，雷达发布 `/scan`。旧配套 YAML 的 `wheel_frame: odom` 自动迁移为 `odom_combined`，话题 `/odom` 不改名。
 
-CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地址。可显式添加 `ros_setup` 指向实际 ROS overlay 的绝对路径；默认推导为 `project_dir/ros2/install/setup.bash`。该 overlay 必须包含构建时正确加载的 ROS 底层及厂商 underlay。若驱动使用特定 ROS 域，添加与驱动实际一致的 `ros_domain` 整数；不要照搬仿真域或假定为 42。`project_dir` 在 Docker 模式下指容器内的路径，必须能找到 `.ros-venv/bin/python` 和已安装的本项目。Python 路径不单独配置。不要逐项添加 `credentials`、`database`、`socket` 或 `estop_state` 的其他路径；CLI 从统一目录推导它们。
+CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地址。可显式添加 `ros_setup` 指向实际 ROS overlay 的绝对路径；默认推导为 `project_dir/ros2/install/setup.bash`。该 overlay 必须包含构建时正确加载的 ROS 底层及厂商 underlay。若驱动使用特定 ROS 域，添加与驱动实际一致的 `ros_domain` 整数；不要照搬仿真域或假定为 42。`project_dir` 在 Docker 模式下指容器内的路径，必须能找到 `.ros-venv/bin/python` 和已安装的本项目。Python 路径不单独配置。不要逐项添加 `credentials`、`database`或 `socket` 的其他路径；CLI 从统一目录推导它们。
 
 | 文件 | 来源与用途 |
 | --- | --- |
 | `config.json` | 手工创建的运行配置；不含设备 token |
 | `device.json` | pair 创建的设备身份和 token，权限 0600 |
 | `agent.db`、可能的 `agent.db-wal/-shm` | Agent 的 SQLite 数据 |
-| `estop-state.json` | 实车急停持久状态；缺失或无效时保持锁定，CLI 不重置它 |
 | `agent.sock` | ROS 适配器提供的本地通信端点 |
 | `agent.env` | deploy 生成的环境变量，引用凭据文件，不写入 token |
 | `senior-agent-<目录哈希>.service` | deploy 生成的宿主机 systemd 服务文件 |
@@ -117,7 +116,7 @@ CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地�
 
 systemd 只在宿主机 `/etc/systemd/system` 建立指向目录内服务文件的必要链接。CLI 不再把新配置分散写入 `/etc/senior-control`、`/var/lib/senior-control` 和 `/run/senior-control`。系统日志仍由宿主机 journal 管理。
 
-已有设备应保留并迁移原凭据、数据库和急停状态，迁移前停止相关写入并做好备份。CLI 不会自动迁移或删除旧目录。旧文件确已删除且没有备份时，需要重新配对；不能凭克隆仓库恢复原设备身份或任务历史。
+已有设备应保留并迁移原凭据和数据库，迁移前停止相关写入并做好备份。CLI 不会自动迁移或删除旧目录。旧文件确已删除且没有备份时，需要重新配对；不能凭克隆仓库恢复原设备身份或任务历史。
 
 ## 4. 配对设备
 
@@ -166,6 +165,8 @@ source install/setup.bash
 
 容器应预先具备对应 ROS 发行版、Python venv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
 
+启动服务前执行 [ROS 类型支持加载检查](ros-interface-rebuild.md#启动前检查不创建-ros-节点)。升级包含消息删除或重命名时，先按该页定向备份并重建接口包；普通增量构建成功不足以排除旧生成物和安装残留，无需重复创建 venv 或 pip 安装。
+
 ### 非容器模式
 
 本机的 `<project_dir>/.ros-venv` 同时承载 Agent 与适配器。按上面的 ROS 安装与构建步骤在本机准备环境，不执行 `docker exec`。只装宿主机 CLI 依赖不足以运行此模式。
@@ -176,7 +177,6 @@ source install/setup.bash
 
 - 联合入口从 `device.json` 读取 robot ID 并传给适配器，握手核对身份；不要输出或复制其中的 token。
 - 适配器的 `SENIOR_AGENT_SOCKET` 指向运行环境内统一目录的 `agent.sock`，进程用户可读写该目录并能创建端点。
-- `safety_state_path` 指向该目录的 `estop-state.json`，由实车安全流程准备和管理。不要使用仿真的初始化命令来创建实车未锁定状态。
 - ROS Domain、话题、TF、时钟与硬件实际配置匹配；安全门是唯一最终 `/cmd_vel` 发布者。
 
 硬件核验见[硬件检查](hardware.md)。实车启动会拒绝缺失或无效的运动配置；仓库没有已经资格化的通用实车制动、覆盖和相机参数，当前共享输出适配仅使用激光自由空间。下面的启动命令不能代替现场标定与运行验收。
@@ -261,7 +261,7 @@ stat -c '%a %U:%G %n' /home/wheeltec/ros2_shared_dir/senior-control
 docker inspect --format '{{.State.Status}} {{json .Mounts}}' ros2
 ```
 
-现代实车 unit 应指向联合入口。`doctor` 只证明可检查的 Python、目录和挂载条件；ROS 就绪在 start 时核验。`Cloud: last event connected` 只是该次服务运行最近的连接事件，不是持续在线证明。缺失/无效急停状态保持锁定，不要清空安全意图、删除急停状态或用复位急停解决上线问题。
+现代实车 unit 应指向联合入口。`doctor` 只证明可检查的 Python、目录和挂载条件；ROS 就绪在 start 时核验。`Cloud: last event connected` 只是该次服务运行最近的连接事件，不是持续在线证明。软件急停由最终输出侧唯一 owner 在当前进程内锁存；完整启动未锁存，不读取或写入旧急停文件。文件缺失、损坏或不可读不影响软件急停状态，也不会因此授予运动许可。不要删除现场历史文件。
 
 ## 9. 升级已部署服务
 
@@ -284,3 +284,5 @@ Agent 会校验完整小写 SHA-256、地图包内容与来源车辆。只读包
 ## 源码依据与验收边界
 
 入口与统一目录解析见 [cli.py](../../src/senior_control/cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../src/senior_control/vehicle_deploy.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../src/senior_control/docker_start_helper.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
+
+升级时从自定义配置中移除已退役的 `estop_state` / `safety_state_path` 参数，并从自定义 motion profile 移除 `hardware_estop` 配置块；新版本不保留这些配置的兼容读取。现场旧 `estop-state.json` 保留原样，不作为启动输入。

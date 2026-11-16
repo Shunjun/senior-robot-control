@@ -20,7 +20,11 @@ def navigation(monkeypatch):
         "rclpy.parameter": {"Parameter": object},
         "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "rclpy.subscription": {"Subscription": object},
-        "senior_motion_msgs.msg": {"DriveExecutionFeedback": object, "FinalCommand": object},
+        "senior_motion_msgs.msg": {
+            "DriveExecutionFeedback": object,
+            "FinalCommand": object,
+            "NavigationSample": object,
+        },
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
     }
     for name, attributes in modules.items():
@@ -33,11 +37,7 @@ def navigation(monkeypatch):
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     clock = SimpleNamespace(mono=10.0, wall=100.0, qualification=0.03, graph=0.0, jump=0.0)
-    monkeypatch.setattr(
-        module,
-        "time",
-        SimpleNamespace(time=lambda: clock.wall, time_ns=lambda: round(clock.wall * 1e9)),
-    )
+    monkeypatch.setattr("time.time", lambda: clock.wall)
     node = module.CommandNode.__new__(module.CommandNode)
     node._consuming_runtime = False
     node._runtime_subscription = MagicMock(msg_type=object, raw=False)
@@ -81,9 +81,16 @@ def navigation(monkeypatch):
     node.get_logger = lambda: SimpleNamespace(warning=logs.append)
     topic = "/control/navigation/run_" + "a" * 32 + "/cmd_vel"
     node._navigation_source = module._NavigationSource(
-        "private-execution", topic, 90.0, object(), 99_000_000_000, qualified
+        "private-execution", topic, object(), 9.0, "same-boot", b"controller", qualified
     )
-    msg = SimpleNamespace(linear=SimpleNamespace(x=0.08), angular=SimpleNamespace(z=0.0))
+    msg = SimpleNamespace(
+        vx=0.08,
+        wz=0.0,
+        produced_steady_ns=10_000_000_000,
+        clock_domain="same-boot",
+        run_id="a" * 32,
+        sequence=1,
+    )
     info = {"source_timestamp": 100_000_000_000, "publisher_gid": b"controller"}
     return SimpleNamespace(
         node=node,
@@ -108,16 +115,18 @@ def test_qualification_work_is_not_a_wall_clock_jump(navigation):
     assert rig.attempts[0][1] == pytest.approx(10.03)
 
 
-@pytest.mark.parametrize("jump", [-0.03, 0.03])
-def test_real_wall_clock_jump_still_clears_source_once_with_reason(navigation, jump):
+@pytest.mark.parametrize("jump", [-3600.0, 3600.0])
+def test_wall_clock_corrections_preserve_source_and_fresh_commands(navigation, jump):
     rig = navigation
+    source = rig.node._navigation_source
     rig.clock.jump = jump
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
+    rig.clock.mono += 0.2
+    rig.msg.produced_steady_ns = round(rig.clock.mono * 1e9)
+    rig.msg.sequence += 1
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
-    assert rig.node._navigation_source is None and len(rig.ended) == 1
-    assert not rig.accepted and len(rig.logs) == 1
-    assert "clock_offset_changed" in rig.logs[0]
-    assert "private-execution" not in rig.logs[0] and rig.topic not in rig.logs[0]
+    assert rig.node._navigation_source is source and len(rig.accepted) == 2
+    assert not rig.ended and not rig.logs
 
 
 @pytest.mark.parametrize("delay_stage", ["qualification", "graph"])
@@ -130,13 +139,13 @@ def test_freshness_uses_current_time_after_all_qualification_work(navigation, de
     assert rig.attempts[0][1] == pytest.approx(10.35)
 
 
-def test_old_dds_source_stamp_is_never_restamped_by_slow_qualification(navigation):
+def test_old_production_time_is_never_restamped_by_slow_qualification(navigation):
     rig = navigation
-    rig.info["source_timestamp"] = 99_600_000_000
+    rig.msg.produced_steady_ns = 9_600_000_000
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
     assert not rig.accepted and rig.node._navigation_source is not None
-    assert rig.attempts[0][0] == pytest.approx(9.59)
-    assert rig.node._navigation_source.last_stamp == 0
+    assert rig.attempts[0][0] == pytest.approx(9.6)
+    assert rig.node._navigation_source.producer_sequence == 0
 
 
 def test_real_qualification_loss_is_cleared_with_one_reason(navigation):
@@ -154,8 +163,12 @@ def test_retirement_waits_for_correlated_gate_receipt(navigation):
     node._owner_boot = "command-boot"
     node._awaiting_feedback = {}
     node.get_parameter = lambda _: SimpleNamespace(value="robot")
-    node.get_publishers_info_by_topic = lambda _: [
-        SimpleNamespace(node_name="safety_gate", node_namespace="/", endpoint_gid=b"gate")
+    node.get_publishers_info_by_topic = lambda topic: [
+        SimpleNamespace(
+            node_name="motion_reporter" if topic == "/motion/runtime" else "safety_gate",
+            node_namespace="/",
+            endpoint_gid=b"gate",
+        )
     ]
     node._retirement_core = (b"gate", "test-core")
     node._navigation_source.task_epoch = 1

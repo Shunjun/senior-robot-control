@@ -1,0 +1,8 @@
+AT 2026-11-16T18:45:36.723587+00:00
+CWD /tmp
+COMMAND ["/tmp/final-review-fixes-wheel-venv/bin/python", "-I", "-c", "import senior_control.protocol, senior_control.config, senior_control; import importlib.util; from importlib.metadata import distributions; assert importlib.util.find_spec('shapely') is None; print(senior_control.__file__); print(sorted((d.metadata['Name'],d.version) for d in distributions()))"]
+/tmp/final-review-fixes-wheel-venv/lib/python3.12/site-packages/senior_control/__init__.py
+[('PyYAML', '6.0.3'), ('aiosqlite', '0.22.1'), ('annotated-types', '0.8.0'), ('pydantic', '2.14.2'), ('pydantic-settings', '2.16.2'), ('pydantic_core', '2.50.2'), ('python-dotenv', '1.2.4'), ('senior-control', '0.1.0'), ('typing-inspection', '0.4.4'), ('typing_extensions', '4.16.0')]
+
+EXIT 0
+ELAPSED 0.27155220799613744
