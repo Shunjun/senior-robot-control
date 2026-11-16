@@ -92,26 +92,93 @@ async def start(
     return runtime, executor, nav, live, records[0].execution_id
 
 
-async def test_runtime_runs_offline_and_completes_same_identity(tmp_path: Path) -> None:
+@pytest.mark.parametrize("outage", ["socket", "heartbeat"])
+async def test_runtime_runs_offline_and_completes_same_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outage: str
+) -> None:
+    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, until
+    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
+
+    from senior_control.agent import Agent
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.agent.websocket import WebSocketLink
+
+    clock = HeartbeatClock(monkeypatch)
+    hub = relay_hub(monkeypatch, clock)
+    first = RelaySocket(hub, "robot", drop_replies=outage == "heartbeat")
+    links: asyncio.Queue[Any] = asyncio.Queue()
+    links.put_nowait(WebSocketLink(first, "robot", 1, clock=clock.monotonic))
     async with Database(tmp_path / "task.db") as database:
         runtime, executor, nav, live, identity = await start(database)
         assert nav.progress is not None and nav.progress.status == "running"
         assert executor.lifecycle is not None
         receipt = await executor.lifecycle.store.query(f"schedule:{identity}")
-        nav.progress = nav.progress.model_copy(
-            update={
-                "completed_action_ids": ["0:a", "1:b"],
-                "status": "succeeded",
-                "controller_output_exited": True,
-            }
+
+        class State(FakeState):
+            async def collect(self):
+                return replace(await super().collect(), route_progress=nav.progress)
+
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        agent = Agent(
+            "robot",
+            connector=links.get,
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=State(),
+            motion=FakeMotion(),
+            clock=clock,
+            heartbeat_ms=20,
+            retry_delay_ms=1,
         )
-        await runtime.tick(NOW + timedelta(seconds=60.5), 1, replace(live, connected=False))
-        assert (await executor.lifecycle.store.load(identity)).pending.kind == "terminal_release"
-        await runtime.tick(NOW + timedelta(seconds=60.6), 1.1, replace(live, connected=False))
-        state = await executor.lifecycle.store.load(identity)
-        assert state.phase == "succeeded" and state.completed == ("0:a", "1:b")
-        assert await executor.lifecycle.store.query(f"schedule:{identity}") == receipt
-        assert [effect.kind for effect in nav.effects] == ["plan", "terminal_release"]
+        runner = asyncio.create_task(agent.run())
+        try:
+            await until(lambda: bool(first.sent))
+            if outage == "socket":
+                await first.close()
+            else:
+                clock.advance(14.999)
+                await agent._beat()
+                assert agent.connected and not first.closed
+                clock.advance(15.0)
+            await until(lambda: not agent.connected and first.closed)
+            # Derive offline from a real closed relay transport and completed Agent session.
+            assert first.connection.outbox.closed
+            assert (await executor.lifecycle.store.load(identity)).phase == "running"
+            nav.progress = nav.progress.model_copy(
+                update={
+                    "completed_action_ids": ["0:a", "1:b"],
+                    "status": "succeeded",
+                    "controller_output_exited": True,
+                }
+            )
+            offline = replace(live, connected=agent.connected)
+            await runtime.tick(NOW + timedelta(seconds=60.5), 1, offline)
+            pending = (await executor.lifecycle.store.load(identity)).pending
+            assert pending is not None and pending.kind == "terminal_release"
+            await runtime.tick(NOW + timedelta(seconds=60.6), 1.1, offline)
+            state = await executor.lifecycle.store.load(identity)
+            assert state.phase == "succeeded" and state.completed == ("0:a", "1:b")
+            second = RelaySocket(hub, "robot")
+            links.put_nowait(WebSocketLink(second, "robot", 2, clock=clock.monotonic))
+            await until(lambda: agent.connection_epoch == 2)
+            await until(lambda: any(frame["type"] == "snapshot" for frame in second.sent))
+            snapshot = next(frame for frame in second.sent if frame["type"] == "snapshot")
+            synced = snapshot["payload"]["route_progress"]
+            assert synced["execution_id"] == nav.progress.execution_id
+            assert synced["task_id"] == nav.progress.task_id and synced["status"] == "succeeded"
+            await runtime.tick(NOW + timedelta(seconds=61), 1.5, replace(live, connected=True))
+            assert await executor.lifecycle.store.query(f"schedule:{identity}") == receipt
+            assert [effect.kind for effect in nav.effects] == [
+                "plan",
+                "terminal_release",
+                "terminal_settled",
+            ]
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
 
 
 async def test_takeover_waits_for_output_ack_then_explicit_resume_uses_remaining(
@@ -152,7 +219,7 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
     ros_nav = importlib.import_module("senior_robot.navigation_adapter")
     ros_ipc = importlib.import_module("senior_robot.agent_adapter")
     goals: list[asyncio.Future[bool]] = []
-    arbiter = Arbiter("robot", 0.3)
+    arbiter = Arbiter("robot", 300)
 
     class Goals:
         async def start(self, goal: Any) -> str:
@@ -400,6 +467,7 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
             motion=FakeMotion(),
             navigation=actions,
         )
+        agent._link, agent._epoch = wire_link, 1
         for kind, result in [
             ("navigation.goal", accepted),
             ("navigation.return_home", accepted),

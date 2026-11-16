@@ -4,6 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 from test_motion_sources import config
 
 from senior_control.motion.observations import (
@@ -14,6 +15,7 @@ from senior_control.motion.observations import (
 from senior_control.motion.sample_types import PointObservation
 from senior_control.motion.source_admission import AdmissionOwner
 from senior_control.motion.temporal import TemporalConfig, TemporalResolver
+from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def point(source, t, seq, values, epoch="p", covariance=None, model=None):
@@ -30,17 +32,19 @@ def point(source, t, seq, values, epoch="p", covariance=None, model=None):
         covariance,
         model,
         None,
+        measurement_steady=t + 100,
+        measurement=capture_time(t + 100, tick=t).measurement,
     )
 
 
 def owner():
     return AdmissionOwner(
-        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=128
+        replace(config(), recovery_samples=1, recovery_span_ms=0), event_capacity=128
     )
 
 
 def resolver():
-    return TemporalResolver(TemporalConfig(1.0, 128, 0.08, 0.08, 0.08, True))
+    return TemporalResolver(TemporalConfig(1.0, 128, 80, 80, 80, True))
 
 
 def feed(o, events):
@@ -85,7 +89,7 @@ def test_30_50_hz_causal_zoh_turning_prediction_is_complete_but_not_observed_lat
 def test_gap_epoch_interruption_and_cursor_overrun_are_explicit():
     o = owner()
     r = resolver()
-    feed(o, [point(Source.IMU, 0.0, 1, (0.5,))])
+    feed(o, [point(Source.IMU, 0.0, 1, (0.5,)), point(Source.WHEEL, 0.2, 1, (0.0, 0.0))])
     s = o.snapshot(after_cursor=0, now_ros=0.2, now_steady=100.2)
     r.consume(s)
     assert r.resolve(0.1, 0.2, s).by_source(Source.IMU).reason == "hold_expired"
@@ -95,7 +99,7 @@ def test_gap_epoch_interruption_and_cursor_overrun_are_explicit():
     r.consume(n)
     assert not r.resolve(0.0, 0.1, n).by_source(Source.IMU).original_keys
     small = AdmissionOwner(
-        replace(config(), recovery_samples=1, recovery_span_s=0), event_capacity=2
+        replace(config(), recovery_samples=1, recovery_span_ms=0), event_capacity=2
     )
     feed(small, [point(Source.IMU, i * 0.02, i + 1, (0.5,)) for i in range(4)])
     assert small.snapshot(after_cursor=0, now_ros=0.06, now_steady=100.06).journal_gap
@@ -117,7 +121,16 @@ def test_raw_gps_uses_each_causal_heading_not_only_window_start(yaw, enu):
         for i in range(4)
     ]
     for p in sorted(events + gps, key=lambda p: p.end_ros):
-        heading = Heading(yaw, 0, p.end_ros, p.received_steady, "h", "synthetic known yaw")
+        heading = Heading(
+            yaw,
+            0,
+            p.end_ros,
+            p.received_steady,
+            "h",
+            "synthetic known yaw",
+            measurement_steady=p.received_steady,
+            measurement=capture_time(p.received_steady, tick=p.end_ros).measurement,
+        )
         assert o.ingest(
             p,
             now_ros=p.end_ros,
@@ -175,6 +188,12 @@ def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
         covariance,
         "synthetic",
         extrinsic,
+        start_steady=(100.1) - ((0.1) - (0)),
+        end_steady=100.1,
+        measurement_interval=MeasurementInterval(
+            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
+            capture_time(100.1, tick=0.1).measurement,
+        ),
     )
     assert o.ingest(p, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
@@ -191,7 +210,16 @@ def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change()
     from senior_control.motion.observations import Heading
 
     o = owner()
-    h = Heading(0, 0, 0, 100, "h", "synthetic")
+    h = Heading(
+        0,
+        0,
+        0,
+        100,
+        "h",
+        "synthetic",
+        measurement_steady=100,
+        measurement=capture_time(100, tick=0).measurement,
+    )
     good = replace(
         point(Source.GPS, 0, 1, (0.3, 0)), frame=Frame.ENU, body_from_sensor=Pose2D(0, 0, 0)
     )
@@ -200,7 +228,14 @@ def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change()
         Pose2D(float("nan"), 0, 0)
     bad = replace(good, sequence=99, body_from_sensor="unknown")
     assert o.ingest(bad, now_ros=0, now_steady=100, heading=h).reason == "invalid_extrinsic"
-    next_sample = replace(good, stamp_ros=0.02, sequence=2, received_steady=100.02)
+    next_sample = replace(
+        good,
+        stamp_ros=0.02,
+        sequence=2,
+        received_steady=100.02,
+        measurement_steady=100.02,
+        measurement=capture_time(100.02, tick=0.02).measurement,
+    )
     assert o.ingest(next_sample, now_ros=0.02, now_steady=100.02, heading=h).accepted
 
 
@@ -222,7 +257,7 @@ def test_repeated_snapshot_and_clock_rollback_do_not_keep_gyro_history():
         assert result.values[2] == pytest.approx(0.5)
     reset = o.snapshot(after_cursor=s.cursor, now_ros=0.01, now_steady=100.2)
     r.consume(reset)
-    assert r.resolve(0, 0.01, reset).by_source(Source.IMU).reason == "source_unavailable"
+    assert r.resolve(0, 0.01, reset).by_source(Source.IMU).values[2] == pytest.approx(0.5)
 
 
 def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
@@ -231,7 +266,7 @@ def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
     o = owner()
     feed(o, [point(Source.IMU, i * 0.02, i + 1, (0.5,)) for i in range(6)])
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
-    r = TemporalResolver(TemporalConfig(1, 2, 0.08, 0.08, 0.08, True))
+    r = TemporalResolver(TemporalConfig(1, 2, 80, 80, 80, True))
     r.consume(s)
     w = r.resolve(0, 0.1, s)
     assert "history_capacity_eviction" in w.diagnostics
@@ -257,6 +292,12 @@ def test_interval_rotation_alias_is_explicit_not_a_crash_or_wrapped_prediction()
         None,
         None,
         Pose2D(0, 0, 0),
+        start_steady=(100.1) - ((0.1) - (0)),
+        end_steady=100.1,
+        measurement_interval=MeasurementInterval(
+            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
+            capture_time(100.1, tick=0.1).measurement,
+        ),
     )
     assert o.ingest(p, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
@@ -298,7 +339,16 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
             imu,
         ]
         for p in events:
-            h = Heading(0, 0, t, 100 + t, "h", "synthetic known orientation")
+            h = Heading(
+                0,
+                0,
+                t,
+                100 + t,
+                "h",
+                "synthetic known orientation",
+                measurement_steady=100 + t,
+                measurement=capture_time(100 + t, tick=t).measurement,
+            )
             o.ingest(
                 p, now_ros=t, now_steady=100 + t, heading=h if p.source is Source.GPS else None
             )
@@ -343,8 +393,9 @@ def test_single_left_tail_and_held_use_same_coverage_ceiling(max_gap, max_hold, 
 
     o = owner()
     feed(o, [point(Source.IMU, 0, 1, (0.1,))])
-    s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
-    r = TemporalResolver(TemporalConfig(1, 128, max_hold, max_gap, 0.08, True))
+    feed(o, [point(Source.WHEEL, 0.2, 1, (0.0, 0.0))])
+    s = o.snapshot(after_cursor=0, now_ros=0.2, now_steady=100.2)
+    r = TemporalResolver(TemporalConfig(1, 128, (max_hold) * 1000, (max_gap) * 1000, 80, True))
     r.consume(s)
     limit = min(max_gap, max_hold)
     assert r.resolve(0, limit, s).by_source(Source.IMU).reason == "covered"

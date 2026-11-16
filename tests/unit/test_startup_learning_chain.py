@@ -1,16 +1,23 @@
 import pytest
 from control_process_test_support import capture_inputs, publish_inputs
+from learning_test_support import (  # noqa: F401
+    begin_action,
+    bind_core,
+    learning_runs,
+    startup_for,
+    write_geometry_record,
+)
+from source_time_test_support import wire_time
 from test_motion_core_handoff import barrier, core  # noqa: F401
 
 from senior_control.models import Velocity
-from senior_control.motion.startup_learning import StartupLearning
 
 
 def test_core_preserves_unmoved_learning_on_estop(core, tmp_path):  # noqa: F811
     from senior_control.motion.state_machine import RecoveryObservation
 
     core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
-    core.startup = StartupLearning(tmp_path / "claim")
+    bind_core(core, tmp_path / "claim")
     core.startup.state = "moving"
     core._startup_target(10)
     assert core.target.source == "startup_learning"
@@ -29,7 +36,7 @@ def test_initial_interior_stop_does_not_latch_execution_fault(core, tmp_path):  
 
     from senior_control.motion.contracts import MotionMode
 
-    core.startup = StartupLearning(tmp_path / "claim")
+    bind_core(core, tmp_path / "claim")
     core._startup_target(10)
     assert core.target.velocity == Velocity(0, 0)
     result = core._decision_output(
@@ -56,8 +63,8 @@ def test_startup_flows_through_real_tick_and_safety_checks(
     from senior_control.motion.constraint_worker import ConstraintScheduler
 
     a = NativeObservations(core.profile.admission(), core.profile.temporal(), core.profile.fusion())
-    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
-    core.startup = StartupLearning(tmp_path / "claim")
+    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+    bind_core(core, tmp_path / "claim")
     node = core.node
     node._depth_policy = "laser_only"
     node._scan_topology_ready = lambda: True
@@ -96,50 +103,44 @@ def test_startup_flows_through_real_tick_and_safety_checks(
                     sensor_y=0.0,
                     sensor_yaw=0.0,
                     transform_stamp=t,
+                    raw_capture=N(timing=wire_time(t, sequence=i + 1, epoch="scan")),
                 ),
+                measurement_steady=t,
             )
         ]
         publish_inputs(core)
         core.prefetch_scan()
         core.tick()
     assert core.startup.state == "moving", core.startup.summary()
-    if interior_occlusion:
+    if interior_occlusion == "front":
         assert not any(v.vx > 0 for v, _ in node.emitted)
-        if interior_occlusion is True:
-            assert "sweep_unknown" in node.emitted[-1][1]
     else:
         assert any(v.vx > 0 for v, _ in node.emitted), (core.startup.summary(), node.emitted[-3:])
     assert core.self_returns.learned == ()  # prior has never become learned at rest
     core.revoke("estop", now=now[0])
-    assert core.startup.provisional
+    assert core.startup.provisional == (not core.startup.motion_started)
     assert core.startup.velocity == (0 if core.startup.motion_started else 0.05)
     assert core.self_returns.learned == ()
 
 
-def test_permission_loss_after_first_output_interrupts_and_clears_prior(core, tmp_path):  # noqa: F811
-    from types import SimpleNamespace as N
-
-    core.startup = StartupLearning(tmp_path / "claim")
-    core.startup.state = "moving"
-    core.startup.motion_emitted(10.0)
-    assert core._startup_permission_lost(N(permit=None))
-    assert core.startup.state == "interrupted"
-    assert not core.startup.provisional
+def test_temporary_feedback_loss_segments_without_replaying_action(core, tmp_path):  # noqa: F811
+    bind_core(core, tmp_path / "claim")
+    begin_action(core.startup, 10.0)
+    core.revoke("feedback_lost", now=10.1)
+    assert core.startup.state != "interrupted"
+    assert core.startup.started == 10.0
 
 
-def test_component_reconstruction_cannot_repeat_program_start(core, tmp_path, monkeypatch):  # noqa: F811
-    from senior_robot.motion_core_output import MotionCoreOutput
-
-    claim = tmp_path / "program-run"
-    assert StartupLearning(claim).active
-    monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(claim))
-    rebuilt = MotionCoreOutput(core.node, core.profile)
-    try:
-        assert rebuilt.startup.state == "interrupted"
-        rebuilt._startup_target(10)
-        assert rebuilt.target.velocity == Velocity(0, 0)
-    finally:
-        rebuilt.close()
+def test_component_reconstruction_restores_consumption_without_repeat(core, tmp_path):  # noqa: F811
+    path = tmp_path / "program-run"
+    bind_core(core, path)
+    begin_action(core.startup, 10.0)
+    core._learning_client.close()
+    bind_core(core, path)
+    core.startup.advance(0.0, now=10.1, stationary=True)
+    core._startup_target(10.1)
+    assert core.startup.velocity == 0
+    assert core.startup.motion_withdrawn
 
 
 def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # noqa: F811
@@ -147,7 +148,7 @@ def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # n
     from senior_control.motion.state_machine import RecoveryObservation
 
     core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
-    core.startup = StartupLearning(tmp_path / "claim")
+    bind_core(core, tmp_path / "claim")
     core.startup.state = "moving"
     core._startup_target(10)
     assert core.machine.state.mode is MotionMode.TASK
@@ -158,9 +159,8 @@ def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # n
 
 
 def test_geometry_pending_does_not_interrupt_started_learning(core, tmp_path, monkeypatch):  # noqa: F811
-    from senior_control.motion.startup_learning import StartupLearning
 
-    core.startup = StartupLearning(tmp_path / "pending-learning")
+    bind_core(core, tmp_path / "pending-learning")
     core.startup.state = "moving"
     from test_unified_motion_runtime import point
 
@@ -170,7 +170,7 @@ def test_geometry_pending_does_not_interrupt_started_learning(core, tmp_path, mo
     receiver.sensors.ingest(point(Source.WHEEL, 10, 10, (0.0, 0.0)), 10, 10, 10)
     receiver.sensors.ingest(point(Source.IMU, 10, 10, (0.0,)), 10, 10, 10)
     receiver.publish(10, 10)
-    core.startup.motion_emitted(9.9)
+    begin_action(core.startup, 9.9)
     core._startup_target(10)
 
     def pending(_now):

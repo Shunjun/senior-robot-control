@@ -1,3 +1,6 @@
+#include <senior_motion_msgs/msg/timed_pose.hpp>
+#include <senior_motion_msgs/msg/timed_odometry.hpp>
+#include <senior_motion_msgs/msg/timed_imu.hpp>
 // Humble-compatible DDS receipts over an inherited, private AF_UNIX channel.
 // GID is read from MessageInfo for THIS sample, never synthesized from discovery.
 #include <algorithm>
@@ -57,7 +60,10 @@ class NativeReceipt : public rclcpp::Node {
       if (qos_name == "sensor") qos.best_effort();
       else if (qos_name == "latched") qos.keep_last(1).transient_local();
       else if (qos_name != "reliable") throw std::invalid_argument("invalid receipt QoS");
-      if (type == "nav_msgs/msg/Odometry") add<nav_msgs::msg::Odometry>(id, qos);
+      if (type == "senior_motion_msgs/msg/TimedOdometry") add<senior_motion_msgs::msg::TimedOdometry>(id, qos);
+      else if (type == "senior_motion_msgs/msg/TimedImu") add<senior_motion_msgs::msg::TimedImu>(id, qos);
+      else if (type == "senior_motion_msgs/msg/TimedPose") add<senior_motion_msgs::msg::TimedPose>(id, qos);
+      else if (type == "nav_msgs/msg/Odometry") add<nav_msgs::msg::Odometry>(id, qos);
       else if (type == "sensor_msgs/msg/Imu") add<sensor_msgs::msg::Imu>(id, qos);
       else if (type == "senior_motion_msgs/msg/ScanMotion") add<senior_motion_msgs::msg::ScanMotion>(id, qos);
       else if (type == "senior_motion_msgs/msg/DriveExecutionFeedback")
@@ -133,6 +139,11 @@ class NativeReceipt : public rclcpp::Node {
   }
   static bool bounded(const std_msgs::msg::String &m) { return m.data.size() <= 131072; }
   static bool bounded(const std_msgs::msg::Bool &) { return true; }
+  static bool bounded(const senior_motion_msgs::msg::TimedPose &m) { return bounded(m.data); }
+  static bool bounded(const senior_motion_msgs::msg::TimedOdometry &m) {
+    return bounded(m.data);
+  }
+  static bool bounded(const senior_motion_msgs::msg::TimedImu &m) { return bounded(m.data); }
   static bool bounded(const nav_msgs::msg::Odometry &m) {
     return m.header.frame_id.size() <= 128 && m.child_frame_id.size() <= 128;
   }

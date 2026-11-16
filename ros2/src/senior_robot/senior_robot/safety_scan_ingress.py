@@ -31,14 +31,14 @@ class SafetyScanIngress(Node):
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("scan_topic", "/safety/raw/scan")
         self.declare_parameter("bounded_scan_topic", "/safety/scan_candidate")
-        self.declare_parameter("observation_max_age", -1.0)
         self._body = str(self.get_parameter("body_frame").value)
         self._raw_topic = str(self.get_parameter("scan_topic").value)
-        self._max_age = default_policy().hard_age_s
+        hard_age_ms = default_policy().hard_age_ms
+        self._max_age = hard_age_ms / 1000
         if not self._body or len(self._body.encode()) > MAX_FRAME_BYTES or not self._raw_topic:
             raise ValueError("invalid safety ingress frame or raw topic")
         self._admission = (
-            RawCaptureAdmission(max_age_s=self._max_age, hard_limit_s=5.0)
+            RawCaptureAdmission(max_age_ms=hard_age_ms, hard_limit_ms=5000)
             if math.isfinite(self._max_age) and 0 < self._max_age <= 5.0
             else None
         )
@@ -49,7 +49,6 @@ class SafetyScanIngress(Node):
         self._ready = False
         self._failure_active = False
         self._sequence = 0
-        self._last_ros = None
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._publisher = self.create_publisher(
@@ -141,21 +140,8 @@ class SafetyScanIngress(Node):
                 or scan.time_increment != 0.0
             ):
                 raise ValueError("raw_scan_dimensions")
-            now = now_ns / 1e9
-            if self._last_ros is not None and now < self._last_ros:
-                self._last_ros = now
-                self._new_epoch(
-                    "raw_clock_rollback",
-                    capture.received_steady,
-                    capture.received_ros_ns / 1e9,
-                    scan.capture,
-                )
-                return
-            self._last_ros = now
             stamp_time = Time.from_msg(scan.capture.stamp)
             stamp = stamp_time.nanoseconds / 1e9
-            if not 0 <= now - stamp <= self._max_age:
-                raise ValueError("raw_scan_stale")
             # TF resolves static and dynamic edges at the scan timestamp.
             tf = self._tf_buffer.lookup_transform(self._body, frame, stamp_time)
             q = tf.transform.rotation

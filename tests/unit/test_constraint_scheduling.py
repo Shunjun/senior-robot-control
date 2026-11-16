@@ -28,7 +28,7 @@ class Worker:
 
 def test_ten_hz_updates_do_not_starve_slow_refinement_or_renew_deadline():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
     q.update(snapshot(), 0)
     for i in range(1, 5):
         assert q.update(snapshot(i / 10), i / 10).permit is None
@@ -46,7 +46,7 @@ def test_ten_hz_updates_do_not_starve_slow_refinement_or_renew_deadline():
 
 def test_new_hazard_tightens_now_and_rejects_older_relaxation():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
     q.update(snapshot(), 0)
     w.complete()
     assert q.update(snapshot(0.1), 0.1).permit is not None
@@ -59,7 +59,7 @@ def test_new_hazard_tightens_now_and_rejects_older_relaxation():
 def test_source_config_and_stop_fence_reject_late_result():
     for changed in ("epoch", "config", "stop"):
         w = Worker()
-        q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+        q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
         s = snapshot()
         q.update(s, 0)
         if changed == "stop":
@@ -75,7 +75,7 @@ def test_source_config_and_stop_fence_reject_late_result():
 
 def test_worker_computation_has_no_authority_or_scheduler_side_effect():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
     q.update(snapshot(), 0)
     w.complete()
     assert q.current.permit is None
@@ -84,7 +84,7 @@ def test_worker_computation_has_no_authority_or_scheduler_side_effect():
 
 def test_identity_round_trip_cannot_resurrect_old_job():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
     s = snapshot()
     q.update(s, 0)
     q.update(replace(s, config_version="config-2"), 0.1)
@@ -95,7 +95,7 @@ def test_identity_round_trip_cannot_resurrect_old_job():
 
 def test_worker_budget_rejects_late_relaxation_without_new_qualification_gate():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.2)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=200)
     q.update(snapshot(), 0)
     w.complete()
     result = q.poll(0.3)
@@ -106,7 +106,7 @@ def test_worker_budget_rejects_late_relaxation_without_new_qualification_gate():
 
 def test_busy_worker_reports_budget_immediately_and_keeps_only_one_slot():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.2)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=200)
     q.update(snapshot(), 0)
     assert q.poll(0.3).brake.reason == "waiting_refinement"
     assert q.worker_diagnostic == "worker_budget_exceeded"
@@ -117,7 +117,7 @@ def test_busy_worker_reports_budget_immediately_and_keeps_only_one_slot():
 
 def test_old_scan_cannot_erase_a_newer_hazard_or_refresh_its_deadline():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.6)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=600)
     q.update(snapshot(), 0)
     w.complete()
     q.update(snapshot(0.1), 0.1)
@@ -129,7 +129,7 @@ def test_old_scan_cannot_erase_a_newer_hazard_or_refresh_its_deadline():
 
 def test_slow_worker_continues_serving_during_repeated_identical_obstacles():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     q.update(snapshot(hits=((3, 0),)), 0)
     for i in range(1, 17):
         now = i / 10
@@ -143,7 +143,7 @@ def test_slow_worker_continues_serving_during_repeated_identical_obstacles():
 
 def test_worker_failure_isolated_from_brake_and_future_requests():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     q.update(snapshot(), 0)
     future, task = w.jobs.pop(0)
     future.set_exception(RuntimeError("synthetic worker failure"))
@@ -157,14 +157,14 @@ def test_submit_failure_is_a_bounded_brake_result_not_a_tick_exception():
         def submit(self, task):
             raise RuntimeError("synthetic executor closed")
 
-    q = ConstraintScheduler(engine(), ClosedWorker(), worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), ClosedWorker(), worker_budget_ms=500)
     assert q.update(snapshot(), 0).brake.reason == "waiting_refinement"
     assert q.worker_diagnostic == "worker_unavailable"
 
 
 def test_stop_then_new_request_cannot_use_old_result_but_can_make_progress():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     q.update(snapshot(), 0)
     q.stop()
     q.update(snapshot(0.1), 0.1)
@@ -186,7 +186,7 @@ def test_computation_status_cannot_downgrade_physical_emergency(failure):
 
     w = Worker()
     q = ConstraintScheduler(
-        engine(), ClosedWorker() if failure == "submit" else w, worker_budget_s=0.2
+        engine(), ClosedWorker() if failure == "submit" else w, worker_budget_ms=200
     )
     danger = snapshot(current=0.4, hits=((0.5, 0),))
     expected = engine().refine(danger, 0).brake
@@ -216,7 +216,7 @@ def test_computation_status_cannot_downgrade_physical_emergency(failure):
 @pytest.mark.parametrize("failure", ["submit", "future", "running_timeout", "completed_timeout"])
 def test_worker_failure_preserves_latest_valid_permit(failure):
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.2)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=200)
     q.update(snapshot(), 0)
     w.complete()
     permitted = q.poll(0.05)
@@ -253,7 +253,7 @@ def test_zero_target_poll_rechecks_each_original_proof_deadline(deadline):
         value = getattr(s, deadline)
         s = replace(s, **{deadline: replace(value, valid_until_steady=0.2)})
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     assert q.update(s, 0).brake.stop_verified
     assert not q.poll(0.3).brake.stop_verified
     assert not q.poll(30).brake.stop_verified
@@ -262,7 +262,7 @@ def test_zero_target_poll_rechecks_each_original_proof_deadline(deadline):
 
 def test_cancel_rechecks_braking_without_allowing_late_relaxation():
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     q.update(snapshot(), 0)
     q.stop()
     w.complete()
@@ -279,7 +279,7 @@ def test_cancel_rechecks_braking_without_allowing_late_relaxation():
 def test_zero_and_cancel_keep_checking_actual_forward_inertia_without_worker():
     danger = snapshot(target=Velocity(0, 0), current=0.4, hits=((0.5, 0),))
     w = Worker()
-    q = ConstraintScheduler(engine(), w, worker_budget_s=0.5)
+    q = ConstraintScheduler(engine(), w, worker_budget_ms=500)
     assert q.update(danger, 0).brake.kind is BrakeKind.EMERGENCY
     q.stop()
     assert q.current.brake.kind is BrakeKind.EMERGENCY

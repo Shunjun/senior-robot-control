@@ -1,0 +1,73 @@
+FFF..F.........                                                          [100%]
+=================================== FAILURES ===================================
+_______ test_wire_float32_full_turn_preserves_seam_connection[False-720] _______
+
+count = 720, inclusive = False
+
+    @pytest.mark.parametrize("count", [720, 1080, 1440])
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
+        step = wire_float32(math.tau / (count - 1 if inclusive else count))
+        observation = wire_seam_observation(count, step, inclusive=inclusive)
+        model = learn([observation] * 12)
+>       assert model.validate() == (4 if inclusive else 3)
+E       assert 1 == 3
+E        +  where 1 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c41f0e0>.validate
+
+tests/unit/test_learning_surface_review.py:140: AssertionError
+______ test_wire_float32_full_turn_preserves_seam_connection[False-1080] _______
+
+count = 1080, inclusive = False
+
+    @pytest.mark.parametrize("count", [720, 1080, 1440])
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
+        step = wire_float32(math.tau / (count - 1 if inclusive else count))
+        observation = wire_seam_observation(count, step, inclusive=inclusive)
+        model = learn([observation] * 12)
+>       assert model.validate() == (4 if inclusive else 3)
+E       assert 1 == 3
+E        +  where 1 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c468b90>.validate
+
+tests/unit/test_learning_surface_review.py:140: AssertionError
+______ test_wire_float32_full_turn_preserves_seam_connection[False-1440] _______
+
+count = 1440, inclusive = False
+
+    @pytest.mark.parametrize("count", [720, 1080, 1440])
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
+        step = wire_float32(math.tau / (count - 1 if inclusive else count))
+        observation = wire_seam_observation(count, step, inclusive=inclusive)
+        model = learn([observation] * 12)
+>       assert model.validate() == (4 if inclusive else 3)
+E       assert 1 == 3
+E        +  where 1 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c4d7e30>.validate
+
+tests/unit/test_learning_surface_review.py:140: AssertionError
+_______ test_wire_float32_full_turn_preserves_seam_connection[True-1440] _______
+
+count = 1440, inclusive = True
+
+    @pytest.mark.parametrize("count", [720, 1080, 1440])
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
+        step = wire_float32(math.tau / (count - 1 if inclusive else count))
+        observation = wire_seam_observation(count, step, inclusive=inclusive)
+        model = learn([observation] * 12)
+>       assert model.validate() == (4 if inclusive else 3)
+E       assert 2 == 4
+E        +  where 2 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c4649e0>.validate
+
+tests/unit/test_learning_surface_review.py:140: AssertionError
+---------- generated xml file: /tmp/learning-wire-float32-before.xml -----------
+=========================== short test summary info ============================
+FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-720]
+FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-1080]
+FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-1440]
+FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[True-1440]
+4 failed, 11 passed, 7 deselected in 0.54s

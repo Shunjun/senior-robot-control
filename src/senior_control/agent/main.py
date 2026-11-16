@@ -15,7 +15,6 @@ from typing import Any
 
 from senior_control.agent.connection import (
     HeartbeatFrame,
-    HeartbeatLedger,
     Link,
     MotionPort,
     MotionRejected,
@@ -40,6 +39,8 @@ from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.observability import Metrics
 from senior_control.protocol import (
+    HEARTBEAT_INTERVAL_MS,
+    EmptyPayload,
     Envelope,
     ManualIntentEnvelope,
     OperationEnvelope,
@@ -129,13 +130,12 @@ class Agent:
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
-        on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
-        heartbeat_seconds: float = 1.0,
-        retry_delay: float = 1.0,
-        heartbeat_window: float = 2.0,
-        command_ttl_seconds: float = 0.3,
+        background_fault: Callable[[str], Awaitable[None]] | None = None,
+        heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
+        retry_delay_ms: float = 1000,
+        command_ttl_ms: float = 300,
         snapshot_seconds: float = 2.0,
-        state_poll_seconds: float = 0.25,
+        state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         wall_clock: Callable[[], float] = time.time,
@@ -161,24 +161,24 @@ class Agent:
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
-        self._on_eligibility_lost = on_eligibility_lost
-        self._loss_tasks: set[asyncio.Task[None]] = set()
+        self._background_fault_handler = background_fault
+        self.module_faults: dict[str, dict[str, Any]] = {}
+        self._failed_modules: set[str] = set()
+        self._failed_manual_authority: str | None = None
+        self._manual_epoch_failed: int | None = None
+        self._safety_fault_task: asyncio.Task[None] | None = None
         self._stragglers: set[asyncio.Task[Any]] = set()
-        self._continuity_generation = 0
-        self._was_eligible = False
-        self._heartbeat_seconds = heartbeat_seconds
-        self._retry_delay = retry_delay
-        if command_ttl_seconds <= 0:
+        self._heartbeat_ms = heartbeat_ms
+        self._retry_delay_ms = retry_delay_ms
+        if command_ttl_ms <= 0:
             raise ValueError("command ttl must be positive")
-        self._command_ttl_seconds = command_ttl_seconds
+        self._command_ttl_seconds = command_ttl_ms / 1000
         self._wall_clock = wall_clock
         self._clock = clock if clock is not None else SystemClock()
         # //Compatible: isolated/non-native MotionPort implementations have no admission clock.
         bind_clock = getattr(motion, "bind_clock", None)
         if bind_clock is not None:
             bind_clock(self._clock.monotonic)
-        self._heartbeat_window = heartbeat_window
-        self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
         self._home = home
         self._dispatcher = Dispatcher(
             robot_id,
@@ -210,10 +210,10 @@ class Agent:
         self._estop_receipts: dict[str, tuple[str, bool]] = {}
         self._estop_inflight = False
         self._signals: list[signal.Signals] = []
-        if snapshot_seconds <= 0 or state_poll_seconds <= 0:
+        if snapshot_seconds <= 0 or state_poll_ms <= 0:
             raise ValueError("snapshot intervals must be positive")
         self._snapshot_seconds = snapshot_seconds
-        self._state_poll_seconds = state_poll_seconds
+        self._state_poll_seconds = state_poll_ms / 1000
 
     # ------------------------------------------------------------------ state
 
@@ -226,59 +226,22 @@ class Agent:
         return self._epoch
 
     @property
+    def failed_modules(self) -> frozenset[str]:
+        # Local lifecycle policy is never sourced from reporting-channel messages.
+        return frozenset(self._failed_modules)
+
+    @property
     def motion_allowed(self) -> bool:
         supervisor = self._supervisor
         return supervisor is not None and supervisor.motion_allowed and not self._stopping
 
     @property
-    def eligible_for_motion(self) -> bool:
-        """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
-        self._expire_eligibility()
-        return (
-            self._link is not None
-            and self.motion_allowed
-            and not self._safety_blocked
-            and self._ledger.eligible(self.robot_id)
-        )
-
-    @property
     def _safety_blocked(self) -> bool:
         return self._estop_inflight or any(key[0] == "safety.estop" for key in self._safety_pending)
-
-    @property
-    def continuity_generation(self) -> int:
-        self._expire_eligibility()
-        return self._continuity_generation
-
-    def _expire_eligibility(self) -> None:
-        if self._was_eligible and not self._ledger.eligible(self.robot_id):
-            self._lose_eligibility()
 
     def _invalidate_gate(self) -> None:
         if self._runtime_gate is not None:
             self._runtime_gate.invalidate()
-
-    def _lose_eligibility(self) -> None:
-        self._invalidate_gate()
-        if not self._was_eligible:
-            return
-        self._was_eligible = False
-        lost_generation = self._continuity_generation
-        self._continuity_generation += 1
-        self._revoked_link = self._link
-        self._ledger.forget(self.robot_id)
-        if self._on_eligibility_lost is not None:
-            task = asyncio.ensure_future(self._on_eligibility_lost(lost_generation))
-            self._loss_tasks.add(task)
-            task.add_done_callback(self._loss_finished)
-
-    def _loss_finished(self, task: asyncio.Task[None]) -> None:
-        self._loss_tasks.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            self._supervisor_fault("failed to persist connection loss")
-
-    def note_heartbeat(self, robot_id: str) -> None:
-        self._ledger.note(robot_id)
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -288,9 +251,9 @@ class Agent:
             call_ros=self._motion.call,
             connect=self._session,
             background=self._background,
-            heartbeat_seconds=self._heartbeat_seconds,
-            retry_delay=self._retry_delay,
-            on_fault=self._supervisor_fault,
+            heartbeat_ms=self._heartbeat_ms,
+            retry_delay_ms=self._retry_delay_ms,
+            on_fault=self._background_fault,
         )
         self._supervisor = supervisor
         self._log("startup")
@@ -303,19 +266,63 @@ class Agent:
         finally:
             await self._release()
 
+    def report_runtime_event(self, event: dict[str, Any]) -> None:
+        # Only reporting metadata. No event grants motion or changes the safety owner.
+        module = event["module"]
+        if module not in self.module_faults and len(self.module_faults) >= 32:
+            module = "observer"
+        if event["phase"] == "ready":
+            if module in self.failed_modules:
+                return  # Reporting cannot revive a stopped local module.
+            self.module_faults.pop(module, None)
+        else:
+            self.module_faults[module] = dict(event)
+        level = logging.INFO if event["phase"] in {"ready", "starting"} else logging.ERROR
+        logger.log(
+            level, "runtime module %s: %s %s", module, event["phase"], event.get("detail", "")
+        )
+
+    async def _background_fault(self, name: str, reason: str) -> None:
+        self._failed_modules.add(name)
+        if name != "observer" or "observer" not in self.module_faults:
+            self.report_runtime_event({"module": name, "phase": "failed", "detail": reason})
+        if name == "tasks" and self._background_fault_handler is not None:
+            await self._quietly(
+                self._background_fault_handler(name), context="failed task revocation"
+            )
+
     def _supervisor_fault(self, reason: str) -> None:
-        self.runtime_failed = True
-        self.request_shutdown()
+        self.report_runtime_event(
+            {"module": "motion_delivery", "phase": "unconfirmed", "detail": reason}
+        )
+        self._manual_epoch_failed = self._last_epoch
+        self._discard_queued_intent()
+        self._invalidate_gate()
+        if not self._stopping and (
+            self._safety_fault_task is None or self._safety_fault_task.done()
+        ):
+            self._safety_fault_task = self._spawn(self._retire_failed_delivery(self._last_epoch))
+
+    async def _retire_failed_delivery(self, epoch: int) -> None:
+        async def disable() -> None:
+            await self._quietly(self._motion.disable(epoch), context="manual source retirement")
+
+        async def pause_tasks() -> None:
+            if self._background_fault_handler is not None:
+                await self._quietly(
+                    self._background_fault_handler("motion_delivery"),
+                    context="task source revocation",
+                )
+
+        await asyncio.gather(disable(), pause_tasks())
 
     def _safety_fault(self) -> None:
-        self.auth_rejected = True
-        self.runtime_failed = True
-        self.request_shutdown()
+        self._supervisor_fault("safety delivery unconfirmed; vehicle owner state is unknown")
 
     def request_shutdown(self) -> None:
         """Synchronous and signal-safe: motion is revoked before anything else happens."""
         self._stopping = True
-        self._lose_eligibility()
+        self._invalidate_gate()
         if self._supervisor is not None:
             self._supervisor.revoke("shutdown requested")
         self._stop.set()
@@ -333,6 +340,7 @@ class Agent:
         await self._settle_safety()
 
     async def _release(self) -> None:
+        self._stopping = True
         self._log("shutdown")
         inflight = list(self._inflight)
         for task in inflight:
@@ -340,7 +348,6 @@ class Agent:
                 task.cancel()
         await self._settle_safety()
         await self._wait_inflight(inflight)
-        await self._wait_inflight(list(self._loss_tasks))
         link, self._link = self._link, None
         if link is not None:
             await self._quietly(link.close())
@@ -356,26 +363,32 @@ class Agent:
     async def _wait_inflight(self, tasks: list[asyncio.Task[None]]) -> None:
         if not tasks:
             return
-        done, pending = await asyncio.wait(tasks, timeout=self._deadlines.safety)
+        done, pending = await asyncio.wait(tasks, timeout=self._deadlines.safety_ms / 1000)
         if done:
             await asyncio.gather(*done, return_exceptions=True)
         if pending:
             self._stragglers.update(pending)
             for task in pending:
                 task.add_done_callback(self._straggler_finished)
-            self.runtime_failed = True
-            self.request_shutdown()
-            logger.error("inflight work did not stop before shutdown deadline")
+            if self._stopping:
+                self.runtime_failed = True
+            self.report_runtime_event(
+                {
+                    "module": "retired_work",
+                    "phase": "unconfirmed",
+                    "detail": "inflight work did not stop before shutdown deadline",
+                }
+            )
 
     def _straggler_finished(self, task: asyncio.Task[Any]) -> None:
         self._stragglers.discard(task)
         if not task.cancelled():
             task.exception()
 
-    async def _quietly(self, call: Awaitable[Any]) -> None:
+    async def _quietly(self, call: Awaitable[Any], *, context: str = "shutdown step") -> None:
         task = asyncio.ensure_future(call)
         try:
-            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
         except BaseException:
             task.cancel()
             self._stragglers.add(task)
@@ -385,13 +398,14 @@ class Agent:
             task.cancel()
             self._stragglers.add(task)
             task.add_done_callback(self._straggler_finished)
-            self.runtime_failed = True
-            logger.error("shutdown step exceeded its deadline")
+            if self._stopping:
+                self.runtime_failed = True
+            logger.error("%s exceeded its deadline", context)
             return
         try:
             task.result()
         except Exception:
-            logger.exception("shutdown step failed")
+            logger.exception("%s failed", context)
 
     # ------------------------------------------------------------------ cloud link
 
@@ -399,23 +413,12 @@ class Agent:
         link = self._link
         if link is None:
             return
-        self._expire_eligibility()
-        if self._revoked_link is link:
-            await self._quietly(self._motion.disable(link.epoch))
-            await self._quietly(link.close())
-            return
         try:
             await link.send_heartbeat()
         except Exception:
-            if self._link is not link:
-                raise
-            self._revoked_link = link
-            self._lose_eligibility()
-            self._ledger.forget(self.robot_id)
-            epoch = link.epoch
-            if epoch:
-                await self._quietly(self._motion.disable(epoch))
-            await self._quietly(link.close())
+            if self._link is link:
+                self._revoked_link = link
+                await self._quietly(link.close())
             raise
 
     async def _session(self) -> bool:
@@ -437,15 +440,9 @@ class Agent:
             while True:
                 frame = await link.recv()
                 if isinstance(frame, HeartbeatFrame):
-                    if (
-                        frame.robot_id != self.robot_id
-                        or frame.deadline <= self._clock.monotonic()
-                        or self._revoked_link is link
-                    ):
+                    if frame.robot_id != self.robot_id or self._revoked_link is link:
                         raise ConnectionError("invalid heartbeat")
                     received_heartbeat = True
-                    self._ledger.note(frame.robot_id, deadline=frame.deadline)
-                    self._was_eligible = self._ledger.eligible(frame.robot_id)
                 elif isinstance(frame, VideoEnvelope):
                     if video is None:
                         video = VideoSignaling(
@@ -466,9 +463,8 @@ class Agent:
         finally:
             epoch = link.epoch
             if self._link is link:
-                self._lose_eligibility()
+                self._invalidate_gate()
                 self._link, self._epoch = None, 0
-                self._ledger.forget(self.robot_id)
             self._log("connection_closed")
             if video is not None:
                 video.retire()
@@ -562,7 +558,8 @@ class Agent:
             return
         if overflow:
             self._safety_fault()
-            raise ConnectionError("safety command capacity exceeded")
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+            return
         try:
             if self._admit_native_estop(envelope):
                 self._spawn(self._reply(link, envelope, status=OperationStatus.SUCCEEDED))
@@ -627,10 +624,8 @@ class Agent:
                 if envelope.seq > existing[1].seq:
                     self._safety_pending[key] = (link, envelope)
             elif len(self._safety_pending) >= MAX_SAFETY_PENDING:
-                self.auth_rejected = True
-                self.runtime_failed = True
-                self.request_shutdown()
-                raise ConnectionError("agent safety capacity exceeded")
+                self._safety_fault()
+                raise DomainError(ErrorCode.UNAVAILABLE, "agent safety capacity exceeded")
             else:
                 self._safety_pending[key] = (link, envelope)
             if self._safety_task is None or self._safety_task.done():
@@ -667,14 +662,34 @@ class Agent:
                 logger.debug("manual stream sample discarded: %s", exc.code.value)
             except (OSError, ConnectionError, IpcError):
                 logger.exception("manual stream transport failed")
-                self._lose_eligibility()
-                await link.close()
+                self._invalidate_gate()
+                self._failed_manual_authority = envelope.payload.authority_id
+                self._discard_queued_intent()
+                self.report_runtime_event(
+                    {
+                        "module": "manual",
+                        "phase": "unconfirmed",
+                        "detail": "manual IPC failed",
+                    }
+                )
+                # Retire exactly this authority through the existing native owner.
+                release = SimpleEnvelope(
+                    **envelope.model_dump(exclude={"type", "payload"}),
+                    type="control.release",
+                    payload=EmptyPayload(authority_id=envelope.payload.authority_id),
+                )
+                await self._quietly(
+                    self._motion.manual(release), context="manual authority release"
+                )
                 return
             finally:
                 self._intent_queue.finish(id(envelope), time.monotonic())
 
     def _safety_finished(self, task: asyncio.Task[None]) -> None:
-        if task.cancelled() or task.exception() is not None:
+        if task.cancelled():
+            self._safety_fault()
+        elif (error := task.exception()) is not None:
+            logger.error("safety delivery worker failed", exc_info=error)
             self._safety_fault()
 
     async def _drain_safety(self) -> None:
@@ -724,7 +739,7 @@ class Agent:
         task = self._safety_task
         if task is None:
             return True
-        done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+        done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
         failed = task not in done or task.cancelled()
         if not failed:
             failed = task.exception() is not None or bool(self._safety_pending)
@@ -737,7 +752,7 @@ class Agent:
             )
             if not task.done():
                 task.cancel()
-                done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety)
+                done, _ = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
                 if not done:
                     self._stragglers.add(task)
                     task.add_done_callback(self._straggler_finished)
@@ -768,8 +783,13 @@ class Agent:
         self._inflight.add(task)
         self._report_queues()
         task.add_done_callback(self._inflight.discard)
+        task.add_done_callback(self._work_finished)
         task.add_done_callback(lambda _: self._report_queues())
         return task
+
+    def _work_finished(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("agent request failed", exc_info=error)
 
     async def _answer(self, link: Link, envelope: Envelope) -> None:
         try:
@@ -838,6 +858,12 @@ class Agent:
         status: OperationStatus | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
+        if (
+            link is not self._link
+            or envelope.connection_epoch != self._epoch
+            or asyncio.current_task() in self._stragglers
+        ):
+            return
         request_type: Any = envelope.type
         shown = result.status if result is not None else status
         operation_id = (
@@ -973,13 +999,17 @@ class Agent:
                 self._motion.manual(envelope, received_steady=received, deadline_steady=deadline),
                 timeout=self._deadlines.edit
                 if envelope.type == "control.acquire"
-                else self._deadlines.safety,
+                else self._deadlines.safety_ms / 1000,
             )
         except asyncio.TimeoutError as exc:
             raise DomainError(
                 ErrorCode.OPERATION_UNKNOWN, "manual acknowledgement is unknown"
             ) from exc
         if envelope.type == "control.acquire":
+            if reply["authority_id"] == self._failed_manual_authority:
+                raise DomainError(
+                    ErrorCode.UNAVAILABLE, "manual authority retirement is unconfirmed"
+                )
             return ManualOperationResult(
                 envelope.request_id,
                 OperationStatus.SUCCEEDED,
@@ -1002,12 +1032,14 @@ class Agent:
                         received = envelope._received_steady = self._clock.monotonic()
                     await asyncio.wait_for(
                         self._motion.estop_received(envelope, received_steady=received),
-                        self._deadlines.safety,
+                        self._deadlines.safety_ms / 1000,
                     )
                     fingerprint, _ = self._estop_receipts[request_id]
                     self._estop_receipts[request_id] = (fingerprint, True)
                 else:
-                    await asyncio.wait_for(self._motion.stop(envelope), self._deadlines.safety)
+                    await asyncio.wait_for(
+                        self._motion.stop(envelope), self._deadlines.safety_ms / 1000
+                    )
             except MotionRejected as exc:
                 raise DomainError(
                     exc.code or ErrorCode.SAFETY_REJECTED, "stop was rejected"
@@ -1021,6 +1053,21 @@ class Agent:
 
     def _admit(self, envelope: Envelope) -> None:
         """A first-time command needs a live link, the current epoch, and an unexpired deadline."""
+        if asyncio.current_task() in self._stragglers:
+            raise DomainError(ErrorCode.CONFLICT, "retired work cannot issue commands")
+        starts_task = envelope.type in {"navigation.goal", "navigation.return_home"} or (
+            isinstance(envelope, TaskExecutionEnvelope) and envelope.payload.action == "resume"
+        )
+        if starts_task and "tasks" in self.failed_modules:
+            raise DomainError(ErrorCode.UNAVAILABLE, "task runtime is unavailable")
+        if envelope.type in {"control.acquire", "drive.intent"}:
+            if self._manual_epoch_failed == envelope.connection_epoch:
+                raise DomainError(ErrorCode.UNAVAILABLE, "manual delivery is unavailable")
+            if (
+                isinstance(envelope, ManualIntentEnvelope)
+                and envelope.payload.authority_id == self._failed_manual_authority
+            ):
+                raise DomainError(ErrorCode.UNAVAILABLE, "manual authority was retired")
         if self._link is None or self._revoked_link is self._link:
             raise DomainError(ErrorCode.OFFLINE, "robot is not connected to the server")
         if envelope.connection_epoch != self._epoch:
@@ -1051,6 +1098,17 @@ class Agent:
         if deleted is None:
             deleted = await self._journal.deleted_task_ids()
         home = live.home
+        ui = dict(live.vehicle_ui or {})
+        if self.module_faults:
+            ui["module_faults"] = dict(self.module_faults)
+            capabilities = list(ui.get("capabilities", []))
+            if "tasks" in self.failed_modules:
+                capabilities = [c for c in capabilities if c != "task.execution.v1"]
+            if self._manual_epoch_failed == self._epoch:
+                capabilities = [c for c in capabilities if c != "motion.intent.v1"]
+            if "logs" in self.failed_modules:
+                capabilities = [c for c in capabilities if c != "logs.v1"]
+            ui["capabilities"] = capabilities
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
             connected=self.connected,
@@ -1069,7 +1127,7 @@ class Agent:
             robot_pose=live.robot_pose,
             navigation_block_reason=live.navigation_block_reason,
             scan_points=live.scan_points,
-            vehicle_ui=live.vehicle_ui,
+            vehicle_ui=ui if self.module_faults else live.vehicle_ui,
             manual_controller_generation=live.manual_controller_generation,
             manual_agent_epoch=live.manual_agent_epoch,
         )

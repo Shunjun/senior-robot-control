@@ -1,0 +1,110 @@
+{
+  "head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "branch": "fix/degraded-drive-speed",
+  "start_snapshot": "/tmp/heartbeat-round-20261116-start",
+  "source_snapshot_protocol_note": "protocol.py was clean at startup; original contents retrieved from HEAD before editing the original baseline snapshot manifest.",
+  "files": {
+    "docs/protocol/http-ws.md": {
+      "before": "1f230ca02d4ff6f9e008425f5036c53164cf2230d1f37f55626e7812663121cd",
+      "after": "c35dcff5fa7aa339542abdbead7f0241608b956ea2a69150086d033e0c74baa6"
+    },
+    "src/senior_control/agent/connection.py": {
+      "before": "ec71bfb1bc696c0dbf454659f90f137bb41a1abc2b31273a55ca1a5220896213",
+      "after": "73326d4303a153b6058284c3ffa74bd6340c41e47220e94035c85a814a1100a1"
+    },
+    "src/senior_control/agent/main.py": {
+      "before": "13e623b9a040e5e858924070afb0af72cfa965f8915b0708ba231ce3f1a9fdea",
+      "after": "cb21588a5cecce1df69db7589ead72ff792cd1b2b083781c31b2b6fc2af4d367"
+    },
+    "src/senior_control/agent/websocket.py": {
+      "before": "fa09b6ac5f91492983df965783e14c73e6268fd0cb17d4c1c8685d763cc179ed",
+      "after": "4de01b4cb12cdfca51cc1ab0362ce53d021e167086dc7cb7502ddda8188a2a65"
+    },
+    "src/senior_control/cloud/relay.py": {
+      "before": "d16b1b36b352454f220faad75bea7a5e0af20234ff9754f4e009d3e67541fd1b",
+      "after": "e0f2727d703e0756b83a813de5650b88a02f4f641ec46cd6a5ded581293b3507"
+    },
+    "src/senior_control/protocol.py": {
+      "before": "ba909e96ec97343b2af2299296e71068cffcdae4172230ef226dca0507862a72",
+      "after": "593d626f34e5c4e04b964f7397e21631f0f8d93ed81aedf612f5cd8f0a7f8798"
+    },
+    "src/senior_control/runtime/supervisor.py": {
+      "before": "5dc4850161423592b5af2961d55ff965babe6346b2d6eb93c728f4acd73264ad",
+      "after": "8af45125545c3f4dd94b6ccccf31517795bd4893e5abb5c86511a3dbaf61f103"
+    },
+    "tests/integration/heartbeat_test_support.py": {
+      "before": null,
+      "after": "8eea07c272972227ab9ca81df52d517468fe70a7436bd542e509018809a00a79"
+    },
+    "tests/integration/test_agent.py": {
+      "before": "0c40db4fd4efc2297fb16d59ac3a20a4fb34a0516c00ce267560cbb6d43afad0",
+      "after": "0b9b9beef923c13c76339ce98e1257e4a6a47edb9fa88f87f8c1657551a0d5df"
+    },
+    "tests/integration/test_estop_recovery.py": {
+      "before": "0d51a5afba64169741a0338d9e3a7b46ec6db4637e269f34a9443342f2d71075",
+      "after": "d4d9a78137c834c2ddceda0e59e103ea45e5b7ffb8100941d4c847a0610da40c"
+    },
+    "tests/integration/test_manual_wire.py": {
+      "before": "1baef00ce0830a6c5370ed4e8c21458bdeeb089eb111653a88a8a6483a253de3",
+      "after": "00f79982b3c8261276f9d252ec2fab31aa3bb0b60638c00c3145378a621dc2d5"
+    },
+    "tests/integration/test_runtime.py": {
+      "before": "ceac365442812986a3157ff23432f23a23a2078dfdc2867fdd37ac081a8d1e26",
+      "after": "969d8584341fe3827a3b0fb83cfc33bb7b45e414f978fc95666fe06a8f779ff8"
+    },
+    "tests/integration/test_settings_logs_review.py": {
+      "before": "326481aadd8446136ea495b312be345fdd211ed90a7d449e20bb0d44a7ebaa3e",
+      "after": "770dd21f796ce86e3768255153670b9642a595850c41c87c1c74e9a1055eb511"
+    },
+    "tests/integration/test_shutdown.py": {
+      "before": "050a920808b1580ddda6e47749fc483112ffd877689d7153f936b1733cd549ed",
+      "after": "fbfa1fb7a8bafc679bf2cb3163c739ff6a0dd223ff45f645c47ff83ed3d11d04"
+    },
+    "tests/integration/test_task_ownership.py": {
+      "before": "71425e3a7b41942dec9d92e8c96e63a253868bc0f58f649ad40489b866788b99",
+      "after": "d775a3eb3f1e6ff6e4f33db84a411069285e132eb21a2952113704924621ff6c"
+    },
+    "tests/integration/test_task_runner.py": {
+      "before": "a7bb9b0eec3d7dc18237cbd12fb9ed2666a4b4bc81a44d43353170ef86d05746",
+      "after": "9aa0b0a6cdda8075911e2760105e1c9c7d8f4456380627ad3a90b61dca6ccfe6"
+    },
+    "tests/unit/test_heartbeat_eligibility.py": {
+      "before": "e63e7205c91045700a16ce8e02301bf62bd8d5a5ad4f583e35b1fdab22643ec6",
+      "after": null
+    },
+    "tests/unit/test_heartbeat_wire.py": {
+      "before": "56a01fd6962fbc0ba616be6ee704550b41ea31b04fdbf198f96bae0c9e21ce5c",
+      "after": "8c01306592c6dd1bdfcd3e00b5b1902688c667c74135135ec5583f58a6b8b764"
+    },
+    "tests/unit/test_websocket_link.py": {
+      "before": "079d00720078da5e211038154b120bdba3a0d7a7806bff48b49f2f17ed7aed5d",
+      "after": "af4bbe09c7dc20ca6a1201ded9038155dee1ecb7b8f1eb5491906002957c85eb"
+    }
+  },
+  "product_aggregate_sha256": "6206ffe94a46bba373533cd886b52949c1785910816feab37737f34881925075",
+  "product_manifest": "src/senior_control/agent/connection.py 73326d4303a153b6058284c3ffa74bd6340c41e47220e94035c85a814a1100a1\nsrc/senior_control/agent/main.py cb21588a5cecce1df69db7589ead72ff792cd1b2b083781c31b2b6fc2af4d367\nsrc/senior_control/agent/websocket.py 4de01b4cb12cdfca51cc1ab0362ce53d021e167086dc7cb7502ddda8188a2a65\nsrc/senior_control/cloud/relay.py e0f2727d703e0756b83a813de5650b88a02f4f641ec46cd6a5ded581293b3507\nsrc/senior_control/protocol.py 593d626f34e5c4e04b964f7397e21631f0f8d93ed81aedf612f5cd8f0a7f8798\nsrc/senior_control/runtime/supervisor.py 8af45125545c3f4dd94b6ccccf31517795bd4893e5abb5c86511a3dbaf61f103\n",
+  "protected": {
+    "ros2/src/senior_robot/senior_robot/native_receipt.py": {
+      "before": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "after": "53d08230fb94dce972ed72dbf6fb16532d3b34aea4e5ed7191772a9bd0ef910a",
+      "unchanged": true
+    },
+    "tests/test_native_receipt_diagnostics.py": {
+      "before": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "after": "5c33cba2555e0c0b9b0096a025620fbfdb9ef86ef03bfee53e485dc43c440408",
+      "unchanged": true
+    },
+    "docs/reviews/2026-11-16-software-estop-owner.md": {
+      "before": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "after": "cf258266704168979f6485658e6c8e08d18bd444e6a1175cfc2f848ff5cab4d1",
+      "unchanged": true
+    }
+  },
+  "staged_diff_empty": true,
+  "external_root_plan": {
+    "path": "/Users/zhangshunjun/Wheel 机器人/车辆启动约束审查与处理方案.md",
+    "before": "800c019240b703e269e5e31015f9aa9ebdfce05a411753d44811030946e41fcc",
+    "after": "d1cad7d1c7121293ea76761ad1d2b90ab547ed7e214885fa4253949abc01313a",
+    "updated_only_item": 10
+  }
+}

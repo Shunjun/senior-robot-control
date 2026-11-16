@@ -89,9 +89,9 @@ async def rig(tmp_path: Path) -> AsyncIterator[Rig]:
             maps=maps,
             state=state,
             motion=motion,
-            deadlines=Deadlines(edit=1.0, map=0.4, safety=0.5),
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
+            deadlines=Deadlines(edit=1.0, map=0.4, safety_ms=500.0),
+            heartbeat_ms=20,
+            retry_delay_ms=10,
         )
         yield Rig(agent, connector, journal, tasks, home, maps, motion, state)
 
@@ -305,55 +305,9 @@ async def test_long_map_export_does_not_block_heartbeat_or_stop(rig: Rig) -> Non
     await finish(task, rig)
 
 
-async def test_other_robot_heartbeat_not_eligible(rig: Rig) -> None:
-    link = FakeLink(epoch=1)
-    task = await start(rig, link)
-    rig.agent.note_heartbeat("robot-2")
-    assert rig.agent.eligible_for_motion is False
-    rig.agent.note_heartbeat(ROBOT)
-    assert rig.agent.eligible_for_motion is True
-    await finish(task, rig)
-
-
-async def test_heartbeat_send_success_does_not_restore_eligibility(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
-
-    link = FakeLink(epoch=4)
-    task = await start(rig, link)
-    rig.agent.note_heartbeat(ROBOT)
-    original = link.send_heartbeat
-    failed = asyncio.Event()
-    release = asyncio.Event()
-
-    async def flaky() -> None:
-        if not failed.is_set():
-            failed.set()
-            raise ConnectionError("auth heartbeat failed")
-        await release.wait()
-        await original()
-
-    link.send_heartbeat = flaky  # type: ignore[method-assign]
-    try:
-        await until(lambda: not rig.agent.eligible_for_motion)
-        await until(lambda: "disable:4" in rig.motion.events)
-        with pytest.raises(DomainError) as caught:
-            await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
-        assert caught.value.code is ErrorCode.OFFLINE
-        release.set()
-        await original()
-        assert not rig.agent.eligible_for_motion
-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-        await until(lambda: not rig.agent.connected)
-        assert not rig.agent.eligible_for_motion
-    finally:
-        release.set()
-        await finish(task, rig)
-
-
 async def test_dropped_link_disables_its_epoch(rig: Rig) -> None:
     link = FakeLink(epoch=4)
     task = await start(rig, link)
-    rig.agent.note_heartbeat(ROBOT)
     link.drop()
     await until(lambda: "disable:4" in rig.motion.events)
     with pytest.raises(DomainError) as caught:
@@ -474,8 +428,8 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
             maps=FakeMaps(),
             state=FakeState(),
             motion=FakeMotion(),
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
+            heartbeat_ms=20,
+            retry_delay_ms=10,
         )
         connector.add(FakeLink(epoch=1))
         runner = asyncio.ensure_future(agent.run())
@@ -573,8 +527,8 @@ async def store_rig(tmp_path: Path) -> AsyncIterator[StoreRig]:
             maps=FakeMaps(),
             state=state,
             motion=FakeMotion(),
-            heartbeat_seconds=0.02,
-            retry_delay=0.01,
+            heartbeat_ms=20,
+            retry_delay_ms=10,
         )
         runner = asyncio.ensure_future(agent.run())
         await until(lambda: agent.connected)
@@ -793,8 +747,8 @@ async def idle_agent(tmp_path: Path, link: FakeLink, state: FakeState, **extra: 
         maps=FakeMaps(),
         state=state,
         motion=FakeMotion(),
-        heartbeat_seconds=0.02,
-        retry_delay=0.01,
+        heartbeat_ms=20,
+        retry_delay_ms=10,
         cleanup=cleanup,
         **extra,
     )
@@ -803,9 +757,7 @@ async def idle_agent(tmp_path: Path, link: FakeLink, state: FakeState, **extra: 
 async def test_idle_connected_robot_stays_fresh_past_stale_after(tmp_path: Path) -> None:
     cache = SnapshotCache(stale_after=0.3)
     link = CachingLink(1, cache)
-    agent = await idle_agent(
-        tmp_path, link, FakeState(), snapshot_seconds=0.05, state_poll_seconds=0.02
-    )
+    agent = await idle_agent(tmp_path, link, FakeState(), snapshot_seconds=0.05, state_poll_ms=20)
     runner = asyncio.ensure_future(agent.run())
     await until(lambda: agent.connected)
     for _ in range(4):
@@ -837,7 +789,7 @@ async def test_failed_collect_does_not_end_the_keepalive(
     cache = SnapshotCache(stale_after=0.3)
     link = CachingLink(1, cache)
     state = FlakyState()
-    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=0.05, state_poll_seconds=0.02)
+    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=0.05, state_poll_ms=20)
     runner = asyncio.ensure_future(agent.run())
     try:
         await until(lambda: agent.connected)
@@ -857,7 +809,7 @@ async def test_failed_collect_does_not_end_the_keepalive(
 async def test_state_change_is_pushed_without_an_edit(tmp_path: Path) -> None:
     link = FakeLink(1)
     state = FakeState()
-    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=30.0, state_poll_seconds=0.02)
+    agent = await idle_agent(tmp_path, link, state, snapshot_seconds=30.0, state_poll_ms=20)
     runner = asyncio.ensure_future(agent.run())
     await until(lambda: len(link.snapshots) == 1)
     await asyncio.sleep(0.15)
@@ -934,20 +886,6 @@ async def test_replay_of_a_running_operation_is_a_conflict(rig: Rig) -> None:
     await finish(task, rig)
 
 
-async def test_authenticated_reply_renews_ros_eligibility(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
-
-    link = FakeLink(epoch=1)
-    task = await start(rig, link)
-    try:
-        deadline = time.monotonic() + 0.7
-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, deadline))
-        await until(lambda: rig.agent.eligible_for_motion)
-        assert rig.agent.eligible_for_motion
-    finally:
-        await finish(task, rig)
-
-
 async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) -> None:
     from senior_control.agent.connection import HeartbeatFrame
 
@@ -967,9 +905,9 @@ async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) ->
     try:
         await until(lambda: link.closed)
         await until(lambda: rig.agent.connected and rig.agent._epoch == 2)
-        assert not rig.agent.eligible_for_motion
-        replacement.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
-        await until(lambda: rig.agent.eligible_for_motion)
+        assert rig.agent.connected
+        replacement.inbox.put_nowait(HeartbeatFrame(ROBOT))
+        await until(lambda: replacement.inbox.empty())
         assert "disable:1" in rig.motion.events
     finally:
         await finish(task, rig)
@@ -988,8 +926,8 @@ async def test_slow_snapshot_does_not_block_heartbeat_reply(tmp_path: Path) -> N
     task = asyncio.create_task(agent.run())
     try:
         await until(lambda: agent.connected)
-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
-        await until(lambda: agent.eligible_for_motion, timeout=0.5)
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+        await until(lambda: link.inbox.empty(), timeout=0.5)
     finally:
         agent.request_shutdown()
         await asyncio.wait_for(task, 2)
@@ -1024,7 +962,6 @@ async def test_disconnect_cancels_inflight_old_epoch_operations(rig: Rig, monkey
         await asyncio.wait_for(closing.wait(), timeout=2)
         # Cancellation must revoke the old link before waiting for journal I/O.
         assert not rig.agent.connected
-        assert not rig.agent.eligible_for_motion
         assert any(not operation.done() for operation in inflight)
         persist.set()
         _, pending = await asyncio.wait(inflight, timeout=2)
@@ -1081,39 +1018,14 @@ async def test_heartbeat_survives_full_work_slots_before_overload_closes_session
         for seq in range(MAX_INFLIGHT):
             link.inbox.put_nowait(operation("task.create", f"load-{seq}"))
         link.inbox.put_nowait(stop())
-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
-        await until(lambda: rig.agent.eligible_for_motion)
+        link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+        await until(lambda: link.inbox.empty())
         assert len(rig.agent._inflight) <= MAX_INFLIGHT + 1
         link.inbox.put_nowait(operation("task.create", "overload"))
         await until(lambda: link.closed)
         assert "disable:1" in rig.motion.events
     finally:
         release.set()
-        await finish(task, rig)
-
-
-async def test_disconnect_and_reconnect_records_loss_between_scans(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
-
-    lost = asyncio.Event()
-
-    async def persist_loss(generation: int) -> None:
-        lost.set()
-
-    rig.agent._on_eligibility_lost = persist_loss
-    first, second = FakeLink(1), FakeLink(2)
-    task = await start(rig, first, second)
-    try:
-        first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-        await until(lambda: rig.agent.eligible_for_motion)
-        before = rig.agent.continuity_generation
-        first.drop()
-        await asyncio.wait_for(lost.wait(), 1)
-        await until(lambda: rig.agent._epoch == 2)
-        second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
-        await until(lambda: rig.agent.eligible_for_motion)
-        assert rig.agent.continuity_generation > before
-    finally:
         await finish(task, rig)
 
 
@@ -1184,15 +1096,14 @@ async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Ri
     task = asyncio.create_task(rig.agent.run())
     try:
         await until(lambda: rig.agent.connected)
-        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
-        await until(lambda: rig.agent.eligible_for_motion)
+        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT))
+        await until(lambda: links[0].inbox.empty())
         links[0].drop()
         await until(lambda: all(bad.closed for bad in links[:6]))
-        assert not rig.agent.eligible_for_motion
         assert "exit" not in rig.motion.events
         await until(lambda: rig.agent._epoch == 7)
-        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
-        await until(lambda: rig.agent.eligible_for_motion)
+        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT))
+        await until(lambda: links[6].inbox.empty())
         assert rig.agent.connection_epoch == 7
         assert "exit" not in rig.motion.events
     finally:
@@ -1527,3 +1438,30 @@ async def test_public_snapshot_offline_collect_remains_available_without_sending
     assert snapshot.connected is False
     assert snapshot.robot_pose.x == 0.0
     assert len(runtime.link.snapshots) == 1
+
+
+async def test_delayed_replies_preserve_send_cadence_and_connection(monkeypatch) -> None:
+    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
+
+    from senior_control.agent.connection import HeartbeatFrame
+    from senior_control.agent.websocket import WebSocketLink
+
+    clock = HeartbeatClock(monkeypatch)
+    hub = relay_hub(monkeypatch, clock)
+    socket = RelaySocket(hub, ROBOT)
+    link = WebSocketLink(socket, ROBOT, 1, clock=clock.monotonic)
+    try:
+        for now in [10.0, 11.0, 12.0]:
+            clock.advance(now)
+            await link.send_heartbeat()
+        requests = [frame for frame in socket.sent if frame["type"] == "heartbeat.request"]
+        assert len(requests) == 3 and len({frame["nonce"] for frame in requests}) == 3
+        # Every receipt is three seconds late, across the first request's old deadline.
+        for now in [13.0, 14.0, 15.0]:
+            clock.advance(now)
+            assert await link.recv() == HeartbeatFrame(ROBOT)
+            await link.send_heartbeat()
+            hub.expire_stale_agent(socket.connection)
+            assert hub.is_online(ROBOT) and not socket.closed
+    finally:
+        await link.close()

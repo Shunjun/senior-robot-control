@@ -7,21 +7,22 @@ from pathlib import Path
 import pytest
 
 
-def test_cpp_age_queue_boundaries_and_transient_crossing(tmp_path):
+def test_cpp_age_queue_boundaries_and_transient_crossing(tmp_path: Path) -> None:
     compiler = shutil.which("c++")
     if compiler is None:
         pytest.skip("C++ compiler unavailable")
+    assert compiler is not None
     source = tmp_path / "policy.cpp"
     source.write_text(r"""
 #include "senior_motion_msgs/sensor_timing.hpp"
 #include <cassert>
 #include <limits>
 int main() {
-  sensor_timing::Policy p(.3,1.,5.);
-  assert(p.age_ns(1000000000,1200000000,5.,1400000000,5.7)==900000000);
+  sensor_timing::Policy p(300.,1000.,5.);
+  assert(p.age_ns(4800000000ULL,5.,5.7)==900000000);
   bool bad=false; try {sensor_timing::Policy q(0.,std::numeric_limits<double>::quiet_NaN(),5.);}
     catch(const std::invalid_argument &) {bad=true;} assert(bad);
-  bad=false; try {p.age_ns(1000000000,1200000000,5.,1100000000,5.);}
+  bad=false; try {p.age_ns(1200000000ULL,1.2,1.1);}
     catch(const std::invalid_argument &) {bad=true;} assert(bad);
   sensor_timing::AgeSummary ages;
   ages.observe(299999999,p); ages.observe(300000000,p); ages.observe(1000000000,p);

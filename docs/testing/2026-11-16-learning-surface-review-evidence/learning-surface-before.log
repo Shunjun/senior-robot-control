@@ -1,0 +1,80 @@
+FFF.F.                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference _
+
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-209/test_dense_long_learned_surfac0')
+
+    def test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference(tmp_path):
+        observation = dense_surface()
+        model = learn([observation] * 12)
+>       assert model.validate() == len(observation.rays)
+E       AssertionError: assert 125 == 1000
+E        +  where 125 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c593830>.validate
+E        +  and   1000 = len((RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...))
+E        +    where (RayEvidence(index=0, origin=(0, 0), endpoint=(4.998499909992285, 0.15), kind='hit'), RayEvidence(index=1, origin=(0, ...5437138, 0.15), kind='hit'), RayEvidence(index=5, origin=(0, 0), endpoint=(3.9756603705184084, 0.15), kind='hit'), ...) = FilteredObservation(scan=ScanObservation(ranges=(5.0007500787574735, 4.756301600106132, 4.534648075640032, 4.332743542...n=(0, 0), endpoint=(9.184850993605149e-18, 0.15), kind='hit')), occluded_regions=(), invalid_regions=(), self_masks=()).rays
+
+tests/unit/test_learning_surface_review.py:29: AssertionError
+_____ test_complete_scan_connects_surface_across_first_last_samples[False] _____
+
+inclusive = False
+
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
+        count = 720
+        step = math.tau / (count - 1 if inclusive else count)
+        # The only interior seed is at the end; the outside extension is at the start.
+        obs = cloud(((0.0, .4), None, (0.0, .15)))
+        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
+        rays[0] = replace(obs.rays[0], index=0)
+        rays[-1] = replace(obs.rays[-1], index=count - 1)
+        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
+        obs = replace(obs, scan=scan, rays=tuple(rays))
+        model = learn([obs] * 12)
+>       assert model.validate() == 2
+E       assert 1 == 2
+E        +  where 1 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c63dbb0>.validate
+
+tests/unit/test_learning_surface_review.py:57: AssertionError
+_____ test_complete_scan_connects_surface_across_first_last_samples[True] ______
+
+inclusive = True
+
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_complete_scan_connects_surface_across_first_last_samples(inclusive):
+        count = 720
+        step = math.tau / (count - 1 if inclusive else count)
+        # The only interior seed is at the end; the outside extension is at the start.
+        obs = cloud(((0.0, .4), None, (0.0, .15)))
+        rays = [replace(obs.rays[0], index=i, endpoint=None, kind="invalid") for i in range(count)]
+        rays[0] = replace(obs.rays[0], index=0)
+        rays[-1] = replace(obs.rays[-1], index=count - 1)
+        scan = replace(obs.scan, ranges=tuple([1.0] * count), angle_increment=step)
+        obs = replace(obs, scan=scan, rays=tuple(rays))
+        model = learn([obs] * 12)
+>       assert model.validate() == 2
+E       assert 1 == 2
+E        +  where 1 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c660560>.validate
+
+tests/unit/test_learning_surface_review.py:57: AssertionError
+____________ test_unstable_bridge_disconnects_stable_outside_piece _____________
+
+    def test_unstable_bridge_disconnects_stable_outside_piece():
+        frames = [cloud(((0.0, .15), (0.0, .3), (0.0, .8)))] * 12
+        frames[5] = cloud(((0.0, .15), (0.0, .33), (0.0, .8)))
+        model = learn(frames)
+>       assert model.validate() == 1
+E       assert 2 == 1
+E        +  where 2 = validate()
+E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c6676e0>.validate
+
+tests/unit/test_learning_surface_review.py:71: AssertionError
+------------- generated xml file: /tmp/learning-surface-before.xml -------------
+=========================== short test summary info ============================
+FAILED tests/unit/test_learning_surface_review.py::test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference
+FAILED tests/unit/test_learning_surface_review.py::test_complete_scan_connects_surface_across_first_last_samples[False]
+FAILED tests/unit/test_learning_surface_review.py::test_complete_scan_connects_surface_across_first_last_samples[True]
+FAILED tests/unit/test_learning_surface_review.py::test_unstable_bridge_disconnects_stable_outside_piece
+4 failed, 2 passed in 0.43s

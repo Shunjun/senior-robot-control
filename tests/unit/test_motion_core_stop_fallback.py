@@ -75,7 +75,7 @@ def test_fallback_rebuilds_current_ros_risk_without_readmitting_or_committing_dr
     assert rig.core.target.source == "navigation"
 
 
-@pytest.mark.parametrize("invalid", ["ros_window", "steady_source"])
+@pytest.mark.parametrize("invalid", ["source_expired", "steady_source"])
 def test_fallback_never_salvages_invalid_or_different_packet(rig, monkeypatch, invalid):
     stage(rig, monkeypatch)
     before = command_state(rig.core.controller)
@@ -84,8 +84,8 @@ def test_fallback_never_salvages_invalid_or_different_packet(rig, monkeypatch, i
 
     def stop(prepared, now):
         attempted.append(now)
-        if invalid == "ros_window":
-            rig.clock.ns = 6_150_000_001
+        if invalid == "source_expired":
+            now = prepared.body.deadline_steady
             rig.core.node._reception_test.publish(6.150000001, now)
         elif invalid == "packet_changed":
             raise AssertionError("retired local packet replay")
@@ -133,11 +133,11 @@ def test_failed_actual_output_never_commits_proposed_command(rig, monkeypatch):
     emit = rig.node._emit_motion_core
     calls = []
 
-    def failed_output(command, reason, deadline=0):
+    def failed_output(command, reason, deadline=0, *, computed_steady):
         calls.append(command)
         if len(calls) == 1:
             raise ValueError("captured actuator write failure")
-        return emit(command, reason, deadline)
+        return emit(command, reason, deadline, computed_steady=computed_steady)
 
     monkeypatch.setattr(rig.node, "_emit_motion_core", failed_output)
     rig.core.tick()

@@ -104,7 +104,7 @@ def create_perception_node() -> type:
             self.declare_parameter("rgb_topic", DEFAULT_RGB_TOPIC)
             self.declare_parameter("depth_topic", DEFAULT_DEPTH_TOPIC)
             self.declare_parameter("weights_path", "")
-            self.declare_parameter("max_skew_s", 0.03)
+            self.declare_parameter("max_skew_ms", 30.0)
             for name in calibration_fields:
                 self.declare_parameter(f"calibration.{name}")
             for name in extrinsic_fields:
@@ -124,7 +124,7 @@ def create_perception_node() -> type:
             detector = load_detector(Path(weights) if weights else None)
             self.adapter = PerceptionAdapter(
                 calibration=calibration,
-                synchronizer=RgbdSynchronizer(max_skew_s=float(str(value("max_skew_s")))),
+                synchronizer=RgbdSynchronizer(max_skew_ms=float(str(value("max_skew_ms")))),
                 geometry_config=GeometryConfig(),
                 tracking_config=TrackingConfig(),
                 worker=InferenceWorker(detector, max_pending=1),

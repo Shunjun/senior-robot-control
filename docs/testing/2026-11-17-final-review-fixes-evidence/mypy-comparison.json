@@ -1,0 +1,18 @@
+{
+  "current_count": 6,
+  "baseline_worktree_count": 7,
+  "baseline_head_count": 68,
+  "retained_from_head": [
+    "src/senior_control/motion/constraints.py: error: Argument \"join_style\" to \"buffer\" of \"BaseGeometry\" has incompatible type \"Literal[2]\"; expected \"Literal['round', 'mitre', 'bevel'] | BufferJoinStyle\"  [arg-type]",
+    "src/senior_control/motion/constraints.py: error: Incompatible return value type (got \"tuple[tuple[float, ...], ...]\", expected \"tuple[tuple[float, float], ...]\")  [return-value]",
+    "src/senior_control/motion/controller.py: error: Argument 1 to \"validate_output\" of \"ConstraintEngine\" has incompatible type \"ConstraintResult | None\"; expected \"ConstraintResult\"  [arg-type]",
+    "src/senior_control/motion/controller.py: error: Argument 1 to \"validate_output\" of \"TickEvaluation\" has incompatible type \"ConstraintResult | None\"; expected \"ConstraintResult\"  [arg-type]",
+    "src/senior_control/tasks/lifecycle.py: error: Incompatible types in assignment (expression has type \"Literal['succeeded', 'canceled', 'failed'] | None\", variable has type \"Literal['empty', 'starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']\")  [assignment]",
+    "src/senior_control/tasks/lifecycle_store.py: error: Value of type \"Row | None\" is not indexable  [index]"
+  ],
+  "new_vs_head": [],
+  "removed_vs_round_start": [
+    "src/senior_control/agent/websocket.py: error: Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"  [arg-type]"
+  ],
+  "new_vs_round_start": []
+}

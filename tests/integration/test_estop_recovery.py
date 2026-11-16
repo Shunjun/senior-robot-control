@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-import pytest
 from agent_fakes import (
     ROBOT,
     FakeConnector,
@@ -25,18 +24,16 @@ from senior_control.runtime.ipc import IpcClient, IpcServer
 from senior_control.storage.database import Database
 
 
-@pytest.mark.parametrize("invalidate", ["expired_heartbeat", "disable"])
 async def test_received_estop_survives_epoch_invalidation(
-    tmp_path: Path, socket_path: Path, invalidate: str
+    tmp_path: Path, socket_path: Path
 ) -> None:
     """An already received fresh estop must latch even if the epoch is disabled in transit."""
     from agent_fakes import simple
 
-    from senior_control.agent.connection import HeartbeatFrame
     from senior_control.safety.arbiter import Arbiter
 
     rig = ArbiterRig()
-    rig.arbiter = Arbiter(ROBOT, 0.3)
+    rig.arbiter = Arbiter(ROBOT, 300)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def handle(message: dict[str, Any]) -> dict[str, Any]:
@@ -71,24 +68,17 @@ async def test_received_estop_survives_epoch_invalidation(
                 state=FakeState(),
                 motion=motion,
                 clock=Clock(),
-                heartbeat_seconds=0.05,
+                heartbeat_ms=50,
             )
             runner = asyncio.create_task(agent.run())
             control = IpcClient(socket_path)
             try:
                 await until(lambda: agent.connected)
-                link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
-                await until(lambda: agent.eligible_for_motion)
                 await agent.dispatch(simple("control.acquire", seq=1))
                 link.inbox.put_nowait(simple("safety.estop", seq=2))
                 await asyncio.wait_for(entered.wait(), 1)
-                if invalidate == "expired_heartbeat":
-                    rig.now = 100.9
-                    # Explicit retirement may arrive while the admitted emergency IPC waits.
-                    response = await control.request("disable_motion", connection_epoch=1)
-                    assert response["ok"]
-                else:
-                    assert (await control.request("disable_motion", connection_epoch=1))["ok"]
+                # Explicit retirement can arrive while admitted emergency IPC waits.
+                assert (await control.request("disable_motion", connection_epoch=1))["ok"]
                 release.set()
                 assert agent._safety_task is not None
                 await asyncio.wait_for(agent._safety_task, 1)

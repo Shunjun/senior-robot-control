@@ -1,0 +1,22 @@
+{
+  "head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "own": {
+    "src/senior_control/motion/startup_learning.py": "311a90c698e73d58ca09ee02762be36db0a2ab4ae1437b1e00d5320ad4524849",
+    "tests/unit/learning_test_support.py": "d5daabacd481011bcc19f284dabb83538af308f13880bae6641873fe76ed5e10",
+    "tests/unit/test_learning_recorded_path.py": "341bb8f227e11ff7115eb820b573c9cbdae725c831b9a90865057f3b7f9ea2f9",
+    "tests/unit/test_learning_dual_clock.py": "ee0d8400e05ba1052d03e226e10edf3829c88a5860e827daa29a54d17bc79ac3",
+    "tests/unit/test_startup_learning_review.py": "2cd790a6341e20ab590b0c9a35241b85288da5c5c290434e6c7e381a824c03a9",
+    "tests/unit/test_startup_learning.py": "c2e058e37675778143851543f87776916277cd8c2bb4925993dc09be69168f61",
+    "tests/unit/test_startup_learning_timed.py": "22a0725ba5f2683a78236fb6c4805393c8b27cc339dc410b9a977f916c52abbb",
+    "tests/unit/test_startup_learning_cycle.py": "132a53774a6df962fe8634bbeb394ccb57d797c1a9a2902c037aa5dc8bbbca64"
+  },
+  "nav_dependencies_snapshot": {
+    "src/senior_control/motion/estimator.py": "8fd30a1d58abc4fba0821358103345368e39f620a82902855c00104d59445a2f",
+    "src/senior_control/motion/pose_estimator.py": "6fec37fccc488202956bc9ade2134aaab40924f1b89c5676d9d7ae3eba85fcf7",
+    "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py": "4727c372e8b6ba501c6045edcdfdf3ce503b8b678b37aa35949c01d42bc97335",
+    "ros2/src/senior_robot/senior_robot/motion_observation_adapter.py": "3353b9245143966b055752fc406e635db15e42a0896fde9196c8180c44bdc454",
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py": "300e55864d548bc969576f6f49047f02b91599cf9a71813bf11687fae91057b7",
+    "tests/unit/control_process_test_support.py": "ce091121f9d1f5cdcc24ce8499d39ca21c1cff1f9a45428795f0a125c39685f2",
+    "tests/unit/test_motion_core_chain.py": "7a6f2d914709d6c6f281551c027c07fffd522bdbb42fee8ba20507a2788f1af0"
+  }
+}

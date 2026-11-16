@@ -1,0 +1,193 @@
+AT 2026-11-16T18:38:51.714796+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web
+COMMAND ["./node_modules/.bin/vitest", "run", "--reporter=verbose"]
+
+ RUN  v5.0.5 /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web
+
+ ✓ src/api/client.test.ts > uses the existing authenticated envelope, keeps RTT diagnostic, and never sends timing challenges 13ms
+ ✓ src/api/client.test.ts > ignores mismatched session replies and accepts the matching prepared receipt 1ms
+ ✓ src/api/client.test.ts > does not send a new route when the vehicle has not advertised its capability 1ms
+ ✓ src/api/client.test.ts > does not append a motion sample behind a buffered socket 0ms
+ ✓ src/api/client.test.ts > keeps held input during backpressure, sends only current effort after draining, and drops released input 24ms
+ ✓ src/api/client.test.ts > retires manual input when agent epoch changes on the same browser socket without canceling tasks 6ms
+ ✓ src/api/client.test.ts > ignores retired per-intent receipts and continues fresh samples 11ms
+ ✓ src/api/client.test.ts > accepts serialized navigation.goal lifecycle details without claiming completion 1ms
+ ✓ src/api/client.test.ts > accepts serialized navigation.return_home lifecycle details without claiming completion 1ms
+ ✓ src/api/client.test.ts > accepts serialized operation.query lifecycle details without claiming completion 1ms
+ ✓ src/api/client.test.ts > preserves legacy non-task operation query replies without data 1ms
+ ✓ src/api/client.test.ts > strictly restricts lifecycle data shape and request types 0ms
+ ✓ src/api/client.test.ts > sends every 100ms while a 400ms independent receipt is unresolved, with no intent pending or retry 13ms
+ ✓ src/features/devices/vehicleState.test.tsx > keeps disconnected running task as last known and never replaces missing body with wheels 125ms
+ ✓ src/features/devices/vehicleState.test.tsx > requests explicit resume without projecting local task completion or mode changes 70ms
+ ✓ src/features/devices/vehicleState.test.tsx > shows missing runtime as an online report with unknown safety and speed 6ms
+ ✓ src/features/map/map.test.tsx > test_rotated_map_coordinates_roundtrip > places grid cells by origin, resolution and yaw 2ms
+ ✓ src/features/map/map.test.tsx > test_rotated_map_coordinates_roundtrip > round-trips screen, world and grid on a rotated map 0ms
+ ✓ src/features/map/map.test.tsx > test_rotated_map_coordinates_roundtrip > agrees with gridToScreen and flips the y axis for the screen 0ms
+ ✓ src/features/map/map.test.tsx > test_rotated_map_coordinates_roundtrip > fits the occupied cells inside the viewport 1ms
+ ✓ src/features/drive/drive.test.tsx > normalized manual ownership > prepared authority stays still until a fresh press and sends normalized gear intent 11ms
+ ✓ src/features/drive/drive.test.tsx > normalized manual ownership > late acquire cannot revive a released press 37ms
+ ✓ src/features/drive/drive.test.tsx > normalized manual ownership > samples the latest held input despite an unresolved send and fences on release 10ms
+ ✓ src/features/mapping/mapping.test.tsx > map lifecycle > test_clear_requires_named_robot_confirmation 289ms
+ ✓ src/features/mapping/mapping.test.tsx > map lifecycle > test_import_waits_for_localization 10ms
+ ✓ src/features/mapping/mapping.test.tsx > map lifecycle > test_inflight_operation_recovered_after_reconnect 45ms
+ ✓ src/features/map/map.test.tsx > test_rotated_map_coordinates_roundtrip > turns a pick on the rotated map into a world pose, with heading from the drag 203ms
+ ✓ src/features/drive/drive.test.tsx > shows unavailable instead of enabling old velocity controls 269ms
+ ✓ src/features/drive/drive.test.tsx > a request acknowledgement does not claim confirmed emergency stop 18ms
+ ✓ src/features/drive/drive.test.tsx > actual controls send full high-gear effort, then close the authority on key release 49ms
+ ✓ src/features/settings/settings.test.tsx > converts only displayed km/h to SI, submits one group and reads effective values 406ms
+ ✓ src/features/drive/drive.test.tsx > sends emergency stop before fencing a held input, and requires owner permission for software reset 92ms
+ ✓ src/features/tasks/tasks.test.tsx > task schedules > test_daily_interval_weekly_cron_roundtrip 171ms
+ ✓ src/features/map/map.test.tsx > MapCanvas > zooms and pans from buttons and the keyboard 127ms
+ ✓ src/features/map/map.test.tsx > MapCanvas > pans by dragging when picking is off 29ms
+ ✓ src/features/map/map.test.tsx > MapCanvas > compares raw and filtered occupancy 55ms
+stderr | src/features/devices/devices.test.tsx > robot switching > test_switch_robot_drops_previous_state
+A component suspended inside an `act` scope, but the `act` call was not awaited. When testing React components that depend on asynchronous data, you must await the result:
+
+await act(() => ...)
+
+ ✓ src/features/settings/settings.test.tsx > keeps unknown request identity through disconnect and queries instead of creating another apply 113ms
+ ✓ src/features/settings/settings.test.tsx > allows logging while driving changes are refused by the car 30ms
+ ✓ src/features/settings/settings.test.tsx > can restore defaults even while a draft field is empty 49ms
+ ✓ src/features/tasks/tasks.test.tsx > task schedules > submits a waypoint and edits each task with its own revision 358ms
+ ✓ src/features/map/map.test.tsx > MapCanvas > draws trajectory, safety zones, robot, home, goal and the draft 73ms
+ ✓ src/features/map/map.test.tsx > MapCanvas > marks a cached map as not live and refuses picks on it 10ms
+ ✓ src/features/map/map.test.tsx > PosePicker > test_stale_map_blocks_goal 35ms
+ ✓ src/features/map/map.test.tsx > PosePicker > blocks a goal when the map on screen is not the map the robot reports 16ms
+ ✓ src/features/logs/logs.test.tsx > keeps cursor/gap with pagination and escapes detail text 330ms
+ ✓ src/features/devices/devices.test.tsx > robot switching > test_switch_robot_drops_previous_state 376ms
+ ✓ src/features/devices/devices.test.tsx > snapshot freshness > test_stale_cache_label 42ms
+ ✓ src/features/tasks/tasks.test.tsx > task schedules > test_offline_edits_disabled 22ms
+ ✓ src/features/map/map.test.tsx > PosePicker > emits a goal that carries the map reference 48ms
+ ✓ src/features/map/map.test.tsx > PosePicker > fills the fields from a pick on the map 55ms
+ ✓ src/features/map/map.test.tsx > PosePicker > rejects non-numeric input instead of sending NaN 19ms
+ ✓ src/features/devices/devices.test.tsx > session > test_session_expired_returns_login 124ms
+ ✓ src/features/devices/devices.test.tsx > session > returns to login when the first request is unauthorized, and logs in 32ms
+ ✓ src/features/map/map.test.tsx > PosePicker > offers a localization hint while not localized, with the map reference 40ms
+ ✓ src/features/map/map.test.tsx > PosePicker > blocks a hint on a cached map 49ms
+ ✓ src/features/map/map.test.tsx > HomeControls > test_home_unset_and_localization_pending_disable_navigation 41ms
+ ✓ src/features/map/map.test.tsx > HomeControls > blocks start and resume while a cross-robot Home is unconfirmed 8ms
+ ✓ src/features/tasks/schedule.test.ts > visual schedule conversion > keeps daily wall time distinct from a fixed 24-hour interval 2ms
+ ✓ src/features/tasks/schedule.test.ts > visual schedule conversion > maps common daily and weekly cron losslessly until explicitly edited 1ms
+ ✓ src/features/tasks/schedule.test.ts > visual schedule conversion > preserves complex cron verbatim on metadata-only edits 0ms
+ ✓ src/features/tasks/schedule.test.ts > visual schedule conversion > roundtrips interval units and rejects incomplete visual values 0ms
+ ✓ src/api/logs.test.ts > uses independent sockets, validates query and segmented download replies 3ms
+ ✓ src/api/logs.test.ts > pause closes follow and resume starts from the supplied cursor 1ms
+ ✓ src/api/logs.test.ts > rejects pending reads when the owning vehicle connection is closed 1ms
+ ✓ src/features/video/video.test.tsx > video > test_detection_frame_mismatch_hidden 23ms
+ ✓ src/features/video/video.test.tsx > video > shows unavailable without a camera answer and labels inference honestly 29ms
+ ✓ src/features/map/map.test.tsx > HomeControls > blocks navigation when Home belongs to another map 5ms
+ ✓ src/features/map/map.test.tsx > HomeControls > keeps cancel available while navigation start is blocked 19ms
+ ✓ src/features/map/map.test.tsx > HomeControls > shows no success for a command the robot rejected 15ms
+ ✓ src/features/map/map.test.tsx > HomeControls > sends the published home revision with 设为 Home 28ms
+ ✓ src/features/map/map.test.tsx > HomeControls > sets Home through an operation, only when localized, and confirms only on ok 15ms
+ ✓ src/features/map/map.test.tsx > HomeControls > asks before replacing an existing Home 14ms
+ ✓ src/features/map/map.test.tsx > HomeControls > shows Home and localization state, and a missing snapshot as unknown 7ms
+ ✓ src/features/map/map.test.tsx > map layout > keeps the map usable in landscape and the controls large 0ms
+ ✓ src/features/devices/devices.test.tsx > session > shows a wrong password and stays on login 61ms
+ ✓ src/features/devices/devices.test.tsx > session > logs out and returns to login 43ms
+ ✓ src/features/devices/devices.test.tsx > device list > shows the real online state of each robot 18ms
+ ✓ src/features/devices/devices.test.tsx > device list > updates from reconnecting to 在线 after the next robot list response 27ms
+ ✓ src/features/map/map.test.tsx > renders live scan hits in the map frame and hides all live overlays on cached maps 10ms
+ ✓ src/features/video/video.test.tsx > starts signaling when the agent becomes live and sends the offer before trickle ICE 79ms
+ ✓ src/api/vehicleState.test.ts > vehicle transport boundary > strictly decodes independent body state and never substitutes wheel speed 2ms
+ ✓ src/api/vehicleState.test.ts > vehicle transport boundary > acquires through the independent control connection without a report 1ms
+ ✓ src/api/vehicleState.test.ts > vehicle transport boundary > preserves confirmed state on disconnect and rejects old safety revisions 0ms
+ ✓ src/api/vehicleState.test.ts > keeps unavailable reports live across reconnect without restoring old permissions 0ms
+ ✓ src/features/tasks/tasks.test.tsx > ordered task route > test_reorders_and_reopens_three_point_route 305ms
+ ✓ src/features/tasks/tasks.test.tsx > ordered task route > test_reference_change_rejects_late_route_read 89ms
+ ✓ src/features/devices/devices.test.tsx > device list > updates from reconnecting to 离线 after the next robot list response 19ms
+ ✓ src/features/devices/devices.test.tsx > device list > shows an empty state and a retryable error state 18ms
+ ✓ src/features/devices/devices.test.tsx > device list > tells the operator when the selected robot does not exist 7ms
+ ✓ src/features/devices/devices.test.tsx > command errors > test_command_error_never_shown_success 31ms
+ ✓ src/features/devices/devices.test.tsx > command errors > only reports an e-stop as confirmed after an ok response 22ms
+ ✓ src/features/devices/devices.test.tsx > demo data > test_demo_label_always_visible 28ms
+ ✓ src/features/devices/devices.test.tsx > demo data > shows no demo label for real data 8ms
+ ✓ src/features/devices/devices.test.tsx > demo data > demo backend names its robots as demo and never drives a chassis 2ms
+ ✓ src/features/devices/devices.test.tsx > HttpControlApi > logs in with the password, keeps the csrf token and sends it on logout 1ms
+ ✓ src/features/devices/devices.test.tsx > HttpControlApi > maps 401, 429 and other login failures to distinct errors 1ms
+ ✓ src/features/devices/devices.test.tsx > HttpControlApi > lists robots, and reports a 401 as an unauthorized session 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > opens the control socket for one robot 2ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > sends a v1 envelope and resolves only on an ok response 2ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > rejects an ok=false response with its error code 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > numbers requests with an increasing seq 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > refuses unknown request types and an unopened link 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > times out an unanswered request instead of waiting forever 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > rejects pending requests when disconnected 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > publishes snapshots as live, then marks them stale and not connected 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > keeps the cloud's stale flag and sync time on a cached snapshot 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > ignores a snapshot that does not say when the cloud last synced it 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > sends a command with the independent connection epoch 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > sends urgent commands before connection identity and waits for a real response 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > allows an urgent stop on a stale snapshot while rejecting ordinary commands 2ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > still permits urgent stop after the cached snapshot times out 1ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > marks the last snapshot stale when the socket closes 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > drops frames for another robot and malformed frames 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > ignores frames of the previous robot after switching 0ms
+ ✓ src/features/devices/devices.test.tsx > RobotClient > rejects connect when the socket closes before opening 0ms
+ ✓ src/features/devices/devices.test.tsx > cached snapshot delivered by the cloud > test_stale_snapshot_from_the_cloud_is_labeled_cache_in_the_page 18ms
+ ✓ src/features/devices/devices.test.tsx > cached snapshot delivered by the cloud > test_command_uses_the_epoch_the_cloud_delivered 25ms
+ ✓ src/features/devices/devices.test.tsx > protocol parity with src/senior_control/protocol.py > mirrors the request types 1ms
+ ✓ src/features/devices/devices.test.tsx > protocol parity with src/senior_control/protocol.py > mirrors the response request types and error codes 0ms
+ ✓ src/features/devices/devices.test.tsx > protocol parity with src/senior_control/protocol.py > mirrors the envelope and snapshot fields and the size bound 0ms
+ ✓ src/features/devices/devices.test.tsx > remote drive admission > refuses the retired velocity route without sending it 0ms
+ ✓ src/features/devices/devices.test.tsx > remote drive admission > does not enable the joystick before control authority is acquired 13ms
+ ✓ src/features/tasks/tasks.test.tsx > ordered task route > retains the reordered draft on revision conflict until explicitly reloaded 99ms
+ ✓ src/features/devices/devices.test.tsx > remote drive admission > marks an existing live view stale when the control link closes 17ms
+ ✓ src/features/devices/devices.test.tsx > does not repaint a current robot with an older agent epoch after an offline frame 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > posts a pairing code request with the authenticated session and CSRF 1ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > handles HTTP 401 without accepting invalid data 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > handles HTTP 403 without accepting invalid data 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > handles HTTP 429 without accepting invalid data 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > handles HTTP 201 without accepting invalid data 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > keeps a new login's CSRF token when an older list refresh answers 401 0ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > offers pairing on an empty list and ignores repeated and closed requests 25ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > clears expired and logged-out codes 38ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > clears the code while logout is pending and submits logout only once 31ms
+ ✓ src/features/tasks/tasks.test.tsx > ordered task route > test_single_point_compatibility 48ms
+ ✓ src/features/tasks/tasks.test.tsx > assembles current occupancy tiles and catalog before allowing route edits 55ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > clears a pairing code on return from a suspended page 18ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > allows retry after a rate limit and redirects on expired auth 26ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > offers reauthentication when the session cookie is present but CSRF is unavailable 30ms
+ ✓ src/features/devices/devices.test.tsx > device pairing > hides real pairing in demo mode 8ms
+ ✓ src/features/tasks/tasks.test.tsx > saves a picked point before exposing it as a selectable route waypoint 67ms
+ ✓ src/features/tasks/tasks.test.tsx > shows only vehicle-reported progress on the current live map 7ms
+ ✓ src/features/tasks/tasks.test.tsx > shows current vehicle and laser hits on task maps only for qualified live generations 34ms
+ ✓ src/features/tasks/tasks.test.tsx > shows a selected task route directly and keeps editing order live on the map 66ms
+ ✓ src/features/tasks/tasks.test.tsx > does not draw a missing task route on the wrong/current incomplete map 30ms
+ ✓ src/features/tasks/tasks.test.tsx > does not draw a grid task route on the wrong/current incomplete map 22ms
+ ✓ src/features/devices/devices.test.tsx > operator workspace > test_keeps_manual_controls_mounted_on_primary_view_switch 47ms
+ ✓ src/features/devices/devices.test.tsx > operator workspace > test_leaving_manual_revokes_gesture_without_rearm 88ms
+ ✓ src/features/tasks/tasks.test.tsx > creates, saves and reopens a visual daily schedule 74ms
+ ✓ src/features/tasks/tasks.test.tsx > creates, saves and reopens a visual weekly schedule 101ms
+ ✓ src/features/logs/logs.test.tsx > bounds the browser window and pauses only its independent subscription 1433ms
+ ✓ src/features/logs/logs.test.tsx > reports bounded segmented download and keeps its continuation cursor 66ms
+ ✓ src/features/devices/devices.test.tsx > keeps an exported map read-only and requires task runtime before cancellation 136ms
+ ✓ src/features/tasks/tasks.test.tsx > creates, saves and reopens a visual interval schedule 126ms
+ ✓ src/features/tasks/tasks.test.tsx > keeps an existing complex cron unchanged when saving other task fields 48ms
+ ✓ src/features/devices/devices.test.tsx > sends an eligible goal and return with the current map fence 176ms
+ ✓ src/features/devices/devices.test.tsx > validates optional snapshot navigation readiness 1ms
+ ✓ src/features/devices/devices.test.tsx > updates navigation readiness from snapshots without reloading the map 132ms
+ ✓ src/features/devices/devices.test.tsx > validates bounded finite live map telemetry and defaults legacy snapshots 1ms
+ ✓ src/features/devices/devices.test.tsx > shows only telemetry qualified for the displayed map (export copy: false) 97ms
+ ✓ src/features/devices/devices.test.tsx > shows only telemetry qualified for the displayed map (export copy: true) 39ms
+ ✓ src/features/devices/devices.test.tsx > validates optional navigation block diagnostics 0ms
+ ✓ src/features/devices/devices.test.tsx > explains the vehicle's concrete navigation blocker 54ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > deletes with session, CSRF and an encoded robot ID 1ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > confirms credential invalidation, prevents duplicates and exits the removed robot 28ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > keeps the device after failure and allows retry or cancellation 27ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > keeps another selected robot and rejects an older refresh that still contains the deleted one 36ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > hides deletion in demo mode 7ms
+ ✓ src/features/devices/devices.test.tsx > device unpairing > returns to login when revocation discovers an expired session 21ms
+
+ Test Files  13 passed (13)
+      Tests  169 passed (169)
+   Start at  02:38:52
+   Duration  3.61s (environment 43%, tests 41%, import 10%, transform 5%, worker 1%)
+
+Environment  jsdom was created 13 times · 8.67s total, 43% of tracked time
+             create it once per worker with pool: 'vmThreads' (keeps per-file isolation) or isolate: false (shares it across files)
+             learn more: https://vitest.dev/guide/improving-performance#test-environments
+
+
+EXIT 0
+ELAPSED 4.049510125012603

@@ -10,6 +10,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Any
 
+from senior_control.protocol import HEARTBEAT_INTERVAL_MS
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,29 +27,31 @@ class Supervisor:
         call_ros: Callable[[str], Awaitable[Any]],
         connect: Callable[[], Awaitable[bool | None]] | None = None,
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
-        heartbeat_seconds: float = 0.2,
-        retry_delay: float = 1.0,
+        heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
+        retry_delay_ms: float = 1000,
         max_retry_delay: float | None = None,
-        shutdown_timeout: float = 1.0,
-        on_fault: Callable[[str], None] | None = None,
+        shutdown_timeout_ms: float = 1000,
+        on_fault: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         if (
-            heartbeat_seconds <= 0
-            or retry_delay < 0
-            or not math.isfinite(shutdown_timeout)
-            or shutdown_timeout <= 0
+            heartbeat_ms <= 0
+            or retry_delay_ms < 0
+            or not math.isfinite(shutdown_timeout_ms)
+            or shutdown_timeout_ms <= 0
         ):
             raise ValueError("heartbeat and retry delay must be positive")
         self._send_heartbeat = send_heartbeat
         self._call_ros = call_ros
         self._connect = connect
         self._background = dict(background or {})
-        self._heartbeat_seconds = heartbeat_seconds
-        self._shutdown_timeout = shutdown_timeout
+        self._heartbeat_seconds = heartbeat_ms / 1000
+        self._shutdown_timeout = shutdown_timeout_ms / 1000
         self._on_fault = on_fault
-        self._retry_delay = retry_delay
+        self._retry_delay = retry_delay_ms / 1000
         self._max_retry_delay = (
-            max_retry_delay if max_retry_delay is not None else max(retry_delay * 30, retry_delay)
+            max(self._retry_delay * 30, self._retry_delay)
+            if max_retry_delay is None
+            else max_retry_delay
         )
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
@@ -106,10 +110,9 @@ class Supervisor:
             self.revoked_reason = reason
             logger.error("motion revoked: %s", reason)
 
-    def _fault(self, reason: str) -> None:
-        self._revoke(reason)
+    async def _fault(self, name: str, reason: str) -> None:
         if self._on_fault is not None:
-            self._on_fault(reason)
+            await self._on_fault(name, reason)
 
     async def _heartbeat_loop(self) -> None:
         loop = asyncio.get_running_loop()
@@ -117,10 +120,10 @@ class Supervisor:
         deadline = loop.time()
         while self._running:
             try:
-                await asyncio.wait_for(self._send_heartbeat(), timeout=interval * 5)
+                await self._send_heartbeat()
             except Exception:
                 logger.warning("heartbeat failed", exc_info=True)
-            # //Compatible: Python 3.10 wait_for can swallow cancellation at completion.
+            # A send completing during shutdown must not schedule another heartbeat.
             if not self._running:
                 return
             deadline += interval
@@ -135,10 +138,10 @@ class Supervisor:
         except Exception:
             logger.exception("background task %s failed", name)
             if self._running:
-                self._fault(f"background task {name} failed")
+                await self._fault(name, f"background task {name} failed")
         else:
             if self._running:
-                self._fault(f"background task {name} ended")
+                await self._fault(name, f"background task {name} ended")
 
     async def _uplink_loop(self, connect: Callable[[], Awaitable[bool | None]]) -> None:
         delay = self._retry_delay

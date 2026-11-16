@@ -113,8 +113,9 @@ def test_failed_laser_with_live_wheel_still_uses_unified_result():
         "laser",
         (0.02, None, 0.0),
         10,
-        (Origin("laser", "boot", 1, 10, 10, 20),),
+        (Origin("laser", "boot", 1, 10, 10, 20, measurement_steady=20),),
         independent=(True, True, True),
+        measured_steady=20,
     )
     core.sensors.ingest_observation(laser, 10, 20)
     snapshot(core)
@@ -138,8 +139,9 @@ def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
             name,
             (value, None, 0.0),
             stamp,
-            (Origin(name, "boot2", 1, stamp, stamp, stamp + 10),),
+            (Origin(name, "boot2", 1, stamp, stamp, stamp + 10, measurement_steady=stamp + 10),),
             independent=(name == "laser",) * 3,
+            measured_steady=stamp + 10,
         )
         core.sensors.ingest_observation(o, 10, 20)
     ctx = snapshot(core, obstacle=Point(1, 0))

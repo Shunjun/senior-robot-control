@@ -1,0 +1,17 @@
+........................................................................ [ 35%]
+........................................................................ [ 70%]
+..............................FFFFF..........................            [100%]
+=================================== FAILURES ===================================
+/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_gap_debug.py:177: AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_gap_debug.py:177: AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_gap_debug.py:177: AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_gap_debug.py:177: AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/tests/unit/test_learning_gap_debug.py:177: AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-targeted.xml -
+=========================== short test summary info ============================
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]
+5 failed, 200 passed in 29.56s

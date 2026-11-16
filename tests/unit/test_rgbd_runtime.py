@@ -49,7 +49,7 @@ def geometry(values: tuple[float, ...], *, stamp: float = 1.0):
         CameraExtrinsic(0.2316, 0.00224, 0.1282, 0.0, 0.0, 0.0),
     )
     return project_depth(
-        align(rgb, depth, max_skew_s=0.0),
+        align(rgb, depth, max_skew_ms=0),
         calibration,
         GeometryConfig(column_stride=1, row_stride=1),
     )
@@ -109,6 +109,16 @@ def test_optical_tf_is_converted_to_body_extrinsic_once():
     assert (extrinsic.roll, extrinsic.pitch, extrinsic.yaw) == pytest.approx((0.0, 0.0, 0.0))
 
 
+def test_depth_admission_rejects_retired_future_wait():
+    """SafetyGate used to pass future_wait_s; the constructor no longer accepts it."""
+    from senior_control.vision.runtime_evidence import DepthAdmission
+
+    with pytest.raises(TypeError):
+        DepthAdmission(max_age_ms=1000, future_wait_s=min(0.02, 1.0))
+    admission = DepthAdmission(max_age_ms=1000)
+    assert admission.max_age_ms == 1000
+
+
 def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation():
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
@@ -123,9 +133,10 @@ def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation()
             "camera_optical_frame",
             "calibration-a",
             valid,
+            measurement_steady=received_steady,
         )
 
-    admission = DepthAdmission(max_age_s=0.5)
+    admission = DepthAdmission(max_age_ms=500)
     assert admission.accept(header(), now_ros_ns=1_100_000_000, now_steady=10.1)
     generation = admission.generation
     assert admission.latest is not None
@@ -145,30 +156,34 @@ def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation()
     assert not admission.usable(now_ros_ns=1_600_000_001, now_steady=10.6)
 
 
-def test_depth_admission_defers_future_and_rejects_expired_receipt():
+def test_depth_ros_correction_does_not_delay_fresh_original_capture():
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    admission = DepthAdmission(max_age_s=0.5)
-    future = DepthHeader("a", "camera", 1, 1_200_000_000, 1_100_000_000, 10.1, "frame", "cal", True)
-    assert not admission.accept(future, now_ros_ns=1_100_000_000, now_steady=10.1)
-    assert admission.latest is None
-    assert admission.release(now_ros_ns=1_200_000_000, now_steady=10.11) == 1
-    assert admission.latest is not None
-    assert admission.latest.received_steady == 10.1
-    assert admission.latest.received_ros_ns == 1_100_000_000
-    past = DepthHeader("a", "camera", 2, 1_000_000_000, 1_050_000_000, 9.0, "frame", "cal", True)
-    assert not admission.accept(past, now_ros_ns=1_100_000_000, now_steady=10.1)
-    assert admission.latest is None
+    h = DepthHeader(
+        "a",
+        "camera",
+        1,
+        1_200_000_000,
+        1_100_000_000,
+        10.1,
+        "frame",
+        "cal",
+        True,
+        measurement_steady=10.0,
+    )
+    for wall in (1, 1_100_000_000, 100_000_000_000):
+        admission = DepthAdmission(max_age_ms=500)
+        assert admission.accept(h, now_ros_ns=wall, now_steady=10.1)
+        assert admission.latest is h
+        assert not admission.usable(now_ros_ns=wall, now_steady=10.5)
 
 
-def test_future_frame_expires_on_paused_clock_and_never_refreshes():
+def test_queued_depth_cannot_receive_a_new_lifetime():
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    admission = DepthAdmission(max_age_s=0.5, future_wait_s=0.02)
-    future = DepthHeader("a", "camera", 1, 1_002_000_000, 1_000_000_000, 10.0, "frame", "cal", True)
-    assert not admission.accept(future, now_ros_ns=1_000_000_000, now_steady=10.0)
-    assert admission.release(now_ros_ns=1_000_000_000, now_steady=10.021) == 0
-    assert admission.release(now_ros_ns=1_002_000_000, now_steady=10.022) == 0
+    admission = DepthAdmission(max_age_ms=500)
+    h = DepthHeader("a", "camera", 1, 1, 1, 10.6, "frame", "cal", True, measurement_steady=10.0)
+    assert not admission.accept(h, now_ros_ns=100, now_steady=10.6)
     assert admission.latest is None
 
 
@@ -177,8 +192,19 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
 
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    admission = DepthAdmission(max_age_s=0.5)
-    h = DepthHeader("a", "camera", 1, 1_000_000_000, 1_000_000_000, 10.0, "frame", "cal-a", True)
+    admission = DepthAdmission(max_age_ms=500)
+    h = DepthHeader(
+        "a",
+        "camera",
+        1,
+        1_000_000_000,
+        1_000_000_000,
+        10.0,
+        "frame",
+        "cal-a",
+        True,
+        measurement_steady=10.0,
+    )
     assert admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
     assert not admission.accept(
         replace(h, sequence=2, valid=False), now_ros_ns=1_010_000_000, now_steady=10.01
@@ -186,7 +212,12 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
     assert admission.latest is None
     assert not admission.accept(replace(h, sequence=3), now_ros_ns=1_010_000_000, now_steady=10.01)
     later = replace(
-        h, sequence=4, stamp_ns=1_020_000_000, received_ros_ns=1_020_000_000, received_steady=10.02
+        h,
+        sequence=4,
+        stamp_ns=1_020_000_000,
+        received_ros_ns=1_020_000_000,
+        received_steady=10.02,
+        measurement_steady=10.02,
     )
     assert admission.accept(later, now_ros_ns=1_020_000_000, now_steady=10.02)
     changed = replace(
@@ -195,6 +226,7 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
         stamp_ns=1_030_000_000,
         received_ros_ns=1_030_000_000,
         received_steady=10.03,
+        measurement_steady=10.03,
         calibration_id="cal-b",
     )
     assert not admission.accept(changed, now_ros_ns=1_030_000_000, now_steady=10.03)
@@ -204,53 +236,34 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
 def test_depth_admission_rejects_stale_or_fabricated_receipts():
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    h = DepthHeader("a", "camera", 1, 1_000_000_000, 1_000_000_000, 9.0, "frame", "cal", True)
-    admission = DepthAdmission(max_age_s=0.5)
+    h = DepthHeader(
+        "a",
+        "camera",
+        1,
+        1_000_000_000,
+        1_000_000_000,
+        9.0,
+        "frame",
+        "cal",
+        True,
+        measurement_steady=9.0,
+    )
+    admission = DepthAdmission(max_age_ms=500)
     assert not admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
     assert admission.latest is None
 
 
-def test_depth_future_fifo_is_bounded_and_never_refreshes_original_receipts():
-    from dataclasses import replace
+def test_replayed_depth_and_true_monotonic_regression_revoke_without_ros_gate():
 
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    admission = DepthAdmission(max_age_s=0.5)
-    h = DepthHeader("a", "camera", 1, 1_000_001_000, 1_000_000_000, 10.0, "frame", "cal", True)
-    for index in range(10):
-        assert not admission.accept(
-            replace(h, sequence=index + 1, stamp_ns=h.stamp_ns + index),
-            now_ros_ns=1_000_000_000,
-            now_steady=10.0,
-        )
-    assert admission.release(now_ros_ns=1_000_100_000, now_steady=10.01) == 8
-    assert admission.latest is None
-    assert admission.release(now_ros_ns=1_000_100_000, now_steady=10.01) == 2
-    assert admission.latest is not None and admission.latest.sequence == 10
-    assert admission.latest.received_ros_ns == 1_000_000_000
-    assert admission.latest.received_steady == 10.0
-
-
-def test_depth_failure_and_clock_rollback_fence_pending_future():
-    from dataclasses import replace
-
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
-
-    admission = DepthAdmission(max_age_s=0.5)
-    h = DepthHeader("a", "camera", 1, 1_001_000_000, 1_000_000_000, 10.0, "frame", "cal", True)
-    assert not admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
-    assert not admission.accept(
-        replace(h, sequence=2, valid=False), now_ros_ns=1_000_000_000, now_steady=10.001
-    )
-    assert admission.release(now_ros_ns=1_001_000_000, now_steady=10.002) == 0
-    assert admission.latest is None
-    assert not admission.accept(
-        replace(h, sequence=3, stamp_ns=1_002_000_000), now_ros_ns=900_000_000, now_steady=10.003
-    )
-    assert not admission.accept(
-        replace(h, sequence=4, stamp_ns=1_003_000_000), now_ros_ns=1_003_000_000, now_steady=10.004
-    )
-    assert admission.latest is None
+    a = DepthAdmission(max_age_ms=500)
+    h = DepthHeader("a", "camera", 1, 1, 1, 10.0, "frame", "cal", True, measurement_steady=10.0)
+    assert a.accept(h, now_ros_ns=999, now_steady=10.0)
+    assert not a.accept(h, now_ros_ns=1, now_steady=10.1)
+    assert a.latest is h
+    assert not a.usable(now_ros_ns=1, now_steady=9.9)
+    assert a.latest is None
 
 
 def test_depth_calibration_drift_requires_new_source_epoch():
@@ -258,8 +271,19 @@ def test_depth_calibration_drift_requires_new_source_epoch():
 
     from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 
-    admission = DepthAdmission(max_age_s=0.5)
-    h = DepthHeader("a", "camera", 1, 1_000_000_000, 1_000_000_000, 10.0, "frame", "cal-a", True)
+    admission = DepthAdmission(max_age_ms=500)
+    h = DepthHeader(
+        "a",
+        "camera",
+        1,
+        1_000_000_000,
+        1_000_000_000,
+        10.0,
+        "frame",
+        "cal-a",
+        True,
+        measurement_steady=10.0,
+    )
     assert admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
     h = replace(
         h,
@@ -267,6 +291,7 @@ def test_depth_calibration_drift_requires_new_source_epoch():
         stamp_ns=1_001_000_000,
         received_ros_ns=1_001_000_000,
         received_steady=10.001,
+        measurement_steady=10.001,
         calibration_id="cal-b",
     )
     assert not admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.001)
@@ -276,6 +301,7 @@ def test_depth_calibration_drift_requires_new_source_epoch():
         stamp_ns=1_002_000_000,
         received_ros_ns=1_002_000_000,
         received_steady=10.002,
+        measurement_steady=10.002,
         calibration_id="cal-a",
     )
     assert not admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.002)

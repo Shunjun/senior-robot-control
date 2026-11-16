@@ -1,0 +1,12 @@
+pytest 2026-11-16T18:17:27Z
+DRIFT before-pytest-unit source_drift=False changed=[] missing=[] added=[]
+DRIFT after-pytest-unit source_drift=False changed=[] missing=[] added=[]
+DRIFT before-pytest-integration source_drift=False changed=[] missing=[] added=[]
+DRIFT after-pytest-integration source_drift=False changed=[] missing=[] added=[]
+DRIFT before-pytest-deploy source_drift=False changed=[] missing=[] added=[]
+DRIFT after-pytest-deploy source_drift=False changed=[] missing=[] added=[]
+DRIFT before-pytest-e2e source_drift=False changed=[] missing=[] added=[]
+DRIFT after-pytest-e2e source_drift=False changed=[] missing=[] added=[]
+DRIFT before-pytest-ros source_drift=False changed=[] missing=[] added=[]
+DRIFT after-pytest-ros source_drift=False changed=[] missing=[] added=[]
+[{"group": "unit", "exit": 1, "files": 149, "source_drift": false}, {"group": "integration", "exit": 0, "files": 35, "source_drift": false}, {"group": "deploy", "exit": 0, "files": 1, "source_drift": false}, {"group": "e2e", "exit": 0, "files": 5, "source_drift": false}, {"group": "ros", "exit": 0, "files": 27, "source_drift": false}]

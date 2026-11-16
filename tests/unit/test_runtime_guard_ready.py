@@ -29,7 +29,7 @@ def ready(request, monkeypatch):
     node._runtime_subscription = ReadySubscription(object, node._on_motion_runtime, depth=5)
     node._consuming_runtime = False
     node._motion_runtime = MotionRuntimeReceiver()
-    node._arbiter = Arbiter("route-sim", 0.3)
+    node._arbiter = Arbiter("route-sim", 300)
     node._manual_ingress = ManualIngress("route-sim", "command-boot", ttl=0.3)
     node._manual_target = None
     node._navigation_source = None

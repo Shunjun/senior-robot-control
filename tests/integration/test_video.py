@@ -166,7 +166,7 @@ def make_session(
         viewer=viewer or Viewer("control", "robot-a"),
         source=camera,
         factory=factory,
-        limits=limits or VideoLimits(frame_poll_s=0.01, push_timeout_s=0.05),
+        limits=limits or VideoLimits(frame_poll_ms=10, push_timeout_ms=50),
         budget=budget,
         turn=turn,
         now=clock,
@@ -297,7 +297,7 @@ async def test_congested_video_keeps_heartbeat_and_stop() -> None:
     supervisor = Supervisor(
         send_heartbeat=heartbeat,
         call_ros=ros,
-        heartbeat_seconds=0.01,
+        heartbeat_ms=10,
     )
     async with supervisor:
         for index in range(300):
@@ -453,7 +453,7 @@ def test_codec_follows_what_the_client_actually_offers() -> None:
 
 
 async def test_negotiated_codec_and_bitrate_cap_reach_the_peer() -> None:
-    limits = VideoLimits(max_bitrate_bps=800_000, frame_poll_s=0.01, push_timeout_s=0.05)
+    limits = VideoLimits(max_bitrate_bps=800_000, frame_poll_ms=10, push_timeout_ms=50)
     session, factory, _, _ = make_session(limits=limits)
     answer = await session.offer("robot-a", video_offer("H264"))
     request = factory.peers[0].request
@@ -469,9 +469,7 @@ async def test_negotiated_codec_and_bitrate_cap_reach_the_peer() -> None:
 
 
 async def test_offer_and_candidates_are_bounded() -> None:
-    limits = VideoLimits(
-        max_sdp_bytes=2048, max_candidates=2, frame_poll_s=0.01, push_timeout_s=0.05
-    )
+    limits = VideoLimits(max_sdp_bytes=2048, max_candidates=2, frame_poll_ms=10, push_timeout_ms=50)
     session, factory, _, _ = make_session(limits=limits)
     huge = SessionDescription("offer", video_offer("VP8").sdp + "a=x:" + "y" * 4096 + "\r\n")
     with pytest.raises(ValueError):

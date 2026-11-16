@@ -237,6 +237,11 @@ class IpcServer:
                     request = await _read(reader)
                 except IpcError:
                     return
+                # An identity handshake precedes either dedicated connection mode.
+                if stream is None and request.get("type") == "identity":
+                    writer.write(_encode(await self._answer(request)))
+                    await writer.drain()
+                    continue
                 notification = request.get("type") == "manual_intent"
                 if stream is None:
                     stream = notification
@@ -284,9 +289,20 @@ class IpcServer:
 class IpcClient:
     """Agent-side requester. One request in flight; a failure drops the connection."""
 
-    def __init__(self, path: Path, *, timeout: float = 1.0) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout_ms: float = 1000.0,
+        robot_id: str | None = None,
+        ros_domain: int | None = None,
+        owner_record: str | None = None,
+    ) -> None:
+        self._owner_record = owner_record
+        self._robot_id = robot_id
+        self._ros_domain = ros_domain
         self._text = _check_path(path)
-        self._timeout = timeout
+        self._timeout = timeout_ms / 1000
         self._lock = asyncio.Lock()
         self._queue_diagnostic = PendingCounter("ipc.client.lock_wait")
         self._reader: asyncio.StreamReader | None = None
@@ -336,7 +352,48 @@ class IpcClient:
 
     async def _write(self, frame: bytes) -> None:
         if self._writer is None or self._reader is None:
+            identity_before = None
+            if self._owner_record:
+                # The supervisor writes this existing marker only after PID/UID peer proof.
+                path = Path(self._text)
+                try:
+                    info = path.lstat()
+                    identity_before = [info.st_dev, info.st_ino, info.st_uid]
+                    recorded = json.loads(path.with_suffix(".owner.json").read_bytes())
+                    if (
+                        not stat.S_ISSOCK(info.st_mode)
+                        or info.st_uid != os.geteuid()
+                        or not isinstance(recorded, dict)
+                        or recorded.get("identity") != identity_before
+                        or recorded.get("run_id") != self._owner_record
+                    ):
+                        raise IpcError("adapter peer has not been verified by its owner")
+                except (OSError, ValueError) as exc:
+                    raise IpcError("adapter ownership record unavailable") from exc
             self._reader, self._writer = await asyncio.open_unix_connection(self._text)
+            if identity_before is not None:
+                info = Path(self._text).lstat()
+                if [info.st_dev, info.st_ino, info.st_uid] != identity_before:
+                    raise IpcError("adapter socket changed during connection")
+            if self._robot_id is not None:
+                # Each new connection proves identity before any business/stream frame.
+                self._writer.write(
+                    _encode({"v": PROTOCOL_VERSION, "type": "identity", "robot_id": self._robot_id})
+                )
+                await self._writer.drain()
+                identity = await _read(self._reader)
+                if (
+                    identity.get("v") != PROTOCOL_VERSION
+                    or identity.get("ok") is not True
+                    or (
+                        self._ros_domain is not None
+                        and (
+                            type(identity.get("ros_domain")) is not int
+                            or identity["ros_domain"] != self._ros_domain
+                        )
+                    )
+                ):
+                    raise IpcError("ROS adapter identity/domain mismatch")
         self._writer.write(frame)
         await self._writer.drain()
 

@@ -1,0 +1,4 @@
+ruff job 2026-11-16T18:17:27Z
+DRIFT before-ruff source_drift=False changed=[] missing=[] added=[]
+DRIFT after-ruff source_drift=False changed=[] missing=[] added=[]
+CODES [1, 1, 1, 1, 1]

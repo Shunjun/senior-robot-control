@@ -13,10 +13,40 @@ from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output
 from senior_robot.motion_observation_adapter import NativeObservationRosBridge
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
 
 
 def native(value):
     return json.loads(json.dumps(value), object_hook=lambda fields: N(**fields))
+
+
+def synthetic_laser(value, host):
+    """Original capture omitted producer clocks; explicit synthetic 1x source only."""
+    from source_time_test_support import wire_time
+
+    value = copy.deepcopy(value)
+    end = value["header"]["stamp"]["sec"] + value["header"]["stamp"]["nanosec"] / 1e9
+    start = value["interval_start"]["sec"] + value["interval_start"]["nanosec"] / 1e9
+    for name, tick, mono in (
+        ("first_capture", start, host - (end - start)),
+        ("second_capture", end, host),
+    ):
+        value[name] = dict(
+            stamp=stamp(tick),
+            received_ros=stamp(tick),
+            received_steady=mono,
+            frame_id="laser",
+            raw_gid="scan",
+            bridge_gid="bridge",
+            source_epoch="synthetic-laser",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=max(1, round(tick * 1e9)),
+            valid=True,
+            reason="",
+            timing=vars(wire_time(mono, tick=tick, sequence=max(1, round(tick * 1e9)))),
+        )
+    return native(value)
 
 
 def stamp(seconds):
@@ -72,7 +102,7 @@ class Node:
             "/imu/data": ("senior_sim_bridge", b"imu"),
             "/motion/scan": ("scan_motion_node", b"laser"),
             "/motion/core_reference": ("motion_fusion", b"fusion"),
-        }[topic]
+        }[topic.removesuffix("/timed")]
         return [N(node_name=name, node_namespace="/", endpoint_gid=gid)]
 
     def get_logger(self):
@@ -89,7 +119,7 @@ def phase(monkeypatch):
         "rclpy.qos": {"qos_profile_sensor_data": N()},
         "rclpy.time": {"Time": N},
         "sensor_msgs.msg": {"Imu": N},
-        "senior_motion_msgs.msg": {"ScanMotion": N},
+        "senior_motion_msgs.msg": {"ScanMotion": N, "TimedImu": N, "TimedOdometry": N},
         "std_msgs.msg": {"String": lambda: N(data="")},
         "tf2_ros": {"TransformException": type("TransformException", (Exception,), {})},
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -113,8 +143,12 @@ def phase(monkeypatch):
             twist=N(twist=N(linear=N(x=0), angular=N(z=0))),
         )
         imu = N(header=N(stamp=native(stamp(end)), frame_id="base_link"), angular_velocity=N(z=0))
-        node.callbacks["/wheel/odom"](wheel, {"publisher_gid": b"wheel"})
-        node.callbacks["/imu/data"](imu, {"publisher_gid": b"imu"})
+        node.callbacks["/wheel/odom/timed"](
+            N(data=wheel, timing=wire_time(clock.steady, tick=end)), {"publisher_gid": b"wheel"}
+        )
+        node.callbacks["/imu/data/timed"](
+            N(data=imu, timing=wire_time(clock.steady, tick=end)), {"publisher_gid": b"imu"}
+        )
 
     # History for the legacy progress/diagnostic publisher; driving owns raw ingress.
     for index in range(4, 16):
@@ -123,7 +157,9 @@ def phase(monkeypatch):
         points(end)
         message = copy.deepcopy(case["old_laser"])
         message["header"]["stamp"], message["interval_start"] = stamp(end), stamp(end - 0.1)
-        node.callbacks["/motion/scan"](native(message), {"publisher_gid": b"laser"})
+        node.callbacks["/motion/scan"](
+            synthetic_laser(message, clock.steady), {"publisher_gid": b"laser"}
+        )
     clock.steady, clock.ros = case["old_snapshot"].values()
     bridge._timer.callback()
     assert node.packets[-1]["reference"]["end_ros"] == 1.5
@@ -146,7 +182,7 @@ def phase(monkeypatch):
         accepted.append(result)
         return result
 
-    callback = bridge._callback(completed, "/motion/scan")
+    callback = bridge._callback(completed, "/motion/scan", "/motion/scan")
     yield N(
         case=case,
         clock=clock,
@@ -163,7 +199,10 @@ def phase(monkeypatch):
 
 def test_accepted_laser_is_published_after_handler_return_before_next_timer(phase):
     before = len(phase.node.packets)
-    phase.callback(native(phase.case["new_laser"]), {"publisher_gid": b"laser"})
+    phase.callback(
+        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
+        {"publisher_gid": b"laser"},
+    )
     assert phase.accepted == [True]
     assert phase.node.events[0] == (
         "handler_return",
@@ -181,14 +220,12 @@ def test_accepted_laser_is_published_after_handler_return_before_next_timer(phas
     assert phase.node.packets[-1]["reference"]["end_ros"] == 1.6
     assert body.stamp_steady == phase.case["new_received"]["steady"]
     roots = phase.consumer.sensors.latest.vx.roots
-    assert body.deadline_steady <= min(
-        r.received_steady + 1 - (r.received_ros - r.stamp_ros) for r in roots
-    )
+    assert body.deadline_steady <= min(r.measurement_steady + 1 for r in roots)
     assert phase.node.publisher_count == 1
 
 
 def test_duplicate_and_rejected_laser_do_not_recompute_or_publish(phase):
-    message = native(phase.case["new_laser"])
+    message = synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"])
     phase.callback(message, {"publisher_gid": b"laser"})
     before = (len(phase.node.packets), phase.bridge.core._sequence)
     phase.callback(message, {"publisher_gid": b"laser"})
@@ -203,7 +240,7 @@ def test_duplicate_and_rejected_laser_do_not_recompute_or_publish(phase):
     phase.clock.steady += 0.1
     phase.clock.ros = 1.72
     phase.case["handler_finished"] = dict(steady=phase.clock.steady, ros=phase.clock.ros)
-    phase.callback(native(rejected), {"publisher_gid": b"laser"})
+    phase.callback(synthetic_laser(rejected, phase.clock.steady), {"publisher_gid": b"laser"})
     assert phase.accepted[-1] is False
     assert (len(phase.node.packets), phase.bridge.core._sequence) == before
     phase.bridge._timer.callback()
@@ -226,7 +263,9 @@ def test_new_laser_epoch_does_not_add_old_five_sample_recovery_gate(phase):
     message = copy.deepcopy(phase.case["new_laser"])
     message["source_epoch"] = "new-laser-epoch"
     before = len(phase.node.packets)
-    phase.callback(native(message), {"publisher_gid": b"laser"})
+    phase.callback(
+        synthetic_laser(message, phase.case["new_received"]["steady"]), {"publisher_gid": b"laser"}
+    )
     assert phase.accepted == [True]
     assert len(phase.node.packets) == before + 1
     laser = next(s for s in phase.node.packets[-1]["sources"] if s["source"] == "laser")
@@ -245,7 +284,10 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
         earlier_body.append(phase.consumer._inputs(phase.clock.steady)[1])
 
     phase.before_return.append(independent_consumer_tick)
-    phase.callback(native(phase.case["new_laser"]), {"publisher_gid": b"laser"})
+    phase.callback(
+        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
+        {"publisher_gid": b"laser"},
+    )
     assert phase.accepted == [True] and earlier_body[0] is not None
     old_sequence = phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence
     assert old_sequence < phase.node.packets[-1]["sources"][0]["sample"]["sequence"]
@@ -256,7 +298,10 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
 
 
 def test_periodic_and_immediate_publications_share_sequence_and_original_deadline(phase):
-    phase.callback(native(phase.case["new_laser"]), {"publisher_gid": b"laser"})
+    phase.callback(
+        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
+        {"publisher_gid": b"laser"},
+    )
     immediate = phase.node.packets[-1]
     phase.clock.steady, phase.clock.ros = phase.case["next_periodic"].values()
     phase.bridge._timer.callback()

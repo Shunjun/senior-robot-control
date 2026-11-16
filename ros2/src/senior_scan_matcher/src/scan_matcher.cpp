@@ -37,7 +37,7 @@ using Point = std::pair<double, double>;
 
 bool valid_scan(const LaserScan & scan, const MatcherLimits & limits)
 {
-  return std::isfinite(scan.stamp) && scan.stamp > 0 &&
+  return std::isfinite(scan.stamp) && scan.stamp >= 0 &&
     std::isfinite(scan.angle_min) && std::isfinite(scan.angle_increment) &&
     scan.angle_increment > 0 && std::isfinite(scan.range_min) &&
     std::isfinite(scan.range_max) && scan.range_min >= 0 &&
@@ -140,7 +140,7 @@ class LocalMatcher::Impl {
 public:
   explicit Impl(MatcherLimits value) : limits(value), name("senior_local_" + std::to_string(next_sensor++))
   {
-    if (!std::isfinite(limits.max_interval) || limits.max_interval <= 0 ||
+    if (!std::isfinite(limits.max_interval_ms) || limits.max_interval_ms <= 0 ||
         !std::isfinite(limits.range_limit) || limits.range_limit <= 0 ||
         !std::isfinite(limits.min_response) || limits.min_response <= 0 || limits.min_response > 1 ||
         !std::isfinite(limits.max_residual) || limits.max_residual <= 0 ||
@@ -250,7 +250,7 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   if (!m.same_geometry(scan)) {
     m.clear(); m.drop_sensor(); out.reason = "geometry_discontinuity"; return out;
   }
-  if (scan.stamp <= m.previous.stamp || scan.stamp - m.previous.stamp > m.limits.max_interval) {
+  if (scan.stamp <= m.previous.stamp || scan.stamp - m.previous.stamp > m.limits.max_interval_ms / 1000) {
     m.clear(); out.reason = "geometry_or_time_discontinuity"; return out;
   }
   auto * grid = m.matcher->GetCorrelationGrid();

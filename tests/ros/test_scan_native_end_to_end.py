@@ -51,7 +51,6 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
                 parameter_overrides=[
                     Parameter("transform_static", value=True),
                     Parameter("self_mask_calibrated", value=True),
-                    Parameter("max_age_seconds", value=0.8),
                 ]
             )
             executor = SingleThreadedExecutor()

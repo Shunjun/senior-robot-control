@@ -53,7 +53,7 @@ public:
     if (!header.valid || header.sequence == 0 || scan.ranges.size() > 2048 ||
         scan.intensities.size() > 2048 || !std::isfinite(now) ||
         !std::isfinite(header.received_steady) || now < header.received_steady ||
-        now - header.received_steady > age_limit_ ||
+        now - (static_cast<double>(header.timing.capture_end_steady_ns) / 1e9) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     expire(now);
     if ((!values_.empty() && header.sequence <= values_.back().capture.sequence) ||
@@ -122,7 +122,7 @@ private:
   {
     while (!values_.empty() &&
            (now < values_.front().capture.received_steady ||
-            now - values_.front().capture.received_steady > age_limit_)) retire_front();
+            now - (static_cast<double>(values_.front().capture.timing.capture_end_steady_ns) / 1e9) > age_limit_)) retire_front();
   }
 
   size_t capacity_;

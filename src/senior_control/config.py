@@ -128,9 +128,6 @@ class CloudSettings(CommonSettings):
 
 class AgentSettings(CommonSettings):
     role: Literal["agent"] = "agent"
-    heartbeat_seconds: float = Field(default=0.2, gt=0)
-    command_ttl_seconds: float = Field(default=0.3, gt=0)
-    perception_stale_seconds: float = Field(default=0.5, gt=0)
     device: DeviceProfile = Field(default_factory=DeviceProfile)
 
     @model_validator(mode="before")

@@ -16,6 +16,8 @@ from pydantic import (
 from senior_control.errors import ErrorCode
 from senior_control.navigation import RouteProgress
 
+HEARTBEAT_WINDOW_SECONDS = 5.0
+HEARTBEAT_INTERVAL_MS = 1000.0
 DEVICE_REVOKED_CLOSE_CODE = 4403
 _MAX_SAFE_WEB_INTEGER = 2**53 - 1
 

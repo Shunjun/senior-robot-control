@@ -29,7 +29,6 @@ class RgbdCoordinator:
         generation: int,
         sequence_floor: int,
         registration: str,
-        fresh_after_ros_ns: int,
         fresh_after_steady: float,
         capacity: int = 4,
     ) -> None:
@@ -38,7 +37,6 @@ class RgbdCoordinator:
         self._registration = registration
         self.ledger = CaptureLedger(
             capacity=capacity,
-            fresh_after_ros_ns=fresh_after_ros_ns,
             fresh_after_steady=fresh_after_steady,
         )
         self.worker = SpawnWorker(profile, generation=generation, sequence_floor=sequence_floor)
@@ -149,16 +147,12 @@ class RgbdCoordinator:
             self._tickets.clear()
             self._preprocessing.clear()
             return False
-        ros_deadline = min(h.stamp_ns + round(default_policy().hard_age_s * 1e9) for h in headers)
-        steady_deadline = min(
-            h.received_steady + default_policy().hard_age_s - (h.received_ros_ns - h.stamp_ns) / 1e9
-            for h in headers
-        )
+        hard_s = default_policy().hard_age_ms / 1000
+        steady_deadline = min(h.measurement_steady + hard_s for h in headers)
         if not self.worker.submit(
             built.frame,
             now_ros_ns=now_ros_ns,
             now_steady=now_steady,
-            ros_deadline_ns=ros_deadline,
             steady_deadline=steady_deadline,
         ):
             self.ledger.invalidate()
@@ -293,13 +287,9 @@ class RgbdCoordinator:
             )
         for a, b in zip(first.headers, second.headers, strict=True):
             if not self.binding.pair_valid(
-                a.stamp_ns,
-                b.stamp_ns,
-                a.received_steady,
-                b.received_steady,
+                a.measurement_steady,
+                b.measurement_steady,
                 generation=self.binding.generation,
-                first_received_ros_ns=a.received_ros_ns,
-                second_received_ros_ns=b.received_ros_ns,
             ):
                 self.ledger.invalidate()
                 self.worker.invalidate()

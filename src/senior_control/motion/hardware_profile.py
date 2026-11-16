@@ -5,10 +5,8 @@ receive this profile and the isolated simulation profile through the same API.
 """
 
 import json
-import math
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -34,54 +32,11 @@ class HardwareMotionProfile(BaseModel):
     simulation_only: Literal[False]
     # Software evidence TTL; acceptance still checks original receipts.
     diagnostics: DiagnosticsSettings = Field(default_factory=DiagnosticsSettings)
-    max_age: float = Field(default_factory=lambda: default_policy().hard_age_s, gt=0)
 
-    @model_validator(mode="before")
-    @classmethod
-    def common_sensor_age(cls, value: Any) -> Any:
-        # //Compatible: old profiles stored per-deployment sensor-age copies.
-        # Migrate only in memory; never rewrite the vehicle's saved configuration.
-        if isinstance(value, dict):
-            legacy_age = value.get("max_age", default_policy().hard_age_s)
-            if (
-                isinstance(legacy_age, bool)
-                or not isinstance(legacy_age, (int, float))
-                or not math.isfinite(legacy_age)
-                or legacy_age <= 0
-            ):
-                raise ValueError("invalid legacy sensor age")
-            age = default_policy().hard_age_s
-            value = {**value, "max_age": age}
-            for name in ("admission_config", "temporal_config"):
-                nested = value.get(name)
-                if nested is None:
-                    continue
-                if is_dataclass(nested) and not isinstance(nested, type):
-                    nested = asdict(nested)
-                if not isinstance(nested, dict):
-                    continue
-                nested = dict(nested)
-                if name == "admission_config":
-                    nested.update(
-                        recovery_samples=1,
-                        recovery_span_s=0.0,
-                        heading_max_age_s=age,
-                        alignment_max_skew_s=age,
-                        clock_pause_s=age,
-                    )
-                    if not isinstance(nested.get("rules"), (list, tuple)):
-                        raise ValueError("invalid legacy source rules")
-                    nested["rules"] = [
-                        {
-                            **(asdict(r) if is_dataclass(r) and not isinstance(r, type) else r),
-                            "max_age_s": age,
-                        }
-                        for r in nested["rules"]
-                    ]
-                else:
-                    nested.update(max_hold_s=age, max_gap_s=age, prediction_horizon_s=age)
-                value[name] = nested
-        return value
+    @property
+    def max_age_ms(self) -> float:
+        """Single sensor-policy limit; not an independently editable profile input."""
+        return default_policy().hard_age_ms
 
     accel: float = Field(gt=0)
     decel: float = Field(gt=0)
@@ -89,7 +44,7 @@ class HardwareMotionProfile(BaseModel):
     yaw_accel: float = Field(gt=0)
     yaw_decel: float = Field(gt=0)
     yaw_jerk: float = Field(gt=0)
-    lag: float = Field(ge=0)
+    lag_ms: float = Field(ge=0)
     # Product request ceiling, independently clamped by calibrated physical limits.
     requested_linear_mps: float = Field(default=25 / 18, gt=0)
     degraded_cap: float = Field(gt=0)
@@ -101,6 +56,8 @@ class HardwareMotionProfile(BaseModel):
     wheel_speed_mps: float = Field(gt=0)
     stationary_linear_mps: float = Field(gt=0)
     stationary_yaw_rps: float = Field(gt=0)
+    startup_learning_front_occlusion_stop: bool = Field(default=True, strict=True)
+    startup_learning_rear_occlusion_stop: bool = Field(default=True, strict=True)
     linear_error: float = Field(ge=0)
     yaw_error: float = Field(ge=0)
     sensor_error: float = Field(ge=0)
@@ -117,7 +74,7 @@ class HardwareMotionProfile(BaseModel):
     )
     orientation_error_rad: float = Field(ge=0)
     lateral_drift_mps: float = Field(ge=0)
-    lateral_stop_s: float = Field(ge=0)
+    lateral_stop_ms: float = Field(ge=0)
     reaction_linear_accel: float = Field(ge=0)
     reaction_yaw_accel: float = Field(ge=0)
     watchdog_mode: Literal["verified", "unknown"] = "unknown"
@@ -126,8 +83,6 @@ class HardwareMotionProfile(BaseModel):
     risk_basis: str = ""
     brake_tracking_basis: str = ""
     # //Compatible: optional legacy declarations must match the single derived configuration.
-    admission_config: AdmissionConfig | None = None
-    temporal_config: TemporalConfig | None = None
     fusion_config: FusionConfig | None = None
     controller_config: ControllerConfig | None = None
     gps_input: OptionalMotionInput | None = None
@@ -148,7 +103,7 @@ class HardwareMotionProfile(BaseModel):
     def coherent(self) -> "HardwareMotionProfile":
         if self.gps_input is not None and self.gps_input.origin_family is None:
             raise ValueError("GPS input requires its original raw acquisition family")
-        if self.lateral_stop_s > self.horizon_s:
+        if self.lateral_stop_ms / 1000 > self.horizon_s:
             raise ValueError("lateral settling must fit the search horizon")
         if self.reaction_linear_accel < self.accel or self.reaction_yaw_accel < self.yaw_accel:
             raise ValueError("reaction acceleration bounds must cover commanded acceleration")
@@ -164,8 +119,6 @@ class HardwareMotionProfile(BaseModel):
         # No independently editable wheel/error/stillness copy may contradict
         # the profile that supplies T4/T5's response and error envelopes.
         for supplied, derived in (
-            (self.admission_config, self.admission()),
-            (self.temporal_config, self.temporal()),
             (self.fusion_config, self.fusion()),
             (self.controller_config, self.controller()),
         ):
@@ -182,20 +135,19 @@ class HardwareMotionProfile(BaseModel):
 
     def admission(self) -> AdmissionConfig:
         return AdmissionConfig(
-            tuple(SourceRule(source, self.max_age, 0.4, 0.1, 2.0) for source in Source),
+            tuple(SourceRule(source, self.max_age_ms, 400, 0.1, 2.0) for source in Source),
             1,
-            0.0,
+            0,
             self.cap,
             self.degraded_cap,
-            self.max_age,
-            self.max_age,
+            self.max_age_ms,
+            self.max_age_ms,
             0.05,
-            self.max_age,
             16,
         )
 
     def temporal(self) -> TemporalConfig:
-        return TemporalConfig(2.0, 512, self.max_age, self.max_age, self.max_age, True)
+        return TemporalConfig(2.0, 512, self.max_age_ms, self.max_age_ms, self.max_age_ms, True)
 
     def fusion(self) -> FusionConfig:
         return FusionConfig(

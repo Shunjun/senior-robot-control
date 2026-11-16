@@ -1,0 +1,1677 @@
+diff --git a/docs/protocol/http-ws.md b/docs/protocol/http-ws.md
+--- a/docs/protocol/http-ws.md
++++ b/docs/protocol/http-ws.md
+@@ -44,7 +44,7 @@
+ - 写操作（`POST`、`DELETE`，配对兑换除外）必须带 `X-CSRF-Token`，值为登录响应中的 `csrf_token`。请求若带 `Origin` 头，必须在允许列表内。
+ - 配对兑换用一条带条件的 `UPDATE ... WHERE redeemed_at IS NULL` 并在同一事务内插入机器人行。两个并发兑换只有一个成功，另一个得到 409。
+ - 请求体超过 `max_body_bytes` 返回 413。
+-- `online` 表示当前代次的连接仍打开，且云端在过去 2 秒内接受过该代次的心跳。已在线设备失联后，`online` 立即为 `false`，`reconnecting` 在 60 秒宽限内为 `true`。收到新代次心跳立即恢复在线，超过宽限仍无心跳则显示离线。云端无法观察未抵达的尝试。60 秒覆盖默认的前五段退避（1、2、4、8、16 秒）、五次各 5 秒的握手超时以及心跳余量。失败但未完成首次心跳的连接不会延长宽限。
++- `online` 表示当前代次的连接仍打开，且云端在过去不足 5 秒内接受过该代次的心跳。已在线设备失联后，`online` 立即为 `false`，`reconnecting` 在 60 秒宽限内为 `true`。收到新代次心跳立即恢复在线，超过宽限仍无心跳则显示离线。云端无法观察未抵达的尝试。60 秒覆盖默认的前五段退避（1、2、4、8、16 秒）、五次各 5 秒的握手超时以及心跳余量。失败但未完成首次心跳的连接不会延长宽限。
+ 
+ ## WebSocket
+ 
+@@ -54,7 +54,7 @@
+ 
+ - 认证：`Authorization: Bearer <device_token>`。会话 Cookie 不能打开此 socket。令牌缺失、未知或已作废时拒绝握手。已建立连接的设备凭据被撤销时，云端以 4403 关闭连接。Agent 将握手 HTTP 401/403 或关闭码 4403 视为认证失败。
+ - 同一机器人的第 n 个存活 agent socket 拥有 epoch n，握手响应头 `x-connection-epoch` 返回该值。新 socket 连上时旧 socket 被关闭（4000），旧 socket 之后的帧丢弃。
+-- Agent 每秒发送一个 `heartbeat.request`，云端回复 `heartbeat.reply` 并回显机器人、连接代次、随机值和发送时间。心跳间隔、回复超时和宽限均用单调时钟计时。Agent 在 1 秒内未收到匹配回复会关闭连接并重试。500 ms 往返可以通过在线探测，驾驶资格仍取决于命令时钟、有效期和 ROS 确认。
++- Agent 每秒发送一个 `heartbeat.request`，云端回复 `heartbeat.reply` 并回显机器人、连接代次、随机值和发送时间。心跳间隔、回复超时和宽限均用单调时钟计时。Agent 自连接建立或最近一次有效回复起，到 5 秒仍无有效回复会关闭连接并重试；云端自连接建立或最近一次有效请求起也在 5 秒到点过期。发送周期与在线超时独立，nonce、机器人和代次校验保留。心跳只决定在线和重连，不撤销运动资格或直接停车；真实连接关闭只撤销旧代次手动上下文，实际手动断流由车端 TTL 和唯一输出 owner 停车，已接受自主任务继续且重连同步原身份。
+ - Agent 可发送心跳、状态快照、操作响应及视频信令。消息必须属于自己的机器人及当前连接代次。旧 socket 的迟到帧不改变当前连接的状态。
+ 
+ ### `/ws/control?robot_id=<id>`
+diff --git a/src/senior_control/agent/connection.py b/src/senior_control/agent/connection.py
+--- a/src/senior_control/agent/connection.py
++++ b/src/senior_control/agent/connection.py
+@@ -1,11 +1,9 @@
+-"""Agent seams: the cloud link, per-robot heartbeat eligibility, and the ROS IPC motion port."""
+-
+-import math
++"""Agent seams: the cloud link and the ROS IPC motion port."""
++
+ from dataclasses import dataclass
+ from typing import Any, Protocol
+ 
+ from senior_control.agent.snapshots import RobotSnapshot
+-from senior_control.clock import Clock
+ from senior_control.errors import DomainError, ErrorCode
+ from senior_control.protocol import (
+     Envelope,
+@@ -23,7 +21,6 @@
+     """A cloud heartbeat addressed to one robot."""
+ 
+     robot_id: str
+-    deadline: float
+ 
+ 
+ class Link(Protocol):
+@@ -44,34 +41,6 @@
+     async def send_heartbeat(self) -> None: ...
+ 
+     async def close(self) -> None: ...
+-
+-
+-class HeartbeatLedger:
+-    """Remembers when each robot id last had a heartbeat; ids never borrow each other's."""
+-
+-    def __init__(self, clock: Clock, window: float) -> None:
+-        if window <= 0:
+-            raise ValueError("heartbeat window must be positive")
+-        self._clock = clock
+-        self._window = window
+-        self._seen: dict[str, tuple[float, float]] = {}
+-
+-    def note(self, robot_id: str, *, deadline: float | None = None) -> None:
+-        now = self._clock.monotonic()
+-        # //Compatible: direct test callers without a cloud deadline retain the bounded window.
+-        expires = min(now + self._window, deadline) if deadline is not None else now + self._window
+-        if not math.isfinite(now) or not math.isfinite(expires) or expires <= now:
+-            self.forget(robot_id)
+-            return
+-        self._seen[robot_id] = (now, expires)
+-
+-    def eligible(self, robot_id: str) -> bool:
+-        seen = self._seen.get(robot_id)
+-        now = self._clock.monotonic()
+-        return seen is not None and math.isfinite(now) and seen[0] <= now <= seen[1]
+-
+-    def forget(self, robot_id: str) -> None:
+-        self._seen.pop(robot_id, None)
+ 
+ 
+ class MotionPort(Protocol):
+diff --git a/src/senior_control/agent/main.py b/src/senior_control/agent/main.py
+--- a/src/senior_control/agent/main.py
++++ b/src/senior_control/agent/main.py
+@@ -15,7 +15,6 @@
+ 
+ from senior_control.agent.connection import (
+     HeartbeatFrame,
+-    HeartbeatLedger,
+     Link,
+     MotionPort,
+     MotionRejected,
+@@ -40,6 +39,7 @@
+ from senior_control.models import OperationResult, OperationStatus
+ from senior_control.observability import Metrics
+ from senior_control.protocol import (
++    HEARTBEAT_INTERVAL_SECONDS,
+     Envelope,
+     ManualIntentEnvelope,
+     OperationEnvelope,
+@@ -129,10 +129,8 @@
+         map_root: Path = Path("map-transfer"),
+         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
+         cleanup: Callable[[], Awaitable[None]] | None = None,
+-        on_eligibility_lost: Callable[[int], Awaitable[None]] | None = None,
+-        heartbeat_seconds: float = 1.0,
++        heartbeat_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+         retry_delay: float = 1.0,
+-        heartbeat_window: float = 2.0,
+         command_ttl_seconds: float = 0.3,
+         snapshot_seconds: float = 2.0,
+         state_poll_seconds: float = 0.25,
+@@ -161,11 +159,7 @@
+         self._deadlines = deadlines if deadlines is not None else Deadlines()
+         self._background = dict(background or {})
+         self._cleanup = cleanup
+-        self._on_eligibility_lost = on_eligibility_lost
+-        self._loss_tasks: set[asyncio.Task[None]] = set()
+         self._stragglers: set[asyncio.Task[Any]] = set()
+-        self._continuity_generation = 0
+-        self._was_eligible = False
+         self._heartbeat_seconds = heartbeat_seconds
+         self._retry_delay = retry_delay
+         if command_ttl_seconds <= 0:
+@@ -177,8 +171,6 @@
+         bind_clock = getattr(motion, "bind_clock", None)
+         if bind_clock is not None:
+             bind_clock(self._clock.monotonic)
+-        self._heartbeat_window = heartbeat_window
+-        self._ledger = HeartbeatLedger(self._clock, heartbeat_window)
+         self._home = home
+         self._dispatcher = Dispatcher(
+             robot_id,
+@@ -231,54 +223,12 @@
+         return supervisor is not None and supervisor.motion_allowed and not self._stopping
+ 
+     @property
+-    def eligible_for_motion(self) -> bool:
+-        """Needs this robot's own heartbeat. Another robot's heartbeat counts for nothing."""
+-        self._expire_eligibility()
+-        return (
+-            self._link is not None
+-            and self.motion_allowed
+-            and not self._safety_blocked
+-            and self._ledger.eligible(self.robot_id)
+-        )
+-
+-    @property
+     def _safety_blocked(self) -> bool:
+         return self._estop_inflight or any(key[0] == "safety.estop" for key in self._safety_pending)
+-
+-    @property
+-    def continuity_generation(self) -> int:
+-        self._expire_eligibility()
+-        return self._continuity_generation
+-
+-    def _expire_eligibility(self) -> None:
+-        if self._was_eligible and not self._ledger.eligible(self.robot_id):
+-            self._lose_eligibility()
+ 
+     def _invalidate_gate(self) -> None:
+         if self._runtime_gate is not None:
+             self._runtime_gate.invalidate()
+-
+-    def _lose_eligibility(self) -> None:
+-        self._invalidate_gate()
+-        if not self._was_eligible:
+-            return
+-        self._was_eligible = False
+-        lost_generation = self._continuity_generation
+-        self._continuity_generation += 1
+-        self._revoked_link = self._link
+-        self._ledger.forget(self.robot_id)
+-        if self._on_eligibility_lost is not None:
+-            task = asyncio.ensure_future(self._on_eligibility_lost(lost_generation))
+-            self._loss_tasks.add(task)
+-            task.add_done_callback(self._loss_finished)
+-
+-    def _loss_finished(self, task: asyncio.Task[None]) -> None:
+-        self._loss_tasks.discard(task)
+-        if not task.cancelled() and task.exception() is not None:
+-            self._supervisor_fault("failed to persist connection loss")
+-
+-    def note_heartbeat(self, robot_id: str) -> None:
+-        self._ledger.note(robot_id)
+ 
+     # ------------------------------------------------------------------ lifecycle
+ 
+@@ -315,7 +265,7 @@
+     def request_shutdown(self) -> None:
+         """Synchronous and signal-safe: motion is revoked before anything else happens."""
+         self._stopping = True
+-        self._lose_eligibility()
++        self._invalidate_gate()
+         if self._supervisor is not None:
+             self._supervisor.revoke("shutdown requested")
+         self._stop.set()
+@@ -340,7 +290,6 @@
+                 task.cancel()
+         await self._settle_safety()
+         await self._wait_inflight(inflight)
+-        await self._wait_inflight(list(self._loss_tasks))
+         link, self._link = self._link, None
+         if link is not None:
+             await self._quietly(link.close())
+@@ -399,23 +348,12 @@
+         link = self._link
+         if link is None:
+             return
+-        self._expire_eligibility()
+-        if self._revoked_link is link:
+-            await self._quietly(self._motion.disable(link.epoch))
+-            await self._quietly(link.close())
+-            return
+         try:
+             await link.send_heartbeat()
+         except Exception:
+-            if self._link is not link:
+-                raise
+-            self._revoked_link = link
+-            self._lose_eligibility()
+-            self._ledger.forget(self.robot_id)
+-            epoch = link.epoch
+-            if epoch:
+-                await self._quietly(self._motion.disable(epoch))
+-            await self._quietly(link.close())
++            if self._link is link:
++                self._revoked_link = link
++                await self._quietly(link.close())
+             raise
+ 
+     async def _session(self) -> bool:
+@@ -437,15 +375,9 @@
+             while True:
+                 frame = await link.recv()
+                 if isinstance(frame, HeartbeatFrame):
+-                    if (
+-                        frame.robot_id != self.robot_id
+-                        or frame.deadline <= self._clock.monotonic()
+-                        or self._revoked_link is link
+-                    ):
++                    if frame.robot_id != self.robot_id or self._revoked_link is link:
+                         raise ConnectionError("invalid heartbeat")
+                     received_heartbeat = True
+-                    self._ledger.note(frame.robot_id, deadline=frame.deadline)
+-                    self._was_eligible = self._ledger.eligible(frame.robot_id)
+                 elif isinstance(frame, VideoEnvelope):
+                     if video is None:
+                         video = VideoSignaling(
+@@ -466,9 +398,8 @@
+         finally:
+             epoch = link.epoch
+             if self._link is link:
+-                self._lose_eligibility()
++                self._invalidate_gate()
+                 self._link, self._epoch = None, 0
+-                self._ledger.forget(self.robot_id)
+             self._log("connection_closed")
+             if video is not None:
+                 video.retire()
+@@ -667,7 +598,7 @@
+                 logger.debug("manual stream sample discarded: %s", exc.code.value)
+             except (OSError, ConnectionError, IpcError):
+                 logger.exception("manual stream transport failed")
+-                self._lose_eligibility()
++                self._invalidate_gate()
+                 await link.close()
+                 return
+             finally:
+diff --git a/src/senior_control/agent/websocket.py b/src/senior_control/agent/websocket.py
+--- a/src/senior_control/agent/websocket.py
++++ b/src/senior_control/agent/websocket.py
+@@ -12,6 +12,7 @@
+ from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
+ from senior_control.protocol import (
+     DEVICE_REVOKED_CLOSE_CODE,
++    HEARTBEAT_WINDOW_SECONDS,
+     MAX_MESSAGE_BYTES,
+     Envelope,
+     ResponseEnvelope,
+@@ -33,6 +34,10 @@
+     async def close(self) -> None: ...
+ 
+ 
++# A blocked transport owns this resource budget; it is not an online evidence window.
++SOCKET_SEND_TIMEOUT_SECONDS = 5.0
++
++
+ class WebSocketLink:
+     def __init__(
+         self,
+@@ -42,17 +47,14 @@
+         *,
+         wall_clock: Callable[[], float] = time.time,
+         clock: Callable[[], float] = time.monotonic,
+-        heartbeat_timeout: float = 1.0,
+-        heartbeat_freshness: float = 2.0,
+     ) -> None:
+         self._socket = socket
+         self._robot_id = robot_id
+         self.epoch = epoch
+         self._wall = wall_clock
+         self._clock = clock
+-        self._timeout = heartbeat_timeout
+-        self._freshness = heartbeat_freshness
+-        self._pending: tuple[str, float, float] | None = None
++        self._online_deadline = clock() + HEARTBEAT_WINDOW_SECONDS
++        self._pending: dict[str, tuple[float, float]] = {}
+         self._heartbeat_timer: asyncio.TimerHandle | None = None
+         self._heartbeat_expired: asyncio.Future[None] | None = None
+         self._send_lock = DiagnosticLock("websocket.send_wait")
+@@ -64,11 +66,12 @@
+ 
+     async def _send(self, data: str) -> None:
+         async with self._send_lock:
+-            await asyncio.wait_for(self._socket.send(data), self._timeout)
++            await asyncio.wait_for(self._socket.send(data), SOCKET_SEND_TIMEOUT_SECONDS)
+ 
+     def _expiry_signal(self) -> asyncio.Future[None]:
+         if self._heartbeat_expired is None:
+             self._heartbeat_expired = asyncio.get_running_loop().create_future()
++            self._arm_heartbeat_timer()
+         return self._heartbeat_expired
+ 
+     def _cancel_heartbeat_timer(self) -> None:
+@@ -76,21 +79,34 @@
+             self._heartbeat_timer.cancel()
+             self._heartbeat_timer = None
+ 
++    def _arm_heartbeat_timer(self) -> None:
++        self._cancel_heartbeat_timer()
++        self._heartbeat_timer = asyncio.get_running_loop().call_later(
++            max(0.0, self._online_deadline - self._clock()), self._expire_heartbeat
++        )
++
++    def _expire_heartbeat(self) -> None:
++        expired = self._heartbeat_expired
++        if expired is not None and not expired.done():
++            expired.set_result(None)
++
++    def _check_heartbeat(self) -> None:
++        if self._clock() >= self._online_deadline or self._expiry_signal().done():
++            raise ConnectionError("heartbeat reply timed out")
++
+     async def send_heartbeat(self) -> None:
++        self._check_heartbeat()
+         now = self._clock()
+-        if self._pending is not None:
+-            if now - self._pending[1] >= self._timeout:
+-                raise ConnectionError("heartbeat reply timed out")
+-            return
++        # Sending keeps its cadence while earlier replies are in flight. Retain only
++        # request identities that can still supply evidence within the online window.
++        self._pending = {
++            nonce: sent
++            for nonce, sent in self._pending.items()
++            if now - sent[0] < HEARTBEAT_WINDOW_SECONDS
++        }
+         nonce = secrets.token_hex(16)
+         sent_at = self._wall()
+-        self._pending = nonce, now, sent_at
+-        expired = self._expiry_signal()
+-        if expired.done():
+-            raise ConnectionError("heartbeat reply timed out")
+-        self._heartbeat_timer = asyncio.get_running_loop().call_later(
+-            self._timeout, expired.set_result, None
+-        )
++        self._pending[nonce] = now, sent_at
+         request = {
+             "v": 1,
+             "type": "heartbeat.request",
+@@ -105,6 +121,7 @@
+         from websockets.exceptions import ConnectionClosed
+ 
+         try:
++            self._check_heartbeat()
+             expired = self._expiry_signal()
+             reader = asyncio.ensure_future(self._socket.recv())
+             try:
+@@ -112,6 +129,7 @@
+                 await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                 if expired.done():
+                     raise ConnectionError("heartbeat reply timed out")
++                self._check_heartbeat()
+                 raw = reader.result()
+             finally:
+                 if not reader.done():
+@@ -126,7 +144,11 @@
+         try:
+             data = json.loads(raw)
+             if isinstance(data, dict) and data.get("type") == "heartbeat.reply":
+-                pending = self._pending
++                pending = (
++                    self._pending.get(data.get("nonce"))
++                    if isinstance(data.get("nonce"), str)
++                    else None
++                )
+                 now = self._clock()
+                 fields = {
+                     "v",
+@@ -143,19 +165,19 @@
+                     or data["v"] != 1
+                     or data["robot_id"] != self._robot_id
+                     or data["connection_epoch"] != self.epoch
+-                    or data["nonce"] != pending[0]
+-                    or data["sent_at"] != pending[2]
++                    or data["sent_at"] != pending[1]
+                     or isinstance(data["server_time"], bool)
+                     or not isinstance(data["server_time"], (int, float))
+                 ):
+                     raise ConnectionError("invalid heartbeat reply")
+-                elapsed = now - pending[1]
++                elapsed = now - pending[0]
+                 server_time = data["server_time"]
+-                if not math.isfinite(server_time) or not 0 <= elapsed < self._timeout:
++                if not math.isfinite(server_time) or not 0 <= elapsed < HEARTBEAT_WINDOW_SECONDS:
+                     raise ConnectionError("invalid heartbeat reply timestamp or reply timed out")
+-                self._pending = None
+-                self._cancel_heartbeat_timer()
+-                return HeartbeatFrame(self._robot_id, pending[1] + self._freshness)
++                del self._pending[data["nonce"]]
++                self._online_deadline = now + HEARTBEAT_WINDOW_SECONDS
++                self._arm_heartbeat_timer()
++                return HeartbeatFrame(self._robot_id)
+             envelope = validate_frame(raw.encode() if isinstance(raw, str) else raw, self._robot_id)
+             if not isinstance(envelope, VideoEnvelope) and envelope.connection_epoch != self.epoch:
+                 raise ValueError("wrong connection epoch")
+diff --git a/src/senior_control/cloud/relay.py b/src/senior_control/cloud/relay.py
+--- a/src/senior_control/cloud/relay.py
++++ b/src/senior_control/cloud/relay.py
+@@ -21,6 +21,7 @@
+ from senior_control.errors import ErrorCode
+ from senior_control.protocol import (
+     DEVICE_REVOKED_CLOSE_CODE,
++    HEARTBEAT_WINDOW_SECONDS,
+     WORKSPACE_REQUEST_TYPES,
+     EmptyPayload,
+     Envelope,
+@@ -53,7 +54,6 @@
+ CONNECTION = "control.connection"
+ WORKSPACE = "workspace"
+ WORKSPACE_REPLY_SECONDS = 5.0
+-HEARTBEAT_WINDOW_SECONDS = 2.0
+ # Five default backoffs (31s), five failed handshakes (up to 25s) and heartbeat margin.
+ RECONNECT_GRACE_SECONDS = 60.0
+ SNAPSHOT_TTL_SECONDS = 60.0
+@@ -277,7 +277,7 @@
+             agent is not None
+             and not agent.outbox.closed
+             and agent.heartbeat_at is not None
+-            and time.monotonic() - agent.heartbeat_at <= HEARTBEAT_WINDOW_SECONDS
++            and 0 <= time.monotonic() - agent.heartbeat_at < HEARTBEAT_WINDOW_SECONDS
+         )
+ 
+     def is_reconnecting(self, robot_id: str) -> bool:
+@@ -381,7 +381,7 @@
+             else connection.started_at
+         )
+         now = time.monotonic()
+-        if now - last > HEARTBEAT_WINDOW_SECONDS:
++        if now - last >= HEARTBEAT_WINDOW_SECONDS:
+             self.detach(connection)
+ 
+     def attach_controller(self, robot_id: str, session_hash: str) -> Connection | None:
+@@ -473,6 +473,10 @@
+     def handle_agent_frame(self, connection: Connection, raw: bytes) -> None:
+         link = self._links.get(connection.robot_id)
+         if link is None or link.agent is not connection or connection.outbox.closed:
++            return
++        # Enforce the deadline on ingress too: watcher scheduling cannot revive an expired epoch.
++        self.expire_stale_agent(connection)
++        if connection.outbox.closed:
+             return
+         if len(raw) > self._limits.max_ws_message_bytes:
+             connection.outbox.close(CLOSE_TOO_BIG)
+@@ -863,8 +867,13 @@
+ 
+ 
+ async def _watch_heartbeat(connection: Connection, hub: Hub) -> None:
+-    while True:
+-        await asyncio.sleep(0.2)
++    while not connection.outbox.closed:
++        last = connection.heartbeat_at
++        if last is None:
++            last = connection.started_at
++        remaining = last + HEARTBEAT_WINDOW_SECONDS - time.monotonic()
++        if remaining > 0:
++            await asyncio.sleep(remaining)
+         hub.expire_stale_agent(connection)
+ 
+ 
+diff --git a/src/senior_control/protocol.py b/src/senior_control/protocol.py
+--- a/src/senior_control/protocol.py
++++ b/src/senior_control/protocol.py
+@@ -16,6 +16,8 @@
+ from senior_control.errors import ErrorCode
+ from senior_control.navigation import RouteProgress
+ 
++HEARTBEAT_WINDOW_SECONDS = 5.0
++HEARTBEAT_INTERVAL_SECONDS = 1.0
+ DEVICE_REVOKED_CLOSE_CODE = 4403
+ _MAX_SAFE_WEB_INTEGER = 2**53 - 1
+ 
+diff --git a/src/senior_control/runtime/supervisor.py b/src/senior_control/runtime/supervisor.py
+--- a/src/senior_control/runtime/supervisor.py
++++ b/src/senior_control/runtime/supervisor.py
+@@ -9,6 +9,8 @@
+ from collections.abc import Awaitable, Callable, Mapping
+ from types import TracebackType
+ from typing import Any
++
++from senior_control.protocol import HEARTBEAT_INTERVAL_SECONDS
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -25,7 +27,7 @@
+         call_ros: Callable[[str], Awaitable[Any]],
+         connect: Callable[[], Awaitable[bool | None]] | None = None,
+         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
+-        heartbeat_seconds: float = 0.2,
++        heartbeat_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+         retry_delay: float = 1.0,
+         max_retry_delay: float | None = None,
+         shutdown_timeout: float = 1.0,
+@@ -117,10 +119,10 @@
+         deadline = loop.time()
+         while self._running:
+             try:
+-                await asyncio.wait_for(self._send_heartbeat(), timeout=interval * 5)
++                await self._send_heartbeat()
+             except Exception:
+                 logger.warning("heartbeat failed", exc_info=True)
+-            # //Compatible: Python 3.10 wait_for can swallow cancellation at completion.
++            # A send completing during shutdown must not schedule another heartbeat.
+             if not self._running:
+                 return
+             deadline += interval
+diff --git a/tests/integration/heartbeat_test_support.py b/tests/integration/heartbeat_test_support.py
+--- /dev/null
++++ b/tests/integration/heartbeat_test_support.py
+@@ -0,0 +1,75 @@
++"""Real relay/WebSocketLink frames with an explicitly advanced online clock."""
++
++import asyncio
++import json
++from typing import Any
++
++from senior_control.agent.websocket import WebSocketLink
++from senior_control.cloud.limits import CloudLimits
++from senior_control.cloud.relay import Hub
++
++
++class HeartbeatClock:
++    def __init__(self, monkeypatch: Any, now: float = 10.0) -> None:
++        self.now = now
++        self.timers: list[tuple[float, Any, Any]] = []
++        loop = asyncio.get_running_loop()
++        original = loop.call_later
++
++        def call_later(delay: float, callback: Any, *args: Any, **kwargs: Any) -> Any:
++            if isinstance(getattr(callback, "__self__", None), WebSocketLink):
++                handle = asyncio.Handle(callback, args, loop)
++                self.timers.append((self.now + delay, handle, lambda: callback(*args)))
++                return handle
++            return original(delay, callback, *args, **kwargs)
++
++        monkeypatch.setattr(loop, "call_later", call_later)
++
++    def monotonic(self) -> float:
++        return self.now
++
++    def advance(self, now: float) -> None:
++        self.now = now
++        for deadline, handle, fire in list(self.timers):
++            if deadline <= now and not handle.cancelled():
++                handle.cancel()
++                fire()
++
++
++class RelaySocket:
++    """Authenticated Hub connection, preserving real encoded transport and close events."""
++
++    def __init__(self, hub: Hub, robot: str, *, drop_replies: bool = False) -> None:
++        self.hub = hub
++        self.connection = hub.attach_agent(robot)
++        self.drop_replies = drop_replies
++        self.closed = False
++        self.sent: list[dict[str, Any]] = []
++
++    async def send(self, data: str) -> None:
++        self.sent.append(json.loads(data))
++        self.hub.handle_agent_frame(self.connection, data.encode())
++
++    async def recv(self) -> str:
++        while True:
++            raw = await self.connection.outbox.get()
++            if isinstance(raw, int):
++                raise ConnectionError("relay socket closed")
++            if self.drop_replies and json.loads(raw)["type"] == "heartbeat.reply":
++                continue
++            return raw.decode()
++
++    async def close(self) -> None:
++        self.closed = True
++        self.hub.detach(self.connection)
++
++
++def relay_hub(monkeypatch: Any, clock: HeartbeatClock) -> Hub:
++    import time
++    from types import SimpleNamespace
++
++    monkeypatch.setattr(
++        "senior_control.cloud.relay.time",
++        SimpleNamespace(monotonic=clock.monotonic, time=time.time),
++    )
++    return Hub(CloudLimits())
+diff --git a/tests/integration/test_agent.py b/tests/integration/test_agent.py
+--- a/tests/integration/test_agent.py
++++ b/tests/integration/test_agent.py
+@@ -305,55 +305,9 @@
+     await finish(task, rig)
+ 
+ 
+-async def test_other_robot_heartbeat_not_eligible(rig: Rig) -> None:
+-    link = FakeLink(epoch=1)
+-    task = await start(rig, link)
+-    rig.agent.note_heartbeat("robot-2")
+-    assert rig.agent.eligible_for_motion is False
+-    rig.agent.note_heartbeat(ROBOT)
+-    assert rig.agent.eligible_for_motion is True
+-    await finish(task, rig)
+-
+-
+-async def test_heartbeat_send_success_does_not_restore_eligibility(rig: Rig) -> None:
+-    from senior_control.agent.connection import HeartbeatFrame
+-
+-    link = FakeLink(epoch=4)
+-    task = await start(rig, link)
+-    rig.agent.note_heartbeat(ROBOT)
+-    original = link.send_heartbeat
+-    failed = asyncio.Event()
+-    release = asyncio.Event()
+-
+-    async def flaky() -> None:
+-        if not failed.is_set():
+-            failed.set()
+-            raise ConnectionError("auth heartbeat failed")
+-        await release.wait()
+-        await original()
+-
+-    link.send_heartbeat = flaky  # type: ignore[method-assign]
+-    try:
+-        await until(lambda: not rig.agent.eligible_for_motion)
+-        await until(lambda: "disable:4" in rig.motion.events)
+-        with pytest.raises(DomainError) as caught:
+-            await rig.agent.dispatch(simple("control.acquire", seq=1, epoch=4))
+-        assert caught.value.code is ErrorCode.OFFLINE
+-        release.set()
+-        await original()
+-        assert not rig.agent.eligible_for_motion
+-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-        await until(lambda: not rig.agent.connected)
+-        assert not rig.agent.eligible_for_motion
+-    finally:
+-        release.set()
+-        await finish(task, rig)
+-
+-
+ async def test_dropped_link_disables_its_epoch(rig: Rig) -> None:
+     link = FakeLink(epoch=4)
+     task = await start(rig, link)
+-    rig.agent.note_heartbeat(ROBOT)
+     link.drop()
+     await until(lambda: "disable:4" in rig.motion.events)
+     with pytest.raises(DomainError) as caught:
+@@ -934,20 +888,6 @@
+     await finish(task, rig)
+ 
+ 
+-async def test_authenticated_reply_renews_ros_eligibility(rig: Rig) -> None:
+-    from senior_control.agent.connection import HeartbeatFrame
+-
+-    link = FakeLink(epoch=1)
+-    task = await start(rig, link)
+-    try:
+-        deadline = time.monotonic() + 0.7
+-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, deadline))
+-        await until(lambda: rig.agent.eligible_for_motion)
+-        assert rig.agent.eligible_for_motion
+-    finally:
+-        await finish(task, rig)
+-
+-
+ async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) -> None:
+     from senior_control.agent.connection import HeartbeatFrame
+ 
+@@ -967,9 +907,9 @@
+     try:
+         await until(lambda: link.closed)
+         await until(lambda: rig.agent.connected and rig.agent._epoch == 2)
+-        assert not rig.agent.eligible_for_motion
+-        replacement.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+-        await until(lambda: rig.agent.eligible_for_motion)
++        assert rig.agent.connected
++        replacement.inbox.put_nowait(HeartbeatFrame(ROBOT))
++        await until(lambda: replacement.inbox.empty())
+         assert "disable:1" in rig.motion.events
+     finally:
+         await finish(task, rig)
+@@ -988,8 +928,8 @@
+     task = asyncio.create_task(agent.run())
+     try:
+         await until(lambda: agent.connected)
+-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+-        await until(lambda: agent.eligible_for_motion, timeout=0.5)
++        link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++        await until(lambda: link.inbox.empty(), timeout=0.5)
+     finally:
+         agent.request_shutdown()
+         await asyncio.wait_for(task, 2)
+@@ -1024,7 +964,6 @@
+         await asyncio.wait_for(closing.wait(), timeout=2)
+         # Cancellation must revoke the old link before waiting for journal I/O.
+         assert not rig.agent.connected
+-        assert not rig.agent.eligible_for_motion
+         assert any(not operation.done() for operation in inflight)
+         persist.set()
+         _, pending = await asyncio.wait(inflight, timeout=2)
+@@ -1081,8 +1020,8 @@
+         for seq in range(MAX_INFLIGHT):
+             link.inbox.put_nowait(operation("task.create", f"load-{seq}"))
+         link.inbox.put_nowait(stop())
+-        link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+-        await until(lambda: rig.agent.eligible_for_motion)
++        link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++        await until(lambda: link.inbox.empty())
+         assert len(rig.agent._inflight) <= MAX_INFLIGHT + 1
+         link.inbox.put_nowait(operation("task.create", "overload"))
+         await until(lambda: link.closed)
+@@ -1092,31 +1031,6 @@
+         await finish(task, rig)
+ 
+ 
+-async def test_disconnect_and_reconnect_records_loss_between_scans(rig: Rig) -> None:
+-    from senior_control.agent.connection import HeartbeatFrame
+-
+-    lost = asyncio.Event()
+-
+-    async def persist_loss(generation: int) -> None:
+-        lost.set()
+-
+-    rig.agent._on_eligibility_lost = persist_loss
+-    first, second = FakeLink(1), FakeLink(2)
+-    task = await start(rig, first, second)
+-    try:
+-        first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-        await until(lambda: rig.agent.eligible_for_motion)
+-        before = rig.agent.continuity_generation
+-        first.drop()
+-        await asyncio.wait_for(lost.wait(), 1)
+-        await until(lambda: rig.agent._epoch == 2)
+-        second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-        await until(lambda: rig.agent.eligible_for_motion)
+-        assert rig.agent.continuity_generation > before
+-    finally:
+-        await finish(task, rig)
+-
+-
+ async def test_agent_release_is_bounded_for_cancellation_resistant_work(rig: Rig) -> None:
+     entered, release = asyncio.Event(), asyncio.Event()
+ 
+@@ -1184,15 +1098,14 @@
+     task = asyncio.create_task(rig.agent.run())
+     try:
+         await until(lambda: rig.agent.connected)
+-        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+-        await until(lambda: rig.agent.eligible_for_motion)
++        links[0].inbox.put_nowait(HeartbeatFrame(ROBOT))
++        await until(lambda: links[0].inbox.empty())
+         links[0].drop()
+         await until(lambda: all(bad.closed for bad in links[:6]))
+-        assert not rig.agent.eligible_for_motion
+         assert "exit" not in rig.motion.events
+         await until(lambda: rig.agent._epoch == 7)
+-        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.7))
+-        await until(lambda: rig.agent.eligible_for_motion)
++        links[6].inbox.put_nowait(HeartbeatFrame(ROBOT))
++        await until(lambda: links[6].inbox.empty())
+         assert rig.agent.connection_epoch == 7
+         assert "exit" not in rig.motion.events
+     finally:
+@@ -1527,3 +1440,30 @@
+     assert snapshot.connected is False
+     assert snapshot.robot_pose.x == 0.0
+     assert len(runtime.link.snapshots) == 1
++
++
++async def test_delayed_replies_preserve_send_cadence_and_connection(monkeypatch) -> None:
++    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
++
++    from senior_control.agent.connection import HeartbeatFrame
++    from senior_control.agent.websocket import WebSocketLink
++
++    clock = HeartbeatClock(monkeypatch)
++    hub = relay_hub(monkeypatch, clock)
++    socket = RelaySocket(hub, ROBOT)
++    link = WebSocketLink(socket, ROBOT, 1, clock=clock.monotonic)
++    try:
++        for now in [10.0, 11.0, 12.0]:
++            clock.advance(now)
++            await link.send_heartbeat()
++        requests = [frame for frame in socket.sent if frame["type"] == "heartbeat.request"]
++        assert len(requests) == 3 and len({frame["nonce"] for frame in requests}) == 3
++        # Every receipt is three seconds late, across the first request's old deadline.
++        for now in [13.0, 14.0, 15.0]:
++            clock.advance(now)
++            assert await link.recv() == HeartbeatFrame(ROBOT)
++            await link.send_heartbeat()
++            hub.expire_stale_agent(socket.connection)
++            assert hub.is_online(ROBOT) and not socket.closed
++    finally:
++        await link.close()
+diff --git a/tests/integration/test_estop_recovery.py b/tests/integration/test_estop_recovery.py
+--- a/tests/integration/test_estop_recovery.py
++++ b/tests/integration/test_estop_recovery.py
+@@ -4,7 +4,6 @@
+ from pathlib import Path
+ from typing import Any
+ 
+-import pytest
+ from agent_fakes import (
+     ROBOT,
+     FakeConnector,
+@@ -25,14 +24,12 @@
+ from senior_control.storage.database import Database
+ 
+ 
+-@pytest.mark.parametrize("invalidate", ["expired_heartbeat", "disable"])
+ async def test_received_estop_survives_epoch_invalidation(
+-    tmp_path: Path, socket_path: Path, invalidate: str
++    tmp_path: Path, socket_path: Path
+ ) -> None:
+     """An already received fresh estop must latch even if the epoch is disabled in transit."""
+     from agent_fakes import simple
+ 
+-    from senior_control.agent.connection import HeartbeatFrame
+     from senior_control.safety.arbiter import Arbiter
+ 
+     rig = ArbiterRig()
+@@ -77,18 +74,11 @@
+             control = IpcClient(socket_path)
+             try:
+                 await until(lambda: agent.connected)
+-                link.inbox.put_nowait(HeartbeatFrame(ROBOT, 100.8))
+-                await until(lambda: agent.eligible_for_motion)
+                 await agent.dispatch(simple("control.acquire", seq=1))
+                 link.inbox.put_nowait(simple("safety.estop", seq=2))
+                 await asyncio.wait_for(entered.wait(), 1)
+-                if invalidate == "expired_heartbeat":
+-                    rig.now = 100.9
+-                    # Explicit retirement may arrive while the admitted emergency IPC waits.
+-                    response = await control.request("disable_motion", connection_epoch=1)
+-                    assert response["ok"]
+-                else:
+-                    assert (await control.request("disable_motion", connection_epoch=1))["ok"]
++                # Explicit retirement can arrive while admitted emergency IPC waits.
++                assert (await control.request("disable_motion", connection_epoch=1))["ok"]
+                 release.set()
+                 assert agent._safety_task is not None
+                 await asyncio.wait_for(agent._safety_task, 1)
+diff --git a/tests/integration/test_manual_wire.py b/tests/integration/test_manual_wire.py
+--- a/tests/integration/test_manual_wire.py
++++ b/tests/integration/test_manual_wire.py
+@@ -1057,3 +1057,200 @@
+         finally:
+             released.set()
+             await agent._release()
++
++
++async def test_heartbeat_window_keeps_manual_delivery_then_reconnect_retires_old_context(
++    node: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    from agent_fakes import FakeHome, FakeMaps, FakeState, FakeTasks, until
++    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
++    from test_task_ownership import Navigation
++
++    from senior_control.agent import Agent
++    from senior_control.agent.composition import build_task_runtime
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.agent.ports import TaskAwareMotion
++    from senior_control.agent.websocket import WebSocketLink
++    from senior_control.settings.service import RuntimeGate, SettingsService
++    from senior_control.settings.store import SettingsStore
++    from senior_control.storage.database import Database
++    from senior_control.tasks.store import TaskStore
++
++    clock = HeartbeatClock(monkeypatch)
++    hub = relay_hub(monkeypatch, clock)
++    first = RelaySocket(hub, "robot")
++    link = WebSocketLink(first, "robot", first.connection.epoch, clock=clock.monotonic)
++    connections: asyncio.Queue[Any] = asyncio.Queue()
++    connections.put_nowait(link)
++    disabled: list[int] = []
++
++    # Keep the actual IPC framing and native manual owner from this existing fixture.
++    AdapterCore = importlib.import_module("senior_robot.agent_adapter").AdapterCore
++
++    core = AdapterCore(
++        robot_id="robot",
++        submit=node.value.submit,
++        disconnect=node.value.disconnect,
++        request_exit=lambda: None,
++        manual=node.value.manual_request,
++    )
++
++    async def tracked_handle(message: dict[str, Any]) -> dict[str, Any]:
++        if message["type"] == "disable_motion":
++            disabled.append(message["connection_epoch"])
++        return await core.handle(message)
++
++    async with (
++        ipc_pair(tracked_handle, monkeypatch) as client,
++        ipc_pair(tracked_handle, monkeypatch) as intent_client,
++        Database(tmp_path / "heartbeat-manual.db") as database,
++    ):
++        journal = AgentJournal(database, robot_id="robot")
++        await journal.prepare()
++        settings = SettingsService(
++            SettingsStore(database),
++            simulation_settings_profile(),
++            RuntimeGate(),
++        )
++        await settings.prepare()
++        motion = TaskAwareMotion(client, intent_client=intent_client)
++        motion.settings = settings
++        tasks = TaskStore(database, robot_id="robot")
++        await tasks.prepare()
++        _, executor = build_task_runtime(database, tasks, Navigation(), boot_id="heartbeat")
++        motion.bind_tasks(executor)
++        agent = Agent(
++            "robot",
++            connector=connections.get,
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=motion,
++            clock=clock,
++            heartbeat_seconds=0.02,
++            retry_delay=0.001,
++        )
++        runner = asyncio.create_task(agent.run())
++        controller = hub.attach_controller("robot", "controller-session")
++        assert controller is not None
++
++        async def command(kind: str, payload: dict[str, Any], seq: int, epoch: int) -> None:
++            frame = envelope(kind, payload, generation=None, seq=seq, request=str(seq))
++            frame.connection_epoch = epoch
++            hub.handle_control_frame(controller, serialize_envelope(frame))
++
++        async def response() -> Any:
++            while True:
++                raw = await controller.outbox.get()
++                assert isinstance(raw, bytes)
++                data = json.loads(raw)
++                if data["type"] == "response":
++                    return data["payload"]
++
++        try:
++            await until(
++                lambda: (
++                    any(frame["type"] == "heartbeat.request" for frame in first.sent)
++                    and not link._pending
++                )
++            )
++            first.drop_replies = True
++            await command("control.acquire", {}, 1, 1)
++            prepared = await asyncio.wait_for(response(), 1)
++            assert prepared["ok"]
++            authority = prepared["data"]["authority_id"]
++            # Fresh inputs span both retired thresholds, while subsequent replies are missing.
++            for seq, now in enumerate([10 + i / 10 for i in range(1, 50)] + [14.999], start=2):
++                clock.advance(now)
++                node.clock.now = now
++                node.value._motion_runtime.accept(runtime(now, seq), b"t5", now)
++                await command(
++                    "drive.intent",
++                    {
++                        "authority_id": authority,
++                        "gesture": 1,
++                        "sequence": seq,
++                        "linear": 0.4,
++                        "turn": 0.0,
++                        "gear": "low",
++                    },
++                    seq,
++                    1,
++                )
++                await until(lambda seq=seq: bool(node.output) and node.output[-1].sequence == seq)
++                assert node.output[-1].vx > 0 and not disabled
++                assert not first.closed and agent.connection_epoch == 1
++            clock.advance(15.0)
++            await until(lambda: first.closed and disabled == [1])
++            assert not agent.connected
++            assert node.value.manual_view()["state"] == "closed"
++            second = RelaySocket(hub, "robot")
++            connections.put_nowait(
++                WebSocketLink(
++                    second,
++                    "robot",
++                    second.connection.epoch,
++                    clock=clock.monotonic,
++                )
++            )
++            await until(lambda: agent.connection_epoch == 2 and hub.is_online("robot"))
++            node.clock.now = 15.0
++            node.value._motion_runtime.accept(runtime(15.0, 100), b"t5", 15.0)
++            count = len(node.output)
++            await command(
++                "drive.intent",
++                {
++                    "authority_id": authority,
++                    "gesture": 1,
++                    "sequence": 100,
++                    "linear": 0.4,
++                    "turn": 0.0,
++                    "gear": "low",
++                },
++                100,
++                1,
++            )
++            # Intent has no per-sample response, including rejection.
++            await asyncio.sleep(0.02)
++            assert len(node.output) == count
++            # Even a current transport epoch cannot resurrect the old authority.
++            await command(
++                "drive.intent",
++                {
++                    "authority_id": authority,
++                    "gesture": 1,
++                    "sequence": 101,
++                    "linear": 0.4,
++                    "turn": 0.0,
++                    "gear": "low",
++                },
++                101,
++                2,
++            )
++            await asyncio.sleep(0.02)
++            assert len(node.output) == count
++            await command("control.acquire", {}, 102, 2)
++            prepared = await asyncio.wait_for(response(), 1)
++            assert prepared["ok"]
++            fresh_authority = prepared["data"]["authority_id"]
++            assert fresh_authority != authority
++            await command(
++                "drive.intent",
++                {
++                    "authority_id": fresh_authority,
++                    "gesture": 1,
++                    "sequence": 103,
++                    "linear": 0.4,
++                    "turn": 0.0,
++                    "gear": "low",
++                },
++                103,
++                2,
++            )
++            await until(lambda: len(node.output) > count and node.output[-1].vx > 0)
++        finally:
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++            await settings.close()
+diff --git a/tests/integration/test_runtime.py b/tests/integration/test_runtime.py
+--- a/tests/integration/test_runtime.py
++++ b/tests/integration/test_runtime.py
+@@ -150,46 +150,27 @@
+         assert retrying.state == "reconnecting"
+ 
+ 
+-async def test_shutdown_when_heartbeat_cancellation_is_swallowed(monkeypatch) -> None:
+-    import senior_control.runtime.supervisor as module
+-
++async def test_shutdown_when_heartbeat_cancellation_is_swallowed() -> None:
+     entered = asyncio.Event()
+     release = asyncio.Event()
+-    original_wait_for = asyncio.wait_for
+-
+-    async def swallowed(awaitable, timeout):
+-        result = await original_wait_for(awaitable, timeout)
+-        entered.set()  # the inner heartbeat has completed before shutdown cancels its waiter
++
++    async def beat() -> None:
++        entered.set()
+         try:
+             await release.wait()
+         except asyncio.CancelledError:
+-            return result  # //Compatible: simulate the Python 3.10 wait_for cancellation race.
+-        return result
+-
+-    async def beat() -> None:
+-        pass
+-
+-    async def ros(name: str) -> None:
+-        pass
+-
+-    async def sink(vx: float, wz: float) -> None:
+-        pass
+-
+-    monkeypatch.setattr(module.asyncio, "wait_for", swallowed)
+-    supervisor = Supervisor(
+-        send_heartbeat=beat,
+-        call_ros=ros,
+-        heartbeat_seconds=60,
+-    )
++            return  # A transport may finish while shutdown cancels the send.
++
++    async def ros(name: str) -> None:
++        pass
++
++    supervisor = Supervisor(send_heartbeat=beat, call_ros=ros, heartbeat_seconds=60)
+     await supervisor.__aenter__()
+     await entered.wait()
+     close = asyncio.create_task(supervisor.__aexit__(None, None, None))
+     done, _ = await asyncio.wait({close}, timeout=0.5)
+-    if close not in done:
+-        for task in supervisor._tasks:
+-            task.cancel()
+-        await close
+     assert close in done
++    await close
+ 
+ 
+ async def test_shutdown_reports_stubborn_background_within_deadline() -> None:
+diff --git a/tests/integration/test_settings_logs_review.py b/tests/integration/test_settings_logs_review.py
+--- a/tests/integration/test_settings_logs_review.py
++++ b/tests/integration/test_settings_logs_review.py
+@@ -150,8 +150,8 @@
+         # authenticated socket heartbeat independently of the task/settings gate.
+         async with settings.runtime.lock:
+             await link.inbox.put(envelope("control.acquire", {}, request="gate-acquire"))
+-            await link.inbox.put(HeartbeatFrame("robot", time.monotonic() + 2))
+-            await until(lambda: agents[0]._ledger.eligible("robot"), timeout=0.3)
++            await link.inbox.put(HeartbeatFrame("robot"))
++            await until(lambda: link.inbox.empty(), timeout=0.3)
+             assert not link.responses
+         await until(lambda: bool(link.responses))
+         assert link.responses[0].request_id == "gate-acquire"
+diff --git a/tests/integration/test_shutdown.py b/tests/integration/test_shutdown.py
+--- a/tests/integration/test_shutdown.py
++++ b/tests/integration/test_shutdown.py
+@@ -408,8 +408,8 @@
+         runner = asyncio.create_task(agent.run())
+         try:
+             await until(lambda: agent.connected)
+-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
++            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++            await until(lambda: link.inbox.empty())
+             trigger.set()
+             await asyncio.wait_for(asyncio.shield(runner), 1.5)
+             assert adapter._disabled_through_epoch >= 1
+@@ -449,8 +449,8 @@
+         runner = asyncio.create_task(agent.run())
+         try:
+             await until(lambda: agent.connected)
+-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
++            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++            await until(lambda: link.inbox.empty())
+             await agent.dispatch(simple("control.acquire", seq=1))
+             link.inbox.put_nowait(simple("drive.stop", seq=2))
+             link.inbox.put_nowait(simple("safety.estop", seq=3))
+@@ -499,8 +499,8 @@
+         runner = asyncio.create_task(agent.run())
+         try:
+             await until(lambda: agent.connected)
+-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
++            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++            await until(lambda: link.inbox.empty())
+             await agent.dispatch(simple("control.acquire", seq=1))
+             link.inbox.put_nowait(simple("drive.stop", seq=2))
+             await asyncio.wait_for(entered.wait(), 1)
+@@ -564,8 +564,8 @@
+         runner = asyncio.create_task(agent.run())
+         try:
+             await until(lambda: agent.connected)
+-            link.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
++            link.inbox.put_nowait(HeartbeatFrame(ROBOT))
++            await until(lambda: link.inbox.empty())
+             await agent.dispatch(simple("control.acquire", seq=1))
+             link.inbox.put_nowait(simple("drive.stop", seq=2))
+             await asyncio.wait_for(entered.wait(), 1)
+diff --git a/tests/integration/test_task_ownership.py b/tests/integration/test_task_ownership.py
+--- a/tests/integration/test_task_ownership.py
++++ b/tests/integration/test_task_ownership.py
+@@ -92,26 +92,93 @@
+     return runtime, executor, nav, live, records[0].execution_id
+ 
+ 
+-async def test_runtime_runs_offline_and_completes_same_identity(tmp_path: Path) -> None:
++@pytest.mark.parametrize("outage", ["socket", "heartbeat"])
++async def test_runtime_runs_offline_and_completes_same_identity(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outage: str
++) -> None:
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, until
++    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
++
++    from senior_control.agent import Agent
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.agent.websocket import WebSocketLink
++
++    clock = HeartbeatClock(monkeypatch)
++    hub = relay_hub(monkeypatch, clock)
++    first = RelaySocket(hub, "robot", drop_replies=outage == "heartbeat")
++    links: asyncio.Queue[Any] = asyncio.Queue()
++    links.put_nowait(WebSocketLink(first, "robot", 1, clock=clock.monotonic))
+     async with Database(tmp_path / "task.db") as database:
+         runtime, executor, nav, live, identity = await start(database)
+         assert nav.progress is not None and nav.progress.status == "running"
+         assert executor.lifecycle is not None
+         receipt = await executor.lifecycle.store.query(f"schedule:{identity}")
+-        nav.progress = nav.progress.model_copy(
+-            update={
+-                "completed_action_ids": ["0:a", "1:b"],
+-                "status": "succeeded",
+-                "controller_output_exited": True,
+-            }
+-        )
+-        await runtime.tick(NOW + timedelta(seconds=60.5), 1, replace(live, connected=False))
+-        assert (await executor.lifecycle.store.load(identity)).pending.kind == "terminal_release"
+-        await runtime.tick(NOW + timedelta(seconds=60.6), 1.1, replace(live, connected=False))
+-        state = await executor.lifecycle.store.load(identity)
+-        assert state.phase == "succeeded" and state.completed == ("0:a", "1:b")
+-        assert await executor.lifecycle.store.query(f"schedule:{identity}") == receipt
+-        assert [effect.kind for effect in nav.effects] == ["plan", "terminal_release"]
++
++        class State(FakeState):
++            async def collect(self):
++                return replace(await super().collect(), route_progress=nav.progress)
++
++        journal = AgentJournal(database, robot_id="robot")
++        await journal.prepare()
++        agent = Agent(
++            "robot",
++            connector=links.get,
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=State(),
++            motion=FakeMotion(),
++            clock=clock,
++            heartbeat_seconds=0.02,
++            retry_delay=0.001,
++        )
++        runner = asyncio.create_task(agent.run())
++        try:
++            await until(lambda: bool(first.sent))
++            if outage == "socket":
++                await first.close()
++            else:
++                clock.advance(14.999)
++                await agent._beat()
++                assert agent.connected and not first.closed
++                clock.advance(15.0)
++            await until(lambda: not agent.connected and first.closed)
++            # Derive offline from a real closed relay transport and completed Agent session.
++            assert first.connection.outbox.closed
++            assert (await executor.lifecycle.store.load(identity)).phase == "running"
++            nav.progress = nav.progress.model_copy(
++                update={
++                    "completed_action_ids": ["0:a", "1:b"],
++                    "status": "succeeded",
++                    "controller_output_exited": True,
++                }
++            )
++            offline = replace(live, connected=agent.connected)
++            await runtime.tick(NOW + timedelta(seconds=60.5), 1, offline)
++            pending = (await executor.lifecycle.store.load(identity)).pending
++            assert pending is not None and pending.kind == "terminal_release"
++            await runtime.tick(NOW + timedelta(seconds=60.6), 1.1, offline)
++            state = await executor.lifecycle.store.load(identity)
++            assert state.phase == "succeeded" and state.completed == ("0:a", "1:b")
++            second = RelaySocket(hub, "robot")
++            links.put_nowait(WebSocketLink(second, "robot", 2, clock=clock.monotonic))
++            await until(lambda: agent.connection_epoch == 2)
++            await until(lambda: any(frame["type"] == "snapshot" for frame in second.sent))
++            snapshot = next(frame for frame in second.sent if frame["type"] == "snapshot")
++            synced = snapshot["payload"]["route_progress"]
++            assert synced["execution_id"] == nav.progress.execution_id
++            assert synced["task_id"] == nav.progress.task_id and synced["status"] == "succeeded"
++            await runtime.tick(NOW + timedelta(seconds=61), 1.5, replace(live, connected=True))
++            assert await executor.lifecycle.store.query(f"schedule:{identity}") == receipt
++            assert [effect.kind for effect in nav.effects] == [
++                "plan",
++                "terminal_release",
++                "terminal_settled",
++            ]
++        finally:
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
+ 
+ 
+ async def test_takeover_waits_for_output_ack_then_explicit_resume_uses_remaining(
+diff --git a/tests/integration/test_task_runner.py b/tests/integration/test_task_runner.py
+--- a/tests/integration/test_task_runner.py
++++ b/tests/integration/test_task_runner.py
+@@ -930,85 +930,6 @@
+         assert got is not None and got.status is ExecutionStatus.RUNNING
+ 
+ 
+-async def test_agent_disconnect_during_start_persists_cancel_before_reconnect(
+-    tmp_path: Path,
+-) -> None:
+-    import time
+-
+-    from agent_fakes import (
+-        ROBOT,
+-        FakeConnector,
+-        FakeHome,
+-        FakeLink,
+-        FakeMaps,
+-        FakeMotion,
+-        FakeState,
+-        FakeTasks,
+-        until,
+-    )
+-
+-    from senior_control.agent import Agent
+-    from senior_control.agent.connection import HeartbeatFrame
+-    from senior_control.agent.journal import AgentJournal
+-
+-    created = datetime(2026, 10, 27, tzinfo=timezone.utc)
+-    async with Database(tmp_path / "robot.db") as database:
+-        store, task = await saved_task(database, created)
+-        journal = AgentJournal(database, robot_id=ROBOT)
+-        await journal.prepare()
+-        first, second = FakeLink(1), FakeLink(2)
+-        agent = Agent(
+-            ROBOT,
+-            connector=FakeConnector(first, second),
+-            journal=journal,
+-            tasks=FakeTasks(),
+-            home=FakeHome(),
+-            maps=FakeMaps(),
+-            state=FakeState(),
+-            motion=FakeMotion(),
+-            heartbeat_seconds=0.02,
+-            retry_delay=0.01,
+-            on_eligibility_lost=store.mark_active_cancel_pending,
+-        )
+-        nav = HoldNavigation(store)
+-        executor = TaskExecutor(
+-            database,
+-            store,
+-            nav,
+-            link_up=lambda: agent.eligible_for_motion,
+-            generation=lambda: agent.continuity_generation,
+-        )
+-        runtime = TaskRuntime(store, executor, generation=lambda: agent.continuity_generation)
+-        runner = asyncio.create_task(agent.run())
+-        tick = None
+-        try:
+-            await until(lambda: agent.connected)
+-            first.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
+-            context = ExecutionContext(True, True, True, False, task.map_ref)
+-            await runtime.tick(created + timedelta(seconds=1799), 1.0, context)
+-            tick = asyncio.create_task(
+-                runtime.tick(created + timedelta(seconds=1800), 2.0, context)
+-            )
+-            await asyncio.wait_for(nav.started.wait(), 1)
+-            first.drop()
+-            await until(lambda: agent.continuity_generation > 0)
+-            await until(lambda: second.epoch == agent._epoch)
+-            second.inbox.put_nowait(HeartbeatFrame(ROBOT, time.monotonic() + 0.8))
+-            await until(lambda: agent.eligible_for_motion)
+-            nav.release.set()
+-            await tick
+-            record = await store.execution_for(task.task_id, created + timedelta(seconds=1800))
+-            assert record is not None and record.status is not ExecutionStatus.RUNNING
+-            assert f"cancel:{record.execution_id}" in nav.calls
+-        finally:
+-            nav.release.set()
+-            if tick is not None:
+-                await asyncio.gather(tick, return_exceptions=True)
+-            agent.request_shutdown()
+-            await asyncio.wait_for(runner, 2)
+-
+-
+ async def test_blocked_cancel_survives_reconnect_without_dispatching_new_work(
+     tmp_path: Path,
+ ) -> None:
+diff --git a/tests/unit/test_heartbeat_eligibility.py b/tests/unit/test_heartbeat_eligibility.py
+--- a/tests/unit/test_heartbeat_eligibility.py
++++ /dev/null
+@@ -1,27 +0,0 @@
+-from senior_control.agent.connection import HeartbeatLedger
+-
+-
+-class Clock:
+-    now = 0.01
+-
+-    def monotonic(self) -> float:
+-        return self.now
+-
+-
+-def test_eligibility_never_outlives_confirmed_ros_deadline() -> None:
+-    clock = Clock()
+-    ledger = HeartbeatLedger(clock, 1.0)
+-    ledger.note("robot-a", deadline=0.8)
+-    clock.now = 0.8
+-    assert ledger.eligible("robot-a")
+-    clock.now = 0.81
+-    assert not ledger.eligible("robot-a")
+-
+-
+-def test_heartbeat_is_invalid_if_monotonic_clock_moves_backwards() -> None:
+-    clock = Clock()
+-    clock.now = 1.0
+-    ledger = HeartbeatLedger(clock, 1.0)
+-    ledger.note("robot-a", deadline=1.8)
+-    clock.now = 0.9
+-    assert not ledger.eligible("robot-a")
+diff --git a/tests/unit/test_heartbeat_wire.py b/tests/unit/test_heartbeat_wire.py
+--- a/tests/unit/test_heartbeat_wire.py
++++ b/tests/unit/test_heartbeat_wire.py
+@@ -39,13 +39,24 @@
+     monkeypatch.setattr("senior_control.cloud.relay.time.monotonic", lambda: now[0])
+     hub = Hub(CloudLimits())
+     connection = hub.attach_agent("robot-a")
+-    now[0] = 11.1
+-    hub.expire_stale_agent(connection)
+-    assert not connection.outbox.closed
+-    now[0] = 12.1
+-    hub.expire_stale_agent(connection)
+-    assert connection.outbox.closed
+-    assert not hub.is_online("robot-a")
++    hub.handle_agent_frame(
++        connection,
++        json.dumps(
++            {
++                "v": 1,
++                "type": "heartbeat.request",
++                "robot_id": "robot-a",
++                "connection_epoch": connection.epoch,
++                "nonce": "current",
++                "sent_at": 100.0,
++            }
++        ).encode(),
++    )
++    for instant, online in [(14.999, True), (15.0, False), (15.001, False)]:
++        now[0] = instant
++        assert hub.is_online("robot-a") is online
++        hub.expire_stale_agent(connection)
++        assert connection.outbox.closed is not online
+ 
+ 
+ def test_reconnect_grace_ends_without_a_fresh_epoch_heartbeat(
+@@ -106,12 +117,12 @@
+     assert hub.is_online("robot-a")
+     assert not hub.is_reconnecting("robot-a")
+ 
+-    now[0] = 12.01
++    now[0] = 15.01
+     assert not hub.is_online("robot-a")
+     assert hub.is_reconnecting("robot-a")
+     assert not previous.outbox.closed
+ 
+-    now[0] = 71.9
++    now[0] = 74.9
+     if transition == "replace":
+         hub.attach_agent("robot-a")
+         hub.detach(previous)  # Stale socket cleanup must preserve the replacement's state.
+@@ -119,7 +130,7 @@
+         hub.expire_stale_agent(previous)
+     assert hub.is_reconnecting("robot-a")
+ 
+-    now[0] = 72.0
++    now[0] = 75.0
+     assert not hub.is_online("robot-a")
+     assert not hub.is_reconnecting("robot-a")
+ 
+@@ -132,7 +143,7 @@
+     hub = Hub(CloudLimits())
+     agent = hub.attach_agent("robot-a")
+     agent.heartbeat_at = now[0]
+-    now[0] = 12.01
++    now[0] = 15.01
+     hub.revoke_robot("robot-a")
+     assert not hub.is_online("robot-a")
+     assert not hub.is_reconnecting("robot-a")
+@@ -147,3 +158,82 @@
+         agent, json.dumps({"type": "heartbeat.request", "drive_t1": 1.0}).encode()
+     )
+     assert agent.outbox.closed
++
++
++@pytest.mark.parametrize("elapsed", [5.0, 5.001])
++def test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher(monkeypatch, elapsed):
++    import time
++    from types import SimpleNamespace
++
++    now = [10.0]
++    monkeypatch.setattr(
++        "senior_control.cloud.relay.time",
++        SimpleNamespace(
++            monotonic=lambda: now[0],
++            time=time.time,
++        ),
++    )
++    hub = Hub(CloudLimits())
++    agent = hub.attach_agent("robot-a")
++    request = json.dumps(
++        {
++            "v": 1,
++            "type": "heartbeat.request",
++            "robot_id": "robot-a",
++            "connection_epoch": agent.epoch,
++            "nonce": "current",
++            "sent_at": 100.0,
++        }
++    ).encode()
++    hub.handle_agent_frame(agent, request)
++    assert hub.is_online("robot-a")
++    now[0] += elapsed
++    hub.handle_agent_frame(agent, request)
++    assert not hub.is_online("robot-a") and agent.outbox.closed
++
++
++async def test_watcher_sleeps_until_current_evidence_deadline(monkeypatch):
++    import asyncio
++    import time
++    from types import SimpleNamespace
++
++    from senior_control.cloud.relay import _watch_heartbeat
++
++    now = [10.0]
++    monkeypatch.setattr(
++        "senior_control.cloud.relay.time",
++        SimpleNamespace(
++            monotonic=lambda: now[0],
++            time=time.time,
++        ),
++    )
++    hub = Hub(CloudLimits())
++    agent = hub.attach_agent("robot-a")
++    request = json.dumps(
++        {
++            "v": 1,
++            "type": "heartbeat.request",
++            "robot_id": "robot-a",
++            "connection_epoch": agent.epoch,
++            "nonce": "current",
++            "sent_at": 100.0,
++        }
++    ).encode()
++    hub.handle_agent_frame(agent, request)
++    sleeps = []
++    original_sleep = asyncio.sleep
++
++    async def sleep(delay):
++        sleeps.append(delay)
++        if len(sleeps) == 1:
++            now[0] = 12.0
++            hub.handle_agent_frame(agent, request)
++            now[0] = 15.0
++        else:
++            now[0] += delay
++        await original_sleep(0)
++
++    monkeypatch.setattr("senior_control.cloud.relay.asyncio.sleep", sleep)
++    await _watch_heartbeat(agent, hub)
++    assert sleeps == [5.0, 2.0] and now[0] == 17.0
++    assert agent.outbox.closed and not hub.is_online("robot-a")
+diff --git a/tests/unit/test_websocket_link.py b/tests/unit/test_websocket_link.py
+--- a/tests/unit/test_websocket_link.py
++++ b/tests/unit/test_websocket_link.py
+@@ -22,17 +22,26 @@
+         pass
+ 
+ 
+-async def test_reply_must_match_outstanding_nonce_and_epoch() -> None:
++@pytest.mark.parametrize(
++    "wrong",
++    [
++        {"nonce": "other"},
++        {"connection_epoch": 2},
++        {"robot_id": "other"},
++        {"sent_at": 99.0},
++    ],
++)
++async def test_reply_must_match_outstanding_nonce_and_epoch(wrong) -> None:
+     socket = Socket()
+     link = WebSocketLink(socket, "robot-a", 3, wall_clock=lambda: 100.0, clock=lambda: 1.0)
+     await link.send_heartbeat()
+     request = json.loads(socket.sent[0])
+     reply = {**request, "type": "heartbeat.reply", "server_time": 100.0}
+-    socket.inbox.append(json.dumps({**reply, "nonce": "other"}))
++    socket.inbox.append(json.dumps({**reply, **wrong}))
+     with pytest.raises(ConnectionError):
+         await link.recv()
+     socket.inbox.append(json.dumps(reply))
+-    assert await link.recv() == HeartbeatFrame("robot-a", 3.0)
++    assert await link.recv() == HeartbeatFrame("robot-a")
+ 
+ 
+ async def test_reply_rejects_nonfinite_server_clock() -> None:
+@@ -84,7 +93,7 @@
+     assert isinstance(failure.value, AuthRejected) is terminal
+ 
+ 
+-@pytest.mark.parametrize(("elapsed", "offset"), [(0.5, 0.0), (0.02, 1.0)])
++@pytest.mark.parametrize(("elapsed", "offset"), [(3.0, 0.0), (4.999, 1.0)])
+ async def test_unqualified_command_clock_keeps_link_alive(elapsed: float, offset: float) -> None:
+     socket = Socket()
+     wall, mono = [100.0], [1.0]
+@@ -95,10 +104,15 @@
+     socket.inbox.append(
+         json.dumps({**request, "type": "heartbeat.reply", "server_time": 100.0 + offset})
+     )
+-    assert await link.recv() == HeartbeatFrame("robot-a", 3.0)
++    assert await link.recv() == HeartbeatFrame("robot-a")
++    # The next online deadline belongs to the receipt, not the original request.
++    mono[0] += 1.0
++    await link.send_heartbeat()
++    assert len(socket.sent) == 2
++    await link.close()
+ 
+ 
+-async def test_missing_reply_times_out_even_if_receive_is_idle() -> None:
++async def test_missing_reply_times_out_even_if_receive_is_idle(monkeypatch) -> None:
+     import asyncio
+ 
+     class IdleSocket(Socket):
+@@ -106,16 +120,34 @@
+             await asyncio.Future()
+             raise AssertionError("receive should have been cancelled")
+ 
+-    link = WebSocketLink(IdleSocket(), "robot-a", 3, heartbeat_timeout=0.01)
++    now = [10.0]
++    timers = []
++    loop = asyncio.get_running_loop()
++    original = loop.call_later
++
++    def call_later(delay, callback, *args, **kwargs):
++        if isinstance(getattr(callback, "__self__", None), WebSocketLink):
++            timers.append((delay, callback, args))
++            return asyncio.Handle(callback, args, loop)
++        return original(delay, callback, *args, **kwargs)
++
++    monkeypatch.setattr(loop, "call_later", call_later)
++    link = WebSocketLink(IdleSocket(), "robot-a", 3, clock=lambda: now[0])
+     reader = asyncio.create_task(link.recv())
+     try:
++        await link.send_heartbeat()
+         await asyncio.sleep(0)
++        assert timers[0][0] == 5.0
++        now[0] = 14.999
+         await link.send_heartbeat()
+-        done, _ = await asyncio.wait({reader}, timeout=0.2)
+-        assert reader in done
++        assert not reader.done()
++        now[0] = 15.0
++        _, callback, args = timers[0]
++        callback(*args)
+         with pytest.raises(ConnectionError, match="heartbeat reply timed out"):
+             await reader
+     finally:
++        await link.close()
+         reader.cancel()
+         await asyncio.gather(reader, return_exceptions=True)
+ 

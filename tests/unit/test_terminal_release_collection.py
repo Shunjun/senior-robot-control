@@ -64,7 +64,7 @@ def gate_for(rig, wire):
     return gate
 
 
-@pytest.mark.parametrize("reason", ["navigation_source_inactive", "clock_offset_changed"])
+@pytest.mark.parametrize("reason", ["navigation_source_inactive", "qualification_lost"])
 def test_original_expiry_fault_retirement_then_cancel_uses_unchanged_payload(rig, wire, reason):
     start(rig, 0.5)
     gate_for(rig, wire)
@@ -79,9 +79,6 @@ def test_original_expiry_fault_retirement_then_cancel_uses_unchanged_payload(rig
     assert node._retirements["route"] == original
     assert rig.core.machine.state.task_id is None
     assert rig.core.machine.state.fault_revision == revision
-    if reason == "clock_offset_changed":
-        assert revision == 1
-        assert rig.core.machine.state.mode.value == "execution_fault"
 
 
 def test_real_sender_gate_core_269_settlements_and_old_scope_cannot_rehandshake(rig, wire):

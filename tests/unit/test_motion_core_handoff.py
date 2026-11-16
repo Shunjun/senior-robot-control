@@ -49,7 +49,8 @@ class Node:
     def get_parameter(self, name):
         return N(value="route-sim")
 
-    def _emit_motion_core(self, v, reason, deadline=0.0):
+    def _emit_motion_core(self, v, reason, deadline=0.0, *, computed_steady):
+        self.last_computed_steady = computed_steady
         self.emitted.append((v, reason))
 
 
@@ -241,8 +242,8 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
     assert core.target.source == "idle"
 
 
-@pytest.mark.parametrize("expired", ["ros_age", "steady_age"])
-def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, expired):
+@pytest.mark.parametrize("corrected_ros", [1.0, 1_000_000_000.0])
+def test_body_projection_keeps_original_monotonic_expiry_across_ros_correction(core, corrected_ros):
     from senior_control.motion.estimator import MotionObservation, Origin
 
     core.node._reception_test.sensors.estimator.ingest(
@@ -250,7 +251,8 @@ def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, exp
             "laser",
             (0.0, None, 0.0),
             10.0,
-            (Origin("laser", "laser", 1, 10.0, 10.0, 20.0),),
+            (Origin("laser", "laser", 1, 10.0, 10.0, 20.0, measurement_steady=20.0),),
+            measured_steady=20.0,
             independent=(True, True, True),
         )
     )
@@ -258,8 +260,8 @@ def test_body_projection_preserves_original_hard_expiry_under_slow_rtf(core, exp
     _, body, _ = read_inputs(core, 20.2)
     assert body is not None
     assert body.stamp_steady == 20.0 and body.deadline_steady == 21.0
-    if expired == "ros_age":
-        core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=11e9))
-        assert read_inputs(core, 20.2)[1] is None
-    else:
-        assert read_inputs(core, 21.0)[1] is None
+    before = core.node._reception_test.sensors.latest.generation
+    core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=round(corrected_ros * 1e9)))
+    assert read_inputs(core, 20.2)[1] is not None
+    assert core.node._reception_test.sensors.latest.generation == before
+    assert read_inputs(core, 21.0)[1] is None

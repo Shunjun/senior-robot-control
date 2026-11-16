@@ -62,6 +62,7 @@ def setup_stop(c, monkeypatch):
                         epoch=name,
                         sequence=seq,
                         received_steady=now,
+                        measurement_steady=now,
                         stamp_ros=now - 0.001,
                     ),
                 )
@@ -153,7 +154,11 @@ def test_first_motion_rechecks_evidence_after_neutral(core, monkeypatch, change)
         now = clock[0]
         core.sensors.ingest_observation(
             MotionObservation(
-                "imu", (None, None, 0.0), now, (Origin("imu", "replacement", 1, now, now, now),)
+                "imu",
+                (None, None, 0.0),
+                now,
+                (Origin("imu", "replacement", 1, now, now, now, measurement_steady=now),),
+                measured_steady=now,
             ),
             now,
             now,

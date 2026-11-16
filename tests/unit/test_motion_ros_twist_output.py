@@ -36,12 +36,14 @@ def test_actual_core_emitter_serializes_zero_and_tracking_as_ros_floats(velocity
     outputs = []
     gate = N(
         _output_transport=N(
-            publish=lambda velocity, deadline: outputs.append((velocity, deadline))
+            publish=lambda velocity, deadline, *, computed_steady: outputs.append(
+                (velocity, deadline, computed_steady)
+            )
         ),
         _publish_drive_feedback=lambda _: None,
         _feedback=N(published=lambda *_: None),
         _report=lambda _: None,
     )
-    scope["_emit_motion_core"](gate, velocity, "test", 10.25)
+    scope["_emit_motion_core"](gate, velocity, "test", 10.25, computed_steady=10.0)
     assert len(outputs) == 1
-    assert outputs == [(velocity, 10.25)]
+    assert outputs == [(velocity, 10.25, 10.0)]

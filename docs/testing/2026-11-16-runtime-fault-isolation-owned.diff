@@ -1,0 +1,2533 @@
+--- a/ros2/src/senior_robot/launch/safety_motion.launch.py
++++ b/ros2/src/senior_robot/launch/safety_motion.launch.py
+@@ -11,19 +11,18 @@
+ from launch import LaunchDescription
+ from launch.actions import (
+     DeclareLaunchArgument,
+-    EmitEvent,
+     IncludeLaunchDescription,
+     OpaqueFunction,
+     RegisterEventHandler,
+ )
+ from launch.event_handlers import OnProcessExit
+-from launch.events import Shutdown
+ from launch.launch_description_sources import PythonLaunchDescriptionSource
+ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+ from launch_ros.actions import Node
+ from launch_ros.substitutions import FindPackageShare
+ 
+ from senior_control.real_runtime import load_real_parameters, validate_real_runtime
++from senior_control.runtime.lifecycle_events import report_ros_exit
+ from senior_control.sensors.policy import ros_sensor_parameters
+ 
+ 
+@@ -37,19 +36,9 @@
+     selected = {**shared, "hardware_motion_profile": hardware, "motion_core_profile": ""}
+     # NativeObservationRosBridge selects the configured physical /timed topics
+     # directly. Its DDS writer remains the driver; no untyped relay is involved.
+-    shutdown_requested = False
+-
+-    def stop_required(event, launch_context):
+-        nonlocal shutdown_requested
+-        if shutdown_requested or launch_context.is_shutdown:
+-            return []
+-        shutdown_requested = True
+-        return [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
+-
+     nodes = [
+-        # All included hardware children belong to this launch process group.
+-        # A required driver exit shuts down the shared stack as well.
+-        RegisterEventHandler(OnProcessExit(on_exit=stop_required)),
++        # Observe every child exit without terminating healthy modules.
++        RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
+         *[
+             IncludeLaunchDescription(
+                 PythonLaunchDescriptionSource(
+--- a/ros2/src/senior_robot/launch/simulation_motion.launch.py
++++ b/ros2/src/senior_robot/launch/simulation_motion.launch.py
+@@ -5,9 +5,11 @@
+     DeclareLaunchArgument,
+     IncludeLaunchDescription,
+     OpaqueFunction,
++    RegisterEventHandler,
+     SetLaunchConfiguration,
+ )
+ from launch.conditions import IfCondition
++from launch.event_handlers import OnProcessExit
+ from launch.launch_description_sources import PythonLaunchDescriptionSource
+ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+ from launch_ros.actions import Node
+@@ -15,6 +17,7 @@
+ from launch_ros.substitutions import FindPackageShare
+ from nav2_common.launch import RewrittenYaml
+ 
++from senior_control.runtime.lifecycle_events import report_ros_exit
+ from senior_control.sensors.policy import ros_sensor_parameters
+ 
+ 
+@@ -69,6 +72,7 @@
+     )
+     return LaunchDescription(
+         [
++            RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
+             DeclareLaunchArgument("agent_socket"),
+             DeclareLaunchArgument("robot_id"),
+             DeclareLaunchArgument("headless", default_value="true"),
+--- a/src/senior_control/agent/composition.py
++++ b/src/senior_control/agent/composition.py
+@@ -2,6 +2,7 @@
+ 
+ import asyncio
+ import logging
++import os
+ import re
+ import time
+ import uuid
+@@ -37,7 +38,8 @@
+     configure_diagnostics,
+     diagnostics_from_environment,
+ )
+-from senior_control.runtime.ipc import IpcClient, IpcError
++from senior_control.runtime.ipc import IpcClient
++from senior_control.runtime.lifecycle_events import READ_FD, observe
+ from senior_control.settings.models import vehicle_settings_profile
+ from senior_control.settings.service import RuntimeGate, SettingsService
+ from senior_control.settings.store import SettingsStore
+@@ -313,6 +315,16 @@
+     return TaskRuntime(tasks, executor), executor
+ 
+ 
++async def pause_failed_tasks(executor: TaskExecutor) -> bool:
++    """Use the existing durable owner; absence of a revoke proof remains pending."""
++    retired = await executor.control_current("pause", "runtime-tasks-failed")
++    if retired is None:
++        return True
++    assert executor.lifecycle is not None
++    current = await executor.lifecycle.store.load(retired[0])
++    return current.phase in {"paused", "succeeded", "failed", "canceled"}
++
++
+ async def run_agent(config: AgentConfig) -> int:
+     configure_diagnostics(config.diagnostics)
+     async with Database(config.database_path) as database:
+@@ -326,43 +338,29 @@
+         except Exception:
+             logger.exception("could not initialize agent operation journal")
+             return 78
++        domain_value = os.environ.get("SENIOR_EXPECTED_ROS_DOMAIN")
++        domain = int(domain_value) if domain_value is not None else None
++
++        def ipc(*, timeout: float = 1.0) -> IpcClient:
++            return IpcClient(
++                config.socket_path,
++                timeout=timeout,
++                robot_id=config.robot_id,
++                ros_domain=domain,
++                owner_record=os.environ.get("SENIOR_VERIFIED_ADAPTER_RUN"),
++            )
++
+         motion = TaskAwareMotion(
+-            IpcClient(config.socket_path),
+-            intent_client=IpcClient(config.socket_path),
+-            disable_client=IpcClient(config.socket_path),
+-            safety_client=IpcClient(config.socket_path),
+-        )
+-        try:
+-            await motion.verify_robot(config.robot_id)
+-        except IpcError as exc:
+-            await motion.close()
+-            cause = exc.__cause__
+-            while isinstance(cause, IpcError):
+-                cause = cause.__cause__
+-            # //Compatible: Python 3.10 has distinct asyncio and built-in timeout types.
+-            if isinstance(
+-                cause,
+-                (
+-                    FileNotFoundError,
+-                    ConnectionError,
+-                    asyncio.IncompleteReadError,
+-                    asyncio.TimeoutError,
+-                    TimeoutError,
+-                ),
+-            ):
+-                logger.warning("ROS adapter identity check could not reach the adapter")
+-                return 1
+-            logger.exception("ROS adapter identity check failed")
+-            return 78
+-        except Exception:
+-            logger.exception("ROS adapter identity check failed")
+-            await motion.close()
+-            return 78
+-        state_client = IpcClient(config.socket_path)
+-        map_client = IpcClient(config.socket_path)
+-        navigation_client = IpcClient(config.socket_path, timeout=3.0)
+-        workspace_client = IpcClient(config.socket_path)
+-        display_client = IpcClient(config.socket_path)
++            ipc(),
++            intent_client=ipc(),
++            disable_client=ipc(),
++            safety_client=ipc(),
++        )
++        state_client = ipc()
++        map_client = ipc()
++        navigation_client = ipc(timeout=3.0)
++        workspace_client = ipc()
++        display_client = ipc()
+         state = IpcState(state_client)
+         exported_grid = None
+         if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
+@@ -407,6 +405,8 @@
+                     local = ExecutionContext(False, False, False, False, None)
+                 else:
+                     local = sampled.for_tasks(agent.connected)
++                    if "tasks" in agent.failed_modules:
++                        local = replace(local, admission_ready=False)
+                     authority = sampled.manual_authority
+                     local = replace(
+                         local,
+@@ -525,6 +525,26 @@
+                         await settings.close()
+                     if video_factory is not None:
+                         await asyncio.to_thread(video_factory.close)
++
++        async def background_fault(name: str) -> None:
++            # Stop the failed task driver, persist pause/revoke through its sole owner.
++            gate.invalidate()
++            executor.context = replace(context, admission_ready=False)
++            if not await pause_failed_tasks(executor):
++                agent.report_runtime_event(
++                    {
++                        "module": "tasks",
++                        "phase": "unconfirmed",
++                        "detail": "task pause/revocation is pending",
++                    }
++                )
++
++        event_fd = os.environ.get(READ_FD)
++
++        async def lifecycle_loop() -> None:
++            assert event_fd is not None
++            await observe(int(event_fd), agent.report_runtime_event)
++            # EOF is already recorded by observe; no global shutdown or restart.
+ 
+         async def logs_loop() -> None:
+             if log_connection is not None:
+@@ -562,9 +582,12 @@
+             motion=motion,
+             video_session=video_session,
+             map_root=config.database_path.parent / "map-transfer",
+-            background={"tasks": task_loop, "logs": logs_loop}
+-            if logs is not None
+-            else {"tasks": task_loop},
++            background={
++                "tasks": task_loop,
++                **({"logs": logs_loop} if logs is not None else {}),
++                **({"observer": lifecycle_loop} if event_fd is not None else {}),
++            },
++            background_fault=background_fault,
+             cleanup=cleanup,
+             # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
+         )
+--- a/src/senior_control/agent/main.py
++++ b/src/senior_control/agent/main.py
+@@ -40,6 +40,7 @@
+ from senior_control.observability import Metrics
+ from senior_control.protocol import (
+     HEARTBEAT_INTERVAL_SECONDS,
++    EmptyPayload,
+     Envelope,
+     ManualIntentEnvelope,
+     OperationEnvelope,
+@@ -129,6 +130,7 @@
+         map_root: Path = Path("map-transfer"),
+         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
+         cleanup: Callable[[], Awaitable[None]] | None = None,
++        background_fault: Callable[[str], Awaitable[None]] | None = None,
+         heartbeat_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+         retry_delay: float = 1.0,
+         command_ttl_seconds: float = 0.3,
+@@ -159,6 +161,12 @@
+         self._deadlines = deadlines if deadlines is not None else Deadlines()
+         self._background = dict(background or {})
+         self._cleanup = cleanup
++        self._background_fault_handler = background_fault
++        self.module_faults: dict[str, dict[str, Any]] = {}
++        self._failed_modules: set[str] = set()
++        self._failed_manual_authority: str | None = None
++        self._manual_epoch_failed: int | None = None
++        self._safety_fault_task: asyncio.Task[None] | None = None
+         self._stragglers: set[asyncio.Task[Any]] = set()
+         self._heartbeat_seconds = heartbeat_seconds
+         self._retry_delay = retry_delay
+@@ -218,6 +226,11 @@
+         return self._epoch
+ 
+     @property
++    def failed_modules(self) -> frozenset[str]:
++        # Local lifecycle policy is never sourced from reporting-channel messages.
++        return frozenset(self._failed_modules)
++
++    @property
+     def motion_allowed(self) -> bool:
+         supervisor = self._supervisor
+         return supervisor is not None and supervisor.motion_allowed and not self._stopping
+@@ -240,7 +253,7 @@
+             background=self._background,
+             heartbeat_seconds=self._heartbeat_seconds,
+             retry_delay=self._retry_delay,
+-            on_fault=self._supervisor_fault,
++            on_fault=self._background_fault,
+         )
+         self._supervisor = supervisor
+         self._log("startup")
+@@ -253,14 +266,58 @@
+         finally:
+             await self._release()
+ 
++    def report_runtime_event(self, event: dict[str, Any]) -> None:
++        # Only reporting metadata. No event grants motion or changes the safety owner.
++        module = event["module"]
++        if module not in self.module_faults and len(self.module_faults) >= 32:
++            module = "observer"
++        if event["phase"] == "ready":
++            if module in self.failed_modules:
++                return  # Reporting cannot revive a stopped local module.
++            self.module_faults.pop(module, None)
++        else:
++            self.module_faults[module] = dict(event)
++        level = logging.INFO if event["phase"] in {"ready", "starting"} else logging.ERROR
++        logger.log(
++            level, "runtime module %s: %s %s", module, event["phase"], event.get("detail", "")
++        )
++
++    async def _background_fault(self, name: str, reason: str) -> None:
++        self._failed_modules.add(name)
++        if name != "observer" or "observer" not in self.module_faults:
++            self.report_runtime_event({"module": name, "phase": "failed", "detail": reason})
++        if name == "tasks" and self._background_fault_handler is not None:
++            await self._quietly(
++                self._background_fault_handler(name), context="failed task revocation"
++            )
++
+     def _supervisor_fault(self, reason: str) -> None:
+-        self.runtime_failed = True
+-        self.request_shutdown()
++        self.report_runtime_event(
++            {"module": "motion_delivery", "phase": "unconfirmed", "detail": reason}
++        )
++        self._manual_epoch_failed = self._last_epoch
++        self._discard_queued_intent()
++        self._invalidate_gate()
++        if not self._stopping and (
++            self._safety_fault_task is None or self._safety_fault_task.done()
++        ):
++            self._safety_fault_task = self._spawn(self._retire_failed_delivery(self._last_epoch))
++
++    async def _retire_failed_delivery(self, epoch: int) -> None:
++        async def disable() -> None:
++            await self._quietly(self._motion.disable(epoch), context="manual source retirement")
++
++        async def pause_tasks() -> None:
++            if self._background_fault_handler is not None:
++                await self._quietly(
++                    self._background_fault_handler("motion_delivery"),
++                    context="task source revocation",
++                )
++
++        await asyncio.gather(disable(), pause_tasks())
+ 
+     def _safety_fault(self) -> None:
+-        self.auth_rejected = True
+-        self.runtime_failed = True
+-        self.request_shutdown()
++        self._supervisor_fault("safety delivery unconfirmed; vehicle owner state is unknown")
+ 
+     def request_shutdown(self) -> None:
+         """Synchronous and signal-safe: motion is revoked before anything else happens."""
+@@ -283,6 +340,7 @@
+         await self._settle_safety()
+ 
+     async def _release(self) -> None:
++        self._stopping = True
+         self._log("shutdown")
+         inflight = list(self._inflight)
+         for task in inflight:
+@@ -312,16 +370,22 @@
+             self._stragglers.update(pending)
+             for task in pending:
+                 task.add_done_callback(self._straggler_finished)
+-            self.runtime_failed = True
+-            self.request_shutdown()
+-            logger.error("inflight work did not stop before shutdown deadline")
++            if self._stopping:
++                self.runtime_failed = True
++            self.report_runtime_event(
++                {
++                    "module": "retired_work",
++                    "phase": "unconfirmed",
++                    "detail": "inflight work did not stop before shutdown deadline",
++                }
++            )
+ 
+     def _straggler_finished(self, task: asyncio.Task[Any]) -> None:
+         self._stragglers.discard(task)
+         if not task.cancelled():
+             task.exception()
+ 
+-    async def _quietly(self, call: Awaitable[Any]) -> None:
++    async def _quietly(self, call: Awaitable[Any], *, context: str = "shutdown step") -> None:
+         task = asyncio.ensure_future(call)
+         try:
+             done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety)
+@@ -334,13 +398,14 @@
+             task.cancel()
+             self._stragglers.add(task)
+             task.add_done_callback(self._straggler_finished)
+-            self.runtime_failed = True
+-            logger.error("shutdown step exceeded its deadline")
++            if self._stopping:
++                self.runtime_failed = True
++            logger.error("%s exceeded its deadline", context)
+             return
+         try:
+             task.result()
+         except Exception:
+-            logger.exception("shutdown step failed")
++            logger.exception("%s failed", context)
+ 
+     # ------------------------------------------------------------------ cloud link
+ 
+@@ -493,7 +558,8 @@
+             return
+         if overflow:
+             self._safety_fault()
+-            raise ConnectionError("safety command capacity exceeded")
++            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
++            return
+         try:
+             if self._admit_native_estop(envelope):
+                 self._spawn(self._reply(link, envelope, status=OperationStatus.SUCCEEDED))
+@@ -558,10 +624,8 @@
+                 if envelope.seq > existing[1].seq:
+                     self._safety_pending[key] = (link, envelope)
+             elif len(self._safety_pending) >= MAX_SAFETY_PENDING:
+-                self.auth_rejected = True
+-                self.runtime_failed = True
+-                self.request_shutdown()
+-                raise ConnectionError("agent safety capacity exceeded")
++                self._safety_fault()
++                raise DomainError(ErrorCode.UNAVAILABLE, "agent safety capacity exceeded")
+             else:
+                 self._safety_pending[key] = (link, envelope)
+             if self._safety_task is None or self._safety_task.done():
+@@ -599,13 +663,33 @@
+             except (OSError, ConnectionError, IpcError):
+                 logger.exception("manual stream transport failed")
+                 self._invalidate_gate()
+-                await link.close()
++                self._failed_manual_authority = envelope.payload.authority_id
++                self._discard_queued_intent()
++                self.report_runtime_event(
++                    {
++                        "module": "manual",
++                        "phase": "unconfirmed",
++                        "detail": "manual IPC failed",
++                    }
++                )
++                # Retire exactly this authority through the existing native owner.
++                release = SimpleEnvelope(
++                    **envelope.model_dump(exclude={"type", "payload"}),
++                    type="control.release",
++                    payload=EmptyPayload(authority_id=envelope.payload.authority_id),
++                )
++                await self._quietly(
++                    self._motion.manual(release), context="manual authority release"
++                )
+                 return
+             finally:
+                 self._intent_queue.finish(id(envelope), time.monotonic())
+ 
+     def _safety_finished(self, task: asyncio.Task[None]) -> None:
+-        if task.cancelled() or task.exception() is not None:
++        if task.cancelled():
++            self._safety_fault()
++        elif (error := task.exception()) is not None:
++            logger.error("safety delivery worker failed", exc_info=error)
+             self._safety_fault()
+ 
+     async def _drain_safety(self) -> None:
+@@ -699,8 +783,13 @@
+         self._inflight.add(task)
+         self._report_queues()
+         task.add_done_callback(self._inflight.discard)
++        task.add_done_callback(self._work_finished)
+         task.add_done_callback(lambda _: self._report_queues())
+         return task
++
++    def _work_finished(self, task: asyncio.Task[None]) -> None:
++        if not task.cancelled() and (error := task.exception()) is not None:
++            logger.error("agent request failed", exc_info=error)
+ 
+     async def _answer(self, link: Link, envelope: Envelope) -> None:
+         try:
+@@ -769,6 +858,12 @@
+         status: OperationStatus | None = None,
+         data: dict[str, Any] | None = None,
+     ) -> None:
++        if (
++            link is not self._link
++            or envelope.connection_epoch != self._epoch
++            or asyncio.current_task() in self._stragglers
++        ):
++            return
+         request_type: Any = envelope.type
+         shown = result.status if result is not None else status
+         operation_id = (
+@@ -911,6 +1006,10 @@
+                 ErrorCode.OPERATION_UNKNOWN, "manual acknowledgement is unknown"
+             ) from exc
+         if envelope.type == "control.acquire":
++            if reply["authority_id"] == self._failed_manual_authority:
++                raise DomainError(
++                    ErrorCode.UNAVAILABLE, "manual authority retirement is unconfirmed"
++                )
+             return ManualOperationResult(
+                 envelope.request_id,
+                 OperationStatus.SUCCEEDED,
+@@ -952,6 +1051,21 @@
+ 
+     def _admit(self, envelope: Envelope) -> None:
+         """A first-time command needs a live link, the current epoch, and an unexpired deadline."""
++        if asyncio.current_task() in self._stragglers:
++            raise DomainError(ErrorCode.CONFLICT, "retired work cannot issue commands")
++        starts_task = envelope.type in {"navigation.goal", "navigation.return_home"} or (
++            isinstance(envelope, TaskExecutionEnvelope) and envelope.payload.action == "resume"
++        )
++        if starts_task and "tasks" in self.failed_modules:
++            raise DomainError(ErrorCode.UNAVAILABLE, "task runtime is unavailable")
++        if envelope.type in {"control.acquire", "drive.intent"}:
++            if self._manual_epoch_failed == envelope.connection_epoch:
++                raise DomainError(ErrorCode.UNAVAILABLE, "manual delivery is unavailable")
++            if (
++                isinstance(envelope, ManualIntentEnvelope)
++                and envelope.payload.authority_id == self._failed_manual_authority
++            ):
++                raise DomainError(ErrorCode.UNAVAILABLE, "manual authority was retired")
+         if self._link is None or self._revoked_link is self._link:
+             raise DomainError(ErrorCode.OFFLINE, "robot is not connected to the server")
+         if envelope.connection_epoch != self._epoch:
+@@ -982,6 +1096,17 @@
+         if deleted is None:
+             deleted = await self._journal.deleted_task_ids()
+         home = live.home
++        ui = dict(live.vehicle_ui or {})
++        if self.module_faults:
++            ui["module_faults"] = dict(self.module_faults)
++            capabilities = list(ui.get("capabilities", []))
++            if "tasks" in self.failed_modules:
++                capabilities = [c for c in capabilities if c != "task.execution.v1"]
++            if self._manual_epoch_failed == self._epoch:
++                capabilities = [c for c in capabilities if c != "motion.intent.v1"]
++            if "logs" in self.failed_modules:
++                capabilities = [c for c in capabilities if c != "logs.v1"]
++            ui["capabilities"] = capabilities
+         snapshot = RobotSnapshot(
+             robot_id=self.robot_id,
+             connected=self.connected,
+@@ -1000,7 +1125,7 @@
+             robot_pose=live.robot_pose,
+             navigation_block_reason=live.navigation_block_reason,
+             scan_points=live.scan_points,
+-            vehicle_ui=live.vehicle_ui,
++            vehicle_ui=ui if self.module_faults else live.vehicle_ui,
+             manual_controller_generation=live.manual_controller_generation,
+             manual_agent_epoch=live.manual_agent_epoch,
+         )
+--- a/src/senior_control/docker_start_helper.py
++++ b/src/senior_control/docker_start_helper.py
+@@ -34,7 +34,7 @@
+     return [info.st_dev, info.st_ino, info.st_uid]
+ 
+ 
+-def _record(path: Path, expected: list[int] | None = None) -> None:
++def _record(path: Path, expected: list[int] | None = None, *, run_id: str | None = None) -> None:
+     identity = _identity(path)
+     if expected is not None and identity != expected:
+         raise ValueError("IPC socket changed before ownership recording")
+@@ -43,7 +43,7 @@
+     # The enclosing private directory and instance lock protect this ownership record.
+     fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+     with os.fdopen(fd, "w") as file:
+-        json.dump(identity, file)
++        json.dump(identity if run_id is None else {"identity": identity, "run_id": run_id}, file)
+     os.replace(temporary, marker)
+ 
+ 
+@@ -60,6 +60,9 @@
+         marker = path.with_suffix(".owner.json")
+         try:
+             owned = json.loads(marker.read_text())
++            # //Compatible: pre-isolation ownership records contain only the identity list.
++            if isinstance(owned, dict):
++                owned = owned.get("identity")
+         except (OSError, ValueError):
+             owned = None
+         if owned != identity or _identity(path) != identity:
+@@ -314,6 +317,8 @@
+     *,
+     profile: "VehicleProfile | None" = None,
+ ) -> int:
++    from senior_control.runtime.lifecycle_events import LifecycleEvents
++
+     private_directory(root)
+     fd = os.open(root / ".agent-service.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+     with os.fdopen(fd, "wb") as lock:
+@@ -324,29 +329,26 @@
+         motion_stack: asyncio.subprocess.Process | None = None
+         camera_stack: asyncio.subprocess.Process | None = None
+         adapter_identity: list[int] | None = None
+-        adapter_command = None
+-        robot_id = ""
+-        # //Compatible: direct supervisor callers may still manage a single arbitrary child.
+-        if profile is not None:
+-            robot_id = read_credentials(root / "device.json").robot_id
+-            adapter_command = _adapter_command(profile, robot_id)
++        robot_id = read_credentials(root / "device.json").robot_id if profile is not None else ""
+         from senior_control.motion.startup_learning import start_environment
++        from senior_control.runtime.learning_service import LearningService
+ 
+         environment = start_environment(environment, root)
+-        from senior_control.runtime.learning_service import LearningService
+-
+         learning_service = LearningService(Path(environment["SENIOR_STARTUP_LEARNING_CLAIM"]))
+         if profile is not None:
+-            # Hardware deployment must not inherit a simulation identity or clock policy.
+             for key in tuple(environment):
+                 if key.startswith("SENIOR_SIMULATION_") or key.startswith("SENIOR_MOTION_CORE_"):
+                     environment.pop(key)
+             environment["ROS_LOCALHOST_ONLY"] = "0"
++            environment["SENIOR_VERIFIED_ADAPTER_RUN"] = Path(
++                environment["SENIOR_STARTUP_LEARNING_CLAIM"]
++            ).name
+         environment.update(ROS_HOME=str(root / "ros-home"), ROS_LOG_DIR=str(root / "ros-log"))
+         environment.pop("SENIOR_EXPECTED_ROS_DOMAIN", None)
+         if profile is not None and profile.ros_domain is not None:
+             environment["SENIOR_EXPECTED_ROS_DOMAIN"] = str(profile.ros_domain)
+             environment["ROS_DOMAIN_ID"] = str(profile.ros_domain)
++        events = LifecycleEvents() if profile is not None else None
+ 
+         async def handle(request: dict[str, Any]) -> dict[str, Any]:
+             if request["type"] == "status":
+@@ -359,38 +361,54 @@
+         server = IpcServer(root / "service.sock", handle, replace_existing=False)
+         loop = asyncio.get_running_loop()
+         signals = (signal.SIGINT, signal.SIGTERM)
+-        waiters: list[asyncio.Task[Any]] = []
+-        try:
+-            await learning_service.start()
+-            await _prepare_socket(root / "service.sock")
+-            if adapter_command is not None:
++        waiters: dict[asyncio.Task[Any], str] = {}
++        startup: asyncio.Task[None] | None = None
++
++        def watch(child: asyncio.subprocess.Process, name: str) -> None:
++            waiters[asyncio.create_task(child.wait())] = name
++
++        async def start_local() -> None:
++            nonlocal adapter, motion_stack, camera_stack, adapter_identity
++            assert profile is not None and events is not None
++            child_env = events.child_environment(environment)
++            try:
++                events.report("motion", "starting")
+                 await _prepare_socket(root / "agent.sock")
+-            await server.start()
+-            _record(root / "service.sock")
+-            for number in signals:
+-                loop.add_signal_handler(number, stopping.set)
+-            if adapter_command is not None:
+-                assert profile is not None
+-                motion_command = _motion_command(profile, robot_id)
+                 motion_stack = await asyncio.create_subprocess_exec(
+-                    *motion_command, env=environment, start_new_session=True
++                    *_motion_command(profile, robot_id),
++                    env=child_env,
++                    start_new_session=True,
++                    pass_fds=(events.writer,),
+                 )
+-                adapter = await asyncio.create_subprocess_exec(*adapter_command, env=environment)
+-                assert profile is not None
++                adapter = await asyncio.create_subprocess_exec(
++                    *_adapter_command(profile, robot_id),
++                    env=environment,
++                    start_new_session=True,
++                )
+                 adapter_identity = await _wait_for_adapter(
+                     root / "agent.sock", robot_id, profile.ros_domain, adapter, stopping
+                 )
++                if adapter_identity is not None:
++                    _record(
++                        root / "agent.sock",
++                        adapter_identity,
++                        run_id=environment["SENIOR_VERIFIED_ADAPTER_RUN"],
++                    )
++            except (OSError, ValueError, IpcError) as exc:
++                events.report("motion", "unavailable", str(exc))
++                await _terminate_motion_stack(adapter)
++                await _terminate_motion_stack(motion_stack)
++                adapter = motion_stack = None
++                return
+             if stopping.is_set():
+-                return 0
+-            process = await asyncio.create_subprocess_exec(*command, env=environment)
+-            exited = asyncio.create_task(process.wait())
+-            # Adapter verified and Agent started, still under .agent-service.lock.
+-            # Let child-exit callbacks run before accepting Agent liveness.
++                return
++            assert adapter is not None and motion_stack is not None
++            watch(motion_stack, "motion")
++            watch(adapter, "adapter")
+             await asyncio.sleep(0)
+             if (
+                 adapter_identity is not None
+-                and adapter is not None
+-                and motion_stack is not None
++                and process is not None
+                 and all(child.returncode is None for child in (process, adapter, motion_stack))
+                 and not stopping.is_set()
+             ):
+@@ -401,57 +419,74 @@
+                     environment["SENIOR_STARTUP_LEARNING_CLAIM"],
+                     peer_lock_name=".senior-simulator.lock",
+                 )
+-            requested = asyncio.create_task(stopping.wait())
+-            waiters = [exited, requested]
+-            if motion_stack is not None:
+-                waiters.append(asyncio.create_task(motion_stack.wait()))
+-            if adapter is not None:
+-                waiters.append(asyncio.create_task(adapter.wait()))
+-            camera_exited = None
+-            if motion_stack is not None and profile is not None:
+-                # Camera/video is optional for the laser-only motion chain.
+-                # Give it a separate launch/process group, started after IPC/Agent
+-                # readiness, so camera crashes cannot stop safety state reporting.
+-                try:
+-                    camera_stack = await asyncio.create_subprocess_exec(
+-                        *_ros_launch_command(
+-                            profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
+-                        ),
+-                        env=environment,
+-                        start_new_session=True,
+-                    )
+-                    camera_exited = asyncio.create_task(camera_stack.wait())
+-                    waiters.append(camera_exited)
+-                except OSError as exc:
+-                    print(f"Camera unavailable: {exc}", file=sys.stderr)
++            events.report("motion", "ready", "adapter verified; cloud status independent")
++            try:
++                camera_stack = await asyncio.create_subprocess_exec(
++                    *_ros_launch_command(
++                        profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
++                    ),
++                    env=child_env,
++                    start_new_session=True,
++                    pass_fds=(events.writer,),
++                )
++                watch(camera_stack, "camera")
++            except (OSError, ValueError) as exc:
++                events.report("camera", "unavailable", str(exc))
++
++        try:
++            await learning_service.start()
++            await _prepare_socket(root / "service.sock")
++            await server.start()
++            _record(root / "service.sock")
++            for number in signals:
++                loop.add_signal_handler(number, stopping.set)
++            # //Compatible: profile=None still propagates a single arbitrary child's exit.
++            agent_env = events.agent_environment(environment) if events else environment
++            process = await asyncio.create_subprocess_exec(
++                *command, env=agent_env, pass_fds=(events.reader,) if events else ()
++            )
++            if events:
++                events.close_reader()
++            if process.returncode is not None:
++                return await process.wait()
++            watch(process, "agent")
++            waiters[asyncio.create_task(stopping.wait())] = "stop"
++            if profile is not None:
++                startup = asyncio.create_task(start_local())
++                waiters[startup] = "startup"
+             while True:
+                 done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+-                if camera_exited is not None and camera_exited in done:
+-                    print(
+-                        f"Camera launch exited ({camera_exited.result()}); "
+-                        "video unavailable; motion supervision remains active.",
+-                        file=sys.stderr,
+-                    )
+-                    waiters.remove(camera_exited)
+-                    await _terminate_motion_stack(camera_stack)
+-                    camera_stack = None
+-                    camera_exited = None
+-                    if len(done) == 1:
++                if stopping.is_set():
++                    return 0
++                if process.returncode is not None:
++                    return await process.wait()
++                for task in done:
++                    name = waiters.pop(task)
++                    result = task.result()
++                    if name == "agent":
++                        return int(result)
++                    if name == "startup":
+                         continue
+-                break
+-            if stopping.is_set():
+-                return 0
+-            if motion_stack is not None and motion_stack.returncode is not None:
+-                return 1
+-            if adapter is not None and adapter.returncode is not None:
+-                return 1
+-            return await exited
++                    assert events is not None
++                    events.report(name, "exited", returncode=result)
++                    if name == "motion":
++                        await _terminate_motion_stack(motion_stack)
++                        motion_stack = None
++                    elif name == "adapter":
++                        await _terminate_motion_stack(adapter)
++                        adapter = None
++                    elif name == "camera":
++                        await _terminate_motion_stack(camera_stack)
++                        camera_stack = None
+         finally:
++            if startup is not None and not startup.done():
++                startup.cancel()
++                await asyncio.gather(startup, return_exceptions=True)
+             try:
+                 await _terminate(process, 20)
+             finally:
+                 try:
+-                    await _terminate(adapter, 5)
++                    await _terminate_motion_stack(adapter)
+                 finally:
+                     try:
+                         await _terminate_motion_stack(motion_stack)
+@@ -467,6 +502,8 @@
+                     if os.path.lexists(path) and _identity(path) == adapter_identity:
+                         path.unlink()
+             finally:
++                if events:
++                    events.close()
+                 await server.close()
+                 await learning_service.close()
+                 for number in signals:
+--- a/src/senior_control/runtime/ipc.py
++++ b/src/senior_control/runtime/ipc.py
+@@ -237,6 +237,11 @@
+                     request = await _read(reader)
+                 except IpcError:
+                     return
++                # An identity handshake precedes either dedicated connection mode.
++                if stream is None and request.get("type") == "identity":
++                    writer.write(_encode(await self._answer(request)))
++                    await writer.drain()
++                    continue
+                 notification = request.get("type") == "manual_intent"
+                 if stream is None:
+                     stream = notification
+@@ -284,7 +289,18 @@
+ class IpcClient:
+     """Agent-side requester. One request in flight; a failure drops the connection."""
+ 
+-    def __init__(self, path: Path, *, timeout: float = 1.0) -> None:
++    def __init__(
++        self,
++        path: Path,
++        *,
++        timeout: float = 1.0,
++        robot_id: str | None = None,
++        ros_domain: int | None = None,
++        owner_record: str | None = None,
++    ) -> None:
++        self._owner_record = owner_record
++        self._robot_id = robot_id
++        self._ros_domain = ros_domain
+         self._text = _check_path(path)
+         self._timeout = timeout
+         self._lock = asyncio.Lock()
+@@ -336,7 +352,48 @@
+ 
+     async def _write(self, frame: bytes) -> None:
+         if self._writer is None or self._reader is None:
++            identity_before = None
++            if self._owner_record:
++                # The supervisor writes this existing marker only after PID/UID peer proof.
++                path = Path(self._text)
++                try:
++                    info = path.lstat()
++                    identity_before = [info.st_dev, info.st_ino, info.st_uid]
++                    recorded = json.loads(path.with_suffix(".owner.json").read_bytes())
++                    if (
++                        not stat.S_ISSOCK(info.st_mode)
++                        or info.st_uid != os.geteuid()
++                        or not isinstance(recorded, dict)
++                        or recorded.get("identity") != identity_before
++                        or recorded.get("run_id") != self._owner_record
++                    ):
++                        raise IpcError("adapter peer has not been verified by its owner")
++                except (OSError, ValueError) as exc:
++                    raise IpcError("adapter ownership record unavailable") from exc
+             self._reader, self._writer = await asyncio.open_unix_connection(self._text)
++            if identity_before is not None:
++                info = Path(self._text).lstat()
++                if [info.st_dev, info.st_ino, info.st_uid] != identity_before:
++                    raise IpcError("adapter socket changed during connection")
++            if self._robot_id is not None:
++                # Each new connection proves identity before any business/stream frame.
++                self._writer.write(
++                    _encode({"v": PROTOCOL_VERSION, "type": "identity", "robot_id": self._robot_id})
++                )
++                await self._writer.drain()
++                identity = await _read(self._reader)
++                if (
++                    identity.get("v") != PROTOCOL_VERSION
++                    or identity.get("ok") is not True
++                    or (
++                        self._ros_domain is not None
++                        and (
++                            type(identity.get("ros_domain")) is not int
++                            or identity["ros_domain"] != self._ros_domain
++                        )
++                    )
++                ):
++                    raise IpcError("ROS adapter identity/domain mismatch")
+         self._writer.write(frame)
+         await self._writer.drain()
+ 
+--- /dev/null
++++ b/src/senior_control/runtime/lifecycle_events.py
+@@ -0,0 +1,108 @@
++"""Bounded, one-way local lifecycle facts; never a motion or recovery transport."""
++
++import asyncio
++import json
++import logging
++import os
++from collections.abc import Callable, Mapping
++from typing import Any
++
++logger = logging.getLogger(__name__)
++READ_FD = "SENIOR_RUNTIME_EVENTS_READ_FD"
++WRITE_FD = "SENIOR_RUNTIME_EVENTS_WRITE_FD"
++MAX_EVENT_BYTES = 2048  # Below POSIX PIPE_BUF: concurrent lifecycle writers stay atomic.
++
++
++def emit(fd: int, module: str, phase: str, detail: str = "", **facts: Any) -> bool:
++    value = {"module": module[:64], "phase": phase[:64], "detail": detail[:256], **facts}
++    raw = json.dumps(value, ensure_ascii=True).encode() + b"\n"
++    if len(raw) > MAX_EVENT_BYTES:
++        return False
++    try:
++        return os.write(fd, raw) == len(raw)
++    except OSError:
++        # Full pipe or closed observer must never delay the process owner.
++        return False
++
++
++class LifecycleEvents:
++    def __init__(self) -> None:
++        self.reader, self.writer = os.pipe()
++        os.set_blocking(self.writer, False)
++        self.lost = 0
++
++    def agent_environment(self, environment: Mapping[str, str]) -> dict[str, str]:
++        result = dict(environment)
++        result.pop(WRITE_FD, None)
++        result[READ_FD] = str(self.reader)
++        return result
++
++    def child_environment(self, environment: Mapping[str, str]) -> dict[str, str]:
++        result = dict(environment)
++        result.pop(READ_FD, None)
++        result[WRITE_FD] = str(self.writer)
++        return result
++
++    def report(self, module: str, phase: str, detail: str = "", **facts: Any) -> None:
++        logger.warning("runtime lifecycle %s %s: %s %s", module, phase, detail, facts)
++        if emit(self.writer, module, phase, detail, lost=self.lost, **facts):
++            self.lost = 0
++        else:
++            self.lost += 1
++
++    def close_reader(self) -> None:
++        if self.reader >= 0:
++            os.close(self.reader)
++            self.reader = -1
++
++    def close(self) -> None:
++        self.close_reader()
++        if self.writer >= 0:
++            os.close(self.writer)
++            self.writer = -1
++
++
++def report_ros_exit(event: Any, context: Any) -> list[Any]:
++    """Launch sees its own children; record facts without a global Shutdown event."""
++    detail = f"pid={event.pid} returncode={event.returncode}"
++    logger.error("ROS process exited: %s", detail)
++    raw = os.environ.get(WRITE_FD)
++    if raw is not None:
++        emit(int(raw), "ros_child", "exited", detail, pid=event.pid, returncode=event.returncode)
++    return []
++
++
++async def observe(fd: int, receive: Callable[[dict[str, Any]], None]) -> None:
++    reader = asyncio.StreamReader(limit=MAX_EVENT_BYTES)
++    protocol = asyncio.StreamReaderProtocol(reader)
++    transport, _ = await asyncio.get_running_loop().connect_read_pipe(
++        lambda: protocol, os.fdopen(fd, "rb", buffering=0)
++    )
++    try:
++        while True:
++            try:
++                raw = await reader.readline()
++            except ValueError:
++                receive({"module": "observer", "phase": "unavailable", "detail": "oversize frame"})
++                return
++            if not raw:
++                receive({"module": "observer", "phase": "unavailable", "detail": "lifecycle EOF"})
++                return
++            try:
++                value = json.loads(raw)
++                if (
++                    not isinstance(value, dict)
++                    or not isinstance(value.get("module"), str)
++                    or not isinstance(value.get("phase"), str)
++                    or not isinstance(value.get("detail"), str)
++                    or len(value["module"]) > 64
++                    or len(value["phase"]) > 64
++                    or len(value["detail"]) > 256
++                ):
++                    raise ValueError("invalid lifecycle frame")
++            except (ValueError, UnicodeError):
++                receive({"module": "observer", "phase": "unavailable", "detail": "invalid frame"})
++                continue
++            receive(value)
++    finally:
++        transport.close()
+--- a/src/senior_control/runtime/supervisor.py
++++ b/src/senior_control/runtime/supervisor.py
+@@ -31,7 +31,7 @@
+         retry_delay: float = 1.0,
+         max_retry_delay: float | None = None,
+         shutdown_timeout: float = 1.0,
+-        on_fault: Callable[[str], None] | None = None,
++        on_fault: Callable[[str, str], Awaitable[None]] | None = None,
+     ) -> None:
+         if (
+             heartbeat_seconds <= 0
+@@ -108,10 +108,9 @@
+             self.revoked_reason = reason
+             logger.error("motion revoked: %s", reason)
+ 
+-    def _fault(self, reason: str) -> None:
+-        self._revoke(reason)
++    async def _fault(self, name: str, reason: str) -> None:
+         if self._on_fault is not None:
+-            self._on_fault(reason)
++            await self._on_fault(name, reason)
+ 
+     async def _heartbeat_loop(self) -> None:
+         loop = asyncio.get_running_loop()
+@@ -137,10 +136,10 @@
+         except Exception:
+             logger.exception("background task %s failed", name)
+             if self._running:
+-                self._fault(f"background task {name} failed")
++                await self._fault(name, f"background task {name} failed")
+         else:
+             if self._running:
+-                self._fault(f"background task {name} ended")
++                await self._fault(name, f"background task {name} ended")
+ 
+     async def _uplink_loop(self, connect: Callable[[], Awaitable[bool | None]]) -> None:
+         delay = self._retry_delay
+--- a/src/senior_control/simulation_cli.py
++++ b/src/senior_control/simulation_cli.py
+@@ -14,6 +14,7 @@
+ import sys
+ from pathlib import Path
+ from tempfile import TemporaryDirectory
++from typing import Any
+ from urllib.parse import urlsplit
+ 
+ from senior_control.agent.pairing import Credentials, read_credentials
+@@ -258,6 +259,8 @@
+     learning_service = LearningService(Path(env["SENIOR_STARTUP_LEARNING_CLAIM"]))
+     env.pop("NOTIFY_SOCKET", None)
+     env.pop("SENIOR_SIMULATION_VIDEO_FRAME", None)
++    env.pop("SENIOR_VERIFIED_ADAPTER_RUN", None)
++    env.pop("SENIOR_EXPECTED_ROS_DOMAIN", None)
+     camera = TemporaryDirectory(prefix=".camera-", dir=root) if profile.video else None
+     video_args: list[str] = []
+     if camera is not None:
+@@ -280,66 +283,113 @@
+     loop = asyncio.get_running_loop()
+     for signum in (signal.SIGINT, signal.SIGTERM):
+         loop.add_signal_handler(signum, stop.set)
++    from senior_control.docker_start_helper import _terminate_motion_stack
++    from senior_control.runtime.lifecycle_events import LifecycleEvents
++
++    events = LifecycleEvents()
+     ros = None
+     agent = None
++    startup = None
++    waiters: dict[asyncio.Task[Any], str] = {}
++    socket_path = profile.socket
++
++    async def start_local() -> None:
++        nonlocal ros
++        try:
++            events.report("ros", "starting")
++            ros = await asyncio.create_subprocess_exec(
++                "/bin/bash",
++                "-c",
++                'source "$1" || exit; shift; exec "$@"',
++                "senior-ros",
++                str(profile.ros_setup),
++                *(["xvfb-run", "-a"] if headless else []),
++                "ros2",
++                "launch",
++                "senior_robot",
++                "simulation_motion.launch.py",
++                f"headless:={str(headless).lower()}",
++                "qualified_reference:=true",
++                *video_args,
++                f"agent_socket:={profile.socket}",
++                f"robot_id:={credentials.robot_id}",
++                env=events.child_environment(env),
++                start_new_session=True,
++                pass_fds=(events.writer,),
++            )
++            assert socket_path is not None
++            await _wait_for_adapter(socket_path, credentials.robot_id, ros, stop)
++        except (OSError, ValueError, IpcError) as exc:
++            events.report("ros", "unavailable", str(exc))
++            if ros is not None:
++                await _terminate_motion_stack(ros)
++                ros = None
++            return
++        if stop.is_set():
++            return
++        assert ros is not None
++        waiters[asyncio.create_task(ros.wait())] = "ros"
++        await asyncio.sleep(0)
++        assert agent is not None
++        if ros.returncode is None and agent.returncode is None and not stop.is_set():
++            from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
++
++            cleanup_old_learning_files(
++                root, env["SENIOR_STARTUP_LEARNING_CLAIM"], peer_lock_name=".agent-service.lock"
++            )
++        events.report("ros", "ready", "adapter verified; cloud status independent")
++
+     try:
+         await learning_service.start()
+-        ros = await asyncio.create_subprocess_exec(
+-            "/bin/bash",
+-            "-c",
+-            'source "$1" || exit; shift; exec "$@"',
+-            "senior-ros",
+-            str(profile.ros_setup),
+-            *(["xvfb-run", "-a"] if headless else []),
+-            "ros2",
+-            "launch",
+-            "senior_robot",
+-            "simulation_motion.launch.py",
+-            f"headless:={str(headless).lower()}",
+-            "qualified_reference:=true",
+-            *video_args,
+-            f"agent_socket:={profile.socket}",
+-            f"robot_id:={credentials.robot_id}",
+-            env=env,
+-        )
+-        await _wait_for_adapter(profile.socket, credentials.robot_id, ros, stop)
+-        if stop.is_set():
+-            return 0
+         agent = await asyncio.create_subprocess_exec(
+             sys.executable,
+             "-m",
+             "senior_control.agent.main",
+-            env=env,
++            env=events.agent_environment(env),
++            pass_fds=(events.reader,),
+         )
+-        # main() retains both existing simulation ownership locks here.
+-        # No cleanup occurs on readiness failure or subsequent child restarts.
+-        await asyncio.sleep(0)
+-        if ros.returncode is None and agent.returncode is None and not stop.is_set():
+-            from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
+-
+-            cleanup_old_learning_files(
+-                root,
+-                env["SENIOR_STARTUP_LEARNING_CLAIM"],
+-                peer_lock_name=".agent-service.lock",
+-            )
+-        _notify("READY=1\nSTATUS=ROS adapter verified. Agent started, cloud status unverified.")
+-        waiters = [asyncio.create_task(wait) for wait in (stop.wait(), ros.wait(), agent.wait())]
+-        try:
+-            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+-            return 0 if stop.is_set() else 1
+-        finally:
+-            for waiter in waiters:
++        events.close_reader()
++        if agent.returncode is not None:
++            return await agent.wait()
++        _notify("READY=1\nSTATUS=Agent started, cloud and ROS status unverified.")
++        startup = asyncio.create_task(start_local())
++        waiters = {
++            asyncio.create_task(stop.wait()): "stop",
++            asyncio.create_task(agent.wait()): "agent",
++            startup: "startup",
++        }
++        while True:
++            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
++            if stop.is_set():
++                return 0
++            if agent.returncode is not None:
++                return await agent.wait()
++            for waiter in done:
++                name = waiters.pop(waiter)
++                result = waiter.result()
++                if name == "agent":
++                    return int(result)
++                if name == "ros":
++                    events.report("ros", "exited", returncode=result)
++                    await _terminate_motion_stack(ros)
++                    ros = None
++    finally:
++        if startup is not None and not startup.done():
++            startup.cancel()
++            await asyncio.gather(startup, return_exceptions=True)
++        for waiter in waiters:
++            if not waiter.done():
+                 waiter.cancel()
+-            await asyncio.gather(*waiters, return_exceptions=True)
+-    finally:
++        await asyncio.gather(*waiters, return_exceptions=True)
+         try:
+             if agent is not None:
+                 await _stop(agent, 12)
+         finally:
+             try:
+                 if ros is not None:
+-                    await _stop(ros, 10)
++                    await _terminate_motion_stack(ros)
+             finally:
++                events.close()
+                 for signum in (signal.SIGINT, signal.SIGTERM):
+                     loop.remove_signal_handler(signum)
+                 if camera is not None:
+--- a/tests/integration/test_runtime.py
++++ b/tests/integration/test_runtime.py
+@@ -59,7 +59,7 @@
+     assert "rclpy" not in sys.modules
+ 
+ 
+-async def test_background_failure_revokes_motion() -> None:
++async def test_background_failure_stops_only_its_watcher() -> None:
+     delivered: list[tuple[float, float]] = []
+     published: list[tuple[float, float]] = []
+     fail = asyncio.Event()
+@@ -94,7 +94,7 @@
+         fail.set()
+         await settle(0.1)
+ 
+-        assert supervisor.motion_allowed is False
++        assert supervisor.motion_allowed is True
+         await settle(0.1)
+         assert delivered == []
+         assert published == []
+--- /dev/null
++++ b/tests/integration/test_runtime_fault_isolation.py
+@@ -0,0 +1,578 @@
++"""Real Agent composition/log service; only OS children and remote sockets are fixtures."""
++
++import asyncio
++import json
++import os
++import tempfile
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++from agent_fakes import FakeConnector, FakeLink, until
++
++from senior_control.agent import composition
++from senior_control.agent.logs_wire import AgentLogConnection
++from senior_control.agent.main import Agent
++from senior_control.agent.pairing import Credentials
++from senior_control.runtime.ipc import IpcClient
++from senior_control.runtime.lifecycle_events import READ_FD, LifecycleEvents, report_ros_exit
++
++
++class LogSocket:
++    def __init__(self):
++        self.requests = asyncio.Queue()
++        self.replies = asyncio.Queue()
++
++    def __aiter__(self):
++        return self
++
++    async def __anext__(self):
++        return await self.requests.get()
++
++    async def send(self, raw):
++        await self.replies.put(json.loads(raw))
++
++
++class Child:
++    def __init__(self, name, runner=None, shutdown=None):
++        self.name, self.runner, self.shutdown = name, runner, shutdown
++        self.returncode = None
++        self.done = asyncio.Event()
++        self.pid = 900001
++        self.stopped = False
++        if runner:
++            runner.add_done_callback(lambda task: self.exit(task.result()))
++
++    async def wait(self):
++        await self.done.wait()
++        return self.returncode
++
++    def exit(self, code):
++        self.returncode = code
++        self.done.set()
++
++    def terminate(self):
++        self.stopped = True
++        if self.shutdown:
++            self.shutdown()
++        else:
++            self.exit(0)
++
++    def send_signal(self, _signum):
++        self.terminate()
++
++    def kill(self):
++        self.terminate()
++
++
++@pytest.mark.parametrize(
++    ("kind", "failure"),
++    [
++        (kind, failure)
++        for kind in ("real", "simulation")
++        for failure in ("spawn", "identity", "exit", "agent_exit")
++    ]
++    + [("real", "adapter_exit")],
++)
++async def test_supervise_local_fault_keeps_actual_agent_and_log_transport(
++    monkeypatch, kind, failure
++):
++    from senior_control import docker_start_helper as helper
++    from senior_control import simulation_cli
++
++    with tempfile.TemporaryDirectory(prefix="isolation-") as directory:
++        root = Path(directory).resolve()
++        link, log_socket = FakeLink(1), LogSocket()
++        agents, children = [], {}
++        local_ready = asyncio.Event()
++        spawn_calls = []
++
++        def installed(agent):
++            agents.append(agent)
++
++        async def logs_run(self, url, token):
++            await self.serve(log_socket)
++
++        monkeypatch.setattr(Agent, "install_signal_handlers", installed)
++        monkeypatch.setattr(composition, "WebSocketConnector", lambda *a: FakeConnector(link))
++        monkeypatch.setattr(AgentLogConnection, "run", logs_run)
++        credentials = Credentials(robot_id="robot-a", device_token="secret")
++        monkeypatch.setattr(helper, "read_credentials", lambda path: credentials)
++        monkeypatch.setattr(helper, "_motion_command", lambda *a: ["motion"])
++        monkeypatch.setattr(helper, "_adapter_command", lambda *a: ["adapter"])
++        monkeypatch.setattr(helper, "_ros_launch_command", lambda *a: ["camera"])
++        monkeypatch.setattr(simulation_cli, "_notify", lambda message: None)
++
++        async def group_stop(child):
++            if child is not None:
++                child.terminate()
++                await child.wait()
++
++        monkeypatch.setattr(helper, "_terminate_motion_stack", group_stop)
++
++        async def ready(*args):
++            if failure == "identity":
++                raise ValueError("foreign adapter identity")
++            local_ready.set()
++            return None
++
++        monkeypatch.setattr(helper, "_wait_for_adapter", ready)
++        monkeypatch.setattr(simulation_cli, "_wait_for_adapter", ready)
++
++        async def spawn(*args, env, **options):
++            is_agent = args[0] == "agent" or "senior_control.agent.main" in args
++            name = (
++                "agent"
++                if is_agent
++                else ("ros" if "simulation_motion.launch.py" in args else args[0])
++            )
++            spawn_calls.append(name)
++            if name in {"motion", "ros"} and failure == "spawn":
++                raise OSError("fixture ROS spawn failed")
++            if is_agent:
++                assert not children  # Report plane starts before every local child.
++                monkeypatch.setenv(READ_FD, str(os.dup(int(env[READ_FD]))))
++                monkeypatch.delenv("SENIOR_VERIFIED_ADAPTER_RUN", raising=False)
++                config = composition.AgentConfig(
++                    "robot-a",
++                    "wss://cloud.test/ws/agent",
++                    "secret",
++                    root / "agent.db",
++                    root / "agent.sock",
++                )
++                runner = asyncio.create_task(composition.run_agent(config))
++                child = Child(name, runner, lambda: agents[0].request_shutdown())
++            else:
++                assert options["start_new_session"] is True
++                child = Child(name)
++            children[name] = child
++            return child
++
++        monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
++        env = dict(os.environ)
++        if kind == "real":
++            profile = SimpleNamespace(ros_domain=17)
++            runner = asyncio.create_task(helper.supervise(root, ["agent"], env, profile=profile))
++        else:
++            profile = SimpleNamespace(
++                socket=root / "agent.sock",
++                credentials=root / "device.json",
++                video=False,
++                ros_domain=73,
++                cloud_url="wss://cloud.test/ws/agent",
++                database=root / "agent.db",
++                ros_setup=root / "setup.bash",
++            )
++            runner = asyncio.create_task(simulation_cli.supervise(profile, credentials))
++        try:
++            await until(lambda: runner.done() or (agents and link.snapshots))
++            if runner.done():
++                await runner
++                pytest.fail("supervisor ended before reporting")
++            agent = agents[0]
++            if failure == "agent_exit":
++                children["agent"].exit(78)
++                assert await asyncio.wait_for(runner, 4) == 78
++                assert all(c.stopped for n, c in children.items() if n != "agent")
++                return
++            if failure in {"exit", "adapter_exit"}:
++                await local_ready.wait()
++                name = (
++                    "adapter"
++                    if failure == "adapter_exit"
++                    else ("motion" if kind == "real" else "ros")
++                )
++                children[name].exit(9)
++                module, phase = name, "exited"
++            else:
++                module, phase = ("motion" if kind == "real" else "ros"), "unavailable"
++            await until(lambda: agent.module_faults.get(module, {}).get("phase") == phase)
++            await until(
++                lambda: any(
++                    (s.vehicle_ui or {}).get("module_faults", {}).get(module, {}).get("phase")
++                    == phase
++                    for s in link.snapshots
++                )
++            )
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats)
++            assert agent.connection_epoch == 1 and not link.closed and not runner.done()
++            if failure in {"exit", "adapter_exit"}:
++                assert children[module].stopped
++            # Query through the real log wire/grant/service/store, not a logger mock.
++            found = False
++            for _ in range(100):
++                await log_socket.requests.put(
++                    json.dumps(
++                        {"client": "a" * 32, "action": "query", "query": {"after": 0, "limit": 100}}
++                    )
++                )
++                reply = await asyncio.wait_for(log_socket.replies.get(), 2)
++                assert reply["ok"]
++                found = any(
++                    f"runtime module {module}: {phase}" in e["summary"]
++                    for e in reply["data"]["entries"]
++                )
++                if found:
++                    break
++                await asyncio.sleep(0.01)
++            assert found
++            assert spawn_calls.count("agent") == 1
++            assert spawn_calls.count("motion" if kind == "real" else "ros") == 1
++            if kind == "real":
++                client = IpcClient(root / "service.sock")
++                try:
++                    assert (await client.request("status"))["running"]
++                    assert (await client.request("stop"))["ok"]
++                finally:
++                    await client.close()
++            else:
++                # Same callback as SIGTERM without sending a signal to pytest.
++                asyncio.get_running_loop()._signal_handlers[15]._run()
++            assert await asyncio.wait_for(runner, 4) == 0
++            assert children["agent"].stopped
++            assert not (root / "service.sock").exists()
++        finally:
++            if not runner.done():
++                runner.cancel()
++            await asyncio.gather(runner, return_exceptions=True)
++            for agent in agents:
++                agent.request_shutdown()
++            await asyncio.gather(
++                *(c.runner for c in children.values() if c.runner), return_exceptions=True
++            )
++
++
++@pytest.mark.parametrize("code", [0, 7])
++def test_launch_exit_only_reports_lifecycle(monkeypatch, code):
++    events = LifecycleEvents()
++    try:
++        monkeypatch.setenv("SENIOR_RUNTIME_EVENTS_WRITE_FD", str(events.writer))
++        assert report_ros_exit(SimpleNamespace(pid=4321, returncode=code), None) == []
++        raw = os.read(events.reader, 2048)
++        assert json.loads(raw)["returncode"] == code
++        for filename in ("safety_motion.launch.py", "simulation_motion.launch.py"):
++            source = Path("ros2/src/senior_robot/launch", filename).read_text()
++            assert "OnProcessExit(on_exit=report_ros_exit)" in source
++            assert "Shutdown(" not in source
++    finally:
++        events.close()
++
++
++@pytest.mark.parametrize("retired", [False, True])
++async def test_task_failure_uses_actual_durable_pause_owner(tmp_path, retired):
++    from test_task_ownership import start
++
++    from senior_control.storage.database import Database
++
++    async with Database(tmp_path / "task.db") as database:
++        runtime, executor, nav, live, identity = await start(database)
++        nav.retired = retired
++        assert await composition.pause_failed_tasks(executor) is retired
++        state = await executor.lifecycle.store.load(identity)
++        assert state.phase == ("paused" if retired else "revoking")
++        assert state.stopped_for == "pause"
++        assert [e.kind for e in nav.effects].count("plan") == 1
++        assert any(e.kind == "revoke" for e in nav.effects)
++        if not retired:
++            assert await executor.lifecycle.store.active_effects(identity)
++
++
++async def test_observer_eof_is_reported_by_actual_agent_without_exiting(monkeypatch, tmp_path):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
++
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.runtime.lifecycle_events import observe
++    from senior_control.storage.database import Database
++
++    events = LifecycleEvents()
++    reader = os.dup(events.reader)
++    link = FakeLink(1)
++    async with Database(tmp_path / "robot.db") as database:
++        journal = AgentJournal(database, robot_id="robot-a")
++        await journal.prepare()
++
++        async def observer():
++            await observe(reader, agent.report_runtime_event)
++
++        agent = Agent(
++            "robot-a",
++            connector=FakeConnector(link),
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=FakeMotion(),
++            background={"observer": observer},
++            heartbeat_seconds=0.02,
++        )
++        runner = asyncio.create_task(agent.run())
++        try:
++            await until(lambda: agent.connected)
++            events.close()
++            await until(lambda: "observer" in agent.module_faults)
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats)
++            assert not runner.done() and not link.closed
++        finally:
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++            events.close()
++
++
++async def test_manual_transport_failure_retires_authority_without_cloud_disconnect(
++    monkeypatch, tmp_path
++):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, velocity
++
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.runtime.ipc import IpcError
++    from senior_control.storage.database import Database
++
++    class Motion(FakeMotion):
++        sends = 0
++
++        async def send_intent(self, *args, **kwargs):
++            self.sends += 1
++            raise IpcError("intent EOF")
++
++    link, motion = FakeLink(1), Motion()
++    async with Database(tmp_path / "robot.db") as database:
++        journal = AgentJournal(database, robot_id="robot-1")
++        await journal.prepare()
++        agent = Agent(
++            "robot-1",
++            connector=FakeConnector(link),
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=motion,
++            heartbeat_seconds=0.02,
++        )
++        runner = asyncio.create_task(agent.run())
++        try:
++            await until(lambda: agent.connected)
++            link.inbox.put_nowait(velocity())
++            await until(lambda: "manual" in agent.module_faults)
++            link.inbox.put_nowait(velocity(seq=20))
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats and link.inbox.empty())
++            assert motion.sends == 1 and "forward:control.release" in motion.events
++            assert not link.closed and not runner.done()
++        finally:
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++
++
++@pytest.mark.parametrize("module", ["tasks", "logs"])
++async def test_failed_background_module_stops_without_stopping_report_plane(tmp_path, module):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
++
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.storage.database import Database
++
++    calls = []
++    trigger = asyncio.Event()
++
++    async def background():
++        calls.append(module)
++        await trigger.wait()
++        raise RuntimeError(f"{module} failed")
++
++    link = FakeLink(1)
++    async with Database(tmp_path / "robot.db") as database:
++        journal = AgentJournal(database, robot_id="robot-a")
++        await journal.prepare()
++        agent = Agent(
++            "robot-a",
++            connector=FakeConnector(link),
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=FakeMotion(),
++            background={module: background},
++            heartbeat_seconds=0.02,
++        )
++        runner = asyncio.create_task(agent.run())
++        try:
++            await until(lambda: agent.connected)
++            trigger.set()
++            await until(lambda: module in agent.module_faults)
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats)
++            assert calls == [module] and not runner.done() and not link.closed
++        finally:
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++
++
++async def test_retired_straggler_cannot_issue_new_motion_or_reply(tmp_path):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, simple
++
++    from senior_control.agent.dispatcher import Deadlines
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.errors import DomainError
++    from senior_control.models import OperationResult, OperationStatus
++    from senior_control.storage.database import Database
++
++    first, second = FakeLink(1), FakeLink(2)
++    connector, motion = FakeConnector(first), FakeMotion()
++    entered, release = asyncio.Event(), asyncio.Event()
++    errors = []
++    async with Database(tmp_path / "robot.db") as database:
++        journal = AgentJournal(database, robot_id="robot-1")
++        await journal.prepare()
++        agent = Agent(
++            "robot-1",
++            connector=connector,
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=motion,
++            deadlines=Deadlines(safety=0.03),
++            heartbeat_seconds=0.02,
++            retry_delay=0.001,
++        )
++        runner = asyncio.create_task(agent.run())
++
++        async def stubborn():
++            entered.set()
++            while not release.is_set():
++                try:
++                    await release.wait()
++                except asyncio.CancelledError:
++                    pass
++            try:
++                await agent.dispatch(simple("control.acquire", seq=1))
++            except DomainError as exc:
++                errors.append(exc)
++            await agent._reply(
++                first,
++                simple("drive.stop", seq=2),
++                result=OperationResult("old", OperationStatus.SUCCEEDED),
++            )
++
++        worker = None
++        try:
++            await until(lambda: agent.connected)
++            worker = agent._spawn(stubborn())
++            await entered.wait()
++            first.drop()
++            connector.add(second)
++            await until(lambda: agent.connection_epoch == 2)
++            assert worker in agent._stragglers and worker in agent._inflight
++            release.set()
++            await worker
++            assert errors and "forward:control.acquire" not in motion.events
++            assert not first.responses and not second.responses
++            assert not runner.done() and not second.closed
++        finally:
++            release.set()
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++            if worker:
++                await worker
++
++
++@pytest.mark.parametrize("capacity", [False, True])
++async def test_safety_delivery_fault_preserves_cloud_and_never_claims_success(tmp_path, capacity):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, simple
++
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.agent.main import MAX_SAFETY_PENDING
++    from senior_control.runtime.ipc import IpcError
++    from senior_control.storage.database import Database
++
++    entered, release = asyncio.Event(), asyncio.Event()
++
++    class Motion(FakeMotion):
++        deliveries = 0
++
++        async def estop_received(self, envelope, *, received_steady):
++            self.deliveries += 1
++            entered.set()
++            if capacity:
++                await release.wait()
++            raise IpcError("estop outcome unconfirmed")
++
++    link, motion = FakeLink(1), Motion()
++    async with Database(tmp_path / "robot.db") as database:
++        from test_task_ownership import start
++
++        _, executor, nav, _, identity = await start(database)
++
++        async def pause_owner(name):
++            assert name == "motion_delivery"
++            await composition.pause_failed_tasks(executor)
++
++        journal = AgentJournal(database, robot_id="robot-1")
++        await journal.prepare()
++        agent = Agent(
++            "robot-1",
++            connector=FakeConnector(link),
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=motion,
++            background_fault=pause_owner,
++            heartbeat_seconds=0.02,
++        )
++        runner = asyncio.create_task(agent.run())
++        try:
++            await until(lambda: agent.connected)
++            link.inbox.put_nowait(simple("safety.estop", seq=1))
++            if capacity:
++                await entered.wait()
++                for seq in range(2, MAX_SAFETY_PENDING + 3):
++                    link.inbox.put_nowait(simple("safety.estop", seq=seq))
++                await until(lambda: len(agent._safety_pending) == MAX_SAFETY_PENDING)
++                await until(lambda: any(r.payload.error for r in link.responses))
++                assert len(agent._safety_pending) <= MAX_SAFETY_PENDING
++                release.set()
++            await until(lambda: "motion_delivery" in agent.module_faults)
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats)
++            assert not agent.auth_rejected and not agent.runtime_failed
++            assert not runner.done() and not link.closed
++            assert not any(r.payload.ok for r in link.responses)
++            await until(lambda: agent._safety_fault_task and agent._safety_fault_task.done())
++            assert (await executor.lifecycle.store.load(identity)).phase == "revoking"
++            assert [e.kind for e in nav.effects].count("plan") == 1
++        finally:
++            release.set()
++            agent.request_shutdown()
++            await asyncio.wait_for(runner, 2)
++
++
++async def test_reporting_ready_cannot_revive_failed_local_module(tmp_path):
++    from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
++
++    from senior_control.agent.journal import AgentJournal
++    from senior_control.storage.database import Database
++
++    async with Database(tmp_path / "robot.db") as database:
++        journal = AgentJournal(database, robot_id="robot-a")
++        await journal.prepare()
++        agent = Agent(
++            "robot-a",
++            connector=FakeConnector(),
++            journal=journal,
++            tasks=FakeTasks(),
++            home=FakeHome(),
++            maps=FakeMaps(),
++            state=FakeState(),
++            motion=FakeMotion(),
++        )
++        await agent._background_fault("logs", "log driver stopped")
++        agent.report_runtime_event({"module": "logs", "phase": "ready", "detail": "reported"})
++        assert "logs" in agent.failed_modules
++        assert agent.module_faults["logs"]["phase"] == "failed"
+--- a/tests/integration/test_shutdown.py
++++ b/tests/integration/test_shutdown.py
+@@ -41,6 +41,7 @@
+ from senior_control.agent import Agent
+ from senior_control.agent.connection import IpcMotion
+ from senior_control.agent.journal import AgentJournal
++from senior_control.errors import DomainError
+ from senior_control.runtime.ipc import MAX_FRAME, IpcClient, IpcError, IpcServer
+ from senior_control.storage.database import Database
+ 
+@@ -373,14 +374,12 @@
+     assert "publish_velocity" not in COMMAND_NODE.read_text()
+ 
+ 
+-async def test_background_failure_revokes_ros_heartbeat_and_stops_agent(
+-    tmp_path: Path, socket_path: Path
+-) -> None:
++async def test_background_failure_keeps_agent_reporting(tmp_path: Path, socket_path: Path) -> None:
+     from senior_control.agent.connection import HeartbeatFrame
+ 
+     local = ArbiterRig()
+     local.now = time.monotonic()
+-    arbiter, adapter = local.arbiter, local.core
++    _arbiter, adapter = local.arbiter, local.core
+     server = IpcServer(socket_path, adapter.handle)
+     await server.start()
+     trigger = asyncio.Event()
+@@ -411,9 +410,11 @@
+             link.inbox.put_nowait(HeartbeatFrame(ROBOT))
+             await until(lambda: link.inbox.empty())
+             trigger.set()
+-            await asyncio.wait_for(asyncio.shield(runner), 1.5)
+-            assert adapter._disabled_through_epoch >= 1
+-            assert arbiter.final_command(time.monotonic()) is None
++            await until(lambda: "tasks" in agent.module_faults)
++            beats = link.heartbeats
++            await until(lambda: link.heartbeats > beats)
++            assert not runner.done() and not link.closed
++            assert not agent.auth_rejected
+         finally:
+             agent.request_shutdown()
+             if not runner.done():
+@@ -516,7 +517,7 @@
+     await server.close()
+ 
+ 
+-async def test_background_fault_disables_ros_while_safety_ipc_is_blocked(
++async def test_background_fault_preserves_cloud_while_safety_ipc_is_blocked(
+     tmp_path: Path, socket_path: Path
+ ) -> None:
+     from agent_fakes import simple
+@@ -570,7 +571,10 @@
+             link.inbox.put_nowait(simple("drive.stop", seq=2))
+             await asyncio.wait_for(entered.wait(), 1)
+             fail.set()
+-            await until(lambda: core._disabled_through_epoch >= 1, timeout=0.3)
++            await until(lambda: "tasks" in agent.module_faults)
++            assert not runner.done() and not link.closed
++            release.set()
++            await until(lambda: bool(link.responses))
+         finally:
+             release.set()
+             agent.request_shutdown()
+@@ -645,14 +649,14 @@
+                                 }
+                             ),
+                         )
+-                    with pytest.raises(ConnectionError, match="safety capacity"):
++                    with pytest.raises(DomainError, match="safety capacity"):
+                         agent._accept(
+                             link,
+                             simple("safety.estop", seq=1).model_copy(
+                                 update={"session_id": "overflow", "request_id": "overflow"}
+                             ),
+                         )
+-                    assert agent.auth_rejected and agent.runtime_failed
++                    assert not agent.auth_rejected and not agent._stop.is_set()
+                     assert len(agent._safety_pending) == MAX_SAFETY_PENDING
+                 release.set()
+                 assert agent._safety_task is not None
+@@ -701,7 +705,7 @@
+     try:
+         for seq in range(1, MAX_SAFETY_PENDING + 1):
+             agent._accept(link, simple("safety.estop", seq=seq))
+-        with pytest.raises(ConnectionError, match="safety capacity"):
++        with pytest.raises(DomainError, match="safety capacity"):
+             agent._accept(link, simple("safety.estop", seq=MAX_SAFETY_PENDING + 1))
+         assert owner.machine.state.mode.value == "idle"  # No task has been scheduled yet.
+         await agent._release()
+@@ -722,12 +726,13 @@
+     agent, _, database = await build(tmp_path, socket_path, [])
+     agent._last_epoch = 1
+     link = FakeLink(1)
++    agent._link, agent._epoch = link, 1
+     try:
+         agent._accept(link, simple("safety.estop", seq=1))
+         await agent._safety_task
+         await until(lambda: bool(link.responses))
+         assert not any(response.payload.ok for response in link.responses)
+-        assert agent.runtime_failed and agent.auth_rejected
++        assert not agent.runtime_failed and not agent.auth_rejected
+         assert "safety delivery not confirmed" in caplog.text
+         await agent._release()
+     finally:
+@@ -755,6 +760,7 @@
+     agent, _, database = await build(tmp_path, socket_path, [], deadlines=Deadlines(safety=0.3))
+     agent._last_epoch = 1
+     link = FakeLink(1)
++    agent._link, agent._epoch = link, 1
+     try:
+         agent._accept(link, simple("safety.estop", seq=1))
+         await asyncio.wait_for(entered.wait(), 1)
+@@ -765,7 +771,7 @@
+         await asyncio.wait_for(agent._release(), 0.5)
+         assert time.monotonic() - began < 0.5
+         assert owner.machine.state.mode.value == "idle"
+-        assert agent.runtime_failed and agent._safety_task.done()
++        assert not agent.auth_rejected and agent._safety_task.done()
+         assert not any(response.payload.ok for response in link.responses)
+         assert "vehicle owner state is unconfirmed" in caplog.text
+     finally:
+--- a/tests/integration/test_task_ownership.py
++++ b/tests/integration/test_task_ownership.py
+@@ -467,6 +467,7 @@
+             motion=FakeMotion(),
+             navigation=actions,
+         )
++        agent._link, agent._epoch = wire_link, 1
+         for kind, result in [
+             ("navigation.goal", accepted),
+             ("navigation.return_home", accepted),
+--- a/tests/integration/test_vehicle_cli.py
++++ b/tests/integration/test_vehicle_cli.py
+@@ -153,33 +153,6 @@
+     assert list(tmp_path.iterdir()) == [profile]
+ 
+ 
+-async def test_simulation_waits_for_matching_adapter(tmp_path, monkeypatch):
+-    from senior_control import simulation_cli
+-
+-    events = []
+-
+-    async def spawn(*args, **kwargs):
+-        events.append("ros" if "simulation_motion.launch.py" in args else "agent")
+-        return object()
+-
+-    async def verify(*args):
+-        events.append("identity")
+-        raise ValueError("foreign adapter")
+-
+-    async def cleanup(process, timeout):
+-        events.append("cleanup")
+-
+-    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+-    monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
+-    monkeypatch.setattr(simulation_cli, "_stop", cleanup)
+-    profile, credentials = _simulation_profile(tmp_path)
+-    import pytest
+-
+-    with pytest.raises(ValueError, match="foreign adapter"):
+-        await simulation_cli.supervise(profile, credentials)
+-    assert events == ["ros", "identity", "cleanup"]
+-
+-
+ def _simulation_profile(tmp_path):
+     from senior_control.agent.pairing import Credentials
+ 
+@@ -220,7 +193,7 @@
+ 
+     with pytest.raises(OSError, match="agent failed"):
+         await simulation_cli.supervise(profile, credentials)
+-    assert stopped == [owned_ros]
++    assert stopped == []  # Agent failed before any ROS child was created.
+ 
+ 
+ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_start(
+@@ -255,7 +228,7 @@
+     profile, credentials = _simulation_profile(tmp_path)
+     with pytest.raises(OSError, match="agent failed"):
+         await simulation_cli.supervise(profile.model_copy(update={"video": True}), credentials)
+-    assert len(slots) == 2 and slots[0] == slots[1]
++    assert len(slots) == 1
+     assert not slots[0].parent.exists()
+ 
+ 
+@@ -358,17 +331,19 @@
+ 
+ @pytest.mark.parametrize("headless", [True, False])
+ async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatch, headless):
+-    from senior_control import simulation_cli
++    from test_runtime_fault_isolation import Child
++
++    from senior_control import docker_start_helper, simulation_cli
+ 
+     calls = []
+     monkeypatch.setenv("DISPLAY", ":7")
+ 
+     async def spawn(*args, **kwargs):
+         calls.append((args, kwargs))
+-        return object()
++        return Child("fixture")
+ 
+     async def verify(*args):
+-        raise ValueError("stop after inspecting launch")
++        args[-1].set()
+ 
+     async def cleanup(*args):
+         pass
+@@ -376,11 +351,11 @@
+     monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+     monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
+     monkeypatch.setattr(simulation_cli, "_stop", cleanup)
++    monkeypatch.setattr(docker_start_helper, "_terminate_motion_stack", cleanup)
+     profile, credentials = _simulation_profile(tmp_path)
+-    with pytest.raises(ValueError, match="stop after inspecting launch"):
+-        await simulation_cli.supervise(profile, credentials, headless=headless)
+-    assert len(calls) == 1
+-    argv, options = calls[0]
++    assert await simulation_cli.supervise(profile, credentials, headless=headless) == 0
++    assert len(calls) == 2
++    argv, options = calls[1]
+     assert f"headless:={str(headless).lower()}" in argv
+     assert ("xvfb-run" in argv) is headless
+     assert options["env"]["DISPLAY"] == ":7"
+--- a/tests/unit/test_agent_config.py
++++ b/tests/unit/test_agent_config.py
+@@ -43,7 +43,7 @@
+         seen.append(not self.is_open)
+ 
+     async def run(self: agent_module.Agent) -> None:
+-        return None
++        await self._release()
+ 
+     monkeypatch.setattr(Database, "__aexit__", close)
+     monkeypatch.setattr(agent_module.Agent, "run", run)
+@@ -112,78 +112,47 @@
+ 
+ 
+ @pytest.mark.parametrize("missing_adapter", [True, False])
+-async def test_composition_classifies_adapter_startup_failure(
+-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_adapter: bool
+-) -> None:
+-    from senior_control.agent import composition
+-    from senior_control.runtime.ipc import IpcClient
++async def test_composition_starts_reporting_without_adapter_identity(
++    tmp_path, monkeypatch, missing_adapter
++):
++    import asyncio
++    import tempfile
+ 
+-    async def missing_socket(*args: object, **kwargs: object) -> None:
+-        raise FileNotFoundError("adapter is starting")
+-
+-    async def reject_identity(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+-        assert kind == "identity"
+-        assert fields["robot_id"] == "robot-a"
+-        return {"ok": False}
+-
+-    def unexpected_connector(*args: object, **kwargs: object) -> None:
+-        pytest.fail("cloud connector must wait for adapter identity")
+-
+-    if missing_adapter:
+-        monkeypatch.setattr(composition.asyncio, "open_unix_connection", missing_socket)
+-    else:
+-        monkeypatch.setattr(IpcClient, "request", reject_identity)
+-    monkeypatch.setattr(composition, "WebSocketConnector", unexpected_connector)
+-
+-    config = AgentConfig(
+-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+-    )
+-    assert await composition.run_agent(config) == (1 if missing_adapter else 78)
+-
+-
+-async def test_composition_retries_python310_asyncio_timeout(
+-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+-) -> None:
+-    from senior_control.agent import composition
+-    from senior_control.runtime.ipc import IpcClient, IpcError
+-
+-    class LegacyAsyncioTimeout(Exception):
+-        pass
+-
+-    async def timed_out(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
+-        raise IpcError("ipc request identity failed") from LegacyAsyncioTimeout()
+-
+-    # //Compatible: asyncio.TimeoutError and builtins.TimeoutError are distinct in Python 3.10.
+-    monkeypatch.setattr(composition.asyncio, "TimeoutError", LegacyAsyncioTimeout)
+-    monkeypatch.setattr(IpcClient, "request", timed_out)
+-    config = AgentConfig(
+-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+-    )
+-    assert await composition.run_agent(config) == 1
+-
+-
+-@pytest.mark.parametrize("truncated", [True, False])
+-async def test_composition_distinguishes_truncated_and_malformed_identity_reply(
+-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, truncated: bool
+-) -> None:
+-    import asyncio
++    from agent_fakes import FakeConnector, FakeLink, until
+ 
+     from senior_control.agent import composition
+-    from senior_control.runtime.ipc import IpcClient, IpcError
++    from senior_control.agent.main import Agent
++    from senior_control.runtime.ipc import IpcServer
+ 
+-    async def invalid_reply(self: IpcClient, kind: str, **fields: object) -> dict[str, bool]:
++    with tempfile.TemporaryDirectory(prefix="identity-") as directory:
++        socket = Path(directory) / "agent.sock"
++        seen = []
++
++        async def foreign(message):
++            seen.append(message["type"])
++            return {"ok": False}
++
++        server = IpcServer(socket, foreign)
++        if not missing_adapter:
++            await server.start()
++        link = FakeLink(1)
++        agents = []
++        monkeypatch.setattr(composition, "WebSocketConnector", lambda *a: FakeConnector(link))
++        monkeypatch.setattr(Agent, "install_signal_handlers", lambda self: agents.append(self))
++        config = AgentConfig(
++            "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", socket
++        )
++        runner = asyncio.create_task(composition.run_agent(config))
+         try:
+-            try:
+-                if truncated:
+-                    raise asyncio.IncompleteReadError(b"", 4)
+-                raise ValueError("invalid JSON")
+-            except (ValueError, asyncio.IncompleteReadError) as exc:
+-                raise IpcError("could not read frame") from exc
+-        except IpcError as exc:
+-            raise IpcError("ipc request identity failed") from exc
+-
+-    monkeypatch.setattr(IpcClient, "request", invalid_reply)
+-    config = AgentConfig(
+-        "robot-a", "wss://cloud.test/ws/agent", "secret", tmp_path / "robot.db", Path("/tmp/a.sock")
+-    )
+-    assert await composition.run_agent(config) == (1 if truncated else 78)
++            await until(lambda: bool(link.snapshots))
++            assert (
++                link.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
++            )
++            assert not runner.done() and not link.closed
++            if not missing_adapter:
++                assert seen and set(seen) == {"identity"}
++        finally:
++            if agents:
++                agents[0].request_shutdown()
++            await asyncio.wait_for(runner, 4)
++            await server.close()
+--- a/tests/unit/test_docker_start_helper.py
++++ b/tests/unit/test_docker_start_helper.py
+@@ -152,88 +152,6 @@
+     assert not path.exists()
+ 
+ 
+-@pytest.mark.parametrize(("configured_domain", "expected_domain"), [(17, "17"), (None, "42")])
+-async def test_verified_adapter_precedes_agent_and_agent_stops_first(
+-    service_root, monkeypatch, configured_domain, expected_domain
+-):
+-    from senior_control import docker_start_helper as helper
+-
+-    profile = real_profile(service_root, domain=configured_domain)
+-    events = []
+-    environments = []
+-
+-    class Child:
+-        def __init__(self, name):
+-            self.name = name
+-            self.returncode = None
+-            self.done = asyncio.Event()
+-
+-        async def wait(self):
+-            await self.done.wait()
+-            return self.returncode
+-
+-        def terminate(self):
+-            events.append(f"stop-{self.name}")
+-            self.returncode = 0
+-            self.done.set()
+-
+-    camera = Child("camera")
+-    motion = Child("motion")
+-    adapter = Child("adapter")
+-    agent = Child("agent")
+-
+-    async def stop_motion(child):
+-        if child is not None:
+-            child.terminate()
+-
+-    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
+-
+-    async def spawn(*args, env, **kwargs):
+-        environments.append(env)
+-        if any("wheeltec_camera" in str(arg) for arg in args):
+-            events.append("start-camera")
+-            return camera
+-        if len(environments) == 1:
+-            events.append("start-motion")
+-            return motion
+-        if len(environments) == 2:
+-            events.append("start-adapter")
+-            return adapter
+-        events.append("start-agent")
+-        # Trigger controlled shutdown after both children exist.
+-        asyncio.get_running_loop().call_soon(stopping.set)
+-        return agent
+-
+-    stopping = None
+-
+-    async def ready(path, robot_id, domain, child, stop):
+-        nonlocal stopping
+-        assert robot_id == "robot-a" and domain == configured_domain and child is adapter
+-        stopping = stop
+-        events.append("verified")
+-        return None
+-
+-    monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
+-    monkeypatch.setattr(helper, "_wait_for_adapter", ready)
+-    assert (
+-        await helper.supervise(service_root, ["agent"], {"ROS_DOMAIN_ID": "42"}, profile=profile)
+-        == 0
+-    )
+-    assert events == [
+-        "start-motion",
+-        "start-adapter",
+-        "verified",
+-        "start-agent",
+-        "start-camera",
+-        "stop-agent",
+-        "stop-adapter",
+-        "stop-motion",
+-        "stop-camera",
+-    ]
+-    assert all(env["ROS_DOMAIN_ID"] == expected_domain for env in environments)
+-    assert not (service_root / "estop-state.json").exists()
+-
+-
+ @pytest.mark.parametrize(
+     ("reply", "error"),
+     [({"ok": True, "ros_domain": 18}, "domain mismatch"), ({"ok": False}, "identity mismatch")],
+@@ -285,44 +203,6 @@
+     assert profile.database == service_root / "agent.db"
+     assert profile.ros_setup == Path("/container/project/ros2/install/setup.bash")
+     assert profile.ros_domain is None
+-
+-
+-async def test_handshake_failure_reaps_adapter_without_starting_agent(service_root, monkeypatch):
+-    from senior_control import docker_start_helper as helper
+-
+-    profile = real_profile(service_root)
+-    events = []
+-
+-    class Adapter:
+-        returncode = None
+-
+-        def terminate(self):
+-            events.append("terminate-adapter")
+-            self.returncode = 0
+-
+-        async def wait(self):
+-            return self.returncode
+-
+-    async def spawn(*args, **kwargs):
+-        events.append("start-adapter")
+-        return Adapter()
+-
+-    async def not_ready(*args):
+-        raise ValueError("ROS adapter robot identity mismatch")
+-
+-    monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
+-    monkeypatch.setattr(helper, "_wait_for_adapter", not_ready)
+-
+-    async def stop_motion(child):
+-        if child is not None:
+-            events.append("stop-motion")
+-
+-    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
+-    with pytest.raises(ValueError, match="identity mismatch"):
+-        await helper.supervise(service_root, ["agent"], {}, profile=profile)
+-    assert events == ["start-adapter", "start-adapter", "terminate-adapter", "stop-motion"]
+-    assert not (service_root / "service.sock").exists()
+-    assert not (service_root / "estop-state.json").exists()
+ 
+ 
+ async def test_matching_robot_id_does_not_establish_process_ownership(service_root):
+--- a/tests/unit/test_learning_cleanup.py
++++ b/tests/unit/test_learning_cleanup.py
+@@ -169,6 +169,7 @@
+         stop = stopping
+         events.append("verified")
+         if outcome == "adapter_failed":
++            stopping.set()
+             raise ValueError("adapter failed")
+         return [1, 2, 3]
+ 
+@@ -187,7 +188,7 @@
+ 
+     def clean(root, claim, **kwargs):
+         calls.append(claim)
+-        assert events[-1] == "agent" and "verified" in events
++        assert events[0] == "agent" and events[-1] == "verified"
+         with (root / ".agent-service.lock").open("rb") as contender:
+             with pytest.raises(BlockingIOError):
+                 fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+@@ -207,7 +208,7 @@
+     monkeypatch.setattr(helper, "IpcServer", Server)
+     monkeypatch.setattr("senior_control.runtime.learning_service.LearningService", Server)
+     monkeypatch.setattr(helper, "_prepare_socket", prepare)
+-    monkeypatch.setattr(helper, "_record", lambda *args: None)
++    monkeypatch.setattr(helper, "_record", lambda *args, **kwargs: None)
+     monkeypatch.setattr(helper, "read_credentials", lambda *args: N(robot_id="robot"))
+     monkeypatch.setattr(helper, "_adapter_command", lambda *args: ["adapter"])
+     monkeypatch.setattr(helper, "_motion_command", lambda *args: ["motion"])
+@@ -218,11 +219,9 @@
+     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
+     monkeypatch.setattr(cleanup, "cleanup_old_learning_files", clean)
+     profile = N(ros_domain=None)
+-    if outcome == "adapter_failed":
+-        with pytest.raises(ValueError, match="adapter failed"):
+-            await helper.supervise(tmp_path, ["agent"], {}, profile=profile)
+-    else:
+-        assert await helper.supervise(tmp_path, ["agent"], {}, profile=profile) == 0
++    assert await helper.supervise(tmp_path, ["agent"], {}, profile=profile) == (
++        2 if outcome == "agent_exited" else 0
++    )
+     assert len(calls) == (1 if outcome in {"success", "cleanup_failed"} else 0)
+     assert old.exists() == (outcome != "success")
+     if calls:
+@@ -256,10 +255,11 @@
+         nonlocal stop
+         stop = stopping
+         if outcome == "adapter_failed":
++            stopping.set()
+             raise ValueError("adapter failed")
+ 
+     async def spawn(*args, **kwargs):
+-        child = Child(dead=outcome == "agent_exited" and bool(spawned))
++        child = Child(dead=outcome == "agent_exited" and not spawned)
+         spawned.append(child)
+         return child
+ 
+@@ -275,21 +275,27 @@
+                 fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+         calls.append(claim)
+         original(root, claim, **kwargs)
++        stop.set()
+ 
+     monkeypatch.setattr("senior_control.runtime.learning_service.LearningService", Server)
+     monkeypatch.setattr(helper, "_wait_for_adapter", ready)
+     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
+     monkeypatch.setattr(helper, "_stop", terminate)
+-    monkeypatch.setattr(helper, "_notify", lambda *args: stop.set())
++    monkeypatch.setattr(helper, "_notify", lambda *args: None)
++    from senior_control import docker_start_helper
++
++    async def stop_group(child):
++        if child is not None:
++            child.terminate()
++
++    monkeypatch.setattr(docker_start_helper, "_terminate_motion_stack", stop_group)
+     monkeypatch.setattr(cleanup, "cleanup_old_learning_files", clean)
+     # Production main() holds this existing ownership lock around supervise().
+     with (tmp_path / ".senior-simulator.lock").open("wb") as lock:
+         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+-        if outcome == "adapter_failed":
+-            with pytest.raises(ValueError, match="adapter failed"):
+-                await helper.supervise(profile, N(robot_id="robot"))
+-        else:
+-            assert await helper.supervise(profile, N(robot_id="robot")) == 0
++        assert await helper.supervise(profile, N(robot_id="robot")) == (
++            2 if outcome == "agent_exited" else 0
++        )
+     assert len(calls) == (1 if outcome == "success" else 0)
+     assert old.exists() == (outcome != "success")
+ 
+--- a/tests/unit/test_logging_diagnostics.py
++++ b/tests/unit/test_logging_diagnostics.py
+@@ -127,7 +127,7 @@
+     assert "private-token" not in str(result)
+ 
+ 
+-async def test_supervisor_failure_logs_diagnostic_and_revocation():
++async def test_supervisor_failure_logs_diagnostic_without_global_revocation():
+     import asyncio
+     import io
+ 
+@@ -143,6 +143,11 @@
+     logger.propagate = False
+     logger.disabled = False
+     fault = asyncio.Event()
++    failures = []
++
++    async def on_fault(name, reason):
++        failures.append((name, reason))
++        fault.set()
+ 
+     async def noop(*args):
+         pass
+@@ -155,7 +160,7 @@
+             send_heartbeat=noop,
+             call_ros=noop,
+             background={"tasks": task_loop},
+-            on_fault=lambda reason: fault.set(),
++            on_fault=on_fault,
+         ):
+             await asyncio.wait_for(fault.wait(), timeout=1)
+     finally:
+@@ -164,6 +169,6 @@
+     assert records[0]["event"] == "background_task_failed"
+     assert records[0]["exceptions"][0]["type"] == "RuntimeError"
+     assert records[0]["exceptions"][0]["frames"][-1]["function"] == "task_loop"
+-    assert records[1]["event"] == "motion_revoked"
+-    assert records[1]["reason"] == "background task tasks failed"
++    assert failures == [("tasks", "background task tasks failed")]
++    assert all(record["event"] != "motion_revoked" for record in records)
+     assert "private-token" not in output.getvalue()
+--- /dev/null
++++ b/tests/unit/test_runtime_identity.py
+@@ -0,0 +1,78 @@
++import tempfile
++from pathlib import Path
++
++import pytest
++
++from senior_control.runtime.ipc import IpcClient, IpcError, IpcServer
++
++
++async def test_each_new_connection_checks_identity_before_business_or_stream():
++    with tempfile.TemporaryDirectory(prefix="identity-") as directory:
++        path = Path(directory) / "a.sock"
++        identity = [True]
++        calls = []
++
++        async def handle(message):
++            calls.append(message["type"])
++            if message["type"] == "identity":
++                return {"ok": identity[0], "ros_domain": 17}
++            return {"ok": True}
++
++        server = IpcServer(path, handle)
++        await server.start()
++        client = IpcClient(path, robot_id="robot", ros_domain=17)
++        intent = IpcClient(path, robot_id="robot", ros_domain=17)
++        try:
++            assert (await client.request("state.get"))["ok"]
++            assert calls == ["identity", "state.get"]
++            await intent.send("manual_intent")
++            for _ in range(50):
++                import asyncio
++
++                if "manual_intent" in calls:
++                    break
++                await asyncio.sleep(0.001)
++            assert calls == ["identity", "state.get", "identity", "manual_intent"]
++            await client.close()
++            identity[0] = False
++            with pytest.raises(IpcError):
++                await client.request("state.get")
++            assert calls[-1] == "identity" and calls.count("state.get") == 1
++        finally:
++            await client.close()
++            await intent.close()
++            await server.close()
++
++
++async def test_owned_adapter_must_have_current_peer_verification_record():
++    with tempfile.TemporaryDirectory(prefix="identity-") as directory:
++        path = Path(directory) / "a.sock"
++        calls = []
++
++        async def handle(message):
++            calls.append(message["type"])
++            return {"ok": True}
++
++        server = IpcServer(path, handle)
++        await server.start()
++        client = IpcClient(path, robot_id="robot", owner_record="current-run")
++        try:
++            with pytest.raises(IpcError):
++                await client.request("manual")
++            assert not calls and path.exists()
++            path.with_suffix(".owner.json").write_text("[1,2,3]")
++            with pytest.raises(IpcError):
++                await client.request("manual")
++            assert not calls and path.exists()
++            from senior_control.docker_start_helper import _record
++
++            _record(path, run_id="old-run")
++            with pytest.raises(IpcError):
++                await client.request("manual")
++            assert not calls and path.exists()
++            _record(path, run_id="current-run")
++            assert (await client.request("manual"))["ok"]
++            assert calls == ["identity", "manual"]
++        finally:
++            await client.close()
++            await server.close()

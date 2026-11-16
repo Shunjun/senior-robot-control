@@ -54,7 +54,7 @@ def test_final_fence_cannot_relabel_session_within_generation():
 
 
 def test_task_samples_keep_local_deadline_without_a_remote_lease():
-    owner = Arbiter("robot", 0.3)
+    owner = Arbiter("robot", 300)
     assert owner.begin_navigation("route", 10.0, task_epoch=1)
     assert owner.accept_navigation_sample("route", 1, Velocity(0.2, 0), 10.0, 10.1)
     assert owner.final_command(10.2) == (Velocity(0.2, 0), "route", 1, 1, 10.3)
@@ -69,7 +69,7 @@ def test_task_samples_keep_local_deadline_without_a_remote_lease():
 def test_estop_retires_task_and_rejects_wrong_robot_or_replayed_request():
     from senior_control.protocol import EmptyPayload, SimpleEnvelope
 
-    owner = Arbiter("robot", 0.3)
+    owner = Arbiter("robot", 300)
     assert owner.begin_navigation("route", 10.0, task_epoch=1)
     stop = SimpleEnvelope(
         v=1,

@@ -7,7 +7,7 @@ using senior_sensor_ingress::CaptureLedger;
 
 TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)
 {
-  CaptureLedger ledger(2, 1.0);
+  CaptureLedger ledger(2, 1000.0);
   RawCaptureHeader first;
   first.bridge_boot_id = "boot";
   first.capture_generation = 1;
@@ -17,6 +17,7 @@ TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)
   first.bridge_gid = "0202";
   first.frame_id = "optical";
   first.received_steady = 10.0;
+  first.timing.capture_end_steady_ns = 10000000000ULL;
   first.valid = true;
   ASSERT_TRUE(ledger.observe(0, first, 10.0));
   EXPECT_EQ(ledger.match(0, first, 10.5), CaptureLedger::Match::exact);
@@ -28,7 +29,7 @@ TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)
 
 TEST(CaptureLedger, OldGenerationIsRetiredAndCapacityIsBounded)
 {
-  CaptureLedger ledger(2, 1.0);
+  CaptureLedger ledger(2, 1000.0);
   RawCaptureHeader value;
   value.bridge_boot_id = "boot";
   value.capture_generation = 1;
@@ -37,6 +38,7 @@ TEST(CaptureLedger, OldGenerationIsRetiredAndCapacityIsBounded)
   value.bridge_gid = "0202";
   value.frame_id = "optical";
   value.received_steady = 10.0;
+  value.timing.capture_end_steady_ns = 10000000000ULL;
   value.valid = true;
   value.sequence = 1;
   ASSERT_TRUE(ledger.observe(0, value, 10.0));

@@ -57,8 +57,8 @@ namespace {
 rclcpp::NodeOptions clock_test_options()
 {
   rclcpp::NodeOptions options;
-  options.append_parameter_override("sensor_soft_age_s", 0.3);
-  options.append_parameter_override("sensor_hard_age_s", 1.0);
+  options.append_parameter_override("sensor_soft_age_ms", 300.0);
+  options.append_parameter_override("sensor_hard_age_ms", 1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s", 5.0);
   options.append_parameter_override("queue_warn_count", 32);
   options.append_parameter_override("queue_warn_ratio", 0.75);
@@ -99,8 +99,8 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_egress_test"),
                                rclcpp::Parameter("camera_frame", "camera")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -323,8 +323,8 @@ TEST(RgbdCandidateReceipt, ProducerBootChangeOnSameGidRevokesImmediately)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_boot_test")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -377,8 +377,8 @@ TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_raw_restart")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -451,8 +451,8 @@ TEST(RgbdCandidateReceipt, SameCurrentHeaderWithDifferentPixelsRevokes)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_duplicate_raw")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -517,8 +517,8 @@ TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_fence"),
     rclcpp::Parameter("camera_frame", "camera")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -576,8 +576,8 @@ TEST(RgbdCandidateReceipt, RetirementExhaustionRevokesActualProducerOnGraphLoss)
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_cap")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);
@@ -625,8 +625,8 @@ TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUniqu
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_pending")});
-  options.append_parameter_override("sensor_soft_age_s",0.3);
-  options.append_parameter_override("sensor_hard_age_s",1.0);
+  options.append_parameter_override("sensor_soft_age_ms",300.0);
+  options.append_parameter_override("sensor_hard_age_ms",1000.0);
   options.append_parameter_override("sensor_diagnostics_period_s",5.0);
   options.append_parameter_override("queue_warn_count",32);
   options.append_parameter_override("queue_warn_ratio",0.75);

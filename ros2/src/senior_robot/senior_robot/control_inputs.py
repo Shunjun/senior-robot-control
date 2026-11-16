@@ -49,7 +49,13 @@ class ControlInputs:
         ]
         remaps = [
             (topic, node.resolve_topic_name(topic))
-            for topic in ("/wheel/odom", "/imu/data", "/motion/scan", "/tf", "/tf_static")
+            for topic in (
+                "/wheel/odom/timed",
+                "/imu/data/timed",
+                "/motion/scan",
+                "/tf",
+                "/tf_static",
+            )
         ]
         self.process = context.Process(
             target=_receive,

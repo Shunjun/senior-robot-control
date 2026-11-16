@@ -1,0 +1,17 @@
+parent 2026-11-16T18:17:25Z
+{"source_drift": false, "at": "2026-11-16T18:17:26Z"}
+LAUNCH ruff pid=60547 2026-11-16T18:17:26Z
+LAUNCH mypy-worktree pid=60548 2026-11-16T18:17:26Z
+LAUNCH mypy-head pid=60549 2026-11-16T18:17:26Z
+LAUNCH frontend pid=60550 2026-11-16T18:17:26Z
+LAUNCH wheel pid=60551 2026-11-16T18:17:26Z
+LAUNCH pytest pid=60552 2026-11-16T18:17:26Z
+CHILDREN_LAUNCHED
+DONE ruff exit=1 2026-11-16T18:17:29Z
+DONE mypy-worktree exit=1 2026-11-16T18:17:44Z
+DONE mypy-head exit=1 2026-11-16T18:17:44Z
+DONE frontend exit=1 2026-11-16T18:17:47Z
+DONE wheel exit=0 2026-11-16T18:17:47Z
+DONE pytest exit=1 2026-11-16T18:22:51Z
+{"jobs": {"ruff": 1, "mypy-worktree": 1, "mypy-head": 1, "frontend": 1, "wheel": 0, "pytest": 1}, "final_source_drift": false, "at": "2026-11-16T18:22:51Z"}
+ALL_DONE

@@ -1,0 +1,88 @@
+..........................................................F............. [ 29%]
+........................................................................ [ 58%]
+........................................................................ [ 87%]
+..............................                                           [100%]
+=================================== FAILURES ===================================
+_________ test_startup_flows_through_real_tick_and_safety_checks[True] _________
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10bbd2000>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-227/test_startup_flows_through_rea1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bbd0740>
+interior_occlusion = True
+
+    @pytest.mark.parametrize("interior_occlusion", [False, True, "front"])
+    def test_startup_flows_through_real_tick_and_safety_checks(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        interior_occlusion,
+    ):
+        import math
+        from types import SimpleNamespace as N
+    
+        from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+        from test_motion_core_chain import InlineWorker, feed
+    
+        from senior_control.config import DeviceProfile
+        from senior_control.motion.constraint_worker import ConstraintScheduler
+    
+        a = NativeObservations(core.profile.admission(), core.profile.temporal(), core.profile.fusion())
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
+        bind_core(core, tmp_path / "claim")
+        node = core.node
+        node._depth_policy = "laser_only"
+        node._scan_topology_ready = lambda: True
+        node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        node.get_publishers_info_by_topic = lambda _: [
+            N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")
+        ]
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        for i in range(45):
+            t = now[0] = 10 + i * 0.025
+            feed(a, t)
+            capture_inputs(core, N(data=strict_reference_json(a.snapshot(t, t))))
+            ranges = [10.0] * 720
+            if interior_occlusion is True:
+                ranges[0] = 0.15  # occlusion behind rear equipment remains unknown
+            if interior_occlusion == "front":
+                ranges[359] = 0.4
+            node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=t,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=i + 1,
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=t,
+                        raw_capture=N(timing=wire_time(t, sequence=i + 1, epoch="scan")),
+                    ),
+                    measurement_steady=t,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "moving", core.startup.summary()
+        if interior_occlusion:
+>           assert not any(v.vx > 0 for v, _ in node.emitted)
+E           assert not True
+E            +  where True = any(<generator object test_startup_flows_through_real_tick_and_safety_checks.<locals>.<genexpr> at 0x10b0cc520>)
+
+tests/unit/test_startup_learning_chain.py:116: AssertionError
+------------ generated xml file: /tmp/occlusion-accepted-final.xml -------------
+=========================== short test summary info ============================
+FAILED tests/unit/test_startup_learning_chain.py::test_startup_flows_through_real_tick_and_safety_checks[True]
+1 failed, 245 passed in 85.01s (0:01:25)

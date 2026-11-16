@@ -1,0 +1,23 @@
+import importlib.util,json,hashlib,difflib,re,shutil
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('previous','/tmp/startup-final-validation-scripts/orchestrator.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+root=m.ROOT; prefix=root/'docs/testing/2026-11-17-final-review-fixes'; evid=Path(str(prefix)+'-evidence')
+before=json.loads(Path(str(prefix)+'-before-fingerprints.json').read_text()); after=m.collect_records()
+a={i['path']:i for i in before['files']}; b={i['path']:i for i in after}
+changed=[p for p in a.keys()&b.keys() if a[p]['sha256']!=b[p]['sha256']]
+previous=json.loads((root/'docs/testing/2026-11-17-startup-final-validation-fingerprints.json').read_text())
+old={i['path']:i for i in previous['files']}
+summary={'captured_at':m.now(),'changed':sorted(changed),'missing':sorted(a.keys()-b.keys()),'added':sorted(b.keys()-a.keys()),'protected_unchanged':{p:a[p]['sha256']==b[p]['sha256'] for p in m.PROTECTED},'previous_validation_to_round_start_changed':sorted(p for p in a.keys()&old.keys() if a[p]['sha256']!=old[p]['sha256']), 'previous_validation_to_round_start_added':sorted(a.keys()-old.keys()),'previous_validation_to_round_start_missing':sorted(old.keys()-a.keys()),'before_manifest_sha256':before['manifest_sha256'],'after_manifest_sha256':hashlib.sha256(json.dumps(after,sort_keys=True).encode()).hexdigest()}
+Path(str(prefix)+'-fingerprints.json').write_text(json.dumps({'summary':summary,'files':after},indent=2)+'\n')
+diff=''
+for p in sorted(changed):
+ diff+=''.join(difflib.unified_diff((Path('/tmp/final-review-fixes-before')/p).read_text().splitlines(True),(root/p).read_text().splitlines(True),fromfile='before/'+p,tofile='after/'+p))
+Path(str(prefix)+'-owned.diff').write_text(diff)
+(evid/'source-delta.json').write_text(json.dumps(summary,indent=2)+'\n')
+def errors(path):
+ return sorted(re.sub(r':\d+: error:', ': error:',line) for line in path.read_text().splitlines() if ': error:' in line)
+current=errors(evid/'mypy-worktree.log'); orig=evid.parent/'2026-11-17-startup-final-validation-evidence'
+base=errors(orig/'mypy-worktree.txt'); head=errors(orig/'mypy-head.txt')
+comparison={'current_count':len(current),'baseline_worktree_count':len(base),'baseline_head_count':len(head),'retained_from_head':sorted(set(current)&set(head)),'new_vs_head':sorted(set(current)-set(head)),'removed_vs_round_start':sorted(set(base)-set(current)), 'new_vs_round_start':sorted(set(current)-set(base))}
+(evid/'mypy-comparison.json').write_text(json.dumps(comparison,indent=2)+'\n')
+print(json.dumps(summary,indent=2)); print(json.dumps(comparison,indent=2)); print(diff)

@@ -11,5 +11,5 @@ class RawSafetyObservation:
     message: Any
     received: float
     received_ros: float
-    clock_advance_steady: float
     stamp: float
+    measurement_steady: float

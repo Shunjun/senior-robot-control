@@ -50,12 +50,7 @@ bool sole_owner(
 
 bool valid_times(const Receipt & receipt, std::int64_t now_ros, double now_steady)
 {
-  const auto first = time_ns(receipt.first_received_ros);
-  const auto latest = time_ns(receipt.received_ros);
-  const auto admitted = time_ns(receipt.admitted_from_ros);
   return receipt.first_sequence > 0 && receipt.sequence >= receipt.first_sequence &&
-         first >= 0 && latest >= first && latest <= now_ros &&
-         admitted > 0 && admitted >= first && admitted <= now_ros &&
          std::isfinite(receipt.first_received_steady) && receipt.first_received_steady > 0 &&
          std::isfinite(receipt.received_steady) &&
          receipt.received_steady >= receipt.first_received_steady &&
@@ -131,13 +126,11 @@ bool StaticLidarTfIngress::source_active()
   if (retired_) {
     return false;
   }
-  const auto now = node_.now().nanoseconds();
-  if (now < last_ros_ || (active_ && !current_owners(*active_))) {
+  if (active_ && !current_owners(*active_)) {
     retire();
     return false;
   }
-  last_ros_ = now;
-  return active_ && !pending_ && now > 0;
+  return active_ && !pending_;
 }
 
 void StaticLidarTfIngress::offer(Receipt::ConstSharedPtr receipt, const rclcpp::MessageInfo & info)
@@ -216,13 +209,6 @@ void StaticLidarTfIngress::poll()
     retire();
     return;
   }
-  if (pending_->valid && pending_->admitted &&
-    (time_ns(pending_->received_ros) > last_ros_ ||
-    time_ns(pending_->admitted_from_ros) > last_ros_))
-  {
-    // The relay may observe a /clock update before this executor does.
-    return;
-  }
   const auto candidate = std::move(pending_);
   if (!active_ && candidate->generation > 0 && candidate->sequence > 0 &&
     !candidate->bridge_boot_id.empty() && candidate->bridge_boot_id.size() <= 64 &&
@@ -235,7 +221,7 @@ void StaticLidarTfIngress::poll()
   const double now_steady = std::chrono::duration<double>(now.time_since_epoch()).count();
   if (!candidate->valid || !candidate->admitted || candidate->generation == 0 ||
     candidate->bridge_boot_id.empty() || candidate->bridge_boot_id.size() > 64 ||
-    !valid_times(*candidate, last_ros_, now_steady))
+    !valid_times(*candidate, 0, now_steady))
   {
     if (active_) {
       retire();
@@ -244,12 +230,9 @@ void StaticLidarTfIngress::poll()
   }
 
   if (active_) {
-    const auto old_time = time_ns(active_->received_ros);
-    const auto new_time = time_ns(candidate->received_ros);
-    if (new_time < old_time ||
-      candidate->received_steady < active_->received_steady ||
+    if (candidate->received_steady < active_->received_steady ||
       (candidate->sequence == active_->sequence &&
-      (new_time != old_time || candidate->received_steady != active_->received_steady)))
+      candidate->received_steady != active_->received_steady))
     {
       retire();
       return;
@@ -281,11 +264,10 @@ bool StaticLidarTfIngress::admits(const senior_motion_msgs::msg::RawCaptureHeade
   if (!source_active()) {
     return false;
   }
-  const auto admitted = time_ns(active_->admitted_from_ros);
   // The producer and scan ingress share the host monotonic clock. A latched
   // static receipt is a fence, so later scans do not renew its admission.
-  return scan.frame_id == lidar_ && time_ns(scan.stamp) >= admitted &&
-         time_ns(scan.received_ros) >= admitted &&
+  return scan.frame_id == lidar_ &&
+         static_cast<double>(scan.timing.capture_start_steady_ns) / 1e9 >= active_->admitted_from_steady &&
          std::isfinite(scan.received_steady) && scan.received_steady >= active_->admitted_from_steady;
 }
 

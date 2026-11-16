@@ -50,7 +50,7 @@ struct MatchResult {
   MatchDiagnostics diagnostics;
 };
 struct MatcherLimits {
-  double max_interval = 0.3;
+  double max_interval_ms = 300.0;
   double range_limit = 8.0;
   double min_response = 0.3;
   double max_residual = 0.09;

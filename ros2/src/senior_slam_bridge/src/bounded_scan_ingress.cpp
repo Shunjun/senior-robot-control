@@ -1,3 +1,4 @@
+#include <senior_motion_msgs/source_timing.hpp>
 #include "bounded_scan_ingress.hpp"
 
 #include "scan_receipt_admission.hpp"
@@ -35,7 +36,7 @@ BoundedScanIngress::BoundedScanIngress(
   std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
   StaticLidarTfIngress * static_lidar_tf)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
-  raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
+  raw_topic_(std::move(raw_topic) + "/timed"), odom_frame_(std::move(odom_frame)),
   base_frame_(std::move(base_frame)), submit_(std::move(submit)),
   static_lidar_tf_(static_lidar_tf)
 {
@@ -52,11 +53,11 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
   if (closed_) {
     return false;
   }
-  if (now < last_ros_ || (now == 0 && source_)) {
+  if (now < last_steady_ns_ || (now == 0 && source_)) {
     retire_source();
     return false;
   }
-  last_ros_ = now;
+  last_steady_ns_ = now;
   return now > 0;
 }
 
@@ -74,7 +75,7 @@ bool BoundedScanIngress::current_owner(const Receipt & receipt)
 
 bool BoundedScanIngress::source_active()
 {
-  if (!observe_clock(node_.now().nanoseconds()) || !source_) {
+  if (!observe_clock(senior_motion_msgs::navigation::monotonic_ns()) || !source_) {
     return false;
   }
   if (!current_owner(source_->capture)) {
@@ -86,8 +87,7 @@ bool BoundedScanIngress::source_active()
 
 void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
 {
-  const auto now_ros = node_.now().nanoseconds();
-  if (!observe_clock(now_ros)) {
+  if (!observe_clock(senior_motion_msgs::navigation::monotonic_ns())) {
     return;
   }
   if (source_ && !current_owner(source_->capture)) {
@@ -129,22 +129,22 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   if (!current_owner(receipt) || !text_ok(receipt.bridge_boot_id) ||
     !text_ok(receipt.source_epoch) || !text_ok(receipt.frame_id) ||
-    !fresh(receipt, now_ros, steady_seconds()) || !layout_ok(*scan) ||
+    !fresh(receipt, steady_seconds()) || !layout_ok(*scan) ||
     (static_lidar_tf_ && !static_lidar_tf_->admits(receipt)))
   {
     return;
   }
-  const auto stamp = time_ns(receipt.stamp);
+  const auto measured = receipt.timing.capture_end_steady_ns;
   if (source_ && !same_geometry(*source_, *scan)) {
     retire_source();
     return;
   }
-  // Sequence is the identity. The stamp is only a TF/temporal admission fence.
+  // Source sequence and original monotonic measurement order survive ROS clock corrections.
   last_sequence_ = receipt.sequence;
-  if (stamp <= last_stamp_) {
+  if (measured <= last_measurement_ns_) {
     return;
   }
-  last_stamp_ = stamp;
+  last_measurement_ns_ = measured;
   if (!source_) {
     source_ = scan;
   }
@@ -158,9 +158,8 @@ void BoundedScanIngress::poll()
   if (!source_active()) {
     return;
   }
-  const auto now_ros = node_.now().nanoseconds();
   const auto now_steady = steady_seconds();
-  while (!pending_.empty() && !fresh(pending_.front()->capture, now_ros, now_steady)) {
+  while (!pending_.empty() && !fresh(pending_.front()->capture, now_steady)) {
     pending_.pop_front();
   }
   if (pending_.empty()) {
@@ -184,7 +183,7 @@ void BoundedScanIngress::poll()
     return;
   }
   if (!source_active() ||
-    !fresh(receipt, node_.now().nanoseconds(), steady_seconds()))
+    !fresh(receipt, steady_seconds()))
   {
     return;
   }

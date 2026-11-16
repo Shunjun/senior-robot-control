@@ -24,6 +24,7 @@ from senior_control.motion.contracts import (
 )
 from senior_control.motion.source_modes import SourceMode
 from senior_control.safety.geometry import swept_footprint
+from senior_control.safety.startup_visibility import StartupVisibility
 
 Point = tuple[float, float]
 
@@ -263,6 +264,7 @@ class ConstraintSnapshot:
     scope_id: str
     config_version: str
     envelope: RiskEnvelope | None
+    startup_visibility: StartupVisibility | None = None
 
 
 @dataclass(frozen=True)
@@ -400,6 +402,7 @@ def _identity(s: ConstraintSnapshot) -> tuple[str, ...]:
         s.response.profile_id,
         s.target.source,
         s.target.source_id,
+        repr(None if s.startup_visibility is None else s.startup_visibility.identity),
     )
 
 
@@ -646,13 +649,22 @@ class ConstraintEngine:
             return "geometry_numeric_range"
         if world.intersects(s.perception.occupied):
             return "sweep_obstructed"
+        visibility = (
+            s.startup_visibility if s.target.source in {"idle", "startup_learning"} else None
+        )
+        if visibility is not None and visibility.blocked_reason is not None:
+            return visibility.blocked_reason
         padded_new = world.difference(_world(Polygon(s.footprint.vertices), s.pose))
         physical_new = _world(c.physical_sweep, s.pose).difference(
             _world(Polygon(s.footprint.physical_vertices), s.pose)
         )
         for required in (padded_new, physical_new):
             if not required.is_empty and not s.perception.free_space.covers(required):
-                return "sweep_unknown"
+                if visibility is None:
+                    return "sweep_unknown"
+                unknown = required.difference(s.perception.free_space)
+                if not visibility.remaining_unknown(unknown, s.pose).is_empty:
+                    return "sweep_unknown"
         return None
 
     def _stop_certificate(self, s: ConstraintSnapshot, now: float) -> BrakingProof:
@@ -714,9 +726,19 @@ class ConstraintEngine:
             return ConstraintResult(
                 None, BrakeRequest(BrakeKind.CONTROLLED, "reverse_requires_stop", True)
             )
+        # Start the shared search at the currently effective capability, rather
+        # than dropping every fixed fraction of a large request. One scale keeps
+        # the signed linear/angular intent and curvature together; every resulting
+        # combination still needs the same sweep and final output verification.
+        target = s.target.velocity
+        scale = min(
+            1.0,
+            s.envelope.linear_cap_mps / abs(target.vx) if target.vx else 1.0,
+            s.envelope.yaw_cap_rps / abs(target.wz) if target.wz else 1.0,
+        )
         certs = []
         for fraction in self.config.fractions:
-            v = Velocity(s.target.velocity.vx * fraction, s.target.velocity.wz * fraction)
+            v = Velocity(target.vx * scale * fraction, target.wz * scale * fraction)
             if abs(v.vx) > s.envelope.linear_cap_mps or abs(v.wz) > s.envelope.yaw_cap_rps:
                 continue
             try:

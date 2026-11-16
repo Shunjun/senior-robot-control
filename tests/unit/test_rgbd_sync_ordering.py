@@ -18,7 +18,7 @@ def depth(stamp):
 
 @pytest.mark.parametrize("rgb_first", [True, False])
 def test_out_of_order_consumes_match_and_older_but_preserves_newer(rgb_first):
-    s = RgbdSynchronizer(max_skew_s=0.01)
+    s = RgbdSynchronizer(max_skew_ms=10)
     offer = s.offer_rgb if rgb_first else s.offer_depth
     match = s.offer_depth if rgb_first else s.offer_rgb
     frame = rgb if rgb_first else depth
@@ -40,7 +40,7 @@ def test_queue_depth_wait_and_drops_survive_arbitrary_index_consumption(monkeypa
     d = RuntimeDiagnostics(lambda *_: None)
     monkeypatch.setattr(module, "process_diagnostics", lambda: d)
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock[0]))
-    s = RgbdSynchronizer(max_skew_s=0.01)
+    s = RgbdSynchronizer(max_skew_ms=10)
     s.offer_rgb(rgb(2.0))
     clock[0] = 1.0
     s.offer_rgb(rgb(0.5))
@@ -59,7 +59,7 @@ def test_reoffered_same_object_is_consumed_once_and_duplicate_slot_is_dropped(mo
 
     d = RuntimeDiagnostics(lambda *_: None)
     monkeypatch.setattr(module, "process_diagnostics", lambda: d)
-    s = RgbdSynchronizer(max_skew_s=0.01)
+    s = RgbdSynchronizer(max_skew_ms=10)
     s.offer_rgb(rgb(2.0))
     same = rgb(1.0)
     s.offer_rgb(same)
@@ -76,7 +76,7 @@ def test_unusable_nan_slot_is_not_retained_as_newer_than_the_match(monkeypatch):
 
     d = RuntimeDiagnostics(lambda *_: None)
     monkeypatch.setattr(module, "process_diagnostics", lambda: d)
-    s = RgbdSynchronizer(max_skew_s=0.01)
+    s = RgbdSynchronizer(max_skew_ms=10)
     for stamp in (2.0, float("nan"), 1.0):
         s.offer_rgb(rgb(stamp))
     assert s.offer_depth(depth(1.0)) is not None

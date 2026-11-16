@@ -17,6 +17,7 @@ from senior_control.motion.observations import (
     SourceStatus,
 )
 from senior_control.motion.sample_types import PointObservation
+from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
 from tools.motion_fusion_replay import ReplayChain, replay_policy
 
 
@@ -46,6 +47,8 @@ def _point(
         covariance,
         "synthetic-known",
         Pose2D(0, 0, 0) if source is Source.GPS else None,
+        measurement_steady=100 + t,
+        measurement=MeasurementTime("synthetic-physical", "demo", t),
     )
 
 
@@ -75,7 +78,16 @@ def synthetic_demo() -> list[dict[str, Any]]:
                     if source is Source.GPS and 0.24 <= t < 0.45
                     else SourceStatus.VALID
                 )
-                h = Heading(0, 0, t, 100 + t, "synthetic-h", "synthetic known yaw")
+                h = Heading(
+                    0,
+                    0,
+                    t,
+                    100 + t,
+                    "synthetic-h",
+                    "synthetic known yaw",
+                    measurement_steady=100 + t,
+                    measurement=MeasurementTime("synthetic-physical", "demo", t),
+                )
                 chain.ingest(
                     _point(source, t, sequences[source], values, status),
                     t,
@@ -100,6 +112,12 @@ def synthetic_demo() -> list[dict[str, Any]]:
                     (0.01,) * 3, CovarianceKind.DIAGONAL_ONLY, "SYNTHETIC known rate variance", None
                 ),
                 "synthetic-known",
+                start_steady=100 + t - 0.1,
+                end_steady=100 + t,
+                measurement_interval=MeasurementInterval(
+                    _point(Source.IMU, t - 0.1, 1, (0.0,)).measurement,
+                    _point(Source.IMU, t, 1, (0.0,)).measurement,
+                ),
             )
             chain.ingest(sample, t, 100 + t)
             results.append(

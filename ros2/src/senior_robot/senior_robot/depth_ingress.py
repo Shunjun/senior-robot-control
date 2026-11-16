@@ -1,5 +1,6 @@
 """Depth geometry ingress. This process never publishes velocity or free space."""
 
+import math
 import time
 import uuid
 from dataclasses import replace
@@ -64,8 +65,6 @@ class DepthIngress(Node):
         self.declare_parameter("range_error_m", -1.0)
         self.declare_parameter("row_stride", 8)
         self.declare_parameter("column_stride", 8)
-        self.declare_parameter("max_age_s", -1.0)
-        self.declare_parameter("pair_wait_s", 0.1)
         self.declare_parameter("transform_static", False)
         self._depth_topic = str(self.get_parameter("depth_topic").value)
         self._info_topic = str(self.get_parameter("camera_info_topic").value)
@@ -77,15 +76,12 @@ class DepthIngress(Node):
             column_stride=int(self.get_parameter("column_stride").value),
             body_frame=str(self.get_parameter("body_frame").value),
         )
-        # //Compatible: retain the legacy parameter as input metadata; one shared
-        # dynamic-sensor policy supplies actual runtime age.
-        self._max_age = default_policy().hard_age_s
-        self._buffer = DepthPairBuffer(
-            max_age_s=self._max_age, pair_wait_s=default_policy().hard_age_s
-        )
+        # //Compatible: one shared dynamic-sensor policy supplies the runtime age.
+        hard_age_ms = default_policy().hard_age_ms
+        self._buffer = DepthPairBuffer(max_age_ms=hard_age_ms, pair_wait_ms=hard_age_ms)
         self._static = bool(self.get_parameter("transform_static").value)
         self._captures = {"depth": {}, "info": {}}
-        self._capture_group = RawCaptureGroup(("depth", "info"), max_age_s=self._max_age)
+        self._capture_group = RawCaptureGroup(("depth", "info"), max_age_ms=hard_age_ms)
         self._capture_lineage = None
         self._epoch = uuid.uuid4().hex
         self._depth_source = ""
@@ -94,7 +90,7 @@ class DepthIngress(Node):
         self._input_sequence = 0
         self._output_sequence = 0
         self._calibration_id = ""
-        self._last_ros_ns = None
+        self._last_steady = None
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._publisher = self.create_publisher(
@@ -173,15 +169,12 @@ class DepthIngress(Node):
         return ready
 
     def _clock_ok(self, ros_ns, steady):
-        if ros_ns <= 0:
-            self._buffer.clear()
-            self._invalid("clock_unqualified", ros_ns, steady)
+        if not math.isfinite(steady) or (
+            self._last_steady is not None and steady < self._last_steady
+        ):
+            self._new_epoch("monotonic_clock_invalid", ros_ns, steady)
             return False
-        if self._last_ros_ns is not None and ros_ns < self._last_ros_ns:
-            self._last_ros_ns = ros_ns
-            self._new_epoch("clock_rollback", ros_ns, steady)
-            return False
-        self._last_ros_ns = ros_ns
+        self._last_steady = steady
         return True
 
     def _offer_capture(self, stream, message, ros_ns, steady):
@@ -243,6 +236,7 @@ class DepthIngress(Node):
                 int(message.binning_x),
                 int(message.binning_y),
                 (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]), bool(message.roi_do_rectify)),
+                measurement_steady=capture.measurement_steady,
             )
             self._buffer.offer_info(info)
             self._drain()
@@ -281,6 +275,7 @@ class DepthIngress(Node):
                 str(message.encoding),
                 bool(message.is_bigendian),
                 bytes(message.data),
+                measurement_steady=capture.measurement_steady,
             )
             self._buffer.offer_depth(packet)
             self._drain()

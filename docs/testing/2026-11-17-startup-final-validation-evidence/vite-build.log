@@ -1,0 +1,27 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web/node_modules/.bin/vite build --outDir /tmp/startup-final-validation-web-dist --emptyOutDir
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web
+AT 2026-11-16T18:17:45Z
+vite v6.4.5 building for production...
+transforming...
+✓ 90 modules transformed.
+rendering chunks...
+computing gzip size...
+../../../../../../../tmp/startup-final-validation-web-dist/index.html                                              0.52 kB │ gzip:   0.33 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-400-normal-SafcrIr2.woff2     9.76 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-700-normal-CnDBPjkL.woff2     9.90 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-500-normal-BR1ody1F.woff2     9.96 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-600-normal-DVQm9bgb.woff2     9.97 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/ibm-plex-mono-latin-400-normal-CvHOgSBP.woff    13.14 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/ibm-plex-mono-latin-500-normal-CB9ihrfo.woff    13.16 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-400-normal-D7EtbySE.woff     13.16 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-700-normal-D1s_c2du.woff     13.33 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-500-normal-CnUQnZ4D.woff     13.41 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/chakra-petch-latin-600-normal-DQKfcdKo.woff     13.43 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2   14.71 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2   14.89 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/index-Cwk7c-0p.css                              45.73 kB │ gzip:   9.01 kB
+../../../../../../../tmp/startup-final-validation-web-dist/assets/index-C-6ExdbH.js                              391.23 kB │ gzip: 126.08 kB
+✓ built in 1.55s
+
+EXIT 0 AT 2026-11-16T18:17:46Z

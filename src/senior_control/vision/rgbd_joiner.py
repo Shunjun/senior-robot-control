@@ -166,7 +166,7 @@ class CaptureJoiner:
         self._bridge_gids: list[str] = ["", "", "", ""]
         self._identities: list[tuple[str, str, str] | None] = [None, None, None, None]
         self._sequences = [0, 0, 0, 0]
-        self._times: list[tuple[int, int, float] | None] = [None, None, None, None]
+        self._times: list[tuple[float, int, float] | None] = [None, None, None, None]
         self._time_sources: list[tuple[str, str] | None] = [None, None, None, None]
         self._pending: dict[int, dict[int, tuple[RawCaptureHeader, Any, str]]] = {}
         self._faulted = False
@@ -247,16 +247,18 @@ class CaptureJoiner:
             or (
                 previous is not None
                 and (
-                    header.stamp_ns <= previous[0]
-                    or header.received_ros_ns < previous[1]
-                    or header.received_steady < previous[2]
+                    header.measurement_steady <= previous[0] or header.received_steady < previous[2]
                 )
             )
         ):
             self.invalidate()
             return JoinResult("invalid")
         self._identities[stream] = identity
-        self._times[stream] = (header.stamp_ns, header.received_ros_ns, header.received_steady)
+        self._times[stream] = (
+            header.measurement_steady,
+            header.timing.sequence,
+            header.received_steady,
+        )
         self._time_sources[stream] = source
         try:
             snapshot = _snapshot(stream, header, body)
@@ -266,12 +268,20 @@ class CaptureJoiner:
         bucket = self._pending.setdefault(header.stamp_ns, {})
         bucket[stream] = (header, snapshot, bridge_gid)
         while len(self._pending) > self.capacity:
-            del self._pending[min(self._pending)]
+            del self._pending[
+                min(
+                    self._pending,
+                    key=lambda k: min(v[0].measurement_steady for v in self._pending[k].values()),
+                )
+            ]
         if len(bucket) != 4 or header.stamp_ns not in self._pending:
             return JoinResult("invalid" if generation_changed and self._faulted else "pending")
         entries = tuple(bucket[i] for i in range(4))
         for stamp in tuple(self._pending):
-            if stamp <= header.stamp_ns:
+            if (
+                max(v[0].measurement_steady for v in self._pending[stamp].values())
+                <= header.measurement_steady
+            ):
                 del self._pending[stamp]
         self._faulted = False
         return JoinResult(

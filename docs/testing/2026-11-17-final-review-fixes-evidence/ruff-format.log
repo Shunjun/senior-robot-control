@@ -1,0 +1,7 @@
+AT 2026-11-16T18:39:11.643056+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+COMMAND [".venv/bin/ruff", "format", "--check", "--no-cache", "--extend-exclude", "ros2/src/senior_robot/senior_robot/native_receipt.py,tests/test_native_receipt_diagnostics.py,docs/reviews/2026-11-16-software-estop-owner.md", "."]
+619 files already formatted
+
+EXIT 0
+ELAPSED 0.20859512500464916

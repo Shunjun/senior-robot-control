@@ -94,6 +94,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         "std_msgs.msg": {"String": object},
         "senior_motion_msgs.msg": {
             "DriveExecutionFeedback": object,
+            "NavigationSample": object,
             "FinalCommand": type("FinalCommand", (), {}),
         },
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -126,7 +127,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._runtime_subscription.handle.take_message.return_value = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
-    value._arbiter = Arbiter("robot", 0.3)
+    value._arbiter = Arbiter("robot", 300)
     output: list[Any] = []
     value._final_publisher = SimpleNamespace(publish=output.append)
     value._publish = lambda velocity: None
@@ -242,7 +243,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
     assert await browser.connect() and await other.connect()
     node.value.get_parameter = lambda name: SimpleNamespace(value=robot_id)
     node.value._manual_ingress = ManualIngress(robot_id, "command-boot", ttl=0.3)
-    node.value._arbiter = Arbiter(robot_id, 0.3)
+    node.value._arbiter = Arbiter(robot_id, 300)
     node.value._motion_runtime = MotionRuntimeReceiver()
     node.value._motion_runtime.accept(runtime(10, robot_id=robot_id), b"t5", 10)
 
@@ -1056,3 +1057,200 @@ async def test_agent_queued_intent_keeps_original_300ms_cutoff(tmp_path):
         finally:
             released.set()
             await agent._release()
+
+
+async def test_heartbeat_window_keeps_manual_delivery_then_reconnect_retires_old_context(
+    node: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_fakes import FakeHome, FakeMaps, FakeState, FakeTasks, until
+    from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
+    from test_task_ownership import Navigation
+
+    from senior_control.agent import Agent
+    from senior_control.agent.composition import build_task_runtime
+    from senior_control.agent.journal import AgentJournal
+    from senior_control.agent.ports import TaskAwareMotion
+    from senior_control.agent.websocket import WebSocketLink
+    from senior_control.settings.service import RuntimeGate, SettingsService
+    from senior_control.settings.store import SettingsStore
+    from senior_control.storage.database import Database
+    from senior_control.tasks.store import TaskStore
+
+    clock = HeartbeatClock(monkeypatch)
+    hub = relay_hub(monkeypatch, clock)
+    first = RelaySocket(hub, "robot")
+    link = WebSocketLink(first, "robot", first.connection.epoch, clock=clock.monotonic)
+    connections: asyncio.Queue[Any] = asyncio.Queue()
+    connections.put_nowait(link)
+    disabled: list[int] = []
+
+    # Keep the actual IPC framing and native manual owner from this existing fixture.
+    AdapterCore = importlib.import_module("senior_robot.agent_adapter").AdapterCore
+
+    core = AdapterCore(
+        robot_id="robot",
+        submit=node.value.submit,
+        disconnect=node.value.disconnect,
+        request_exit=lambda: None,
+        manual=node.value.manual_request,
+    )
+
+    async def tracked_handle(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "disable_motion":
+            disabled.append(message["connection_epoch"])
+        return await core.handle(message)
+
+    async with (
+        ipc_pair(tracked_handle, monkeypatch) as client,
+        ipc_pair(tracked_handle, monkeypatch) as intent_client,
+        Database(tmp_path / "heartbeat-manual.db") as database,
+    ):
+        journal = AgentJournal(database, robot_id="robot")
+        await journal.prepare()
+        settings = SettingsService(
+            SettingsStore(database),
+            simulation_settings_profile(),
+            RuntimeGate(),
+        )
+        await settings.prepare()
+        motion = TaskAwareMotion(client, intent_client=intent_client)
+        motion.settings = settings
+        tasks = TaskStore(database, robot_id="robot")
+        await tasks.prepare()
+        _, executor = build_task_runtime(database, tasks, Navigation(), boot_id="heartbeat")
+        motion.bind_tasks(executor)
+        agent = Agent(
+            "robot",
+            connector=connections.get,
+            journal=journal,
+            tasks=FakeTasks(),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            state=FakeState(),
+            motion=motion,
+            clock=clock,
+            heartbeat_ms=20,
+            retry_delay_ms=1,
+        )
+        runner = asyncio.create_task(agent.run())
+        controller = hub.attach_controller("robot", "controller-session")
+        assert controller is not None
+
+        async def command(kind: str, payload: dict[str, Any], seq: int, epoch: int) -> None:
+            frame = envelope(kind, payload, generation=None, seq=seq, request=str(seq))
+            frame.connection_epoch = epoch
+            hub.handle_control_frame(controller, serialize_envelope(frame))
+
+        async def response() -> Any:
+            while True:
+                raw = await controller.outbox.get()
+                assert isinstance(raw, bytes)
+                data = json.loads(raw)
+                if data["type"] == "response":
+                    return data["payload"]
+
+        try:
+            await until(
+                lambda: (
+                    any(frame["type"] == "heartbeat.request" for frame in first.sent)
+                    and not link._pending
+                )
+            )
+            first.drop_replies = True
+            await command("control.acquire", {}, 1, 1)
+            prepared = await asyncio.wait_for(response(), 1)
+            assert prepared["ok"]
+            authority = prepared["data"]["authority_id"]
+            # Fresh inputs span both retired thresholds, while subsequent replies are missing.
+            for seq, now in enumerate([10 + i / 10 for i in range(1, 50)] + [14.999], start=2):
+                clock.advance(now)
+                node.clock.now = now
+                node.value._motion_runtime.accept(runtime(now, seq), b"t5", now)
+                await command(
+                    "drive.intent",
+                    {
+                        "authority_id": authority,
+                        "gesture": 1,
+                        "sequence": seq,
+                        "linear": 0.4,
+                        "turn": 0.0,
+                        "gear": "low",
+                    },
+                    seq,
+                    1,
+                )
+                await until(lambda seq=seq: bool(node.output) and node.output[-1].sequence == seq)
+                assert node.output[-1].vx > 0 and not disabled
+                assert not first.closed and agent.connection_epoch == 1
+            clock.advance(15.0)
+            await until(lambda: first.closed and disabled == [1])
+            assert not agent.connected
+            assert node.value.manual_view()["state"] == "closed"
+            second = RelaySocket(hub, "robot")
+            connections.put_nowait(
+                WebSocketLink(
+                    second,
+                    "robot",
+                    second.connection.epoch,
+                    clock=clock.monotonic,
+                )
+            )
+            await until(lambda: agent.connection_epoch == 2 and hub.is_online("robot"))
+            node.clock.now = 15.0
+            node.value._motion_runtime.accept(runtime(15.0, 100), b"t5", 15.0)
+            count = len(node.output)
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 100,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                100,
+                1,
+            )
+            # Intent has no per-sample response, including rejection.
+            await asyncio.sleep(0.02)
+            assert len(node.output) == count
+            # Even a current transport epoch cannot resurrect the old authority.
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 101,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                101,
+                2,
+            )
+            await asyncio.sleep(0.02)
+            assert len(node.output) == count
+            await command("control.acquire", {}, 102, 2)
+            prepared = await asyncio.wait_for(response(), 1)
+            assert prepared["ok"]
+            fresh_authority = prepared["data"]["authority_id"]
+            assert fresh_authority != authority
+            await command(
+                "drive.intent",
+                {
+                    "authority_id": fresh_authority,
+                    "gesture": 1,
+                    "sequence": 103,
+                    "linear": 0.4,
+                    "turn": 0.0,
+                    "gear": "low",
+                },
+                103,
+                2,
+            )
+            await until(lambda: len(node.output) > count and node.output[-1].vx > 0)
+        finally:
+            agent.request_shutdown()
+            await asyncio.wait_for(runner, 2)
+            await settings.close()

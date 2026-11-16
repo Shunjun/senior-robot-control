@@ -5,6 +5,7 @@ import pytest
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.optional_motion_inputs import rgbd_observation, static_matrix
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
 
 from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
@@ -25,6 +26,7 @@ def header(t, sequence, family):
         received_ros=stamp(t),
         received_steady=t + 10,
         frame_id="camera",
+        timing=wire_time(t + 10, tick=t, sequence=sequence, epoch="epoch"),
     )
 
 
@@ -125,7 +127,7 @@ def test_gps_body_twist_does_not_need_absolute_heading_or_other_motion_axes(monk
         receipt_generation=1,
         receipt_sequence=1,
     )
-    adapter.gps(message, info, N(sample_gid=b"gps"))
+    adapter.gps(N(data=message, timing=wire_time(19.9, tick=9.9)), info, N(sample_gid=b"gps"))
     s.estimate(10.0, 20.0)
     assert s.latest.vx.observed and s.latest.vy.observed
     assert s.latest.wz.value is None and s.latest.healthy

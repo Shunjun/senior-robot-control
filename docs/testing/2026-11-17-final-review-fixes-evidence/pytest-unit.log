@@ -1,0 +1,46 @@
+AT 2026-11-16T18:39:11.649808+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+COMMAND [".venv/bin/pytest", "-q", "-p", "no:cacheprovider", "--tb=short", "--junitxml=docs/testing/2026-11-17-final-review-fixes-evidence/pytest-unit.xml", "--basetemp=/tmp/final-review-fixes-pytest-unit", "--durations=10", "tests/unit/test_agent_config.py", "tests/unit/test_limited_manual_rearm.py", "tests/unit/test_motion_core_event_time.py", "tests/unit/test_websocket_link.py", "tests/unit/test_heartbeat_wire.py"]
+......F...............F..................                                [100%]
+=================================== FAILURES ===================================
+______ test_composition_starts_reporting_without_adapter_identity[False] _______
+tests/unit/test_agent_config.py:137: in test_composition_starts_reporting_without_adapter_identity
+    await server.start()
+src/senior_control/runtime/ipc.py:110: in start
+    cancellation = await task
+                   ^^^^^^^^^^
+src/senior_control/runtime/ipc.py:131: in _start
+    pending_socket.bind(self._text)
+E   PermissionError: [Errno 1] Operation not permitted
+______________ test_connector_uses_authenticated_socket_and_epoch ______________
+tests/unit/test_websocket_link.py:71: in test_connector_uses_authenticated_socket_and_epoch
+    async with serve(handler, "127.0.0.1", 0, process_response=headers) as server:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/websockets/asyncio/server.py:813: in __aenter__
+    return await self
+           ^^^^^^^^^^
+.venv/lib/python3.12/site-packages/websockets/asyncio/server.py:831: in __await_impl__
+    server = await self.create_server
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../.local/share/uv/python/cpython-3.12.15-macos-aarch64-none/lib/python3.12/asyncio/base_events.py:1584: in create_server
+    raise OSError(err.errno, msg) from None
+E   PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-final-review-fixes-evidence/pytest-unit.xml -
+============================= slowest 10 durations =============================
+0.43s call     tests/unit/test_limited_manual_rearm.py::test_completed_stop_uses_raw_wheel_imu_stillness_without_body
+0.42s call     tests/unit/test_limited_manual_rearm.py::test_static_stop_model_does_not_manufacture_raw_stillness
+0.38s call     tests/unit/test_limited_manual_rearm.py::test_epoch_change_and_missing_model_remove_permission
+0.11s setup    tests/unit/test_motion_core_event_time.py::test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_clock_fault
+0.09s call     tests/unit/test_motion_core_event_time.py::test_unified_feedback_does_not_repeat_pair_qualification_at_output
+0.07s call     tests/unit/test_motion_core_event_time.py::test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_clock_fault
+0.06s call     tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[True]
+0.04s call     tests/unit/test_motion_core_event_time.py::test_real_sampled_clock_rollback_rejects_without_clamping[t1]
+0.04s call     tests/unit/test_motion_core_event_time.py::test_real_sampled_clock_rollback_rejects_without_clamping[t2]
+0.04s setup    tests/unit/test_motion_core_event_time.py::test_unified_feedback_does_not_repeat_pair_qualification_at_output
+=========================== short test summary info ============================
+FAILED tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[False] - PermissionError: [Errno 1] Operation not permitted
+FAILED tests/unit/test_websocket_link.py::test_connector_uses_authenticated_socket_and_epoch - PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted
+2 failed, 39 passed in 3.13s
+
+EXIT 1
+ELAPSED 3.7712742500007153

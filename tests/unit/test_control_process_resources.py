@@ -180,3 +180,33 @@ def test_cpu_busy_spawn_does_not_hold_parent_snapshot_or_heartbeat():
         assert slot.take(0)[1] == {"heartbeat": updates - 1}
     finally:
         worker.close()
+
+
+def test_reception_child_inherits_typed_sensor_remaps_without_twist_or_untyped_fallback(
+    monkeypatch,
+):
+    from types import SimpleNamespace as N
+
+    from senior_robot import control_inputs
+
+    captured = {}
+
+    def process(**kwargs):
+        captured.update(kwargs)
+        return N(start=lambda: captured.update(started=True))
+
+    context = N(Event=lambda: object(), Process=process)
+    monkeypatch.setattr(control_inputs.mp, "get_context", lambda _: context)
+    monkeypatch.setattr(control_inputs, "LatestSnapshot", lambda _: object())
+    names = []
+    node = N(
+        list_parameters=lambda *a, **kw: N(names=[]),
+        resolve_topic_name=lambda topic: names.append(topic) or "/isolated" + topic,
+    )
+    channel = control_inputs.ControlInputs(node)
+    mappings = dict(captured["args"][1])
+    assert captured["started"]
+    assert mappings["/wheel/odom/timed"] == "/isolated/wheel/odom/timed"
+    assert mappings["/imu/data/timed"] == "/isolated/imu/data/timed"
+    assert "/wheel/odom" not in mappings and "/imu/data" not in mappings
+    assert channel.slot is captured["args"][2]

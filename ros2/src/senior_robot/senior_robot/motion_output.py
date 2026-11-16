@@ -10,7 +10,7 @@ from ament_index_python.packages import get_package_prefix
 
 
 class MotionOutput:
-    def __init__(self, output_topic="/cmd_vel"):
+    def __init__(self, output_topic="/control/actuator_target"):
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         executable = (
             Path(get_package_prefix("senior_motion_msgs"))
@@ -31,11 +31,13 @@ class MotionOutput:
         self.channel, self.sequence = parent, 0
         self._closed = False
 
-    def publish(self, velocity, deadline):
+    def publish(self, velocity, deadline, *, computed_steady):
         if self.process.poll() is not None:
             raise ValueError("motion_output_transport_exited")
         self.sequence += 1
-        frame = struct.pack("=dddQ", velocity.vx, velocity.wz, deadline, self.sequence)
+        frame = struct.pack(
+            "=ddddQ", velocity.vx, velocity.wz, deadline, computed_steady, self.sequence
+        )
         try:
             if self.channel.send(frame) != len(frame):
                 raise OSError("partial output frame")

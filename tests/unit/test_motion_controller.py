@@ -412,14 +412,23 @@ def test_t3_partial_fusion_to_real_t4_to_controller_wheel_limited():
 
     policy = replay_policy()
     policy = replace(
-        policy, admission=replace(policy.admission, recovery_samples=1, recovery_span_s=0)
+        policy, admission=replace(policy.admission, recovery_samples=1, recovery_span_ms=0)
     )
     chain = ReplayChain(policy)
     events = [
-        replace(point(Source.IMU, i / 50, i + 1, (0,)), received_steady=i / 50) for i in range(6)
+        replace(
+            point(Source.IMU, i / 50, i + 1, (0,)),
+            received_steady=i / 50,
+            measurement_steady=i / 50,
+        )
+        for i in range(6)
     ]
     events += [
-        replace(point(Source.WHEEL, i / 30, i + 1, (0, 0)), received_steady=i / 30)
+        replace(
+            point(Source.WHEEL, i / 30, i + 1, (0, 0)),
+            received_steady=i / 30,
+            measurement_steady=i / 30,
+        )
         for i in range(4)
     ]
     for p in sorted(events, key=lambda p: p.end_ros):

@@ -1,5 +1,6 @@
 """Isolated registered RGB-D proposals. They never publish velocity or free space."""
 
+import math
 import time
 from pathlib import Path
 
@@ -63,7 +64,6 @@ class SemanticIngress(Node):
         self.declare_parameter("weights_path", "")
         self.declare_parameter("device", "cpu")
         self.declare_parameter("inference_timeout_s", 5.0)
-        self.declare_parameter("max_age_s", 0.3)
         self._topics = (
             str(self.get_parameter("rgb_topic").value),
             str(self.get_parameter("rgb_camera_info_topic").value),
@@ -71,14 +71,13 @@ class SemanticIngress(Node):
             str(self.get_parameter("raw_depth_topic").value),
             str(self.get_parameter("raw_depth_info_topic").value),
         )
-        # //Compatible: retain the legacy parameter as input metadata; one shared
-        # dynamic-sensor policy supplies actual runtime age.
-        self._max_age = default_policy().hard_age_s
+        # //Compatible: one shared dynamic-sensor policy supplies the runtime age.
+        self._max_age_ms = default_policy().hard_age_ms
         self._registered = bool(self.get_parameter("registered_profile").value)
-        self._depth_egress = EgressAdmission(max_age_s=self._max_age)
-        self._sync = SemanticSynchronizer(max_age_s=self._max_age)
+        self._depth_egress = EgressAdmission(max_age_ms=self._max_age_ms)
+        self._sync = SemanticSynchronizer(max_age_ms=self._max_age_ms)
         self._capture_group = RawCaptureGroup(
-            ("rgb", "rgb_info", "depth", "depth_info"), max_age_s=self._max_age
+            ("rgb", "rgb_info", "depth", "depth_info"), max_age_ms=self._max_age_ms
         )
         self._capture_lineage = None
         self._captures = {name: {} for name in ("rgb", "rgb_info", "depth", "depth_info")}
@@ -92,15 +91,15 @@ class SemanticIngress(Node):
                 weights_path=Path(weights) if weights else None,
                 device=str(self.get_parameter("device").value),
                 timeout_s=float(self.get_parameter("inference_timeout_s").value),
-                max_result_age_s=self._max_age,
+                max_result_age_ms=self._max_age_ms,
             )
         )
         self._coordinator = SemanticCoordinator(
-            worker, registered_profile=self._registered, max_age_s=self._max_age
+            worker, registered_profile=self._registered, max_age_ms=self._max_age_ms
         )
         self._sources = ("", "", "", "", "")
         self._ready = False
-        self._last_ros = None
+        self._last_steady = None
         self._last_status = 0.0
         self._sequence = 0
         self._depth_epoch = ""
@@ -170,15 +169,13 @@ class SemanticIngress(Node):
         return ready
 
     def _clock_ok(self, ros_ns):
-        if ros_ns <= 0:
-            self._reset("clock_unqualified", retire_depth=True)
-            self._last_ros = ros_ns
+        steady = time.monotonic()
+        if not math.isfinite(steady) or (
+            self._last_steady is not None and steady < self._last_steady
+        ):
+            self._reset("monotonic_clock_invalid", retire_depth=True)
             return False
-        if self._last_ros is not None and ros_ns < self._last_ros:
-            self._reset("clock_rollback", retire_depth=True)
-            self._last_ros = ros_ns
-            return False
-        self._last_ros = ros_ns
+        self._last_steady = steady
         return True
 
     def _input_ready(self, ros_ns):
@@ -235,6 +232,7 @@ class SemanticIngress(Node):
                     capture.frame_id,
                     capture.raw_gid,
                     image,
+                    measurement_steady=capture.measurement_steady,
                 )
             )
             self._drain()
@@ -269,6 +267,7 @@ class SemanticIngress(Node):
                 int(message.binning_x),
                 int(message.binning_y),
                 (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]), bool(message.roi_do_rectify)),
+                measurement_steady=capture.measurement_steady,
             )
             self._sync.offer_info(info)
             self._drain()
@@ -296,7 +295,7 @@ class SemanticIngress(Node):
                     info_gid=self._sources[4],
                     now_ros_ns=ros_ns,
                     now_steady=steady,
-                    max_age_s=self._max_age,
+                    max_age_ms=self._max_age_ms,
                 )
                 is None
             ):

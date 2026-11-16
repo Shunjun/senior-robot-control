@@ -1,0 +1,85 @@
+--- before/src/senior_control/agent/websocket.py
++++ after/src/senior_control/agent/websocket.py
+@@ -144,11 +144,8 @@
+         try:
+             data = json.loads(raw)
+             if isinstance(data, dict) and data.get("type") == "heartbeat.reply":
+-                pending = (
+-                    self._pending.get(data.get("nonce"))
+-                    if isinstance(data.get("nonce"), str)
+-                    else None
+-                )
++                nonce = data.get("nonce")
++                pending = self._pending.get(nonce) if isinstance(nonce, str) else None
+                 now = self._clock()
+                 fields = {
+                     "v",
+@@ -160,7 +157,8 @@
+                     "server_time",
+                 }
+                 if (
+-                    pending is None
++                    not isinstance(nonce, str)
++                    or pending is None
+                     or set(data) != fields
+                     or data["v"] != 1
+                     or data["robot_id"] != self._robot_id
+@@ -174,7 +172,7 @@
+                 server_time = data["server_time"]
+                 if not math.isfinite(server_time) or not 0 <= elapsed < HEARTBEAT_WINDOW_SECONDS:
+                     raise ConnectionError("invalid heartbeat reply timestamp or reply timed out")
+-                del self._pending[data["nonce"]]
++                del self._pending[nonce]
+                 self._online_deadline = now + HEARTBEAT_WINDOW_SECONDS
+                 self._arm_heartbeat_timer()
+                 return HeartbeatFrame(self._robot_id)
+--- before/tests/unit/test_agent_config.py
++++ after/tests/unit/test_agent_config.py
+@@ -118,11 +118,10 @@
+     import asyncio
+     import tempfile
+ 
+-    from agent_fakes import FakeConnector, FakeLink, until
+-
+     from senior_control.agent import composition
+     from senior_control.agent.main import Agent
+     from senior_control.runtime.ipc import IpcServer
++    from tests.integration.agent_fakes import FakeConnector, FakeLink, until
+ 
+     with tempfile.TemporaryDirectory(prefix="identity-") as directory:
+         socket = Path(directory) / "agent.sock"
+@@ -145,9 +144,7 @@
+         runner = asyncio.create_task(composition.run_agent(config))
+         try:
+             await until(lambda: bool(link.snapshots))
+-            assert (
+-                link.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
+-            )
++            assert link.snapshots[-1].vehicle_ui["observation"]["status"] == "ipc_unavailable"
+             assert not runner.done() and not link.closed
+             if not missing_adapter:
+                 assert seen and set(seen) == {"identity"}
+--- before/tests/unit/test_limited_manual_rearm.py
++++ after/tests/unit/test_limited_manual_rearm.py
+@@ -34,7 +34,7 @@
+             p.yaw_accel,
+             p.yaw_decel,
+             p.yaw_jerk,
+-            p.lag,
++            p.lag_ms / 1000,
+             p.profile_id,
+         ),
+         Footprint(p.length, p.width),
+--- before/tests/unit/test_motion_core_event_time.py
++++ after/tests/unit/test_motion_core_event_time.py
+@@ -65,8 +65,8 @@
+     rig.core.sensors.estimator.invalidate("laser")
+     snapshot = rig.core._snapshot
+ 
+-    def bounded(*args):
+-        ctx = snapshot(*args)
++    def bounded(*args, visibility=None):
++        ctx = snapshot(*args, visibility=visibility)
+         return replace(
+             ctx,
+             envelope=replace(

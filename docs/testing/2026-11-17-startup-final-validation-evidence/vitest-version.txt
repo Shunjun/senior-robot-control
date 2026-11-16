@@ -1,0 +1,7 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web/node_modules/.bin/vitest --version
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web
+AT 2026-11-16T18:17:27Z
+vitest/5.0.5 darwin-arm64 node-v24.14.1
+
+EXIT 0 AT 2026-11-16T18:17:28Z

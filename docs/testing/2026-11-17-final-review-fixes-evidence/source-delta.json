@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-11-16T18:45:37Z",
+  "changed": [
+    "src/senior_control/agent/websocket.py",
+    "tests/unit/test_agent_config.py",
+    "tests/unit/test_limited_manual_rearm.py",
+    "tests/unit/test_motion_core_event_time.py"
+  ],
+  "missing": [],
+  "added": [],
+  "protected_unchanged": {
+    "ros2/src/senior_robot/senior_robot/native_receipt.py": true,
+    "tests/test_native_receipt_diagnostics.py": true,
+    "docs/reviews/2026-11-16-software-estop-owner.md": true
+  },
+  "previous_validation_to_round_start_changed": [],
+  "previous_validation_to_round_start_added": [],
+  "previous_validation_to_round_start_missing": [],
+  "before_manifest_sha256": "ff10f4de43e6167a87feed12c57629e6d62e4e83965fd3c8b7a2d35866f7fadf",
+  "after_manifest_sha256": "d828c0878e38eab11161c58f16e293a194d28ae49492a8b5f7589bb26a5a8d5e"
+}

@@ -7,6 +7,7 @@ from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs, publish_inputs
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from source_time_test_support import capture_time, wire_time
 from test_motion_core_handoff import barrier, core  # noqa: F401 -- shared fake ROS fixture
 
 from senior_control.config import DeviceProfile
@@ -38,15 +39,17 @@ def feed(adapter, t, vx=0.0, wz=0.0):
         b"wheel",
         t,
         t,
+        timing=capture_time(t, sequence=round(t * 1e9)),
     )
     adapter.imu(
         N(header=N(stamp=timestamp(t), frame_id="base_link"), angular_velocity=N(z=wz)),
         b"imu",
         t,
         t,
+        timing=capture_time(t, sequence=round(t * 1e9)),
     )
     captures = {}
-    if adapter.sample_sink is not None:
+    if True:
 
         def capture(stamp):
             return N(
@@ -60,6 +63,7 @@ def feed(adapter, t, vx=0.0, wz=0.0):
                 received_ros=timestamp(stamp),
                 received_steady=stamp,
                 frame_id="laser_link",
+                timing=wire_time(stamp, sequence=round(stamp * 1e9), epoch="raw-scan"),
             )
 
         captures = {"first_capture": capture(t - 0.05), "second_capture": capture(t)}
@@ -83,7 +87,7 @@ def feed(adapter, t, vx=0.0, wz=0.0):
 def test_native_recovery_then_intent_and_local_release_are_actually_consumed(core, monkeypatch):  # noqa: F811
     p = core.profile
     a = NativeObservations(p.admission(), p.temporal(), p.fusion())
-    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_s=0.25)
+    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
     node = core.node
     node._depth_policy = "laser_only"
     node._scan_topology_ready = lambda: True
@@ -102,8 +106,12 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
             N(
                 received=t,
                 received_ros=t,
+                measurement_steady=t,
                 stamp=t,
                 message=N(
+                    raw_capture=N(
+                        timing=wire_time(t, sequence=round(t * 100), epoch="scan-driver")
+                    ),
                     source_epoch="scan",
                     frame_id="laser_link",
                     sequence=round(t * 100),

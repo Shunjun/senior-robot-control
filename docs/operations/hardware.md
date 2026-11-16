@@ -60,10 +60,10 @@ ROS 子进程运行中退出/IPC 就绪超时仍属于运行故障，按 on-fail
 
 | 字段组 | 单位 / 获取途径 |
 | --- | --- |
-| accel/decel、yaw_accel/yaw_decel、jerk/yaw_jerk、lag | m/s²、rad/s²、m/s³、rad/s³、s；对应载荷/地面条件下命令与独立车身观测的响应界，普通缓刹不能证明最坏制动下界 |
+| accel/decel、yaw_accel/yaw_decel、jerk/yaw_jerk、lag_ms | m/s²、rad/s²、m/s³、rad/s³、ms；对应载荷/地面条件下命令与独立车身观测的响应界，停车模型把 lag_ms 换算成秒，普通缓刹不能证明最坏制动下界 |
 | wheel_speed_mps、assumed_body_cap、degraded_cap | m/s；实际驱动组合限值、独立全车身包络及轮速退化适用范围，不能用仿真 1.52 或固件教学限幅冒充 |
 | linear_error/yaw_error、sensor_error、position_error、orientation_error_rad | m/s、rad/s、m、m、rad；对应测量/预测/感知/全时域跟踪标定 |
-| drive_linear_overshoot/drive_yaw_overshoot、lateral_drift_mps/lateral_stop_s | m/s、rad/s、m/s、s；零命令响应和侧滑收敛独立界 |
+| drive_linear_overshoot/drive_yaw_overshoot、lateral_drift_mps/lateral_stop_ms | m/s、rad/s、m/s、ms；零命令响应和侧滑收敛独立界，搜索模型把 lateral_stop_ms 换算成秒 |
 | stationary_linear_mps/stationary_yaw_rps | m/s、rad/s；物理近静止容差；须大于测量误差，控制器采用扣除误差后的阈值，最终恢复再核算预测年龄 |
 | evidence_basis、operating_conditions、risk_basis、brake_tracking_basis | 对应原始资料/采集记录和适用载荷、地面、坡度，不填虚构“已验证” |
 

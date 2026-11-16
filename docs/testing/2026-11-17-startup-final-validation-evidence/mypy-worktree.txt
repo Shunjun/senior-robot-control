@@ -1,0 +1,17 @@
+mypy worktree 2026-11-16T18:17:27Z
+DRIFT before-mypy-worktree source_drift=False changed=[] missing=[] added=[]
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/mypy --no-incremental --cache-dir /tmp/startup-final-mypy-worktree src/senior_control
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:17:27Z
+src/senior_control/tasks/lifecycle.py:318: error: Incompatible types in assignment (expression has type "Literal['succeeded', 'canceled', 'failed'] | None", variable has type "Literal['empty', 'starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']")  [assignment]
+src/senior_control/tasks/lifecycle_store.py:647: error: Value of type "Row | None" is not indexable  [index]
+src/senior_control/motion/constraints.py:189: error: Incompatible return value type (got "tuple[tuple[float, ...], ...]", expected "tuple[tuple[float, float], ...]")  [return-value]
+src/senior_control/motion/constraints.py:191: error: Argument "join_style" to "buffer" of "BaseGeometry" has incompatible type "Literal[2]"; expected "Literal['round', 'mitre', 'bevel'] | BufferJoinStyle"  [arg-type]
+src/senior_control/motion/controller.py:454: error: Argument 1 to "validate_output" of "TickEvaluation" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+src/senior_control/motion/controller.py:456: error: Argument 1 to "validate_output" of "ConstraintEngine" has incompatible type "ConstraintResult | None"; expected "ConstraintResult"  [arg-type]
+src/senior_control/agent/websocket.py:148: error: Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "str"  [arg-type]
+Found 7 errors in 5 files (checked 170 source files)
+
+EXIT 1 AT 2026-11-16T18:17:43Z
+DRIFT after-mypy-worktree source_drift=False changed=[] missing=[] added=[]

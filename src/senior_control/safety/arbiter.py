@@ -134,11 +134,11 @@ class Arbiter:
     sample TTL through cloud disconnects; a heartbeat never grants motion here.
     """
 
-    def __init__(self, robot_id: str, command_ttl_seconds: float):
-        if not math.isfinite(command_ttl_seconds) or command_ttl_seconds <= 0:
+    def __init__(self, robot_id: str, command_ttl_ms: float):
+        if not math.isfinite(command_ttl_ms) or command_ttl_ms <= 0:
             raise ValueError("command TTL must be positive")
         self._robot_id = robot_id
-        self._command_ttl_seconds = command_ttl_seconds
+        self._command_ttl_seconds = command_ttl_ms / 1000
         self._history: dict[tuple[str, int], int] = {}
         self._navigation_run: str | None = None
         self._navigation_seq = 0

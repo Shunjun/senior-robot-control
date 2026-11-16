@@ -52,8 +52,11 @@ class RecordingReports:
 def local_resources(monkeypatch):
     import senior_robot.motion_core_output as output
     import senior_robot.runtime_reports as reports
+    from source_time_test_support import DOMAIN
 
     import senior_control.motion.process_resources as processes
+
+    monkeypatch.setattr("senior_control.sensors.time_proof.monotonic_domain", lambda: DOMAIN)
 
     monkeypatch.setattr(output, "ProcessWorker", lambda **_: LocalWorker())
     monkeypatch.setattr(processes, "ProcessWorker", lambda **_: LocalWorker())
@@ -76,6 +79,7 @@ class Reception:
         from test_unified_motion_runtime import point
 
         from senior_control.motion.observations import Source
+        from senior_control.sensors.time_proof import measurement_time
 
         for row in packet.get("sources", []):
             sample = row["sample"]
@@ -86,8 +90,18 @@ class Reception:
             values = sample["values"]
             values = (values[0], values[-1]) if source == "wheel" else (values[0],)
             raw = replace(
-                point(Source(source), stamp, sample["received_steady"], values, sample["sequence"]),
+                point(
+                    Source(source),
+                    stamp,
+                    sample["received_steady"],
+                    values,
+                    sample["sequence"],
+                    measurement_steady=sample["measurement_steady"],
+                ),
                 epoch=sample["epoch"],
+                measurement=measurement_time(sample["measurement"])
+                if sample.get("measurement") is not None
+                else None,
             )
             self.sensors.ingest(
                 raw,

@@ -2,6 +2,7 @@ import math
 from dataclasses import replace
 
 import pytest
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 from test_motion_sources import config, sample
 from test_motion_temporal import feed, owner, point, resolver
 
@@ -17,6 +18,7 @@ from senior_control.motion.observations import (
 )
 from senior_control.motion.source_admission import AdmissionOwner
 from senior_control.motion.source_modes import SourceMode
+from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def test_ci_correlated_and_different_values_without_reciprocal_overflow():
@@ -61,7 +63,16 @@ def synthetic_window():
         for i in range(4)
     ]
     for p in sorted(events, key=lambda p: p.end_ros):
-        h = Heading(0, 0, p.end_ros, p.received_steady, "h", "synthetic known yaw")
+        h = Heading(
+            0,
+            0,
+            p.end_ros,
+            p.received_steady,
+            "h",
+            "synthetic known yaw",
+            measurement_steady=p.received_steady,
+            measurement=capture_time(p.received_steady, tick=p.end_ros).measurement,
+        )
         assert o.ingest(
             p,
             now_ros=p.end_ros,
@@ -89,7 +100,7 @@ def test_complete_asynchronous_chain_ci_and_no_repeated_tick_precision():
     assert first.components[1].variance > 0.016  # gyro uncertainty also enters GPS lateral
     assert first.upper is None
     assert first.statistical_covariance[0] == pytest.approx(3 * 0.016, abs=1e-9, rel=0)
-    assert first.current_reference.predicted_at_ros is None
+    assert first.current_reference.predicted_at_steady is None
     assert first.components[0].new_information
     for _ in range(5):
         repeated = f.update(w, s, r)
@@ -158,14 +169,47 @@ def test_explicit_gps_loss_or_drift_uses_same_owner_recovery(status):
         p = replace(
             point(Source.GPS, t, seq, (0.3, 0)), frame=Frame.ENU, body_from_sensor=Pose2D(0, 0, 0)
         )
-        h = Heading(0, 0, t, 100 + t, "h", "synthetic")
+        h = Heading(
+            0,
+            0,
+            t,
+            100 + t,
+            "h",
+            "synthetic",
+            measurement_steady=100 + t,
+            measurement=capture_time(100 + t, tick=t).measurement,
+        )
         assert o.ingest(p, now_ros=t, now_steady=100 + t, heading=h).accepted
     assert dict(o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1).sources)[Source.GPS].ready
-    bad = replace(p, stamp_ros=0.12, received_steady=100.12, sequence=3, status=status)
+    bad = replace(
+        p,
+        stamp_ros=0.12,
+        measurement_steady=100.12,
+        measurement=capture_time(100.12, tick=0.12).measurement,
+        received_steady=100.12,
+        sequence=3,
+        status=status,
+    )
     assert not o.ingest(bad, now_ros=0.12, now_steady=100.12).accepted
     for t, seq, ready in [(0.14, 4, False), (0.26, 5, True)]:
-        good = replace(p, stamp_ros=t, received_steady=100 + t, sequence=seq)
-        h = Heading(0, 0, t, 100 + t, "h", "synthetic")
+        good = replace(
+            p,
+            stamp_ros=t,
+            measurement_steady=100 + t,
+            measurement=capture_time(100 + t, tick=t).measurement,
+            received_steady=100 + t,
+            sequence=seq,
+        )
+        h = Heading(
+            0,
+            0,
+            t,
+            100 + t,
+            "h",
+            "synthetic",
+            measurement_steady=100 + t,
+            measurement=capture_time(100 + t, tick=t).measurement,
+        )
         assert o.ingest(good, now_ros=t, now_steady=100 + t, heading=h).accepted
         for _ in range(3):
             assert (
@@ -326,6 +370,12 @@ def test_delta_log_translation_does_not_claim_independence_from_disputed_laser_y
         None,
         None,
         Pose2D(0, 0, 0),
+        start_steady=(100.1) - ((0.1) - (0)),
+        end_steady=100.1,
+        measurement_interval=MeasurementInterval(
+            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
+            capture_time(100.1, tick=0.1).measurement,
+        ),
     )
     assert o.ingest(delta, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)

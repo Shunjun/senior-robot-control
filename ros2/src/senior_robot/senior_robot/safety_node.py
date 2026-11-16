@@ -43,6 +43,7 @@ from senior_control.motion.source_fences import (
 from senior_control.safety.arbiter import FinalCommandFence
 from senior_control.safety.freshness import SafetyFreshness
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.time_proof import source_time
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
@@ -93,12 +94,12 @@ class SafetyGate(Node):
         self.declare_parameter("depth_policy", "required")
         self.declare_parameter("depth_collision_min_z", 1e10)
         self.declare_parameter("depth_collision_max_z", -1e10)
-        self.declare_parameter("output_topic", "/cmd_vel")
+        self.declare_parameter("output_topic", "/control/actuator_target")
         self._body = str(self.get_parameter("body_frame").value)
         rate = float(self.get_parameter("simulation_rate_hz").value)
         if not self._body or not math.isfinite(rate) or rate <= 0:
             raise ValueError("control frequency must be finite/positive and body_frame nonempty")
-        self._cadence = ControlCadence(1.0 / rate)
+        self._cadence = ControlCadence((1.0 / rate) * 1000)
         self.declare_parameter("motion_core_profile", "")
         self.declare_parameter("hardware_motion_profile", "")
         hardware_path = str(self.get_parameter("hardware_motion_profile").value)
@@ -114,6 +115,21 @@ class SafetyGate(Node):
             localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
             domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
         )
+        from senior_robot.motion_profile import configure_startup_learning
+
+        self.declare_parameter(
+            "startup_learning_front_occlusion_stop",
+            candidate_profile.startup_learning_front_occlusion_stop,
+        )
+        self.declare_parameter(
+            "startup_learning_rear_occlusion_stop",
+            candidate_profile.startup_learning_rear_occlusion_stop,
+        )
+        candidate_profile = configure_startup_learning(
+            candidate_profile,
+            front_stop=self.get_parameter("startup_learning_front_occlusion_stop").value,
+            rear_stop=self.get_parameter("startup_learning_rear_occlusion_stop").value,
+        )
         self._final_fence = FinalCommandFence()
         self._guard_socket = None
         self._guard_process = None
@@ -125,38 +141,37 @@ class SafetyGate(Node):
         self._scan_source = ""
         self._scan_masked_count = 0
         self._scan_ambiguous_count = 0
-        self._last_ros: float | None = None
-        self._last_ros_advance_steady: float | None = None
         self._scan_topology = ProducerTopology("scan_receipt", "/")
         self._depth_topology = ProducerTopology("raw_receipt", "/")
         self._scan_generation = 0
         # Configuration is startup-only; cap geometry before any slicing or geometry work.
         self._profile()
-        scan_age = default_policy().hard_age_s
+        hard_age_ms = default_policy().hard_age_ms
+        scan_age = hard_age_ms / 1000
         self._freshness = SafetyFreshness(scan_age) if scan_age else None
         self._depth_policy = str(self.get_parameter("depth_policy").value)
         if self._depth_policy not in {"required", "laser_only"}:
             raise ValueError("depth policy must be required or laser_only")
-        self._depth_admission = (
-            DepthAdmission(max_age_s=scan_age, future_wait_s=min(0.02, scan_age))
-            if scan_age
-            else None
-        )
+        self._depth_admission = DepthAdmission(max_age_ms=hard_age_ms) if scan_age else None
         self._depth_messages = {}
         self._scan_egress = (
-            EgressAdmission(max_age_s=scan_age, hard_limit_s=5.0)
+            EgressAdmission(max_age_ms=hard_age_ms, hard_limit_ms=5000)
             if scan_age and scan_age <= 5.0
             else None
         )
         self._scan_raw_admission = (
-            RawCaptureAdmission(max_age_s=scan_age, hard_limit_s=5.0)
+            RawCaptureAdmission(max_age_ms=hard_age_ms, hard_limit_ms=5000)
             if scan_age and scan_age <= 5.0
             else None
         )
         self._scan_relay_gid = ""
-        self._depth_egress = EgressAdmission(max_age_s=min(scan_age, 1.0)) if scan_age else None
+        self._depth_egress = (
+            EgressAdmission(max_age_ms=min(hard_age_ms, 1000.0)) if scan_age else None
+        )
         self._depth_relay_gid = ""
         output = str(self.get_parameter("output_topic").value)
+        if output == "/cmd_vel":
+            raise ValueError("typed actuator topic must be independent of /cmd_vel")
         self._bounded_scan_topic = str(self.get_parameter("bounded_scan_topic").value)
         self._raw_scan_topic = str(self.get_parameter("raw_scan_topic").value)
         self._bounded_depth_topic = str(self.get_parameter("bounded_depth_topic").value)
@@ -270,24 +285,8 @@ class SafetyGate(Node):
         return DeviceProfile(footprint=footprint)
 
     def _clock_ok(self, now: float) -> bool:
-        if not math.isfinite(now) or (self._last_ros is not None and now < self._last_ros):
-            self._scan_generation += 1
-            self._scan_fence.retire_active()
-            self._scan_sequence = 0
-            self._scan_source = ""
-            self._scans.clear()
-            if self._depth_admission is not None:
-                self._depth_admission.retire()
-            self._depth_messages.clear()
-            if self._freshness is not None:
-                self._freshness.scan_received = None
-            self._last_ros = now if math.isfinite(now) else None
-            self._last_ros_advance_steady = time.monotonic() if math.isfinite(now) else None
-            return False
-        if self._last_ros is None or now > self._last_ros:
-            self._last_ros_advance_steady = time.monotonic()
-        self._last_ros = now
-        return True
+        # Control clock anomalies are separate from the ROS/TF timestamp label.
+        return math.isfinite(now)
 
     def _on_command(self, msg, gid: bytes) -> None:
         now = time.monotonic()
@@ -480,7 +479,7 @@ class SafetyGate(Node):
                 bridge_gid=bridge_gid,
                 now_ros_ns=ros_ns,
                 now_steady=steady,
-                max_age_s=self._freshness.max_age,
+                max_age_ms=(self._freshness.max_age) * 1000,
             )
             if (
                 owner.owner_epoch != msg.source_epoch
@@ -523,11 +522,11 @@ class SafetyGate(Node):
         self._scan_sequence = msg.sequence
         self._scan_generation += 1
         try:
-            now = self.get_clock().now().nanoseconds / 1e9
             steady = time.monotonic()
             stamp = Time.from_msg(msg.stamp).nanoseconds / 1e9
+            proof = source_time(msg.raw_capture.timing)
             if (
-                not self._clock_ok(now)
+                not self._clock_ok(steady)
                 or not msg.valid
                 or not msg.raw_source
                 or msg.raw_source != self._scan_source
@@ -535,10 +534,7 @@ class SafetyGate(Node):
                 or not 1 <= len(msg.ranges) <= 2048
                 or not all(math.isfinite(v) for v in (msg.ingress_steady, msg.ingress_ros))
                 or not 0 <= steady - msg.ingress_steady <= self._freshness.max_age
-                or not 0 <= now - msg.ingress_ros <= self._freshness.max_age
-                or not 0 <= msg.ingress_ros - stamp <= self._freshness.max_age
-                or self._last_ros_advance_steady is None
-                or not self._freshness.scan(stamp, msg.ingress_steady, now)
+                or not self._freshness.scan(proof.end_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
             self._scans.append(
@@ -546,8 +542,8 @@ class SafetyGate(Node):
                     msg,
                     msg.ingress_steady,
                     msg.ingress_ros,
-                    min(msg.ingress_steady, self._last_ros_advance_steady),
                     stamp,
+                    proof.end_steady,
                 )
             )
         except (ValueError, OverflowError):
@@ -577,7 +573,7 @@ class SafetyGate(Node):
             info_stamp = Time.from_msg(msg.camera_info_stamp).nanoseconds
             info_receipt = Time.from_msg(msg.camera_info_received_ros).nanoseconds
             transform_stamp = Time.from_msg(msg.transform_stamp).nanoseconds
-            age = self._depth_admission.max_age_s
+            age = self._depth_admission.max_age_ms / 1000
             scalars = (
                 msg.fx,
                 msg.fy,
@@ -626,7 +622,7 @@ class SafetyGate(Node):
         if admission is None:
             self._depth_messages.clear()
             return
-        headers = list(admission.pending_headers)
+        headers = []
         if admission.latest is not None:
             headers.append(admission.latest)
         keep = {(header.source_epoch, header.sequence) for header in headers}
@@ -661,6 +657,9 @@ class SafetyGate(Node):
                                 body.frame_id,
                                 body.calibration_id,
                                 False,
+                                measurement_steady=source_time(
+                                    body.depth_capture.timing
+                                ).end_steady,
                             ),
                             now_ros_ns=ros_ns,
                             now_steady=steady,
@@ -679,7 +678,7 @@ class SafetyGate(Node):
                 info_gid=bridge_gid(self._raw_depth_info_topic),
                 now_ros_ns=ros_ns,
                 now_steady=steady,
-                max_age_s=admission.max_age_s,
+                max_age_ms=admission.max_age_ms,
             )
             valid = (
                 owner.owner_epoch == msg.source_epoch
@@ -697,6 +696,7 @@ class SafetyGate(Node):
                 msg.frame_id,
                 msg.calibration_id,
                 valid,
+                measurement_steady=source_time(msg.depth_capture.timing).end_steady,
             )
             generation = admission.generation
             admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)
@@ -712,7 +712,6 @@ class SafetyGate(Node):
         admission = self._depth_admission
         if admission is None or not self._depth_topology_ready():
             return None
-        admission.release(now_ros_ns=ros_ns, now_steady=steady)
         self._prune_depth_messages()
         if not admission.usable(now_ros_ns=ros_ns, now_steady=steady):
             return None
@@ -721,8 +720,10 @@ class SafetyGate(Node):
         msg = self._depth_messages.get((header.source_epoch, header.sequence))
         return msg if msg is not None and self._depth_shape_valid(msg, ros_ns, steady) else None
 
-    def _emit_motion_core(self, velocity: Velocity, reason: str, deadline: float = 0.0) -> None:
-        self._output_transport.publish(velocity, deadline)
+    def _emit_motion_core(
+        self, velocity: Velocity, reason: str, deadline: float = 0.0, *, computed_steady: float
+    ) -> None:
+        self._output_transport.publish(velocity, deadline, computed_steady=computed_steady)
         self._report(reason)
 
     def _report(self, reason: str) -> None:
@@ -757,7 +758,7 @@ class SafetyGate(Node):
             self._motion_core.tick()
         except ValueError as exc:
             self._motion_core.revoke(str(exc))
-            self._emit_motion_core(Velocity(0, 0), str(exc))
+            self._emit_motion_core(Velocity(0, 0), str(exc), computed_steady=time.monotonic())
         finally:
             if started:
                 self._cadence.finished(time.monotonic())
@@ -779,7 +780,9 @@ class SafetyGate(Node):
             if self._input_channel is None:
                 self._motion_core.revoke("shutdown")
                 try:
-                    self._emit_motion_core(Velocity(0, 0), "shutdown")
+                    self._emit_motion_core(
+                        Velocity(0, 0), "shutdown", computed_steady=time.monotonic()
+                    )
                 except ValueError:
                     pass  # A lost output channel is already withdrawn by the native owner.
         finally:

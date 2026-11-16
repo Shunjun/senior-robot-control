@@ -127,7 +127,7 @@ def test_exception_chain_and_frames_are_bounded():
     assert "private-token" not in str(result)
 
 
-async def test_supervisor_failure_logs_diagnostic_and_revocation():
+async def test_supervisor_failure_logs_diagnostic_without_global_revocation():
     import asyncio
     import io
 
@@ -143,6 +143,11 @@ async def test_supervisor_failure_logs_diagnostic_and_revocation():
     logger.propagate = False
     logger.disabled = False
     fault = asyncio.Event()
+    failures = []
+
+    async def on_fault(name, reason):
+        failures.append((name, reason))
+        fault.set()
 
     async def noop(*args):
         pass
@@ -155,7 +160,7 @@ async def test_supervisor_failure_logs_diagnostic_and_revocation():
             send_heartbeat=noop,
             call_ros=noop,
             background={"tasks": task_loop},
-            on_fault=lambda reason: fault.set(),
+            on_fault=on_fault,
         ):
             await asyncio.wait_for(fault.wait(), timeout=1)
     finally:
@@ -164,6 +169,6 @@ async def test_supervisor_failure_logs_diagnostic_and_revocation():
     assert records[0]["event"] == "background_task_failed"
     assert records[0]["exceptions"][0]["type"] == "RuntimeError"
     assert records[0]["exceptions"][0]["frames"][-1]["function"] == "task_loop"
-    assert records[1]["event"] == "motion_revoked"
-    assert records[1]["reason"] == "background task tasks failed"
+    assert failures == [("tasks", "background task tasks failed")]
+    assert all(record["event"] != "motion_revoked" for record in records)
     assert "private-token" not in output.getvalue()

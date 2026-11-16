@@ -11,19 +11,18 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    EmitEvent,
     IncludeLaunchDescription,
     OpaqueFunction,
     RegisterEventHandler,
 )
 from launch.event_handlers import OnProcessExit
-from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 from senior_control.real_runtime import load_real_parameters, validate_real_runtime
+from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
 
 
@@ -35,22 +34,11 @@ def _nodes(context):
     runtime = load_real_parameters(Path(parameters), profile)
     shared = {"use_sim_time": False, **ros_sensor_parameters(profile.diagnostics)}
     selected = {**shared, "hardware_motion_profile": hardware, "motion_core_profile": ""}
-    # Driver topics from the WHEELTEC source: odom and imu/data_raw. Preserve
-    # the original DDS publisher identity; a relay would hide the real producer.
-    remaps = [("/wheel/odom", profile.wheel_topic), ("/imu/data", profile.imu_topic)]
-    shutdown_requested = False
-
-    def stop_required(event, launch_context):
-        nonlocal shutdown_requested
-        if shutdown_requested or launch_context.is_shutdown:
-            return []
-        shutdown_requested = True
-        return [EmitEvent(event=Shutdown(reason="required hardware motion process exited"))]
-
+    # NativeObservationRosBridge selects the configured physical /timed topics
+    # directly. Its DDS writer remains the driver; no untyped relay is involved.
     nodes = [
-        # All included hardware children belong to this launch process group.
-        # A required driver exit shuts down the shared stack as well.
-        RegisterEventHandler(OnProcessExit(on_exit=stop_required)),
+        # Observe every child exit without terminating healthy modules.
+        RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
         *[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -90,7 +78,6 @@ def _nodes(context):
             package="senior_robot",
             executable="safety_node",
             parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
-            remappings=remaps,
         ),
     ]
 

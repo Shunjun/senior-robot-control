@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
 
 cv2 = pytest.importorskip("cv2")
 
@@ -19,7 +20,21 @@ from senior_control.vision.raw_capture import RawCaptureHeader  # noqa: E402
 def header(seq: int) -> RawCaptureHeader:
     stamp = 1_000_000_000 + seq * 100_000_000
     return RawCaptureHeader(
-        stamp, stamp, 1.0 + seq * 0.1, "optical", "01", "02", "source", "boot", 1, seq, True, ""
+        stamp,
+        stamp,
+        1.0 + seq * 0.1,
+        "optical",
+        "01",
+        "02",
+        "source",
+        "boot",
+        1,
+        seq,
+        True,
+        "",
+        timing=capture_time(
+            1.0 + seq * 0.1, sequence=max(1, seq), epoch="source", tick=(stamp) / 1e9
+        ),
     )
 
 

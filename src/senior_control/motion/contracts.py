@@ -112,8 +112,8 @@ class BodyMotion:
     average: BodyTwist | None
     # //Compatible: pure T3a references may lack a supported current true-speed bound.
     upper: BodyTwist | None
-    interval_start_ros: float
-    interval_end_ros: float
+    interval_start_steady: float
+    interval_end_steady: float
     computed_steady: float
     valid_until_steady: float
     source_epoch: str

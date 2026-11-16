@@ -1,0 +1,8 @@
+AT 2026-11-16T18:40:43.016479+00:00
+CWD /tmp
+COMMAND ["uv", "venv", "--offline", "--python", "/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/python", "/tmp/final-review-fixes-wheel-venv"]
+error: Failed to initialize cache at `/Users/zhangshunjun/.cache/uv`
+  cause: failed to open file `/Users/zhangshunjun/.cache/uv/sdists-v9/.git`: Operation not permitted (os error 1)
+
+EXIT 2
+ELAPSED 0.01582120801322162

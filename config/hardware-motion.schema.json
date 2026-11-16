@@ -1,67 +1,5 @@
 {
   "$defs": {
-    "AdmissionConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "rules": {
-          "items": {
-            "$ref": "#/$defs/SourceRule"
-          },
-          "title": "Rules",
-          "type": "array"
-        },
-        "recovery_samples": {
-          "title": "Recovery Samples",
-          "type": "integer"
-        },
-        "recovery_span_s": {
-          "title": "Recovery Span S",
-          "type": "number"
-        },
-        "normal_cap_mps": {
-          "title": "Normal Cap Mps",
-          "type": "number"
-        },
-        "degraded_cap_mps": {
-          "title": "Degraded Cap Mps",
-          "type": "number"
-        },
-        "heading_max_age_s": {
-          "title": "Heading Max Age S",
-          "type": "number"
-        },
-        "alignment_max_skew_s": {
-          "title": "Alignment Max Skew S",
-          "type": "number"
-        },
-        "heading_max_variance_rad2": {
-          "title": "Heading Max Variance Rad2",
-          "type": "number"
-        },
-        "clock_pause_s": {
-          "title": "Clock Pause S",
-          "type": "number"
-        },
-        "epoch_history_limit": {
-          "title": "Epoch History Limit",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "rules",
-        "recovery_samples",
-        "recovery_span_s",
-        "normal_cap_mps",
-        "degraded_cap_mps",
-        "heading_max_age_s",
-        "alignment_max_skew_s",
-        "heading_max_variance_rad2",
-        "clock_pause_s",
-        "epoch_history_limit"
-      ],
-      "title": "AdmissionConfig",
-      "type": "object"
-    },
     "ControllerConfig": {
       "additionalProperties": false,
       "properties": {
@@ -263,88 +201,6 @@
       "title": "QueueWarningPolicy",
       "type": "object"
     },
-    "Source": {
-      "enum": [
-        "laser",
-        "gps",
-        "imu",
-        "wheel"
-      ],
-      "title": "Source",
-      "type": "string"
-    },
-    "SourceRule": {
-      "additionalProperties": false,
-      "properties": {
-        "source": {
-          "$ref": "#/$defs/Source"
-        },
-        "max_age_s": {
-          "title": "Max Age S",
-          "type": "number"
-        },
-        "max_interval_s": {
-          "title": "Max Interval S",
-          "type": "number"
-        },
-        "min_quality": {
-          "title": "Min Quality",
-          "type": "number"
-        },
-        "max_variance": {
-          "title": "Max Variance",
-          "type": "number"
-        }
-      },
-      "required": [
-        "source",
-        "max_age_s",
-        "max_interval_s",
-        "min_quality",
-        "max_variance"
-      ],
-      "title": "SourceRule",
-      "type": "object"
-    },
-    "TemporalConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "history_s": {
-          "title": "History S",
-          "type": "number"
-        },
-        "max_samples": {
-          "title": "Max Samples",
-          "type": "integer"
-        },
-        "max_hold_s": {
-          "title": "Max Hold S",
-          "type": "number"
-        },
-        "max_gap_s": {
-          "title": "Max Gap S",
-          "type": "number"
-        },
-        "prediction_horizon_s": {
-          "title": "Prediction Horizon S",
-          "type": "number"
-        },
-        "assume_nonholonomic": {
-          "title": "Assume Nonholonomic",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "history_s",
-        "max_samples",
-        "max_hold_s",
-        "max_gap_s",
-        "prediction_horizon_s",
-        "assume_nonholonomic"
-      ],
-      "title": "TemporalConfig",
-      "type": "object"
-    },
     "Velocity": {
       "additionalProperties": false,
       "properties": {
@@ -395,11 +251,6 @@
     "diagnostics": {
       "$ref": "#/$defs/DiagnosticsSettings"
     },
-    "max_age": {
-      "exclusiveMinimum": 0,
-      "title": "Max Age",
-      "type": "number"
-    },
     "accel": {
       "exclusiveMinimum": 0,
       "title": "Accel",
@@ -430,9 +281,9 @@
       "title": "Yaw Jerk",
       "type": "number"
     },
-    "lag": {
+    "lag_ms": {
       "minimum": 0,
-      "title": "Lag",
+      "title": "Lag Ms",
       "type": "number"
     },
     "requested_linear_mps": {
@@ -484,6 +335,16 @@
       "exclusiveMinimum": 0,
       "title": "Stationary Yaw Rps",
       "type": "number"
+    },
+    "startup_learning_front_occlusion_stop": {
+      "default": true,
+      "title": "Startup Learning Front Occlusion Stop",
+      "type": "boolean"
+    },
+    "startup_learning_rear_occlusion_stop": {
+      "default": true,
+      "title": "Startup Learning Rear Occlusion Stop",
+      "type": "boolean"
     },
     "linear_error": {
       "minimum": 0,
@@ -537,9 +398,9 @@
       "title": "Lateral Drift Mps",
       "type": "number"
     },
-    "lateral_stop_s": {
+    "lateral_stop_ms": {
       "minimum": 0,
-      "title": "Lateral Stop S",
+      "title": "Lateral Stop Ms",
       "type": "number"
     },
     "reaction_linear_accel": {
@@ -580,28 +441,6 @@
       "default": "",
       "title": "Brake Tracking Basis",
       "type": "string"
-    },
-    "admission_config": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AdmissionConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "temporal_config": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TemporalConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
     },
     "fusion_config": {
       "anyOf": [
@@ -688,7 +527,7 @@
     "yaw_accel",
     "yaw_decel",
     "yaw_jerk",
-    "lag",
+    "lag_ms",
     "degraded_cap",
     "wheel_speed_mps",
     "stationary_linear_mps",
@@ -702,7 +541,7 @@
     "drive_yaw_overshoot",
     "orientation_error_rad",
     "lateral_drift_mps",
-    "lateral_stop_s",
+    "lateral_stop_ms",
     "reaction_linear_accel",
     "reaction_yaw_accel"
   ],

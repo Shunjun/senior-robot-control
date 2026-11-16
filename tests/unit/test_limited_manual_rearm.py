@@ -34,7 +34,7 @@ def context(now, target=None):
             p.yaw_accel,
             p.yaw_decel,
             p.yaw_jerk,
-            p.lag,
+            p.lag_ms / 1000,
             p.profile_id,
         ),
         Footprint(p.length, p.width),

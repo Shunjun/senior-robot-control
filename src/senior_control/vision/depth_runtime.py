@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from senior_control.runtime.diagnostics import DiagnosticDeque
-from senior_control.sensors.policy import default_policy
+from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.depth import (
     CameraCalibration,
     GeometryConfig,
@@ -37,6 +37,7 @@ class DepthPacket:
     encoding: str
     big_endian: bool
     data: bytes
+    measurement_steady: float = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class CameraInfoFrame:
     binning_x: int
     binning_y: int
     roi: tuple[int, int, int, int, bool]
+    measurement_steady: float = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -74,7 +76,9 @@ class DepthGeometrySettings:
     row_stride: int
     column_stride: int
     body_frame: str
-    tf_max_age_ns: int = field(default_factory=lambda: round(default_policy().hard_age_s * 1e9))
+    tf_max_age_ns: int = field(
+        default_factory=lambda: round(default_policy().hard_age_ms * 1_000_000)
+    )
 
 
 @dataclass(frozen=True)
@@ -91,39 +95,39 @@ class ProjectedDepthEvidence:
 class DepthPairBuffer:
     """Bounded exact-stamp CameraInfo pairing with original receipt deadlines."""
 
-    def __init__(self, *, max_age_s: float, pair_wait_s: float) -> None:
+    def __init__(self, *, max_age_ms: float, pair_wait_ms: float) -> None:
         if (
-            not math.isfinite(max_age_s)
-            or not math.isfinite(pair_wait_s)
-            or not 0 < pair_wait_s <= max_age_s
+            not math.isfinite(max_age_ms)
+            or not math.isfinite(pair_wait_ms)
+            or not 0 < pair_wait_ms <= max_age_ms
         ):
             raise ValueError("invalid depth pairing limits")
-        self.max_age_s = max_age_s
-        self.pair_wait_s = pair_wait_s
+        self.max_age_ms = max_age_ms
+        self.pair_wait_ms = pair_wait_ms
         self._depth: deque[DepthPacket] = DiagnosticDeque("vision.depth_info_pair.depth", 4)
         self._info: deque[CameraInfoFrame] = DiagnosticDeque("vision.depth_info_pair.info", 16)
         self._failure: str | None = None
-        self._last_depth_ns = 0
-        self._last_info_ns = 0
-        self._last_ros_ns: int | None = None
+        self._last_depth_steady = 0.0
+        self._last_info_steady = 0.0
+        self._last_steady: float | None = None
         self.last_failure_packet: DepthPacket | None = None
 
     def clear(self) -> None:
         self._depth.clear()
         self._info.clear()
         self._failure = None
-        self._last_depth_ns = 0
-        self._last_info_ns = 0
+        self._last_depth_steady = 0.0
+        self._last_info_steady = 0.0
         self.last_failure_packet = None
-        self._last_ros_ns = None
+        self._last_steady = None
 
     def offer_depth(self, packet: DepthPacket) -> bool:
-        if packet.stamp_ns <= self._last_depth_ns:
+        if packet.measurement_steady <= self._last_depth_steady:
             self.last_failure_packet = packet
             self._depth.clear()
             self._failure = "depth_out_of_order"
             return False
-        self._last_depth_ns = packet.stamp_ns
+        self._last_depth_steady = packet.measurement_steady
         if len(self._depth) >= 4:
             self.last_failure_packet = packet
             self._depth.clear()
@@ -133,13 +137,13 @@ class DepthPairBuffer:
         return True
 
     def offer_info(self, info: CameraInfoFrame) -> bool:
-        if info.stamp_ns <= self._last_info_ns:
+        if info.measurement_steady <= self._last_info_steady:
             self.last_failure_packet = self._depth[-1] if self._depth else None
             self._depth.clear()
             self._info.clear()
             self._failure = "camera_info_out_of_order"
             return False
-        self._last_info_ns = info.stamp_ns
+        self._last_info_steady = info.measurement_steady
         if len(self._info) >= 16:
             self.last_failure_packet = self._depth[-1] if self._depth else None
             self._depth.clear()
@@ -152,15 +156,13 @@ class DepthPairBuffer:
     def take_ready(
         self, *, now_ros_ns: int, now_steady: float
     ) -> tuple[tuple[DepthPacket, CameraInfoFrame] | None, str | None]:
-        if (
-            now_ros_ns <= 0
-            or not math.isfinite(now_steady)
-            or (self._last_ros_ns is not None and now_ros_ns < self._last_ros_ns)
+        if not math.isfinite(now_steady) or (
+            self._last_steady is not None and now_steady < self._last_steady
         ):
             self.clear()
-            self._last_ros_ns = now_ros_ns
+            self._last_steady = now_steady
             return None, "clock_unqualified"
-        self._last_ros_ns = now_ros_ns
+        self._last_steady = now_steady
         if self._failure is not None:
             failure = self._failure
             self._failure = None
@@ -168,34 +170,28 @@ class DepthPairBuffer:
         if not self._depth:
             return None, None
         packet = self._depth[0]
-        age = now_steady - packet.received_steady
-        if not 0 <= age <= self.max_age_s:
+        age = now_steady - packet.measurement_steady
+        if not 0 <= age <= (self.max_age_ms / 1000):
             self.last_failure_packet = packet
             self._depth.clear()
             return None, "depth_receipt_expired"
-        if packet.stamp_ns > now_ros_ns:
-            if age > min(0.02, self.max_age_s):
-                self.last_failure_packet = packet
-                self._depth.clear()
-                return None, "future_expired"
-            return None, None
-        if not 0 <= now_ros_ns - packet.stamp_ns <= self.max_age_s * 1e9:
-            self.last_failure_packet = packet
-            self._depth.clear()
-            return None, "depth_stamp_expired"
-        while self._info and self._info[0].stamp_ns < packet.stamp_ns:
-            self._info.popleft()
-        if not self._info or self._info[0].stamp_ns != packet.stamp_ns:
-            if age > self.pair_wait_s:
+        # ROS stamps identify the exact image/CameraInfo pair; they do not
+        # order control time. Separate driver callbacks may have distinct host
+        # fronts even for this same geometry label.
+        info = next((value for value in self._info if value.stamp_ns == packet.stamp_ns), None)
+        if info is None:
+            if age > (self.pair_wait_ms / 1000):
                 self.last_failure_packet = packet
                 self._depth.popleft()
                 return None, "camera_info_missing"
             return None, None
-        info = self._info.popleft()
+        self._info.remove(info)
         self._depth.popleft()
-        if (
-            not 0 <= now_steady - info.received_steady <= self.max_age_s
-            or not 0 <= now_ros_ns - info.received_ros_ns <= self.max_age_s * 1e9
+        if not sensor_current(
+            measured_steady=info.measurement_steady,
+            received_steady=info.received_steady,
+            now_steady=now_steady,
+            max_age_ms=self.max_age_ms,
         ):
             self.last_failure_packet = packet
             return None, "camera_info_receipt_expired"
@@ -347,6 +343,7 @@ def produce_depth_evidence(
         packet.frame_id,
         calibration_id,
         True,
+        measurement_steady=packet.measurement_steady,
     )
     return ProjectedDepthEvidence(
         header, info, transform, settings, transform.translation, observation.samples

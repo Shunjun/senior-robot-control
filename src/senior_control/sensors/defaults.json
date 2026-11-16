@@ -1,1 +1,1 @@
-{"soft_age_s": 0.3, "hard_age_s": 1.0, "diagnostics_period_s": 5.0}
+{"soft_age_ms": 300, "hard_age_ms": 1000, "diagnostics_period_s": 5.0}

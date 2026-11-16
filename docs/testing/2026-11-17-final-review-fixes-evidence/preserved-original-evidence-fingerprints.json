@@ -1,0 +1,270 @@
+[
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation.md",
+    "sha256": "7f404961d746b268d33d1eb26d3230317411f9b81b2dbc18330b8ece88830188"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-fingerprints.json",
+    "sha256": "a9ed0529defe0f1b1a1f4e8b5f634c6e49e378b70905ad960806eb03ac91da46"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-frontend.json",
+    "sha256": "630cc7c677e52a99b0e13c417904f5ffa54a182e94449f2234a7e609d8f4f226"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-mypy-head.json",
+    "sha256": "81e630d240ca132882e89c37e05710033f29a4ac572b4ce414dc0a6aff8572ea"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-mypy-worktree.json",
+    "sha256": "98458b14a0d94a84037ff44089ece1121174668be611f757b2ecc56b63598a9d"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-pytest-deploy.json",
+    "sha256": "2885e6cc9bdb92330faabfd7d2f3aaa6eeebe19a34fd49515e35c8059dc02b4b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-pytest-e2e.json",
+    "sha256": "a0f2b2782564d4d2718a5ea0a9722bae6c04f5f57f9d356ba0f6665fb9bf64a0"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-pytest-integration.json",
+    "sha256": "d1526eb4df16b62ae737907e170bcf0f4a000c586681d14d921078b6cf061a18"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-pytest-ros.json",
+    "sha256": "dde9a52418ec0b8b4cd13ab9c1318831c903aa4f38bf2647db9d2ad682cf8826"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-pytest-unit.json",
+    "sha256": "165b1da5ba7a15cbf80226c2bc4b103099eddfb8115d6e5347f53285b776c7e5"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-ruff.json",
+    "sha256": "4e85da28bb19281ebb32db23da3f7a441bf42c64f2f041db118c8539e5586421"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-after-wheel.json",
+    "sha256": "83468c095b057d8452508bb2db36cd533fe8f622fc6a8cba36731a3091de546b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-frontend.json",
+    "sha256": "dedb66b326414a223646c50174973fa8bafa874cfca904ad98a725c862c73e51"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-mypy-head.json",
+    "sha256": "80bcbab05fcf2e1a59d5dd1f64ffeb6c8f6b3247d70f32c282741f09dcea1eb2"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-mypy-worktree.json",
+    "sha256": "077e8f79bf34d44a726ca71a2b01fda2da7abab83553bd9131ef5331c5637790"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-pytest-deploy.json",
+    "sha256": "330e88047e50fc86527b59fea5e06870375525ee414960412fd8ffc55c97a021"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-pytest-e2e.json",
+    "sha256": "ac347bb5d3f5ffba815c171c8bc2f68b7263037f5ba16e71ea57246d542bb03b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-pytest-integration.json",
+    "sha256": "f7b137ba3ba26173abb4283098f1961ec55ef4c94a2acce017b7391cda7282b7"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-pytest-ros.json",
+    "sha256": "1cbbc949cab49a1f7b6b842c8e6ccba2bc865e98e55b2a2798e669c9ef957cb5"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-pytest-unit.json",
+    "sha256": "b25a769846667428f8cd29dd78777b675b46617b9fa1310d527be09f0d26ab15"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-ruff.json",
+    "sha256": "ce430d826082e4042672642003d872b4813490d7c916001a7a16e25f72d09022"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-before-wheel.json",
+    "sha256": "86024ee68b45148f6dafe6e0541616f699e09f4394c00dc91a3ca4ed790638f1"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-parent-after-all.json",
+    "sha256": "a21a0bdac62bef0e0544e8cdcdba8f0fbbf186e3e1c4836d7f6759492b83759b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/drift-parent-before-launch.json",
+    "sha256": "974577c464d49ef069df3e455728c68f7787a2521db21cfd01cb1496317730c9"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/frontend-runner.log",
+    "sha256": "b4abced97411f8dd29559a70e2648d61e064d57cc42083285030669a933e10cf"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-frontend.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-mypy-head.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-mypy-worktree.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-pytest.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-ruff.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-summary.json",
+    "sha256": "81817f19998b3701ac8e30f1fdbc50f8c87c3440508ba67cf4f19a54b10778d1"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/job-wheel.out",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/mypy-head.txt",
+    "sha256": "ed575fb0343978588541154e3df49b75a977b3b20bda9c92330b7fbaae2dc9d4"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/mypy-worktree.txt",
+    "sha256": "1f8f190e10d5496a6a4a8bf3035fd0b4ac1abfb687e4a4c691225dcf94cae843"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/orchestrator.log",
+    "sha256": "b03b7d8876e6832db2933a4cc46284d7691cc13ab8a4e6de96e384d4f131f7fc"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-deploy-files.txt",
+    "sha256": "19b428dff5d8b9cd05a07637d231467d89b414455f4fb8c153a6c1e4a92336d3"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-deploy.log",
+    "sha256": "6e3a99ed402375817ae4efe87298d96813671133ebf9965d7fd75eeea6078d14"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-deploy.xml",
+    "sha256": "4cbed29040b72e8d2ceea756e5920202ef6fd49378585a315129688b1ca7d28e"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-e2e-files.txt",
+    "sha256": "c778df597b09651e2457a588c4acdec3d6f0355bf6ebdc06e6aaf7550b897a5a"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-e2e.log",
+    "sha256": "97e699df2a9c0684bb2b30e941beadacf78093d0a5a73bf19449f106753f1691"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-e2e.xml",
+    "sha256": "9b7019e2c527c6a9df41200361d352d3d3d458b94cd21359ca6cc4083ca7b8c4"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-integration-files.txt",
+    "sha256": "dbbae97a4a109f8f76f46019e53e9753ebc49244396dd9ebbcb6e541d8447594"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-integration.log",
+    "sha256": "dd10990437f67c1faf95f97d374ef21cb7d9011faf7168a11ee3ebcf1366d61b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-integration.xml",
+    "sha256": "9faeb0768c541f66c4c08c94bd3d064f6e4f0a7ce8f6088b234976493f33a10b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-results.json",
+    "sha256": "ef5bc426c158aa2b021f4689b7d91f720238a2704a6e282acdd22223e7c0b684"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-ros-files.txt",
+    "sha256": "f164db3b4270a7ad695a9b3d6e73b11f89909f67124af3b9eb1bbbb26f5639a6"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-ros.log",
+    "sha256": "33b1a62dc5c80592cc384a2cd7c900357511c00478910053ef913ac661246fe1"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-ros.xml",
+    "sha256": "144f863bddc550ffcca2cf14d9437d66d34789d08099c9f4ee1d722398631fc5"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-runner.log",
+    "sha256": "14f51fd5d06ea8a2105df6bb84c7eb02004e2bbcf45a492e9e5f57356df1acbd"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-unit-files.txt",
+    "sha256": "25683da182b612555e4a9bd442dfa0a2c2b60a5d3dbbbdb75391adb1dd0918f8"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-unit.log",
+    "sha256": "aead295d93b40af9e539ae9db8ad4dbea02038db3ab886b0d39801cc08eb145f"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/pytest-unit.xml",
+    "sha256": "061d76946997254c15a9e73b1445200d558fce670cafe1932870821e6c13fd1a"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-check-head.txt",
+    "sha256": "29921193edbe461581fb8b0fb71107f8abfb1e25020cd1eb50eff4fed8bf32d9"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-check.json",
+    "sha256": "6ac7e5cecfaee1b9896faaa80697f52955524483fb370325e0dd45c6c07146ad"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-check.txt",
+    "sha256": "683e2c2ddbcf0a57290b32ed72c833a1f2dbd0828503d9a11f42ee78f5fd0f3b"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-format-head.txt",
+    "sha256": "694a7856df98cb203f37f9728063290d497080815a13ec06f2c2749455e9e714"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-format-protected.diff",
+    "sha256": "cac1427840f802c7a9af5cb7c4dcca85c65082b3fac03f14b7e04c16fe4360b6"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-format.txt",
+    "sha256": "7c702e89927d82f56a20d8599fd083363f7d9dd4c82be6e00a4e9cc57fe345c7"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-runner.log",
+    "sha256": "e1b74c8923e841f51247b0a5c70c2e04bfdc0d40ac4bd329d167da4981184f61"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/ruff-statistics.txt",
+    "sha256": "21057a29bd50373b791ac8c9c2cc15b9f32e29d1d8e03d5cb253b591d6ed8310"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/tsc-version.txt",
+    "sha256": "684b334ebab3d03ad2c7a8647adeae79d5b83555f9913f2f59961ad271377d99"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/tsc.log",
+    "sha256": "211000108b736b4d599cc1609bf84a7d5af6455149ff90cb8a8e0496bbdf6499"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/vite-build.log",
+    "sha256": "9d4c975fe97d71335f871e721ccf05f26863e6f5bb4429a3226f6ccd3bbc6109"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/vite-version.txt",
+    "sha256": "d399b382afdf4b69db65c7379d452fb51c68a50318ba7568beea134e2e1f6a47"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/vitest-version.txt",
+    "sha256": "87886d94ff0a797d6bd465b29cf6dc967edbd652f31264fe11bf165a92ef8373"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/vitest.log",
+    "sha256": "3b61e19e85762d188fb8770f1aeb079a4f3a1b1d04642e28f7cf03023a908622"
+  },
+  {
+    "path": "docs/testing/2026-11-17-startup-final-validation-evidence/wheel.log",
+    "sha256": "f53ea3460571efb6fa43f8f3839278a2e8bb01e14a9cd9f07cb6bc2617420fcf"
+  }
+]

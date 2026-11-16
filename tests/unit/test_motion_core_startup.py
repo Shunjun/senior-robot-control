@@ -18,6 +18,7 @@ from control_process_test_support import make_core, publish_inputs
 from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_capture_schedule
 from test_navigation_command_clock import navigation  # noqa: F401
 
 from senior_control.agent.manual_control import MotionRuntimeReceiver
@@ -52,7 +53,7 @@ class Node:
     def get_parameter(self, _name):
         return N(value="route-sim")
 
-    def _emit_motion_core(self, velocity, reason, deadline=0.0):
+    def _emit_motion_core(self, velocity, reason, deadline=0.0, *, computed_steady):
         self.output.append((velocity, reason))
 
 
@@ -115,20 +116,35 @@ class Replay:
         if self.free:
             # Synthetic raw interval: the capture retained fused output only.
             # It proves controller composition, never a physical laser replay.
+            from source_time_test_support import capture_time
+
             from senior_control.motion.estimator import MotionObservation, Origin
+            from senior_control.motion.kinematics import exponential
+            from senior_control.sensors.time_proof import MeasurementInterval
 
             ref = packet["reference"]
             row = next(r["sample"] for r in packet["sources"] if r["source"] == "laser")
+            end_host = row["received_steady"]
+            duration = ref["end_ros"] - ref["start_ros"]
+            physical = MeasurementInterval(
+                capture_time(end_host - duration, tick=ref["start_ros"]).measurement,
+                capture_time(end_host, tick=ref["end_ros"]).measurement,
+            )
             roots = tuple(
                 Origin(
                     "laser",
                     row["epoch"],
                     row["sequence"],
-                    stamp,
+                    label,
                     packet["sampled_ros"],
-                    row["received_steady"],
+                    end_host,
+                    measurement_steady=host,
+                    measurement=coordinate,
                 )
-                for stamp in (ref["start_ros"], ref["end_ros"])
+                for label, host, coordinate in (
+                    (ref["start_ros"], end_host - duration, physical.start),
+                    (ref["end_ros"], end_host, physical.end),
+                )
             )
             avg = ref["average"]
             if avg is not None:
@@ -139,6 +155,10 @@ class Replay:
                         sum((ref["start_ros"], ref["end_ros"])) / 2,
                         roots,
                         independent=(True, True, True),
+                        measured_steady=end_host,
+                        measurement=physical.end,
+                        measurement_interval=physical,
+                        measurement_delta=exponential(avg["vx"], avg["vy"], avg["wz"], duration),
                     )
                 )
         publish_inputs(self.core, self.clock.steady, self.clock.ros)
@@ -168,7 +188,9 @@ def replay(monkeypatch):
     lifecycle = ModuleType("senior_robot.motion_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
-    capture = json.loads(Path("tests/fixtures/navigation_startup_reference.json").read_text())
+    capture = synthetic_capture_schedule(
+        json.loads(Path("tests/fixtures/navigation_startup_reference.json").read_text())
+    )
     clock = N(steady=capture["fault_steady"], ros=capture["blocked_ros"])
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
     value = Replay(capture, clock, monkeypatch)

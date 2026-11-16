@@ -8,6 +8,8 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <senior_motion_msgs/msg/timed_laser_scan.hpp>
+#include <senior_motion_msgs/source_timing.hpp>
 #include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
 #include <senior_motion_msgs/msg/bounded_safety_scan.hpp>
 #include <senior_motion_msgs/msg/bounded_filtered_scan.hpp>
@@ -34,7 +36,7 @@ private:
                   int64_t received_ros = 0, double received_steady = 0.0,
                   const std::string & raw_gid = "");
   void inspect_topology();
-  void on_scan(const Scan & message, const rclcpp::MessageInfo & info);
+  void on_scan(const senior_motion_msgs::msg::TimedLaserScan & timed, const rclcpp::MessageInfo & info);
   struct Owner {
     std::string topic, gid, epoch;
     std::set<std::string> retired_gids, retired_epochs;
@@ -62,13 +64,14 @@ private:
   rclcpp::Subscription<senior_motion_msgs::msg::BoundedFilteredScan>::SharedPtr filter_subscription_;
   std::mutex mutex_;
   rclcpp::CallbackGroup::SharedPtr test_group_;
-  rclcpp::Subscription<Scan>::SharedPtr subscription_;
+  rclcpp::Subscription<senior_motion_msgs::msg::TimedLaserScan>::SharedPtr subscription_;
+  senior_motion_msgs::timing::SourceOrder source_order_;
   rclcpp::Publisher<Bounded>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::string input_topic_, boot_, epoch_, raw_gid_;
   std::set<std::string> retired_gids_;
   uint64_t counter_ = 0, generation_ = 1, sequence_ = 0;
-  int64_t last_ros_ns_ = 0;
-  bool active_ = false, invalid_ = false, clock_bad_ = false, failed_ = false;
+  double last_steady_ = 0;
+  bool active_ = false, invalid_ = false, failed_ = false;
 };
 }  // namespace senior_sensor_ingress

@@ -1,0 +1,7 @@
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web/node_modules/.bin/tsc --version
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/web
+AT 2026-11-16T18:17:28Z
+Version 5.9.3
+
+EXIT 0 AT 2026-11-16T18:17:28Z

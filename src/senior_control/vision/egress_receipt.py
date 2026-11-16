@@ -52,9 +52,10 @@ def depth_capture_headers(
     info_gid: str,
     now_ros_ns: int,
     now_steady: float,
-    max_age_s: float,
+    max_age_ms: float,
 ) -> tuple[RawCaptureHeader, RawCaptureHeader] | None:
     """Verify both original bridge receipts and their duplicated body fields."""
+    max_age_s = max_age_ms / 1000
     try:
         depth = capture_from_message(body.depth_capture)
         info = capture_from_message(body.camera_info_capture)
@@ -91,9 +92,8 @@ def depth_capture_headers(
             or not math.isfinite(max_age_s)
             or not 0 < max_age_s <= 1
             or any(
-                not 0 <= now_ros_ns - h.received_ros_ns <= max_age_s * 1e9
-                or not math.isfinite(h.received_steady)
-                or not 0 <= now_steady - h.received_steady <= max_age_s
+                not 0 <= h.measurement_steady <= h.received_steady <= now_steady
+                or now_steady - h.measurement_steady > max_age_s
                 for h in (depth, info)
             )
         ):
@@ -109,9 +109,10 @@ def safety_scan_capture(
     bridge_gid: str,
     now_ros_ns: int,
     now_steady: float,
-    max_age_s: float,
+    max_age_ms: float,
 ) -> RawCaptureHeader | None:
     """Validate the original scan source, native endpoint and first receipt clocks."""
+    max_age_s = max_age_ms / 1000
     try:
         capture = capture_from_message(body.raw_capture)
         sec, nano = int(body.stamp.sec), int(body.stamp.nanosec)
@@ -138,8 +139,8 @@ def safety_scan_capture(
             or not math.isfinite(capture.received_steady)
             or not math.isfinite(max_age_s)
             or not 0 < max_age_s <= 5
-            or not 0 <= now_ros_ns - capture.received_ros_ns <= max_age_s * 1e9
-            or not 0 <= now_steady - capture.received_steady <= max_age_s
+            or not 0 <= capture.measurement_steady <= capture.received_steady <= now_steady
+            or now_steady - capture.measurement_steady > max_age_s
         ):
             return None
         return capture
@@ -150,15 +151,15 @@ def safety_scan_capture(
 class EgressAdmission:
     """Fence relay and owner identities; body freshness is checked separately."""
 
-    def __init__(self, *, max_age_s: float, hard_limit_s: float = 1.0) -> None:
+    def __init__(self, *, max_age_ms: float, hard_limit_ms: float = 1000.0) -> None:
         if (
-            not math.isfinite(max_age_s)
-            or not math.isfinite(hard_limit_s)
-            or not 0 < hard_limit_s <= 5.0
-            or not 0 < max_age_s <= hard_limit_s
+            not math.isfinite(max_age_ms)
+            or not math.isfinite(hard_limit_ms)
+            or not 0 < hard_limit_ms <= 5000
+            or not 0 < max_age_ms <= hard_limit_ms
         ):
             raise ValueError("invalid_egress_age")
-        self.max_age_s = max_age_s
+        self.max_age_ms = max_age_ms
         self.latest: EgressHeader | None = None
         self.generation = 0
         self._relay_gid = ""

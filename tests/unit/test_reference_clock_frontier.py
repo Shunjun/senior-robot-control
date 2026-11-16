@@ -10,9 +10,12 @@ import pytest
 from control_process_test_support import capture_inputs, local_resources, make_core, read_inputs
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_capture_schedule
 from test_motion_reference_backlog import Node
 
-CASE = json.loads(Path("tests/fixtures/reference_clock_frontier.json").read_text())
+CASE = synthetic_capture_schedule(
+    json.loads(Path("tests/fixtures/reference_clock_frontier.json").read_text())
+)
 
 
 @pytest.fixture
@@ -46,7 +49,18 @@ def test_future_raw_clock_cannot_destroy_other_live_sources(witness):
                 "future",
                 (0.9, None, None),
                 7.0,
-                (Origin("future", "future", 1, 7.0, 6.2, witness.clock.steady),),
+                (
+                    Origin(
+                        "future",
+                        "future",
+                        1,
+                        7.0,
+                        6.2,
+                        witness.clock.steady,
+                        measurement_steady=witness.clock.steady + 0.1,
+                    ),
+                ),
+                measured_steady=witness.clock.steady,
             )
         )
     assert read_inputs(witness.core, witness.clock.steady)[1].velocity == before
@@ -58,12 +72,12 @@ def test_original_age_expiry_uses_paused_ros_and_advancing_steady(witness):
     assert read_inputs(witness.core, witness.clock.steady)[1] is None
 
 
-def test_local_ros_rollback_clears_estimates_before_new_epoch(witness):
+def test_local_ros_rollback_preserves_estimates_and_source_generation(witness):
     read_inputs(witness.core, witness.clock.steady)
     generation = witness.core.sensors.latest.generation
     witness.clock.ros -= 1
-    assert read_inputs(witness.core, witness.clock.steady)[1] is None
-    assert witness.core.sensors.latest.generation == generation + 1
+    assert read_inputs(witness.core, witness.clock.steady)[1] is not None
+    assert witness.core.sensors.latest.generation == generation
 
 
 def test_retired_raw_epoch_cannot_return(witness):

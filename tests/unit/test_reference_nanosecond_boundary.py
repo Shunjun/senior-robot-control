@@ -10,9 +10,12 @@ import pytest
 from control_process_test_support import capture_inputs, local_resources, make_core, read_inputs
 from senior_robot import motion_core_output as module
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import synthetic_capture_schedule
 from test_motion_reference_backlog import Node
 
-CASE = json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
+CASE = synthetic_capture_schedule(
+    json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
+)
 
 
 @pytest.fixture
@@ -51,15 +54,28 @@ def test_raw_original_nanosecond_boundary_is_shared_one_second(replay, age_ns, a
             "laser",
             (0.0, None, 0.0),
             5.0,
-            (Origin("laser", "boundary", 1, 5.0, 5.0, replay.clock.steady),),
+            (
+                Origin(
+                    "laser",
+                    "boundary",
+                    1,
+                    5.0,
+                    5.0,
+                    replay.clock.steady,
+                    measurement_steady=replay.clock.steady,
+                ),
+            ),
             independent=(True, True, True),
+            measured_steady=replay.clock.steady,
         )
     )
+    original = replay.clock.steady
+    replay.clock.steady += age_ns / 1e9
     replay.clock.ns = 5_000_000_000 + age_ns
     body = read_inputs(replay.core, replay.clock.steady)[1]
     assert (body is not None) is allowed
     if body is not None:
-        assert body.deadline_steady <= replay.clock.steady + (1 - age_ns / 1e9)
+        assert body.deadline_steady <= original + 1
 
 
 def test_captured_raw_rows_remain_usable_beyond_old_150ms_cutoff(replay):

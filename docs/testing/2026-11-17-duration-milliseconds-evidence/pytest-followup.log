@@ -1,0 +1,20 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.15, pytest-8.4.2, pluggy-1.7.0
+rootdir: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+configfile: pyproject.toml
+plugins: asyncio-0.26.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 79 items
+
+tests/unit/test_semantic_candidates.py .............                     [ 16%]
+tests/unit/test_raw_capture.py ............                              [ 31%]
+tests/unit/test_egress_receipt.py .........                              [ 43%]
+tests/unit/test_depth_producer.py ...........                            [ 56%]
+tests/unit/test_rgbd_runtime.py ...............                          [ 75%]
+tests/unit/test_spawn_detector.py ..........                             [ 88%]
+tests/unit/test_vehicle_motion_fixture.py ........                       [ 98%]
+tests/unit/test_sim_contract.py .                                        [100%]
+
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-followup.xml -
+============================== 79 passed in 4.62s ==============================
+EXIT:0

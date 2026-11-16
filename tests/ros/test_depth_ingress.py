@@ -22,7 +22,6 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
             Parameter("range_error_m", value=0.01),
             Parameter("row_stride", value=1),
             Parameter("column_stride", value=1),
-            Parameter("max_age_s", value=0.5),
             Parameter("transform_static", value=True),
         ]
     )
@@ -133,8 +132,6 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
     rclpy.init()
     gate = SafetyGate(
         parameter_overrides=[
-            Parameter("observation_max_age", value=0.5),
-            Parameter("measurement_max_age", value=0.5),
             Parameter("depth_policy", value="required"),
         ]
     )
@@ -269,14 +266,11 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
             Parameter("range_error_m", value=0.01),
             Parameter("row_stride", value=1),
             Parameter("column_stride", value=1),
-            Parameter("max_age_s", value=1.0),
             Parameter("transform_static", value=True),
         ]
     )
     gate = SafetyGate(
         parameter_overrides=[
-            Parameter("observation_max_age", value=1.0),
-            Parameter("measurement_max_age", value=1.0),
             Parameter("depth_policy", value="required"),
         ]
     )
@@ -414,19 +408,12 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     import time
 
     rclpy = pytest.importorskip("rclpy")
-    from rclpy.parameter import Parameter
     from senior_robot.safety_node import SafetyGate
 
     from senior_control.models import Velocity
 
     rclpy.init()
-    gate = SafetyGate(
-        parameter_overrides=[
-            Parameter("observation_max_age", value=0.5),
-            Parameter("measurement_max_age", value=0.5),
-            Parameter("command_ttl_seconds", value=0.5),
-        ]
-    )
+    gate = SafetyGate()
     emitted = []
     monkeypatch.setattr(
         gate, "_publish", lambda velocity, reason, **_: emitted.append((velocity, reason))
@@ -437,9 +424,7 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
     gate._command = Velocity(0.05, 0.0)
     gate._command_monotonic = time.monotonic()
-    gate._command_deadline = (
-        gate._command_monotonic + gate.get_parameter("command_ttl_seconds").value
-    )
+    gate._command_deadline = gate._command_monotonic + 0.5
     now_ros = gate.get_clock().now().nanoseconds / 1e9
     assert gate._freshness.scan(now_ros, gate._command_monotonic, now_ros)
     assert gate._freshness.measured(now_ros, gate._command_monotonic, now_ros)
@@ -465,7 +450,6 @@ def test_depth_ingress_uses_only_bounded_bridge_types_and_embeds_captures():
             Parameter("min_range_m", value=0.1),
             Parameter("max_range_m", value=8.0),
             Parameter("range_error_m", value=0.01),
-            Parameter("max_age_s", value=0.5),
         ]
     )
     try:
@@ -528,14 +512,11 @@ def test_native_bridge_depth_ingress_gate_end_to_end_and_raw_failure(native_brid
             Parameter("range_error_m", value=0.01),
             Parameter("row_stride", value=1),
             Parameter("column_stride", value=1),
-            Parameter("max_age_s", value=1.0),
             Parameter("transform_static", value=True),
         ]
     )
     gate = SafetyGate(
         parameter_overrides=[
-            Parameter("observation_max_age", value=1.0),
-            Parameter("measurement_max_age", value=1.0),
             Parameter("depth_policy", value="required"),
         ]
     )

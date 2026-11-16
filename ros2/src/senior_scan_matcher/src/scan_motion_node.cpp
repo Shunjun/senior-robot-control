@@ -1,3 +1,4 @@
+#include <senior_motion_msgs/source_timing.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -31,12 +32,11 @@ public:
     const auto scan_topic = declare_parameter<std::string>("scan_topic", "/perception/scan_filtered");
     scan_topic_ = scan_topic;
     raw_topic_ = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
-    declare_parameter<double>("scan_max_age", -1.0);  //Compatible: old YAML copy is no longer authoritative.
-    max_age_ = declare_parameter<double>("sensor_hard_age_s", -1.0);
+    max_age_ = declare_parameter<double>("sensor_hard_age_ms", -1.0) / 1000;
     max_speed_ = declare_parameter<double>("max_linear_speed", -1.0);
     max_yaw_rate_ = declare_parameter<double>("max_yaw_rate", -1.0);
     MatcherLimits limits;
-    limits.max_interval = declare_parameter<double>("max_interval", -1.0);
+    limits.max_interval_ms = declare_parameter<double>("max_interval_ms", -1.0);
     limits.range_limit = declare_parameter<double>("range_limit", -1.0);
     limits.min_response = declare_parameter<double>("min_response", -1.0);
     limits.max_residual = declare_parameter<double>("max_residual", -1.0);
@@ -232,11 +232,11 @@ private:
     if (capture.sequence <= scan_sequence_) return;
     const double steady = std::chrono::duration<double>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
-    const double received_ros = rclcpp::Time(capture.received_ros).seconds();
-    if (!std::isfinite(capture.received_steady) || steady < capture.received_steady ||
-        steady - capture.received_steady >= max_age_ || received_ros <= 0 ||
-        get_clock()->now().seconds() < received_ros ||
-        get_clock()->now().seconds() - received_ros >= max_age_) {
+    const double measured = static_cast<double>(capture.timing.capture_end_steady_ns) / 1e9;
+    if (!senior_motion_msgs::timing::valid(capture.timing,
+          senior_motion_msgs::navigation::monotonic_ns()) ||
+        !std::isfinite(capture.received_steady) || steady < capture.received_steady ||
+        measured > capture.received_steady || steady - measured >= max_age_) {
       invalidate(output, "raw_scan_receipt_expired", true); return;
     }
     relay_boot_ = owner.relay_boot;
@@ -247,16 +247,25 @@ private:
     scan_epoch_ = capture.source_epoch;
     scan_raw_gid_ = capture.raw_gid;
     scan_sequence_ = capture.sequence;
+    const double physical = static_cast<double>(
+      senior_motion_msgs::timing::measurement_ns(capture.timing)) / 1e9;
+    if (physical_valid_ && !senior_motion_msgs::timing::same_measurement_axis(
+        physical_proof_, capture.timing)) {
+      matcher_->reset(); previous_stamp_valid_ = false; last_stamp_ = -1;
+    }
+    physical_valid_ = true; physical_proof_ = capture.timing;
     const double stamp = rclcpp::Time(capture.stamp).seconds();
-    const double now = get_clock()->now().seconds();
-    if (!std::isfinite(stamp) || stamp <= 0 || !std::isfinite(now) || now < stamp ||
-        now - stamp >= max_age_ || (last_stamp_ > 0 && stamp <= last_stamp_) ||
+    if (!std::isfinite(stamp) || stamp < 0 ||
+        (last_stamp_ >= 0 && physical < last_stamp_) ||
         capture.frame_id.empty() || !std::isfinite(message.time_increment) ||
         message.time_increment != 0.0) {
-      last_stamp_ = 0;
+      last_stamp_ = -1;
       invalidate(output, "time_or_deskew_unqualified", true); return;
     }
-    last_stamp_ = stamp;
+    if (last_stamp_ == physical) {
+      invalidate(output, "same_physics_tick", false); return;
+    }
+    last_stamp_ = physical;
     try {
       // TF resolves static and dynamic edges at the scan timestamp; the
       // comparison below detects changes in the mounted sensor extrinsic.
@@ -279,7 +288,7 @@ private:
       extrinsic_ = extrinsic;
       extrinsic_valid_ = true;
       LaserScan scan;
-      scan.stamp = stamp; scan.angle_min = message.angle_min;
+      scan.stamp = physical; scan.angle_min = message.angle_min;
       scan.angle_increment = message.angle_increment; scan.range_min = message.range_min;
       scan.range_max = message.range_max;
       scan.ranges.assign(message.ranges.begin(), message.ranges.end());
@@ -293,7 +302,7 @@ private:
         }
         invalidate(output, match.reason, match.reason != "initializing"); return;
       }
-      if (!previous_stamp_valid_ || previous_stamp_.seconds() != match.start) {
+      if (!previous_stamp_valid_ || static_cast<double>(senior_motion_msgs::timing::measurement_ns(previous_capture_.timing)) / 1e9 != match.start) {
         invalidate(output, "source_stamp_unavailable", true); return;
       }
       const Pose delta = to_body_delta(match.sensor_delta, extrinsic_);
@@ -339,7 +348,9 @@ private:
   uint64_t relay_sequence_ = 0, owner_generation_ = 0, owner_sequence_ = 0;
   uint64_t scan_generation_ = 0, scan_sequence_ = 0;
   unsigned epoch_counter_ = 0;
-  double max_age_ = 0, max_speed_ = 0, max_yaw_rate_ = 0, last_stamp_ = 0;
+  bool physical_valid_ = false;
+  senior_motion_msgs::msg::SourceTime physical_proof_;
+  double max_age_ = 0, max_speed_ = 0, max_yaw_rate_ = 0, last_stamp_ = -1;
   Pose extrinsic_, pose_;
   bool extrinsic_valid_ = false;
   bool bound_source_ = false;

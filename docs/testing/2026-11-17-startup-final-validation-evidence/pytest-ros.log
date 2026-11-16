@@ -1,0 +1,20 @@
+group ros files 27 2026-11-16T18:22:49Z
+
+$ /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/.venv/bin/pytest -q -p no:cacheprovider --tb=short --junitxml=/Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-ros.xml --basetemp=/tmp/startup-final-validation-pytest-ros --durations=20 tests/ros/test_agent_adapter_shutdown.py tests/ros/test_depth_ingress.py tests/ros/test_egress_wire.py tests/ros/test_final_command_dds.py tests/ros/test_mapping.py tests/ros/test_motion_anomaly_trace.py tests/ros/test_motion_atexit.py tests/ros/test_motion_core_acceptance.py tests/ros/test_motion_ingress_loss.py tests/ros/test_motion_lifecycle_restoration.py tests/ros/test_motion_low_friction_window.py tests/ros/test_native_motion_executor.py tests/ros/test_navigation.py tests/ros/test_receipt_process_shutdown.py tests/ros/test_relocalization.py tests/ros/test_rgbd_candidate_producer.py tests/ros/test_rgbd_diagnostic_launch.py tests/ros/test_rgbd_generated_boundaries.py tests/ros/test_rgbd_producer_failures.py tests/ros/test_scan_adapter.py tests/ros/test_scan_epoch_live.py tests/ros/test_scan_exact_stamp.py tests/ros/test_scan_ingress.py tests/ros/test_scan_matcher_process_shutdown.py tests/ros/test_scan_native_end_to_end.py tests/ros/test_semantic_ingress.py tests/ros/test_sim_topics.py
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+AT 2026-11-16T18:22:49Z
+ssssssssssssssssssssss.......s..sssss.................ssssssssssssssssss [ 53%]
+ssssssssssss........ss...ss.....sssssssss.ssssssssssssssssssss           [100%]
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-startup-final-validation-evidence/pytest-ros.xml -
+============================= slowest 20 durations =============================
+0.06s call     tests/ros/test_navigation.py::test_route_service_reports_actual_index_and_blocks_next_on_lost_reference
+0.02s call     tests/ros/test_navigation.py::test_nav2_costmap_nodes_receive_footprint_and_layers
+0.01s call     tests/ros/test_navigation.py::test_nav2_humble_uses_project_through_poses_tree
+0.01s call     tests/ros/test_navigation.py::test_nav2_launch_config_keeps_recovery_output_before_arbitration
+0.01s call     tests/ros/test_motion_lifecycle_restoration.py::test_entrypoint_constructor_does_not_start_worker[scan_adapter-ScanAdapter]
+0.01s setup    tests/ros/test_mapping.py::test_verified_static_lidar_selects_dedicated_relay_and_native_owner[False]
+
+(14 durations < 0.005s hidden.  Use -vv to show these durations.)
+43 passed, 98 skipped in 0.78s
+
+EXIT 0 AT 2026-11-16T18:22:50Z

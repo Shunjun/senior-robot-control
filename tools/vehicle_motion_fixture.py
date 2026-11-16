@@ -111,8 +111,8 @@ def generate_fixture(
     model = ET.fromstring(model_bytes)
     replaced = 0
     for mapping in model.iter("remapping"):
-        if mapping.text == "/drive/cmd_vel_unstamped:=/cmd_vel":
-            mapping.text = "/drive/cmd_vel_unstamped:=" + plan.target_topic
+        if mapping.text == "/drive/actuator_target:=/control/actuator_target":
+            mapping.text = "/drive/actuator_target:=" + plan.target_topic
             replaced += 1
     if replaced != 1:
         raise ValueError("expected exactly one source actuator remapping")

@@ -1,0 +1,122 @@
+--- a/gz_ros2_control/src/gz_system.cpp
++++ b/gz_ros2_control/src/gz_system.cpp
+@@ -12,6 +12,9 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "senior_motion_msgs/navigation_timing.hpp"
++#include "senior_motion_msgs/simulation_timing.hpp"
++#include "gz/sim/components/World.hh"
+ #include "gz_ros2_control/gz_system.hpp"
+ 
+ #include <array>
+@@ -223,6 +226,9 @@
+   std::vector<std::shared_ptr<ForceTorqueData>> ft_sensors_;
+ 
+   /// \brief state interfaces that will be exported to the Resource Manager
++  double measurement_steady_ = 0.0;
++  double measurement_world_ = 0.0;
++  double actuator_deadline_steady_ = 0.0;
+   std::vector<hardware_interface::StateInterface> state_interfaces_;
+ 
+   /// \brief command interfaces that will be exported to the Resource Manager
+@@ -674,12 +680,18 @@
+ std::vector<hardware_interface::StateInterface>
+ GazeboSimSystem::export_state_interfaces()
+ {
++  this->dataPtr->state_interfaces_.emplace_back(
++    "source_clock", "measurement_steady", &this->dataPtr->measurement_steady_);
++  this->dataPtr->state_interfaces_.emplace_back(
++    "source_clock", "world_key", &this->dataPtr->measurement_world_);
+   return std::move(this->dataPtr->state_interfaces_);
+ }
+ 
+ std::vector<hardware_interface::CommandInterface>
+ GazeboSimSystem::export_command_interfaces()
+ {
++  this->dataPtr->command_interfaces_.emplace_back(
++    "control_clock", "valid_until_steady", &this->dataPtr->actuator_deadline_steady_);
+   return std::move(this->dataPtr->command_interfaces_);
+ }
+ 
+@@ -694,9 +706,17 @@
+ }
+ 
+ hardware_interface::return_type GazeboSimSystem::read(
+-  const rclcpp::Time & /*time*/,
++  const rclcpp::Time & time,
+   const rclcpp::Duration & /*period*/)
+ {
++  // Earliest synchronous hardware read boundary; carried through controller_manager.
++  this->dataPtr->measurement_steady_ =
++    static_cast<double>(senior_motion_msgs::navigation::monotonic_ns()) * 1e-9;
++  const auto world = this->dataPtr->ecm->EntityByComponents(sim::components::World());
++  this->dataPtr->measurement_world_ = static_cast<double>(senior_motion_msgs::timing::simulation_world_key(
++    this->dataPtr->ecm, world));
++  senior_motion_msgs::timing::simulation_epoch(std::to_string(static_cast<uint64_t>(this->dataPtr->measurement_world_)), time.nanoseconds());
++
+   for (unsigned int i = 0; i < this->dataPtr->joints_.size(); ++i) {
+     if (this->dataPtr->joints_[i].sim_joint == sim::kNullEntity) {
+       continue;
+@@ -814,9 +834,13 @@
+ }
+ 
+ hardware_interface::return_type GazeboSimSystem::write(
+-  const rclcpp::Time & /*time*/,
++  const rclcpp::Time & time,
+   const rclcpp::Duration & /*period*/)
+ {
++  const double write_steady = static_cast<double>(senior_motion_msgs::navigation::monotonic_ns()) * 1e-9;
++  const bool actuator_current = std::isfinite(this->dataPtr->actuator_deadline_steady_) &&
++    write_steady < this->dataPtr->actuator_deadline_steady_;
++
+   for (unsigned int i = 0; i < this->dataPtr->joints_.size(); ++i) {
+     if (this->dataPtr->joints_[i].sim_joint == sim::kNullEntity) {
+       continue;
+@@ -834,7 +858,7 @@
+           this->dataPtr->ecm->Component<sim::components::JointVelocityCmd>(
+           this->dataPtr->joints_[i].sim_joint);
+         *jointVelCmd = sim::components::JointVelocityCmd(
+-          {this->dataPtr->joints_[i].joint_velocity_cmd});
++          {actuator_current ? this->dataPtr->joints_[i].joint_velocity_cmd : 0.0});
+       }
+     } else if (this->dataPtr->joints_[i].joint_control_method & POSITION) {
+       // Get error in position
+--- a/gz_ros2_control/src/gz_ros2_control_plugin.cpp
++++ b/gz_ros2_control/src/gz_ros2_control_plugin.cpp
+@@ -556,6 +556,13 @@
+   rclcpp::Time sim_time_ros(std::chrono::duration_cast<std::chrono::nanoseconds>(
+       _info.simTime).count(), RCL_ROS_TIME);
+   rclcpp::Duration sim_period = sim_time_ros - this->dataPtr->last_update_sim_time_ros_;
++  if (sim_period.nanoseconds() < 0) {
++    // World reset: read/update once before write, with a zero physics interval.
++    this->dataPtr->last_update_sim_time_ros_ = sim_time_ros;
++    sim_period = rclcpp::Duration::from_nanoseconds(0);
++    this->dataPtr->controller_manager_->read(sim_time_ros, sim_period);
++    this->dataPtr->controller_manager_->update(sim_time_ros, sim_period);
++  }
+   // Always set commands on joints, otherwise at low control frequencies the joints tremble
+   // as they are updated at a fraction of gazebo sim time
+   this->dataPtr->controller_manager_->write(sim_time_ros, sim_period);
+--- a/gz_ros2_control/CMakeLists.txt
++++ b/gz_ros2_control/CMakeLists.txt
+@@ -17,6 +17,9 @@
+ 
+ # Find dependencies
+ find_package(ament_cmake REQUIRED)
++find_package(senior_motion_msgs 0.2.0 EXACT REQUIRED)
++include_directories(${senior_motion_msgs_INCLUDE_DIRS})
++link_libraries(senior_motion_msgs::simulation_timing)
+ find_package(ament_index_cpp REQUIRED)
+ find_package(controller_manager REQUIRED)
+ find_package(hardware_interface REQUIRED)
+--- a/gz_ros2_control/package.xml
++++ b/gz_ros2_control/package.xml
+@@ -8,6 +8,7 @@
+   <license>Apache 2</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>senior_motion_msgs</depend>
+ 
+   <!-- Harmonic -->
+   <depend condition="$GZ_VERSION == harmonic">gz-sim8</depend>

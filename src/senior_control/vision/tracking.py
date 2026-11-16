@@ -19,12 +19,9 @@ _MOVING_LABELS = frozenset({"bicycle", "car", "motorcycle", "bus", "truck", "dog
 @dataclass(frozen=True)
 class TrackingConfig:
     min_confidence: float = 0.5
-    max_detection_age_s: float = 0.3
     range_tolerance_m: float = 0.5
     max_object_speed_mps: float = 2.0
     motion_threshold_m: float = 0.2
-    motion_min_baseline_s: float = 0.15
-    motion_max_baseline_s: float = 0.6
     motion_max_changed_fraction: float = 0.5
     person_labels: frozenset[str] = frozenset({"person"})
     moving_labels: frozenset[str] = _MOVING_LABELS
@@ -32,22 +29,17 @@ class TrackingConfig:
     def __post_init__(self) -> None:
         values = (
             self.min_confidence,
-            self.max_detection_age_s,
             self.range_tolerance_m,
             self.max_object_speed_mps,
             self.motion_threshold_m,
-            self.motion_min_baseline_s,
-            self.motion_max_baseline_s,
             self.motion_max_changed_fraction,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("tracking thresholds must be finite")
-        if self.max_detection_age_s < 0.0 or self.range_tolerance_m <= 0.0:
+        if self.range_tolerance_m <= 0.0:
             raise ValueError("invalid tracking thresholds")
         if self.max_object_speed_mps <= 0.0 or self.motion_threshold_m <= 0.0:
             raise ValueError("speed and motion threshold must be positive")
-        if not 0.0 < self.motion_min_baseline_s < self.motion_max_baseline_s:
-            raise ValueError("motion baselines must satisfy 0 < min < max")
         if not 0.0 < self.motion_max_changed_fraction <= 1.0:
             raise ValueError("motion_max_changed_fraction must be within (0, 1]")
 

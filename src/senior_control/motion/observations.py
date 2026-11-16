@@ -5,9 +5,12 @@ body yaw rate for IMU. Diagonal-only data explicitly leaves correlation unknown.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
+
+from senior_control.models import Pose2D
+from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
 
 if TYPE_CHECKING:
     from senior_control.motion.sample_types import MotionSample
@@ -51,6 +54,10 @@ class Observation:
     frame: Frame
     start_ros: float
     end_ros: float
+    measurement_interval: MeasurementInterval | None = field(default=None, kw_only=True)
+    measurement_delta: "Pose2D | None" = field(default=None, kw_only=True)
+    start_steady: float = field(kw_only=True)
+    end_steady: float = field(kw_only=True)
     received_steady: float
     epoch: str
     sequence: int
@@ -69,21 +76,32 @@ class Heading:
     yaw_rad: float
     variance_rad2: float
     stamp_ros: float
+    measurement_steady: float = field(kw_only=True)
+    measurement: MeasurementTime | None = field(default=None, kw_only=True)
     received_steady: float
     epoch: str
     basis: str
+
+    @property
+    def coordinate(self) -> MeasurementTime:
+        return self.measurement or MeasurementTime("host", None, self.measurement_steady)
 
 
 @dataclass(frozen=True)
 class SourceRule:
     source: Source
-    max_age_s: float
-    max_interval_s: float
+    max_age_ms: float
+    max_interval_ms: float
     min_quality: float
     max_variance: float
 
     def __post_init__(self) -> None:
-        numbers = (self.max_age_s, self.max_interval_s, self.min_quality, self.max_variance)
+        numbers = (
+            self.max_age_ms,
+            self.max_interval_ms / 1000,
+            self.min_quality,
+            self.max_variance,
+        )
         if not all(math.isfinite(x) and x > 0 for x in numbers) or self.min_quality > 1:
             raise ValueError("invalid explicitly supplied source rule")
 
@@ -92,13 +110,12 @@ class SourceRule:
 class AdmissionConfig:
     rules: tuple[SourceRule, ...]
     recovery_samples: int
-    recovery_span_s: float
+    recovery_span_ms: float
     normal_cap_mps: float
     degraded_cap_mps: float
-    heading_max_age_s: float
-    alignment_max_skew_s: float
+    heading_max_age_ms: float
+    alignment_max_skew_ms: float
     heading_max_variance_rad2: float
-    clock_pause_s: float
     epoch_history_limit: int
 
     def __post_init__(self) -> None:
@@ -107,15 +124,14 @@ class AdmissionConfig:
         positive = (
             self.normal_cap_mps,
             self.degraded_cap_mps,
-            self.heading_max_age_s,
-            self.alignment_max_skew_s,
+            (self.heading_max_age_ms / 1000),
+            (self.alignment_max_skew_ms / 1000),
             self.heading_max_variance_rad2,
-            self.clock_pause_s,
         )
         if (
             not all(math.isfinite(x) and x > 0 for x in positive)
-            or not math.isfinite(self.recovery_span_s)
-            or self.recovery_span_s < 0
+            or not math.isfinite(self.recovery_span_ms)
+            or self.recovery_span_ms < 0
             or self.recovery_samples < 1
             or self.epoch_history_limit < 1
             or self.degraded_cap_mps > self.normal_cap_mps
@@ -202,6 +218,8 @@ def metadata_error(
     stamps = (
         observation.start_ros,
         observation.end_ros,
+        observation.start_steady,
+        observation.end_steady,
         observation.received_steady,
         observation.quality,
     )
@@ -251,18 +269,19 @@ def metadata_error(
             for value in (
                 heading.yaw_rad,
                 heading.variance_rad2,
-                heading.stamp_ros,
+                heading.measurement_steady,
                 heading.received_steady,
             )
         ):
             return "invalid_heading_structure"
     if (
-        observation.end_ros > now_ros
+        not 0 <= observation.start_steady <= observation.end_steady <= observation.received_steady
+        or observation.end_steady > now_steady
         or observation.received_steady > now_steady
-        or observation.start_ros > observation.end_ros
+        or observation.start_steady > observation.end_steady
         or (
             not isinstance(observation, PointObservation)
-            and observation.start_ros == observation.end_ros
+            and observation.start_steady == observation.end_steady
         )
     ):
         return "future_or_invalid_interval"
@@ -272,10 +291,10 @@ def metadata_error(
 def is_current(
     observation: AdaptedObservation, rule: SourceRule, *, now_ros: float, now_steady: float
 ) -> bool:
-    """The same ROS-age and fixed steady-deadline test for ingest and snapshots."""
+    """The same original measurement age and fixed steady-deadline test for ingest and snapshots."""
     return (
         now_steady < observation.valid_until_steady
-        and now_ros - observation.original.end_ros <= rule.max_age_s
+        and now_steady - observation.original.end_steady <= (rule.max_age_ms / 1000)
     )
 
 
@@ -288,15 +307,19 @@ def validate(
     heading: Heading | None,
     config: AdmissionConfig,
 ) -> str | None:
-    from senior_control.motion.sample_types import DeltaObservation, PointObservation
+    from senior_control.motion.sample_types import (
+        DeltaObservation,
+        PointObservation,
+        physical_support,
+    )
 
     structural = metadata_error(observation, heading, now_ros=now_ros, now_steady=now_steady)
     if structural is not None:
         return structural
     if (
-        now_ros - observation.end_ros > rule.max_age_s
-        or now_steady - observation.received_steady > rule.max_age_s
-        or observation.end_ros - observation.start_ros > rule.max_interval_s
+        now_steady - observation.end_steady > (rule.max_age_ms / 1000)
+        or now_steady - observation.received_steady > (rule.max_age_ms / 1000)
+        or physical_support(observation).duration > (rule.max_interval_ms / 1000)
     ):
         return "expired_or_long_interval"
     if observation.status is not SourceStatus.VALID:
@@ -341,7 +364,7 @@ def validate(
         values = (
             heading.yaw_rad,
             heading.variance_rad2,
-            heading.stamp_ros,
+            heading.measurement_steady,
             heading.received_steady,
         )
         if (
@@ -349,11 +372,12 @@ def validate(
             or not 0 <= heading.variance_rad2 <= config.heading_max_variance_rad2
             or not heading.epoch
             or not heading.basis
-            or heading.stamp_ros > now_ros
+            or heading.measurement_steady > now_steady
             or heading.received_steady > now_steady
-            or now_ros - heading.stamp_ros > config.heading_max_age_s
-            or now_steady - heading.received_steady > config.heading_max_age_s
-            or abs(heading.stamp_ros - observation.end_ros) > config.alignment_max_skew_s
+            or now_steady - heading.measurement_steady > (config.heading_max_age_ms / 1000)
+            or now_steady - heading.received_steady > (config.heading_max_age_ms / 1000)
+            or abs(heading.measurement_steady - observation.end_steady)
+            > (config.alignment_max_skew_ms / 1000)
         ):
             return "heading_unqualified"
     return None
@@ -385,7 +409,7 @@ def adapt(
         values = ()
         covariance = None
     deadline = min(
-        observation.received_steady + rule.max_age_s,
-        now_steady + rule.max_age_s - (now_ros - observation.end_ros),
+        observation.received_steady + (rule.max_age_ms / 1000),
+        now_steady + (rule.max_age_ms / 1000) - (now_steady - observation.end_steady),
     )
     return AdaptedObservation(observation, values, covariance, deadline, heading_context)

@@ -17,7 +17,7 @@ from typing import Any, TextIO
 import yaml
 
 LIMIT_FIELDS = (
-    "max_interval",
+    "max_interval_ms",
     "range_limit",
     "min_response",
     "max_residual",

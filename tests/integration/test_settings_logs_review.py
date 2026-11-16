@@ -150,8 +150,8 @@ async def test_directory_log_database_does_not_abort_composed_control(
         # authenticated socket heartbeat independently of the task/settings gate.
         async with settings.runtime.lock:
             await link.inbox.put(envelope("control.acquire", {}, request="gate-acquire"))
-            await link.inbox.put(HeartbeatFrame("robot", time.monotonic() + 2))
-            await until(lambda: agents[0]._ledger.eligible("robot"), timeout=0.3)
+            await link.inbox.put(HeartbeatFrame("robot"))
+            await until(lambda: link.inbox.empty(), timeout=0.3)
             assert not link.responses
         await until(lambda: bool(link.responses))
         assert link.responses[0].request_id == "gate-acquire"

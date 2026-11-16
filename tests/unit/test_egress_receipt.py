@@ -2,11 +2,13 @@
 
 from dataclasses import replace
 
+from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
+
 
 def test_retired_owner_packet_does_not_revoke_successor():
     from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
 
-    admission = EgressAdmission(max_age_s=0.3)
+    admission = EgressAdmission(max_age_ms=300)
     old = EgressHeader(
         relay_gid="01" * 24,
         relay_boot="relay-a",
@@ -40,7 +42,7 @@ def test_retired_owner_packet_does_not_revoke_successor():
 def test_current_invalid_is_idempotent_and_a_later_valid_message_recovers():
     from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
 
-    admission = EgressAdmission(max_age_s=0.3)
+    admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
         relay_gid="01" * 24,
         relay_boot="relay-a",
@@ -68,7 +70,7 @@ def test_current_invalid_is_idempotent_and_a_later_valid_message_recovers():
 def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
     from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
 
-    admission = EgressAdmission(max_age_s=0.3)
+    admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
         relay_gid="01" * 24,
         relay_boot="relay-a",
@@ -95,7 +97,7 @@ def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
 def test_topology_loss_invalidates_once_and_new_owner_can_recover():
     from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
 
-    admission = EgressAdmission(max_age_s=0.3)
+    admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
         relay_gid="01" * 24,
         relay_boot="relay-a",
@@ -171,6 +173,7 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
             stamp=SimpleNamespace(sec=1, nanosec=0),
             received_ros=SimpleNamespace(sec=1, nanosec=1),
             received_steady=10.0,
+            timing=wire_time(10.0, tick=1.0),
             frame_id="optical",
             raw_gid=raw_gid,
             bridge_gid=bridge_gid,
@@ -202,7 +205,7 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
         info_gid=info.bridge_gid,
         now_ros_ns=1_100_000_000,
         now_steady=10.1,
-        max_age_s=0.3,
+        max_age_ms=300,
     )
     assert depth_capture_headers(body, **args) is not None
     body.received_steady = 10.05
@@ -215,7 +218,7 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
 def test_upstream_failure_revokes_once_without_retiring_healthy_semantic_owner():
     from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
 
-    admission = EgressAdmission(max_age_s=0.3)
+    admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
         relay_gid="01" * 24,
         relay_boot="relay-a",
@@ -246,9 +249,9 @@ def test_scan_egress_can_use_explicit_three_second_observation_profile():
     from senior_control.vision.egress_receipt import EgressAdmission
 
     with pytest.raises(ValueError):
-        EgressAdmission(max_age_s=3.0)
-    admission = EgressAdmission(max_age_s=3.0, hard_limit_s=5.0)
-    assert admission.max_age_s == 3.0
+        EgressAdmission(max_age_ms=3000)
+    admission = EgressAdmission(max_age_ms=3000, hard_limit_ms=5000)
+    assert admission.max_age_ms == 3000
 
 
 def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
@@ -262,6 +265,7 @@ def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
         stamp=stamp,
         received_ros=receipt,
         received_steady=10.0,
+        timing=wire_time(10.0, tick=1.0),
         frame_id="laser",
         raw_gid="11" * 24,
         bridge_gid="22" * 24,
@@ -281,7 +285,7 @@ def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
         ingress_steady=10.0,
     )
     args = dict(
-        bridge_gid=header.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1, max_age_s=0.5
+        bridge_gid=header.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1, max_age_ms=500
     )
     assert safety_scan_capture(body, **args) is not None
     body.ingress_steady = 10.01

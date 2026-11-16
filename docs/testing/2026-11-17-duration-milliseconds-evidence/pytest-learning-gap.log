@@ -1,0 +1,1100 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.15, pytest-8.4.2, pluggy-1.7.0
+rootdir: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+configfile: pyproject.toml
+plugins: asyncio-0.26.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 5 items
+
+tests/unit/test_learning_gap_debug.py FFFFF                              [100%]
+
+=================================== FAILURES ===================================
+_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed] _
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10c695790>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c585fd0>
+delay_pattern = (0.0,), late_device = False, motion_reordering = False
+expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) < 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) < 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) > 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError
+----------------------------- Captured stdout call -----------------------------
+TRACE_PERMISSION 50.1 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.1, deadline_steady=51.1, source_epoch='scan', frame_id='scan_reference', revision=50100, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.15 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.15 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.15) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.15, deadline_steady=51.15, source_epoch='scan', frame_id='scan_reference', revision=50150, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.2 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.2 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.2) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.2, deadline_steady=51.2, source_epoch='scan', frame_id='scan_reference', revision=50200, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.25 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.25 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.25) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.25, deadline_steady=51.25, source_epoch='scan', frame_id='scan_reference', revision=50250, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.3 waiting_refinement target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.3 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.3) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.3, deadline_steady=51.3, source_epoch='scan', frame_id='scan_reference', revision=50300, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.35 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.35 ControlDecision(command=Velocity(vx=0.0012500000000002132, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.449999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.35, deadline_steady=51.35, source_epoch='scan', frame_id='scan_reference', revision=50350, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.4 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.4 ControlDecision(command=Velocity(vx=0.005000000000000142, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.5) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.4, deadline_steady=51.4, source_epoch='scan', frame_id='scan_reference', revision=50400, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.45 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.45 ControlDecision(command=Velocity(vx=0.011250000000000853, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.55) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.45, deadline_steady=51.45, source_epoch='scan', frame_id='scan_reference', revision=50450, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.5 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.5 ControlDecision(command=Velocity(vx=0.02000000000000057, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.6) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.5, deadline_steady=51.5, source_epoch='scan', frame_id='scan_reference', revision=50500, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.55 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.55 ControlDecision(command=Velocity(vx=0.030553398874989486, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.65) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.55, deadline_steady=51.55, source_epoch='scan', frame_id='scan_reference', revision=50550, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.6 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.6 ControlDecision(command=Velocity(vx=0.039164078649988006, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.699999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.6, deadline_steady=51.6, source_epoch='scan', frame_id='scan_reference', revision=50600, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.65 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.65 ControlDecision(command=Velocity(vx=0.04527475842498541, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.75) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.65, deadline_steady=51.65, source_epoch='scan', frame_id='scan_reference', revision=50650, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.7 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.7 ControlDecision(command=Velocity(vx=0.048885438199983436, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.8) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.7, deadline_steady=51.7, source_epoch='scan', frame_id='scan_reference', revision=50700, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.75 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.75 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.85) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.75, deadline_steady=51.75, source_epoch='scan', frame_id='scan_reference', revision=50750, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.8 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.8 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.9) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.8, deadline_steady=51.8, source_epoch='scan', frame_id='scan_reference', revision=50800, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.85 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.85 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.949999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.85, deadline_steady=51.85, source_epoch='scan', frame_id='scan_reference', revision=50850, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.9 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.9 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.0) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.9, deadline_steady=51.9, source_epoch='scan', frame_id='scan_reference', revision=50900, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.95 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.95 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.05) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.95, deadline_steady=51.95, source_epoch='scan', frame_id='scan_reference', revision=50950, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 51.0 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 51.0 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '4d5e127e7ddf4dcd97d2b6355cda5b7c', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=51.0, deadline_steady=52.0, source_epoch='scan', frame_id='scan_reference', revision=51000, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed] _
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10c78ca40>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ad70f50>
+delay_pattern = (0.0,), late_device = True, motion_reordering = False
+expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) < 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) < 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) > 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError
+----------------------------- Captured stdout call -----------------------------
+TRACE_PERMISSION 50.1 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.1, deadline_steady=51.1, source_epoch='scan', frame_id='scan_reference', revision=50100, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.15 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.15 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.15) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.15, deadline_steady=51.15, source_epoch='scan', frame_id='scan_reference', revision=50150, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.2 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.2 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.2) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.2, deadline_steady=51.2, source_epoch='scan', frame_id='scan_reference', revision=50200, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.25 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.25 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.25) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.25, deadline_steady=51.25, source_epoch='scan', frame_id='scan_reference', revision=50250, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.3 waiting_refinement target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.3 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.3) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.3, deadline_steady=51.3, source_epoch='scan', frame_id='scan_reference', revision=50300, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.35 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.35 ControlDecision(command=Velocity(vx=0.0012500000000002132, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.449999999999996) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.35, deadline_steady=51.35, source_epoch='scan', frame_id='scan_reference', revision=50350, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.4 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.4 ControlDecision(command=Velocity(vx=0.005000000000000142, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.5) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.4, deadline_steady=51.4, source_epoch='scan', frame_id='scan_reference', revision=50400, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.45 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.45 ControlDecision(command=Velocity(vx=0.011250000000000853, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.55) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.45, deadline_steady=51.45, source_epoch='scan', frame_id='scan_reference', revision=50450, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.5 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.5 ControlDecision(command=Velocity(vx=0.02000000000000057, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.6) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.5, deadline_steady=51.5, source_epoch='scan', frame_id='scan_reference', revision=50500, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.55 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.55 ControlDecision(command=Velocity(vx=0.030553398874989486, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.65) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.55, deadline_steady=51.55, source_epoch='scan', frame_id='scan_reference', revision=50550, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.6 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.6 ControlDecision(command=Velocity(vx=0.039164078649988006, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.699999999999996) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.6, deadline_steady=51.6, source_epoch='scan', frame_id='scan_reference', revision=50600, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.65 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.65 ControlDecision(command=Velocity(vx=0.04527475842498541, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.75) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.65, deadline_steady=51.65, source_epoch='scan', frame_id='scan_reference', revision=50650, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.7 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.7 ControlDecision(command=Velocity(vx=0.048885438199983436, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.8) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.7, deadline_steady=51.7, source_epoch='scan', frame_id='scan_reference', revision=50700, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.75 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.75 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.85) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.75, deadline_steady=51.75, source_epoch='scan', frame_id='scan_reference', revision=50750, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.8 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.8 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.9) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.8, deadline_steady=51.8, source_epoch='scan', frame_id='scan_reference', revision=50800, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.85 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.85 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.949999999999996) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.85, deadline_steady=51.85, source_epoch='scan', frame_id='scan_reference', revision=50850, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.9 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.9 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.0) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.9, deadline_steady=51.9, source_epoch='scan', frame_id='scan_reference', revision=50900, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.95 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.95 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.05) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=50.95, deadline_steady=51.95, source_epoch='scan', frame_id='scan_reference', revision=50950, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 51.0 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 51.0 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '3a60c5b936204847b406e3be5b421b8e', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.976 -0.02, -9.913 -0.02, -9.962 0.281, -9.972 0.281, -9.966 0....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.445 -3.363, -9.445 -3.323, -9.405 -3...>, stamp_steady=51.0, deadline_steady=52.0, source_epoch='scan', frame_id='scan_reference', revision=51000, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed] _
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad49f10>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c78c830>
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
+motion_reordering = False, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) < 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) < 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) > 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError
+----------------------------- Captured stdout call -----------------------------
+TRACE_PERMISSION 50.1 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.075) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.1, deadline_steady=51.075, source_epoch='scan', frame_id='scan_reference', revision=50075, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.15 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.15 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.125) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.15, deadline_steady=51.125, source_epoch='scan', frame_id='scan_reference', revision=50125, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.2 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.2 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.175000000000004) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.2, deadline_steady=51.175000000000004, source_epoch='scan', frame_id='scan_reference', revision=50175, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.25 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.25 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.225) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.25, deadline_steady=51.225, source_epoch='scan', frame_id='scan_reference', revision=50225, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.3 waiting_refinement target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.3 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.275) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.3, deadline_steady=51.275, source_epoch='scan', frame_id='scan_reference', revision=50275, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.35 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.35 ControlDecision(command=Velocity(vx=0.0012500000000002132, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.449999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.35, deadline_steady=51.325, source_epoch='scan', frame_id='scan_reference', revision=50325, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.4 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.4 ControlDecision(command=Velocity(vx=0.005000000000000142, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.5) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.4, deadline_steady=51.375, source_epoch='scan', frame_id='scan_reference', revision=50375, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.45 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.45 ControlDecision(command=Velocity(vx=0.011250000000000853, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.55) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.45, deadline_steady=51.425000000000004, source_epoch='scan', frame_id='scan_reference', revision=50425, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.5 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.5 ControlDecision(command=Velocity(vx=0.02000000000000057, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.6) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.5, deadline_steady=51.475, source_epoch='scan', frame_id='scan_reference', revision=50475, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.55 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.55 ControlDecision(command=Velocity(vx=0.030553398874989486, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.65) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.55, deadline_steady=51.525, source_epoch='scan', frame_id='scan_reference', revision=50525, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.6 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.6 ControlDecision(command=Velocity(vx=0.039164078649988006, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.699999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.6, deadline_steady=51.575, source_epoch='scan', frame_id='scan_reference', revision=50575, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.65 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.65 ControlDecision(command=Velocity(vx=0.04527475842498541, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.75) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.65, deadline_steady=51.625, source_epoch='scan', frame_id='scan_reference', revision=50625, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.7 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.7 ControlDecision(command=Velocity(vx=0.048885438199983436, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.8) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.7, deadline_steady=51.675000000000004, source_epoch='scan', frame_id='scan_reference', revision=50675, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.75 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.75 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.85) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.75, deadline_steady=51.725, source_epoch='scan', frame_id='scan_reference', revision=50725, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.8 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.8 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.9) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.8, deadline_steady=51.775, source_epoch='scan', frame_id='scan_reference', revision=50775, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.85 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.85 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.949999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.85, deadline_steady=51.825, source_epoch='scan', frame_id='scan_reference', revision=50825, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.9 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.9 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.0) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.9, deadline_steady=51.875, source_epoch='scan', frame_id='scan_reference', revision=50875, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.95 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.95 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.05) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.95, deadline_steady=51.925000000000004, source_epoch='scan', frame_id='scan_reference', revision=50925, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 51.0 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 51.0 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', '376bf6f4def8400a97c61e81f080903a', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=51.0, deadline_steady=51.975, source_epoch='scan', frame_id='scan_reference', revision=50975, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed] _
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad70e90>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c585f70>
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = True
+motion_reordering = False, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) < 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) < 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) > 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError
+----------------------------- Captured stdout call -----------------------------
+TRACE_PERMISSION 50.1 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.075) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.1, deadline_steady=51.075, source_epoch='scan', frame_id='scan_reference', revision=50075, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.15 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.15 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.125) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.15, deadline_steady=51.125, source_epoch='scan', frame_id='scan_reference', revision=50125, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.2 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.2 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.175000000000004) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.2, deadline_steady=51.175000000000004, source_epoch='scan', frame_id='scan_reference', revision=50175, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.25 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.25 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.225) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.25, deadline_steady=51.225, source_epoch='scan', frame_id='scan_reference', revision=50225, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.3 waiting_refinement target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.3 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.275) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.3, deadline_steady=51.275, source_epoch='scan', frame_id='scan_reference', revision=50275, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.35 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.35 ControlDecision(command=Velocity(vx=0.0012500000000002132, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.449999999999996) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.35, deadline_steady=51.325, source_epoch='scan', frame_id='scan_reference', revision=50325, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.4 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.4 ControlDecision(command=Velocity(vx=0.005000000000000142, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.5) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.4, deadline_steady=51.375, source_epoch='scan', frame_id='scan_reference', revision=50375, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.45 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.45 ControlDecision(command=Velocity(vx=0.011250000000000853, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.55) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.45, deadline_steady=51.425000000000004, source_epoch='scan', frame_id='scan_reference', revision=50425, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.5 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.5 ControlDecision(command=Velocity(vx=0.02000000000000057, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.6) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.5, deadline_steady=51.475, source_epoch='scan', frame_id='scan_reference', revision=50475, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.55 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.55 ControlDecision(command=Velocity(vx=0.030553398874989486, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.65) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.55, deadline_steady=51.525, source_epoch='scan', frame_id='scan_reference', revision=50525, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.6 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.6 ControlDecision(command=Velocity(vx=0.039164078649988006, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.699999999999996) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.6, deadline_steady=51.575, source_epoch='scan', frame_id='scan_reference', revision=50575, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.65 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.65 ControlDecision(command=Velocity(vx=0.04527475842498541, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.75) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.65, deadline_steady=51.625, source_epoch='scan', frame_id='scan_reference', revision=50625, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.7 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.7 ControlDecision(command=Velocity(vx=0.048885438199983436, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.8) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.7, deadline_steady=51.675000000000004, source_epoch='scan', frame_id='scan_reference', revision=50675, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.75 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.75 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.85) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.75, deadline_steady=51.725, source_epoch='scan', frame_id='scan_reference', revision=50725, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.8 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.8 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.9) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.8, deadline_steady=51.775, source_epoch='scan', frame_id='scan_reference', revision=50775, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.85 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.85 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=50.949999999999996) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.85, deadline_steady=51.825, source_epoch='scan', frame_id='scan_reference', revision=50825, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.9 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.9 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.0) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.9, deadline_steady=51.875, source_epoch='scan', frame_id='scan_reference', revision=50875, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.95 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.95 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.05) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=50.95, deadline_steady=51.925000000000004, source_epoch='scan', frame_id='scan_reference', revision=50925, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 51.0 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 51.0 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'e02da1429ad946038b709ec22d150734', '((0.0, 0.0), True, True, None, False, False)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.958 -0.113, -9.957 -0.113, -9.956 -0.113, -9.956 -0.113, -9.95...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 0.018, 9.979 0.018, 9.979 0.018, 9...>, stamp_steady=51.0, deadline_steady=51.975, source_epoch='scan', frame_id='scan_reference', revision=50975, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+_ test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed] _
+
+core = <senior_robot.motion_core_output.MotionCoreOutput object at 0x10c78c590>
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela4')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c78e210>
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
+motion_reordering = True, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) < 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) < 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i > 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) > 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+>       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError
+----------------------------- Captured stdout call -----------------------------
+TRACE_PERMISSION 50.1 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.1, interval_end_steady=50.1, computed_steady=50.1, valid_until_steady=51.1, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.1 ControlDecision(command=None, reason='clock_initialized', verified=False, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.1, deadline_steady=51.1, source_epoch='scan', frame_id='scan_reference', revision=50100, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.15 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.15, interval_end_steady=50.15, computed_steady=50.15, valid_until_steady=51.15, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.15 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.15) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.15, deadline_steady=51.15, source_epoch='scan', frame_id='scan_reference', revision=50150, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.2 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.2, interval_end_steady=50.2, computed_steady=50.2, valid_until_steady=51.2, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.2 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.2) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.2, deadline_steady=51.2, source_epoch='scan', frame_id='scan_reference', revision=50200, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.25 controlled_stop target Velocity(vx=0.0, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.25, interval_end_steady=50.25, computed_steady=50.25, valid_until_steady=51.25, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.25 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.25) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.25, deadline_steady=51.25, source_epoch='scan', frame_id='scan_reference', revision=50250, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.3 waiting_refinement target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.3, interval_end_steady=50.3, computed_steady=50.3, valid_until_steady=51.3, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.3 ControlDecision(command=Velocity(vx=0.0, wz=0.0), reason='waiting_refinement', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.3) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.3, deadline_steady=51.3, source_epoch='scan', frame_id='scan_reference', revision=50300, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.35 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.35, interval_end_steady=50.35, computed_steady=50.35, valid_until_steady=51.35, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.35 ControlDecision(command=Velocity(vx=0.0012500000000002132, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.449999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.35, deadline_steady=51.35, source_epoch='scan', frame_id='scan_reference', revision=50350, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.4 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.4, interval_end_steady=50.4, computed_steady=50.4, valid_until_steady=51.4, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.4 ControlDecision(command=Velocity(vx=0.005000000000000142, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.5) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.4, deadline_steady=51.4, source_epoch='scan', frame_id='scan_reference', revision=50400, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.45 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.45, interval_end_steady=50.45, computed_steady=50.45, valid_until_steady=51.45, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.45 ControlDecision(command=Velocity(vx=0.011250000000000853, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.55) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.45, deadline_steady=51.45, source_epoch='scan', frame_id='scan_reference', revision=50450, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.5 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.5, interval_end_steady=50.5, computed_steady=50.5, valid_until_steady=51.5, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.5 ControlDecision(command=Velocity(vx=0.02000000000000057, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.6) covered Perception(free_space=<POLYGON ((-9.188 3.885, -9.18 3.881, -8.924 4.263, -8.787 4.703, -8.795 4.7...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((-9.385 -3.527, -9.385 -3.487, -9.345 -3...>, stamp_steady=50.5, deadline_steady=51.5, source_epoch='scan', frame_id='scan_reference', revision=50500, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.55 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.55, interval_end_steady=50.55, computed_steady=50.55, valid_until_steady=51.55, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.55 ControlDecision(command=Velocity(vx=0.030553398874989486, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.65) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.55, deadline_steady=51.525, source_epoch='scan', frame_id='scan_reference', revision=50525, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.6 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.6, interval_end_steady=50.6, computed_steady=50.6, valid_until_steady=51.6, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.6 ControlDecision(command=Velocity(vx=0.039164078649988006, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.699999999999996) covered Perception(free_space=<POLYGON ((-9.177 3.852, -9.176 3.854, -9.176 3.856, -9.175 3.857, -9.174 3....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.082, 9.978 -0.082, 9.976 -0.082...>, stamp_steady=50.55, deadline_steady=51.525, source_epoch='scan', frame_id='scan_reference', revision=50525, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.65 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.65, interval_end_steady=50.65, computed_steady=50.65, valid_until_steady=51.65, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.65 ControlDecision(command=Velocity(vx=0.04527475842498541, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.75) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.65, deadline_steady=51.625, source_epoch='scan', frame_id='scan_reference', revision=50625, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.7 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.7, interval_end_steady=50.7, computed_steady=50.7, valid_until_steady=51.7, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.7 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.575) covered Perception(free_space=<POLYGON ((-9.463 1.932, -9.459 1.946, -9.459 1.949, -9.457 1.963, -9.456 1....>, occupied=<GEOMETRYCOLLECTION (POLYGON ((-10.191 0.135, -10.191 0.136, -10.192 0.139, ...>, stamp_steady=50.7, deadline_steady=51.575, source_epoch='scan', frame_id='scan_reference', revision=50575, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.75 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.75, interval_end_steady=50.75, computed_steady=50.75, valid_until_steady=51.75, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.75 ControlDecision(command=Velocity(vx=0.04888543819998311, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.85) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.75, deadline_steady=51.725, source_epoch='scan', frame_id='scan_reference', revision=50725, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.8 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.8, interval_end_steady=50.8, computed_steady=50.8, valid_until_steady=51.8, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.8 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.9) covered Perception(free_space=<POLYGON ((-9.177 3.852, -9.176 3.854, -9.176 3.856, -9.175 3.857, -9.174 3....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.082, 9.978 -0.082, 9.976 -0.082...>, stamp_steady=50.75, deadline_steady=51.724999999999994, source_epoch='scan', frame_id='scan_reference', revision=50725, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.85 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.85, interval_end_steady=50.85, computed_steady=50.85, valid_until_steady=51.85, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.85 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=50.949999999999996) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.85, deadline_steady=51.825, source_epoch='scan', frame_id='scan_reference', revision=50825, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.9 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.9, interval_end_steady=50.9, computed_steady=50.9, valid_until_steady=51.9, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.9 ControlDecision(command=None, reason='sweep_unknown', verified=False, emergency=True, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.775) covered Perception(free_space=<POLYGON ((-9.424 1.92, -9.419 1.938, -9.418 1.941, -9.416 1.959, -9.415 1.9...>, occupied=<GEOMETRYCOLLECTION (POLYGON ((-10.231 0.136, -10.232 0.153, -10.232 0.155, ...>, stamp_steady=50.9, deadline_steady=51.775, source_epoch='scan', frame_id='scan_reference', revision=50775, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 50.95 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=50.95, interval_end_steady=50.95, computed_steady=50.95, valid_until_steady=51.95, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 50.95 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.05) covered Perception(free_space=<POLYGON ((-9.188 3.858, -9.188 3.859, -9.187 3.859, -9.187 3.86, -9.184 3.8...>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.07, 9.979 -0.07, 9.979 -0.07, 9...>, stamp_steady=50.95, deadline_steady=51.925000000000004, source_epoch='scan', frame_id='scan_reference', revision=50925, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+TRACE_PERMISSION 51.0 None target Velocity(vx=0.05, wz=0) body BodyMotion(average=None, upper=None, interval_start_steady=51.0, interval_end_steady=51.0, computed_steady=51.0, valid_until_steady=52.0, source_epoch='clock:1|imu:boot|laser:native|wheel:boot', qualified=True, reason='unified current control estimate; no truth bound') footprint Footprint(length_m=0.674, width_m=0.552, physical_polygon=((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)))
+TRACE_OUTPUT 51.0 ControlDecision(command=Velocity(vx=0.05, wz=0.0), reason='tracking', verified=True, emergency=False, evidence_identity=('clock:1|imu:boot|laser:native|wheel:boot', 'scan', 'scan_reference', 'fortress-candidate-unvalidated-v1', 'fortress-candidate-unvalidated-v1', '0.674', '0.552', '((-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276))', 'fortress-candidate-unvalidated-v1', 'startup_learning', 'c34f1d7a4251411ab8045654c5f00245', '((0.0, 0.0), True, True, None, False, True)'), evidence_deadline=51.1) covered Perception(free_space=<POLYGON ((-9.177 3.852, -9.176 3.854, -9.176 3.856, -9.175 3.857, -9.174 3....>, occupied=<GEOMETRYCOLLECTION (MULTIPOLYGON (((9.98 -0.082, 9.978 -0.082, 9.976 -0.082...>, stamp_steady=50.95, deadline_steady=51.925, source_epoch='scan', frame_id='scan_reference', revision=50925, forecast_horizon_s=12.0, basis='simulation-only static scene; original raw scan; validated_free_to_range')
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-learning-gap.xml -
+=========================== short test summary info ============================
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]
+FAILED tests/unit/test_learning_gap_debug.py::test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]
+============================== 5 failed in 8.93s ===============================
+EXIT:1

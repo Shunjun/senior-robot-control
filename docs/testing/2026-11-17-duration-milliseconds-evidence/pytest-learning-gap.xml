@@ -1,0 +1,871 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="5" time="8.918" timestamp="2026-11-17T01:36:40.296448+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_gap_debug" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern0-False-False-completed]" time="1.465"><failure message="AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10c695790&gt;
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c585fd0&gt;
+delay_pattern = (0.0,), late_device = False, motion_reordering = False
+expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) &gt; 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_gap_debug" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern1-True-False-completed]" time="1.395"><failure message="AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10c78ca40&gt;
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10ad70f50&gt;
+delay_pattern = (0.0,), late_device = True, motion_reordering = False
+expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) &gt; 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_gap_debug" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern2-False-False-completed]" time="1.972"><failure message="AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad49f10&gt;
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela2')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c78c830&gt;
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
+motion_reordering = False, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) &gt; 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_gap_debug" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern3-True-False-completed]" time="2.030"><failure message="AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10ad70e90&gt;
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela3')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c585f70&gt;
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = True
+motion_reordering = False, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) &gt; 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_gap_debug" name="test_full_core_cycle_with_delayed_and_reordered_raw_scans[delay_pattern4-False-True-completed]" time="1.529"><failure message="AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})&#10;assert 'moving' == 'completed'&#10;  &#10;  - completed&#10;  + moving">core = &lt;senior_robot.motion_core_output.MotionCoreOutput object at 0x10c78c590&gt;
+tmp_path = PosixPath('/private/var/folders/c7/q9fxb_xs5f170_rbc0tbwkww0000gn/T/pytest-of-zhangshunjun/pytest-251/test_full_core_cycle_with_dela4')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c78e210&gt;
+delay_pattern = (0.075, 0.025, 0.125, 0.025), late_device = False
+motion_reordering = True, expected = 'completed'
+
+    @pytest.mark.parametrize(
+        "delay_pattern,late_device,motion_reordering,expected",
+        [
+            ((0.0,), False, False, "completed"),
+            ((0.0,), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), True, False, "completed"),
+            ((0.075, 0.025, 0.125, 0.025), False, True, "completed"),
+        ],
+    )
+    def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
+        core,  # noqa: F811
+        tmp_path,
+        monkeypatch,
+        delay_pattern,
+        late_device,
+        motion_reordering,
+        expected,
+    ):
+        core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
+        bind_core(core, tmp_path / "claim")
+        core.node._depth_policy = "laser_only"
+        core.node._scan_topology_ready = lambda: True
+        core.node._profile = lambda: DeviceProfile(
+            footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
+        )
+        now = [10.0]
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+        losses = []
+        original_diagnose = core._diagnose_stopping
+        original_output = core._decision_output
+    
+        def diagnose(ctx, reason, evaluation):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_PERMISSION",
+                    now[0],
+                    reason,
+                    "target",
+                    ctx.target.velocity,
+                    "body",
+                    ctx.motion,
+                    "footprint",
+                    ctx.footprint,
+                )
+            return original_diagnose(ctx, reason, evaluation)
+    
+        def output(decision, body, ctx, epoch, stamp):
+            if len(losses) &lt; 24:
+                print(
+                    "TRACE_OUTPUT",
+                    now[0],
+                    decision,
+                    "covered",
+                    ctx.perception.covered if hasattr(ctx.perception, "covered") else ctx.perception,
+                )
+            losses.append(decision.reason)
+            return original_output(decision, body, ctx, epoch, stamp)
+    
+        core._diagnose_stopping = diagnose
+        core._decision_output = output
+        phases = set()
+        captures = []
+        stopped_stamp = None
+        outputs = []
+        positions = [(50.0, 0.0)]
+        # Real core initialization may wait longer than the learning budget.
+        for t in (10.0, 50.0):
+            now[0] = t
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+        assert core.startup.state == "initializing" and core.startup.started is None
+        for i in range(1, 21):
+            t = now[0] = 50 + i * 0.05
+            # Explicit synthetic zero-order plant: the preceding actual core output
+            # supplies the next measured speed. No permit or obstacle is patched.
+            v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
+            positions.append((t, positions[-1][1] + v * 0.05))
+            core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
+            core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+            core.node._reception_test.sensors.ingest_observation(
+                MotionObservation(
+                    "laser",
+                    (v, 0.0, 0.0),
+                    t,
+                    (
+                        Origin(
+                            "laser",
+                            "native",
+                            i,
+                            t,
+                            t,
+                            t,
+                            measurement_steady=t,
+                            measurement=capture_time(t).measurement,
+                        ),
+                    ),
+                    quality=1.0,
+                    independent=(True, True, True),
+                    measured_steady=t,
+                    measurement=capture_time(t).measurement,
+                    # v is the preceding output actually applied throughout this
+                    # completed plant interval, not an instantaneous new rate.
+                    measurement_interval=MeasurementInterval(
+                        capture_time(t - 0.05).measurement, capture_time(t).measurement
+                    ),
+                    measurement_delta=Pose2D(v * 0.05, 0, 0),
+                ),
+                t,
+                t,
+            )
+            delay = delay_pattern[i % len(delay_pattern)] if i &gt; 10 else 0.0
+            if (
+                core.startup.state in {"moving", "sampling"}
+                and len(delay_pattern) &gt; 1
+                and not motion_reordering
+            ):
+                delay = 0.025
+            stamp = t - delay
+            ranges = [10.0] * 720
+            if not late_device:
+                ranges[0] = 0.15
+                ranges[1] = ranges[-1] = float("nan")
+            if late_device and core.startup.state == "validating":
+                ranges[0] = 0.15  # new equipment appears after the move: unverified
+            core.node._scans = [
+                N(
+                    received=t,
+                    received_ros=t,
+                    stamp=stamp,
+                    message=N(
+                        source_epoch="scan",
+                        frame_id="laser_link",
+                        sequence=max(1, round(stamp * 1000)),
+                        ranges=ranges,
+                        angle_min=-math.pi,
+                        angle_increment=2 * math.pi / 719,
+                        range_min=0.08,
+                        range_max=20.0,
+                        sensor_x=0.0,
+                        sensor_y=0.0,
+                        sensor_yaw=0.0,
+                        transform_stamp=stamp,
+                        raw_capture=N(
+                            timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        ),
+                    ),
+                    measurement_steady=stamp,
+                )
+            ]
+            publish_inputs(core)
+            core.prefetch_scan()
+            core.tick()
+            phases.add(core.startup.state)
+            captures.append(stamp)
+            outputs.append(core.node.emitted[-1][0].vx)
+            if core.startup.state == "validating" and stopped_stamp is None:
+                stopped_stamp = core.startup.validation_after_steady
+            if not core.startup.active:
+                break
+&gt;       assert core.startup.state == expected, (core.startup.summary(), losses, phases)
+E       AssertionError: ({'action_consumed': True, 'action_elapsed_s': 0.6499999999999986, 'classification': 'provisional', 'learned_local_ret...efinement', 'waiting_refinement', 'waiting_refinement', 'waiting_refinement', 'tracking', ...], {'moving', 'sampling'})
+E       assert 'moving' == 'completed'
+E         
+E         - completed
+E         + moving
+
+tests/unit/test_learning_gap_debug.py:189: AssertionError</failure></testcase></testsuite></testsuites>

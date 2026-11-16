@@ -31,6 +31,7 @@ def inputs():
                 (math.nan, 0.4, math.nan),
             )
         ),
+        measurement_steady=10.0,
     )
     info = CameraInfoFrame(
         stamp_ns=packet.stamp_ns,
@@ -48,6 +49,7 @@ def inputs():
         binning_x=0,
         binning_y=0,
         roi=(0, 0, 0, 0, False),
+        measurement_steady=9.999,
     )
     tf = OpticalTransform(
         stamp_ns=0,
@@ -121,8 +123,8 @@ def test_buffer_pairs_exact_stamps_across_dropped_frames_and_keeps_receipts():
     from senior_control.vision.depth_runtime import DepthPairBuffer
 
     packet, info, _ = inputs()
-    buffer = DepthPairBuffer(max_age_s=0.5, pair_wait_s=0.1)
-    assert buffer.offer_info(replace(info, stamp_ns=900_000_000))
+    buffer = DepthPairBuffer(max_age_ms=500, pair_wait_ms=100)
+    assert buffer.offer_info(replace(info, stamp_ns=900_000_000, measurement_steady=9.998))
     assert buffer.offer_depth(packet)
     assert buffer.take_ready(now_ros_ns=1_000_000_002, now_steady=10.01) == (None, None)
     assert buffer.offer_info(info)
@@ -132,24 +134,30 @@ def test_buffer_pairs_exact_stamps_across_dropped_frames_and_keeps_receipts():
     assert pair[1].received_steady == 9.999
 
 
-def test_buffer_future_expiry_and_overflow_are_explicit_failure():
+def test_buffer_ros_correction_keeps_pair_and_overflow_is_explicit():
     from senior_control.vision.depth_runtime import DepthPairBuffer
 
     packet, info, _ = inputs()
-    buffer = DepthPairBuffer(max_age_s=0.5, pair_wait_s=0.1)
+    buffer = DepthPairBuffer(max_age_ms=500, pair_wait_ms=100)
     assert buffer.offer_depth(packet)
     assert buffer.offer_info(info)
-    assert buffer.take_ready(now_ros_ns=packet.stamp_ns - 1, now_steady=10.0) == (None, None)
-    pair, failure = buffer.take_ready(now_ros_ns=packet.stamp_ns - 1, now_steady=10.021)
-    assert pair is None and failure == "future_expired"
-    assert buffer.take_ready(now_ros_ns=packet.stamp_ns, now_steady=10.022) == (None, None)
-
-    for index in range(4):
-        assert buffer.offer_depth(replace(packet, stamp_ns=packet.stamp_ns + index + 1))
-    assert not buffer.offer_depth(replace(packet, stamp_ns=packet.stamp_ns + 5))
-    assert (
-        buffer.take_ready(now_ros_ns=packet.stamp_ns + 10, now_steady=10.03)[1] == "depth_overflow"
+    pair, failure = buffer.take_ready(now_ros_ns=1, now_steady=10.01)
+    assert pair == (packet, info) and failure is None
+    for i in range(4):
+        assert buffer.offer_depth(
+            replace(
+                packet,
+                stamp_ns=packet.stamp_ns + i + 1,
+                measurement_steady=10.01 + i * 0.001,
+                received_steady=10.01 + i * 0.001,
+            )
+        )
+    assert not buffer.offer_depth(
+        replace(
+            packet, stamp_ns=packet.stamp_ns + 5, measurement_steady=10.02, received_steady=10.02
+        )
     )
+    assert buffer.take_ready(now_ros_ns=1, now_steady=10.03)[1] == "depth_overflow"
 
 
 @pytest.mark.parametrize(

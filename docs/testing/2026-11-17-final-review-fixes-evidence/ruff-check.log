@@ -1,0 +1,37 @@
+AT 2026-11-16T18:39:11.637967+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+COMMAND [".venv/bin/ruff", "check", "--no-cache", "--extend-exclude", "ros2/src/senior_robot/senior_robot/native_receipt.py,tests/test_native_receipt_diagnostics.py,docs/reviews/2026-11-16-software-estop-owner.md", "."]
+I001 [*] Import block is un-sorted or un-formatted
+   --> tests/unit/test_agent_config.py:118:5
+    |
+116 |       tmp_path, monkeypatch, missing_adapter
+117 |   ):
+118 | /     import asyncio
+119 | |     import tempfile
+120 | |
+121 | |     from tests.integration.agent_fakes import FakeConnector, FakeLink, until
+122 | |
+123 | |     from senior_control.agent import composition
+124 | |     from senior_control.agent.main import Agent
+125 | |     from senior_control.runtime.ipc import IpcServer
+    | |____________________________________________________^
+126 |
+127 |       with tempfile.TemporaryDirectory(prefix="identity-") as directory:
+    |
+help: Organize imports
+    |
+120 |
+    -     from tests.integration.agent_fakes import FakeConnector, FakeLink, until
+    -
+121 |     from senior_control.agent import composition
+122 |     from senior_control.agent.main import Agent
+123 |     from senior_control.runtime.ipc import IpcServer
+124 +     from tests.integration.agent_fakes import FakeConnector, FakeLink, until
+125 |
+    |
+
+Found 1 error.
+[*] 1 fixable with `--fix`.
+
+EXIT 1
+ELAPSED 0.21529216697672382

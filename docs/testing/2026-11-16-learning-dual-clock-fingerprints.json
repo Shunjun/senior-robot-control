@@ -1,0 +1,27 @@
+{
+  "head": "593e8f13f385892f0bd62cf75c593f7b07efd2da",
+  "own": {
+    "src/senior_control/motion/startup_learning.py": "8dc178fea229401410fdbd3d55fcf9ef42f19482010253b7be2c187bd1921426",
+    "src/senior_control/motion/learning_pose_history.py": "0a3bf4a4b338248d440535ca736d62b21bdee8a565a053c27ebe6896bbe026a4",
+    "src/senior_control/safety/self_learning.py": "dd315d4f7f5f5f2ef173faf634039f6d75321f983b226e428c57421eb116d553",
+    "tests/unit/learning_test_support.py": "66dfd3f7bb6fac627dd2c6b7d3713879f2df3266c5acbc192d31eb4738ad9481",
+    "tests/unit/test_startup_learning.py": "7a342b694a8a82ae7b7d370599afce8e44e9bec1e7b1b985ef6356fa9daafc09",
+    "tests/unit/test_startup_learning_review.py": "83ae3e4fdcb0272f7575bed8b101c0a763c4f86863fec70f640a929bb2de0035",
+    "tests/unit/test_startup_learning_cycle.py": "ad658c011b8f0498e2e954e6ddbcaab24bd28adf78e71f94edfda8c8eed9f13a",
+    "tests/unit/test_startup_learning_latch.py": "f296e1f31b01d645591cf4f78172efd039bbd025d16942de319753b4095a5265",
+    "tests/unit/test_startup_learning_timed.py": "c1aa8e94eae462dc373595b5714e2d2b61626340bb86459f3f269863fd328ea9",
+    "tests/unit/test_learning_dual_clock.py": "98224fcfa20c4f7a82ecf811cad08aa98e2f413e37dc926cdb1fb6dbd6d0a68f"
+  },
+  "concurrent_nav_dependencies": {
+    "src/senior_control/sensors/time_proof.py": "37f617d81b18e988e8e508a8658b9064782c799d2032133fb1978b560b1e861c",
+    "src/senior_control/motion/estimator.py": "49843c4cd143c8220338149592ebd700961c8a625ed33c96eeee059339cceb9a",
+    "src/senior_control/motion/pose_estimator.py": "b36449b784766e97a49653206f98c32374c7fc7d01804b7d3e1ff255a131c2d2",
+    "ros2/src/senior_robot/senior_robot/motion_observation_adapter.py": "3353b9245143966b055752fc406e635db15e42a0896fde9196c8180c44bdc454",
+    "ros2/src/senior_robot/senior_robot/motion_sensor_runtime.py": "5d0944702a282f778ec94d1f6f16846345d217ec5a38615edd8d2eed7f095929",
+    "ros2/src/senior_robot/senior_robot/motion_core_output.py": "300e55864d548bc969576f6f49047f02b91599cf9a71813bf11687fae91057b7",
+    "tests/unit/source_time_test_support.py": "44047f71737a915740687db231d84acb0a280b4e67cc6c5af09e43178d17f6db",
+    "tests/unit/control_process_test_support.py": "51ae82959ab7ffd4c865924636749bf270f21fad48176ef1e698f669a3c66f9b",
+    "tests/unit/test_unified_motion_runtime.py": "8e4e573263896f4dbe4e0b5efdfa34e48abf9eb1417e49c10523b367cd3101ad",
+    "tests/unit/test_motion_core_chain.py": "7a6f2d914709d6c6f281551c027c07fffd522bdbb42fee8ba20507a2788f1af0"
+  }
+}

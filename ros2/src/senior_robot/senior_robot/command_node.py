@@ -10,19 +10,17 @@ simulation configuration, not a physical braking guarantee.
 import math
 import re
 import secrets
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from geometry_msgs.msg import Twist
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.subscription import Subscription
-from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
+from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand, NavigationSample
 from std_msgs.msg import String
 
 from senior_control.agent.manual_control import (
@@ -35,6 +33,7 @@ from senior_control.errors import ErrorCode
 from senior_control.models import Velocity
 from senior_control.motion.contracts import ManualIntent
 from senior_control.motion.manual_authority import ManualAuthorityError, ManualAuthorityState
+from senior_control.motion.navigation_clock import monotonic_domain
 from senior_control.protocol import (
     Envelope,
     ManualIntentEnvelope,
@@ -51,12 +50,14 @@ from senior_robot.motion_lifecycle import with_dds_info
 class _NavigationSource:
     execution_id: str
     topic: str
-    offset: float
     subscription: Subscription
-    bound_at_ns: int
+    bound_steady: float
+    clock_domain: str
+    publisher_gid: bytes
     qualified: Callable[[], bool]
     sequence: int = 0
-    last_stamp: int = 0
+    producer_sequence: int = 0
+    last_produced: float = float("-inf")
     last_forwarded: float = float("-inf")
     task_epoch: int = 0
     received_steady: float = 0.0
@@ -107,13 +108,13 @@ class CommandNode(Node):
         self.declare_parameter("native_writer_receipts", False)
         self._native_writer_receipts = bool(self.get_parameter("native_writer_receipts").value)
         self.declare_parameter("command_rate_hz", 10.0)
-        self.declare_parameter("command_ttl_seconds", 0.3)
+        self.declare_parameter("command_ttl_ms", 300.0)
         self.declare_parameter("final_command_topic", "/safety/final_command")
         self._monotonic_clock = clock if clock is not None else SystemClock()
         if arbiter is None:
             self._arbiter = Arbiter(
                 robot_id=str(self.get_parameter("robot_id").value),
-                command_ttl_seconds=float(self.get_parameter("command_ttl_seconds").value),
+                command_ttl_ms=float(self.get_parameter("command_ttl_ms").value),
             )
         else:
             self._arbiter = arbiter
@@ -124,7 +125,7 @@ class CommandNode(Node):
         self._manual_ingress = ManualIngress(
             str(self.get_parameter("robot_id").value),
             self._owner_boot,
-            ttl=float(self.get_parameter("command_ttl_seconds").value),
+            ttl=float(self.get_parameter("command_ttl_ms").value) / 1000,
         )
         self._manual_target: ManualTarget | None = None
         self._motion_runtime = MotionRuntimeReceiver()
@@ -168,6 +169,7 @@ class CommandNode(Node):
                 self._on_drive_feedback,
                 qos_profile_sensor_data,
             )
+        self._navigation_clock_domain = monotonic_domain()
         self._navigation_source: _NavigationSource | None = None
         self._retirements: dict[str, _NavigationRetirement] = {}
         self._terminal_requests: dict[str, _TerminalRelease] = {}
@@ -179,7 +181,7 @@ class CommandNode(Node):
         self._estop_requests: dict[str, tuple[FinalCommand, CommandResult]] = {}
         self._active = False
         rate = float(self.get_parameter("command_rate_hz").value)
-        ttl = float(self.get_parameter("command_ttl_seconds").value)
+        ttl = float(self.get_parameter("command_ttl_ms").value) / 1000
         if not math.isfinite(rate) or rate <= 0:
             raise ValueError("command_rate_hz must be positive")
         period = min(1.0 / rate, ttl / 2.0)
@@ -290,6 +292,11 @@ class CommandNode(Node):
         qualified: Callable[[], bool],
         task_epoch: int,
     ) -> bool:
+        # Bind the exact producer incarnation, not merely its node name.
+        endpoints = self.get_publishers_info_by_topic(topic)
+        if len(endpoints) != 1 or endpoints[0].node_name != "controller_server":
+            return False
+        publisher_gid = bytes(endpoints[0].endpoint_gid)
         # An execution-specific topic must be configured at the Nav2 publisher.
         if (
             self._navigation_source is not None
@@ -303,11 +310,11 @@ class CommandNode(Node):
         try:
 
             @with_dds_info
-            def on_sample(message: Twist, info: dict[str, Any]) -> None:
+            def on_sample(message: NavigationSample, info: dict[str, Any]) -> None:
                 self._on_navigation_sample(topic, message, info)
 
             subscription = self.create_subscription(
-                Twist, topic, on_sample, qos_profile_sensor_data
+                NavigationSample, topic, on_sample, qos_profile_sensor_data
             )
         except Exception:
             self._arbiter.end_navigation(execution_id)
@@ -327,13 +334,14 @@ class CommandNode(Node):
         self._close_reason = "prepared"
         self._publish_barrier()
         self._retirements.pop(execution_id, None)
-        bound_at = time.time_ns()
+        bound_at = self._monotonic_clock.monotonic()
         self._navigation_source = _NavigationSource(
             execution_id,
             topic,
-            bound_at / 1e9 - self._monotonic_clock.monotonic(),
             subscription,
             bound_at,
+            self._navigation_clock_domain,
+            publisher_gid,
             qualified,
             task_epoch=task_epoch,
         )
@@ -413,7 +421,6 @@ class CommandNode(Node):
                 "requested": "task_revoke",
                 "completed": "task_done",
                 "qualification_lost": "qualification_lost",
-                "clock_offset_changed": "fault",
                 "navigation_source_inactive": "expiry",
             }.get(reason, "task_revoke")
             self._navigation_source = None
@@ -710,50 +717,52 @@ class CommandNode(Node):
         # ACK admission checks both endpoint frontiers before matching a nonce.
         self._retirement_incarnation_current()
 
-    def _on_navigation_sample(self, topic: str, msg: Twist, info: dict[str, Any]) -> None:
+    def _on_navigation_sample(
+        self, topic: str, msg: NavigationSample, info: dict[str, Any]
+    ) -> None:
         received = self._monotonic_clock.monotonic()
         source = self._navigation_source
         if source is None or source.topic != topic:
             return
-        stamp = info.get("source_timestamp")
         if not source.qualified():
             self.clear_navigation_source(source.execution_id, reason="qualification_lost")
             return
-        # Pair clocks after potentially slow DDS/reference qualification. Its
-        # elapsed time is not clock drift and must not enter this comparison.
-        wall_now = time.time()
-        clock_now = self._monotonic_clock.monotonic()
-        if abs((wall_now - clock_now) - source.offset) > 0.01:
-            self.clear_navigation_source(source.execution_id, reason="clock_offset_changed")
-            return
-        if not isinstance(stamp, int) or stamp <= max(source.bound_at_ns, source.last_stamp):
-            return
         endpoints = self.get_publishers_info_by_topic(source.topic)
-        if len(endpoints) != 1 or endpoints[0].node_name != "controller_server":
-            return
-        # //Compatible: Humble's Python callback omits the writer GID. Topic isolation
-        # still comes from the controller's run-specific remapping and a private ROS domain.
+        # //Compatible: Humble omits per-sample GID. Retain its private run-topic
+        # identity contract, now also bound to this graph incarnation and boot/run.
         gid = info.get("publisher_gid")
-        if gid is not None and tuple(gid) != tuple(endpoints[0].endpoint_gid):
+        if (
+            len(endpoints) != 1
+            or endpoints[0].node_name != "controller_server"
+            or bytes(endpoints[0].endpoint_gid) != source.publisher_gid
+            or (gid is not None and bytes(gid) != source.publisher_gid)
+        ):
             return
-        if not (abs(msg.linear.x) <= 0.3 and abs(msg.angular.z) <= 0.5):
+        if (
+            msg.clock_domain != source.clock_domain
+            or msg.run_id != source.topic.split("/")[3][4:]
+            or not isinstance(msg.sequence, int)
+            or msg.sequence <= source.producer_sequence
+            or not isinstance(msg.produced_steady_ns, int)
+            or msg.produced_steady_ns <= 0
+            or not all(math.isfinite(v) for v in (msg.vx, msg.wz))
+        ):
             return
-        # Preserve the producer's signed intent, including slow goal approach.
-        # Source validation and downstream motion constraints still apply.
-        velocity = Velocity(float(msg.linear.x), float(msg.angular.z))
-        # Publisher graph checks may also take time. Check the original DDS
-        # sample's lifetime against current time, never callback-entry time.
+        sampled = msg.produced_steady_ns / 1e9
+        if sampled < source.bound_steady or sampled < source.last_produced:
+            return
+        velocity = Velocity(float(msg.vx), float(msg.wz))
+        # Qualification/graph work consumes the original producer lifetime.
         now = self._monotonic_clock.monotonic()
-        # The safety worker must finish checking a sample before a different
-        # Nav2 output replaces it. A producer zero always takes precedence.
+        # Keep the existing supersedence policy; a producer zero takes precedence.
         if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.16:
             return
-        sampled = stamp / 1e9 - source.offset - 0.01
         if self._arbiter.accept_navigation_sample(
             source.execution_id, source.sequence + 1, velocity, sampled, now
         ):
             source.received_steady = received
-            source.last_stamp = stamp
+            source.producer_sequence = msg.sequence
+            source.last_produced = sampled
             source.last_forwarded = now
             source.sequence += 1
             self.publish_command()

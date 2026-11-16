@@ -9,6 +9,7 @@ from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.motion_core_perception import ScanGeometry
 from senior_robot.raw_safety_observation import RawSafetyObservation
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import capture_time, synthetic_domain, wire_time  # noqa: F401
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
@@ -77,7 +78,15 @@ def make(clock, delay):
         get_clock=lambda: NS(now=lambda: NS(nanoseconds=round(clock[0] * 1e9))),
         get_parameter=lambda name: NS(value="base_link"),
     )
-    core.sensors = NS(latest=NS(generation=0), pose_estimator=Pose())
+    core.sensors = NS(
+        latest=NS(
+            generation=0,
+            measurement_host_steady=clock[0],
+            measurement=capture_time(clock[0], tick=clock[0]).measurement,
+        ),
+        pose_estimator=Pose(),
+    )
+    core._learning_client = None
     core.startup = NS(state="disabled", provisional=False)
     core.self_returns = None
     core._learning_geometry = None
@@ -99,6 +108,7 @@ def scan(t, seq, obstacle=False):
         ranges[360] = 0.38
     m = NS(
         source_epoch="scan",
+        raw_capture=NS(timing=wire_time(t, tick=t, sequence=seq, epoch="scan")),
         sequence=seq,
         ranges=ranges,
         angle_min=-math.pi,

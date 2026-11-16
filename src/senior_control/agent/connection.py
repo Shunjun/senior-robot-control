@@ -1,11 +1,9 @@
-"""Agent seams: the cloud link, per-robot heartbeat eligibility, and the ROS IPC motion port."""
+"""Agent seams: the cloud link and the ROS IPC motion port."""
 
-import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from senior_control.agent.snapshots import RobotSnapshot
-from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.protocol import (
     Envelope,
@@ -23,7 +21,6 @@ class HeartbeatFrame:
     """A cloud heartbeat addressed to one robot."""
 
     robot_id: str
-    deadline: float
 
 
 class Link(Protocol):
@@ -44,34 +41,6 @@ class Link(Protocol):
     async def send_heartbeat(self) -> None: ...
 
     async def close(self) -> None: ...
-
-
-class HeartbeatLedger:
-    """Remembers when each robot id last had a heartbeat; ids never borrow each other's."""
-
-    def __init__(self, clock: Clock, window: float) -> None:
-        if window <= 0:
-            raise ValueError("heartbeat window must be positive")
-        self._clock = clock
-        self._window = window
-        self._seen: dict[str, tuple[float, float]] = {}
-
-    def note(self, robot_id: str, *, deadline: float | None = None) -> None:
-        now = self._clock.monotonic()
-        # //Compatible: direct test callers without a cloud deadline retain the bounded window.
-        expires = min(now + self._window, deadline) if deadline is not None else now + self._window
-        if not math.isfinite(now) or not math.isfinite(expires) or expires <= now:
-            self.forget(robot_id)
-            return
-        self._seen[robot_id] = (now, expires)
-
-    def eligible(self, robot_id: str) -> bool:
-        seen = self._seen.get(robot_id)
-        now = self._clock.monotonic()
-        return seen is not None and math.isfinite(now) and seen[0] <= now <= seen[1]
-
-    def forget(self, robot_id: str) -> None:
-        self._seen.pop(robot_id, None)
 
 
 class MotionPort(Protocol):

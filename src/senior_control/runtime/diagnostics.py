@@ -149,7 +149,10 @@ class RuntimeDiagnostics:
                 return
             p = default_policy()
             self._record(
-                stream, value.seconds, value.seconds >= p.soft_age_s, value.seconds >= p.hard_age_s
+                stream,
+                value.seconds,
+                value.seconds >= (p.soft_age_ms / 1000),
+                value.seconds >= (p.hard_age_ms / 1000),
             )
 
     def _remember(self, stream: str, key: Hashable) -> bool:
@@ -190,8 +193,8 @@ class RuntimeDiagnostics:
                 self._record(
                     stream,
                     value.seconds,
-                    value.seconds >= p.soft_age_s,
-                    value.seconds >= p.hard_age_s,
+                    value.seconds >= (p.soft_age_ms / 1000),
+                    value.seconds >= (p.hard_age_ms / 1000),
                 )
             for outcome in set(outcomes):
                 label = phase + "." + name + "." + outcome

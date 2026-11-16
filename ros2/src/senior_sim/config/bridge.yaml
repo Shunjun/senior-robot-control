@@ -9,3 +9,13 @@
 - {ros_topic_name: /camera/color/camera_info, gz_topic_name: /camera/camera_info, ros_type_name: sensor_msgs/msg/CameraInfo, gz_type_name: ignition.msgs.CameraInfo, direction: GZ_TO_ROS}
 - {ros_topic_name: /camera/depth/camera_info, gz_topic_name: /camera/camera_info, ros_type_name: sensor_msgs/msg/CameraInfo, gz_type_name: ignition.msgs.CameraInfo, direction: GZ_TO_ROS}
 - {ros_topic_name: /ground_truth/odom, gz_topic_name: /ground_truth/odom, ros_type_name: nav_msgs/msg/Odometry, gz_type_name: ignition.msgs.Odometry, direction: GZ_TO_ROS}
+
+# Original source proofs travel in the same Gazebo payload. Standard topics above
+# remain ROS/TF observations; control consumers subscribe to these typed topics.
+- {ros_topic_name: /scan/timed, gz_topic_name: /scan, ros_type_name: senior_motion_msgs/msg/TimedLaserScan, gz_type_name: ignition.msgs.LaserScan, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /imu/data/timed, gz_topic_name: /imu/data, ros_type_name: senior_motion_msgs/msg/TimedImu, gz_type_name: ignition.msgs.IMU, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /camera/color/image_raw/timed, gz_topic_name: /camera/image, ros_type_name: senior_motion_msgs/msg/TimedImage, gz_type_name: ignition.msgs.Image, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /camera/depth/image_raw/timed, gz_topic_name: /camera/depth_image, ros_type_name: senior_motion_msgs/msg/TimedImage, gz_type_name: ignition.msgs.Image, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /camera/color/camera_info/timed, gz_topic_name: /camera/camera_info, ros_type_name: senior_motion_msgs/msg/TimedCameraInfo, gz_type_name: ignition.msgs.CameraInfo, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /camera/depth/camera_info/timed, gz_topic_name: /camera/camera_info, ros_type_name: senior_motion_msgs/msg/TimedCameraInfo, gz_type_name: ignition.msgs.CameraInfo, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}
+- {ros_topic_name: /ground_truth/odom/timed, gz_topic_name: /ground_truth/odom, ros_type_name: senior_motion_msgs/msg/TimedOdometry, gz_type_name: ignition.msgs.Odometry, direction: GZ_TO_ROS, publisher_queue: 1, subscriber_queue: 1}

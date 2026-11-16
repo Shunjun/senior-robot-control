@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="0.587" timestamp="2026-11-16T22:38:57.272342+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.integration.test_agent" name="test_delayed_replies_preserve_send_cadence_and_connection" time="0.006"><failure message="ConnectionError: heartbeat reply timed out">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10b0de750&gt;
+
+    async def test_delayed_replies_preserve_send_cadence_and_connection(monkeypatch) -&gt; None:
+        from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
+    
+        from senior_control.agent.connection import HeartbeatFrame
+        from senior_control.agent.websocket import WebSocketLink
+    
+        clock = HeartbeatClock(monkeypatch)
+        hub = relay_hub(monkeypatch, clock)
+        socket = RelaySocket(hub, ROBOT)
+        link = WebSocketLink(socket, ROBOT, 1, clock=clock.monotonic)
+        try:
+            for now in [10.0, 11.0, 12.0]:
+                clock.advance(now)
+&gt;               await link.send_heartbeat()
+
+tests/integration/test_agent.py:1458: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;senior_control.agent.websocket.WebSocketLink object at 0x10c1086b0&gt;
+
+    async def send_heartbeat(self) -&gt; None:
+        now = self._clock()
+        if self._pending is not None:
+            if now - self._pending[1] &gt;= self._timeout:
+&gt;               raise ConnectionError("heartbeat reply timed out")
+E               ConnectionError: heartbeat reply timed out
+
+/tmp/heartbeat-round-before/src/senior_control/agent/websocket.py:83: ConnectionError</failure></testcase><testcase classname="tests.unit.test_heartbeat_wire" name="test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher[5.0]" time="0.001"><failure message="AssertionError: assert (not True)&#10; +  where True = is_online('robot-a')&#10; +    where is_online = &lt;senior_control.cloud.relay.Hub object at 0x10c46af90&gt;.is_online">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c46afc0&gt;
+elapsed = 5.0
+
+    @pytest.mark.parametrize("elapsed", [5.0, 5.001])
+    def test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher(monkeypatch, elapsed):
+        import time
+        from types import SimpleNamespace
+    
+        now = [10.0]
+        monkeypatch.setattr(
+            "senior_control.cloud.relay.time",
+            SimpleNamespace(
+                monotonic=lambda: now[0],
+                time=time.time,
+            ),
+        )
+        hub = Hub(CloudLimits())
+        agent = hub.attach_agent("robot-a")
+        request = json.dumps(
+            {
+                "v": 1,
+                "type": "heartbeat.request",
+                "robot_id": "robot-a",
+                "connection_epoch": agent.epoch,
+                "nonce": "current",
+                "sent_at": 100.0,
+            }
+        ).encode()
+        hub.handle_agent_frame(agent, request)
+        assert hub.is_online("robot-a")
+        now[0] += elapsed
+        hub.handle_agent_frame(agent, request)
+&gt;       assert not hub.is_online("robot-a") and agent.outbox.closed
+E       AssertionError: assert (not True)
+E        +  where True = is_online('robot-a')
+E        +    where is_online = &lt;senior_control.cloud.relay.Hub object at 0x10c46af90&gt;.is_online
+
+tests/unit/test_heartbeat_wire.py:192: AssertionError</failure></testcase><testcase classname="tests.unit.test_heartbeat_wire" name="test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher[5.001]" time="0.001"><failure message="AssertionError: assert (not True)&#10; +  where True = is_online('robot-a')&#10; +    where is_online = &lt;senior_control.cloud.relay.Hub object at 0x10c46bc80&gt;.is_online">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x10c46bb90&gt;
+elapsed = 5.001
+
+    @pytest.mark.parametrize("elapsed", [5.0, 5.001])
+    def test_heartbeat_at_deadline_cannot_revive_epoch_before_watcher(monkeypatch, elapsed):
+        import time
+        from types import SimpleNamespace
+    
+        now = [10.0]
+        monkeypatch.setattr(
+            "senior_control.cloud.relay.time",
+            SimpleNamespace(
+                monotonic=lambda: now[0],
+                time=time.time,
+            ),
+        )
+        hub = Hub(CloudLimits())
+        agent = hub.attach_agent("robot-a")
+        request = json.dumps(
+            {
+                "v": 1,
+                "type": "heartbeat.request",
+                "robot_id": "robot-a",
+                "connection_epoch": agent.epoch,
+                "nonce": "current",
+                "sent_at": 100.0,
+            }
+        ).encode()
+        hub.handle_agent_frame(agent, request)
+        assert hub.is_online("robot-a")
+        now[0] += elapsed
+        hub.handle_agent_frame(agent, request)
+&gt;       assert not hub.is_online("robot-a") and agent.outbox.closed
+E       AssertionError: assert (not True)
+E        +  where True = is_online('robot-a')
+E        +    where is_online = &lt;senior_control.cloud.relay.Hub object at 0x10c46bc80&gt;.is_online
+
+tests/unit/test_heartbeat_wire.py:192: AssertionError</failure></testcase></testsuite></testsuites>

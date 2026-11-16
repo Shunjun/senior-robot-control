@@ -18,7 +18,8 @@ from senior_control.motion.contracts import ManualIntent
 from senior_control.protocol import EmptyPayload, SimpleEnvelope
 from senior_control.settings.models import DrivingSettings
 
-COMMAND_TTL = 3.0  # Test-only: distinguish identity rejection from expiry during DDS discovery.
+COMMAND_TTL_S = 3.0  # Test-only seconds: keep discovery longer than a 300ms command.
+COMMAND_TTL_MS = 3000.0
 
 
 def wait(executor, predicate, timeout=3.0):
@@ -49,7 +50,7 @@ def dds(tmp_path, monkeypatch):
     rclpy.init()
     parameters = [
         Parameter("robot_id", value="paired-car"),
-        Parameter("command_ttl_seconds", value=COMMAND_TTL),
+        Parameter("command_ttl_ms", value=COMMAND_TTL_MS),
     ]
     nodes = []
     executor = MotionExecutor()
@@ -112,7 +113,7 @@ def manual_frame(command, sequence=2):
     from senior_motion_msgs.msg import FinalCommand
 
     now = time.monotonic()
-    ingress = ManualIngress("paired-car", command._owner_boot, ttl=COMMAND_TTL)
+    ingress = ManualIngress("paired-car", command._owner_boot, ttl=COMMAND_TTL_S)
     ingress.bind(1, 1, "page", now)
     authority = ingress.acquire("acquire", now).authority_id
     # Prepared authority only activates on the explicit initial neutral sample.
@@ -124,9 +125,9 @@ def manual_frame(command, sequence=2):
         reverse_linear_mps=0.3,
     )
     neutral = ManualIntent(authority, 1, 1, 0.0, 0.0, "low")
-    assert ingress.accept(neutral, settings, now, now + COMMAND_TTL, now) is not None
+    assert ingress.accept(neutral, settings, now, now + COMMAND_TTL_S, now) is not None
     intent = ManualIntent(authority, 1, sequence, 0.2, 0.0, "low")
-    target = ingress.accept(intent, settings, now, now + COMMAND_TTL, now)
+    target = ingress.accept(intent, settings, now, now + COMMAND_TTL_S, now)
     assert target is not None
     return FinalCommand(
         robot_id="paired-car",

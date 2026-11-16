@@ -221,15 +221,12 @@ class RgbdCandidateProducer(Node):
             ):
                 self._publish_invalid_with_owner("dependency_unavailable", owner)
                 return
-            final_ros = self.get_clock().now().nanoseconds
             final_steady = time.monotonic()
             if any(
                 default_policy()
                 .age(
-                    stamp_ros=h.stamp_ns / 1e9,
-                    received_ros=h.received_ros_ns / 1e9,
+                    measured_steady=h.measurement_steady,
                     received_steady=h.received_steady,
-                    now_ros=final_ros / 1e9,
                     now_steady=final_steady,
                 )
                 .band
@@ -247,7 +244,6 @@ class RgbdCandidateProducer(Node):
         last_invalid = 0.0
         pending_tf = DiagnosticPending("rgbd.pending_tf.python", 4)
         allow_tf_reconfirm = False
-        last_ros = 0
         last_steady = 0.0
         failure = None
         try:
@@ -256,11 +252,11 @@ class RgbdCandidateProducer(Node):
                 self._wake.clear()
                 now_ros = self.get_clock().now().nanoseconds
                 now_steady = time.monotonic()
-                if last_ros > 0 and (now_ros < last_ros or now_steady < last_steady):
+                if last_steady > 0 and now_steady < last_steady:
                     self._binding.revoke()
                     self._invalid("clock_invalid")
                     raise RuntimeError("RGB-D clock moved backwards; restart the diagnostic chain")
-                last_ros, last_steady = now_ros, now_steady
+                last_steady = now_steady
                 if not self._enabled:
                     if now_steady - last_invalid >= 0.1:
                         self._invalid("static_domain_unavailable")
@@ -424,7 +420,6 @@ class RgbdCandidateProducer(Node):
             self._profile,
             self._binding,
             registration="registered",
-            fresh_after_ros_ns=now_ros,
             fresh_after_steady=now_steady,
             generation=(
                 self._generation

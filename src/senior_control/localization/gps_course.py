@@ -6,9 +6,10 @@ from dataclasses import dataclass
 
 from senior_control.motion.estimator import Origin
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
 
 
-def wrap(value):
+def wrap(value: float) -> float:
     return math.atan2(math.sin(value), math.cos(value))
 
 
@@ -33,19 +34,28 @@ class CourseHeading:
 
 
 class GPSCourseObserver:
-    def __init__(self):
-        self.anchor = None
-        self.previous = None
-        self.last_sequence = None
+    def __init__(self) -> None:
+        self.anchor: CourseFix | None = None
+        self.previous: CourseFix | None = None
+        self.last_sequence: tuple[str, int] | None = None
         self.wheel_distance = 0.0
         self.turn = 0.0
-        self.heading = None
-        self.motion = deque(maxlen=1024)
+        self.heading: CourseHeading | None = None
+        self.motion: deque[tuple[MeasurementTime, float, float, int, float]] = deque(maxlen=1024)
         self.motion_total = (0.0, 0.0)
-        self.anchor_motion = None
+        self.anchor_motion: tuple[MeasurementTime, float, float, int, float] | None = None
         self.motion_direction = 0
 
-    def record_motion(self, *, stamp_ros, wheel_vx, imu_wz, generation):
+    def record_motion(
+        self,
+        *,
+        measurement_steady: float,
+        wheel_vx: float | None,
+        imu_wz: float | None,
+        generation: int,
+        measurement: MeasurementTime | None = None,
+        interval: MeasurementInterval | None = None,
+    ) -> None:
         """Continuous estimator ticks qualify the whole GPS course window."""
         if wheel_vx is None or imu_wz is None:
             self.motion.clear()
@@ -55,10 +65,24 @@ class GPSCourseObserver:
         if not direction or self.motion_direction not in (0, direction):
             self.reset()
         self.motion_direction = direction
+        coordinate = measurement or MeasurementTime("host", None, measurement_steady)
         if self.motion:
             previous = self.motion[-1]
-            dt = stamp_ros - previous[0]
-            if generation != previous[3] or dt < 0 or dt >= default_policy().hard_age_s:
+            compatible = coordinate.same_axis(previous[0])
+            dt = coordinate.elapsed(previous[0]) if compatible else -1
+            covered = (
+                not coordinate.clock_domain.startswith("sim_step:")
+                or interval is not None
+                and interval.end == coordinate
+                and interval.start.same_axis(previous[0])
+                and interval.start.seconds <= previous[0].seconds <= interval.end.seconds
+            )
+            if (
+                generation != previous[3]
+                or dt < 0
+                or not covered
+                or measurement_steady - previous[4] >= (default_policy().hard_age_ms / 1000)
+            ):
                 self.motion.clear()
                 self.reset()
             elif dt == 0:
@@ -68,21 +92,21 @@ class GPSCourseObserver:
                     self.motion_total[0] + wheel_vx * dt,
                     self.motion_total[1] + abs(imu_wz) * dt,
                 )
-        self.motion.append((stamp_ros, *self.motion_total, generation))
+        self.motion.append((coordinate, *self.motion_total, generation, measurement_steady))
 
-    def reset(self):
+    def reset(self) -> None:
         self.anchor = self.previous = self.heading = None
         self.wheel_distance = self.turn = 0.0
         self.anchor_motion = None
 
-    def observe(self, fix: CourseFix, *, wheel_vx, imu_wz, now_ros, now_steady):
+    def observe(
+        self, fix: CourseFix, *, wheel_vx: float, imu_wz: float, now_ros: float, now_steady: float
+    ) -> CourseHeading | None:
         self.heading = None
         r = fix.origin
         age = default_policy().age(
-            stamp_ros=r.stamp_ros,
-            received_ros=r.received_ros,
+            measured_steady=r.measurement_steady,
             received_steady=r.received_steady,
-            now_ros=now_ros,
             now_steady=now_steady,
         )
         key = (r.epoch, r.sequence)
@@ -105,9 +129,14 @@ class GPSCourseObserver:
             return None
         # Use original capture time, not callback time. GPS can be slower than
         # the estimator; absence of a continuous IMU/wheel window stays unknown.
-        records = [m for m in self.motion if m[0] <= r.stamp_ros]
+        records = [
+            m
+            for m in self.motion
+            if m[0].same_axis(r.coordinate) and m[0].seconds <= r.coordinate.seconds
+        ]
         current = records[-1] if records else None
-        if current is None or r.stamp_ros - current[0] >= default_policy().hard_age_s:
+        hard_s = default_policy().hard_age_ms / 1000
+        if current is None or r.measurement_steady - current[4] >= hard_s:
             self.reset()
             return None
         if self.anchor is None:
@@ -118,11 +147,16 @@ class GPSCourseObserver:
             self.anchor_motion is None
             or current[3] != self.anchor_motion[3]
             or not self.motion
-            or self.motion[0][0] > self.anchor_motion[0]
+            or self.motion[0][0].seconds > self.anchor_motion[0].seconds
         ):
             self.reset()
             return None
-        dt = r.stamp_ros - self.previous.origin.stamp_ros
+        assert self.previous is not None
+        dt = (
+            r.coordinate.elapsed(self.previous.origin.coordinate)
+            if r.coordinate.same_axis(self.previous.origin.coordinate)
+            else -1
+        )
         if dt <= 0 or wheel_vx * self.wheel_distance < 0:
             self.reset()
             return None
@@ -131,6 +165,7 @@ class GPSCourseObserver:
         self.turn = current[2] - self.anchor_motion[2]
         dx, dy = fix.east_m - self.anchor.east_m, fix.north_m - self.anchor.north_m
         baseline = math.hypot(dx, dy)
+        assert self.anchor.position_sigma_m is not None
         uncertainty = math.hypot(sigma, self.anchor.position_sigma_m)
         if abs(self.turn) > 0.05 or abs(self.wheel_distance) > 30:
             self.reset()

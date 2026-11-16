@@ -1,14 +1,25 @@
+from source_time_test_support import DOMAIN, synthetic_domain, wire_time  # noqa: F401
+
 from senior_control.localization.gps_course import CourseFix, GPSCourseObserver
 from senior_control.motion.estimator import Origin
+from senior_control.sensors.time_proof import MeasurementTime
 
 
-def motion(o, start, end, vx=0.2, wz=0):
+def motion(o, start, end, vx=0.2, wz=0, domain=None):
     for i in range(round(start * 10), round(end * 10) + 1):
-        o.record_motion(stamp_ros=i / 10, wheel_vx=vx, imu_wz=wz, generation=1)
+        o.record_motion(
+            measurement_steady=i / 10,
+            wheel_vx=vx,
+            imu_wz=wz,
+            generation=1,
+            measurement=None if domain is None else MeasurementTime("host:" + domain, None, i / 10),
+        )
 
 
 def fix(i, x, *, sigma=0.01, vx=0.2):
-    return CourseFix(x, 0, sigma, vx, 0, 0.01, Origin("gnss", "boot", i, i, i, i))
+    return CourseFix(
+        x, 0, sigma, vx, 0, 0.01, Origin("gnss", "boot", i, i, i, i, measurement_steady=i)
+    )
 
 
 def test_precision_and_baseline_are_required_without_blocking_other_motion():
@@ -69,7 +80,7 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
     covariance = [0.0] * 36
     covariance[0] = covariance[7] = 0.0001
     for i, x in ((1, 0), (3, 0.4)):
-        motion(observer, 1, i)
+        motion(observer, 1, i, domain=DOMAIN)
         adapter.node = N(get_clock=lambda i=i: N(now=lambda: N(nanoseconds=i * 1e9)))
         monkeypatch.setattr("senior_robot.optional_motion_inputs.time.monotonic", lambda i=i: i)
         message = N(
@@ -79,7 +90,7 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
             twist=N(twist=N(linear=N(x=0.2, y=0)), covariance=covariance),
         )
         adapter.gps(
-            message,
+            N(data=message, timing=wire_time(i, tick=i, basis="driver_read", sequence=i)),
             dict(
                 received_timestamp=i * 1e9,
                 native_received_steady=i,

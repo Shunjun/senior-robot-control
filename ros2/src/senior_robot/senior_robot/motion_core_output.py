@@ -36,6 +36,7 @@ from senior_control.motion.contracts import (
 from senior_control.motion.controller import Feedback, MotionController
 from senior_control.motion.estimator import Origin
 from senior_control.motion.kinematics import compose, inverse
+from senior_control.motion.learning_record import LearningGeometry
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.process_resources import ProcessWorker
 from senior_control.motion.source_modes import SourceMode
@@ -44,10 +45,12 @@ from senior_control.motion.state_machine import MotionStateMachine
 from senior_control.motion.stopping_input import StoppingRisk
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import QueueSnapshot, configure_diagnostics
+from senior_control.runtime.learning_client import LearningClient
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.time_proof import source_time
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
@@ -83,11 +86,9 @@ class MotionCoreOutput:
         self.stopping = StoppingRisk()
         self.boot = uuid4().hex
         claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
-        self._startup_claim_path = Path(claim) if claim else None
+        self._learning_client = self._own(LearningClient(Path(claim))) if claim else None
         self.startup = StartupLearning(
-            Path(claim) if claim else None,
-            linear_error_mps=profile.linear_error,
-            yaw_error_rps=profile.yaw_error,
+            self._learning_client,
         )
         self.self_returns = None
         self._learning_scan_key = None
@@ -99,7 +100,7 @@ class MotionCoreOutput:
             ConstraintConfig((1.0, 0.75, 0.5, 0.25), 0.15, 0.05, 256, 0.005)
         )
         self.worker = self._own(ProcessWorker())
-        self.scheduler = ConstraintScheduler(self.engine, self.worker, worker_budget_s=0.25)
+        self.scheduler = ConstraintScheduler(self.engine, self.worker, worker_budget_ms=250)
         self.controller = MotionController(
             self.engine, profile.controller(), Velocity(0, 0), Velocity(0, 0)
         )
@@ -465,26 +466,6 @@ class MotionCoreOutput:
             self.profile.length, self.profile.width, tuple(boundary) if boundary else None
         )
 
-    def _startup_permission_lost(self, permission, now=None):
-        if self.startup.motion_withdrawn:
-            return False  # Only static validation remains; no forward target can replay.
-        if self.startup.state == "validating":
-            return (
-                False  # Stationary post-sampling proposes zero; controller still checks stopping.
-            )
-        if (
-            self.startup.state == "braking"
-            and permission.brake is not None
-            and permission.brake.stop_verified
-        ):
-            return False  # Planned, verified stopping does not need a driving permit.
-        if self.startup.active and self.startup.motion_started and permission.permit is None:
-            self._interrupt_learning("learning_permission_lost")
-            self._startup_target(time.monotonic() if now is None else now)
-            self.scheduler.stop()
-            return True
-        return False
-
     def _retire_startup(self, now):
         if self.machine.state.task_id == self.boot:
             self._event(K.TASK_RETIRED, now, self.boot)
@@ -500,7 +481,7 @@ class MotionCoreOutput:
                 if self.target.source == "startup_learning":
                     self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
                 return
-            elif self.startup.state != "initializing":
+            elif self.startup.state not in {"initializing", "unconfirmed"}:
                 if self.machine.state.task_id != self.boot:
                     self._event(K.TASK_START, now, self.boot)
                 if self.machine.state.task_id != self.boot:
@@ -527,10 +508,8 @@ class MotionCoreOutput:
     def revoke(self, reason: str, *, now: float | None = None) -> None:
         if reason in {"estop", "fault", "estop_reset", "fault_recover", K.EXECUTION_FAULT.value}:
             self.startup.hold_motion()
-        elif reason == K.FEEDBACK_LOST.value and (
-            not self.startup.motion_started or self.startup.motion_withdrawn
-        ):
-            pass  # Initialization/static evidence may wait for fresh observations.
+        elif reason == K.FEEDBACK_LOST.value:
+            self.startup.evidence_gap("motion_feedback_temporarily_unavailable")
         else:
             self._interrupt_learning(reason)
         # One logical transition uses one steady instant. Resampling inside a
@@ -565,61 +544,43 @@ class MotionCoreOutput:
     def _sync_learning_model(self, message):
         if self.startup.state == "disabled":
             return
-        boundary = tuple(self.node._profile().footprint)
-        geometry = (
-            message.source_epoch,
-            message.sensor_x,
-            message.sensor_y,
-            message.sensor_yaw,
-            message.angle_min,
-            message.angle_increment,
-            len(message.ranges),
-            boundary,
-            self.profile.sensor_error,
-            self.profile.orientation_error_rad,
-            self.profile.linear_error,
-            self.profile.yaw_error,
+        geometry = LearningGeometry(
+            body_frame=str(self.node.get_parameter("body_frame").value),
+            sensor_frame=message.frame_id,
+            source_kind="scan",
+            physical_polygon=tuple(self.node._profile().footprint),
+            sensor_to_body=(message.sensor_x, message.sensor_y, message.sensor_yaw),
+            angle_min=message.angle_min,
+            angle_increment=message.angle_increment,
+            count=len(message.ranges),
+            range_min=message.range_min,
+            range_max=message.range_max,
         )
+        if self._learning_client is not None:
+            self._learning_client.poll()
+            self._learning_client.geometry(geometry)
         if geometry == self._learning_geometry:
             return
         if self._learning_geometry is not None:
-            self._interrupt_learning("scan_or_body_geometry_changed")
-            self.startup.state, self.startup.reason = "interrupted", "scan_or_body_geometry_changed"
-            if self.self_returns is not None:
-                self.self_returns.clear()
+            self.startup.hold_motion()
+            self.startup.evidence_gap("scan_or_body_geometry_changed")
             self._perception_key = None
             self._filter_signature = None
             self.space_estimator.invalidate("scan")
         self._learning_geometry = geometry
-        self.self_returns = None
-        if len(boundary) < 3:
-            self.startup.state, self.startup.reason = "failed", "physical_polygon_missing"
-            raise ValueError("physical_polygon_missing")
-        radius = max(math.hypot(x, y) for x, y in boundary)
-        error = self.profile.sensor_error + radius * abs(
-            math.sin(self.profile.orientation_error_rad)
-        )
-        model = SelfReturnModel(boundary, error_m=error)
-        if self._startup_claim_path is not None:
-            from senior_control.safety.external_motion_features import write_feature_boundary
-
-            write_feature_boundary(self._startup_claim_path, boundary, error)
-        self.self_returns = model
-        self.startup.motion_radius = radius
-        self.startup.linear_error_mps = self.profile.linear_error
-        self.startup.yaw_error_rps = self.profile.yaw_error
+        self.self_returns = SelfReturnModel(geometry.physical_polygon)
 
     def _filter_key(self):
+        view = None if self._learning_client is None else self._learning_client.view
         return (
             self._learning_geometry,
             self.startup.provisional,
-            None
-            if self.self_returns is None
-            else (self.self_returns.model_id, self.self_returns.revision),
+            None if view is None else view.catalog.model_id,
         )
 
     def _filtered_scan(self, raw):
         m = raw.message
+        self._sync_learning_model(m)
         key = (m.source_epoch, m.sequence, self._filter_key())
         if getattr(self, "_latest_filtered_key", None) == key:
             return self._latest_unmasked, self._latest_masked
@@ -640,15 +601,13 @@ class MotionCoreOutput:
             False,
             True,
         )
-        unmasked = filter_self(
-            scan, self.node._profile(), self_mask_range_uncertainty=self.profile.sensor_error
-        )
+        unmasked = filter_self(scan, self.node._profile())
         masked = unmasked
-        if self.self_returns is not None and self.startup.state != "disabled":
-            masked, revocation = self.self_returns.filter_snapshot(
-                unmasked, provisional=self.startup.provisional
-            )
-            self.self_returns.apply_revocation(revocation)
+        view = None if self._learning_client is None else self._learning_client.view
+        if view is not None:
+            masked = view.filter(unmasked)
+        elif self.self_returns is not None and self.startup.provisional:
+            masked = self.self_returns.filter(unmasked, provisional=True)
         self._latest_filtered_key = (m.source_epoch, m.sequence, self._filter_key())
         self._latest_unmasked, self._latest_masked = unmasked, masked
         return unmasked, masked
@@ -703,10 +662,8 @@ class MotionCoreOutput:
         now = time.monotonic()
         try:
             age = default_policy().age(
-                stamp_ros=raw.stamp,
-                received_ros=raw.received_ros,
+                measured_steady=raw.measurement_steady,
                 received_steady=raw.received,
-                now_ros=self.node.get_clock().now().nanoseconds / 1e9,
                 now_steady=now,
             )
             if age.band != "invalid":
@@ -724,14 +681,21 @@ class MotionCoreOutput:
         raw = self.node._scans[-1]
         m = raw.message
         ros = self.node.get_clock().now().nanoseconds / 1e9
-        root = Origin("scan", m.source_epoch, m.sequence, raw.stamp, raw.received_ros, raw.received)
+        root = Origin(
+            "scan",
+            m.source_epoch,
+            m.sequence,
+            raw.stamp,
+            raw.received_ros,
+            raw.received,
+            measurement_steady=raw.measurement_steady,
+            measurement=source_time(raw.message.raw_capture.timing).measurement,
+        )
         raw_key = (root.epoch, root.sequence)
         try:
             age = default_policy().age(
-                stamp_ros=root.stamp_ros,
-                received_ros=root.received_ros,
+                measured_steady=root.measurement_steady,
                 received_steady=root.received_steady,
-                now_ros=ros,
                 now_steady=now,
             )
         except ValueError:
@@ -746,7 +710,14 @@ class MotionCoreOutput:
             raise ValueError("scan_expired")
         self._sync_learning_model(m)
         motion = self.sensors.latest
-        current = self.sensors.pose_estimator.at(ros, now_ros=ros, now_steady=now, motion=motion)
+        current = self.sensors.pose_estimator.at(
+            ros,
+            measurement_steady=motion.measurement_host_steady,
+            measurement=motion.measurement,
+            now_ros=ros,
+            now_steady=now,
+            motion=motion,
+        )
         alignment_epoch = f"{motion.generation}:{self.sensors.pose_estimator.frame_generation}"
         self.space_estimator.reset_frame(alignment_epoch)
         key = (m.source_epoch, m.sequence, alignment_epoch, self._filter_key())
@@ -760,10 +731,8 @@ class MotionCoreOutput:
         selected = result.snapshot
         selected_message = selected.message
         selected_age = default_policy().age(
-            stamp_ros=selected.stamp,
-            received_ros=selected.received_ros,
+            measured_steady=selected.measurement_steady,
             received_steady=selected.received,
-            now_ros=ros,
             now_steady=now,
         )
         if selected_age.band == "invalid" or now >= result.perception.deadline_steady:
@@ -772,13 +741,20 @@ class MotionCoreOutput:
             if self._learning_scan_key != raw_key:
                 self._learning_scan_key = raw_key
                 unmasked, _ = self._filtered_scan(raw)
-                self.startup.frame(self.self_returns, unmasked)
+                self.startup.frame(
+                    self.self_returns, unmasked, capture=source_time(m.raw_capture.timing)
+                )
                 if signature != self._filter_key():
                     raise ValueError("scan_geometry_pending")
         old = self._perception_pose if result.key == self._perception_key else None
         if old is None:
             old = self.sensors.pose_estimator.at(
-                selected.stamp, now_ros=ros, now_steady=now, motion=motion
+                selected.stamp,
+                measurement_steady=selected.measurement_steady,
+                measurement=source_time(selected.message.raw_capture.timing).measurement,
+                now_ros=ros,
+                now_steady=now,
+                motion=motion,
             )
         pose = compose(inverse(old.pose), current.pose)
         if result.key != self._perception_key:
@@ -790,6 +766,8 @@ class MotionCoreOutput:
                 selected.stamp,
                 selected.received_ros,
                 selected.received,
+                measurement_steady=selected.measurement_steady,
+                measurement=source_time(selected.message.raw_capture.timing).measurement,
             )
             self.space_estimator.ingest(
                 SpaceObservation(
@@ -835,7 +813,12 @@ class MotionCoreOutput:
         from senior_robot.motion_core_perception import fast_scan_guard
 
         latest_pose = self.sensors.pose_estimator.at(
-            raw.stamp, now_ros=ros, now_steady=now, motion=motion
+            raw.stamp,
+            measurement_steady=raw.measurement_steady,
+            measurement=source_time(raw.message.raw_capture.timing).measurement,
+            now_ros=ros,
+            now_steady=now,
+            motion=motion,
         )
         latest_error = self.sensors.pose_estimator.relative_error(latest_pose, current)
         guard_error = (
@@ -881,7 +864,26 @@ class MotionCoreOutput:
         )
         return ref, tracking, secondary
 
-    def _snapshot(self, ref, wheel, now, perception, pose):
+    def _startup_visibility(self):
+        visibility = None
+        if self.startup.active and self.target.source in {"idle", "startup_learning"}:
+            from senior_control.motion.constraints import NoReturnPolicy
+            from senior_control.safety.startup_visibility import startup_visibility
+
+            raw = self.node._scans[-1]
+            _, masked = self._filtered_scan(raw)
+            visibility = startup_visibility(
+                masked,
+                front_stop=self.profile.startup_learning_front_occlusion_stop,
+                rear_stop=self.profile.startup_learning_rear_occlusion_stop,
+                no_return_clear=self.profile.perception_no_return_policy(
+                    raw.message.frame_id, raw.message.range_max
+                )
+                is NoReturnPolicy.VALIDATED_FREE_TO_RANGE,
+            )
+        return visibility
+
+    def _snapshot(self, ref, wheel, now, perception, pose, *, visibility=None):
         mode = SourceMode(ref["mode"])
         if wheel is None:
             raise ValueError("all_relevant_motion_feedback_unavailable")
@@ -890,8 +892,8 @@ class MotionCoreOutput:
         motion = BodyMotion(
             None,
             None,
-            ref["start_ros"],
-            ref["end_ros"],
+            ref["start_steady"],
+            ref["end_steady"],
             now,
             wheel.deadline_steady,
             epoch,
@@ -952,7 +954,7 @@ class MotionCoreOutput:
             cap,
             p.yaw_cap,
             bool(p.simulation_only and p.unvalidated),
-            lateral_stop_s=p.lateral_stop_s,
+            lateral_stop_s=None if p.lateral_stop_ms is None else p.lateral_stop_ms / 1000,
             brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
             brake_tracking_basis=p.brake_tracking_basis or p.profile_id,
         )
@@ -968,6 +970,7 @@ class MotionCoreOutput:
             p.profile_id,
             p.profile_id,
             risk,
+            startup_visibility=visibility,
         )
         return ctx
 
@@ -981,7 +984,7 @@ class MotionCoreOutput:
             a.wz,
             p.yaw_decel,
             p.yaw_jerk,
-            p.lag,
+            p.lag_ms / 1000,
             p.profile_id,
         )
 
@@ -1030,7 +1033,9 @@ class MotionCoreOutput:
         # may change its object identity; that is not a new sensor observation.
         ref, body, wheel = self._inputs(now)
         perception, pose = self._observation(now)
-        ctx = self._snapshot(ref, wheel, now, perception, pose)
+        ctx = self._snapshot(
+            ref, wheel, now, perception, pose, visibility=self._startup_visibility()
+        )
         if ctx.mode is not prepared.context.mode:
             # A prediction leaving its original ROS window cannot become a
             # different feedback mode just to salvage this same output.
@@ -1134,25 +1139,23 @@ class MotionCoreOutput:
             elif self._last_healthy:
                 self._event(K.FEEDBACK_LOST, now)
             self._last_healthy = healthy
-            estimate = self.sensors.latest
             stationary = self.sensors.stationary(now)
-            self.startup.advance(
-                estimate, self.sensors.wheel_linear(now), now=now, stationary=stationary
-            )
+            self.startup.advance(self.sensors.wheel_linear(now), now=now, stationary=stationary)
+            if self.startup.deadline is not None and now >= self.startup.deadline and stationary:
+                self.controller.reset_at_stillness(
+                    self.sensors.raw_feedback("wheel", now),
+                    self.sensors.raw_feedback("imu", now),
+                    now,
+                )
             self._startup_target(now)
             perception, pose = self._observation(now)
             self._startup_target(now)
-            ctx = self._snapshot(ref, wheel, now, perception, pose)
+            ctx = self._snapshot(
+                ref, wheel, now, perception, pose, visibility=self._startup_visibility()
+            )
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
-            if self._startup_permission_lost(permission, now):
-                # Rebuild with provisional filtering revoked before proposing
-                # any output. The current raw sequence is never re-stamped.
-                perception, pose = self._observation(now)
-                ctx = self._snapshot(ref, wheel, now, perception, pose)
-                evaluation = self.engine.evaluate(ctx, now)
-                permission = self.scheduler.update(ctx, now, evaluation=evaluation)
             self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
@@ -1224,24 +1227,49 @@ class MotionCoreOutput:
                     not decision.verified or not emit_now < decision.evidence_deadline
                 ):
                     raise ValueError("motion_expired_or_unqualified")
-            if self.startup.active and output != Velocity(0, 0):
-                self.startup.motion_emitted(time.monotonic())
-            self.node._emit_motion_core(output, reason, decision.evidence_deadline)
+            output_now = time.monotonic()
+            output_deadline = decision.evidence_deadline
+            learning_output = self.target.source == "startup_learning"
+            if (
+                self.target.source == "idle"
+                and self.startup.action_tail_active
+                and self.startup.deadline is not None
+                and output_now >= self.startup.deadline
+                and output != Velocity(0, 0)
+            ):
+                raise ValueError("learning_action_window_finished")
+            if learning_output and output != Velocity(0, 0):
+                if not self.startup.action_permitted and not self.startup.prepare_action():
+                    raise ValueError("learning_action_not_reserved")
+                end = self.startup.deadline
+                if end is not None and output_now >= end:
+                    raise ValueError("learning_action_window_finished")
+                output_deadline = min(output_deadline, output_now + 3.0 if end is None else end)
+            self.node._emit_motion_core(output, reason, output_deadline, computed_steady=now)
+            if learning_output and output != Velocity(0, 0):
+                self.startup.motion_emitted(output_now, deadline=output_deadline)
+            else:
+                self.startup.output_stopped(output_now)
             self._record_stopping_output(output, time.monotonic())
             self.controller.commit(prepared)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
             if prepared is not None:
                 self.controller.discard(prepared)
             reason = str(exc)[:256] or type(exc).__name__
-            if (
-                reason != "scan_geometry_pending"
-                and self.startup.motion_started
-                and not self.startup.motion_withdrawn
-            ):
-                self._interrupt_learning(reason)
-            self.node._emit_motion_core(Velocity(0, 0), reason)
+            if reason not in {
+                "scan_geometry_pending",
+                "learning_action_window_finished",
+                "learning_action_not_reserved",
+            }:
+                self.startup.evidence_gap(reason)
+            self.node._emit_motion_core(Velocity(0, 0), reason, computed_steady=now)
+            self.startup.output_stopped(time.monotonic())
             self._record_stopping_output(Velocity(0, 0), time.monotonic())
-            if reason != "scan_geometry_pending":
+            if reason not in {
+                "scan_geometry_pending",
+                "learning_action_window_finished",
+                "learning_action_not_reserved",
+            }:
                 if self._last_healthy:
                     self._event(K.FEEDBACK_LOST, event_now)
                     self._last_healthy = False
@@ -1287,7 +1315,11 @@ class MotionCoreOutput:
         self.diagnostics.summary(
             "startup_learning",
             self.startup.summary(
-                learned_count=0 if self.self_returns is None else len(self.self_returns.learned)
+                learned_count=(
+                    0
+                    if self._learning_client is None or self._learning_client.view is None
+                    else len(self._learning_client.view.catalog.anchors)
+                )
             ),
         )
         self.diagnostics.duration("control_compute", time.monotonic() - now)

@@ -1,8 +1,14 @@
 #pragma once
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 namespace rclcpp {
+struct MessageInfo {
+  struct Rmw {struct Gid {uint8_t data[24]{};} publisher_gid;} info;
+  const Rmw & get_rmw_message_info() const {return info;}
+};
 inline bool running = true;
 inline bool ok() { return running; }
 inline void shutdown() { running=false; }

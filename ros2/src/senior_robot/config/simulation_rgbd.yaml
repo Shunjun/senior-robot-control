@@ -18,8 +18,6 @@ depth_ingress:
     range_error_m: 0.01
     row_stride: 8
     column_stride: 8
-    max_age_s: 0.8
-    pair_wait_s: 0.1
     transform_static: true
 safety_gate:
   ros__parameters:
@@ -35,4 +33,3 @@ semantic_ingress:
     registered_profile: true
     weights_path: ""
     device: cpu
-    max_age_s: 0.3

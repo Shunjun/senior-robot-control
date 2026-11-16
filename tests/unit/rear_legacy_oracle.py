@@ -1,4 +1,4 @@
-"""Frozen pre-optimization C12 geometry oracle for safety equivalence tests."""
+"""Pre-optimization C12 exact-mask geometry oracle for safety equivalence tests."""
 
 from math import atan2, cos, fsum, isfinite, pi, sin
 from typing import cast
@@ -17,12 +17,7 @@ from senior_control.safety.self_filter import (
 )
 
 
-def legacy_filter_self(
-    scan: ScanObservation, profile: DeviceProfile, *, self_mask_range_uncertainty: float = 0.0
-) -> FilteredObservation:
-    # //Compatible: callers without an explicit range bound retain exact-mask behavior.
-    if not isfinite(self_mask_range_uncertainty) or self_mask_range_uncertainty < 0:
-        raise ValueError("invalid self-mask range uncertainty")
+def legacy_filter_self(scan: ScanObservation, profile: DeviceProfile) -> FilteredObservation:
     masks = []
     for vertices in profile.self_mask:
         polygon = Polygon(vertices)
@@ -45,16 +40,6 @@ def legacy_filter_self(
         line = LineString((origin, endpoint))
         if any(mask.intersects(line) or mask.covers(Point(origin)) for mask in masks):
             rays.append(RayEvidence(i, origin, endpoint, "self"))
-        elif self_mask_range_uncertainty and masks:
-            extended_distance = distance + self_mask_range_uncertainty
-            extended = (
-                origin[0] + extended_distance * cos(angle),
-                origin[1] + extended_distance * sin(angle),
-            )
-            if any(mask.intersects(LineString((origin, extended))) for mask in masks):
-                rays.append(RayEvidence(i, origin, endpoint, "ambiguous_self_overlap"))
-            else:
-                rays.append(RayEvidence(i, origin, endpoint, "hit"))
         else:
             rays.append(RayEvidence(i, origin, endpoint, "hit"))
     evidence = tuple(rays)
@@ -64,7 +49,7 @@ def legacy_filter_self(
         tuple(ray for ray in evidence if ray.kind == "hit"),
         tuple(ray for ray in evidence if ray.kind in ("hit", "clear")),
         tuple(ray for ray in evidence if ray.kind == "self"),
-        tuple(ray for ray in evidence if ray.kind in ("invalid", "ambiguous_self_overlap")),
+        tuple(ray for ray in evidence if ray.kind == "invalid"),
         tuple(tuple(vertices) for vertices in profile.self_mask),
     )
 

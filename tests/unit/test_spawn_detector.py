@@ -30,6 +30,7 @@ def conditional_detector(frame):
 def capture(epoch, stamp_ns, marker=0):
     from senior_control.vision.spawn_detector import CaptureIdentity, RetainedFrame
 
+    measured = 9.99 + (stamp_ns - 1_000_000_000) / 1e9
     identity = CaptureIdentity(
         source_epoch=epoch,
         rgb_source="rgb-gid",
@@ -41,8 +42,10 @@ def capture(epoch, stamp_ns, marker=0):
         depth_stamp_ns=stamp_ns + 1,
         rgb_received_ros_ns=stamp_ns + 2,
         depth_received_ros_ns=stamp_ns + 3,
-        rgb_received_steady=10.0,
-        depth_received_steady=10.01,
+        rgb_received_steady=measured + 0.01,
+        rgb_measurement_steady=measured,
+        depth_received_steady=measured + 0.02,
+        depth_measurement_steady=measured + 0.01,
     )
     frame = ImageFrame(stamp_ns / 1e9, 2, 2, "rgb8", bytes([marker]) * 12)
     depth = DepthFrame((stamp_ns + 1) / 1e9, 2, 2, (0.4,) * 4)
@@ -59,7 +62,7 @@ def capture(epoch, stamp_ns, marker=0):
         CameraExtrinsic(0.2, 0.0, 0.1, 0.0, 0.0, 0.0),
     )
     geometry = project_depth(
-        align(frame, depth, max_skew_s=0.03),
+        align(frame, depth, max_skew_ms=30),
         calibration,
         GeometryConfig(row_stride=1, column_stride=1),
     )
@@ -241,17 +244,17 @@ def test_bound_result_requires_original_fresh_receipts_and_current_epoch(tmp_pat
         assert worker.submit(frame)
         result = wait_until(worker.take_result)
         assert worker.result_qualified(
-            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_ms=300
+        )
+        assert worker.result_qualified(
+            result, now_ros_ns=1_000_000_000, now_steady=10.2, max_age_ms=300
         )
         assert not worker.result_qualified(
-            result, now_ros_ns=1_000_000_000, now_steady=10.2, max_age_s=0.3
-        )
-        assert not worker.result_qualified(
-            result, now_ros_ns=1_100_000_000, now_steady=11.1, max_age_s=1.0
+            result, now_ros_ns=1_100_000_000, now_steady=11.1, max_age_ms=1000
         )
         worker.invalidate()
         assert not worker.result_qualified(
-            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+            result, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_ms=300
         )
     finally:
         worker.close()
@@ -272,7 +275,7 @@ def test_fabricated_result_cannot_borrow_an_active_epoch(tmp_path: Path):
         result = wait_until(worker.take_result)
         forged = replace(result, frame=capture("epoch-a", 1_050_000_000))
         assert not worker.result_qualified(
-            forged, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_s=0.3
+            forged, now_ros_ns=1_100_000_000, now_steady=10.2, max_age_ms=300
         )
     finally:
         worker.close()

@@ -1,0 +1,12 @@
+{
+  "jobs": {
+    "ruff": 1,
+    "mypy-worktree": 1,
+    "mypy-head": 1,
+    "frontend": 1,
+    "wheel": 0,
+    "pytest": 1
+  },
+  "final_source_drift": false,
+  "at": "2026-11-16T18:22:51Z"
+}

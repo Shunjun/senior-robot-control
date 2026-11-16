@@ -151,15 +151,15 @@ void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
 
 bool StaticTfReceipt::update_clock(int64_t ros_ns, double steady)
 {
-  if (ros_ns < 0 || !std::isfinite(steady) || steady <= 0 ||
-      (last_steady_ > 0 && (steady < last_steady_ || ros_ns < last_ros_ns_))) {
+  if (!std::isfinite(steady) || steady <= 0 ||
+      (last_steady_ > 0 && steady < last_steady_)) {
     invalidate("clock_invalid", false);
     clock_ready_ = false;
     last_ros_ns_ = ros_ns;
     last_steady_ = steady;
     return false;
   }
-  if (last_ros_ns_ > 0 && ros_ns > last_ros_ns_) clock_ready_ = true;
+  clock_ready_ = true;
   last_ros_ns_ = ros_ns;
   last_steady_ = steady;
   return true;

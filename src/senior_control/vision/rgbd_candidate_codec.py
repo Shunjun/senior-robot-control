@@ -31,6 +31,19 @@ def _header(out: Any, value: RawCaptureHeader) -> None:
         "reason",
     ):
         setattr(out, name, getattr(value, name))
+    # Preserve the exact original uint64 source front through this Python/ROS
+    # boundary; converting back from a float view can lose ns on a long boot.
+    for name in (
+        "clock_domain",
+        "source_epoch",
+        "sequence",
+        "capture_start_steady_ns",
+        "capture_end_steady_ns",
+        "time_basis",
+    ):
+        setattr(out.timing, name, getattr(value.timing, name))
+    out.timing.measurement_epoch = value.timing.measurement_epoch or ""
+    out.timing.measurement_tick_ns = value.timing.measurement_tick_ns or 0
 
 
 def _layout(out: Any, value: ImageLayoutSnapshot) -> None:

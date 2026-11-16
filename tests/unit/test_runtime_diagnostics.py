@@ -41,7 +41,7 @@ def test_age_raw_dedup_separate_compute_and_five_second_debug():
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append((level, data)))
     p = default_policy()
-    age = p.age(stamp_ros=9.5, received_ros=10, received_steady=20, now_ros=10, now_steady=20)
+    age = p.age(measured_steady=19.5, received_steady=20, now_steady=20)
     d.age("wheel", age, key=("boot", 1))
     d.age("wheel", age, key=("boot", 1))
     d.duration("compute", 0.002)

@@ -1,0 +1,2 @@
+[1;32mAll checks passed![0m
+CHECK_EXIT:0

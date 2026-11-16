@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from detector_test_helpers import slow_detector, wait_until
+from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
 
 from senior_control.vision.depth_runtime import CameraInfoFrame
 
@@ -26,6 +27,7 @@ def color_info():
         binning_x=0,
         binning_y=0,
         roi=(0, 0, 0, 0, False),
+        measurement_steady=10.0,
     )
 
 
@@ -37,6 +39,8 @@ def depth_metadata():
         info_received_ros_ns=1_000_000_003,
         received_steady=10.01,
         info_received_steady=10.02,
+        measurement_steady=10.0,
+        info_measurement_steady=10.0,
         frame_id="optical",
         source_epoch="depth-epoch",
         raw_source="depth-gid",
@@ -63,7 +67,7 @@ def test_registration_requires_explicit_profile_and_exact_calibrated_frames():
         registered_profile=True,
         now_ros_ns=1_100_000_000,
         now_steady=10.1,
-        max_age_s=0.3,
+        max_age_ms=300,
     )
     assert len(registration) == 64
     for changed_info, enabled in (
@@ -82,7 +86,7 @@ def test_registration_requires_explicit_profile_and_exact_calibrated_frames():
                 registered_profile=enabled,
                 now_ros_ns=1_100_000_000,
                 now_steady=10.1,
-                max_age_s=0.3,
+                max_age_ms=300,
             )
 
 
@@ -111,6 +115,8 @@ def wire_depth(stamp_ns=1_000_000_000):
     return SimpleNamespace(
         valid=True,
         reason="",
+        depth_capture=SimpleNamespace(timing=wire_time(10.0, tick=stamp_ns / 1e9)),
+        camera_info_capture=SimpleNamespace(timing=wire_time(10.0, tick=stamp_ns / 1e9)),
         stamp=stamp(stamp_ns),
         camera_info_stamp=stamp(stamp_ns),
         received_ros=stamp(stamp_ns),
@@ -163,7 +169,7 @@ def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable():
         depth_snapshot(wire)
 
 
-def test_synchronizer_waits_for_future_clock_without_replacing_first_receipts():
+def test_synchronizer_ros_correction_keeps_original_pair_without_future_queue():
     from senior_control.vision.semantic_runtime import (
         ColorCapture,
         SemanticSynchronizer,
@@ -179,25 +185,19 @@ def test_synchronizer_waits_for_future_clock_without_replacing_first_receipts():
         "optical",
         "rgb-gid",
         ImageFrame(stamp / 1e9, 3, 3, "rgb8", bytes(27)),
+        measurement_steady=10.0,
     )
-    info = replace(color_info(), stamp_ns=stamp, received_ros_ns=stamp, received_steady=10.0)
+    info = replace(color_info(), stamp_ns=stamp)
     depth = depth_snapshot(wire_depth(stamp))
-    sync = SemanticSynchronizer(max_age_s=0.3)
+    sync = SemanticSynchronizer(max_age_ms=300)
     sync.offer_rgb(rgb)
     sync.offer_info(info)
     sync.offer_depth(depth)
-    assert sync.take_ready(now_ros_ns=1_000_000_000, now_steady=10.01) == (None, None)
-    pair, reason = sync.take_ready(now_ros_ns=stamp, now_steady=10.015)
-    assert reason is None and pair == (rgb, info, depth)
+    pair, reason = sync.take_ready(now_ros_ns=1, now_steady=10.01)
+    assert pair == (rgb, info, depth) and reason is None
     assert pair[0].received_ros_ns == 1_000_000_000
-    assert pair[2].received_steady == 10.0
-
-    sync.offer_rgb(replace(rgb, stamp_ns=stamp + 1))
-    sync.offer_info(replace(info, stamp_ns=stamp + 1))
-    later = depth_snapshot(wire_depth(stamp + 1))
-    sync.offer_depth(later)
-    pair, reason = sync.take_ready(now_ros_ns=stamp, now_steady=10.021)
-    assert pair is None and reason == "future_expired"
+    assert pair[2].measurement_steady == 10.0
+    assert sync.take_ready(now_ros_ns=100_000_000_000, now_steady=10.02) == (None, None)
 
 
 def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
@@ -209,20 +209,31 @@ def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
     worker = SpawnInferenceWorker(weights_path=weights, processor=slow_detector, timeout_s=2)
-    coordinator = SemanticCoordinator(worker, registered_profile=True, max_age_s=0.3)
+    coordinator = SemanticCoordinator(worker, registered_profile=True, max_age_ms=300)
 
     def capture(stamp, distance):
+        host = 9 + stamp / 1e9  # Explicit synthetic producer clock, one immutable front/capture.
         wire = wire_depth(stamp)
+        wire.received_steady = wire.camera_info_received_steady = host
+        wire.depth_capture.timing = wire_time(host, tick=stamp / 1e9)
+        wire.camera_info_capture.timing = wire_time(host, tick=stamp / 1e9)
         wire.samples[0].depth_m = wire.samples[0].z = distance
         rgb = ColorCapture(
             stamp,
             stamp,
-            10.0,
+            host,
             "optical",
             "rgb-gid",
             ImageFrame(stamp / 1e9, 3, 3, "rgb8", bytes(27)),
+            measurement_steady=host,
         )
-        info = replace(color_info(), stamp_ns=stamp, received_ros_ns=stamp, received_steady=10.0)
+        info = replace(
+            color_info(),
+            stamp_ns=stamp,
+            received_ros_ns=stamp,
+            received_steady=host,
+            measurement_steady=host,
+        )
         return rgb, info, depth_snapshot(wire)
 
     try:
@@ -256,7 +267,7 @@ def test_semantic_epoch_invalidation_cancels_inflight_result(tmp_path):
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
     worker = SpawnInferenceWorker(weights_path=weights, processor=slow_detector, timeout_s=2)
-    coordinator = SemanticCoordinator(worker, registered_profile=True, max_age_s=0.3)
+    coordinator = SemanticCoordinator(worker, registered_profile=True, max_age_ms=300)
     rgb = ColorCapture(
         1_000_000_000,
         1_000_000_000,
@@ -264,6 +275,7 @@ def test_semantic_epoch_invalidation_cancels_inflight_result(tmp_path):
         "optical",
         "rgb-gid",
         ImageFrame(1.0, 3, 3, "rgb8", bytes(27)),
+        measurement_steady=10.0,
     )
     info = replace(color_info(), received_ros_ns=1_000_000_000, received_steady=10.0)
     try:
@@ -292,7 +304,7 @@ def test_registration_rejects_stale_info_even_when_image_and_depth_are_fresh():
             registered_profile=True,
             now_ros_ns=1_100_000_000,
             now_steady=10.1,
-            max_age_s=0.3,
+            max_age_ms=300,
         )
 
 
@@ -300,7 +312,7 @@ def test_synchronizer_discards_missed_frames_and_rejects_clock_rollback():
     from senior_control.vision.semantic_runtime import ColorCapture, SemanticSynchronizer
     from senior_control.vision.synchronizer import ImageFrame
 
-    sync = SemanticSynchronizer(max_age_s=0.3)
+    sync = SemanticSynchronizer(max_age_ms=300)
     rgb = ColorCapture(
         1_000_000_000,
         1_000_000_000,
@@ -308,10 +320,12 @@ def test_synchronizer_discards_missed_frames_and_rejects_clock_rollback():
         "optical",
         "rgb-gid",
         ImageFrame(1.0, 3, 3, "rgb8", bytes(27)),
+        measurement_steady=10.0,
     )
     sync.offer_rgb(rgb)
     assert sync.take_ready(now_ros_ns=1_000_000_000, now_steady=10.0) == (None, None)
-    assert sync.take_ready(now_ros_ns=999_000_000, now_steady=10.001) == (None, "clock_unqualified")
+    assert sync.take_ready(now_ros_ns=999_000_000, now_steady=10.001) == (None, None)
+    assert sync.take_ready(now_ros_ns=999_000_000, now_steady=9.999) == (None, "clock_unqualified")
     sync.offer_rgb(rgb)
     with pytest.raises(ValueError):
         sync.offer_rgb(rgb)
@@ -333,7 +347,7 @@ def test_semantic_associations_bound_number_of_objects_and_never_assume_static()
 def test_semantic_registration_uses_common_original_age(age, valid):
     from senior_control.vision.semantic_runtime import SemanticSynchronizer, qualify_registration
 
-    assert SemanticSynchronizer(max_age_s=1)._age == 1
+    assert SemanticSynchronizer(max_age_ms=1000)._age == 1
 
     def qualify():
         return qualify_registration(
@@ -344,7 +358,7 @@ def test_semantic_registration_uses_common_original_age(age, valid):
             registered_profile=True,
             now_ros_ns=round((1 + age) * 1e9),
             now_steady=10 + age,
-            max_age_s=0.3,
+            max_age_ms=300,
         )
 
     if valid:

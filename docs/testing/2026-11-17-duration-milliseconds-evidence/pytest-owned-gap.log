@@ -1,0 +1,37 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.15, pytest-8.4.2, pluggy-1.7.0
+rootdir: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+configfile: pyproject.toml
+plugins: asyncio-0.26.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 456 items
+
+tests/unit/test_control_clock_domains.py ................                [  3%]
+tests/integration/test_agent.py ........................................ [ 12%]
+...................                                                      [ 16%]
+tests/integration/test_backend_observability.py ....                     [ 17%]
+tests/integration/test_estop_recovery.py .                               [ 17%]
+tests/integration/test_manual_wire.py .....................              [ 22%]
+tests/integration/test_shutdown.py ............................          [ 28%]
+tests/integration/test_task_ownership.py ..................              [ 32%]
+tests/integration/test_video.py ......................s................. [ 41%]
+                                                                         [ 41%]
+tests/unit/test_arbiter.py ......                                        [ 42%]
+tests/unit/test_constraint_scheduling.py ..........................      [ 48%]
+tests/unit/test_directional_constraints.py ............................. [ 54%]
+.................................................                        [ 65%]
+tests/unit/test_map_archive.py ............................              [ 71%]
+tests/unit/test_motion_controller.py ................................... [ 78%]
+.                                                                        [ 79%]
+tests/unit/test_motion_core_chain.py ..                                  [ 79%]
+tests/unit/test_navigation_small_intent.py ......                        [ 80%]
+tests/unit/test_perception.py ....................                       [ 85%]
+tests/unit/test_rgbd_sync_ordering.py .....                              [ 86%]
+tests/unit/test_runtime_guard_ready.py .........                         [ 88%]
+tests/unit/test_settings.py .......................                      [ 93%]
+tests/unit/test_startup_learning_cycle.py .....                          [ 94%]
+tests/unit/test_tick_evaluation.py .........................             [100%]
+
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-duration-milliseconds-evidence/pytest-owned-gap.xml -
+================== 455 passed, 1 skipped in 74.27s (0:01:14) ===================
+EXIT:0

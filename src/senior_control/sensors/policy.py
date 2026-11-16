@@ -25,60 +25,55 @@ class Age:
 
 @dataclass(frozen=True)
 class SensorTiming:
-    soft_age_s: float
-    hard_age_s: float
+    soft_age_ms: float
+    hard_age_ms: float
     diagnostics_period_s: float
 
     def __post_init__(self) -> None:
         if (
             not all(
                 math.isfinite(v)
-                for v in (self.soft_age_s, self.hard_age_s, self.diagnostics_period_s)
+                for v in (self.soft_age_ms, self.hard_age_ms, self.diagnostics_period_s)
             )
-            or not 0 <= self.soft_age_s < self.hard_age_s
+            or not 0 <= self.soft_age_ms < self.hard_age_ms
             or self.diagnostics_period_s <= 0
         ):
             raise ValueError("invalid common sensor timing")
 
-    def age(
-        self,
-        *,
-        stamp_ros: float,
-        received_ros: float,
-        received_steady: float,
-        now_ros: float,
-        now_steady: float,
-    ) -> Age:
-        values = (stamp_ros, received_ros, received_steady, now_ros, now_steady)
+    @property
+    def hard_age_s(self) -> float:
+        """Seconds projection for receipt transport and monotonic-clock arithmetic.
+
+        This is derived, read-only, and is never an accepted configuration key.
+        """
+        return self.hard_age_ms / 1000
+
+    def age(self, *, measured_steady: float, received_steady: float, now_steady: float) -> Age:
+        values = (measured_steady, received_steady, now_steady)
         if not all(math.isfinite(v) for v in values):
             raise SensorClockError("nonfinite sensor clock")
         try:
-            stamp, receipt, steady, ros, now = (round(v * 1_000_000_000) for v in values)
+            measured, received, now = (round(v * 1_000_000_000) for v in values)
         except OverflowError as exc:
             raise SensorClockError("sensor clock outside numeric range") from exc
-        if stamp < 0 or receipt < stamp or ros < receipt or now < steady:
-            raise SensorClockError("future or reversed sensor clock")
-        initial = receipt - stamp
-        age = max(ros - stamp, initial + now - steady) / 1_000_000_000
-        band: Literal["normal", "low", "invalid"] = (
-            "invalid" if age >= self.hard_age_s else "low" if age >= self.soft_age_s else "normal"
-        )
-        freshness = (
-            0.0
-            if band == "invalid"
-            else 1.0
-            if band == "normal"
-            else 0.1 + 0.9 * (self.hard_age_s - age) / (self.hard_age_s - self.soft_age_s)
-        )
-        return Age(
-            age,
-            band,
-            freshness,
-            min(
-                received_steady + self.hard_age_s - initial / 1_000_000_000,
-                now_steady + self.hard_age_s - age,
-            ),
-        )
+        if measured < 0 or received < measured or now < received:
+            raise SensorClockError("future or reversed monotonic sensor clock")
+        age = (now - measured) / 1_000_000_000
+        soft_s = self.soft_age_ms / 1000
+        hard_s = self.hard_age_ms / 1000
+        if age >= hard_s:
+            band: Literal["normal", "low", "invalid"] = "invalid"
+        elif age >= soft_s:
+            band = "low"
+        else:
+            band = "normal"
+        if band == "invalid":
+            freshness = 0.0
+        elif band == "normal":
+            freshness = 1.0
+        else:
+            freshness = 0.1 + 0.9 * (hard_s - age) / (hard_s - soft_s)
+        return Age(age, band, freshness, measured_steady + hard_s)
 
 
 @lru_cache(maxsize=1)
@@ -99,8 +94,8 @@ def ros_sensor_parameters(diagnostics: "DiagnosticsSettings | None" = None) -> d
         queue_warn_repeat_s=q.repeat_s,
         queue_warn_recovery_ratio=q.recovery_ratio,
         queue_warn_oldest_wait_ms=q.oldest_wait_ms,
-        sensor_soft_age_s=p.soft_age_s,
-        sensor_hard_age_s=p.hard_age_s,
+        sensor_soft_age_ms=p.soft_age_ms,
+        sensor_hard_age_ms=p.hard_age_ms,
         sensor_diagnostics_period_s=p.diagnostics_period_s
         if diagnostics is None
         else diagnostics.period_s,
@@ -109,20 +104,17 @@ def ros_sensor_parameters(diagnostics: "DiagnosticsSettings | None" = None) -> d
 
 def sensor_current(
     *,
-    stamp_ros: float,
-    received_ros: float,
+    measured_steady: float,
     received_steady: float,
-    now_ros: float,
     now_steady: float,
-    max_age_s: float | None = None,
+    max_age_ms: float | None = None,
 ) -> bool:
-    """Shared boolean facade for non-estimating ingress owners; malformed clocks fail."""
+    """Use the immutable source front, including time spent in every downstream queue."""
+    max_age_s = None if max_age_ms is None else max_age_ms / 1000
     try:
         age = default_policy().age(
-            stamp_ros=stamp_ros,
-            received_ros=received_ros,
+            measured_steady=measured_steady,
             received_steady=received_steady,
-            now_ros=now_ros,
             now_steady=now_steady,
         )
     except (ValueError, OverflowError):

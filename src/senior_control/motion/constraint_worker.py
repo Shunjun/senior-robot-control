@@ -55,12 +55,12 @@ def _merge_refinement(current: ConstraintResult, refined: ConstraintResult) -> C
 
 
 class ConstraintScheduler:
-    def __init__(self, engine: ConstraintEngine, worker: Worker, *, worker_budget_s: float):
-        if not math.isfinite(worker_budget_s) or worker_budget_s <= 0:
+    def __init__(self, engine: ConstraintEngine, worker: Worker, *, worker_budget_ms: float):
+        if not math.isfinite(worker_budget_ms) or worker_budget_ms <= 0:
             raise ValueError("worker budget must be explicitly positive")
         self.engine = engine
         self.worker = worker
-        self.budget = worker_budget_s
+        self.budget = worker_budget_ms / 1000
         self.current = ConstraintResult(
             None, BrakeRequest(BrakeKind.CONTROLLED, "not_started", False)
         )

@@ -152,88 +152,6 @@ async def test_active_or_unrecognized_socket_is_never_replaced(service_root):
     assert not path.exists()
 
 
-@pytest.mark.parametrize(("configured_domain", "expected_domain"), [(17, "17"), (None, "42")])
-async def test_verified_adapter_precedes_agent_and_agent_stops_first(
-    service_root, monkeypatch, configured_domain, expected_domain
-):
-    from senior_control import docker_start_helper as helper
-
-    profile = real_profile(service_root, domain=configured_domain)
-    events = []
-    environments = []
-
-    class Child:
-        def __init__(self, name):
-            self.name = name
-            self.returncode = None
-            self.done = asyncio.Event()
-
-        async def wait(self):
-            await self.done.wait()
-            return self.returncode
-
-        def terminate(self):
-            events.append(f"stop-{self.name}")
-            self.returncode = 0
-            self.done.set()
-
-    camera = Child("camera")
-    motion = Child("motion")
-    adapter = Child("adapter")
-    agent = Child("agent")
-
-    async def stop_motion(child):
-        if child is not None:
-            child.terminate()
-
-    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
-
-    async def spawn(*args, env, **kwargs):
-        environments.append(env)
-        if any("wheeltec_camera" in str(arg) for arg in args):
-            events.append("start-camera")
-            return camera
-        if len(environments) == 1:
-            events.append("start-motion")
-            return motion
-        if len(environments) == 2:
-            events.append("start-adapter")
-            return adapter
-        events.append("start-agent")
-        # Trigger controlled shutdown after both children exist.
-        asyncio.get_running_loop().call_soon(stopping.set)
-        return agent
-
-    stopping = None
-
-    async def ready(path, robot_id, domain, child, stop):
-        nonlocal stopping
-        assert robot_id == "robot-a" and domain == configured_domain and child is adapter
-        stopping = stop
-        events.append("verified")
-        return None
-
-    monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(helper, "_wait_for_adapter", ready)
-    assert (
-        await helper.supervise(service_root, ["agent"], {"ROS_DOMAIN_ID": "42"}, profile=profile)
-        == 0
-    )
-    assert events == [
-        "start-motion",
-        "start-adapter",
-        "verified",
-        "start-agent",
-        "start-camera",
-        "stop-agent",
-        "stop-adapter",
-        "stop-motion",
-        "stop-camera",
-    ]
-    assert all(env["ROS_DOMAIN_ID"] == expected_domain for env in environments)
-    assert not (service_root / "estop-state.json").exists()
-
-
 @pytest.mark.parametrize(
     ("reply", "error"),
     [({"ok": True, "ros_domain": 18}, "domain mismatch"), ({"ok": False}, "identity mismatch")],
@@ -285,44 +203,6 @@ def test_runtime_profile_maps_explicit_host_paths_without_host_ros(service_root)
     assert profile.database == service_root / "agent.db"
     assert profile.ros_setup == Path("/container/project/ros2/install/setup.bash")
     assert profile.ros_domain is None
-
-
-async def test_handshake_failure_reaps_adapter_without_starting_agent(service_root, monkeypatch):
-    from senior_control import docker_start_helper as helper
-
-    profile = real_profile(service_root)
-    events = []
-
-    class Adapter:
-        returncode = None
-
-        def terminate(self):
-            events.append("terminate-adapter")
-            self.returncode = 0
-
-        async def wait(self):
-            return self.returncode
-
-    async def spawn(*args, **kwargs):
-        events.append("start-adapter")
-        return Adapter()
-
-    async def not_ready(*args):
-        raise ValueError("ROS adapter robot identity mismatch")
-
-    monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(helper, "_wait_for_adapter", not_ready)
-
-    async def stop_motion(child):
-        if child is not None:
-            events.append("stop-motion")
-
-    monkeypatch.setattr(helper, "_terminate_motion_stack", stop_motion)
-    with pytest.raises(ValueError, match="identity mismatch"):
-        await helper.supervise(service_root, ["agent"], {}, profile=profile)
-    assert events == ["start-adapter", "start-adapter", "terminate-adapter", "stop-motion"]
-    assert not (service_root / "service.sock").exists()
-    assert not (service_root / "estop-state.json").exists()
 
 
 async def test_matching_robot_id_does_not_establish_process_ownership(service_root):

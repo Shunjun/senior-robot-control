@@ -113,7 +113,12 @@ def test_drive_remapping_uses_humble_plugin_configuration() -> None:
     plugin = model.find("./gazebo/plugin[@name='gz_ros2_control::GazeboSimROS2ControlPlugin']")
     assert plugin is not None
     remaps = {item.text for item in plugin.findall("./ros/remapping")}
-    assert {"/drive/cmd_vel_unstamped:=/cmd_vel", "/drive/odom:=/wheel/odom"} <= remaps
+    assert remaps == {
+        "/drive/actuator_target:=/control/actuator_target",
+        "/drive/odom:=/wheel/odom",
+        "/drive/odom/timed:=/wheel/odom/timed",
+    }
+    assert not any("cmd_vel" in item or "Twist" in item for item in remaps)
     launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
     assert "--controller-ros-args" not in launch
 

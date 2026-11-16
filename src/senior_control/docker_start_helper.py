@@ -34,7 +34,7 @@ def _identity(path: Path) -> list[int]:
     return [info.st_dev, info.st_ino, info.st_uid]
 
 
-def _record(path: Path, expected: list[int] | None = None) -> None:
+def _record(path: Path, expected: list[int] | None = None, *, run_id: str | None = None) -> None:
     identity = _identity(path)
     if expected is not None and identity != expected:
         raise ValueError("IPC socket changed before ownership recording")
@@ -43,7 +43,7 @@ def _record(path: Path, expected: list[int] | None = None) -> None:
     # The enclosing private directory and instance lock protect this ownership record.
     fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as file:
-        json.dump(identity, file)
+        json.dump(identity if run_id is None else {"identity": identity, "run_id": run_id}, file)
     os.replace(temporary, marker)
 
 
@@ -60,6 +60,9 @@ async def _prepare_socket(path: Path) -> None:
         marker = path.with_suffix(".owner.json")
         try:
             owned = json.loads(marker.read_text())
+            # //Compatible: pre-isolation ownership records contain only the identity list.
+            if isinstance(owned, dict):
+                owned = owned.get("identity")
         except (OSError, ValueError):
             owned = None
         if owned != identity or _identity(path) != identity:
@@ -230,7 +233,7 @@ async def _wait_for_adapter(
             raise ValueError(
                 "ROS adapter exited; check sourced ROS workspace and Python dependencies"
             )
-        client = IpcClient(path, timeout=0.5)
+        client = IpcClient(path, timeout_ms=500)
         try:
             reply = await client.request("identity", robot_id=robot_id)
         except (IpcError, OSError):
@@ -314,6 +317,8 @@ async def supervise(
     *,
     profile: "VehicleProfile | None" = None,
 ) -> int:
+    from senior_control.runtime.lifecycle_events import LifecycleEvents
+
     private_directory(root)
     fd = os.open(root / ".agent-service.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as lock:
@@ -324,26 +329,26 @@ async def supervise(
         motion_stack: asyncio.subprocess.Process | None = None
         camera_stack: asyncio.subprocess.Process | None = None
         adapter_identity: list[int] | None = None
-        adapter_command = None
-        robot_id = ""
-        # //Compatible: direct supervisor callers may still manage a single arbitrary child.
-        if profile is not None:
-            robot_id = read_credentials(root / "device.json").robot_id
-            adapter_command = _adapter_command(profile, robot_id)
+        robot_id = read_credentials(root / "device.json").robot_id if profile is not None else ""
         from senior_control.motion.startup_learning import start_environment
+        from senior_control.runtime.learning_service import LearningService
 
         environment = start_environment(environment, root)
+        learning_service = LearningService(Path(environment["SENIOR_STARTUP_LEARNING_CLAIM"]))
         if profile is not None:
-            # Hardware deployment must not inherit a simulation identity or clock policy.
             for key in tuple(environment):
                 if key.startswith("SENIOR_SIMULATION_") or key.startswith("SENIOR_MOTION_CORE_"):
                     environment.pop(key)
             environment["ROS_LOCALHOST_ONLY"] = "0"
+            environment["SENIOR_VERIFIED_ADAPTER_RUN"] = Path(
+                environment["SENIOR_STARTUP_LEARNING_CLAIM"]
+            ).name
         environment.update(ROS_HOME=str(root / "ros-home"), ROS_LOG_DIR=str(root / "ros-log"))
         environment.pop("SENIOR_EXPECTED_ROS_DOMAIN", None)
         if profile is not None and profile.ros_domain is not None:
             environment["SENIOR_EXPECTED_ROS_DOMAIN"] = str(profile.ros_domain)
             environment["ROS_DOMAIN_ID"] = str(profile.ros_domain)
+        events = LifecycleEvents() if profile is not None else None
 
         async def handle(request: dict[str, Any]) -> dict[str, Any]:
             if request["type"] == "status":
@@ -356,81 +361,132 @@ async def supervise(
         server = IpcServer(root / "service.sock", handle, replace_existing=False)
         loop = asyncio.get_running_loop()
         signals = (signal.SIGINT, signal.SIGTERM)
-        waiters: list[asyncio.Task[Any]] = []
-        try:
-            await _prepare_socket(root / "service.sock")
-            if adapter_command is not None:
+        waiters: dict[asyncio.Task[Any], str] = {}
+        startup: asyncio.Task[None] | None = None
+
+        def watch(child: asyncio.subprocess.Process, name: str) -> None:
+            waiters[asyncio.create_task(child.wait())] = name
+
+        async def start_local() -> None:
+            nonlocal adapter, motion_stack, camera_stack, adapter_identity
+            assert profile is not None and events is not None
+            child_env = events.child_environment(environment)
+            try:
+                events.report("motion", "starting")
                 await _prepare_socket(root / "agent.sock")
+                motion_stack = await asyncio.create_subprocess_exec(
+                    *_motion_command(profile, robot_id),
+                    env=child_env,
+                    start_new_session=True,
+                    pass_fds=(events.writer,),
+                )
+                adapter = await asyncio.create_subprocess_exec(
+                    *_adapter_command(profile, robot_id),
+                    env=environment,
+                    start_new_session=True,
+                )
+                adapter_identity = await _wait_for_adapter(
+                    root / "agent.sock", robot_id, profile.ros_domain, adapter, stopping
+                )
+                if adapter_identity is not None:
+                    _record(
+                        root / "agent.sock",
+                        adapter_identity,
+                        run_id=environment["SENIOR_VERIFIED_ADAPTER_RUN"],
+                    )
+            except (OSError, ValueError, IpcError) as exc:
+                events.report("motion", "unavailable", str(exc))
+                await _terminate_motion_stack(adapter)
+                await _terminate_motion_stack(motion_stack)
+                adapter = motion_stack = None
+                return
+            if stopping.is_set():
+                return
+            assert adapter is not None and motion_stack is not None
+            watch(motion_stack, "motion")
+            watch(adapter, "adapter")
+            await asyncio.sleep(0)
+            if (
+                adapter_identity is not None
+                and process is not None
+                and all(child.returncode is None for child in (process, adapter, motion_stack))
+                and not stopping.is_set()
+            ):
+                from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
+
+                cleanup_old_learning_files(
+                    root,
+                    environment["SENIOR_STARTUP_LEARNING_CLAIM"],
+                    peer_lock_name=".senior-simulator.lock",
+                )
+            events.report("motion", "ready", "adapter verified; cloud status independent")
+            try:
+                camera_stack = await asyncio.create_subprocess_exec(
+                    *_ros_launch_command(
+                        profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
+                    ),
+                    env=child_env,
+                    start_new_session=True,
+                    pass_fds=(events.writer,),
+                )
+                watch(camera_stack, "camera")
+            except (OSError, ValueError) as exc:
+                events.report("camera", "unavailable", str(exc))
+
+        try:
+            await learning_service.start()
+            await _prepare_socket(root / "service.sock")
             await server.start()
             _record(root / "service.sock")
             for number in signals:
                 loop.add_signal_handler(number, stopping.set)
-            if adapter_command is not None:
-                assert profile is not None
-                motion_command = _motion_command(profile, robot_id)
-                motion_stack = await asyncio.create_subprocess_exec(
-                    *motion_command, env=environment, start_new_session=True
-                )
-                adapter = await asyncio.create_subprocess_exec(*adapter_command, env=environment)
-                assert profile is not None
-                adapter_identity = await _wait_for_adapter(
-                    root / "agent.sock", robot_id, profile.ros_domain, adapter, stopping
-                )
-            if stopping.is_set():
-                return 0
-            process = await asyncio.create_subprocess_exec(*command, env=environment)
-            exited = asyncio.create_task(process.wait())
-            requested = asyncio.create_task(stopping.wait())
-            waiters = [exited, requested]
-            if motion_stack is not None:
-                waiters.append(asyncio.create_task(motion_stack.wait()))
-            if adapter is not None:
-                waiters.append(asyncio.create_task(adapter.wait()))
-            camera_exited = None
-            if motion_stack is not None and profile is not None:
-                # Camera/video is optional for the laser-only motion chain.
-                # Give it a separate launch/process group, started after IPC/Agent
-                # readiness, so camera crashes cannot stop safety state reporting.
-                try:
-                    camera_stack = await asyncio.create_subprocess_exec(
-                        *_ros_launch_command(
-                            profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
-                        ),
-                        env=environment,
-                        start_new_session=True,
-                    )
-                    camera_exited = asyncio.create_task(camera_stack.wait())
-                    waiters.append(camera_exited)
-                except OSError as exc:
-                    print(f"Camera unavailable: {exc}", file=sys.stderr)
+            # //Compatible: profile=None still propagates a single arbitrary child's exit.
+            agent_env = events.agent_environment(environment) if events else environment
+            process = await asyncio.create_subprocess_exec(
+                *command, env=agent_env, pass_fds=(events.reader,) if events else ()
+            )
+            if events:
+                events.close_reader()
+            if process.returncode is not None:
+                return await process.wait()
+            watch(process, "agent")
+            waiters[asyncio.create_task(stopping.wait())] = "stop"
+            if profile is not None:
+                startup = asyncio.create_task(start_local())
+                waiters[startup] = "startup"
             while True:
                 done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-                if camera_exited is not None and camera_exited in done:
-                    print(
-                        f"Camera launch exited ({camera_exited.result()}); "
-                        "video unavailable; motion supervision remains active.",
-                        file=sys.stderr,
-                    )
-                    waiters.remove(camera_exited)
-                    await _terminate_motion_stack(camera_stack)
-                    camera_stack = None
-                    camera_exited = None
-                    if len(done) == 1:
+                if stopping.is_set():
+                    return 0
+                if process.returncode is not None:
+                    return await process.wait()
+                for task in done:
+                    name = waiters.pop(task)
+                    result = task.result()
+                    if name == "agent":
+                        return int(result)
+                    if name == "startup":
                         continue
-                break
-            if stopping.is_set():
-                return 0
-            if motion_stack is not None and motion_stack.returncode is not None:
-                return 1
-            if adapter is not None and adapter.returncode is not None:
-                return 1
-            return await exited
+                    assert events is not None
+                    events.report(name, "exited", returncode=result)
+                    if name == "motion":
+                        await _terminate_motion_stack(motion_stack)
+                        motion_stack = None
+                    elif name == "adapter":
+                        await _terminate_motion_stack(adapter)
+                        adapter = None
+                    elif name == "camera":
+                        await _terminate_motion_stack(camera_stack)
+                        camera_stack = None
         finally:
+            if startup is not None and not startup.done():
+                startup.cancel()
+                await asyncio.gather(startup, return_exceptions=True)
             try:
                 await _terminate(process, 20)
             finally:
                 try:
-                    await _terminate(adapter, 5)
+                    await _terminate_motion_stack(adapter)
                 finally:
                     try:
                         await _terminate_motion_stack(motion_stack)
@@ -446,14 +502,17 @@ async def supervise(
                     if os.path.lexists(path) and _identity(path) == adapter_identity:
                         path.unlink()
             finally:
+                if events:
+                    events.close()
                 await server.close()
+                await learning_service.close()
                 for number in signals:
                     loop.remove_signal_handler(number)
 
 
 async def stop(root: Path) -> int:
     private_directory(root)
-    client = IpcClient(root / "service.sock", timeout=3)
+    client = IpcClient(root / "service.sock", timeout_ms=3000)
     try:
         reply = await client.request("stop")
         if reply.get("ok") is not True:

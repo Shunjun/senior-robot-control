@@ -76,8 +76,8 @@ bool rigid(const std::array<double, 16> & m)
 
 RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
 : Node("rgbd_candidate_receipt", options), relay_boot_(new_boot()), sensor_policy_(
-    declare_parameter<double>("sensor_soft_age_s", -1.0),
-    declare_parameter<double>("sensor_hard_age_s", -1.0),
+    declare_parameter<double>("sensor_soft_age_ms", -1.0),
+    declare_parameter<double>("sensor_hard_age_ms", -1.0),
     declare_parameter<double>("sensor_diagnostics_period_s", -1.0))
 {
   queue_policy_ = std::make_unique<sensor_timing::QueuePolicy>(
@@ -138,18 +138,18 @@ void RgbdCandidateReceipt::invalidate(const std::string & reason, bool owner_los
   output.body = last_candidate_;
   publisher_->publish(output);
 }
-bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns, double steady)
+bool RgbdCandidateReceipt::clocks_ok(double steady)
 {
   if (failed_) return false;
-  if (last_ros_ > 0 && (ros_ns < last_ros_ || steady < last_steady_)) {
-    // A new time epoch requires restarting the diagnostic chain and its ledgers.
+  if (last_steady_ > 0 && steady < last_steady_) {
+    // A real monotonic discontinuity invalidates the local execution domain.
     failed_ = true;
     ledger_.clear(); tf_queue_dropped_ += pending_tf_.size(); pending_tf_.clear(); tf_ready_ = false; producer_ready_ = false;
     invalidate("clock_invalid", true);
     return false;
   }
-  if (ros_ns <= 0 || !std::isfinite(steady) || steady <= 0) return false;
-  last_ros_ = ros_ns; last_steady_ = steady;
+  if (!std::isfinite(steady) || steady <= 0) return false;
+  last_steady_ = steady;
   return true;
 }
 
@@ -233,7 +233,7 @@ void RgbdCandidateReceipt::image(size_t stream, const Image & body, const rclcpp
 {
   const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady_now()) || !accept_raw(stream, body.capture, actual)) return;
+  if (!clocks_ok(steady_now()) || !accept_raw(stream, body.capture, actual)) return;
   if (!ledger_.remember_image(stream, body) || !graph_matches(raw_topics_[stream], "raw_receipt", actual)) {
     ledger_.clear(); invalidate("raw_image_invalid");
   }
@@ -242,7 +242,7 @@ void RgbdCandidateReceipt::camera_info(size_t stream, const Info & body, const r
 {
   const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady_now()) || !accept_raw(stream+2, body.capture, actual)) return;
+  if (!clocks_ok(steady_now()) || !accept_raw(stream+2, body.capture, actual)) return;
   if (!ledger_.remember_info(stream, body) || !graph_matches(raw_topics_[stream+2], "raw_receipt", actual)) {
     ledger_.clear(); invalidate("raw_info_invalid");
   }
@@ -251,7 +251,7 @@ void RgbdCandidateReceipt::camera_info(size_t stream, const Info & body, const r
 void RgbdCandidateReceipt::tf(const Static & body, const std::string & actual)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  const bool clock_ready = clocks_ok(get_clock()->now().nanoseconds(), steady_now());
+  const bool clock_ready = clocks_ok(steady_now());
   if (failed_ || retired_tf_gids_.count(actual) || !valid_gid(actual) ||
       body.bridge_gid != actual) return;
   // A transient-local status can arrive before graph discovery catches up.
@@ -314,10 +314,9 @@ void RgbdCandidateReceipt::accept_tf(const Static & body, const std::string & ac
   if (!body.valid || !body.admitted || !text_ok(body.bridge_boot_id, 64) ||
       !text_ok(body.raw_gid, 128) || body.generation == 0 || body.first_sequence == 0 ||
       body.sequence < body.first_sequence || body.edges.empty() || body.edges.size() > 32 ||
-      nanos(body.first_received_ros) < 0 || nanos(body.admitted_from_ros) <= 0 ||
+      nanos(body.first_received_ros) < 0 || nanos(body.admitted_from_ros) < 0 ||
       !std::isfinite(body.first_received_steady) || !std::isfinite(body.admitted_from_steady) ||
-      body.first_received_steady < 0 || body.admitted_from_steady < body.first_received_steady ||
-      nanos(body.admitted_from_ros) < nanos(body.first_received_ros)) {
+      body.first_received_steady < 0 || body.admitted_from_steady < body.first_received_steady) {
     if (!body.valid && text_ok(body.bridge_boot_id, 64) && body.generation > tf_generation_) {
       tf_generation_ = body.generation;
       tf_boot_ = body.bridge_boot_id;
@@ -361,43 +360,49 @@ void RgbdCandidateReceipt::accept_tf(const Static & body, const std::string & ac
 }
 
 std::optional<int64_t> RgbdCandidateReceipt::capture_age(
-  const Header & header, int64_t ros_ns, double steady) noexcept
+  const Header & header, double steady) noexcept
 {
-  const auto age = sensor_policy_.try_age_ns(nanos(header.stamp), nanos(header.received_ros),
-    header.received_steady, ros_ns, steady);
+  const auto age = sensor_policy_.try_age_ns(header.timing.capture_end_steady_ns,
+    header.received_steady, steady);
   if (!age) sensor_ages_.reject_invalid_clock();
   return age;
 }
 
-bool RgbdCandidateReceipt::originals_current(const Candidate & body, int64_t ros_ns, double steady)
+bool RgbdCandidateReceipt::originals_current(const Candidate & body, double steady)
 {
   const std::array<const Header *, 4> first = {&body.first_rgb, &body.first_depth,
     &body.first_rgb_info, &body.first_depth_info};
   const std::array<const Header *, 4> second = {&body.second_rgb, &body.second_depth,
     &body.second_rgb_info, &body.second_depth_info};
   const int64_t first_stamp = nanos(first[0]->stamp), second_stamp = nanos(second[0]->stamp);
-  if (first_stamp <= 0 || second_stamp <= first_stamp || second_stamp-first_stamp > 200000000LL ||
+  const auto first_measurement = senior_motion_msgs::timing::measurement_ns(first[0]->timing);
+  const auto second_measurement = senior_motion_msgs::timing::measurement_ns(second[0]->timing);
+  if (first_stamp < 0 || second_stamp < 0 ||
+      !senior_motion_msgs::timing::same_measurement_axis(first[0]->timing, second[0]->timing) ||
+      second_measurement <= first_measurement ||
+      second_measurement-first_measurement > 200000000ULL ||
       nanos(body.interval_start) != first_stamp || nanos(body.interval_end) != second_stamp) return false;
-  const int64_t tf_admission = nanos(tf_first_.admitted_from_ros);
   for (size_t i=0; i<4; ++i) {
     const auto & current = sources_[i];
     if (current.bridge_gid.empty() || !graph_matches(raw_topics_[i], "raw_receipt", current.bridge_gid)) return false;
     for (const auto * h : {first[i], second[i]}) {
-      const auto stamp = nanos(h->stamp), received = nanos(h->received_ros);
-      const auto age = capture_age(*h, ros_ns, steady);
+      const auto age = capture_age(*h, steady);
       if (!age) return false;
       sensor_ages_.observe(*age,sensor_policy_);
       if (!h->valid || *age >= sensor_policy_.hard_ns || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
           h->source_epoch != current.epoch || h->bridge_boot_id != raw_boot_ ||
           h->capture_generation != raw_generation_ || h->frame_id != camera_ || h->sequence == 0 ||
-          stamp <= producer_floor_ros_ || received <= producer_floor_ros_ ||
-          h->received_steady <= producer_floor_steady_ || stamp < tf_admission || received < tf_admission ||
-          h->received_steady < tf_first_.admitted_from_steady ||
-          stamp > ros_ns || received > ros_ns || ros_ns-stamp >= sensor_policy_.hard_ns ||
-          ros_ns-received >= sensor_policy_.hard_ns || !std::isfinite(h->received_steady) ||
+          static_cast<double>(h->timing.capture_start_steady_ns) / 1e9 <= producer_floor_steady_ ||
+          static_cast<double>(h->timing.capture_start_steady_ns) / 1e9 < tf_first_.admitted_from_steady ||
+          !std::isfinite(h->received_steady) ||
           h->received_steady > steady || steady-h->received_steady >= sensor_policy_.hard) return false;
     }
-    if (nanos(first[i]->stamp) != first_stamp || nanos(second[i]->stamp) != second_stamp ||
+    if (!senior_motion_msgs::timing::same_measurement_axis(first[i]->timing, first[0]->timing) ||
+        !senior_motion_msgs::timing::same_measurement_axis(second[i]->timing, first[0]->timing) ||
+        (first[0]->timing.time_basis == "sim_step" &&
+          (senior_motion_msgs::timing::measurement_ns(first[i]->timing) != first_measurement ||
+           senior_motion_msgs::timing::measurement_ns(second[i]->timing) != second_measurement)) ||
+        nanos(first[i]->stamp) != first_stamp || nanos(second[i]->stamp) != second_stamp ||
         second[i]->sequence <= first[i]->sequence) return false;
   }
   if (body.first_rgb_layout.capture != body.first_rgb || body.first_depth_layout.capture != body.first_depth ||
@@ -416,9 +421,8 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
 {
   const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto ros_ns = get_clock()->now().nanoseconds();
   const auto steady = steady_now();
-  if (!clocks_ok(ros_ns, steady) || retired_producer_gids_.count(actual)) return;
+  if (!clocks_ok(steady) || retired_producer_gids_.count(actual)) return;
   if (!producer_ready_ || actual != producer_gid_ || body.producer_gid != actual ||
       !graph_matches(candidate_topic_, "rgbd_candidate_producer", actual)) return;
   if (!text_ok(body.producer_boot_id, 64) || body.owner_generation == 0 || body.worker_generation == 0 ||
@@ -438,7 +442,7 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
   if (body.owner_generation < producer_generation_ || body.sequence <= producer_sequence_) return;
   if (body.owner_generation > producer_generation_) {
     producer_generation_ = body.owner_generation;
-    producer_floor_ros_ = ros_ns; producer_floor_steady_ = steady;
+    producer_floor_steady_ = steady;
     invalidate("producer_generation_changed");
   }
   producer_sequence_ = body.sequence;
@@ -454,7 +458,7 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
       body.matched > 500 || body.inliers > body.matched || !rigid(body.camera_transform) ||
       !std::isfinite(body.median_reprojection_px) || body.median_reprojection_px < 0 ||
       !std::isfinite(body.median_depth_residual_m) || body.median_depth_residual_m < 0 ||
-      !originals_current(body, ros_ns, steady)) {
+      !originals_current(body, steady)) {
     invalidate("candidate_invalid");
     return;
   }
@@ -477,20 +481,17 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
     invalidate("candidate_owner_lost", true);
     return;
   }
-  const auto final_ros = get_clock()->now().nanoseconds();
   const auto final_steady = steady_now();
-  if (!clocks_ok(final_ros, final_steady)) return;
+  if (!clocks_ok(final_steady)) return;
   for (const auto * header : {&body.first_rgb, &body.first_depth, &body.first_rgb_info,
       &body.first_depth_info, &body.second_rgb, &body.second_depth, &body.second_rgb_info,
       &body.second_depth_info}) {
-    const auto age = capture_age(*header, final_ros, final_steady);
+    const auto age = capture_age(*header, final_steady);
     if (!age) {
       invalidate("candidate_invalid");
       return;
     }
     if (*age >= sensor_policy_.hard_ns ||
-        final_ros - nanos(header->stamp) >= sensor_policy_.hard_ns ||
-        final_ros - nanos(header->received_ros) >= sensor_policy_.hard_ns ||
         final_steady - header->received_steady >= sensor_policy_.hard) {
       invalidate("candidate_expired");
       return;
@@ -503,9 +504,8 @@ void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::Messa
 void RgbdCandidateReceipt::inspect()
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto ros_ns = get_clock()->now().nanoseconds();
   const auto steady = steady_now();
-  if (!clocks_ok(ros_ns, steady)) return;
+  if (!clocks_ok(steady)) return;
   if (steady-last_age_report_ >= sensor_policy_.period) {
     RCLCPP_DEBUG(get_logger(), "sensor_use_age avg=%.6f max=%.6f count=%llu over_soft=%llu over_hard=%llu invalid_clock=%llu",
       sensor_ages_.count ? sensor_ages_.sum/sensor_ages_.count : 0., sensor_ages_.maximum,
@@ -555,7 +555,7 @@ void RgbdCandidateReceipt::inspect()
     producer_gid_.clear(); producer_boot_.clear(); producer_generation_ = producer_sequence_ = 0;
   }
   if (!producer_ready_ && valid_gid(current) && !retired_producer_gids_.count(current)) {
-    producer_gid_ = current; producer_floor_ros_ = ros_ns; producer_floor_steady_ = steady;
+    producer_gid_ = current; producer_floor_steady_ = steady;
     producer_ready_ = true;
   }
 }

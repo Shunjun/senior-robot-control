@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from urllib.parse import urlsplit
 
 from senior_control.agent.pairing import Credentials, read_credentials
@@ -253,8 +254,13 @@ async def supervise(
     from senior_control.motion.startup_learning import start_environment
 
     env = start_environment(dict(os.environ), root)
+    from senior_control.runtime.learning_service import LearningService
+
+    learning_service = LearningService(Path(env["SENIOR_STARTUP_LEARNING_CLAIM"]))
     env.pop("NOTIFY_SOCKET", None)
     env.pop("SENIOR_SIMULATION_VIDEO_FRAME", None)
+    env.pop("SENIOR_VERIFIED_ADAPTER_RUN", None)
+    env.pop("SENIOR_EXPECTED_ROS_DOMAIN", None)
     camera = TemporaryDirectory(prefix=".camera-", dir=root) if profile.video else None
     video_args: list[str] = []
     if camera is not None:
@@ -277,58 +283,118 @@ async def supervise(
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stop.set)
+    from senior_control.docker_start_helper import _terminate_motion_stack
+    from senior_control.runtime.lifecycle_events import LifecycleEvents
+
+    events = LifecycleEvents()
     ros = None
     agent = None
-    try:
-        ros = await asyncio.create_subprocess_exec(
-            "/bin/bash",
-            "-c",
-            'source "$1" || exit; shift; exec "$@"',
-            "senior-ros",
-            str(profile.ros_setup),
-            *(["xvfb-run", "-a"] if headless else []),
-            "ros2",
-            "launch",
-            "senior_robot",
-            "simulation_motion.launch.py",
-            f"headless:={str(headless).lower()}",
-            "qualified_reference:=true",
-            *video_args,
-            f"agent_socket:={profile.socket}",
-            f"robot_id:={credentials.robot_id}",
-            env=env,
-        )
-        await _wait_for_adapter(profile.socket, credentials.robot_id, ros, stop)
+    startup = None
+    waiters: dict[asyncio.Task[Any], str] = {}
+    socket_path = profile.socket
+
+    async def start_local() -> None:
+        nonlocal ros
+        try:
+            events.report("ros", "starting")
+            ros = await asyncio.create_subprocess_exec(
+                "/bin/bash",
+                "-c",
+                'source "$1" || exit; shift; exec "$@"',
+                "senior-ros",
+                str(profile.ros_setup),
+                *(["xvfb-run", "-a"] if headless else []),
+                "ros2",
+                "launch",
+                "senior_robot",
+                "simulation_motion.launch.py",
+                f"headless:={str(headless).lower()}",
+                "qualified_reference:=true",
+                *video_args,
+                f"agent_socket:={profile.socket}",
+                f"robot_id:={credentials.robot_id}",
+                env=events.child_environment(env),
+                start_new_session=True,
+                pass_fds=(events.writer,),
+            )
+            assert socket_path is not None
+            await _wait_for_adapter(socket_path, credentials.robot_id, ros, stop)
+        except (OSError, ValueError, IpcError) as exc:
+            events.report("ros", "unavailable", str(exc))
+            if ros is not None:
+                await _terminate_motion_stack(ros)
+                ros = None
+            return
         if stop.is_set():
-            return 0
+            return
+        assert ros is not None
+        waiters[asyncio.create_task(ros.wait())] = "ros"
+        await asyncio.sleep(0)
+        assert agent is not None
+        if ros.returncode is None and agent.returncode is None and not stop.is_set():
+            from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
+
+            cleanup_old_learning_files(
+                root, env["SENIOR_STARTUP_LEARNING_CLAIM"], peer_lock_name=".agent-service.lock"
+            )
+        events.report("ros", "ready", "adapter verified; cloud status independent")
+
+    try:
+        await learning_service.start()
         agent = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
             "senior_control.agent.main",
-            env=env,
+            env=events.agent_environment(env),
+            pass_fds=(events.reader,),
         )
-        _notify("READY=1\nSTATUS=ROS adapter verified. Agent started, cloud status unverified.")
-        waiters = [asyncio.create_task(wait) for wait in (stop.wait(), ros.wait(), agent.wait())]
-        try:
-            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-            return 0 if stop.is_set() else 1
-        finally:
-            for waiter in waiters:
-                waiter.cancel()
-            await asyncio.gather(*waiters, return_exceptions=True)
+        events.close_reader()
+        if agent.returncode is not None:
+            return await agent.wait()
+        _notify("READY=1\nSTATUS=Agent started, cloud and ROS status unverified.")
+        startup = asyncio.create_task(start_local())
+        waiters = {
+            asyncio.create_task(stop.wait()): "stop",
+            asyncio.create_task(agent.wait()): "agent",
+            startup: "startup",
+        }
+        while True:
+            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            if stop.is_set():
+                return 0
+            if agent.returncode is not None:
+                return await agent.wait()
+            for waiter in done:
+                name = waiters.pop(waiter)
+                result = waiter.result()
+                if name == "agent":
+                    return int(result)
+                if name == "ros":
+                    events.report("ros", "exited", returncode=result)
+                    await _terminate_motion_stack(ros)
+                    ros = None
     finally:
+        if startup is not None and not startup.done():
+            startup.cancel()
+            await asyncio.gather(startup, return_exceptions=True)
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
         try:
             if agent is not None:
                 await _stop(agent, 12)
         finally:
             try:
                 if ros is not None:
-                    await _stop(ros, 10)
+                    await _terminate_motion_stack(ros)
             finally:
+                events.close()
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     loop.remove_signal_handler(signum)
                 if camera is not None:
                     camera.cleanup()
+                await learning_service.close()
 
 
 def _remove_stale_socket(path: Path) -> None:

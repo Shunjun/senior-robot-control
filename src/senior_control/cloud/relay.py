@@ -21,6 +21,7 @@ from senior_control.cloud.limits import CloudLimits
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (
     DEVICE_REVOKED_CLOSE_CODE,
+    HEARTBEAT_WINDOW_SECONDS,
     WORKSPACE_REQUEST_TYPES,
     EmptyPayload,
     Envelope,
@@ -53,7 +54,6 @@ SNAPSHOT = "snapshot"
 CONNECTION = "control.connection"
 WORKSPACE = "workspace"
 WORKSPACE_REPLY_SECONDS = 5.0
-HEARTBEAT_WINDOW_SECONDS = 2.0
 # Five default backoffs (31s), five failed handshakes (up to 25s) and heartbeat margin.
 RECONNECT_GRACE_SECONDS = 60.0
 SNAPSHOT_TTL_SECONDS = 60.0
@@ -277,7 +277,7 @@ class Hub:
             agent is not None
             and not agent.outbox.closed
             and agent.heartbeat_at is not None
-            and time.monotonic() - agent.heartbeat_at <= HEARTBEAT_WINDOW_SECONDS
+            and 0 <= time.monotonic() - agent.heartbeat_at < HEARTBEAT_WINDOW_SECONDS
         )
 
     def is_reconnecting(self, robot_id: str) -> bool:
@@ -381,7 +381,7 @@ class Hub:
             else connection.started_at
         )
         now = time.monotonic()
-        if now - last > HEARTBEAT_WINDOW_SECONDS:
+        if now - last >= HEARTBEAT_WINDOW_SECONDS:
             self.detach(connection)
 
     def attach_controller(self, robot_id: str, session_hash: str) -> Connection | None:
@@ -473,6 +473,10 @@ class Hub:
     def handle_agent_frame(self, connection: Connection, raw: bytes) -> None:
         link = self._links.get(connection.robot_id)
         if link is None or link.agent is not connection or connection.outbox.closed:
+            return
+        # Enforce the deadline on ingress too: watcher scheduling cannot revive an expired epoch.
+        self.expire_stale_agent(connection)
+        if connection.outbox.closed:
             return
         if len(raw) > self._limits.max_ws_message_bytes:
             connection.outbox.close(CLOSE_TOO_BIG)
@@ -863,8 +867,13 @@ async def _pump_out(
 
 
 async def _watch_heartbeat(connection: Connection, hub: Hub) -> None:
-    while True:
-        await asyncio.sleep(0.2)
+    while not connection.outbox.closed:
+        last = connection.heartbeat_at
+        if last is None:
+            last = connection.started_at
+        remaining = last + HEARTBEAT_WINDOW_SECONDS - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
         hub.expire_stale_agent(connection)
 
 

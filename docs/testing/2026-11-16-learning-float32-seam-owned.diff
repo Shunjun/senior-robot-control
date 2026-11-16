@@ -1,0 +1,287 @@
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/learning-wire-float32-before.log
+@@ -0,0 +1,73 @@
++FFF..F.........                                                          [100%]
++=================================== FAILURES ===================================
++_______ test_wire_float32_full_turn_preserves_seam_connection[False-720] _______
++
++count = 720, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++>       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c41f0e0>.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError
++______ test_wire_float32_full_turn_preserves_seam_connection[False-1080] _______
++
++count = 1080, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++>       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c468b90>.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError
++______ test_wire_float32_full_turn_preserves_seam_connection[False-1440] _______
++
++count = 1440, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++>       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c4d7e30>.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError
++_______ test_wire_float32_full_turn_preserves_seam_connection[True-1440] _______
++
++count = 1440, inclusive = True
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++>       assert model.validate() == (4 if inclusive else 3)
++E       assert 2 == 4
++E        +  where 2 = validate()
++E        +    where validate = <senior_control.safety.self_learning.SelfReturnModel object at 0x10c4649e0>.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError
++---------- generated xml file: /tmp/learning-wire-float32-before.xml -----------
++=========================== short test summary info ============================
++FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-720]
++FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-1080]
++FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[False-1440]
++FAILED tests/unit/test_learning_surface_review.py::test_wire_float32_full_turn_preserves_seam_connection[True-1440]
++4 failed, 11 passed, 7 deselected in 0.54s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/learning-wire-float32-before.xml
+@@ -0,0 +1,53 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="15" time="0.541" timestamp="2026-11-16T21:04:49.511002+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-720]" time="0.016"><failure message="assert 1 == 3&#10; +  where 1 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c41f0e0&gt;.validate">count = 720, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++&gt;       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c41f0e0&gt;.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-1080]" time="0.014"><failure message="assert 1 == 3&#10; +  where 1 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c468b90&gt;.validate">count = 1080, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++&gt;       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c468b90&gt;.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-1440]" time="0.019"><failure message="assert 1 == 3&#10; +  where 1 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c4d7e30&gt;.validate">count = 1440, inclusive = False
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++&gt;       assert model.validate() == (4 if inclusive else 3)
++E       assert 1 == 3
++E        +  where 1 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c4d7e30&gt;.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-720]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-1080]" time="0.016" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-1440]" time="0.029"><failure message="assert 2 == 4&#10; +  where 2 = validate()&#10; +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c4649e0&gt;.validate">count = 1440, inclusive = True
++
++    @pytest.mark.parametrize("count", [720, 1080, 1440])
++    @pytest.mark.parametrize("inclusive", [False, True])
++    def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++        step = wire_float32(math.tau / (count - 1 if inclusive else count))
++        observation = wire_seam_observation(count, step, inclusive=inclusive)
++        model = learn([observation] * 12)
++&gt;       assert model.validate() == (4 if inclusive else 3)
++E       assert 2 == 4
++E        +  where 2 = validate()
++E        +    where validate = &lt;senior_control.safety.self_learning.SelfReturnModel object at 0x10c4649e0&gt;.validate
++
++tests/unit/test_learning_surface_review.py:140: AssertionError</failure></testcase><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-1080]" time="0.014" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-1440]" time="0.019" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-1080]" time="0.014" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-1440]" time="0.019" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-1080]" time="0.024" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-1440]" time="0.019" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-final.log
+@@ -0,0 +1,3 @@
++...................................                                      [100%]
++--------------- generated xml file: /tmp/wire-c224884b-final.xml ---------------
++35 passed in 5.08s
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-final.xml
+@@ -0,0 +1 @@
++<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="35" time="5.078" timestamp="2026-11-16T21:06:37.653381+08:00" hostname="zhangshunjundeMacBook-Pro.local"><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[1000]" time="0.587" /><testcase classname="tests.unit.test_learning_surface_review" name="test_dense_long_learned_surface_has_no_stride_holes_and_restores_every_reference[2048]" time="1.575" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[False]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_complete_scan_connects_surface_across_first_last_samples[True]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_partial_scan_does_not_join_first_last_samples" time="0.002" /><testcase classname="tests.unit.test_learning_surface_review" name="test_unstable_bridge_disconnects_stable_outside_piece" time="0.002" /><testcase classname="tests.unit.test_learning_surface_review" name="test_outside_piece_with_another_stable_route_to_interior_is_retained" time="0.003" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-1080]" time="0.025" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[False-1440]" time="0.019" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-720]" time="0.012" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-1080]" time="0.015" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_full_turn_preserves_seam_connection[True-1440]" time="0.020" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-1080]" time="0.015" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[270_degrees-1440]" time="0.028" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-1080]" time="0.015" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[one_missing_sample-1440]" time="0.020" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-720]" time="0.011" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-1080]" time="0.015" /><testcase classname="tests.unit.test_learning_surface_review" name="test_wire_float32_partial_fov_does_not_join_seam[beyond_wire_error-1440]" time="0.020" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_adjacent_valid_returns_extend_outside_without_connection_distance_threshold" time="0.003" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_invalid_gap_and_no_interior_seed_keep_disconnected_points_external" time="0.006" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_unstable_connected_bridge_excludes_disconnected_outside_point" time="0.010" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_neighbor_direction_and_changed_beam_indices_match_same_surface_position" time="0.002" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_learning_checks_early_instability_even_after_bounded_capture_window_moves" time="0.007" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01-self]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[-0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_fixed_one_centimeter_boundary_applies_inside_and_outside_body[0.01001-hit]" time="0.001" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_saved_restored_view_survives_missing_mismatched_occluded_frames_without_writes" time="1.938" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[0.1]" time="0.169" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[1.0]" time="0.097" /><testcase classname="tests.unit.test_learning_frozen_reference" name="test_actual_core_returning_echo_is_filtered_after_occlusion[nan]" time="0.096" /></testsuite></testsuites>--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-format.log
+@@ -0,0 +1 @@
++2 files already formatted
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-mypy.log
+@@ -0,0 +1 @@
++Success: no issues found in 1 source file
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam-evidence/wire-c224884b-ruff.log
+@@ -0,0 +1 @@
++All checks passed!
+--- /dev/null
++++ b/docs/testing/2026-11-16-learning-float32-seam.md
+@@ -0,0 +1,36 @@
++# LaserScan float32完整周期识别返修
++
++任务 `task_9aae08045c99 / ctx_c224884bf0ce`，HEAD `593e8f13f385892f0bd62cf75c593f7b07efd2da`。本轮只修改self_learning.py及定向测试，未改变1cm位置匹配、参考点保存、风险/未知空间政策或其它工作区改动；不启服务、ROS、仿真、车辆，未暂存、提交、推送。
++
++根因：旧预算4×ulp(2π)只覆盖binary64运算舍入，而LaserScan.angle_increment经过float32 wire量化，端点跨度中该量化误差会随束数累积。例如720束周期采样，读回step=0.008726646192371845，2π−719×step=0.0087266948642295，已比step大约4.87e−8，旧代码误判非完整扫描。
++
++修复使用float32半ULP作为步长量化误差q，正常数由步长指数和24位有效精度计算，非正规数按2^-149间隔计算；分别向(n−1)×step及n×step传播。完整周期判据仍为原来的“(n−1)步不超过一周且n步至少覆盖一周”，只给两侧各自的乘法项加入量化传播预算和binary64算术舍入预算。angle_min在相对跨度中抵消，不计作额外间隙。非有限算术跨度不会被无穷舍入预算误判为完整周期。
++
++未增加欧氏连接距离、物理连接角阈值、扇区过滤或其它控制条件。周期采样与inclusive重复端点两种表示继续支持；只有相应实际完整扫描的首尾有效run才会相连。
++
++## 先失败与定向验证
++
++新增测试使用 `struct.unpack("f", struct.pack("f", value))` 构造真实float32元数据和驱动范围值，并按这些角度/距离生成端点，不以精确Python double假替wire值。
++
++- 周期与inclusive两种表示，各覆盖720/1080/1440束，验证学习及运行首尾过滤。
++- 三类负例分别覆盖270° FOV、少一个真实样本的非完整周期、低于完整步长量化区间的相邻float32值，每类均覆盖上述三种束数；不得跨端点连接。
++- 保留密集长表面、局部扫描、稳定桥断连及固定参考只读过滤的必要回归。
++
++未修复前：4 failed、11 passed、7 deselected（0.54秒），失败为3个周期输入及1440束inclusive输入。完整证据在[evidence目录](2026-11-16-learning-float32-seam-evidence)的learning-wire-float32-before.log/.xml。
++
++产品最终版定向命令：
++
++```sh
++.venv/bin/pytest -q tests/unit/test_learning_surface_review.py tests/unit/test_learning_frozen_reference.py --junitxml=/tmp/wire-c224884b-final.xml
++.venv/bin/mypy src/senior_control/safety/self_learning.py
++.venv/bin/ruff check src/senior_control/safety/self_learning.py tests/unit/test_learning_surface_review.py
++.venv/bin/ruff format --check src/senior_control/safety/self_learning.py tests/unit/test_learning_surface_review.py
++```
++
++结果：**35 passed，5.08秒**；严格mypy 1个源码通过；Ruff通过；2 files already formatted。日志与JUnit已复制到evidence目录，未重跑无关套件。
++
++本轮未运行Linux内核IPC、ROS或真实驱动；struct测试证明float32表示处理，不代替目标环境验收。此前已定位的非空core运动场景仍因原停车扫掠未知区未成功，本轮没有修改或宣称解决该可用性限制，局部精度修复不能当成整条非空学习链通过。
++
++## 启动快照与精确增量
++
++启动快照 `/tmp/learning-wire-float32-start` 保存本轮源码、测试及三保护文件；本轮逐文件SHA和保护校验见 `2026-11-16-learning-float32-seam-fingerprints.json`，相对本轮启动的真实增量见 `2026-11-16-learning-float32-seam-owned.diff`。指纹不自引用，diff不包含自身或指纹文件；前轮失败、验证报告和指纹均保留历史内容。
+--- a/src/senior_control/safety/self_learning.py
++++ b/src/senior_control/safety/self_learning.py
+@@ -206,12 +206,22 @@
+             runs.append(run)
+         scan = observation.scan
+         count = len(scan.ranges)
+-        span = (count - 1) * scan.angle_increment
+-        # Both common full-turn representations are accepted: periodic samples
+-        # and an inclusive duplicate endpoint. This is sampling topology, not a
+-        # new angular connection threshold; ulps only absorb float roundoff.
+-        rounding = 4 * math.ulp(2 * math.pi)
+-        complete = -rounding <= 2 * math.pi - span <= scan.angle_increment + rounding
++        step = scan.angle_increment
++        span = (count - 1) * step
++        periodic_span = count * step
++        # LaserScan.angle_increment crosses the wire as float32. Propagate its
++        # half-ulp quantization interval through BOTH endpoint conventions;
++        # binary64 arithmetic roundoff alone cannot cover n accumulated errors.
++        # The float32 subnormal spacing is 2**-149. angle_min cancels from the
++        # relative span, so its wire quantization does not enlarge this budget.
++        step_error = math.ldexp(1.0, max(-149, math.frexp(step)[1] - 24)) / 2
++        arithmetic_error = math.ulp(span) + math.ulp(periodic_span) + math.ulp(math.tau)
++        complete = (
++            math.isfinite(span)
++            and math.isfinite(periodic_span)
++            and span <= math.tau + (count - 1) * step_error + arithmetic_error
++            and periodic_span >= math.tau - count * step_error - arithmetic_error
++        )
+         if (
+             len(runs) > 1
+             and complete
+--- a/tests/unit/test_learning_surface_review.py
++++ b/tests/unit/test_learning_surface_review.py
+@@ -105,3 +105,62 @@
+     model = learn(frames)
+     assert model.validate() == 3
+     assert set(model.learned) == {(0.0, 0.15), (0.0, 0.8), (0.0, 0.16)}
++
++
++def wire_float32(value):
++    import struct
++
++    return struct.unpack("f", struct.pack("f", value))[0]
++
++
++def wire_seam_observation(count, step, *, inclusive=False):
++    ranges = [float("nan")] * count
++    ranges[0], ranges[1] = wire_float32(0.4), wire_float32(0.5)
++    if inclusive:
++        ranges[-2], ranges[-1] = wire_float32(0.15), wire_float32(0.4)
++    else:
++        ranges[-1] = wire_float32(0.15)
++    scan = replace(
++        dense_surface().scan,
++        ranges=tuple(ranges),
++        angle_min=wire_float32(-math.pi),
++        angle_increment=step,
++        range_min=wire_float32(0.05),
++        range_max=wire_float32(20),
++    )
++    return filter_self(scan, DeviceProfile(footprint=BOUNDARY))
++
++
++@pytest.mark.parametrize("count", [720, 1080, 1440])
++@pytest.mark.parametrize("inclusive", [False, True])
++def test_wire_float32_full_turn_preserves_seam_connection(count, inclusive):
++    step = wire_float32(math.tau / (count - 1 if inclusive else count))
++    observation = wire_seam_observation(count, step, inclusive=inclusive)
++    model = learn([observation] * 12)
++    assert model.validate() == (4 if inclusive else 3)
++    result = model.filter(observation, provisional=False)
++    assert result.rays[1].kind == "self"
++    assert all(r.kind == "self" for r in result.rays if r.endpoint is not None)
++
++
++@pytest.mark.parametrize("count", [720, 1080, 1440])
++@pytest.mark.parametrize("partial", ["270_degrees", "one_missing_sample", "beyond_wire_error"])
++def test_wire_float32_partial_fov_does_not_join_seam(count, partial):
++    full_step = wire_float32(math.tau / count)
++    if partial == "270_degrees":
++        step = wire_float32(1.5 * math.pi / (count - 1))
++    elif partial == "one_missing_sample":
++        count -= 1
++        step = full_step
++    else:
++        # One lower adjacent float32 value is beyond the full-turn step's
++        # rounding interval, not a permissible extra angular connection gap.
++        import struct
++
++        bits = struct.unpack("I", struct.pack("f", full_step))[0]
++        step = struct.unpack("f", struct.pack("I", bits - 1))[0]
++    observation = wire_seam_observation(count, step)
++    model = learn([observation] * 12)
++    assert model.validate() == 1
++    result = model.filter(observation, provisional=False)
++    assert result.rays[1].kind == "hit" and result.rays[-1].kind == "self"

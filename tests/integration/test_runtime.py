@@ -45,7 +45,7 @@ async def test_slow_ros_does_not_block_heartbeat() -> None:
     supervisor = Supervisor(
         send_heartbeat=heartbeat,
         call_ros=slow_ros,
-        heartbeat_seconds=0.02,
+        heartbeat_ms=20,
     )
     async with supervisor:
         pending = asyncio.ensure_future(supervisor.request_ros("get_state"))
@@ -59,7 +59,7 @@ async def test_slow_ros_does_not_block_heartbeat() -> None:
     assert "rclpy" not in sys.modules
 
 
-async def test_background_failure_revokes_motion() -> None:
+async def test_background_failure_stops_only_its_watcher() -> None:
     delivered: list[tuple[float, float]] = []
     published: list[tuple[float, float]] = []
     fail = asyncio.Event()
@@ -84,7 +84,7 @@ async def test_background_failure_revokes_motion() -> None:
         send_heartbeat=heartbeat,
         call_ros=ros,
         background={"scan": watcher},
-        heartbeat_seconds=0.02,
+        heartbeat_ms=20,
     )
     async with supervisor:
         assert supervisor.motion_allowed is True
@@ -94,7 +94,7 @@ async def test_background_failure_revokes_motion() -> None:
         fail.set()
         await settle(0.1)
 
-        assert supervisor.motion_allowed is False
+        assert supervisor.motion_allowed is True
         await settle(0.1)
         assert delivered == []
         assert published == []
@@ -127,8 +127,8 @@ async def test_auth_failure_does_not_retry_forever() -> None:
         send_heartbeat=heartbeat,
         call_ros=ros,
         connect=rejected,
-        heartbeat_seconds=0.02,
-        retry_delay=0.01,
+        heartbeat_ms=20,
+        retry_delay_ms=10,
     )
     async with denied:
         await settle(0.3)
@@ -140,8 +140,8 @@ async def test_auth_failure_does_not_retry_forever() -> None:
         send_heartbeat=heartbeat,
         call_ros=ros,
         connect=flaky,
-        heartbeat_seconds=0.02,
-        retry_delay=0.01,
+        heartbeat_ms=20,
+        retry_delay_ms=10,
         max_retry_delay=0.02,
     )
     async with retrying:
@@ -150,46 +150,27 @@ async def test_auth_failure_does_not_retry_forever() -> None:
         assert retrying.state == "reconnecting"
 
 
-async def test_shutdown_when_heartbeat_cancellation_is_swallowed(monkeypatch) -> None:
-    import senior_control.runtime.supervisor as module
-
+async def test_shutdown_when_heartbeat_cancellation_is_swallowed() -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
-    original_wait_for = asyncio.wait_for
 
-    async def swallowed(awaitable, timeout):
-        result = await original_wait_for(awaitable, timeout)
-        entered.set()  # the inner heartbeat has completed before shutdown cancels its waiter
+    async def beat() -> None:
+        entered.set()
         try:
             await release.wait()
         except asyncio.CancelledError:
-            return result  # //Compatible: simulate the Python 3.10 wait_for cancellation race.
-        return result
-
-    async def beat() -> None:
-        pass
+            return  # A transport may finish while shutdown cancels the send.
 
     async def ros(name: str) -> None:
         pass
 
-    async def sink(vx: float, wz: float) -> None:
-        pass
-
-    monkeypatch.setattr(module.asyncio, "wait_for", swallowed)
-    supervisor = Supervisor(
-        send_heartbeat=beat,
-        call_ros=ros,
-        heartbeat_seconds=60,
-    )
+    supervisor = Supervisor(send_heartbeat=beat, call_ros=ros, heartbeat_ms=60000)
     await supervisor.__aenter__()
     await entered.wait()
     close = asyncio.create_task(supervisor.__aexit__(None, None, None))
     done, _ = await asyncio.wait({close}, timeout=0.5)
-    if close not in done:
-        for task in supervisor._tasks:
-            task.cancel()
-        await close
     assert close in done
+    await close
 
 
 async def test_shutdown_reports_stubborn_background_within_deadline() -> None:
@@ -217,7 +198,7 @@ async def test_shutdown_reports_stubborn_background_within_deadline() -> None:
         send_heartbeat=beat,
         call_ros=ros,
         background={"stubborn": stubborn},
-        shutdown_timeout=0.05,
+        shutdown_timeout_ms=50,
     )
     await supervisor.__aenter__()
     await entered.wait()

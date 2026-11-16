@@ -1,0 +1,20 @@
+AT 2026-11-16T18:40:40.750582+00:00
+CWD /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed
+COMMAND [".venv/bin/pytest", "-q", "-p", "no:cacheprovider", "--tb=short", "--junitxml=docs/testing/2026-11-17-final-review-fixes-evidence/pytest-unit-unrestricted.xml", "--basetemp=/tmp/final-review-fixes-pytest-unit-unrestricted", "--durations=10", "tests/unit/test_agent_config.py", "tests/unit/test_limited_manual_rearm.py", "tests/unit/test_motion_core_event_time.py", "tests/unit/test_websocket_link.py", "tests/unit/test_heartbeat_wire.py"]
+.........................................                                [100%]
+- generated xml file: /Users/zhangshunjun/workspace/orca/senior-robot-control/fix-degraded-drive-speed/docs/testing/2026-11-17-final-review-fixes-evidence/pytest-unit-unrestricted.xml -
+============================= slowest 10 durations =============================
+0.61s call     tests/unit/test_limited_manual_rearm.py::test_static_stop_model_does_not_manufacture_raw_stillness
+0.44s call     tests/unit/test_limited_manual_rearm.py::test_completed_stop_uses_raw_wheel_imu_stillness_without_body
+0.42s call     tests/unit/test_limited_manual_rearm.py::test_epoch_change_and_missing_model_remove_permission
+0.05s call     tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[True]
+0.05s call     tests/unit/test_motion_core_event_time.py::test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_clock_fault
+0.04s call     tests/unit/test_motion_core_event_time.py::test_real_sampled_clock_rollback_rejects_without_clamping[t1]
+0.04s call     tests/unit/test_motion_core_event_time.py::test_unified_feedback_does_not_repeat_pair_qualification_at_output
+0.04s call     tests/unit/test_motion_core_event_time.py::test_real_sampled_clock_rollback_rejects_without_clamping[t2]
+0.04s setup    tests/unit/test_motion_core_event_time.py::test_physical_stop_fault_then_exit_expiry_applies_feedback_loss_without_clock_fault
+0.03s call     tests/unit/test_agent_config.py::test_composition_starts_reporting_without_adapter_identity[False]
+41 passed in 2.60s
+
+EXIT 0
+ELAPSED 3.1774836249824148

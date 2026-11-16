@@ -32,7 +32,6 @@ class RgbdProducerEngine:
         binding: StaticBinding,
         *,
         registration: str,
-        fresh_after_ros_ns: int,
         fresh_after_steady: float,
         generation: int,
         sequence_floor: int,
@@ -45,14 +44,13 @@ class RgbdProducerEngine:
                 or sequence_floor < retained.sequence_frontier
             ):
                 raise ValueError("invalid_recovery_frontier")
-            retained.ledger.advance_fresh_floor(fresh_after_ros_ns, fresh_after_steady)
+            retained.ledger.advance_fresh_floor(fresh_after_steady)
             retained.claimed = True
         self.joiner = retained.joiner if retained is not None else CaptureJoiner(capacity=4)
         self.coordinator = RgbdCoordinator(
             profile,
             binding,
             registration=registration,
-            fresh_after_ros_ns=fresh_after_ros_ns,
             fresh_after_steady=fresh_after_steady,
             generation=generation,
             sequence_floor=sequence_floor,

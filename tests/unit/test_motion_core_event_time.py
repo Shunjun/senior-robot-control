@@ -65,8 +65,8 @@ def test_unified_feedback_does_not_repeat_pair_qualification_at_output(rig, monk
     rig.core.sensors.estimator.invalidate("laser")
     snapshot = rig.core._snapshot
 
-    def bounded(*args):
-        ctx = snapshot(*args)
+    def bounded(*args, visibility=None):
+        ctx = snapshot(*args, visibility=visibility)
         return replace(
             ctx,
             envelope=replace(

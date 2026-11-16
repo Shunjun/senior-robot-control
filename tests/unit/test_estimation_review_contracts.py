@@ -7,6 +7,7 @@ import pytest
 from control_process_test_support import read_inputs, read_observation
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from source_time_test_support import capture_time, synthetic_domain, wire_time  # noqa: F401
 from test_reference_nanosecond_boundary import replay  # noqa: F401
 from test_unified_estimator import observation
 
@@ -54,8 +55,18 @@ def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
     s.ingest_observation(late, 10, 20)
     bad = replace(
         observation("imu", (None, None, 0.1)),
-        roots=(replace(late.roots[0], family="imu", stamp_ros=10.2, received_ros=10.2),),
+        roots=(
+            replace(
+                late.roots[0],
+                family="imu",
+                stamp_ros=10.2,
+                received_ros=10.2,
+                received_steady=20.2,
+                measurement_steady=20.2,
+            ),
+        ),
         measured_ros=10.2,
+        measured_steady=20.2,
     )
     with pytest.raises(ValueError):
         s.ingest_observation(bad, 10, 20)
@@ -65,7 +76,7 @@ def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
     assert out["streams"]["sensor.raw.laser"]["over_hard"] == 1
     assert "sensor.raw.imu" not in out["streams"]
     assert out["sensor_results"]["raw.imu.invalid_time"] == 1
-    assert out["sensor_results"]["use.laser.expired"] == 1
+    assert out["sensor_results"]["raw.laser.expired"] == 2  # two attempts, one original age sample
 
 
 def test_scan_reuse_has_one_raw_and_each_attempted_use_age(replay, monkeypatch):  # noqa: F811
@@ -103,26 +114,37 @@ def test_relative_integration_accumulates_known_motion_errors():
     p = PoseEstimation()
     p.advance(e.estimate(10, 20))
     p.advance(e.estimate(10.2, 20.2))
-    r = p.at(10.2, now_ros=10.2, now_steady=20.2, motion=e.estimate(10.2, 20.2))
+    r = p.at(
+        10.2,
+        now_ros=10.2,
+        now_steady=20.2,
+        motion=e.estimate(10.2, 20.2),
+        measurement_steady=(10.2) + 10.0,
+    )
     assert r.error_m is not None and r.error_m >= 0.04
     assert r.error_yaw_rad is not None and r.error_yaw_rad >= 0.06 - 1e-12
 
 
-def test_actual_scan_space_keeps_unknown_pose_error_and_uses_relative_prediction(replay):  # noqa: F811
+def test_actual_scan_space_keeps_unknown_absolute_error_without_host_integration_during_sim_pause(
+    replay,  # noqa: F811
+):
     c = replay.core
     read_inputs(c, replay.clock.steady)
     first, _ = read_observation(c, replay.clock.steady)
     initial = c._space_estimate
     assert initial.unknown_pose_sources == ("scan",)
-    assert initial.alignment_error_m is None
-    assert initial.software_alignment_error_m > 0
+    assert c._perception_pose.error_m is None
+    assert initial.alignment_error_m == 0
+    assert initial.software_alignment_error_m == 0
     replay.clock.ns += 300_000_000
     replay.clock.steady += 0.3
     read_inputs(c, replay.clock.steady)
     later, _ = read_observation(c, replay.clock.steady)
-    assert c._space_estimate.alignment_error_m is None
-    assert c._space_estimate.software_alignment_error_m > initial.software_alignment_error_m
-    assert later.free_space.area < first.free_space.area
+    assert c._space_estimate.unknown_pose_sources == ("scan",)
+    assert c._space_estimate.alignment_error_m == 0
+    assert c._space_estimate.software_alignment_error_m == 0
+    assert later.free_space.area == first.free_space.area
+    assert later.deadline_steady == first.deadline_steady
 
 
 @pytest.mark.parametrize("age", [0.3, 0.7, 0.999])
@@ -138,16 +160,18 @@ def test_current_independent_projection_keeps_raw_support_and_error_in_risk(repl
                 observation("laser", (0.2, None, 0.1), stamp=t).roots[0],
                 received_ros=t,
                 received_steady=now,
+                measurement_steady=now,
             ),
         ),
         error=(0.2, None, 0.3),
         independent=(True, False, True),
+        measured_steady=now,
     )
     s.ingest_observation(raw, t, now)
     replay.clock.ns = round((t + age) * 1e9)
     replay.clock.steady += age
     ref, body, wheel = read_inputs(c, replay.clock.steady)
-    assert ref["start_ros"] == ref["end_ros"] == t
+    assert ref["start_steady"] == ref["end_steady"] == now
     from test_directional_constraints import scene
 
     ctx = c._snapshot(ref, wheel, replay.clock.steady, scene(replay.clock.steady), Pose2D(0, 0, 0))
@@ -164,9 +188,18 @@ def test_common_unknown_absolute_anchor_cancels_but_motion_error_does_not():
     e.ingest(raw)
     motion = e.estimate(10, 20)
     p = PoseEstimation()
-    p.ingest(PoseObservation("gps", Pose2D(4, 2, 0.2), 9.5, raw.roots))
-    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion)
-    current = p.at(10, now_ros=10, now_steady=20, motion=motion)
+    p.ingest(
+        PoseObservation(
+            "gps",
+            Pose2D(4, 2, 0.2),
+            9.5,
+            raw.roots,
+            measurement_steady=(raw.roots)[0].measurement_steady,
+            measurement=(raw.roots)[0].coordinate,
+        )
+    )
+    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion, measurement_steady=(9.5) + 10.0)
+    current = p.at(10, now_ros=10, now_steady=20, motion=motion, measurement_steady=(10) + 10.0)
     assert old.error_m is current.error_m is None
     relative = p.relative_error(old, current)
     assert relative.position_m > 0 and relative.yaw_rad > 0
@@ -224,13 +257,13 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
         child_frame_id="base_link",
         twist=N(twist=N(linear=N(x=0.1), angular=N(z=0.1))),
     )
-    core.wheel(msg, provenance, 10, 20, now_steady=20)
+    core.wheel(msg, provenance, 10, 20, timing=capture_time(19.8, tick=9.8), now_steady=20)
     bridge = object.__new__(adapter.NativeObservationRosBridge)
     bridge.core = core
     bridge.node = N(get_clock=lambda: N(now=lambda: N(nanoseconds=11_000_000_000)))
     before = core._sequences.copy()
     bridge._record_rejected_receipt(
-        msg,
+        N(data=msg, timing=wire_time(19.8, tick=9.8)),
         dict(
             publisher_gid=b"wheel",
             received_timestamp=10_000_000_000,
@@ -258,9 +291,11 @@ def test_steady_elapsed_prediction_error_is_preserved_when_ros_is_paused(replay)
                 observation("laser", (0.2, None, 0.1), stamp=5).roots[0],
                 received_ros=5,
                 received_steady=now,
+                measurement_steady=now,
             ),
         ),
         independent=(True, False, True),
+        measured_steady=now,
     )
     s.ingest_observation(raw, 5, now)
     s.estimate(5, now + 0.7)
@@ -302,10 +337,19 @@ def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose
     motion = e.estimate(10, 20)
     p = PoseEstimation()
     p.ingest(
-        PoseObservation("gps", Pose2D(0, 0, 0), 9.5, raw.roots, error_m=0.0, error_yaw_rad=0.2)
+        PoseObservation(
+            "gps",
+            Pose2D(0, 0, 0),
+            9.5,
+            raw.roots,
+            error_m=0.0,
+            error_yaw_rad=0.2,
+            measurement_steady=(raw.roots)[0].measurement_steady,
+            measurement=(raw.roots)[0].coordinate,
+        )
     )
-    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion)
-    current = p.at(10, now_ros=10, now_steady=20, motion=motion)
+    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion, measurement_steady=(9.5) + 10.0)
+    current = p.at(10, now_ros=10, now_steady=20, motion=motion, measurement_steady=(10) + 10.0)
     relative = p.relative_error(old, current)
     assert current.error_m >= 0.1 + current.prediction_error.position_m - 1e-12
     assert relative.position_m == current.prediction_error.position_m
@@ -319,9 +363,22 @@ def test_interval_projection_support_and_software_error_are_not_expanded_twice(r
     o = replace(
         o,
         roots=(
-            replace(o.roots[0], stamp_ros=4.8, received_ros=5.0, received_steady=now),
-            replace(o.roots[0], stamp_ros=5.0, received_ros=5.0, received_steady=now),
+            replace(
+                o.roots[0],
+                stamp_ros=4.8,
+                received_ros=5.0,
+                received_steady=now,
+                measurement_steady=now - 0.2,
+            ),
+            replace(
+                o.roots[0],
+                stamp_ros=5.0,
+                received_ros=5.0,
+                received_steady=now,
+                measurement_steady=now,
+            ),
         ),
+        measured_steady=now - 0.1,
         interval_half_s=0.1,
         independent=(True, False, True),
     )
@@ -329,7 +386,7 @@ def test_interval_projection_support_and_software_error_are_not_expanded_twice(r
     replay.clock.ns = 5_500_000_000
     replay.clock.steady += 0.5
     ref, body, wheel = read_inputs(c, replay.clock.steady)
-    assert ref["start_ros"] == pytest.approx(4.8) and ref["end_ros"] == 5.0
+    assert ref["start_steady"] == pytest.approx(now - 0.2) and ref["end_steady"] == now
     axis = s.latest.independent_axes[0]
     # Oldest original capture age=.7s; interval width is already represented.
     assert axis.prediction_error == pytest.approx(0.7 * s.estimator.acceleration[0])
@@ -345,9 +402,7 @@ def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
     from senior_control.sensors.policy import default_policy
 
     d, emitted = reporter()
-    age = default_policy().age(
-        stamp_ros=9.5, received_ros=10, received_steady=20, now_ros=10, now_steady=20
-    )
+    age = default_policy().age(measured_steady=19.5, received_steady=20, now_steady=20)
     d.sensor_attempt("wheel", "raw", age, ("accepted",), key=("boot", 1))
     d.sensor_attempt("wheel", "raw", age, ("rejected",), key=("boot", 1))
     first = summary(d, emitted)
@@ -383,9 +438,7 @@ def test_space_positional_api_and_bounded_diagnostic_registrations():
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append(data), max_streams=4)
     d.pump(0)
-    age = default_policy().age(
-        stamp_ros=9.5, received_ros=10, received_steady=20, now_ros=10, now_steady=20
-    )
+    age = default_policy().age(measured_steady=19.5, received_steady=20, now_steady=20)
     for n in range(100):
         d.sensor_attempt(f"bounded_{n}", "raw", age, ("rejected",), key=n)
     d.pump(5)

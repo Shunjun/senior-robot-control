@@ -163,7 +163,7 @@ def test_controller_mismatched_evaluation_uses_original_defensive_path(mismatch,
 
 def test_scheduler_perception_fallback_and_worker_never_retain_evaluation(monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
     newest = snapshot(0.2)
     q.update(newest, 0.2)
     old = snapshot(0.1)
@@ -227,7 +227,7 @@ def test_controller_decision_trajectory_and_deadlines_match_defensive_path(waiti
 
 def test_worker_admission_shares_stop_without_renewing_lease(monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
     first = snapshot(0)
     q.update(first, 0, evaluation=e.evaluate(first, 0))
     w.complete()
@@ -248,7 +248,7 @@ def test_worker_admission_shares_stop_without_renewing_lease(monkeypatch):
 @pytest.mark.parametrize("cause", ["expired", "veto"])
 def test_scheduler_no_permit_still_normalizes_in_controller_with_one_base_stop(cause, monkeypatch):
     e, w = engine(), Worker()
-    q = ConstraintScheduler(e, w, worker_budget_s=0.6)
+    q = ConstraintScheduler(e, w, worker_budget_ms=600)
 
     def tracking_context(now, target=None):
         ctx = snapshot(now, target=Velocity(0.6, 0) if target is None else target)
@@ -372,6 +372,7 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_response(
     replay, perception_failure
 ):
+    from source_time_test_support import capture_time
     from test_unified_motion_runtime import point
 
     from senior_control.motion.observations import Source
@@ -386,10 +387,22 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     core._observation = observation
     t = clock.ns / 1e9
     core.node._reception_test.sensors.ingest(
-        point(Source.WHEEL, t, clock.steady, (0.8, 0.0)), t, clock.steady, t
+        replace(
+            point(Source.WHEEL, t, clock.steady, (0.8, 0.0)),
+            measurement=capture_time(clock.steady, tick=t).measurement,
+        ),
+        t,
+        clock.steady,
+        t,
     )
     core.node._reception_test.sensors.ingest(
-        point(Source.IMU, t, clock.steady, (0.0,)), t, clock.steady, t
+        replace(
+            point(Source.IMU, t, clock.steady, (0.0,)),
+            measurement=capture_time(clock.steady, tick=t).measurement,
+        ),
+        t,
+        clock.steady,
+        t,
     )
     publish_inputs(core, clock.steady, clock.ns / 1e9)
     core.tick()
@@ -400,7 +413,13 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     clock.steady = deadline
     clock.ns = round((t + 1.0) * 1e9)
     core.node._reception_test.sensors.ingest(
-        point(Source.IMU, t + 1, clock.steady, (0.0,), 2), t + 1, clock.steady, t + 1
+        replace(
+            point(Source.IMU, t + 1, clock.steady, (0.0,), 2),
+            measurement=capture_time(clock.steady, tick=t + 1).measurement,
+        ),
+        t + 1,
+        clock.steady,
+        t + 1,
     )
     publish_inputs(core, clock.steady, clock.ns / 1e9)
     core.tick()

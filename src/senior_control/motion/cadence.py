@@ -4,10 +4,10 @@ import math
 
 
 class ControlCadence:
-    def __init__(self, period_s: float = 0.05) -> None:
-        if not math.isfinite(period_s) or period_s <= 0:
+    def __init__(self, period_ms: float = 50) -> None:
+        if not math.isfinite(period_ms) or period_ms <= 0:
             raise ValueError("invalid_control_period")
-        self.period = period_s
+        self.period = period_ms / 1000
         self.origin: float | None = None
         self.next_slot = 0
         self.last: float | None = None

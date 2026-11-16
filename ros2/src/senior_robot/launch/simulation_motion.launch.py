@@ -5,9 +5,11 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
+    RegisterEventHandler,
     SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -15,6 +17,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
 
 
@@ -69,6 +72,7 @@ def generate_launch_description():
     )
     return LaunchDescription(
         [
+            RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("robot_id"),
             DeclareLaunchArgument("headless", default_value="true"),

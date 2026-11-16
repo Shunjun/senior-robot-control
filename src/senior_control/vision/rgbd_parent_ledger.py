@@ -34,20 +34,15 @@ def _lineage(headers: tuple[RawCaptureHeader, ...]) -> tuple[tuple[object, ...],
 
 
 class CaptureLedger:
-    def __init__(
-        self, *, capacity: int, fresh_after_ros_ns: int, fresh_after_steady: float
-    ) -> None:
+    def __init__(self, *, capacity: int, fresh_after_steady: float) -> None:
         if type(capacity) is not int or not 1 <= capacity <= 64:
             raise ValueError("invalid_capacity")
         if (
-            type(fresh_after_ros_ns) is not int
-            or fresh_after_ros_ns <= 0
-            or type(fresh_after_steady) not in (int, float)
+            type(fresh_after_steady) not in (int, float)
             or not math.isfinite(fresh_after_steady)
             or fresh_after_steady <= 0
         ):
             raise ValueError("invalid_capture_floor")
-        self._fresh_after_ros_ns = fresh_after_ros_ns
         self._fresh_after_steady = fresh_after_steady
         self.capacity = capacity
         self.generation = 1
@@ -61,33 +56,26 @@ class CaptureLedger:
         self._retired_boots: set[str] = set()
         self._tickets: dict[int, CaptureTicket] = {}
         self._closed = False
-        self._last_clock: tuple[int, float] | None = None
+        self._last_clock: float | None = None
         self._binding_generation = 0
 
     def invalidate(self) -> None:
         self.generation += 1
         self._tickets.clear()
 
-    def advance_fresh_floor(self, ros_ns: int, steady: float) -> None:
+    def advance_fresh_floor(self, steady: float) -> None:
         """Retire live tickets without discarding source history after local loss."""
         if (
             self._closed
-            or type(ros_ns) is not int
-            or ros_ns <= 0
             or type(steady) not in (int, float)
             or not math.isfinite(steady)
             or steady <= 0
-            or ros_ns < self._fresh_after_ros_ns
             or steady < self._fresh_after_steady
-            or (
-                self._last_clock is not None
-                and (ros_ns < self._last_clock[0] or steady < self._last_clock[1])
-            )
+            or (self._last_clock is not None and steady < self._last_clock)
         ):
             self.invalidate()
             self._closed = True
             raise ValueError("invalid_fresh_floor")
-        self._fresh_after_ros_ns = ros_ns
         self._fresh_after_steady = steady
         self.invalidate()
 
@@ -104,23 +92,16 @@ class CaptureLedger:
         return not self._closed
 
     def observe_clock(self, now_ros_ns: int, now_steady: float) -> bool:
-        if (
-            type(now_ros_ns) is not int
-            or now_ros_ns <= 0
-            or type(now_steady) not in (float, int)
-            or not math.isfinite(now_steady)
-            or now_steady <= 0
-        ):
+        if type(now_steady) not in (float, int) or not math.isfinite(now_steady) or now_steady <= 0:
             self.invalidate()
             self._closed = True
             return False
         if self._last_clock is not None:
-            ros, steady = self._last_clock
-            if now_ros_ns < ros or now_steady < steady:
+            if now_steady < self._last_clock:
                 self.invalidate()
                 self._closed = True
                 return False
-        self._last_clock = (now_ros_ns, now_steady)
+        self._last_clock = now_steady
         return not self._closed
 
     def offer(
@@ -144,12 +125,7 @@ class CaptureLedger:
         ):
             self.invalidate()
             return None
-        if any(
-            h.stamp_ns <= self._fresh_after_ros_ns
-            or h.received_ros_ns <= self._fresh_after_ros_ns
-            or h.received_steady <= self._fresh_after_steady
-            for h in headers
-        ):
+        if any(h.start_steady <= self._fresh_after_steady for h in headers):
             return None
         source = _lineage(headers)
         if (
@@ -205,8 +181,7 @@ class CaptureLedger:
             self._lineage, self._frontier = source, None
         if self._frontier is not None and any(
             b.sequence <= a.sequence
-            or b.stamp_ns <= a.stamp_ns
-            or b.received_ros_ns <= a.received_ros_ns
+            or b.measurement_steady <= a.measurement_steady
             or b.received_steady <= a.received_steady
             for a, b in zip(self._frontier, headers, strict=True)
         ):
@@ -283,6 +258,7 @@ class CaptureLedger:
             and first.generation == second.generation
             and first.binding_generation == second.binding_generation
             and all(
-                a.stamp_ns < b.stamp_ns for a, b in zip(first.headers, second.headers, strict=True)
+                a.measurement_steady < b.measurement_steady
+                for a, b in zip(first.headers, second.headers, strict=True)
             )
         )
