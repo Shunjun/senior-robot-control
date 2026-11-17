@@ -71,7 +71,7 @@ class NativeReceipt : public rclcpp::Node {
       else throw std::invalid_argument("unsupported receipt type");
     }
     timer_ = create_wall_timer(20ms, [this]() {
-      observe_clock(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns());
+      if (!observe_clock(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns())) return;
       for (size_t id = 0; id < inputs_.size(); ++id) {
         topology(id); frame(id, inputs_[id].valid ? 2 : 0, senior_motion_msgs::time::monotonic_ns(), nullptr, nullptr);
       }
@@ -85,6 +85,7 @@ class NativeReceipt : public rclcpp::Node {
     bool valid = false;
     std::optional<int64_t> latest_stamp;
     std::set<Gid> retired_gids;
+    std::string rejection_reason;
   };
   senior_motion_msgs::time::ClockTracker clock_;
   uint64_t clock_generation_ = 1;
@@ -171,15 +172,30 @@ class NativeReceipt : public rclcpp::Node {
     return m.header.frame_id.size() <= 128 && m.data.size() <= 16777216 &&
       static_cast<uint64_t>(m.info.width) * m.info.height == m.data.size();
   }
-  void observe_clock(int64_t ros, uint64_t steady) {
-    const auto observed = clock_.observe(ros, steady);
+  void reject_sample(size_t id, uint64_t received, const std::string &reason) {
+    auto &in = inputs_[id];
+    if (in.rejection_reason != reason) {
+      in.rejection_reason = reason;
+      RCLCPP_WARN(get_logger(), "native sample rejected on %s: %s", in.topic.c_str(), reason.c_str());
+    }
+    frame(id, 0, received, nullptr, nullptr);
+  }
+  bool observe_clock(int64_t ros, uint64_t steady) {
+    senior_motion_msgs::time::ClockObservation observed;
+    try {
+      observed = clock_.observe(ros, steady);
+    } catch (const std::invalid_argument &error) {
+      for (size_t id = 0; id < inputs_.size(); ++id) reject_sample(id, steady, error.what());
+      return false;
+    }
     clock_generation_ = observed.generation;
-    if (!observed.discontinuity) return;
+    if (!observed.discontinuity) return true;
     for (size_t id = 0; id < inputs_.size(); ++id) {
       inputs_[id].latest_stamp.reset();
       ++inputs_[id].generation;
       frame(id, 0, steady, nullptr, nullptr);
     }
+    return true;
   }
   static int64_t stamp_ns(const builtin_interfaces::msg::Time &stamp) {
     if (stamp.sec < 0 || stamp.nanosec >= 1000000000u)
@@ -213,11 +229,11 @@ class NativeReceipt : public rclcpp::Node {
       [this, id](typename Message::ConstSharedPtr msg, const rclcpp::MessageInfo &info) {
         const auto received = senior_motion_msgs::time::monotonic_ns();  // original native callback receipt, before IPC/serialization
         const auto received_ros = get_clock()->now().nanoseconds();
-        observe_clock(received_ros, received);
+        if (!observe_clock(received_ros, received)) return;
         if (!topology(id)) return;
         const auto &native = info.get_rmw_message_info();
         if (!std::equal(inputs_[id].gid.begin(), inputs_[id].gid.end(), native.publisher_gid.data)) return;
-        if (!bounded(*msg)) { frame(id, 0, received, nullptr, nullptr); return; }
+        if (!bounded(*msg)) { reject_sample(id, received, "raw_dimensions_invalid"); return; }
         std::optional<senior_motion_msgs::time::SampleTime> sample;
         uint8_t time_mode = 0;
         try {
@@ -226,7 +242,7 @@ class NativeReceipt : public rclcpp::Node {
           if (stamp) {
             if (in.latest_stamp && *stamp == *in.latest_stamp) return;
             if (in.latest_stamp && *stamp < *in.latest_stamp) {
-              frame(id, 0, received, nullptr, nullptr);
+              reject_sample(id, received, "raw_stamp_out_of_order");
               return;
             }
             sample = senior_motion_msgs::time::map_sample(*stamp, received_ros, received,
@@ -237,10 +253,11 @@ class NativeReceipt : public rclcpp::Node {
             sample = derived_sample(*msg);
             if (sample) time_mode = 2;
           }
-        } catch (const std::invalid_argument &) {
-          frame(id, 0, received, nullptr, nullptr);
+        } catch (const std::invalid_argument &error) {
+          reject_sample(id, received, error.what());
           return;
         }
+        inputs_[id].rejection_reason.clear();
         rclcpp::SerializedMessage serialized;
         rclcpp::Serialization<Message> serializer;
         serializer.serialize_message(msg.get(), &serialized);

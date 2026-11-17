@@ -52,7 +52,8 @@ public:
     const auto & header = scan.capture;
     if (!header.valid || header.sequence == 0 || scan.ranges.size() > 2048 ||
         scan.intensities.size() > 2048 || !std::isfinite(now) ||
-        header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns || now < steady_seconds(header.received_steady_ns) ||
+        header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns ||
+        now < steady_seconds(header.received_steady_ns) ||
         now - steady_seconds(header.sample_steady_ns) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     expire(now);

@@ -53,7 +53,13 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
   if (closed_) {
     return false;
   }
-  const auto observed = clock_.observe(node_.get_clock()->now().nanoseconds(), now);
+  senior_motion_msgs::time::ClockObservation observed;
+  try {
+    observed = clock_.observe(node_.get_clock()->now().nanoseconds(), now);
+  } catch (const std::invalid_argument &) {
+    retire_source();
+    return false;
+  }
   if (observed.discontinuity || now < last_steady_ns_ || (now == 0 && source_)) {
     retire_source();
     return false;

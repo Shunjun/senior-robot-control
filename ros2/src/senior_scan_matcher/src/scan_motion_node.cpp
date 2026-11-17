@@ -136,7 +136,13 @@ private:
     output.header.stamp = capture.stamp;
     output.header.frame_id = body_;
     const auto current_steady = senior_motion_msgs::time::monotonic_ns();
-    const auto local_clock = clock_.observe(get_clock()->now().nanoseconds(), current_steady);
+    senior_motion_msgs::time::ClockObservation local_clock;
+    try {
+      local_clock = clock_.observe(get_clock()->now().nanoseconds(), current_steady);
+    } catch (const std::invalid_argument & error) {
+      invalidate(output, error.what(), true);
+      return;
+    }
     if (local_clock.discontinuity) {
       local_receipt_floor_ns_ = current_steady;
       invalidate(output, "clock_rollback", true);

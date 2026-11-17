@@ -226,8 +226,14 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
 
 bool RawReceipt::clock_ok()
 {
-  const auto observed = clock_.observe(get_clock()->now().nanoseconds(),
-                                      senior_motion_msgs::time::monotonic_ns());
+  senior_motion_msgs::time::ClockObservation observed;
+  try {
+    observed = clock_.observe(get_clock()->now().nanoseconds(),
+                              senior_motion_msgs::time::monotonic_ns());
+  } catch (const std::invalid_argument & error) {
+    invalidate_all(error.what());
+    return false;
+  }
   clock_generation_ = observed.generation;
   if (observed.discontinuity) {
     invalidate_all("clock_rollback");

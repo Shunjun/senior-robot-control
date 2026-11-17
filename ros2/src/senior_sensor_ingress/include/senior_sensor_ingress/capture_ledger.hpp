@@ -53,7 +53,8 @@ public:
   bool observe(size_t stream, const Header & header, double now_steady)
   {
     if (stream >= entries_.size() || !header.valid || header.sequence == 0 ||
-        !std::isfinite(now_steady) || header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns ||
+        !std::isfinite(now_steady) || header.clock_generation == 0 ||
+        header.sample_steady_ns > header.received_steady_ns ||
         now_steady < steady_seconds(header.received_steady_ns) ||
         now_steady - steady_seconds(header.sample_steady_ns) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
