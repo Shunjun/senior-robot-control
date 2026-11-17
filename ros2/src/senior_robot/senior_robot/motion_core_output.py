@@ -1112,6 +1112,49 @@ class MotionCoreOutput:
             raise ValueError(error)
         return self.controller.prepare_stop(prepared, ctx, body, wheel, now)
 
+    def _first_fault_scan_evidence(self, ctx):
+        """Report actual latest hit coordinates, not an inferred collision witness."""
+        from shapely.geometry import Point, Polygon
+
+        masked = self._latest_masked
+        body = Polygon(ctx.footprint.physical_vertices)
+        hits = [ray for ray in masked.external_hits if ray.endpoint is not None]
+        points = [(ray, Point(ray.endpoint)) for ray in hits]
+        closest = min(
+            points,
+            key=lambda row: (body.distance(row[1]), math.hypot(*row[0].endpoint)),
+            default=None,
+        )
+        view = None if self._learning_client is None else self._learning_client.view
+        evidence = dict(
+            latest_scan_source=self._latest_filtered_key[:2],
+            geometry_scan_source=None if self._perception_key is None else self._perception_key[:2],
+            learning_state=self.startup.state,
+            interior_prior_active=self.startup.provisional and view is None,
+            learned_filter_active=view is not None,
+            physical_body_xy=ctx.footprint.physical_vertices,
+            sensor_to_body=(
+                masked.scan.sensor_to_body.x,
+                masked.scan.sensor_to_body.y,
+                masked.scan.sensor_to_body.yaw,
+            ),
+            latest_external_hits=len(hits),
+            latest_self_hits=len(masked.occluded_regions),
+            latest_interior_hits=sum(body.contains(point) for _, point in points),
+            closest_latest_external_hit=None,
+        )
+        if closest is not None:
+            ray, point = closest
+            evidence["closest_latest_external_hit"] = dict(
+                ray_index=ray.index,
+                body_xy=ray.endpoint,
+                body_bearing_rad=math.atan2(point.y, point.x),
+                sensor_range_m=math.dist(ray.origin, ray.endpoint),
+                physical_body_clearance_m=body.distance(point),
+                inside_physical_body=body.contains(point),
+            )
+        return evidence
+
     def _decision_output(self, decision, body, ctx, epoch, now, *, stopping_context=None):
         reason = decision.reason
         output = Velocity(0, 0)
@@ -1141,9 +1184,12 @@ class MotionCoreOutput:
                 condition = (reason, epoch)
                 if condition != self._last_fault_condition:
                     first_fault = not self._first_fault_status
+                    scan_evidence = self._first_fault_scan_evidence(ctx) if first_fault else None
                     self._event(K.EXECUTION_FAULT, now, detail=reason)
-                    if first_fault and stopping_context is not None:
-                        self._first_fault_status.update(stopping_context)
+                    if first_fault:
+                        self._first_fault_status.update(scan_evidence)
+                        if stopping_context is not None:
+                            self._first_fault_status.update(stopping_context)
                     self._last_fault_condition = condition
         elif not decision.emergency:
             self._last_fault_condition = None
