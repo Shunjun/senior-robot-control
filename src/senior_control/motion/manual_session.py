@@ -28,7 +28,8 @@ class ManualSession:
 
     All times belong to one local steady clock; receipt and processing are distinct. Equal
     times are allowed; a backward or nonfinite clock permanently closes the
-    session. The initial lease starts at construction, even before any intent.
+    session. The initial lease starts at construction, even before any intent;
+    an explicit gesture stop suspends it until a new gesture is admitted.
     Instances are owned serially by the ingress; they are not thread-safe.
     """
 
@@ -49,6 +50,8 @@ class ManualSession:
         self._last_gesture = -1
         self._last_sequence = -1
         self._closed = False
+        self._idle = False
+        self._stopped_gesture = -1
         self._latest: AcceptedManualIntent | None = None
         self._last_received_steady: float | None = None
 
@@ -66,6 +69,21 @@ class ManualSession:
     def closed(self) -> bool:
         """Whether this authority has been permanently revoked."""
         return self._closed
+
+    @property
+    def idle(self) -> bool:
+        return self._idle
+
+    def stop(self, gesture: int, *, now_steady: float) -> bool:
+        """Fence a finished gesture without expiring idle ownership."""
+        if type(gesture) is not int or gesture < 1 or not self._live(now_steady):
+            return False
+        if gesture < self._last_gesture or gesture <= self._stopped_gesture:
+            return True
+        self._stopped_gesture = gesture
+        self._idle = True
+        self._latest = None
+        return True
 
     def accept(
         self,
@@ -92,6 +110,7 @@ class ManualSession:
         deadline = self._receipt_deadline(received, now_steady, queue_deadline_steady)
         if deadline is None:
             return False
+        self._idle = False
         self._last_gesture = intent.gesture
         self._last_sequence = intent.sequence
         self._last_received_steady = received
@@ -116,7 +135,7 @@ class ManualSession:
         return deadline
 
     def expire(self, *, now_steady: float) -> None:
-        """Close at or beyond the deadline; never renew an idle lease."""
+        """Close an interrupted active stream; stopped ownership has no TTL."""
         self._live(now_steady)
 
     def close(self) -> None:
@@ -145,7 +164,7 @@ class ManualSession:
             self.close()
             return False
         self._last_now_steady = now_steady
-        if now_steady >= self._deadline_steady:
+        if not self._idle and now_steady >= self._deadline_steady:
             self.close()
             return False
         return True
@@ -155,7 +174,11 @@ class ManualSession:
             return False
         if type(intent.gesture) is not int or type(intent.sequence) is not int:
             return False
-        if intent.gesture < 0 or intent.gesture < self._last_gesture:
+        if (
+            intent.gesture <= self._stopped_gesture
+            or intent.gesture < 0
+            or intent.gesture < self._last_gesture
+        ):
             return False
         if intent.sequence < 0 or intent.sequence <= self._last_sequence:
             return False

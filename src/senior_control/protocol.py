@@ -86,11 +86,18 @@ class SimpleEnvelope(EnvelopeBase):
     def validate_gesture(self) -> "SimpleEnvelope":
         if self.payload.gesture is not None and self.type != "drive.stop":
             raise ValueError("gesture is only supported for drive.stop")
-        if self.payload.authority_id is not None and self.type != "control.release":
-            raise ValueError("authority id is only supported for control.release")
+        if self.payload.authority_id is not None and self.type not in {"control.release", "drive.stop"}:
+            raise ValueError("authority id is only supported for control.release and drive.stop")
+        if (
+            self.type == "drive.stop"
+            and self.payload.authority_id is not None
+            and self.payload.gesture is None
+        ):
+            raise ValueError("scoped stop requires a gesture")
         if self.controller_generation is not None and self.type not in {
             "control.acquire",
             "control.release",
+            "drive.stop",
         }:
             raise ValueError("trusted controller context belongs only to manual requests")
         return self

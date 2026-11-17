@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { RobotLink } from '../../api/client';
 import type { RobotSnapshot } from '../../api/protocol';
 import { useVehicleView } from '../devices/useVehicleView';
-import { Joystick } from './Joystick';
+import { Joystick, type ReleaseReason } from './Joystick';
 import { ManualController, type ManualPhase } from './ManualController';
 import styles from './Drive.module.css';
 export interface DriveViewProps {
@@ -65,8 +65,26 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
   function change(axis: 'linear' | 'turn', value: number): void {
     values.current[axis] = value;
     const { linear, turn } = values.current;
-    if (controller?.phase === 'prepared') controller.begin(linear, turn, gear);
-    else controller?.update(linear, turn, gear);
+    controller?.update(linear, turn, gear);
+  }
+  function press(axis: 'linear' | 'turn', value: number): boolean {
+    const next = { ...values.current, [axis]: value };
+    if (controller?.phase === 'prepared') {
+      if (!controller.begin(next.linear, next.turn, gear)) return false;
+    } else if (controller?.phase === 'active') {
+      controller.update(next.linear, next.turn, gear);
+    } else return false;
+    values.current = next;
+    return true;
+  }
+  function stopGesture(reason: ReleaseReason): void {
+    if (reason === 'blur' || reason === 'hidden') {
+      release();
+      return;
+    }
+    controller?.stopGesture();
+    values.current = { linear: 0, turn: 0 };
+    reset(n => n + 1);
   }
   function release(): void {
     controller?.release();
@@ -80,7 +98,8 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
         none: '未获取控制',
         preparing: '等待车端准备',
         prepared: '已准备 · 等待新按压',
-        active: '手动会话进行中'
+        active: '手动会话进行中',
+        stopping: '正在停车 · 保留控制权'
       })[phase]}</span>
     </header>
     <div className={styles.leaseGroup}>
@@ -95,10 +114,10 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
       controller?.update(values.current.linear, values.current.turn, value);
     }}>{value === 'low' ? '低档' : '高档'}</button>)}</div>
     <div className={styles.pads}>
-      <Joystick label="前进后退摇杆" axis="vertical" hint="按住前进 / 后退，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onChange={value => change('linear', value)} onRelease={release} />
-      <Joystick label="左转右转摇杆" axis="horizontal" hint="按住转向，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onChange={value => change('turn', value)} onRelease={release} />
+      <Joystick label="前进后退摇杆" axis="vertical" hint="按住前进 / 后退，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onPress={value => press('linear', value)} onChange={value => change('linear', value)} onRelease={stopGesture} />
+      <Joystick label="左转右转摇杆" axis="horizontal" hint="按住转向，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onPress={value => press('turn', value)} onChange={value => change('turn', value)} onRelease={stopGesture} />
     </div>
-    <p className={styles.quiet}>两档只表达方向与力度。松杆关闭本次会话，再次驾驶需重新获取控制。</p>
+    <p className={styles.quiet}>两档只表达方向与力度。松杆停车并保留控制权，再次按压即可继续驾驶。</p>
     {error && <p role="alert" className={styles.failure}>{error}</p>}
   </section>;
 }
