@@ -60,7 +60,8 @@ bool valid_times(const Receipt & receipt, std::int64_t now_ros, double now_stead
          receipt.admitted_from_steady >= receipt.first_received_steady &&
          receipt.admitted_from_steady <= now_steady &&
          (receipt.sequence != receipt.first_sequence ||
-         (first == latest && receipt.first_received_steady == receipt.received_steady));
+         (receipt.first_received_ros == receipt.received_ros &&
+         receipt.first_received_steady == receipt.received_steady));
 }
 
 bool same_writer(const Receipt & first, const Receipt & latest)
