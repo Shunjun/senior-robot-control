@@ -77,94 +77,6 @@ def test_standard_stamp_mapping_retains_transport_and_queue_age():
     assert default_policy().sample_age(sample, now_steady_ns=20_800_000_000).band == "invalid"
 
 
-def test_integer_stamp_endpoints_and_local_clock_generations():
-    from senior_control.sensors.sample_time import ClockTracker, interval_ns, map_sample
-
-    epoch = 1_790_000_000_000_000_000
-    first = map_sample(
-        stamp_ns=epoch,
-        received_ros_ns=epoch + 2,
-        received_steady_ns=20_000_000_000,
-        clock_generation=1,
-    )
-    last = map_sample(
-        stamp_ns=epoch + 1,
-        received_ros_ns=epoch + 2,
-        received_steady_ns=20_000_000_000,
-        clock_generation=1,
-    )
-    assert interval_ns(first, last).end_ns - interval_ns(first, last).start_ns == 1
-    assert last.sample_steady_ns - first.sample_steady_ns == 1
-    assert interval_ns(first, first).start_ns == interval_ns(first, first).end_ns
-    with pytest.raises(ValueError, match="reversed"):
-        interval_ns(last, first)
-    tracker = ClockTracker()
-    assert tracker.observe(ros_ns=100, steady_ns=100).generation == 1
-    assert not tracker.observe(ros_ns=100, steady_ns=100).discontinuity
-    assert not tracker.observe(ros_ns=200, steady_ns=101).discontinuity
-    rollback = tracker.observe(ros_ns=199, steady_ns=102)
-    assert rollback.discontinuity and rollback.generation == 2
-    assert tracker.observe(ros_ns=200, steady_ns=101).generation == 3
-    changed = map_sample(
-        stamp_ns=epoch + 1,
-        received_ros_ns=epoch + 2,
-        received_steady_ns=20_000_000_000,
-        clock_generation=2,
-    )
-    with pytest.raises(ValueError, match="generation"):
-        interval_ns(first, changed)
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("stamp_ns", -1),
-        ("stamp_ns", 101),
-        ("stamp_ns", 1 << 63),
-        ("stamp_ns", 0.0),
-        ("stamp_ns", True),
-        ("received_ros_ns", -1),
-        ("received_ros_ns", 1 << 63),
-        ("received_steady_ns", -1),
-        ("received_steady_ns", 1 << 64),
-        ("received_steady_ns", 0),
-        ("clock_generation", -1),
-        ("clock_generation", 1 << 64),
-    ],
-)
-def test_mapping_rejects_invalid_integer_coordinates(field, value):
-    from senior_control.sensors.sample_time import map_sample
-
-    fields = dict(stamp_ns=99, received_ros_ns=100, received_steady_ns=20, clock_generation=1)
-    fields[field] = value
-    with pytest.raises(ValueError):
-        map_sample(**fields)
-
-
-def test_zero_stamp_and_full_width_integer_mapping():
-    from sensor_time_test_support import capture_fields, sample_time
-
-    zero = sample_time(stamp_ns=0, received_ros_ns=0, received_steady_ns=0)
-    assert zero.sample_steady_ns == 0
-    maximum = sample_time(
-        stamp_ns=(1 << 63) - 1,
-        received_ros_ns=(1 << 63) - 1,
-        received_steady_ns=(1 << 64) - 1,
-    )
-    assert maximum.sample_steady_ns == (1 << 64) - 1
-    fields = capture_fields(time=zero)
-    assert set(fields) == {
-        "stamp",
-        "received_ros",
-        "received_steady_ns",
-        "sample_steady_ns",
-        "clock_generation",
-    }
-    assert fields["stamp"].sec == fields["stamp"].nanosec == 0
-    with pytest.raises(ValueError):
-        default_policy().sample_age(maximum, now_steady_ns=(1 << 64) - 2)
-
-
 def test_cpp_standard_mapping_and_age_use_same_integer_contract(tmp_path):
     """Standalone arithmetic only; generated messages and ROS remain unverified."""
     import shutil
@@ -179,13 +91,7 @@ def test_cpp_standard_mapping_and_age_use_same_integer_contract(tmp_path):
 #include "senior_motion_msgs/sample_time.hpp"
 #include "senior_motion_msgs/sensor_timing.hpp"
 #include <cassert>
-#include <limits>
 using namespace senior_motion_msgs::time;
-template<class F> void invalid(F run) {
-  bool rejected = false;
-  try { run(); } catch (const std::invalid_argument &) { rejected = true; }
-  assert(rejected);
-}
 int main() {
   const auto sample = map_sample(99'800'000'000,100'000'000'000,20'000'000'000,1);
   assert(sample.sample_steady_ns == 19'800'000'000);
@@ -193,34 +99,12 @@ int main() {
   assert(policy.age_ns(sample,20'150'000'000) == 350'000'000);
   assert(policy.age_ns(sample,20'100'000'000) == policy.soft_ns);
   assert(policy.age_ns(sample,20'800'000'000) == policy.hard_ns);
-  constexpr int64_t epoch = 1'790'000'000'000'000'000;
-  const auto first = map_sample(epoch,epoch+2,20'000'000'000,1);
-  const auto last = map_sample(epoch+1,epoch+2,20'000'000'000,1);
-  const auto interval = interval_ns(first,last);
-  assert(interval.end_ns - interval.start_ns == 1);
-  assert(last.sample_steady_ns - first.sample_steady_ns == 1);
-  assert(interval_ns(first,first).start_ns == epoch);
-  assert(map_sample(0,0,0,1).sample_steady_ns == 0);
-  constexpr auto max_ros = std::numeric_limits<int64_t>::max();
-  constexpr auto max_steady = std::numeric_limits<uint64_t>::max();
-  assert(map_sample(max_ros,max_ros,max_steady,1).sample_steady_ns == max_steady);
-  invalid([] {map_sample(-1,0,10,1);});
-  invalid([] {map_sample(0,-1,10,1);});
-  invalid([] {map_sample(1,0,10,1);});
-  invalid([] {map_sample(0,100,99,1);});
-  invalid([&] {interval_ns(last,first);});
-  invalid([&] {interval_ns(first,map_sample(epoch+1,epoch+2,20'000'000'000,2));});
-  invalid([&] {policy.age_ns(sample,19'999'999'999);});
-  ClockTracker clock;
-  assert(clock.observe(100,100).generation == 1);
-  assert(!clock.observe(100,100).discontinuity);
-  assert(!clock.observe(200,101).discontinuity);
-  const auto rollback = clock.observe(199,102);
-  assert(rollback.discontinuity && rollback.generation == 2);
-  assert(clock.observe(200,101).generation == 3);
-  invalid([&] {clock.observe(-1,102);});
-  assert(clock.observe(200,101).generation == 3);
-  assert(monotonic_ns() > 0);
+  const auto later_age = policy.age_ns(sample,20'700'000'000);
+  assert(later_age == 900'000'000);
+  const auto deadline = static_cast<int64_t>(sample.sample_steady_ns) + policy.hard_ns;
+  assert(deadline == 20'800'000'000);
+  assert(20'150'000'000 + policy.hard_ns - 350'000'000 == deadline);
+  assert(20'700'000'000 + policy.hard_ns - later_age == deadline);
 }
 """)
     executable = tmp_path / "sample_time"
@@ -239,3 +123,69 @@ int main() {
         check=True,
     )
     subprocess.run([str(executable)], check=True)
+
+
+def test_fixture_shared_endpoints_and_cached_repeats_keep_original_deadline():
+    """Adjacent laser intervals share raw endpoints despite new delta sequences."""
+    import json
+    from collections import defaultdict
+    from pathlib import Path
+
+    from senior_control.sensors.sample_time import SampleTime
+
+    paths = [
+        Path("tests/fixtures") / name
+        for name in (
+            "motion_reference_backlog.json",
+            "navigation_startup_reference.json",
+            "reference_clock_frontier.json",
+            "reference_nanosecond_boundary.json",
+        )
+    ]
+    records = defaultdict(list)
+    shared = defaultdict(list)
+
+    def collect(node, path):
+        if isinstance(node, list):
+            for item in node:
+                collect(item, path)
+        elif isinstance(node, dict):
+            samples = [(row["source"], row["sample"]) for row in node.get("sources", [])]
+            samples.extend(("pose", pose) for pose in node.get("poses", []))
+            for source, sample in samples:
+                for role in ("time", "first_time", "last_time"):
+                    if role not in sample:
+                        continue
+                    record = sample[role]
+                    # These retained epochs include raw publisher GID and ingress lifecycle.
+                    # A derived interval sequence is not part of raw endpoint identity.
+                    key = source, sample["epoch"], record["clock_generation"], record["stamp_ns"]
+                    records[key].append(record)
+                    if source == "laser":
+                        shared[path.name, record["stamp_ns"]].append((role, record))
+            for item in node.values():
+                collect(item, path)
+
+    for path in paths:
+        collect(json.loads(path.read_text()), path)
+
+    assert sum(len(copies) for copies in records.values()) == 255
+    policy = default_policy()
+    for copies in records.values():
+        now = max(record["received_steady_ns"] for record in copies) + 50_000_000
+        deadlines = []
+        for record in copies:
+            assert record == copies[0]
+            deadlines.append(
+                policy.sample_age(SampleTime(**record), now_steady_ns=now).deadline_steady
+            )
+        assert all(deadline == deadlines[0] for deadline in deadlines)
+
+    for key, (original_steady, copies) in {
+        ("motion_reference_backlog.json", 1_300_000_000): (125_716_720_020_824, 3),
+        ("reference_clock_frontier.json", 6_100_000_000): (129_861_541_005_342, 2),
+    }.items():
+        endpoints = shared[key]
+        assert len(endpoints) == copies
+        assert {role for role, _ in endpoints} == {"first_time", "last_time"}
+        assert all(record["sample_steady_ns"] == original_steady for _, record in endpoints)

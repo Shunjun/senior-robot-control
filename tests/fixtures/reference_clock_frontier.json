@@ -2768,8 +2768,8 @@
           "first_time": {
             "stamp_ns": 6100000000,
             "received_ros_ns": 6100000000,
-            "received_steady_ns": 129861547511259,
-            "sample_steady_ns": 129861547511259,
+            "received_steady_ns": 129861541005342,
+            "sample_steady_ns": 129861541005342,
             "clock_generation": 1
           },
           "last_time": {

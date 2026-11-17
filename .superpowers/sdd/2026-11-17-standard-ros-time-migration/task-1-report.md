@@ -377,3 +377,55 @@ Final search: 189 files; A=15, B=69, C=13, D=34, F=58. The following table is th
 4. B must update old shared-helper imports and simulation_point callers to the new fixture API, preserve valid algorithm/lifecycle regressions and stop parsing opaque historical source identity strings as simulation admission. F alone handles any later shared fixture adjustments serially.
 5. Installed package/header export ordering was preserved by inspection but remains unverified on ROS. Task 8 must remove only confirmed stale build/install outputs before checking retired schemas/libs/patch constraints; do not let old generated files hide missing migration.
 6. Historical docs/testing/review/spec/plan references in the inventory are evidence to annotate, not delete. The approved current design legitimately names obsolete protocols to specify retirement.
+
+## Task 1 review correction — immutable shared endpoints and assigned validation scope
+
+Status: addressed the P2 in `task-1-review.md` and the coordinator's additional test-scope correction; awaiting coordinator acceptance. This appendix supersedes the earlier sequence-keyed fixture reuse claim and the earlier broad new-test coverage description. The correction commit containing this appendix is the new F freeze; its exact SHA is available with `git log -1 --format=%H` and in the worker completion message. No product validation, business consumer, service, vehicle operation or remote system was changed.
+
+The confirmed defect was in the fixture materialization, not the common mapper. The earlier fixture cache included the derived delta sequence, so a shared raw endpoint could receive another synthetic mapping when used as the start of a later interval. Audited all four fixtures together using `(source, retained source epoch/lifecycle, clock_generation, original stamp_ns)` as the endpoint key; the laser epochs retain publisher GID and ingress lifecycle. Derived interval sequence is deliberately excluded. Selected the complete record with the earliest `received_steady_ns` for each key and copied every field of that record to every occurrence. This also covers cached repeats and reuse across fixture documents, without recalculating an endpoint from a later interval's receipt.
+
+Exactly two conflicting keys and three copies needed changes:
+
+| Fixture | Stamp ns | Copies corrected | Retained received/sample steady ns | Removed age refresh ns |
+| --- | ---: | ---: | ---: | ---: |
+| motion_reference_backlog.json | 1300000000 | 2 later first_time copies, including cached interval | 125716720020824 | 6831208 per copy |
+| reference_clock_frontier.json | 6100000000 | 1 later first_time | 129861541005342 | 6505917 |
+
+`navigation_startup_reference.json` and `reference_nanosecond_boundary.json` already satisfy the invariant and were not rewritten. All four fixtures' historical geometry, numeric observations, source identities, sequences and provenance are unchanged. A recursive comparison against `42ade64`, excluding only endpoint time dictionaries, confirmed exact equality. All 255 endpoint records (184 unique raw identity/lifecycle/generation/stamp keys) and three unchanged RawCaptureHeader records still validate with the production SampleTime type. Repeating the full canonicalization audit found zero conflicting keys and zero copies requiring correction.
+
+Added exactly one focused regression in existing `test_sensor_timing.py`: `test_fixture_shared_endpoints_and_cached_repeats_keep_original_deadline`. It loads all four fixtures without importing unmigrated consumers, groups the 255 records by raw identity/lifecycle/generation/stamp, and requires full record equality plus equal original policy deadlines for every repeated endpoint. It explicitly pins both reviewed laser endpoints, including three backlog occurrences (previous interval end and two later/cached starts) and two frontier occurrences, so the confirmed adjacent-interval and cached-repeat bug cannot silently return.
+
+Removed the new invalid-coordinate parameter matrix, zero/extrema scenario and mixed integer/interval/generation/rollback scenario. Removed the matching unrelated assertions from the new standalone C++ test. The approved Python/C++ 99.8/100/20 -> 19.8 mapping with 0.35 consumed age, 300 ms/1 s boundaries and original deadline remain. All 13 valid pre-migration sensor-timing cases and the existing C++ age/queue regression remain. Product integer/range checks and ClockTracker implementation were not weakened; A/B own their assigned existing integer/generation/clock regressions after fork.
+
+Exact commands/results for this correction:
+
+```text
+.venv/bin/python -m pytest tests/unit/test_sensor_timing.py -k fixture_shared -q
+  Before fixture correction: 1 failed, 15 deselected in 0.06s.
+  Failure reproduced differing received_steady_ns/sample_steady_ns at backlog stamp 1300000000.
+.venv/bin/python /tmp/task1-endpoint-fix.py
+  Four fixtures: 255 records, 184 keys, two conflicting keys, three copies corrected.
+  Repeated after correction: zero conflicting keys, zero copies corrected.
+.venv/bin/python -m pytest tests/unit/test_sensor_timing.py tests/unit/test_shared_sensor_cpp.py -q
+  First correction run: 1 failed, 16 passed in 2.19s, because the narrowed C++ test compared signed age arithmetic with an unsigned deadline under -Werror.
+  Corrected that test-only comparison by explicitly casting the selected sample steady coordinate to int64_t for deadline arithmetic.
+  Final run: 17 passed in 1.36s.
+.venv/bin/ruff check tests/unit/test_sensor_timing.py
+  All checks passed.
+.venv/bin/ruff format --check tests/unit/test_sensor_timing.py
+  1 file already formatted.
+git diff --check
+  Passed, no output.
+.venv/bin/python --version
+  Python 3.12.15.
+.venv/bin/pytest --version
+  pytest 8.4.2.
+.venv/bin/ruff --version
+  ruff 0.17.3.
+c++ --version
+  Apple clang version 21.0.0 (clang-2100.0.123.102), arm64-apple-darwin25.4.0.
+```
+
+The temporary canonicalization/audit script traversed each document's sources and poses, gathered references to time/first_time/last_time by the key above, chose the minimum received_steady_ns record, copied the full dictionary, and asserted historical data/provenance equality after stripping only those time dictionaries. The committed focused test provides the durable repeatable audit through the pytest command above; a separate executed inline Python comparison against `git show 42ade64:<fixture>` confirmed unchanged original observations/provenance and validated every endpoint and raw capture.
+
+Only four F files are part of this correction: the two conflicting fixture JSONs, `tests/unit/test_sensor_timing.py`, and this report. Remaining concerns are unchanged: synthetic receipts remain explicit geometry/control replay inputs rather than transport evidence; real Linux ROS generation/build/installed exports/DDS and all business consumers remain unverified until their assigned migration/integration work. No new compatibility path, speculative validation scenario or placeholder was added.

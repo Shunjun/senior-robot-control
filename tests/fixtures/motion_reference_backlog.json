@@ -1190,8 +1190,8 @@
             "first_time": {
               "stamp_ns": 1300000000,
               "received_ros_ns": 1300000000,
-              "received_steady_ns": 125716726852032,
-              "sample_steady_ns": 125716726852032,
+              "received_steady_ns": 125716720020824,
+              "sample_steady_ns": 125716720020824,
               "clock_generation": 1
             },
             "last_time": {
@@ -1394,8 +1394,8 @@
             "first_time": {
               "stamp_ns": 1300000000,
               "received_ros_ns": 1300000000,
-              "received_steady_ns": 125716726852032,
-              "sample_steady_ns": 125716726852032,
+              "received_steady_ns": 125716720020824,
+              "sample_steady_ns": 125716720020824,
               "clock_generation": 1
             },
             "last_time": {
