@@ -85,7 +85,11 @@ class ControlledFencedScanPublisher:
         capture = body.raw_capture
         capture.stamp, capture.frame_id = scan.header.stamp, scan.header.frame_id
         capture.received_ros = self.node.get_clock().now().to_msg()
-        capture.received_steady = time.monotonic()
+        capture.received_steady_ns = time.monotonic_ns()
+        stamp_ns = scan.header.stamp.sec * 1_000_000_000 + scan.header.stamp.nanosec
+        received_ns = capture.received_ros.sec * 1_000_000_000 + capture.received_ros.nanosec
+        capture.sample_steady_ns = capture.received_steady_ns - (received_ns - stamp_ns)
+        capture.clock_generation = 1
         capture.raw_gid = "cc" * 24
         capture.bridge_gid = bytes(raw[0].endpoint_gid).hex()
         capture.bridge_boot_id, capture.source_epoch = "scan-boot", "raw-epoch"

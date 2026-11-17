@@ -21,13 +21,21 @@ for index in range(720):
             if t > 0 and -2.3 < t * dx < 3.1:
                 hits.append(t)
     ranges.append(min(hits))
-header = "L .4 8 .3 .09 .55 .04 .05 .01 .05 .12 .1 100\n"
-for stamp in (1.0, 1.1):
+header = "L 400 8 .3 .09 .55 .04 .05 .01 .05 .12 .1 100\n"
+for stamp in ("1700000000.000000000", "1700000000.100000000", "1700000000.100000001"):
     header += f"S {stamp} {-math.pi} {2 * math.pi / 720} .08 8 720 "
     header += " ".join(map(str, ranges)) + "\n"
 process = subprocess.run([sys.argv[1]], input=header, text=True, capture_output=True, timeout=5)
 assert process.returncode == 0, process.stderr
 rows = [json.loads(line) for line in process.stdout.splitlines()]
-assert len(rows) == 2
+assert len(rows) == 3
 assert rows[0]["reason"] == "initializing"
 assert rows[1]["valid"]
+assert rows[2]["valid"], rows[2]
+assert [row["stamp_ns"] for row in rows] == [
+    1700000000000000000,
+    1700000000100000000,
+    1700000000100000001,
+]
+assert rows[1]["start_ns"] == rows[0]["stamp_ns"]
+assert rows[2]["start_ns"] == rows[1]["stamp_ns"]

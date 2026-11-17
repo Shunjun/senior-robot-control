@@ -33,9 +33,9 @@ public:
     return node.clocks_ok(ros, steady);
   }
   static std::optional<int64_t> capture_age(RgbdCandidateReceipt & node,
-    const senior_motion_msgs::msg::RawCaptureHeader & header, int64_t ros, double steady) {
+    const senior_motion_msgs::msg::RawCaptureHeader & header, double steady) {
     std::lock_guard<std::mutex> lock(node.mutex_);
-    return node.capture_age(header, ros, steady);
+    return node.capture_age(header, steady);
   }
   static uint64_t invalid_clocks(RgbdCandidateReceipt & node) {
     std::lock_guard<std::mutex> lock(node.mutex_);
@@ -189,7 +189,9 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
       h.frame_id = "camera";
       h.stamp = static_cast<builtin_interfaces::msg::Time>(now_ros - rclcpp::Duration::from_seconds((3-iteration)*.01));
       h.received_ros = h.stamp;
-      h.received_steady = steady - (3-iteration)*.01;
+      h.received_steady_ns = static_cast<uint64_t>((steady - (3-iteration)*.01) * 1e9);
+      h.sample_steady_ns = h.received_steady_ns;
+      h.clock_generation = 1;
       body.width = body.height = 80;
     };
     init(rgb, gid(rgb_pub->get_gid()), "rgb");
@@ -281,7 +283,7 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
     rgb_info_pub->publish(saved_rgb_info[i]); depth_info_pub->publish(saved_depth_info[i]);
   }
   std::this_thread::sleep_for(30ms);
-  ASSERT_LT(steady_now() - saved_rgb[0].capture.received_steady, .3);
+  ASSERT_LT(steady_now() - (static_cast<double>(saved_rgb[0].capture.received_steady_ns) / 1e9), .3);
   candidate.sequence = 3;
   candidate_pub->publish(candidate);
   ASSERT_TRUE(wait_for([&] {
@@ -406,7 +408,9 @@ TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
   body.capture.frame_id = "camera";
   body.capture.capture_generation = body.capture.sequence = 1;
   body.capture.stamp = body.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(observer->now());
-  body.capture.received_steady = steady_now();
+  body.capture.received_steady_ns = static_cast<uint64_t>(steady_now() * 1e9);
+  body.capture.sample_steady_ns = body.capture.received_steady_ns;
+  body.capture.clock_generation = 1;
   body.width = body.height = 1; body.step = 3; body.encoding = "rgb8";
   body.data = {'a','b','c'};
   publisher->publish(body);
@@ -424,7 +428,9 @@ TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
   body.capture.source_epoch = "source-new";
   body.capture.sequence = 1;
   body.capture.stamp = body.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(observer->now());
-  body.capture.received_steady = steady_now();
+  body.capture.received_steady_ns = static_cast<uint64_t>(steady_now() * 1e9);
+  body.capture.sample_steady_ns = body.capture.received_steady_ns;
+  body.capture.clock_generation = 1;
   publisher->publish(body);
   std::this_thread::sleep_for(50ms);
   Image invalid;
@@ -480,7 +486,9 @@ TEST(RgbdCandidateReceipt, SameCurrentHeaderWithDifferentPixelsRevokes)
   body.capture.frame_id = "camera";
   body.capture.capture_generation = body.capture.sequence = 1;
   body.capture.stamp = body.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(observer->now());
-  body.capture.received_steady = steady_now();
+  body.capture.received_steady_ns = static_cast<uint64_t>(steady_now() * 1e9);
+  body.capture.sample_steady_ns = body.capture.received_steady_ns;
+  body.capture.clock_generation = 1;
   body.width = body.height = 1; body.step = 3; body.encoding = "rgb8";
   body.data = {'a','b','c'};
   publisher->publish(body);
@@ -626,7 +634,7 @@ TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUniqu
   EXPECT_TRUE(wait_for([&] {return Peer::admitted_tf(*receipt, sample.bridge_gid);}));
 }
 
-TEST(RgbdCandidateReceipt, ClockRollbackRequiresRestart)
+TEST(RgbdCandidateReceipt, ClockRollbackRevokesWindowThenAcceptsNewSegment)
 {
   using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
   rclcpp::init(0, nullptr);
@@ -634,10 +642,10 @@ TEST(RgbdCandidateReceipt, ClockRollbackRequiresRestart)
   int sentinel = 0;
   std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
   senior_sensor_ingress::RgbdCandidateReceipt receipt(clock_test_options());
-  EXPECT_FALSE(Peer::accept_clock(receipt, 0, 1.0));
+  EXPECT_TRUE(Peer::accept_clock(receipt, 0, 1.0));
   EXPECT_TRUE(Peer::accept_clock(receipt, 100, 2.0));
   EXPECT_FALSE(Peer::accept_clock(receipt, 99, 3.0));
-  EXPECT_FALSE(Peer::accept_clock(receipt, 101, 4.0));
+  EXPECT_TRUE(Peer::accept_clock(receipt, 101, 4.0));
 }
 
 
@@ -652,44 +660,35 @@ TEST(RgbdCandidateReceipt, HeaderAgeBoundaryRejectsInputWithoutThrowingOrFakeAge
   senior_sensor_ingress::RgbdCandidateReceipt receipt(clock_test_options());
   Header good;
   good.stamp.sec = good.received_ros.sec = 1;
-  good.received_steady = 10.;
-  struct Case {Header header; int64_t ros; double steady;};
+  good.received_steady_ns = good.sample_steady_ns = 10000000000ULL;
+  good.clock_generation = 1;
+  struct Case {Header header; double steady;};
   std::vector<Case> invalid;
   Header changed = good;
   changed.received_ros.sec = 2;
-  invalid.push_back({changed, 1500000000LL, 10.1}); // received > now > stamp
-  invalid.push_back({good, 999999999LL, 10.1});   // ROS rollback
-  invalid.push_back({good, 1500000000LL, 9.9});  // steady rollback
+  invalid.push_back({changed, 10.1}); // inconsistent original mapping
+  invalid.push_back({good, 9.9}); // current steady precedes original receipt
+  changed = good; changed.sample_steady_ns = changed.received_steady_ns + 1;
+  invalid.push_back({changed, 10.1});
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const double inf = std::numeric_limits<double>::infinity();
-  for (const double bad : {nan, inf, -inf}) {
-    changed = good; changed.received_steady = bad;
-    invalid.push_back({changed, 1500000000LL, 10.1});
-  }
   const double largest = std::numeric_limits<double>::max();
-  for (const double bad : {nan, inf, -inf, largest})
-    invalid.push_back({good, 1500000000LL, bad});
-  changed = good; changed.received_steady = -largest;
-  invalid.push_back({changed, 1500000000LL, largest});
-  changed = good; changed.received_steady = 0.;
-  invalid.push_back({changed, 1500000000LL, 9e9+1.});
+  for (const double bad : {nan, inf, -inf, largest}) invalid.push_back({good, bad});
   changed = good; changed.stamp.nanosec = 1000000000u;
-  invalid.push_back({changed, 1500000000LL, 10.1});
+  invalid.push_back({changed, 10.1});
+  // Nonfinite/negative float receipt cases retire with the uint64 wire field.
+  // ROS rollback is the window owner's ClockTracker responsibility, above.
   for (size_t i=0; i<invalid.size(); ++i) {
     SCOPED_TRACE(i);
     std::optional<int64_t> result;
-    EXPECT_NO_THROW(result = Peer::capture_age(receipt, invalid[i].header,
-      invalid[i].ros, invalid[i].steady));
+    EXPECT_NO_THROW(result = Peer::capture_age(receipt, invalid[i].header, invalid[i].steady));
     EXPECT_FALSE(result);
   }
   EXPECT_EQ(Peer::invalid_clocks(receipt), invalid.size());
   EXPECT_EQ(Peer::observed_ages(receipt), 0u); // no age=0 for rejected clocks
-  const auto current = Peer::capture_age(receipt, good, 1500000000LL, 10.1);
+  const auto current = Peer::capture_age(receipt, good, 10.5);
   ASSERT_TRUE(current); EXPECT_EQ(*current, 500000000LL);
-  const auto expired = Peer::capture_age(receipt, good, 2000000000LL, 10.1);
+  const auto expired = Peer::capture_age(receipt, good, 11.0);
   ASSERT_TRUE(expired); EXPECT_EQ(*expired, 1000000000LL); // expired, not invalid
-  changed = good; changed.received_steady = largest;
-  const auto same_epoch = Peer::capture_age(receipt, changed, 1500000000LL, largest);
-  ASSERT_TRUE(same_epoch); EXPECT_EQ(*same_epoch, 500000000LL);
   EXPECT_EQ(Peer::invalid_clocks(receipt), invalid.size());
 }

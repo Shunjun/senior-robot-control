@@ -150,8 +150,8 @@ TEST(SemanticEgress, RealFourStreamDepthReceiptAndBodyMutation)
   body.stamp = body.depth_capture.stamp; body.camera_info_stamp = body.camera_info_capture.stamp;
   body.received_ros = body.depth_capture.received_ros;
   body.camera_info_received_ros = body.camera_info_capture.received_ros;
-  body.received_steady = body.depth_capture.received_steady;
-  body.camera_info_received_steady = body.camera_info_capture.received_steady;
+  body.received_steady = (static_cast<double>(body.depth_capture.received_steady_ns) / 1e9);
+  body.camera_info_received_steady = (static_cast<double>(body.camera_info_capture.received_steady_ns) / 1e9);
   body.frame_id = body.depth_capture.frame_id;
   body.raw_source = body.depth_capture.raw_gid;
   body.camera_info_source = body.camera_info_capture.raw_gid;
@@ -166,10 +166,10 @@ TEST(SemanticEgress, RealFourStreamDepthReceiptAndBodyMutation)
   }));
   candidate.rgb_stamp = candidate.rgb_capture.stamp;
   candidate.rgb_received_ros = candidate.rgb_capture.received_ros;
-  candidate.rgb_received_steady = candidate.rgb_capture.received_steady;
+  candidate.rgb_received_steady = (static_cast<double>(candidate.rgb_capture.received_steady_ns) / 1e9);
   candidate.rgb_camera_info_stamp = candidate.rgb_camera_info_capture.stamp;
   candidate.rgb_camera_info_received_ros = candidate.rgb_camera_info_capture.received_ros;
-  candidate.rgb_camera_info_received_steady = candidate.rgb_camera_info_capture.received_steady;
+  candidate.rgb_camera_info_received_steady = (static_cast<double>(candidate.rgb_camera_info_capture.received_steady_ns) / 1e9);
   candidate.rgb_frame_id = candidate.rgb_capture.frame_id;
   candidate.rgb_source = candidate.rgb_capture.raw_gid;
   candidate.rgb_camera_info_source = candidate.rgb_camera_info_capture.raw_gid;

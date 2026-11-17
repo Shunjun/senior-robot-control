@@ -92,7 +92,7 @@ TEST(ScanEgress, RawSafetyAndFilteredBodiesRequireUnchangedSourceBeams)
   safe.stamp = original.capture.stamp; safe.frame_id = original.capture.frame_id;
   safe.raw_source = original.capture.raw_gid; safe.source_epoch = "safety-owner";
   safe.sequence = 1; safe.valid = true;
-  safe.ingress_steady = original.capture.received_steady;
+  safe.ingress_steady = (static_cast<double>(original.capture.received_steady_ns) / 1e9);
   safe.ingress_ros = static_cast<double>(rclcpp::Time(original.capture.received_ros).nanoseconds()) / 1e9;
   safe.angle_min = original.angle_min; safe.angle_increment = original.angle_increment;
   safe.range_min = original.range_min; safe.range_max = original.range_max;
@@ -195,7 +195,7 @@ TEST_P(ScanEgressRetiredOwner, RealOldMessageCannotRevokeQualifiedSuccessor)
   Safety safe;
   safe.raw_capture = original.capture; safe.stamp = original.capture.stamp;
   safe.frame_id = original.capture.frame_id; safe.raw_source = original.capture.raw_gid;
-  safe.ingress_steady = original.capture.received_steady;
+  safe.ingress_steady = (static_cast<double>(original.capture.received_steady_ns) / 1e9);
   safe.ingress_ros = static_cast<double>(rclcpp::Time(original.capture.received_ros).nanoseconds()) / 1e9;
   safe.angle_min = original.angle_min; safe.angle_increment = original.angle_increment;
   safe.range_min = original.range_min; safe.range_max = original.range_max;

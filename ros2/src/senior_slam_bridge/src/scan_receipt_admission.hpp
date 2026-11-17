@@ -10,7 +10,7 @@
 #include <string>
 
 #include "rclcpp/rclcpp.hpp"
-#include <senior_motion_msgs/source_timing.hpp>
+#include <senior_motion_msgs/sample_time.hpp>
 #include "senior_motion_msgs/msg/bounded_raw_laser_scan.hpp"
 
 namespace senior_slam_bridge::scan_receipt_admission
@@ -39,24 +39,25 @@ std::string gid_hex(const Bytes & bytes)
 inline std::int64_t time_ns(const builtin_interfaces::msg::Time & stamp)
 {
   if (stamp.sec < 0 || stamp.nanosec >= 1000000000) {
-    return 0;
+    return -1;
   }
   return static_cast<std::int64_t>(stamp.sec) * 1000000000 + stamp.nanosec;
 }
 
 inline bool fresh(const Receipt & receipt, double now_steady)
 {
-  const auto measured = static_cast<double>(receipt.timing.capture_end_steady_ns) / 1e9;
-  return senior_motion_msgs::timing::valid(receipt.timing,
-      senior_motion_msgs::navigation::monotonic_ns()) &&
-    std::isfinite(receipt.received_steady) && measured <= receipt.received_steady &&
-    receipt.received_steady <= now_steady && now_steady - measured <= max_age_seconds;
+  const auto measured = static_cast<double>(receipt.sample_steady_ns) / 1e9;
+  return receipt.clock_generation > 0 && time_ns(receipt.stamp) >= 0 &&
+    time_ns(receipt.received_ros) >= time_ns(receipt.stamp) &&
+    receipt.sample_steady_ns <= receipt.received_steady_ns &&
+    std::isfinite(now_steady) &&
+    (static_cast<double>(receipt.received_steady_ns) / 1e9) <= now_steady &&
+    now_steady - measured <= max_age_seconds;
 }
 
 inline double steady_seconds()
 {
-  return std::chrono::duration<double>(
-    std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
 }
 
 inline bool same_source(const Receipt & lhs, const Receipt & rhs)
@@ -64,9 +65,7 @@ inline bool same_source(const Receipt & lhs, const Receipt & rhs)
   return lhs.bridge_gid == rhs.bridge_gid && lhs.raw_gid == rhs.raw_gid &&
          lhs.bridge_boot_id == rhs.bridge_boot_id && lhs.source_epoch == rhs.source_epoch &&
          lhs.capture_generation == rhs.capture_generation && lhs.frame_id == rhs.frame_id &&
-         lhs.timing.clock_domain == rhs.timing.clock_domain &&
-         lhs.timing.source_epoch == rhs.timing.source_epoch &&
-         senior_motion_msgs::timing::same_measurement_axis(lhs.timing, rhs.timing);
+         lhs.clock_generation == rhs.clock_generation;
 }
 
 inline bool text_ok(const std::string & value)
@@ -117,7 +116,7 @@ inline std::optional<ScanOwner> unique_scan_owner(
   if (bridge.size() != 1 || raw.size() != 1 ||
     bridge.front().node_name() != "scan_receipt" || bridge.front().node_namespace() != "/" ||
     bridge.front().topic_type() != "senior_motion_msgs/msg/BoundedRawLaserScan" ||
-    raw.front().topic_type() != "senior_motion_msgs/msg/TimedLaserScan")
+    raw.front().topic_type() != "sensor_msgs/msg/LaserScan")
   {
     return std::nullopt;
   }

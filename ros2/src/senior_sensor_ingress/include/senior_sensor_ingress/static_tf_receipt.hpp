@@ -7,6 +7,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 #include <senior_motion_msgs/msg/bounded_static_tf.hpp>
+#include <senior_motion_msgs/sample_time.hpp>
 
 namespace senior_sensor_ingress {
 bool validate_static_tf(const tf2_msgs::msg::TFMessage & message,
@@ -27,6 +28,7 @@ private:
   void inspect();
   bool owner_matches(const std::string & gid);
   bool update_clock(int64_t ros_ns, double steady);
+  void revoke_admission(const std::string & reason);
   void invalidate(const std::string & reason, bool retire_source);
   std::string output_gid() const;
 
@@ -38,6 +40,7 @@ private:
   std::string boot_id_, raw_gid_;
   std::set<std::string> retired_;
   uint64_t generation_ = 0, sequence_ = 0;
+  senior_motion_msgs::time::ClockTracker clock_;
   int64_t last_ros_ns_ = 0;
   double last_steady_ = 0.0;
   bool clock_ready_ = false, active_ = false, have_body_ = false, failed_ = false;

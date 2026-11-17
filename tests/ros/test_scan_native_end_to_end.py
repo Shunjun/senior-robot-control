@@ -19,7 +19,7 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import FencedFilteredScan, ScanMotion
+    from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion
     from senior_robot.scan_adapter import ScanAdapter
     from sensor_msgs.msg import LaserScan
     from test_scan_epoch_live import _room_scan
@@ -57,7 +57,13 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
             executor.add_node(producer)
             executor.add_node(adapter)
             publisher = producer.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
-            filtered, motions = [], []
+            filtered, motions, raw_captures = [], [], []
+            producer.create_subscription(
+                BoundedRawLaserScan,
+                "/safety/raw/scan",
+                raw_captures.append,
+                qos_profile_sensor_data,
+            )
             producer.create_subscription(
                 FencedFilteredScan,
                 "/perception/scan_filtered",
@@ -85,7 +91,17 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
             assert any(item.owner.valid and item.body.raw_capture.valid for item in filtered)
             valid = next(item for item in reversed(filtered) if item.owner.valid)
             assert valid.body.raw_capture.frame_id == "laser_link"
-            assert valid.body.raw_capture.raw_gid and valid.body.raw_capture.received_steady > 0
+            assert valid.body.raw_capture.raw_gid and valid.body.raw_capture.received_steady_ns > 0
+            for motion in (item for item in motions if item.valid):
+                assert motion.interval_start == motion.first_capture.stamp
+                assert motion.header.stamp == motion.second_capture.stamp
+                for capture in (motion.first_capture, motion.second_capture):
+                    assert any(item.capture == capture for item in raw_captures)
+                    stamp_ns = capture.stamp.sec * 1_000_000_000 + capture.stamp.nanosec
+                    ros_ns = capture.received_ros.sec * 1_000_000_000 + capture.received_ros.nanosec
+                    assert capture.sample_steady_ns == capture.received_steady_ns - (
+                        ros_ns - stamp_ns
+                    )
             motions.clear()
             scan.time_increment = 0.001
             deadline = time.monotonic() + 5
