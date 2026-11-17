@@ -44,17 +44,6 @@ def _spin_ready_callbacks(executor: Any, *, clock: Callable[[], float] = time.mo
             break
 
 
-def _route_safety_ready(reference: Any, routes: Any, *, continuing: bool = True) -> bool:
-    """//Compatible: isolated v1 route callers retain the legacy diagnostic adapter.
-
-    Production qualification consumes CommandNode.task_motion_allowed from T5.
-    """
-    current = routes.current if routes is not None else None
-    if continuing and current is not None and current.status == "running":
-        return bool(reference.navigation_evidence_ready())
-    return bool(reference.safety_ready())
-
-
 class AdapterCore:
     """Maps IPC requests to the arbiter. After ``disable_motion`` nothing drives."""
 
@@ -462,24 +451,15 @@ def main() -> None:
     from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import MotionExecutor, run
-    from senior_robot.simulation_reference import SimulationReference
 
     def spin(node, executor, should_stop: Callable[[], bool]) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
         path = Path(os.environ[SOCKET_ENV])
         node.declare_parameter("ipc_replace_existing_socket", True)
-        node.declare_parameter("simulation_qualified_reference", False)
-        node.declare_parameter("simulation_baseline_world", "")
         node.declare_parameter("hardware_navigation_reference", "")
         hardware_reference = str(node.get_parameter("hardware_navigation_reference").value)
         reference = None
-        if node.get_parameter("simulation_qualified_reference").value:
-            world = Path(str(node.get_parameter("simulation_baseline_world").value))
-            reference = SimulationReference(node, world)
-            node.simulation_reference = reference
-        elif hardware_reference:
-            if node.get_parameter("use_sim_time").value:
-                raise ValueError("hardware navigation requires use_sim_time=false")
+        if hardware_reference:
             from senior_robot.hardware_reference import HardwareReference
 
             reference = HardwareReference(node, Path(hardware_reference))

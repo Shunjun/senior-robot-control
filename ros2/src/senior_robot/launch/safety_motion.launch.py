@@ -33,9 +33,8 @@ def _nodes(context):
     profile = validate_real_runtime(Path(hardware), Path(parameters))
     runtime = load_real_parameters(Path(parameters), profile)
     shared = {"use_sim_time": False, **ros_sensor_parameters(profile.diagnostics)}
-    selected = {**shared, "hardware_motion_profile": hardware, "motion_core_profile": ""}
-    # NativeObservationRosBridge selects the configured physical /timed topics
-    # directly. Its DDS writer remains the driver; no untyped relay is involved.
+    selected = {**shared, "hardware_motion_profile": hardware}
+    # Original standard sensor publishers are consumed through native receipts.
     nodes = [
         # Observe every child exit without terminating healthy modules.
         RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),

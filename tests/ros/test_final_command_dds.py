@@ -8,6 +8,7 @@ Run only in an explicitly isolated, same-build Linux ROS workspace.
 
 import os
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -67,7 +68,12 @@ def dds(tmp_path, monkeypatch):
                 parameter_overrides=[
                     Parameter("robot_id", value="paired-car"),
                     Parameter("use_sim_time", value=True),
-                    Parameter("motion_core_profile", value="fortress-candidate-unvalidated-v1"),
+                    Parameter(
+                        "hardware_motion_profile",
+                        value=str(
+                            Path(__file__).resolve().parents[2] / "config/hardware-motion.json"
+                        ),
+                    ),
                 ]
             )
         )
