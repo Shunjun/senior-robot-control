@@ -78,7 +78,12 @@ def bounded_scan(scan, received_ros, bridge_gid, raw_gid, sequence):
         setattr(result, field, getattr(scan, field))
     result.capture.stamp = scan.header.stamp
     result.capture.received_ros = received_ros
-    result.capture.received_steady = time.monotonic()
+    result.capture.received_steady_ns = time.monotonic_ns()
+    result.capture.sample_steady_ns = result.capture.received_steady_ns - (
+        received_ros.sec * 1_000_000_000 + received_ros.nanosec
+        - scan.header.stamp.sec * 1_000_000_000 - scan.header.stamp.nanosec
+    )
+    result.capture.clock_generation = 1
     result.capture.frame_id = scan.header.frame_id
     result.capture.raw_gid = raw_gid
     result.capture.bridge_gid = bridge_gid
@@ -176,7 +181,7 @@ def probe(executable, root, combined):
             if staging is not None:
                 # A capture is a historical graph cut, not a renewal of scan freshness.
                 spin_for(node, 0.6)
-                assert time.monotonic() - valid.capture.received_steady > 0.5
+                assert time.monotonic() - valid.capture.received_steady_ns > 0.5
                 cut = request(node, capture, CaptureGraph.Request())
                 prefix = check_capture(cut, staging, committed.boot_id)
                 assert cut.last_committed_scan_valid and cut.last_committed_scan == valid.capture

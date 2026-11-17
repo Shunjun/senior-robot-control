@@ -1,4 +1,4 @@
-#include <senior_motion_msgs/source_timing.hpp>
+#include <senior_motion_msgs/sample_time.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -96,6 +96,8 @@ private:
     extrinsic_valid_ = false;
     published_qualified_ = false;
     previous_stamp_valid_ = false;
+    stamp_origin_ns_ = -1;
+    last_stamp_ns_ = -1;
   }
   void invalidate(senior_motion_msgs::msg::ScanMotion & output, const std::string & reason,
                   bool restart)
@@ -103,6 +105,8 @@ private:
     if (restart) {
       matcher_->reset();
       previous_stamp_valid_ = false;
+      stamp_origin_ns_ = -1;
+      last_stamp_ns_ = -1;
       // A sustained bad stream is one interruption, not hundreds of source
       // lifetimes. Rotate after qualified continuity is actually broken.
       if (published_qualified_) new_epoch();
@@ -131,6 +135,13 @@ private:
     senior_motion_msgs::msg::ScanMotion output;
     output.header.stamp = capture.stamp;
     output.header.frame_id = body_;
+    const auto current_steady = senior_motion_msgs::time::monotonic_ns();
+    const auto local_clock = clock_.observe(get_clock()->now().nanoseconds(), current_steady);
+    if (local_clock.discontinuity) {
+      local_receipt_floor_ns_ = current_steady;
+      invalidate(output, "clock_rollback", true);
+      return;
+    }
     const auto sources = get_publishers_info_by_topic(scan_topic_);
     const auto & incoming = info.get_rmw_message_info().publisher_gid;
     if (sources.size() != 1 || sources[0].node_name() != "scan_receipt" ||
@@ -220,7 +231,8 @@ private:
     if (retired_scan_epochs_.count(capture.source_epoch) != 0) return;
     const bool scan_changed = !scan_boot_.empty() &&
       (capture.bridge_boot_id != scan_boot_ || capture.capture_generation != scan_generation_ ||
-       capture.source_epoch != scan_epoch_ || capture.raw_gid != scan_raw_gid_);
+       capture.source_epoch != scan_epoch_ || capture.raw_gid != scan_raw_gid_ ||
+       capture.clock_generation != scan_clock_generation_);
     if (scan_changed) {
       if (capture.source_epoch != scan_epoch_) retired_scan_epochs_.insert(scan_epoch_);
       if (retired_scan_epochs_.size() >= 256) {
@@ -230,13 +242,10 @@ private:
       scan_sequence_ = 0;
     }
     if (capture.sequence <= scan_sequence_) return;
-    const double steady = std::chrono::duration<double>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
-    const double measured = static_cast<double>(capture.timing.capture_end_steady_ns) / 1e9;
-    if (!senior_motion_msgs::timing::valid(capture.timing,
-          senior_motion_msgs::navigation::monotonic_ns()) ||
-        !std::isfinite(capture.received_steady) || steady < capture.received_steady ||
-        measured > capture.received_steady || steady - measured >= max_age_) {
+    const auto now_ns = senior_motion_msgs::time::monotonic_ns();
+    if (capture.clock_generation == 0 || capture.sample_steady_ns > capture.received_steady_ns ||
+        capture.received_steady_ns > now_ns || capture.received_steady_ns < local_receipt_floor_ns_ ||
+        static_cast<double>(now_ns - capture.sample_steady_ns) / 1e9 >= max_age_) {
       invalidate(output, "raw_scan_receipt_expired", true); return;
     }
     relay_boot_ = owner.relay_boot;
@@ -247,25 +256,19 @@ private:
     scan_epoch_ = capture.source_epoch;
     scan_raw_gid_ = capture.raw_gid;
     scan_sequence_ = capture.sequence;
-    const double physical = static_cast<double>(
-      senior_motion_msgs::timing::measurement_ns(capture.timing)) / 1e9;
-    if (physical_valid_ && !senior_motion_msgs::timing::same_measurement_axis(
-        physical_proof_, capture.timing)) {
-      matcher_->reset(); previous_stamp_valid_ = false; last_stamp_ = -1;
-    }
-    physical_valid_ = true; physical_proof_ = capture.timing;
-    const double stamp = rclcpp::Time(capture.stamp).seconds();
-    if (!std::isfinite(stamp) || stamp < 0 ||
-        (last_stamp_ >= 0 && physical < last_stamp_) ||
-        capture.frame_id.empty() || !std::isfinite(message.time_increment) ||
+    scan_clock_generation_ = capture.clock_generation;
+    const int64_t stamp_ns = rclcpp::Time(capture.stamp).nanoseconds();
+    if (stamp_ns < 0 || capture.frame_id.empty() || !std::isfinite(message.time_increment) ||
         message.time_increment != 0.0) {
-      last_stamp_ = -1;
       invalidate(output, "time_or_deskew_unqualified", true); return;
     }
-    if (last_stamp_ == physical) {
-      invalidate(output, "same_physics_tick", false); return;
+    if (last_stamp_ns_ >= 0 && stamp_ns <= last_stamp_ns_) {
+      if (stamp_ns < last_stamp_ns_) invalidate(output, "raw_stamp_out_of_order", true);
+      return;
     }
-    last_stamp_ = physical;
+    if (stamp_origin_ns_ < 0) stamp_origin_ns_ = stamp_ns;
+    const double relative_stamp = static_cast<double>(stamp_ns - stamp_origin_ns_) / 1e9;
+    last_stamp_ns_ = stamp_ns;
     try {
       // TF resolves static and dynamic edges at the scan timestamp; the
       // comparison below detects changes in the mounted sensor extrinsic.
@@ -288,7 +291,7 @@ private:
       extrinsic_ = extrinsic;
       extrinsic_valid_ = true;
       LaserScan scan;
-      scan.stamp = physical; scan.angle_min = message.angle_min;
+      scan.stamp = relative_stamp; scan.angle_min = message.angle_min;
       scan.angle_increment = message.angle_increment; scan.range_min = message.range_min;
       scan.range_max = message.range_max;
       scan.ranges.assign(message.ranges.begin(), message.ranges.end());
@@ -302,11 +305,12 @@ private:
         }
         invalidate(output, match.reason, match.reason != "initializing"); return;
       }
-      if (!previous_stamp_valid_ || static_cast<double>(senior_motion_msgs::timing::measurement_ns(previous_capture_.timing)) / 1e9 != match.start) {
+      if (!previous_stamp_valid_ || previous_capture_.clock_generation != capture.clock_generation ||
+          static_cast<double>(previous_stamp_.nanoseconds() - stamp_origin_ns_) / 1e9 != match.start) {
         invalidate(output, "source_stamp_unavailable", true); return;
       }
       const Pose delta = to_body_delta(match.sensor_delta, extrinsic_);
-      const double dt = match.end-match.start;
+      const double dt = static_cast<double>(stamp_ns - previous_stamp_.nanoseconds()) / 1e9;
       if (!positive(dt) || std::hypot(delta.x, delta.y) > max_speed_*dt ||
           std::abs(delta.yaw) > max_yaw_rate_*dt) {
         invalidate(output, "motion_bound_exceeded", true); return;
@@ -346,11 +350,12 @@ private:
   std::string relay_boot_, owner_gid_, owner_epoch_, scan_boot_, scan_epoch_, scan_raw_gid_;
   std::set<std::string> retired_owner_epochs_, retired_scan_epochs_;
   uint64_t relay_sequence_ = 0, owner_generation_ = 0, owner_sequence_ = 0;
-  uint64_t scan_generation_ = 0, scan_sequence_ = 0;
+  uint64_t scan_generation_ = 0, scan_sequence_ = 0, scan_clock_generation_ = 0;
   unsigned epoch_counter_ = 0;
-  bool physical_valid_ = false;
-  senior_motion_msgs::msg::SourceTime physical_proof_;
-  double max_age_ = 0, max_speed_ = 0, max_yaw_rate_ = 0, last_stamp_ = -1;
+  senior_motion_msgs::time::ClockTracker clock_;
+  uint64_t local_receipt_floor_ns_ = 0;
+  int64_t stamp_origin_ns_ = -1, last_stamp_ns_ = -1;
+  double max_age_ = 0, max_speed_ = 0, max_yaw_rate_ = 0;
   Pose extrinsic_, pose_;
   bool extrinsic_valid_ = false;
   bool bound_source_ = false;

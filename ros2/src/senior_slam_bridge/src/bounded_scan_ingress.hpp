@@ -2,6 +2,7 @@
 #define SENIOR_SLAM_BRIDGE__BOUNDED_SCAN_INGRESS_HPP_
 
 #include "laser_geometry.hpp"
+#include <senior_motion_msgs/sample_time.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -56,6 +57,7 @@ private:
   std::uint64_t last_sequence_{0};
   std::int64_t last_measurement_ns_{0};
   std::int64_t last_steady_ns_{0};
+  senior_motion_msgs::time::ClockTracker clock_;
   bool closed_{false};
   rclcpp::Subscription<Message>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;

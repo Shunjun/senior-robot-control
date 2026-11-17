@@ -112,7 +112,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
       if (item.capture.valid) {
         ++valid_before;
         EXPECT_EQ(item.capture.stamp, expected_stamp);
-        EXPECT_GT(item.capture.received_steady, 0.0);
+        EXPECT_GT((static_cast<double>(item.capture.received_steady_ns) / 1e9), 0.0);
         EXPECT_EQ(item.capture.bridge_gid, bridge_gid);
         EXPECT_FALSE(item.capture.bridge_boot_id.empty());
         EXPECT_GT(item.capture.capture_generation, 0u);
@@ -128,7 +128,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
     for (const auto & item : received) {
       if (!item.capture.valid && item.capture.reason == "raw_image_invalid" &&
           item.capture.stamp == malformed.header.stamp && item.capture.raw_gid == old_gid &&
-          item.capture.received_steady > 0 && item.capture.received_ros.sec > 0) return true;
+          (static_cast<double>(item.capture.received_steady_ns) / 1e9) > 0 && item.capture.received_ros.sec > 0) return true;
     }
     return false;
   }));
@@ -155,7 +155,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
     for (const auto & item : received) {
       if (!item.capture.valid && item.capture.reason == "raw_gid_mismatch" &&
           item.capture.raw_gid == old_gid && item.capture.stamp == image.header.stamp &&
-          item.capture.received_steady > 0) return true;
+          (static_cast<double>(item.capture.received_steady_ns) / 1e9) > 0) return true;
     }
     return false;
   }));
@@ -249,10 +249,10 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
               EXPECT_EQ(dep.data.size(), depth.data.size());
               EXPECT_TRUE(dep.data.size() == depth.data.size() &&
                           std::equal(dep.data.begin(), dep.data.end(), depth.data.begin()));
-              EXPECT_GT(rgb.capture.received_steady, 0.0);
-              EXPECT_GT(dep.capture.received_steady, 0.0);
-              EXPECT_GT(ci.capture.received_steady, 0.0);
-              EXPECT_GT(di.capture.received_steady, 0.0);
+              EXPECT_GT((static_cast<double>(rgb.capture.received_steady_ns) / 1e9), 0.0);
+              EXPECT_GT((static_cast<double>(dep.capture.received_steady_ns) / 1e9), 0.0);
+              EXPECT_GT((static_cast<double>(ci.capture.received_steady_ns) / 1e9), 0.0);
+              EXPECT_GT((static_cast<double>(di.capture.received_steady_ns) / 1e9), 0.0);
               EXPECT_EQ(ci.k, info.k);
               EXPECT_EQ(di.r, info.r);
               return true;
@@ -274,7 +274,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
       if (!value.capture.valid && value.capture.reason == "raw_camera_info_invalid" &&
           value.capture.stamp == malformed_info.header.stamp &&
           value.capture.raw_gid == senior_sensor_ingress::gid_hex(rgb_info_publisher->get_gid()) &&
-          value.capture.received_steady > 0) return true;
+          (static_cast<double>(value.capture.received_steady_ns) / 1e9) > 0) return true;
     }
     return false;
   }));

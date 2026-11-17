@@ -1,5 +1,7 @@
-#include "senior_motion_msgs/sensor_timing.hpp"
 #pragma once
+
+#include "senior_motion_msgs/sensor_timing.hpp"
+#include "senior_motion_msgs/sample_time.hpp"
 
 #include <array>
 #include <deque>
@@ -49,7 +51,7 @@ private:
   void invalidate(const std::string & reason, bool owner_lost = false);
   std::optional<int64_t> capture_age(const Header & header, double steady) noexcept;
   bool originals_current(const Candidate & body, double steady);
-  bool clocks_ok(double steady);
+  bool clocks_ok(int64_t ros_ns, double steady);
   std::string output_gid() const;
 
   std::mutex mutex_;
@@ -59,7 +61,8 @@ private:
   std::string raw_boot_, tf_gid_, tf_boot_, tf_raw_gid_, producer_gid_, producer_boot_, relay_boot_;
   std::set<std::string> retired_boots_, retired_tf_gids_, retired_tf_raw_gids_, retired_producer_gids_;
   uint64_t tf_generation_ = 0, raw_generation_ = 0, producer_generation_ = 0, producer_sequence_ = 0, relay_sequence_ = 0;
-  double producer_floor_steady_ = 0.0, last_steady_ = 0.0;
+  senior_motion_msgs::time::ClockTracker clock_;
+  double producer_floor_steady_ = 0.0;
   bool failed_ = false, tf_ready_ = false, tf_needs_new_generation_ = false, producer_ready_ = false;
   sensor_timing::Policy sensor_policy_;
   sensor_timing::AgeSummary sensor_ages_;

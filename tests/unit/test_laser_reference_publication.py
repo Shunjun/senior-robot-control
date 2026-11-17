@@ -8,45 +8,59 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
-from control_process_test_support import capture_inputs, make_core, publish_inputs
+from control_process_test_support import (
+    capture_inputs,
+    generic_motion_profile,
+    make_core,
+    publish_inputs,
+)
 from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output
 from senior_robot.motion_observation_adapter import NativeObservationRosBridge
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import capture_fields, sample_time
+
+from senior_control.sensors.sample_time import SampleTime
 
 
 def native(value):
     return json.loads(json.dumps(value), object_hook=lambda fields: N(**fields))
 
 
-def synthetic_laser(value, host):
-    """Original capture omitted producer clocks; explicit synthetic 1x source only."""
-    from source_time_test_support import wire_time
-
+def laser_with_captures(value, *, first_time, last_time):
+    """Geometry replay with explicit immutable original endpoint records."""
     value = copy.deepcopy(value)
-    end = value["header"]["stamp"]["sec"] + value["header"]["stamp"]["nanosec"] / 1e9
-    start = value["interval_start"]["sec"] + value["interval_start"]["nanosec"] / 1e9
-    for name, tick, mono in (
-        ("first_capture", start, host - (end - start)),
-        ("second_capture", end, host),
-    ):
+    for name, time in (("first_capture", first_time), ("second_capture", last_time)):
+        fields = capture_fields(time=time)
         value[name] = dict(
-            stamp=stamp(tick),
-            received_ros=stamp(tick),
-            received_steady=mono,
+            **{key: vars(item) if isinstance(item, N) else item for key, item in fields.items()},
             frame_id="laser",
-            raw_gid="scan",
-            bridge_gid="bridge",
-            source_epoch="synthetic-laser",
+            raw_gid="cc" * 24,
+            bridge_gid="dd" * 24,
+            source_epoch="laser-source",
             bridge_boot_id="boot",
             capture_generation=1,
-            sequence=max(1, round(tick * 1e9)),
+            sequence=max(1, time.stamp_ns),
             valid=True,
             reason="",
-            timing=vars(wire_time(mono, tick=tick, sequence=max(1, round(tick * 1e9)))),
         )
     return native(value)
+
+
+def receipt_info(gid, sample):
+    return {
+        "publisher_gid": gid,
+        "native_receipt_authenticated": True,
+        "native_writer_name": {
+            b"wheel": "drive",
+            b"imu": "senior_sim_bridge",
+            b"laser": "scan_motion_node",
+        }[gid],
+        "native_writer_namespace": "/",
+        "native_received_steady": sample.received_steady_ns / 1e9,
+        "sample_time": sample,
+        "receipt_generation": 1,
+        "receipt_sequence": sample.stamp_ns,
+    }
 
 
 def stamp(seconds):
@@ -102,7 +116,7 @@ class Node:
             "/imu/data": ("senior_sim_bridge", b"imu"),
             "/motion/scan": ("scan_motion_node", b"laser"),
             "/motion/core_reference": ("motion_fusion", b"fusion"),
-        }[topic.removesuffix("/timed")]
+        }[topic]
         return [N(node_name=name, node_namespace="/", endpoint_gid=gid)]
 
     def get_logger(self):
@@ -119,7 +133,7 @@ def phase(monkeypatch):
         "rclpy.qos": {"qos_profile_sensor_data": N()},
         "rclpy.time": {"Time": N},
         "sensor_msgs.msg": {"Imu": N},
-        "senior_motion_msgs.msg": {"ScanMotion": N, "TimedImu": N, "TimedOdometry": N},
+        "senior_motion_msgs.msg": {"ScanMotion": N},
         "std_msgs.msg": {"String": lambda: N(data="")},
         "tf2_ros": {"TransformException": type("TransformException", (Exception,), {})},
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
@@ -127,14 +141,19 @@ def phase(monkeypatch):
         module = ModuleType(name)
         vars(module).update(fields)
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setitem(sys.modules, "time", N(monotonic=lambda: clock.steady))
-    monkeypatch.setattr(motion_core_output, "time", N(monotonic=lambda: clock.steady))
-    monkeypatch.setattr("senior_robot.native_receipt.time", N(monotonic=lambda: clock.steady))
-    monkeypatch.setattr(
-        "senior_robot.motion_observation_adapter.time", N(monotonic=lambda: clock.steady)
-    )
+    test_time = N(monotonic=lambda: clock.steady, monotonic_ns=lambda: round(clock.steady * 1e9))
+    monkeypatch.setitem(sys.modules, "time", test_time)
+    monkeypatch.setattr(motion_core_output, "time", test_time)
+    monkeypatch.setattr("senior_robot.native_receipt.time", test_time)
+    monkeypatch.setattr("senior_robot.motion_observation_adapter.time", test_time)
+
+    # Replace only ROS I/O; handlers still receive full native receipt metadata.
+    def subscribe(node, message_type, topic, callback, **_kwargs):
+        return node.create_subscription(message_type, topic, callback, 10)
+
+    monkeypatch.setattr("senior_robot.native_receipt.subscribe", subscribe)
     node = Node(clock)
-    bridge = NativeObservationRosBridge(node, SimulationMotionProfile())
+    bridge = NativeObservationRosBridge(node, generic_motion_profile())
 
     def points(end):
         wheel = N(
@@ -143,14 +162,23 @@ def phase(monkeypatch):
             twist=N(twist=N(linear=N(x=0), angular=N(z=0))),
         )
         imu = N(header=N(stamp=native(stamp(end)), frame_id="base_link"), angular_velocity=N(z=0))
-        node.callbacks["/wheel/odom/timed"](
-            N(data=wheel, timing=wire_time(clock.steady, tick=end)), {"publisher_gid": b"wheel"}
+        sample = sample_time(
+            stamp_ns=round(end * 1e9),
+            received_ros_ns=round(clock.ros * 1e9),
+            received_steady_ns=round(clock.steady * 1e9),
         )
-        node.callbacks["/imu/data/timed"](
-            N(data=imu, timing=wire_time(clock.steady, tick=end)), {"publisher_gid": b"imu"}
-        )
+        node.callbacks["/wheel/odom"](wheel, receipt_info(b"wheel", sample))
+        node.callbacks["/imu/data"](imu, receipt_info(b"imu", sample))
 
     # History for the legacy progress/diagnostic publisher; driving owns raw ingress.
+    originals = {}
+    for index in range(3, 16):
+        end = index / 10
+        originals[round(end * 1e9)] = sample_time(
+            stamp_ns=round(end * 1e9),
+            received_ros_ns=round((end + 0.02) * 1e9),
+            received_steady_ns=round((128391.498658892 + end) * 1e9),
+        )
     for index in range(4, 16):
         end = index / 10
         clock.steady, clock.ros = 128391.498658892 + end, end + 0.02
@@ -158,17 +186,32 @@ def phase(monkeypatch):
         message = copy.deepcopy(case["old_laser"])
         message["header"]["stamp"], message["interval_start"] = stamp(end), stamp(end - 0.1)
         node.callbacks["/motion/scan"](
-            synthetic_laser(message, clock.steady), {"publisher_gid": b"laser"}
+            laser_with_captures(
+                message,
+                first_time=originals[round((end - 0.1) * 1e9)],
+                last_time=originals[round(end * 1e9)],
+            ),
+            receipt_info(b"laser", originals[round(end * 1e9)]),
         )
     clock.steady, clock.ros = case["old_snapshot"].values()
     bridge._timer.callback()
     assert node.packets[-1]["reference"]["end_ros"] == 1.5
     assert node.packets[-1]["reference"]["average"] is not None
-    consumer = make_core(monkeypatch, node, SimulationMotionProfile())
+    consumer = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(consumer, N(data=json.dumps(node.packets[-1])))
     node.events.clear()
     clock.steady, clock.ros = case["new_received"].values()
     points(1.6)
+    first_time = SampleTime(**case["new_laser"]["first_time"])
+    last_time = SampleTime(**case["new_laser"]["last_time"])
+
+    def new_laser(value=None):
+        return laser_with_captures(
+            case["new_laser"] if value is None else value,
+            first_time=first_time,
+            last_time=last_time,
+        )
+
     accepted = []
     before_return = []
     handler = bridge.core.laser
@@ -193,6 +236,8 @@ def phase(monkeypatch):
         accepted=accepted,
         points=points,
         before_return=before_return,
+        new_laser=new_laser,
+        laser_info=receipt_info(b"laser", last_time),
     )
     consumer.close()
 
@@ -200,8 +245,8 @@ def phase(monkeypatch):
 def test_accepted_laser_is_published_after_handler_return_before_next_timer(phase):
     before = len(phase.node.packets)
     phase.callback(
-        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
-        {"publisher_gid": b"laser"},
+        phase.new_laser(),
+        phase.laser_info,
     )
     assert phase.accepted == [True]
     assert phase.node.events[0] == (
@@ -218,20 +263,27 @@ def test_accepted_laser_is_published_after_handler_return_before_next_timer(phas
     assert len(phase.node.packets) == before + 1
     assert phase.node.events[1][0] == "publish"
     assert phase.node.packets[-1]["reference"]["end_ros"] == 1.6
-    assert body.stamp_steady == phase.case["new_received"]["steady"]
+    assert body.stamp_steady == phase.laser_info["sample_time"].sample_steady_ns / 1e9
     roots = phase.consumer.sensors.latest.vx.roots
-    assert body.deadline_steady <= min(r.measurement_steady + 1 for r in roots)
+    assert body.deadline_steady <= min(r.time.sample_steady_ns / 1e9 + 1 for r in roots)
     assert phase.node.publisher_count == 1
 
 
 def test_duplicate_and_rejected_laser_do_not_recompute_or_publish(phase):
-    message = synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"])
-    phase.callback(message, {"publisher_gid": b"laser"})
+    message = phase.new_laser()
+    phase.callback(message, phase.laser_info)
     before = (len(phase.node.packets), phase.bridge.core._sequence)
-    phase.callback(message, {"publisher_gid": b"laser"})
+    phase.callback(message, phase.laser_info)
     assert phase.accepted == [True, False]
     assert (len(phase.node.packets), phase.bridge.core._sequence) == before
-    phase.callback(message, {"publisher_gid": b"other"})
+    phase.callback(
+        message,
+        {
+            **phase.laser_info,
+            "publisher_gid": b"other",
+            "native_receipt_authenticated": False,
+        },
+    )
     assert phase.accepted == [True, False]  # Rejected origin never reaches admission.
     assert (len(phase.node.packets), phase.bridge.core._sequence) == before
     rejected = copy.deepcopy(phase.case["new_laser"])
@@ -240,7 +292,7 @@ def test_duplicate_and_rejected_laser_do_not_recompute_or_publish(phase):
     phase.clock.steady += 0.1
     phase.clock.ros = 1.72
     phase.case["handler_finished"] = dict(steady=phase.clock.steady, ros=phase.clock.ros)
-    phase.callback(synthetic_laser(rejected, phase.clock.steady), {"publisher_gid": b"laser"})
+    phase.callback(phase.new_laser(rejected), phase.laser_info)
     assert phase.accepted[-1] is False
     assert (len(phase.node.packets), phase.bridge.core._sequence) == before
     phase.bridge._timer.callback()
@@ -263,9 +315,7 @@ def test_new_laser_epoch_does_not_add_old_five_sample_recovery_gate(phase):
     message = copy.deepcopy(phase.case["new_laser"])
     message["source_epoch"] = "new-laser-epoch"
     before = len(phase.node.packets)
-    phase.callback(
-        synthetic_laser(message, phase.case["new_received"]["steady"]), {"publisher_gid": b"laser"}
-    )
+    phase.callback(phase.new_laser(message), phase.laser_info)
     assert phase.accepted == [True]
     assert len(phase.node.packets) == before + 1
     laser = next(s for s in phase.node.packets[-1]["sources"] if s["source"] == "laser")
@@ -285,8 +335,8 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
 
     phase.before_return.append(independent_consumer_tick)
     phase.callback(
-        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
-        {"publisher_gid": b"laser"},
+        phase.new_laser(),
+        phase.laser_info,
     )
     assert phase.accepted == [True] and earlier_body[0] is not None
     old_sequence = phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence
@@ -299,8 +349,8 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
 
 def test_periodic_and_immediate_publications_share_sequence_and_original_deadline(phase):
     phase.callback(
-        synthetic_laser(phase.case["new_laser"], phase.case["new_received"]["steady"]),
-        {"publisher_gid": b"laser"},
+        phase.new_laser(),
+        phase.laser_info,
     )
     immediate = phase.node.packets[-1]
     phase.clock.steady, phase.clock.ros = phase.case["next_periodic"].values()

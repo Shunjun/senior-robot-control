@@ -10,7 +10,7 @@
 #include <string>
 
 #include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
-#include <senior_motion_msgs/msg/raw_capture_header.hpp>
+#include "senior_sensor_ingress/sample_record.hpp"
 
 namespace senior_sensor_ingress {
 // One bounded raw scan source, independent of the image process and its clocks.
@@ -52,8 +52,8 @@ public:
     const auto & header = scan.capture;
     if (!header.valid || header.sequence == 0 || scan.ranges.size() > 2048 ||
         scan.intensities.size() > 2048 || !std::isfinite(now) ||
-        !std::isfinite(header.received_steady) || now < header.received_steady ||
-        now - (static_cast<double>(header.timing.capture_end_steady_ns) / 1e9) > age_limit_ ||
+        header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns || now < steady_seconds(header.received_steady_ns) ||
+        now - steady_seconds(header.sample_steady_ns) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     expire(now);
     if ((!values_.empty() && header.sequence <= values_.back().capture.sequence) ||
@@ -121,8 +121,8 @@ private:
   void expire(double now)
   {
     while (!values_.empty() &&
-           (now < values_.front().capture.received_steady ||
-            now - (static_cast<double>(values_.front().capture.timing.capture_end_steady_ns) / 1e9) > age_limit_)) retire_front();
+           (now < steady_seconds(values_.front().capture.received_steady_ns) ||
+            now - steady_seconds(values_.front().capture.sample_steady_ns) > age_limit_)) retire_front();
   }
 
   size_t capacity_;

@@ -154,7 +154,7 @@ TEST(StaticTfReceipt, AuthenticPublisherZeroStampAndCurrentInvalidation)
 
 #include <rosgraph_msgs/msg/clock.hpp>
 
-TEST(StaticTfReceipt, StartupZeroReceiptIsPreservedAcrossClockAdmission)
+TEST(StaticTfReceipt, ZeroClockAdmitsStaticConfigurationWithoutRestamping)
 {
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
@@ -201,7 +201,7 @@ TEST(StaticTfReceipt, StartupZeroReceiptIsPreservedAcrossClockAdmission)
   publisher->publish(message);
   ASSERT_TRUE(wait_for_tf([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & item : received) if (item.valid && !item.admitted) return true;
+    for (const auto & item : received) if (item.valid && item.admitted) return true;
     return false;
   }));
   rosgraph_msgs::msg::Clock tick;
@@ -221,7 +221,8 @@ TEST(StaticTfReceipt, StartupZeroReceiptIsPreservedAcrossClockAdmission)
   EXPECT_EQ(admitted.received_ros.sec, 0);
   EXPECT_EQ(admitted.received_ros.nanosec, 0u);
   EXPECT_GT(admitted.received_steady, 0.0);
-  EXPECT_GT(admitted.admitted_from_ros.sec, 0);
+  EXPECT_EQ(admitted.admitted_from_ros.sec, 0);
+  EXPECT_EQ(admitted.admitted_from_ros.nanosec, 0u);
   EXPECT_GT(admitted.admitted_from_steady, admitted.received_steady);
   EXPECT_EQ(admitted.edges[0].stamp.sec, 0);
 }

@@ -16,7 +16,9 @@ TEST(ScanLedger, RawSafetyAndFilteredBeamsRemainBoundToIssuedFrame)
   original.capture.capture_generation = 1;
   original.capture.source_epoch = "scan-source";
   original.capture.sequence = 1;
-  original.capture.received_steady = 10.0;
+  original.capture.received_steady_ns = 10000000000ULL;
+  original.capture.sample_steady_ns = 10000000000ULL;
+  original.capture.clock_generation = 1;
   original.capture.valid = true;
   original.ranges = {1.0f, std::numeric_limits<float>::quiet_NaN(), 3.0f};
   ASSERT_TRUE(ledger.observe(original, 10.0));
@@ -28,7 +30,7 @@ TEST(ScanLedger, RawSafetyAndFilteredBeamsRemainBoundToIssuedFrame)
   EXPECT_FALSE(ledger.filtered_ranges(original.capture, filtered, 10.1));
   EXPECT_FALSE(ledger.same_ranges(original.capture, filtered, 10.1));
   auto forged = original.capture;
-  forged.received_steady += 0.01;
+  forged.received_steady_ns += 10000000ULL;
   EXPECT_FALSE(ledger.same_ranges(forged, original.ranges, 10.1));
   EXPECT_EQ(ledger.match(original.capture, 11.01), ScanLedger::Match::retired);
 }
@@ -40,7 +42,9 @@ TEST(ScanLedger, RetiredGenerationAndCapacityDoNotRevokeSuccessor)
   scan.capture.bridge_boot_id = "scan-boot";
   scan.capture.capture_generation = 1;
   scan.capture.source_epoch = "scan-source";
-  scan.capture.received_steady = 10.0;
+  scan.capture.received_steady_ns = 10000000000ULL;
+  scan.capture.sample_steady_ns = 10000000000ULL;
+  scan.capture.clock_generation = 1;
   scan.capture.valid = true;
   scan.ranges = {1.0f};
   scan.capture.sequence = 1;

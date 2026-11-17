@@ -13,9 +13,7 @@
 #include <rmw/types.h>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <senior_motion_msgs/msg/timed_image.hpp>
-#include <senior_motion_msgs/msg/timed_camera_info.hpp>
-#include <senior_motion_msgs/source_timing.hpp>
+#include "senior_sensor_ingress/sample_record.hpp"
 #include <std_msgs/msg/header.hpp>
 #include <senior_motion_msgs/msg/bounded_depth_evidence.hpp>
 #include <senior_motion_msgs/msg/bounded_semantic_evidence.hpp>
@@ -44,7 +42,7 @@ public:
 
 private:
   struct Source {
-    senior_motion_msgs::timing::SourceOrder timing_order;
+    StampFrontier stamps;
     bool active = false;
     std::string raw_gid;
     std::string epoch;
@@ -62,16 +60,16 @@ private:
   std::string output_gid(size_t index) const;
   bool qualify_source(size_t index, const rmw_gid_t & incoming,
                       const std_msgs::msg::Header & source_header,
-                      int64_t received_ros_ns, double received_steady);
+                      int64_t received_ros_ns, uint64_t received_steady_ns);
   void inspect_topology();
   void invalidate_all(const std::string & reason, size_t trigger = 4,
                       const std_msgs::msg::Header * source_header = nullptr,
-                      int64_t received_ros_ns = 0, double received_steady = 0.0,
+                      int64_t received_ros_ns = 0, uint64_t received_steady_ns = 0,
                       const std::string & raw_gid = "");
   Header header(size_t index, const std::string & reason);
   bool clock_ok();
-  void on_image(size_t index, const senior_motion_msgs::msg::TimedImage & timed, const rclcpp::MessageInfo & info);
-  void on_info(size_t index, const senior_motion_msgs::msg::TimedCameraInfo & timed, const rclcpp::MessageInfo & info);
+  void on_image(size_t index, const sensor_msgs::msg::Image & message, const rclcpp::MessageInfo & info);
+  void on_info(size_t index, const sensor_msgs::msg::CameraInfo & message, const rclcpp::MessageInfo & info);
   void on_depth(const senior_motion_msgs::msg::BoundedDepthEvidence & message,
                 const rclcpp::MessageInfo & info);
   void inspect_depth_owner();
@@ -111,12 +109,13 @@ private:
   std::string boot_id_;
   uint64_t counter_ = 0;
   uint64_t capture_generation_ = 1;
-  double last_steady_ = 0;
+  senior_motion_msgs::time::ClockTracker clock_;
+  uint64_t clock_generation_ = 1;
   bool failed_ = false;
   rclcpp::Publisher<RawImage>::SharedPtr rgb_publisher_, depth_publisher_;
   rclcpp::Publisher<RawInfo>::SharedPtr rgb_info_publisher_, depth_info_publisher_;
-  rclcpp::Subscription<senior_motion_msgs::msg::TimedImage>::SharedPtr rgb_subscription_, depth_subscription_;
-  rclcpp::Subscription<senior_motion_msgs::msg::TimedCameraInfo>::SharedPtr rgb_info_subscription_, depth_info_subscription_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr rgb_subscription_, depth_subscription_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr rgb_info_subscription_, depth_info_subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 }  // namespace senior_sensor_ingress

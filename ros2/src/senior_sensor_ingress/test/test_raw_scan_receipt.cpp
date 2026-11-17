@@ -72,7 +72,7 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
   std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
   ASSERT_TRUE(wait_until([&] {return old->get_subscription_count() > 0;}));
   Scan scan;
-  scan.header.stamp = fixture->now();
+  scan.header.stamp = fixture->now() - rclcpp::Duration::from_seconds(.2);
   scan.header.frame_id = "laser";
   scan.angle_min = -1; scan.angle_max = 1; scan.angle_increment = 1;
   scan.range_min = 0.1; scan.range_max = 10;
@@ -86,9 +86,16 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto & msg : received) {
       if (msg.capture.valid && msg.capture.raw_gid == old_gid &&
-          msg.capture.stamp == scan.header.stamp && msg.capture.received_steady > 0 &&
+          msg.capture.stamp == scan.header.stamp && (static_cast<double>(msg.capture.received_steady_ns) / 1e9) > 0 &&
           msg.capture.bridge_gid == bridge_gid && msg.ranges.size() == 3 &&
-          msg.ranges[0] == 1 && msg.ranges[1] == 2 && msg.ranges[2] == 3) return true;
+          msg.ranges[0] == 1 && msg.ranges[1] == 2 && msg.ranges[2] == 3) {
+        EXPECT_EQ(msg.capture.received_steady_ns - msg.capture.sample_steady_ns,
+          static_cast<uint64_t>(rclcpp::Time(msg.capture.received_ros).nanoseconds() -
+                                rclcpp::Time(msg.capture.stamp).nanoseconds()));
+        EXPECT_GE(msg.capture.received_steady_ns - msg.capture.sample_steady_ns, 200000000ULL);
+        EXPECT_GT(msg.capture.clock_generation, 0u);
+        return true;
+      }
     }
     return false;
   }));

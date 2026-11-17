@@ -1,4 +1,5 @@
 #include "static_lidar_tf_ingress.hpp"
+#include <senior_motion_msgs/sample_time.hpp>
 
 #include <iterator>
 #include <stdexcept>
@@ -218,7 +219,7 @@ void StaticLidarTfIngress::poll()
     // has never admitted a scan. Unadmitted valid receipts may still be promoted.
     startup_cursor_ = candidate;
   }
-  const double now_steady = std::chrono::duration<double>(now.time_since_epoch()).count();
+  const double now_steady = static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
   if (!candidate->valid || !candidate->admitted || candidate->generation == 0 ||
     candidate->bridge_boot_id.empty() || candidate->bridge_boot_id.size() > 64 ||
     !valid_times(*candidate, 0, now_steady))
@@ -267,8 +268,8 @@ bool StaticLidarTfIngress::admits(const senior_motion_msgs::msg::RawCaptureHeade
   // The producer and scan ingress share the host monotonic clock. A latched
   // static receipt is a fence, so later scans do not renew its admission.
   return scan.frame_id == lidar_ &&
-         static_cast<double>(scan.timing.capture_start_steady_ns) / 1e9 >= active_->admitted_from_steady &&
-         std::isfinite(scan.received_steady) && scan.received_steady >= active_->admitted_from_steady;
+         static_cast<double>(scan.sample_steady_ns) / 1e9 >= active_->admitted_from_steady &&
+         static_cast<double>(scan.received_steady_ns) / 1e9 >= active_->admitted_from_steady;
 }
 
 StaticLidarTfIngress::Receipt::ConstSharedPtr StaticLidarTfIngress::verify_mount(

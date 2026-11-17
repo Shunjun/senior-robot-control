@@ -294,12 +294,17 @@ def live_receipt_query(payload, started, frame, seed):
         return stamp.sec * 1_000_000_000 + stamp.nanosec
 
     stamp, received = timestamp(capture.stamp), timestamp(capture.received_ros)
-    if not 0 < stamp <= received or received - stamp > 500_000_000:
+    if not 0 <= stamp <= received or received - stamp > 500_000_000:
         raise PreflightError("Live scan receipt has invalid ROS timing")
 
     def check_fresh():
-        now = time.monotonic()
-        if not started < capture.received_steady <= now or now - capture.received_steady > 0.5:
+        now_ns = time.monotonic_ns()
+        if (
+            not round(started * 1e9) < capture.received_steady_ns <= now_ns
+            or capture.sample_steady_ns > capture.received_steady_ns
+            or now_ns - capture.sample_steady_ns > 500_000_000
+            or not capture.clock_generation
+        ):
             raise PreflightError("Live scan receipt is stale or predates this acquisition")
 
     check_fresh()
@@ -328,7 +333,9 @@ def live_receipt_query(payload, started, frame, seed):
         "frame_id": frame,
         "stamp_ns": stamp,
         "received_ros_ns": received,
-        "received_steady": capture.received_steady,
+        "received_steady_ns": capture.received_steady_ns,
+        "sample_steady_ns": capture.sample_steady_ns,
+        "clock_generation": capture.clock_generation,
         "raw_gid": capture.raw_gid,
         "bridge_gid": capture.bridge_gid,
         "bridge_boot_id": capture.bridge_boot_id,

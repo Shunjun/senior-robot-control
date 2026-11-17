@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <string>
 
-#include <senior_motion_msgs/msg/raw_capture_header.hpp>
+#include "senior_sensor_ingress/sample_record.hpp"
 
 namespace senior_sensor_ingress {
 // Bounded first-receipt metadata only; never retains an image payload.
@@ -53,9 +53,9 @@ public:
   bool observe(size_t stream, const Header & header, double now_steady)
   {
     if (stream >= entries_.size() || !header.valid || header.sequence == 0 ||
-        !std::isfinite(now_steady) || !std::isfinite(header.received_steady) ||
-        now_steady < header.received_steady ||
-        now_steady - (static_cast<double>(header.timing.capture_end_steady_ns) / 1e9) > age_limit_ ||
+        !std::isfinite(now_steady) || header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns ||
+        now_steady < steady_seconds(header.received_steady_ns) ||
+        now_steady - steady_seconds(header.sample_steady_ns) > age_limit_ ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     auto & values = entries_[stream];
     expire(stream, now_steady);
@@ -101,8 +101,8 @@ private:
   {
     auto & values = entries_[stream];
     while (!values.empty() &&
-           (now_steady < values.front().received_steady ||
-            now_steady - (static_cast<double>(values.front().timing.capture_end_steady_ns) / 1e9) > age_limit_)) {
+           (now_steady < steady_seconds(values.front().received_steady_ns) ||
+            now_steady - steady_seconds(values.front().sample_steady_ns) > age_limit_)) {
       retire_front(stream);
     }
   }

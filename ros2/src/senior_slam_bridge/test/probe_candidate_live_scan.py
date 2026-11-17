@@ -132,7 +132,9 @@ def probe(executable, preflight, root):
                 if msg.capture.valid and msg.capture.sequence == receipt["sequence"]
             ]
             for field in (
-                "received_steady",
+                "received_steady_ns",
+                "sample_steady_ns",
+                "clock_generation",
                 "bridge_boot_id",
                 "source_epoch",
                 "capture_generation",

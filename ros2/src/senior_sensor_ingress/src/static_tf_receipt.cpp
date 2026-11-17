@@ -1,7 +1,9 @@
 #include "senior_sensor_ingress/static_tf_receipt.hpp"
+#include <senior_motion_msgs/sample_time.hpp>
 
 #include <cmath>
 #include <map>
+#include <limits>
 #include <set>
 
 namespace senior_sensor_ingress {
@@ -68,7 +70,7 @@ std::string hex_gid(const uint8_t * data, size_t length)
 }
 double steady_now()
 {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
 }
 std::string make_boot()
 {
@@ -151,9 +153,17 @@ void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
 
 bool StaticTfReceipt::update_clock(int64_t ros_ns, double steady)
 {
-  if (!std::isfinite(steady) || steady <= 0 ||
-      (last_steady_ > 0 && steady < last_steady_)) {
+  if (ros_ns < 0 || !std::isfinite(steady) || steady < 0 ||
+      steady >= static_cast<double>(std::numeric_limits<uint64_t>::max()) / 1e9) {
     invalidate("clock_invalid", false);
+    clock_ready_ = false;
+    last_ros_ns_ = ros_ns;
+    last_steady_ = steady;
+    return false;
+  }
+  const auto observed = clock_.observe(ros_ns, static_cast<uint64_t>(steady * 1e9));
+  if (observed.discontinuity) {
+    invalidate("clock_rollback", false);
     clock_ready_ = false;
     last_ros_ns_ = ros_ns;
     last_steady_ = steady;

@@ -129,8 +129,8 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
   input.camera_info_stamp = input.camera_info_capture.stamp;
   input.received_ros = input.depth_capture.received_ros;
   input.camera_info_received_ros = input.camera_info_capture.received_ros;
-  input.received_steady = input.depth_capture.received_steady;
-  input.camera_info_received_steady = input.camera_info_capture.received_steady;
+  input.received_steady = (static_cast<double>(input.depth_capture.received_steady_ns) / 1e9);
+  input.camera_info_received_steady = (static_cast<double>(input.camera_info_capture.received_steady_ns) / 1e9);
   input.frame_id = input.depth_capture.frame_id;
   input.raw_source = input.depth_capture.raw_gid;
   input.camera_info_source = input.camera_info_capture.raw_gid;
@@ -154,7 +154,7 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
   }
   const auto original_capture = input.depth_capture;
   input.sequence = 2;
-  input.depth_capture.received_steady += 0.001;
+  input.depth_capture.received_steady_ns += static_cast<uint64_t>((0.001) * 1e9);
   owner->publish(input);
   EXPECT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
@@ -256,8 +256,8 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
   input.camera_info_stamp = input.camera_info_capture.stamp;
   input.received_ros = input.depth_capture.received_ros;
   input.camera_info_received_ros = input.camera_info_capture.received_ros;
-  input.received_steady = input.depth_capture.received_steady;
-  input.camera_info_received_steady = input.camera_info_capture.received_steady;
+  input.received_steady = (static_cast<double>(input.depth_capture.received_steady_ns) / 1e9);
+  input.camera_info_received_steady = (static_cast<double>(input.camera_info_capture.received_steady_ns) / 1e9);
   input.sequence = 2;
   successor->publish(input);
   ASSERT_TRUE(wait_until([&] {
