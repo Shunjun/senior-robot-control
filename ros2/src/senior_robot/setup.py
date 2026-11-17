@@ -49,7 +49,6 @@ setup(
             "slam_adapter = senior_robot.slam_adapter:main",
             "localization_node = senior_robot.localization_node:main",
             "agent_adapter = senior_robot.agent_adapter:main",
-            "simulation_camera = senior_robot.simulation_camera:main",
         ]
     },
     install_requires=["setuptools"],

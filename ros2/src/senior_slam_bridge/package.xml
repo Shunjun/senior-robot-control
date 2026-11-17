@@ -15,7 +15,7 @@
   <depend>senior_motion_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
-  <depend version_eq="2.6.10">slam_toolbox</depend>
+  <depend>slam_toolbox</depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <test_depend>ament_cmake_test</test_depend>
   <test_depend>ament_index_python</test_depend>

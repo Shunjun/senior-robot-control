@@ -2,4 +2,8 @@ cmake_minimum_required(VERSION 3.8)
 project(senior_sim)
 find_package(ament_cmake REQUIRED)
 install(DIRECTORY urdf worlds launch config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/simulation_camera.py DESTINATION lib/${PROJECT_NAME}
+  RENAME simulation_camera)
+install(PROGRAMS scripts/world_reference.py DESTINATION lib/${PROJECT_NAME}
+  RENAME world_reference)
 ament_package()

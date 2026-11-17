@@ -5,11 +5,13 @@ from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
-from source_time_test_support import DOMAIN
+from sensor_time_test_support import sample_time
 
 from senior_control.motion.startup_learning import StartupLearning
 from senior_control.runtime.learning_owner import LearningRecordOwner
 from senior_control.safety.learning_view import LearningFilterView
+
+DOMAIN = "00000000-0000-0000-0000-000000000001"
 
 
 class ImmediateWorker:
@@ -209,15 +211,25 @@ def write_geometry_record(path, boundary):
     write_record(path, record)
 
 
-def simulation_point(source, stamp, received, values, sequence=1, *, measurement_steady=None):
-    """Explicit synthetic 1x source; production never derives physical time here."""
-    from dataclasses import replace
+def learning_point(source, stamp_ns, received_ros_ns, received_steady_ns, values, sequence=1):
+    """Explicit point input with real mapping, no environment-specific admission."""
+    from senior_control.motion.observations import Frame, SourceStatus
+    from senior_control.motion.sample_types import PointObservation
 
-    from source_time_test_support import capture_time
-    from test_unified_motion_runtime import point
-
-    host = received if measurement_steady is None else measurement_steady
-    return replace(
-        point(source, stamp, received, values, sequence, measurement_steady=host),
-        measurement=capture_time(host, sequence=sequence).measurement,
+    return PointObservation(
+        source=source,
+        frame=Frame.BODY,
+        time=sample_time(
+            stamp_ns=stamp_ns,
+            received_ros_ns=received_ros_ns,
+            received_steady_ns=received_steady_ns,
+        ),
+        epoch="test-producer",
+        sequence=sequence,
+        quality=1.0,
+        status=SourceStatus.VALID,
+        values=values,
+        covariance=None,
+        model_id=None,
+        body_from_sensor=None,
     )

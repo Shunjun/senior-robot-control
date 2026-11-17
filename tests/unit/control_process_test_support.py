@@ -52,11 +52,8 @@ class RecordingReports:
 def local_resources(monkeypatch):
     import senior_robot.motion_core_output as output
     import senior_robot.runtime_reports as reports
-    from source_time_test_support import DOMAIN
 
     import senior_control.motion.process_resources as processes
-
-    monkeypatch.setattr("senior_control.sensors.time_proof.monotonic_domain", lambda: DOMAIN)
 
     monkeypatch.setattr(output, "ProcessWorker", lambda **_: LocalWorker())
     monkeypatch.setattr(processes, "ProcessWorker", lambda **_: LocalWorker())
@@ -74,40 +71,35 @@ class Reception:
 
     def capture(self, packet):
         """Historic raw-source fixture enters only the reception-side offline adapter."""
-        from dataclasses import replace
-
-        from test_unified_motion_runtime import point
-
-        from senior_control.motion.observations import Source
-        from senior_control.sensors.time_proof import measurement_time
+        from senior_control.motion.observations import Frame, Source, SourceStatus
+        from senior_control.motion.sample_types import PointObservation
+        from senior_control.sensors.sample_time import SampleTime
 
         for row in packet.get("sources", []):
             sample = row["sample"]
             source = row["source"]
             if source not in {"wheel", "imu"} or "values" not in sample:
                 continue
-            stamp = sample.get("stamp_ros", sample.get("end_ros"))
             values = sample["values"]
             values = (values[0], values[-1]) if source == "wheel" else (values[0],)
-            raw = replace(
-                point(
-                    Source(source),
-                    stamp,
-                    sample["received_steady"],
-                    values,
-                    sample["sequence"],
-                    measurement_steady=sample["measurement_steady"],
-                ),
+            raw = PointObservation(
+                source=Source(source),
+                frame=Frame.BODY,
+                time=SampleTime(**sample["time"]),
                 epoch=sample["epoch"],
-                measurement=measurement_time(sample["measurement"])
-                if sample.get("measurement") is not None
-                else None,
+                sequence=sample["sequence"],
+                quality=1.0,
+                status=SourceStatus.VALID,
+                values=values,
+                covariance=None,
+                model_id=None,
+                body_from_sensor=None,
             )
             self.sensors.ingest(
                 raw,
                 packet["sampled_ros"],
                 packet["sampled_steady"],
-                sample.get("received_ros", packet["sampled_ros"]),
+                raw.time.received_ros_ns / 1e9,
             )
         self.sensors.ingest_packet(
             {
@@ -119,19 +111,6 @@ class Reception:
                 ],
             }
         )
-
-        # //Compatible: historic test captures retained pose/time but omitted the native capture
-        # sequence and receipt ROS clock. Deterministic timestamp identities
-        # and the later captured snapshot clock conservatively reconstruct the
-        # offline test boundary; neither advances a receipt or invents a pose.
-        self.sensors.poses = [
-            {
-                **row,
-                "sequence": row.get("sequence", round(row["stamp_ros"] * 1e9)),
-                "received_ros": row.get("received_ros", packet["sampled_ros"]),
-            }
-            for row in self.sensors.poses
-        ]
 
     def publish(self, ros, steady):
         self.sensors.ingest_poses(self.sensors.poses)

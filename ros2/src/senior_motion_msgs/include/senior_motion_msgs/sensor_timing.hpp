@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <limits>
 #include <optional>
+#include "senior_motion_msgs/sample_time.hpp"
 
 namespace sensor_timing {
 struct Policy {
@@ -18,6 +19,15 @@ struct Policy {
       throw std::invalid_argument("shared sensor policy is required");
     soft_ns=static_cast<int64_t>(std::llround(soft_ms*1e6));
     hard_ns=static_cast<int64_t>(std::llround(hard_ms*1e6));
+  }
+  int64_t age_ns(const senior_motion_msgs::time::SampleTime &sample,
+      uint64_t now_steady_ns) const {
+    if (sample.sample_steady_ns > sample.received_steady_ns ||
+        now_steady_ns < sample.received_steady_ns ||
+        now_steady_ns - sample.sample_steady_ns >
+          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      throw std::invalid_argument("invalid monotonic sensor clock");
+    return static_cast<int64_t>(now_steady_ns - sample.sample_steady_ns);
   }
   std::optional<int64_t> try_age_ns(uint64_t measured_ns,
       double received_steady, double now_steady) const noexcept {

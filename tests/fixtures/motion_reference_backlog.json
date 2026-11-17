@@ -122,7 +122,6 @@
         "sec": 1,
         "nanosec": 401000000
       },
-      "received_steady": 125716.813343741,
       "frame_id": "laser_link",
       "raw_gid": "010fff1aea73ddc500000000000013030000000000000000",
       "bridge_gid": "010fff1a2574143e00000000000013030000000000000000",
@@ -131,7 +130,10 @@
       "capture_generation": 3,
       "sequence": 15,
       "valid": true,
-      "reason": ""
+      "reason": "",
+      "received_steady_ns": 125716813343741,
+      "sample_steady_ns": 125716812343741,
+      "clock_generation": 1
     },
     "stamp": {
       "sec": 1,
@@ -890,7 +892,15 @@
           "epoch": "[\"3ae33cc9415043f7988d927d8045356c\", {\"sample_gid\": null, \"topology_gid\": \"010fff1ae573856a00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
           "x": -3.3201146849462265e-20,
           "y": 7.087406070515872e-40,
-          "yaw": 9.902527193852835e-20
+          "yaw": 9.902527193852835e-20,
+          "time": {
+            "stamp_ns": 1360000000,
+            "received_ros_ns": 1360000000,
+            "received_steady_ns": 125716778060782,
+            "sample_steady_ns": 125716778060782,
+            "clock_generation": 1
+          },
+          "sequence": 1360000000
         }
       ],
       "reference": {
@@ -972,6 +982,20 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "first_time": {
+              "stamp_ns": 1200000000,
+              "received_ros_ns": 1200000000,
+              "received_steady_ns": 125716620020824,
+              "sample_steady_ns": 125716620020824,
+              "clock_generation": 1
+            },
+            "last_time": {
+              "stamp_ns": 1300000000,
+              "received_ros_ns": 1300000000,
+              "received_steady_ns": 125716720020824,
+              "sample_steady_ns": 125716720020824,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.510020824
@@ -997,6 +1021,13 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1400000000,
+              "received_ros_ns": 1400000000,
+              "received_steady_ns": 125716810852449,
+              "sample_steady_ns": 125716810852449,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.610852449
@@ -1023,6 +1054,13 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1360000000,
+              "received_ros_ns": 1360000000,
+              "received_steady_ns": 125716778060782,
+              "sample_steady_ns": 125716778060782,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.577060782
@@ -1042,7 +1080,15 @@
           "epoch": "[\"3ae33cc9415043f7988d927d8045356c\", {\"sample_gid\": null, \"topology_gid\": \"010fff1ae573856a00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
           "x": -3.3201146849462265e-20,
           "y": 7.087406070515872e-40,
-          "yaw": 9.902527193852835e-20
+          "yaw": 9.902527193852835e-20,
+          "time": {
+            "stamp_ns": 1360000000,
+            "received_ros_ns": 1360000000,
+            "received_steady_ns": 125716778060782,
+            "sample_steady_ns": 125716778060782,
+            "clock_generation": 1
+          },
+          "sequence": 1360000000
         },
         {
           "stamp_ros": 1.42,
@@ -1050,7 +1096,15 @@
           "epoch": "[\"3ae33cc9415043f7988d927d8045356c\", {\"sample_gid\": null, \"topology_gid\": \"010fff1ae573856a00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
           "x": -3.0614021247387e-20,
           "y": 9.66496846573016e-40,
-          "yaw": 1.0874865904124613e-19
+          "yaw": 1.0874865904124613e-19,
+          "time": {
+            "stamp_ns": 1420000000,
+            "received_ros_ns": 1420000000,
+            "received_steady_ns": 125716837825657,
+            "sample_steady_ns": 125716837825657,
+            "clock_generation": 1
+          },
+          "sequence": 1420000000
         }
       ],
       "reference": {
@@ -1132,6 +1186,20 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "first_time": {
+              "stamp_ns": 1300000000,
+              "received_ros_ns": 1300000000,
+              "received_steady_ns": 125716726852032,
+              "sample_steady_ns": 125716726852032,
+              "clock_generation": 1
+            },
+            "last_time": {
+              "stamp_ns": 1400000000,
+              "received_ros_ns": 1400000000,
+              "received_steady_ns": 125716826852032,
+              "sample_steady_ns": 125716826852032,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.614852032
@@ -1157,6 +1225,13 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1440000000,
+              "received_ros_ns": 1440000000,
+              "received_steady_ns": 125716867165574,
+              "sample_steady_ns": 125716867165574,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.667165574
@@ -1183,6 +1258,13 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1420000000,
+              "received_ros_ns": 1420000000,
+              "received_steady_ns": 125716837825657,
+              "sample_steady_ns": 125716837825657,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.634825657
@@ -1202,7 +1284,15 @@
           "epoch": "[\"3ae33cc9415043f7988d927d8045356c\", {\"sample_gid\": null, \"topology_gid\": \"010fff1ae573856a00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
           "x": -3.3201146849462265e-20,
           "y": 7.087406070515872e-40,
-          "yaw": 9.902527193852835e-20
+          "yaw": 9.902527193852835e-20,
+          "time": {
+            "stamp_ns": 1360000000,
+            "received_ros_ns": 1360000000,
+            "received_steady_ns": 125716778060782,
+            "sample_steady_ns": 125716778060782,
+            "clock_generation": 1
+          },
+          "sequence": 1360000000
         },
         {
           "stamp_ros": 1.42,
@@ -1210,7 +1300,15 @@
           "epoch": "[\"3ae33cc9415043f7988d927d8045356c\", {\"sample_gid\": null, \"topology_gid\": \"010fff1ae573856a00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
           "x": -3.0614021247387e-20,
           "y": 9.66496846573016e-40,
-          "yaw": 1.0874865904124613e-19
+          "yaw": 1.0874865904124613e-19,
+          "time": {
+            "stamp_ns": 1420000000,
+            "received_ros_ns": 1420000000,
+            "received_steady_ns": 125716837825657,
+            "sample_steady_ns": 125716837825657,
+            "clock_generation": 1
+          },
+          "sequence": 1420000000
         }
       ],
       "reference": {
@@ -1292,6 +1390,20 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "first_time": {
+              "stamp_ns": 1300000000,
+              "received_ros_ns": 1300000000,
+              "received_steady_ns": 125716726852032,
+              "sample_steady_ns": 125716726852032,
+              "clock_generation": 1
+            },
+            "last_time": {
+              "stamp_ns": 1400000000,
+              "received_ros_ns": 1400000000,
+              "received_steady_ns": 125716826852032,
+              "sample_steady_ns": 125716826852032,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.614852032
@@ -1317,6 +1429,13 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1460000000,
+              "received_ros_ns": 1460000000,
+              "received_steady_ns": 125716902911907,
+              "sample_steady_ns": 125716902911907,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.69991190701
@@ -1343,11 +1462,19 @@
               "x": 0,
               "y": 0,
               "yaw": 0
+            },
+            "time": {
+              "stamp_ns": 1420000000,
+              "received_ros_ns": 1420000000,
+              "received_steady_ns": 125716837825657,
+              "sample_steady_ns": 125716837825657,
+              "clock_generation": 1
             }
           },
           "valid_until_steady": 125717.634825657
         }
       ]
     }
-  ]
+  ],
+  "sample_time_fixture_provenance": "Synthetic standard-ROS first receipts for geometry/control replay, not measured transport age: receipt ROS equals original stamp, mapped steady equals retained first receipt; interval starts are shifted by original ROS duration. Immutable records are reused by source/epoch/sequence/stamp. Historical numeric observations are retained; no manufacturer acquisition or timing proof is claimed."
 }

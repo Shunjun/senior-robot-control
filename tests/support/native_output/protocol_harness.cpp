@@ -17,8 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <cassert>
-#include "senior_motion_msgs/source_timing.hpp"
-#include "senior_motion_msgs/msg/actuator_target.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -28,12 +27,12 @@
 #include "motion_output_guard.cpp"
 #undef main
 #undef private
-using Publication = rclcpp::Publisher<senior_motion_msgs::msg::ActuatorTarget>;
+using Publication = rclcpp::Publisher<geometry_msgs::msg::Twist>;
 int main(int argc, char** argv) {
   assert(argc == 2);
   int pair[2];
   assert(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) == 0);
-  MotionOutput receiver(pair[1], "/control/actuator_target");
+  MotionOutput receiver(pair[1], "/cmd_vel");
   auto send_packet = [&](double vx, double deadline, uint64_t sequence, double produced) {
     std::array<unsigned char, 40> frame{};
     double wz=-0.2;
@@ -45,21 +44,20 @@ int main(int argc, char** argv) {
   auto now = [](){return static_cast<double>(MotionOutput::steady_ns())/1e9;};
   auto zero = [&]() {
     assert(!Publication::published.empty()); auto value=Publication::published.back();
-    assert(value.data.linear.x==0 && value.data.angular.z==0);
+    assert(value.linear.x==0 && value.angular.z==0);
   };
   const auto entry=now()-0.01;
   send_packet(0.3, entry+1, 1, entry); receiver.poll();
   const auto & first=Publication::published.back();
-  assert(first.data.linear.x==0.3 && first.data.angular.z==-0.2);
-  assert(first.timing.capture_start_steady_ns==static_cast<uint64_t>(llround(entry*1e9)));
+  assert(first.linear.x==0.3 && first.angular.z==-0.2);
   const auto scenario=std::string(argv[1]);
   if (scenario=="deadline") {
     receiver.deadline_=now()-0.001; receiver.poll(); zero(); assert(!receiver.disconnected_);
     const auto next=now(); send_packet(0.2, next+1, 2, next); receiver.poll();
-    assert(Publication::published.back().data.linear.x==0.2);
+    assert(Publication::published.back().linear.x==0.2);
   } else if (scenario=="expired") {
     send_packet(0.4, now()-1, 2, now()); receiver.poll();
-    assert(Publication::published.size()==1 && Publication::published.back().data.linear.x==0.3);
+    assert(Publication::published.size()==1 && Publication::published.back().linear.x==0.3);
     receiver.deadline_=now()-0.001; receiver.poll(); zero();
   } else if (scenario=="eof") {
     close(pair[0]); pair[0]=-1; receiver.poll(); zero(); assert(receiver.disconnected_);
