@@ -1,4 +1,5 @@
 #include "senior_sensor_ingress/rgbd_candidate_receipt.hpp"
+#include "senior_motion_msgs/source_timing.hpp"
 #include "senior_sensor_ingress/static_tf_receipt.hpp"
 
 #include <algorithm>
