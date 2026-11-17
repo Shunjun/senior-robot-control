@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 from test_motion_sources import config
 
 from senior_control.motion.observations import (
@@ -15,15 +15,17 @@ from senior_control.motion.observations import (
 from senior_control.motion.sample_types import PointObservation
 from senior_control.motion.source_admission import AdmissionOwner
 from senior_control.motion.temporal import TemporalConfig, TemporalResolver
-from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def point(source, t, seq, values, epoch="p", covariance=None, model=None):
     return PointObservation(
         source,
         Frame.BODY,
-        t,
-        t + 100,
+        sample_time(
+            stamp_ns=round((t) * 1e9),
+            received_ros_ns=round((t) * 1e9),
+            received_steady_ns=round((t + 100) * 1e9),
+        ),
         epoch,
         seq,
         0.9,
@@ -32,8 +34,6 @@ def point(source, t, seq, values, epoch="p", covariance=None, model=None):
         covariance,
         model,
         None,
-        measurement_steady=t + 100,
-        measurement=capture_time(t + 100, tick=t).measurement,
     )
 
 
@@ -59,7 +59,7 @@ def test_burst_events_are_not_lost_and_gyro_only_has_no_translation_delta():
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     assert len([e for e in s.events if e.sample is not None]) == 6
     r.consume(s)
-    w = r.resolve(0.0, 0.1, s)
+    w = r.resolve(round((0.0) * 1e9), round((0.1) * 1e9), s)
     imu = w.by_source(Source.IMU)
     assert imu.values == (None, None, pytest.approx(0.5))
     assert imu.delta is None
@@ -76,7 +76,7 @@ def test_30_50_hz_causal_zoh_turning_prediction_is_complete_but_not_observed_lat
     )
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    wheel = r.resolve(0.0, 0.1, s).by_source(Source.WHEEL)
+    wheel = r.resolve(round((0.0) * 1e9), round((0.1) * 1e9), s).by_source(Source.WHEEL)
     assert wheel.values[0] == pytest.approx(0.3, abs=1e-9, rel=0)
     assert wheel.values[1] is None
     assert wheel.predicted_delta.x == pytest.approx(0.3 / 0.5 * math.sin(0.05), abs=1e-9, rel=0)
@@ -92,12 +92,17 @@ def test_gap_epoch_interruption_and_cursor_overrun_are_explicit():
     feed(o, [point(Source.IMU, 0.0, 1, (0.5,)), point(Source.WHEEL, 0.2, 1, (0.0, 0.0))])
     s = o.snapshot(after_cursor=0, now_ros=0.2, now_steady=100.2)
     r.consume(s)
-    assert r.resolve(0.1, 0.2, s).by_source(Source.IMU).reason == "hold_expired"
+    assert (
+        r.resolve(round((0.1) * 1e9), round((0.2) * 1e9), s).by_source(Source.IMU).reason
+        == "hold_expired"
+    )
     bad = replace(point(Source.IMU, 0.21, 2, (0.5,)), status=SourceStatus.UNAVAILABLE)
     assert not o.ingest(bad, now_ros=0.21, now_steady=100.21).accepted
     n = o.snapshot(after_cursor=s.cursor, now_ros=0.21, now_steady=100.21)
     r.consume(n)
-    assert not r.resolve(0.0, 0.1, n).by_source(Source.IMU).original_keys
+    assert (
+        not r.resolve(round((0.0) * 1e9), round((0.1) * 1e9), n).by_source(Source.IMU).original_keys
+    )
     small = AdmissionOwner(
         replace(config(), recovery_samples=1, recovery_span_ms=0), event_capacity=2
     )
@@ -124,12 +129,13 @@ def test_raw_gps_uses_each_causal_heading_not_only_window_start(yaw, enu):
         heading = Heading(
             yaw,
             0,
-            p.end_ros,
-            p.received_steady,
+            sample_time(
+                stamp_ns=round((p.end_ros) * 1e9),
+                received_ros_ns=round((p.end_ros) * 1e9),
+                received_steady_ns=round((p.received_steady) * 1e9),
+            ),
             "h",
             "synthetic known yaw",
-            measurement_steady=p.received_steady,
-            measurement=capture_time(p.received_steady, tick=p.end_ros).measurement,
         )
         assert o.ingest(
             p,
@@ -139,7 +145,7 @@ def test_raw_gps_uses_each_causal_heading_not_only_window_start(yaw, enu):
         ).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    result = r.resolve(0, 0.1, s).by_source(Source.GPS)
+    result = r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.GPS)
     assert result.reason == "covered"
     assert result.values == pytest.approx((0.3, 0, None), abs=1e-9, rel=0)
 
@@ -154,7 +160,10 @@ def test_invalid_new_epoch_interrupts_resolver_and_retires_old_packets():
     s = o.snapshot(after_cursor=s.cursor, now_ros=0.12, now_steady=100.12)
     assert any(e.sample is None for e in s.events)
     r.consume(s)
-    assert r.resolve(0, 0.1, s).by_source(Source.IMU).reason == "source_unavailable"
+    assert (
+        r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.IMU).reason
+        == "source_unavailable"
+    )
     old = point(Source.IMU, 0.14, 9, (0.5,))
     assert o.ingest(old, now_ros=0.14, now_steady=100.14).reason == "retired_epoch"
     fresh = point(Source.IMU, 0.14, 2, (0.5,), epoch="new")
@@ -177,9 +186,16 @@ def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
     p = DeltaObservation(
         Source.LASER,
         Frame.SENSOR,
-        0,
-        0.1,
-        100.1,
+        sample_time(
+            stamp_ns=round((0) * 1e9),
+            received_ros_ns=round((0) * 1e9),
+            received_steady_ns=round(((100.1) - ((0.1) - (0))) * 1e9),
+        ),
+        sample_time(
+            stamp_ns=round((0.1) * 1e9),
+            received_ros_ns=round((0.1) * 1e9),
+            received_steady_ns=round((100.1) * 1e9),
+        ),
         "p",
         1,
         0.9,
@@ -188,17 +204,11 @@ def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
         covariance,
         "synthetic",
         extrinsic,
-        start_steady=(100.1) - ((0.1) - (0)),
-        end_steady=100.1,
-        measurement_interval=MeasurementInterval(
-            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
-            capture_time(100.1, tick=0.1).measurement,
-        ),
     )
     assert o.ingest(p, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    result = r.resolve(0, 0.1, s).by_source(Source.LASER)
+    result = r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.LASER)
     assert result.values == pytest.approx((0.3, 0.02, 0.5), abs=1e-9, rel=0)
     assert result.delta.x == pytest.approx(expected.x, abs=1e-9, rel=0)
     assert result.inputs[0].original.covariance is covariance
@@ -213,12 +223,13 @@ def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change()
     h = Heading(
         0,
         0,
-        0,
-        100,
+        sample_time(
+            stamp_ns=round((0) * 1e9),
+            received_ros_ns=round((0) * 1e9),
+            received_steady_ns=round((100) * 1e9),
+        ),
         "h",
         "synthetic",
-        measurement_steady=100,
-        measurement=capture_time(100, tick=0).measurement,
     )
     good = replace(
         point(Source.GPS, 0, 1, (0.3, 0)), frame=Frame.ENU, body_from_sensor=Pose2D(0, 0, 0)
@@ -230,11 +241,13 @@ def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change()
     assert o.ingest(bad, now_ros=0, now_steady=100, heading=h).reason == "invalid_extrinsic"
     next_sample = replace(
         good,
-        stamp_ros=0.02,
         sequence=2,
-        received_steady=100.02,
-        measurement_steady=100.02,
-        measurement=capture_time(100.02, tick=0.02).measurement,
+        time=sample_time(
+            stamp_ns=round((0.02) * 1e9),
+            received_ros_ns=round((0.02) * 1e9),
+            received_steady_ns=round((100.02) * 1e9),
+            clock_generation=1,
+        ),
     )
     assert o.ingest(next_sample, now_ros=0.02, now_steady=100.02, heading=h).accepted
 
@@ -252,12 +265,15 @@ def test_repeated_snapshot_and_clock_rollback_do_not_keep_gyro_history():
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     for _ in range(3):
         r.consume(s)
-        result = r.resolve(0, 0.1, s).by_source(Source.IMU)
+        result = r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.IMU)
         assert len(result.original_keys) == 5
         assert result.values[2] == pytest.approx(0.5)
     reset = o.snapshot(after_cursor=s.cursor, now_ros=0.01, now_steady=100.2)
     r.consume(reset)
-    assert r.resolve(0, 0.01, reset).by_source(Source.IMU).values[2] == pytest.approx(0.5)
+    assert (
+        r.resolve(round((0) * 1e9), round((0.01) * 1e9), reset).by_source(Source.IMU).values[2]
+        is None
+    )
 
 
 def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
@@ -268,7 +284,7 @@ def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r = TemporalResolver(TemporalConfig(1, 2, 80, 80, 80, True))
     r.consume(s)
-    w = r.resolve(0, 0.1, s)
+    w = r.resolve(round((0) * 1e9), round((0.1) * 1e9), s)
     assert "history_capacity_eviction" in w.diagnostics
     assert w.by_source(Source.IMU).reason == "missing_left_coverage"
 
@@ -281,9 +297,16 @@ def test_interval_rotation_alias_is_explicit_not_a_crash_or_wrapped_prediction()
     p = DeltaObservation(
         Source.LASER,
         Frame.SENSOR,
-        0,
-        0.1,
-        100.1,
+        sample_time(
+            stamp_ns=round((0) * 1e9),
+            received_ros_ns=round((0) * 1e9),
+            received_steady_ns=round(((100.1) - ((0.1) - (0))) * 1e9),
+        ),
+        sample_time(
+            stamp_ns=round((0.1) * 1e9),
+            received_ros_ns=round((0.1) * 1e9),
+            received_steady_ns=round((100.1) * 1e9),
+        ),
         "p",
         1,
         1,
@@ -292,17 +315,14 @@ def test_interval_rotation_alias_is_explicit_not_a_crash_or_wrapped_prediction()
         None,
         None,
         Pose2D(0, 0, 0),
-        start_steady=(100.1) - ((0.1) - (0)),
-        end_steady=100.1,
-        measurement_interval=MeasurementInterval(
-            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
-            capture_time(100.1, tick=0.1).measurement,
-        ),
     )
     assert o.ingest(p, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    assert r.resolve(0, 0.1, s).by_source(Source.LASER).reason == "rotation_exceeds_log_domain"
+    assert (
+        r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.LASER).reason
+        == "rotation_exceeds_log_domain"
+    )
 
 
 def test_wheel_without_declared_lateral_motion_assumption_is_not_se2_mean():
@@ -315,7 +335,7 @@ def test_wheel_without_declared_lateral_motion_assumption_is_not_se2_mean():
     )
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    result = r.resolve(0, 0.1, s).by_source(Source.WHEEL)
+    result = r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.WHEEL)
     assert result.values[0] is None
     assert result.reason == "wheel_motion_assumption_missing"
     assert result.predicted_delta is None
@@ -342,12 +362,13 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
             h = Heading(
                 0,
                 0,
-                t,
-                100 + t,
+                sample_time(
+                    stamp_ns=round((t) * 1e9),
+                    received_ros_ns=round((t) * 1e9),
+                    received_steady_ns=round((100 + t) * 1e9),
+                ),
                 "h",
                 "synthetic known orientation",
-                measurement_steady=100 + t,
-                measurement=capture_time(100 + t, tick=t).measurement,
             )
             o.ingest(
                 p, now_ros=t, now_steady=100 + t, heading=h if p.source is Source.GPS else None
@@ -368,14 +389,14 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
     assert dict(cold.sources)[Source.GPS].ready and dict(cold.sources)[Source.WHEEL].ready
     assert not dict(cold.sources)[Source.IMU].ready
     for _ in range(3):
-        w = r.resolve(0.24, 0.26, cold)
+        w = r.resolve(round((0.24) * 1e9), round((0.26) * 1e9), cold)
         for src in (Source.GPS, Source.WHEEL):
             assert w.by_source(src).reason == "dependency_imu_recovering"
             assert not w.by_source(src).original_keys
     for i, t in enumerate([0.28, 0.30, 0.32, 0.34]):
         warm = batch(t, 15 + i, point(Source.IMU, t, 4 + i, (0,), epoch="restart"))
     assert dict(warm.sources)[Source.IMU].ready
-    w = r.resolve(0.24, 0.34, warm)
+    w = r.resolve(round((0.24) * 1e9), round((0.34) * 1e9), warm)
     for src in (Source.GPS, Source.WHEEL):
         assert w.by_source(src).reason == "covered"
         assert all(
@@ -398,8 +419,13 @@ def test_single_left_tail_and_held_use_same_coverage_ceiling(max_gap, max_hold, 
     r = TemporalResolver(TemporalConfig(1, 128, (max_hold) * 1000, (max_gap) * 1000, 80, True))
     r.consume(s)
     limit = min(max_gap, max_hold)
-    assert r.resolve(0, limit, s).by_source(Source.IMU).reason == "covered"
-    assert r._held(Source.IMU, limit, s).original.sequence == 1
-    assert r.resolve(0, 0.1, s).by_source(Source.IMU).reason == reason
+    assert (
+        r.resolve(round((0) * 1e9), round((limit) * 1e9), s).by_source(Source.IMU).reason
+        == "covered"
+    )
+    assert r._held(Source.IMU, round((limit) * 1e9), s).original.sequence == 1
+    assert r.resolve(round((0) * 1e9), round((0.1) * 1e9), s).by_source(Source.IMU).reason == reason
     with pytest.raises(CoverageError, match=reason):
-        r._held(Source.IMU, 0.1, s)  # direct consistency check of the helper used by GPS/wheel
+        r._held(
+            Source.IMU, round((0.1) * 1e9), s
+        )  # direct consistency check of the helper used by GPS/wheel

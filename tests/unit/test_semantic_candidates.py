@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from detector_test_helpers import slow_detector, wait_until
-from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import capture_fields, sample_time
 
 from senior_control.vision.depth_runtime import CameraInfoFrame
 
@@ -115,8 +115,42 @@ def wire_depth(stamp_ns=1_000_000_000):
     return SimpleNamespace(
         valid=True,
         reason="",
-        depth_capture=SimpleNamespace(timing=wire_time(10.0, tick=stamp_ns / 1e9)),
-        camera_info_capture=SimpleNamespace(timing=wire_time(10.0, tick=stamp_ns / 1e9)),
+        depth_capture=SimpleNamespace(
+            frame_id="laser_link",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="source",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=1,
+            valid=True,
+            reason="",
+            **capture_fields(
+                time=sample_time(
+                    stamp_ns=round((stamp_ns / 1e9) * 1e9),
+                    received_ros_ns=round((stamp_ns / 1e9) * 1e9),
+                    received_steady_ns=round((10.0) * 1e9),
+                )
+            ),
+        ),
+        camera_info_capture=SimpleNamespace(
+            frame_id="laser_link",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="source",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=1,
+            valid=True,
+            reason="",
+            **capture_fields(
+                time=sample_time(
+                    stamp_ns=round((stamp_ns / 1e9) * 1e9),
+                    received_ros_ns=round((stamp_ns / 1e9) * 1e9),
+                    received_steady_ns=round((10.0) * 1e9),
+                )
+            ),
+        ),
         stamp=stamp(stamp_ns),
         camera_info_stamp=stamp(stamp_ns),
         received_ros=stamp(stamp_ns),
@@ -215,8 +249,20 @@ def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
         host = 9 + stamp / 1e9  # Explicit synthetic producer clock, one immutable front/capture.
         wire = wire_depth(stamp)
         wire.received_steady = wire.camera_info_received_steady = host
-        wire.depth_capture.timing = wire_time(host, tick=stamp / 1e9)
-        wire.camera_info_capture.timing = wire_time(host, tick=stamp / 1e9)
+        wire.depth_capture.__dict__.update(
+            capture_fields(
+                time=sample_time(
+                    stamp_ns=stamp, received_ros_ns=stamp, received_steady_ns=round(host * 1e9)
+                )
+            )
+        )
+        wire.camera_info_capture.__dict__.update(
+            capture_fields(
+                time=sample_time(
+                    stamp_ns=stamp, received_ros_ns=stamp, received_steady_ns=round(host * 1e9)
+                )
+            )
+        )
         wire.samples[0].depth_m = wire.samples[0].z = distance
         rgb = ColorCapture(
             stamp,

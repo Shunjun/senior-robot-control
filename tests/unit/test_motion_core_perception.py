@@ -109,20 +109,12 @@ def test_no_return_contract_never_clears_invalid_missing_or_self_occluded_rays()
     assert geometry.covers(Point(-0.5, 0))
 
 
-def test_candidate_contract_is_bound_to_known_sensor_frame_and_range():
-    from dataclasses import replace
-
-    from senior_robot.simulation_motion_profile import SimulationMotionProfile
+def test_generic_profile_never_certifies_no_return_from_frame_or_range():
+    from control_process_test_support import generic_motion_profile
 
     from senior_control.motion.constraints import NoReturnPolicy
 
-    p = SimulationMotionProfile()
-    assert (
-        p.perception_no_return_policy("laser_link", 20.0) is NoReturnPolicy.VALIDATED_FREE_TO_RANGE
-    )
-    assert p.perception_no_return_policy("unknown_sensor", 20.0) is NoReturnPolicy.UNKNOWN
-    assert p.perception_no_return_policy("laser_link", 30.0) is NoReturnPolicy.UNKNOWN
-    assert (
-        replace(p, simulation_only=False).perception_no_return_policy("laser_link", 20.0)
-        is NoReturnPolicy.UNKNOWN
-    )
+    profile = generic_motion_profile()
+    assert profile.perception_no_return_policy("laser_link", 20.0) is NoReturnPolicy.UNKNOWN
+    assert profile.perception_no_return_policy("unknown_sensor", 20.0) is NoReturnPolicy.UNKNOWN
+    assert profile.perception_no_return_policy("laser_link", 30.0) is NoReturnPolicy.UNKNOWN

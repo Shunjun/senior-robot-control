@@ -64,6 +64,8 @@ def test_depth_producer_preserves_original_identity_and_low_hits():
     from senior_control.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
 
     packet, info, tf = inputs()
+    packet = replace(packet, stamp_ns=0, received_ros_ns=0)
+    info = replace(info, stamp_ns=0, received_ros_ns=0)
     evidence = produce_depth_evidence(
         packet,
         info,

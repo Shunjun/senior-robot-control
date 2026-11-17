@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_parent_ledger import CaptureLedger
@@ -9,9 +9,9 @@ from senior_control.vision.rgbd_parent_ledger import CaptureLedger
 def header(seq):
     stamp = 1_000_000_000 + seq * 100_000_000
     return RawCaptureHeader(
-        stamp,
-        stamp,
-        1.0 + seq * 0.1,
+        sample_time(
+            stamp_ns=stamp, received_ros_ns=stamp, received_steady_ns=round((1.0 + seq * 0.1) * 1e9)
+        ),
         "optical",
         "01",
         "02",
@@ -21,9 +21,6 @@ def header(seq):
         seq,
         True,
         "",
-        timing=capture_time(
-            1.0 + seq * 0.1, sequence=max(1, seq), epoch="source", tick=(stamp) / 1e9
-        ),
     )
 
 
@@ -352,11 +349,13 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
     replay = tuple(
         replace(
             h,
-            stamp_ns=1_300_000_000,
-            received_ros_ns=1_300_000_000,
-            received_steady=1.3,
-            timing=capture_time(1.3, tick=1.3, sequence=3),
             sequence=3,
+            time=sample_time(
+                stamp_ns=round((1.3) * 1e9),
+                received_ros_ns=round((1.3) * 1e9),
+                received_steady_ns=round((1.3) * 1e9),
+                clock_generation=1,
+            ),
         )
         for h in bundle(1)
     )
@@ -373,11 +372,13 @@ def test_recovery_floor_preserves_retired_sources_and_never_revives_old_tickets(
     fresh = tuple(
         replace(
             h,
-            stamp_ns=1_300_000_000,
-            received_ros_ns=1_300_000_000,
-            received_steady=1.3,
-            timing=capture_time(1.3, tick=1.3, sequence=3),
             sequence=3,
+            time=sample_time(
+                stamp_ns=round((1.3) * 1e9),
+                received_ros_ns=round((1.3) * 1e9),
+                received_steady_ns=round((1.3) * 1e9),
+                clock_generation=1,
+            ),
         )
         for h in new
     )

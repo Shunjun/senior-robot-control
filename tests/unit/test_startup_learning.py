@@ -7,13 +7,14 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
-from source_time_test_support import capture_time
+from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY, forward_scan
 
 from senior_control.config import DeviceProfile
 from senior_control.motion.startup_learning import StartupLearning
 from senior_control.safety.self_filter import filter_self
 from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def observation(distance):
@@ -40,7 +41,23 @@ def record(model, obs):
     sequence = model._max_sequence + 1
     model.observe(
         obs,
-        capture=capture_time(10 + sequence * 0.1, sequence=sequence, epoch="model-test"),
+        capture=RawCaptureHeader(
+            time=sample_time(
+                stamp_ns=round((10 + sequence * 0.1) * 1e9),
+                received_ros_ns=round((10 + sequence * 0.1) * 1e9),
+                received_steady_ns=round((10 + sequence * 0.1) * 1e9),
+                clock_generation=1,
+            ),
+            frame_id="laser",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="model-test",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=sequence,
+            valid=True,
+            reason="",
+        ),
         segment_id="model-test",
     )
 
@@ -129,12 +146,31 @@ def test_owner_finishes_using_scans_without_independent_displacement(tmp_path):
         owner.frame(
             m,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.state == "moving"
@@ -145,12 +181,31 @@ def test_owner_finishes_using_scans_without_independent_displacement(tmp_path):
         owner.frame(
             m,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.deadline == 4.0
@@ -160,12 +215,31 @@ def test_owner_finishes_using_scans_without_independent_displacement(tmp_path):
         owner.frame(
             m,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     owner.advance(0.0, now=4.8, stationary=True)
@@ -220,12 +294,31 @@ def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_p
         owner.frame(
             model,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     begin_action(owner, 1.0)
@@ -235,12 +328,31 @@ def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_p
         owner.frame(
             model,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     for i in range(42, 48):
@@ -249,12 +361,31 @@ def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_p
         owner.frame(
             model,
             replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=capture_time(
-                (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_ros_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round(
                     (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
                 )
                 + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.state == "completed"

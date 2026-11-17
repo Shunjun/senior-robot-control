@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 from learning_test_support import TestRun, bind_core, geometry, learning_runs  # noqa: F401
-from source_time_test_support import capture_time
+from sensor_time_test_support import sample_time
 from test_motion_core_handoff import core  # noqa: F401
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
@@ -13,6 +13,7 @@ from test_startup_learning_feasibility import BOUNDARY
 from senior_control.config import DeviceProfile
 from senior_control.safety.self_filter import RayEvidence
 from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def cloud(points):
@@ -27,7 +28,25 @@ def learn(frames):
     model = SelfReturnModel(BOUNDARY)
     for i, observation in enumerate(frames, 1):
         assert model.observe(
-            observation, capture=capture_time(10 + i / 100, sequence=i), segment_id="moving"
+            observation,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round((10 + i / 100) * 1e9),
+                    received_ros_ns=round((10 + i / 100) * 1e9),
+                    received_steady_ns=round((10 + i / 100) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
+                sequence=i,
+                valid=True,
+                reason="",
+            ),
+            segment_id="moving",
         )
     return model
 

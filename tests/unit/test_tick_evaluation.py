@@ -8,6 +8,7 @@ from types import SimpleNamespace as N
 
 import pytest
 from control_process_test_support import LocalWorker, publish_inputs
+from sensor_time_test_support import sample_time
 from test_constraint_scheduling import Worker
 from test_directional_constraints import engine, scene, snapshot
 from test_motion_controller import config, feedback
@@ -372,7 +373,6 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_response(
     replay, perception_failure
 ):
-    from source_time_test_support import capture_time
     from test_unified_motion_runtime import point
 
     from senior_control.motion.observations import Source
@@ -389,7 +389,12 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     core.node._reception_test.sensors.ingest(
         replace(
             point(Source.WHEEL, t, clock.steady, (0.8, 0.0)),
-            measurement=capture_time(clock.steady, tick=t).measurement,
+            time=sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((clock.steady) * 1e9),
+                clock_generation=1,
+            ),
         ),
         t,
         clock.steady,
@@ -398,7 +403,12 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     core.node._reception_test.sensors.ingest(
         replace(
             point(Source.IMU, t, clock.steady, (0.0,)),
-            measurement=capture_time(clock.steady, tick=t).measurement,
+            time=sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((clock.steady) * 1e9),
+                clock_generation=1,
+            ),
         ),
         t,
         clock.steady,
@@ -415,7 +425,12 @@ def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_respo
     core.node._reception_test.sensors.ingest(
         replace(
             point(Source.IMU, t + 1, clock.steady, (0.0,), 2),
-            measurement=capture_time(clock.steady, tick=t + 1).measurement,
+            time=sample_time(
+                stamp_ns=round((t + 1) * 1e9),
+                received_ros_ns=round((t + 1) * 1e9),
+                received_steady_ns=round((clock.steady) * 1e9),
+                clock_generation=1,
+            ),
         ),
         t + 1,
         clock.steady,

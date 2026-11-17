@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import generic_motion_profile
 from pydantic import ValidationError
 from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
 from test_motion_core_handoff import Node, barrier, core  # noqa: F401
 from test_navigation_command_clock import navigation  # noqa: F401
 from test_runtime_guard_ready import CASE, ready  # noqa: F401
@@ -32,10 +32,11 @@ def test_new_output_owner_ignores_old_files_and_never_restores_motion(
     def forbidden(*args, **kwargs):
         raise AssertionError("software estop startup must not access a state file")
 
+    profile = generic_motion_profile()
     with monkeypatch.context() as patch:
         patch.setattr(Path, "open", forbidden)
         patch.setattr("builtins.open", forbidden)
-        fresh = MotionCoreOutput(Node(), SimulationMotionProfile())
+        fresh = MotionCoreOutput(Node(), profile)
         try:
             assert fresh.machine.state.mode is MotionMode.IDLE
             assert fresh.machine.state.estop_revision == 0

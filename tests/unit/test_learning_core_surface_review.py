@@ -61,12 +61,10 @@ def test_loaded_disabled_direction_allows_over_50_percent_nonempty_learning(
 ):
     import math
 
-    from senior_robot.motion_profile import configure_startup_learning, select_motion_profile
-    from senior_robot.simulation_motion_profile import PROFILE_ID
+    from control_process_test_support import generic_motion_profile
+    from senior_robot.motion_profile import configure_startup_learning
 
-    profile = select_motion_profile(
-        PROFILE_ID, hardware_path="", simulated_clock=True, localhost_only="1", domain_id="42"
-    )
+    profile = generic_motion_profile()
     core.profile = configure_startup_learning(
         profile, front_stop=direction != "front", rear_stop=direction != "rear"
     )

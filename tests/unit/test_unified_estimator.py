@@ -1,4 +1,5 @@
 import pytest
+from sensor_time_test_support import sample_time
 
 from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
 
@@ -13,14 +14,16 @@ def observation(source, values, stamp=9.9, quality=1.0, root=None, sequence=1):
                 root or source,
                 "boot",
                 sequence,
-                stamp,
-                max(10.0, stamp),
-                20.0 + max(0, stamp - 10),
-                measurement_steady=(stamp + 10.0),
+                sample_time(
+                    stamp_ns=round((stamp) * 1e9),
+                    received_ros_ns=round((max(10.0, stamp)) * 1e9),
+                    received_steady_ns=round((20.0 + max(0, stamp - 10)) * 1e9),
+                ),
             ),
         ),
         quality,
-        measured_steady=(stamp + 10.0),
+        measured_steady=stamp + 10.0,
+        stamp_ns=round((stamp) * 1e9),
     )
 
 
@@ -145,7 +148,14 @@ def test_interval_conflict_uses_latest_original_endpoint_not_predicted_timestamp
     from dataclasses import replace
 
     older = observation("interval", (0.4, None, None), 9.8)
-    end = replace(older.roots[0], stamp_ros=9.99, measurement_steady=19.99)
+    end = replace(
+        older.roots[0],
+        time=sample_time(
+            stamp_ns=9_990_000_000,
+            received_ros_ns=10_000_000_000,
+            received_steady_ns=20_000_000_000,
+        ),
+    )
     interval = replace(
         older,
         measured_ros=9.895,
@@ -179,11 +189,7 @@ def test_republished_same_acquisition_cannot_renew_paused_clock_lifetime():
     for sequence in range(2, 6):
         replay = replace(
             original,
-            roots=(
-                replace(
-                    original.roots[0], sequence=sequence, received_steady=20.0 + sequence * 0.2
-                ),
-            ),
+            roots=(replace(original.roots[0], sequence=sequence),),
         )
         assert not e.ingest(replay)
     assert not e.estimate(10, 20.9).healthy
@@ -199,17 +205,24 @@ def test_invalid_status_veto_is_immediate_but_cached_recovery_is_not_new_data():
     invalid = replace(original, quality=0.0, roots=(replace(original.roots[0], sequence=2),))
     assert e.ingest(invalid)
     assert not e.estimate(10, 20.1).healthy
-    cached = replace(
-        original, roots=(replace(original.roots[0], sequence=3, received_steady=20.2),)
-    )
+    cached = replace(original, roots=(replace(original.roots[0], sequence=3),))
     assert not e.ingest(cached)
 
 
-def test_new_producer_clock_context_arriving_before_local_reset_is_not_discarded():
+def test_local_rollback_revokes_already_consumed_new_producer_evidence():
     e = MotionEstimation()
     e.ingest(observation("wheel", (0.4, None, 0.1)))
     e.estimate(10, 20)
-    root = Origin("wheel", "new-clock", 1, 4.9, 5.0, 20.1, measurement_steady=20.0)
+    root = Origin(
+        "wheel",
+        "new-clock",
+        1,
+        sample_time(
+            stamp_ns=round((4.9) * 1e9),
+            received_ros_ns=round((5.0) * 1e9),
+            received_steady_ns=round((20.1) * 1e9),
+        ),
+    )
     e.ingest(
         MotionObservation(
             "wheel",
@@ -217,12 +230,12 @@ def test_new_producer_clock_context_arriving_before_local_reset_is_not_discarded
             4.9,
             (root,),
             measured_steady=((root,))[-1].measurement_steady,
-            measurement=((root,))[-1].coordinate,
+            stamp_ns=((root,))[-1].coordinate,
         )
     )
-    # ROS correction does not postpone a fresh physical source or change generation.
+    # This owner used the new producer before observing its own ROS rollback.
     assert e.estimate(10, 20.15).healthy
     result = e.estimate(5.0, 20.2)
-    assert result.healthy and result.generation == 1
-    assert result.vx.roots == (root,)
-    assert result.vx.deadline_steady <= 21.0
+    assert not result.healthy and result.generation == 2
+    assert not result.vx.roots
+    assert result.path is None

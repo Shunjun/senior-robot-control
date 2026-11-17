@@ -99,6 +99,10 @@ class SelfReturnModel:
         key = (*origin, capture.sequence)
         measurement = capture.time.stamp_ns
         frontier = self._frontier_measurement
+        if measurement in self.frame_measurements or (
+            self._capture_floor is not None and measurement <= self._capture_floor[0]
+        ):
+            return False  # A new delivery sequence cannot create another raw frame.
         if frontier is not None and capture.time.clock_generation != self._clock_generation:
             return False  # Caller must open a new evidence segment on clock rollback.
         self._clock_generation = generation

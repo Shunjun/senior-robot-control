@@ -163,7 +163,7 @@ class TemporalResolver:
             raise CoverageError(f"dependency_{source.value}_history_missing")
         return history
 
-    def _check_span(self, stamp: float, until: float) -> None:
+    def _check_span(self, stamp: int, until: int) -> None:
         # The old two injected ceilings intersect: one effective ZOH support
         # horizon, enforced identically for known intervals, open tails and holds.
         gap_s = self.config.max_gap_ms / 1000
@@ -197,7 +197,7 @@ class TemporalResolver:
         segments.append((cursor, b, current))
         return segments
 
-    def _held(self, source: Source, t: float, snapshot: SourceSnapshot) -> AdaptedObservation:
+    def _held(self, source: Source, t: int, snapshot: SourceSnapshot) -> AdaptedObservation:
         points = [
             p
             for p in self._ready_history(source, snapshot)
@@ -462,8 +462,6 @@ class TemporalResolver:
         a: int,
         b: int,
         snapshot: SourceSnapshot,
-        *,
-        stamp_ns: int | None = None,
     ) -> ResolvedWindow:
         live = dict(snapshot.sources)
         points = [physical_support(v.observation.original).end_ns for v in live.values()]

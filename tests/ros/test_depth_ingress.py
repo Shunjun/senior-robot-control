@@ -69,7 +69,9 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
             (info, gids[node._info_topic], "04" * 24),
         ):
             capture = message.capture
-            capture.received_ros, capture.received_steady = stamp, time.monotonic()
+            capture.received_ros = stamp
+            capture.received_steady_ns = capture.sample_steady_ns = time.monotonic_ns()
+            capture.clock_generation = 1
             capture.bridge_gid, capture.raw_gid = bridge_gid, raw_gid
             capture.source_epoch, capture.bridge_boot_id = raw_gid, "bridge-boot"
             capture.capture_generation, capture.sequence, capture.valid = 1, 1, True
@@ -82,8 +84,8 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
         assert len(result.samples) == 3
         assert result.samples[-1].z == pytest.approx(0.0282)
         assert result.sensor_origin == pytest.approx([0.2316, 0.00224, 0.1282])
-        assert result.received_steady == image.capture.received_steady
-        assert result.camera_info_received_steady == info.capture.received_steady
+        assert result.received_steady == image.capture.received_steady_ns / 1e9
+        assert result.camera_info_received_steady == info.capture.received_steady_ns / 1e9
         assert result.depth_capture == image.capture
         assert result.camera_info_capture == info.capture
         count = sum(item.valid for item in captured)
@@ -181,7 +183,8 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
             (msg.camera_info_capture, msg.camera_info_source, "22" * 24),
         ):
             capture.stamp, capture.received_ros = msg.stamp, msg.received_ros
-            capture.received_steady, capture.frame_id = msg.received_steady, msg.frame_id
+            capture.received_steady_ns = capture.sample_steady_ns = round(msg.received_steady * 1e9)
+            capture.clock_generation, capture.frame_id = 1, msg.frame_id
             capture.raw_gid, capture.bridge_gid = raw, bridge
             capture.source_epoch, capture.bridge_boot_id = raw, "raw-boot"
             capture.capture_generation, capture.sequence, capture.valid = 1, sequence, True
@@ -360,7 +363,9 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
             if len(endpoints) != 1:
                 return image
             capture = message.capture
-            capture.received_ros, capture.received_steady = stamp, time.monotonic()
+            capture.received_ros = stamp
+            capture.received_steady_ns = capture.sample_steady_ns = time.monotonic_ns()
+            capture.clock_generation = 1
             capture.raw_gid, capture.bridge_gid = raw, bytes(endpoints[0].endpoint_gid).hex()
             capture.source_epoch, capture.bridge_boot_id = raw, "bridge-boot"
             capture.capture_generation, capture.sequence, capture.valid = 1, sequence, True
@@ -388,7 +393,8 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
         assert gate._depth_usable(gate.get_clock().now().nanoseconds, time.monotonic()) is not None
         last.capture.stamp = fixture.get_clock().now().to_msg()
         last.capture.received_ros = last.capture.stamp
-        last.capture.received_steady = time.monotonic()
+        last.capture.received_steady_ns = last.capture.sample_steady_ns = time.monotonic_ns()
+        last.capture.clock_generation = 1
         last.capture.sequence += 1
         last.encoding = "unsupported"
         depth_pub.publish(last)

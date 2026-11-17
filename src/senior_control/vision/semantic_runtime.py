@@ -60,8 +60,8 @@ def qualify_registration(
         or not math.isfinite(now_steady)
         or not math.isfinite(max_age_ms)
         or not 0 < max_age_ms <= hard_age_ms
-        or now_ros_ns <= 0
-        or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) <= 0
+        or now_ros_ns < 0
+        or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) < 0
         or len({rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns}) != 1
         or not _text(rgb_frame, 128)
         or info.frame_id != rgb_frame
@@ -234,7 +234,7 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
     steady, info_steady = float(wire.received_steady), float(wire.camera_info_received_steady)
     if (
         not wire.valid
-        or stamp <= 0
+        or stamp < 0
         or info_stamp != stamp
         or received <= 0
         or info_received <= 0

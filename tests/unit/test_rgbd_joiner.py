@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_joiner import CaptureJoiner
@@ -8,9 +8,9 @@ from senior_control.vision.rgbd_joiner import CaptureJoiner
 
 def header(sequence, stamp, *, generation=1, valid=True):
     return RawCaptureHeader(
-        stamp,
-        stamp,
-        stamp / 1e9,
+        sample_time(
+            stamp_ns=stamp, received_ros_ns=stamp, received_steady_ns=round((stamp / 1e9) * 1e9)
+        ),
         "camera",
         "01",
         "02",
@@ -20,9 +20,6 @@ def header(sequence, stamp, *, generation=1, valid=True):
         sequence,
         valid,
         "",
-        timing=capture_time(
-            stamp / 1e9, sequence=max(1, sequence), epoch="source", tick=(stamp) / 1e9
-        ),
     )
 
 
@@ -63,10 +60,8 @@ def offer(join, stream, capture, body, *, bridge_gid):
 def test_exact_four_stream_join_and_newer_frame_keeps_inflight_generation():
     join = CaptureJoiner(capacity=2)
     for stream in range(3):
-        assert (
-            offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02").kind == "pending"
-        )
-    ready = offer(join, 3, header(1, 1_000_000_000), 3, bridge_gid="02")
+        assert offer(join, stream, header(1, 0), stream, bridge_gid="02").kind == "pending"
+    ready = offer(join, 3, header(1, 0), 3, bridge_gid="02")
     assert ready.kind == "ready" and len(ready.bodies) == 4
     generation = join.generation
     for stream in range(4):
@@ -134,24 +129,25 @@ def test_old_pending_stamp_eviction_does_not_create_a_false_join():
     assert result.kind != "ready"
 
 
-def test_unjoined_monotonic_regression_invalidates_but_ros_correction_does_not():
-    for field in ("stamp_ns", "received_ros_ns", "received_steady", "timing"):
-        join = CaptureJoiner(capacity=4)
-        for stream in range(4):
-            ready = offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
-        assert ready.kind == "ready"
-        newer = header(2, 1_200_000_000)
-        assert offer(join, 0, newer, 0, bridge_gid="02").kind == "pending"
-        value = (
-            1.1
-            if field == "received_steady"
-            else capture_time(1.1, tick=1.1)
-            if field == "timing"
-            else 1_100_000_000
-        )
-        changed = replace(header(3, 1_300_000_000), **{field: value})
-        result = offer(join, 0, changed, 0, bridge_gid="02")
-        assert result.kind == ("invalid" if field in {"received_steady", "timing"} else "pending")
+def test_unjoined_clock_generation_change_revokes_pending_frames():
+    join = CaptureJoiner(capacity=4)
+    for stream in range(4):
+        assert offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02").kind in {
+            "pending",
+            "ready",
+        }
+    assert offer(join, 0, header(2, 1_200_000_000), 0, bridge_gid="02").kind == "pending"
+    changed = replace(
+        header(3, 1_300_000_000),
+        capture_generation=2,
+        time=sample_time(
+            stamp_ns=1_100_000_000,
+            received_ros_ns=1_100_000_000,
+            received_steady_ns=1_300_000_000,
+            clock_generation=2,
+        ),
+    )
+    assert offer(join, 0, changed, 0, bridge_gid="02").kind == "invalid"
 
 
 def test_mutating_image_and_info_after_offer_cannot_change_joined_snapshot():
@@ -339,9 +335,11 @@ def test_new_raw_source_can_establish_own_frontier_after_bridge_restart():
     later = replace(
         fresh_source,
         sequence=2,
-        stamp_ns=1_150_000_000,
-        received_ros_ns=1_150_000_000,
-        received_steady=1.15,
-        timing=capture_time(1.15, tick=1.15),
+        time=sample_time(
+            stamp_ns=round((1.15) * 1e9),
+            received_ros_ns=round((1.15) * 1e9),
+            received_steady_ns=round((1.15) * 1e9),
+            clock_generation=1,
+        ),
     )
     assert offer(join, 0, later, 0, bridge_gid="04").kind == "pending"

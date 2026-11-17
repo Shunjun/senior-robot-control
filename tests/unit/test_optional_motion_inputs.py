@@ -2,10 +2,10 @@ from types import SimpleNamespace as N
 
 import numpy as np
 import pytest
+from control_process_test_support import generic_motion_profile
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.optional_motion_inputs import rgbd_observation, static_matrix
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import capture_fields, sample_time
 
 from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
@@ -22,11 +22,16 @@ def header(t, sequence, family):
         bridge_boot_id="raw",
         capture_generation=1,
         sequence=sequence,
-        stamp=stamp(t),
-        received_ros=stamp(t),
-        received_steady=t + 10,
         frame_id="camera",
-        timing=wire_time(t + 10, tick=t, sequence=sequence, epoch="epoch"),
+        bridge_gid="02",
+        reason="",
+        **capture_fields(
+            time=sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((t + 10) * 1e9),
+            )
+        ),
     )
 
 
@@ -54,8 +59,12 @@ def candidate():
             second_tf=tf,
             first_rgb=header(9.8, 1, "rgb"),
             first_depth=header(9.8, 1, "depth"),
+            first_rgb_info=header(9.8, 1, "rgb_info"),
+            first_depth_info=header(9.8, 1, "depth_info"),
             second_rgb=header(9.9, 2, "rgb"),
             second_depth=header(9.9, 2, "depth"),
+            second_rgb_info=header(9.9, 2, "rgb_info"),
+            second_depth_info=header(9.9, 2, "depth_info"),
             interval_start=stamp(9.8),
             interval_end=stamp(9.9),
             camera_transform=matrix.flatten(),
@@ -68,18 +77,18 @@ def candidate():
 def test_rgbd_uses_actual_extrinsics_raw_capture_age_and_optional_lateral():
     o = rgbd_observation(candidate())
     assert o.values == pytest.approx((0.4, 0.0, 0.0))
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     s.ingest_observation(o, 10, 20)
     assert s.estimate(10, 20)[1].velocity.vx == pytest.approx(0.4)
     assert s.latest.vy.observed
-    assert len(s.latest.vx.roots) == 4
+    assert len(s.latest.vx.roots) == 8
     assert s.estimate(10.8, 20.8)[1] is None  # first required capture owns hard expiry
 
 
 def test_bad_optional_calibration_never_changes_other_source():
     from test_unified_estimator import observation
 
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     s.ingest_observation(observation("wheel", (0.2, None, 0.1)), 10, 20)
     bad = candidate()
     bad.body.first_tf.edges = []
@@ -110,7 +119,7 @@ def test_gps_body_twist_does_not_need_absolute_heading_or_other_motion_axes(monk
     monkeypatch.setitem(sys.modules, "rclpy.time", time_module)
     monkeypatch.setitem(sys.modules, "tf2_ros", tf_module)
     monkeypatch.setattr("senior_robot.optional_motion_inputs.time", N(monotonic=lambda: 20.0))
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     adapter = object.__new__(OptionalMotionInputs)
     adapter.node = N(get_clock=lambda: N(now=lambda: N(nanoseconds=10_000_000_000)))
     adapter.runtime = s
@@ -127,7 +136,18 @@ def test_gps_body_twist_does_not_need_absolute_heading_or_other_motion_axes(monk
         receipt_generation=1,
         receipt_sequence=1,
     )
-    adapter.gps(N(data=message, timing=wire_time(19.9, tick=9.9)), info, N(sample_gid=b"gps"))
+    adapter.gps(
+        message,
+        dict(
+            info,
+            sample_time=sample_time(
+                stamp_ns=round((9.9) * 1e9),
+                received_ros_ns=round((9.9) * 1e9),
+                received_steady_ns=round((19.9) * 1e9),
+            ),
+        ),
+        N(sample_gid=b"gps"),
+    )
     s.estimate(10.0, 20.0)
     assert s.latest.vx.observed and s.latest.vy.observed
     assert s.latest.wz.value is None and s.latest.healthy

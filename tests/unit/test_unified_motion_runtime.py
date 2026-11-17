@@ -1,9 +1,9 @@
 from types import SimpleNamespace as N
 
 import pytest
+from control_process_test_support import generic_motion_profile
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.models import Pose2D
 from senior_control.motion.observations import Frame, Source, SourceStatus
@@ -16,8 +16,13 @@ def point(source, stamp, received, values, sequence=1, *, measurement_steady=Non
     return PointObservation(
         source,
         Frame.BODY,
-        stamp,
-        received,
+        sample_time(
+            stamp_ns=round((stamp) * 1e9),
+            received_ros_ns=round((stamp) * 1e9),
+            received_steady_ns=round(
+                (received if measurement_steady is None else measurement_steady) * 1e9
+            ),
+        ),
         "boot",
         sequence,
         1.0,
@@ -26,13 +31,11 @@ def point(source, stamp, received, values, sequence=1, *, measurement_steady=Non
         None,
         None,
         Pose2D(0, 0, 0),
-        measurement_steady=received if measurement_steady is None else measurement_steady,
-        measurement=None,
     )
 
 
 def test_actual_runtime_single_wheel_works_without_pair_and_does_not_make_body_truth():
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     s.ingest(point(Source.WHEEL, 9.9, 19.9, (0.4, 0.1)), 10, 20, 9.9)
     ref, tracking, _ = s.estimate(10, 20)
     assert tracking is not None and tracking.unified
@@ -45,7 +48,7 @@ def test_actual_runtime_single_wheel_works_without_pair_and_does_not_make_body_t
 
 
 def test_runtime_partial_axis_hard_cutoff_survives_other_axis_updates():
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     s.ingest(point(Source.WHEEL, 9.5, 19.5, (0.4, 0.1)), 10, 20, 9.5)
     s.estimate(10, 20)
     s.invalidate(Source.WHEEL)
@@ -60,7 +63,7 @@ def test_runtime_partial_axis_hard_cutoff_survives_other_axis_updates():
 def test_leaf_bridge_local_sink_does_not_run_old_numerical_qualification():
     from senior_robot.motion_observation_adapter import NativeObservations
 
-    p = SimulationMotionProfile()
+    p = generic_motion_profile()
     seen = []
     core = NativeObservations(
         p.admission(), p.temporal(), p.fusion(), sample_sink=lambda *x: seen.append(x) or True
@@ -75,7 +78,7 @@ def test_older_but_live_remaining_source_survives_legacy_controller_receipt_fron
     from senior_control.motion.constraints import ConstraintConfig, ConstraintEngine
     from senior_control.motion.controller import Feedback, MotionController
 
-    p = SimulationMotionProfile()
+    p = generic_motion_profile()
     c = MotionController(
         ConstraintEngine(ConstraintConfig((1.0, 0.5), 0.15, 0.05, 256, 0.005)),
         p.controller(),
@@ -92,7 +95,7 @@ def test_older_but_live_remaining_source_survives_legacy_controller_receipt_fron
 def test_raw_wheel_imu_stillness_does_not_depend_on_independent_samples():
     from test_unified_estimator import observation
 
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     from dataclasses import replace
 
     laser = replace(
@@ -120,7 +123,7 @@ def test_laser_delta_retains_both_raw_capture_receipts_through_processing_delay(
     from senior_robot.motion_observation_adapter import NativeObservations
     from test_optional_motion_inputs import header, stamp
 
-    p = SimulationMotionProfile()
+    p = generic_motion_profile()
     runtime = MotionSensorRuntime(p, RuntimeDiagnostics(lambda *_: None))
     ingress = NativeObservations(
         p.admission(), p.temporal(), p.fusion(), sample_sink=runtime.ingest
@@ -150,21 +153,45 @@ def test_ros_imu_unavailable_sentinel_removes_only_imu_contribution():
     from senior_robot.motion_observation_adapter import NativeObservations
     from test_optional_motion_inputs import stamp
 
-    p = SimulationMotionProfile()
-    s = MotionSensorRuntime(p, RuntimeDiagnostics(lambda *_: None))
-    core = NativeObservations(p.admission(), p.temporal(), p.fusion(), sample_sink=s.ingest)
-    s.ingest(point(Source.WHEEL, 9.9, 19.9, (0.2, 0.1)), 10.0, 20.0, 9.9)
+    profile = generic_motion_profile()
+    runtime = MotionSensorRuntime(profile, RuntimeDiagnostics(lambda *_: None))
+    ingress = NativeObservations(
+        profile.admission(), profile.temporal(), profile.fusion(), sample_sink=runtime.ingest
+    )
+    runtime.ingest(point(Source.WHEEL, 9.9, 19.9, (0.2, 0.1)), 10, 20)
     msg = N(header=N(stamp=stamp(9.9), frame_id="base_link"), angular_velocity=N(z=0.1))
-    core.receipt_ros = 10.0
-    assert core.imu(msg, b"imu", 10.0, 20.0, timing=capture_time(20.0, basis="driver_read"))
-    assert s.estimate(10.0, 20.0)[1] is not None
+    assert ingress.imu(
+        msg,
+        b"imu",
+        10,
+        20,
+        generation=1,
+        sequence=1,
+        timing=sample_time(
+            stamp_ns=9_900_000_000,
+            received_ros_ns=10_000_000_000,
+            received_steady_ns=20_000_000_000,
+        ),
+    )
+    assert runtime.estimate(10, 20)[1] is not None
+    msg.header.stamp = stamp(10.1)
     msg.angular_velocity_covariance = [-1.0] + [0.0] * 8
     msg.angular_velocity.z = float("nan")
-    assert core.imu(
-        msg, b"imu", 10.0, 20.0, timing=capture_time(20.0, basis="driver_read", sequence=2)
+    assert ingress.imu(
+        msg,
+        b"imu",
+        10.1,
+        20.1,
+        generation=1,
+        sequence=2,
+        timing=sample_time(
+            stamp_ns=10_100_000_000,
+            received_ros_ns=10_100_000_000,
+            received_steady_ns=20_100_000_000,
+        ),
     )
-    s.estimate(10.0, 20.0)
-    assert s.latest.healthy and s.latest.wz.sources == ("wheel",)
+    runtime.estimate(10.1, 20.1)
+    assert runtime.latest.healthy and runtime.latest.wz.sources == ("wheel",)
 
 
 def test_bad_future_ingress_clock_does_not_replace_still_valid_earlier_input():
@@ -172,16 +199,24 @@ def test_bad_future_ingress_clock_does_not_replace_still_valid_earlier_input():
 
     from test_unified_estimator import observation
 
-    s = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     old = observation("laser", (0.4, None, 0.1))
     s.ingest_observation(old, 10, 20)
     s.estimate(10, 20)
     future = replace(
         old,
         measured_ros=10.1,
+        measured_steady=20.1,
+        stamp_ns=10_100_000_000,
         roots=(
             replace(
-                old.roots[0], stamp_ros=10.1, received_ros=10.1, received_steady=20.1, sequence=2
+                old.roots[0],
+                time=sample_time(
+                    stamp_ns=10_100_000_000,
+                    received_ros_ns=10_100_000_000,
+                    received_steady_ns=20_100_000_000,
+                ),
+                sequence=2,
             ),
         ),
     )
@@ -189,3 +224,23 @@ def test_bad_future_ingress_clock_does_not_replace_still_valid_earlier_input():
         s.ingest_observation(future, 10.0, 20.0)
     assert s.estimate(10, 20.2)[1].velocity.vx == 0.4
     assert s.latest.vx.roots == old.roots
+
+
+def test_invalid_scan_motion_withdraws_source_without_fabricating_endpoints():
+    from senior_robot.motion_observation_adapter import NativeObservations
+    from test_unified_estimator import observation
+
+    profile = generic_motion_profile()
+    runtime = MotionSensorRuntime(profile, RuntimeDiagnostics(lambda *_: None))
+    ingress = NativeObservations(
+        profile.admission(),
+        profile.temporal(),
+        profile.fusion(),
+        sample_sink=runtime.ingest,
+        source_invalidated=runtime.invalidate,
+    )
+    runtime.ingest_observation(observation("laser", (0.2, 0.0, 0.0)), 10, 20)
+    assert runtime.estimate(10, 20)[1] is not None
+    invalid = N(header=N(frame_id="base_link"), valid=False, reason="source_changed")
+    assert not ingress.laser(invalid, b"writer", 10, 20)
+    assert runtime.estimate(10, 20)[1] is None

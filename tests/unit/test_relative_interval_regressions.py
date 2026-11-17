@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 from control_process_test_support import read_inputs, read_observation
-from source_time_test_support import capture_time, wire_time
+from sensor_time_test_support import capture_fields, sample_time
 
 from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
 from senior_control.motion.pose_estimator import PoseEstimation
@@ -15,8 +15,20 @@ def sample(t, sequence, *, source="laser", yaw=0.0, missing_linear=False, latera
         source,
         (None if missing_linear else 0.2, lateral, yaw),
         t,
-        (Origin(source, "epoch", sequence, t, t, t + 100, measurement_steady=t + 100),),
+        (
+            Origin(
+                source,
+                "epoch",
+                sequence,
+                sample_time(
+                    stamp_ns=round((t) * 1e9),
+                    received_ros_ns=round((t) * 1e9),
+                    received_steady_ns=round((t + 100) * 1e9),
+                ),
+            ),
+        ),
         measured_steady=t + 100,
+        stamp_ns=round((t) * 1e9),
     )
 
 
@@ -34,7 +46,14 @@ def run(duration, *, yaw=0.0, switch=False, lateral=None):
         p.advance(m)
         old, current = (
             current,
-            p.at(t, now_ros=t, now_steady=t + 100, motion=m, measurement_steady=(t) + 100.0),
+            p.at(
+                t,
+                now_ros=t,
+                now_steady=t + 100,
+                motion=m,
+                measurement_steady=(t) + 100.0,
+                stamp_ns=round((t) * 1e9),
+            ),
         )
     return p, e, old, current
 
@@ -83,6 +102,7 @@ def test_missing_axis_interval_charges_uncertainty_then_fresh_interval_recovers(
                 now_steady=stamp + 100,
                 motion=m,
                 measurement_steady=(stamp) + 100.0,
+                stamp_ns=round((stamp) * 1e9),
             ),
         )
     assert m.healthy
@@ -108,6 +128,7 @@ def test_missing_axis_interval_charges_uncertainty_then_fresh_interval_recovers(
                 now_steady=stamp + 100,
                 motion=m,
                 measurement_steady=(stamp) + 100.0,
+                stamp_ns=round((stamp) * 1e9),
             ),
         )
     fresh = p.relative_error(old, current)
@@ -125,6 +146,7 @@ def test_relative_midsegment_uses_the_same_integrated_path():
         now_steady=current.stamp_ros + 100,
         motion=m,
         measurement_steady=(stamp) + 100.0,
+        stamp_ns=round((stamp) * 1e9),
     )
     r = p.relative_error(mid, current)
     assert r.software_position_m < 0.005 and r.software_yaw_rad < 0.005
@@ -134,7 +156,18 @@ def test_distinct_anchors_do_not_claim_shared_history_cancellation():
     p, _, old, current = run(0.15)
     unrelated = replace(
         current,
-        anchor_roots=(Origin("gps", "different", 1, 1, 1, 101, measurement_steady=101),),
+        anchor_roots=(
+            Origin(
+                "gps",
+                "different",
+                1,
+                sample_time(
+                    stamp_ns=round((1) * 1e9),
+                    received_ros_ns=round((1) * 1e9),
+                    received_steady_ns=round((101) * 1e9),
+                ),
+            ),
+        ),
         error_m=None,
         error_yaw_rad=None,
     )
@@ -176,15 +209,20 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
                                 "laser",
                                 "fresh",
                                 i + 1,
-                                t,
-                                t,
-                                t,
-                                measurement_steady=t,
-                                measurement=capture_time(t, basis="driver_read").measurement,
+                                sample_time(
+                                    stamp_ns=round((t) * 1e9),
+                                    received_ros_ns=round((t) * 1e9),
+                                    received_steady_ns=round((t) * 1e9),
+                                ),
                             ),
                         ),
                         measured_steady=t,
-                        measurement=capture_time(t, basis="driver_read").measurement,
+                        stamp_ns=sample_time(
+                            stamp_ns=round((t) * 1e9),
+                            received_ros_ns=round((t) * 1e9),
+                            received_steady_ns=round((t) * 1e9),
+                            clock_generation=1,
+                        ).stamp_ns,
                     ),
                     t,
                     t,
@@ -198,7 +236,24 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
                     measurement_steady=stamp,
                     received_ros=stamp,
                     message=N(
-                        raw_capture=N(timing=wire_time(stamp, basis="driver_read")),
+                        raw_capture=N(
+                            frame_id="laser_link",
+                            raw_gid="01",
+                            bridge_gid="02",
+                            source_epoch="source",
+                            bridge_boot_id="boot",
+                            capture_generation=1,
+                            sequence=1,
+                            valid=True,
+                            reason="",
+                            **capture_fields(
+                                time=sample_time(
+                                    stamp_ns=round((stamp) * 1e9),
+                                    received_ros_ns=round((stamp) * 1e9),
+                                    received_steady_ns=round((stamp) * 1e9),
+                                )
+                            ),
+                        ),
                         source_epoch="scan",
                         sequence=round(stamp * 100),
                         frame_id="laser_link",
@@ -235,9 +290,21 @@ def test_midsegment_pose_uses_recorded_motion_when_endpoint_velocity_changes():
     e.ingest(replace(sample(t, 10000), values=(0.8, None, 0.8)))
     m = e.estimate(t, t + 100)
     p.advance(m)
-    current = p.at(t, now_ros=t, now_steady=t + 100, motion=m, measurement_steady=(t) + 100.0)
+    current = p.at(
+        t,
+        now_ros=t,
+        now_steady=t + 100,
+        motion=m,
+        measurement_steady=(t) + 100.0,
+        stamp_ns=round((t) * 1e9),
+    )
     mid = p.at(
-        t - 0.025, now_ros=t, now_steady=t + 100, motion=m, measurement_steady=(t - 0.025) + 100.0
+        t - 0.025,
+        now_ros=t,
+        now_steady=t + 100,
+        motion=m,
+        measurement_steady=(t - 0.025) + 100.0,
+        stamp_ns=round((t - 0.025) * 1e9),
     )
     first = compose(inverse(old.pose), mid.pose)
     second = compose(inverse(mid.pose), current.pose)
@@ -262,9 +329,15 @@ def test_partial_expiry_bounds_error_against_nonzero_clipped_nominal_path():
         now_steady=102.1,
         motion=current_motion,
         measurement_steady=(2.05) + 100.0,
+        stamp_ns=round((2.05) * 1e9),
     )
     current = p.at(
-        2.1, now_ros=2.1, now_steady=102.1, motion=current_motion, measurement_steady=(2.1) + 100.0
+        2.1,
+        now_ros=2.1,
+        now_steady=102.1,
+        motion=current_motion,
+        measurement_steady=(2.1) + 100.0,
+        stamp_ns=round((2.1) * 1e9),
     )
     result = p.relative_error(old, current)
     # The old rate .2/.4 expires halfway through the stored .2s step, so the

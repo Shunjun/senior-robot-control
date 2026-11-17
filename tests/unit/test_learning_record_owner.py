@@ -3,8 +3,7 @@
 from concurrent.futures import Future
 
 import pytest
-from learning_test_support import ImmediateWorker, TestRun, geometry
-from source_time_test_support import DOMAIN
+from learning_test_support import DOMAIN, ImmediateWorker, TestRun, geometry
 from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.motion.learning_record import (

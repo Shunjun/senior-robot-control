@@ -315,91 +315,65 @@ class NativeObservations:
         *,
         now_steady: float | None = None,
     ) -> bool:
-        if msg.header.frame_id != "base_link":
-            raise ValueError("scan delta is not body-frame")
-        epoch, seq = self.identity(Source.LASER, gid, str(msg.source_epoch), now_ros)
-        first_capture = capture_from_message(msg.first_capture)
-        first_time = first_capture.time
-        second_capture = capture_from_message(msg.second_capture)
-        second_time = second_capture.time
-        if (
-            first_capture.source_epoch != second_capture.source_epoch
-            or first_time.clock_generation != second_time.clock_generation
-            or first_capture.sequence >= second_capture.sequence
-            or first_time.stamp_ns != stamp_nanoseconds(msg.interval_start)
-            or second_time.stamp_ns != stamp_nanoseconds(msg.header.stamp)
-        ):
-            raise ValueError("scan interval crossed original source lineage")
-        sample: MotionSample
         if not msg.valid:
-            sample = PointObservation(
-                Source.LASER,
-                Frame.BODY,
-                second_time,
-                epoch,
-                seq,
-                1.0,
-                SourceStatus.UNAVAILABLE,
-                (float(msg.body_delta.x), float(msg.body_delta.y), float(msg.body_delta.theta)),
-                None,
-                None,
-                Pose2D(0, 0, 0),
-            )
-            return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
-        covariance = Covariance(
-            tuple(float(x) for x in msg.covariance),
-            CovarianceKind.FULL,
-            "native ScanMotion displacement covariance; statistical model unverified",
-            None,
+            # A negative matcher result may have no usable raw endpoints.
+            self.invalidate_source(Source.LASER)
+            return False
+        if msg.header.frame_id != "base_link":
+            self.invalidate_source(Source.LASER)
+            raise ValueError("scan delta is not body-frame")
+        first = capture_from_message(msg.first_capture)
+        second = capture_from_message(msg.second_capture)
+        if (
+            not first.valid
+            or not second.valid
+            or not first.raw_gid
+            or first.raw_gid != second.raw_gid
+            or first.source_epoch != second.source_epoch
+            or first.bridge_boot_id != second.bridge_boot_id
+            or first.capture_generation != second.capture_generation
+            or first.time.clock_generation != second.time.clock_generation
+            or first.sequence >= second.sequence
+            or first.stamp_ns != stamp_nanoseconds(msg.interval_start)
+            or second.stamp_ns != stamp_nanoseconds(msg.header.stamp)
+        ):
+            self.invalidate_source(Source.LASER)
+            raise ValueError("scan interval crossed original capture lineage")
+        epoch = self.source_epoch(
+            gid,
+            f"{msg.source_epoch}:{second.bridge_boot_id}:{second.source_epoch}:"
+            f"{second.capture_generation}:{second.time.clock_generation}",
         )
         sample = DeltaObservation(
             Source.LASER,
             Frame.BODY,
-            first_time,
-            second_time,
+            first.time,
+            second.time,
             epoch,
-            seq,
+            second.sequence,
             float(msg.response),
-            SourceStatus.VALID if msg.valid else SourceStatus.UNAVAILABLE,
+            SourceStatus.VALID,
             Pose2D(float(msg.body_delta.x), float(msg.body_delta.y), float(msg.body_delta.theta)),
-            covariance,
+            Covariance(
+                tuple(float(x) for x in msg.covariance),
+                CovarianceKind.FULL,
+                "standard ScanMotion displacement covariance; model unverified",
+                None,
+            ),
             None,
             Pose2D(0, 0, 0),
         )
-        origins = None
-        if self.sample_sink is not None:
-            from senior_control.motion.estimator import Origin
+        from senior_control.motion.estimator import Origin
 
-            first, second = (
-                getattr(msg, "first_capture", None),
-                getattr(msg, "second_capture", None),
+        origins = tuple(
+            Origin(
+                "laser",
+                f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                h.sequence,
+                h.time,
             )
-            if first is None or second is None:
-                raise ValueError("scan interval needs original capture lineage")
-            if (
-                not first.valid
-                or not second.valid
-                or not first.raw_gid
-                or first.raw_gid != second.raw_gid
-                or first.source_epoch != second.source_epoch
-                or first.bridge_boot_id != second.bridge_boot_id
-                or first.capture_generation != second.capture_generation
-                or stamp_seconds(first.stamp) != sample.start_ros
-                or stamp_seconds(second.stamp) != sample.end_ros
-                or first.sequence >= second.sequence
-            ):
-                raise ValueError("scan interval needs original capture lineage")
-            origins = tuple(
-                Origin(
-                    "laser",
-                    f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
-                    int(h.sequence),
-                    capture_from_message(h).time,
-                )
-                for h in (first, second)
-            )
-        # //Compatible: diagnostic/progress-only legacy callers retain their
-        # interval snapshot; it never supplies the production driving estimator.
+            for h in (first, second)
+        )
         return self.ingest(
             sample, now_ros, received if now_steady is None else now_steady, origins=origins
         )
@@ -422,7 +396,7 @@ class NativeObservations:
         )
         a, b = self._window if compatible_window else (max(0, b - 100_000_000), b)
         result = self.fusion.update(
-            self.resolver.resolve(a, b, snapshot, stamp_ns=axis), snapshot, self.resolver
+            self.resolver.resolve(a, b, snapshot), snapshot, self.resolver
         )
         self._sequence += 1
         return {
@@ -664,6 +638,7 @@ class NativeObservationRosBridge:
                         topic
                     ]
                     process_diagnostics().sensor_attempt(role, "raw", None, ("invalid_data",))
+                    self.core.invalidate_source(Source(role))
                 if now - self._warn_at > 1:
                     self._warn_at = now
                     self.node.get_logger().warning("native motion observation unavailable")

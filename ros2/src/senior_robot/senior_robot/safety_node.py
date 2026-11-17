@@ -596,7 +596,7 @@ class SafetyGate(Node):
                 and 0 < msg.min_range_m < msg.max_range_m <= 100
                 and msg.range_error_m > 0
                 and abs(sum(v * v for v in msg.optical_to_body_quaternion) - 1.0) <= 0.001
-                and stamp > 0
+                and stamp >= 0
                 and info_stamp == stamp
                 and 0 <= ros_ns - info_receipt <= age * 1e9
                 and 0 <= steady - msg.camera_info_received_steady <= age

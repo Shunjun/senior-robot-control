@@ -231,7 +231,7 @@ class CaptureJoiner:
                 return JoinResult("invalid")
             return JoinResult("invalid" if generation_changed else "ignored")
         identity = (header.raw_gid, header.source_epoch, header.frame_id)
-        if not all(identity) or header.stamp_ns <= 0:
+        if not all(identity) or header.stamp_ns < 0:
             self.invalidate()
             return JoinResult("invalid")
         if self._identities[stream] is not None and self._identities[stream] != identity:
@@ -241,9 +241,9 @@ class CaptureJoiner:
         source = (header.raw_gid, header.source_epoch)
         previous = self._times[stream] if self._time_sources[stream] == source else None
         if (
-            header.received_ros_ns <= 0
+            header.received_ros_ns < 0
             or not _finite(header.received_steady)
-            or header.received_steady <= 0
+            or header.received_steady < 0
             or (
                 previous is not None
                 and (

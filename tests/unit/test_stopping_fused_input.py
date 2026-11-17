@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+from sensor_time_test_support import sample_time
 from shapely.geometry import GeometryCollection, Point, box
 from test_unified_motion_runtime import point
 
@@ -113,9 +114,21 @@ def test_failed_laser_with_live_wheel_still_uses_unified_result():
         "laser",
         (0.02, None, 0.0),
         10,
-        (Origin("laser", "boot", 1, 10, 10, 20, measurement_steady=20),),
+        (
+            Origin(
+                "laser",
+                "boot",
+                1,
+                sample_time(
+                    stamp_ns=round((10) * 1e9),
+                    received_ros_ns=round((10) * 1e9),
+                    received_steady_ns=round((20) * 1e9),
+                ),
+            ),
+        ),
         independent=(True, True, True),
         measured_steady=20,
+        stamp_ns=round((10) * 1e9),
     )
     core.sensors.ingest_observation(laser, 10, 20)
     snapshot(core)
@@ -139,9 +152,21 @@ def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
             name,
             (value, None, 0.0),
             stamp,
-            (Origin(name, "boot2", 1, stamp, stamp, stamp + 10, measurement_steady=stamp + 10),),
+            (
+                Origin(
+                    name,
+                    "boot2",
+                    1,
+                    sample_time(
+                        stamp_ns=round((stamp) * 1e9),
+                        received_ros_ns=round((stamp) * 1e9),
+                        received_steady_ns=round((stamp + 10) * 1e9),
+                    ),
+                ),
+            ),
             independent=(name == "laser",) * 3,
             measured_steady=stamp + 10,
+            stamp_ns=round((stamp) * 1e9),
         )
         core.sensors.ingest_observation(o, 10, 20)
     ctx = snapshot(core, obstacle=Point(1, 0))
@@ -272,11 +297,7 @@ def test_hardware_profile_schema_and_launch_resolver_preserve_other_parameters()
     schema = json.loads((ROOT / "config/hardware-motion.schema.json").read_text())
     assert schema == HardwareMotionProfile.model_json_schema()
     p = select_motion_profile(
-        "",
         hardware_path=str(ROOT / "config/hardware-motion.json"),
-        simulated_clock=False,
-        localhost_only="0",
-        domain_id="0",
     )
     assert p.decel == 0.5
     assert (p.accel, p.yaw_decel, p.jerk, p.horizon_s) == (0.2, 0.15, 0.4, 12)

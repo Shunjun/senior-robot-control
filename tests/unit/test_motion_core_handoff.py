@@ -7,9 +7,14 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
-from control_process_test_support import local_resources, make_core, read_inputs
+from control_process_test_support import (
+    generic_motion_profile,
+    local_resources,
+    make_core,
+    read_inputs,
+)
 from motion_reference_test_support import ReadySubscription
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from sensor_time_test_support import sample_time
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionEventKind as K
@@ -69,7 +74,7 @@ def core(monkeypatch):
     monkeypatch.setitem(sys.modules, "senior_robot.motion_lifecycle", lifecycle)
     monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.0)
     local_resources(monkeypatch)
-    c = make_core(monkeypatch, Node(), SimulationMotionProfile())
+    c = make_core(monkeypatch, Node(), generic_motion_profile())
     yield c
     c.close()
 
@@ -251,9 +256,21 @@ def test_body_projection_keeps_original_monotonic_expiry_across_ros_correction(c
             "laser",
             (0.0, None, 0.0),
             10.0,
-            (Origin("laser", "laser", 1, 10.0, 10.0, 20.0, measurement_steady=20.0),),
+            (
+                Origin(
+                    "laser",
+                    "laser",
+                    1,
+                    sample_time(
+                        stamp_ns=round((10.0) * 1e9),
+                        received_ros_ns=round((10.0) * 1e9),
+                        received_steady_ns=round((20.0) * 1e9),
+                    ),
+                ),
+            ),
             measured_steady=20.0,
             independent=(True, True, True),
+            stamp_ns=round((10.0) * 1e9),
         )
     )
     core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=10.1e9))
@@ -262,6 +279,6 @@ def test_body_projection_keeps_original_monotonic_expiry_across_ros_correction(c
     assert body.stamp_steady == 20.0 and body.deadline_steady == 21.0
     before = core.node._reception_test.sensors.latest.generation
     core.node.get_clock = lambda: N(now=lambda: N(nanoseconds=round(corrected_ros * 1e9)))
-    assert read_inputs(core, 20.2)[1] is not None
-    assert core.node._reception_test.sensors.latest.generation == before
+    assert (read_inputs(core, 20.2)[1] is not None) is (corrected_ros >= 10.1)
+    assert core.node._reception_test.sensors.latest.generation == before + (corrected_ros < 10.1)
     assert read_inputs(core, 21.0)[1] is None
