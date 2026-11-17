@@ -73,6 +73,12 @@ int main(int argc,char **argv) {
     assert(Publication::published.size()==1 && receiver.deadline_==10.5);
     clock_ns=10'500'000'000ULL;receiver.poll();
     assert(Publication::published.back().linear.x==0);
+  } else if(scenario=="publish_deadline") {
+    clock_ns=10'500'000'000ULL;
+    receiver.publish(0.8,0.4,10'000'000'000ULL,clock_ns);
+    assert(Publication::published.back().linear.x==0);
+    assert(Publication::published.back().angular.z==0);
+    assert(!receiver.moving_ && receiver.deadline_==0);
   } else if(scenario=="original_order") {
     frame(0.2,0.3,10.4,9.99,2);
     frame(0.9,0.9,10.5,9.98,3);receiver.poll();
