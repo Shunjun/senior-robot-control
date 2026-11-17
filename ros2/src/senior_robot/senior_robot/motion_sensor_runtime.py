@@ -235,7 +235,7 @@ class MotionSensorRuntime:
                 or "unavailable"
             )
         )
-        stamp = max((root.received_steady for root in roots), default=now_steady)
+        stamp = max((root.measurement_steady for root in roots), default=now_steady)
         self.tracking = (
             None
             if not r.healthy

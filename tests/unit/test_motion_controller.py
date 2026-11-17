@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from sensor_time_test_support import sample_time
 from shapely.geometry import Point
 from test_directional_constraints import engine, snapshot
 
@@ -418,16 +419,22 @@ def test_t3_partial_fusion_to_real_t4_to_controller_wheel_limited():
     events = [
         replace(
             point(Source.IMU, i / 50, i + 1, (0,)),
-            received_steady=i / 50,
-            measurement_steady=i / 50,
+            time=sample_time(
+                stamp_ns=round(i / 50 * 1e9),
+                received_ros_ns=round(i / 50 * 1e9),
+                received_steady_ns=round(i / 50 * 1e9),
+            ),
         )
         for i in range(6)
     ]
     events += [
         replace(
             point(Source.WHEEL, i / 30, i + 1, (0, 0)),
-            received_steady=i / 30,
-            measurement_steady=i / 30,
+            time=sample_time(
+                stamp_ns=round(i / 30 * 1e9),
+                received_ros_ns=round(i / 30 * 1e9),
+                received_steady_ns=round(i / 30 * 1e9),
+            ),
         )
         for i in range(4)
     ]

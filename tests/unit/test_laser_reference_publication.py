@@ -272,8 +272,11 @@ def test_accepted_laser_is_published_after_handler_return_before_next_timer(phas
     assert len(phase.node.packets) == before + 1
     assert phase.node.events[1][0] == "publish"
     assert phase.node.packets[-1]["reference"]["end_ros"] == 1.6
-    assert body.stamp_steady == phase.laser_info["sample_time"].sample_steady_ns / 1e9
+    original = phase.laser_info["sample_time"]
+    assert original.received_steady_ns - original.sample_steady_ns == 24_000_000
+    assert body.stamp_steady == original.sample_steady_ns / 1e9
     roots = phase.consumer.sensors.latest.vx.roots
+    assert body.stamp_steady == max(root.measurement_steady for root in roots)
     assert body.deadline_steady <= min(r.time.sample_steady_ns / 1e9 + 1 for r in roots)
     assert phase.node.publisher_count == 1
 

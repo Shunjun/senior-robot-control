@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from sensor_time_test_support import sample_time
 from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, box
 from shapely.ops import unary_union
 
@@ -343,16 +344,22 @@ def test_pure_t3b_partial_motion_to_direction_constraint_example():
     events = [
         replace(
             point(Source.IMU, i / 50, i + 1, (0,)),
-            received_steady=i / 50,
-            measurement_steady=i / 50,
+            time=sample_time(
+                stamp_ns=round(i / 50 * 1e9),
+                received_ros_ns=round(i / 50 * 1e9),
+                received_steady_ns=round(i / 50 * 1e9),
+            ),
         )
         for i in range(6)
     ]
     events += [
         replace(
             point(Source.WHEEL, i / 30, i + 1, (0.3, 0)),
-            received_steady=i / 30,
-            measurement_steady=i / 30,
+            time=sample_time(
+                stamp_ns=round(i / 30 * 1e9),
+                received_ros_ns=round(i / 30 * 1e9),
+                received_steady_ns=round(i / 30 * 1e9),
+            ),
         )
         for i in range(4)
     ]
