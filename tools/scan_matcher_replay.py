@@ -16,6 +16,8 @@ from typing import Any, TextIO
 
 import yaml
 
+from tools.vehicle_motion_capture import capture_time
+
 LIMIT_FIELDS = (
     "max_interval_ms",
     "range_limit",
@@ -56,10 +58,11 @@ def write_scan_records(envelopes: Iterable[dict[str, Any]], stream: TextIO) -> l
         if previous is not None and continuity != previous:
             stream.write("R\n")
         previous = continuity
-        stamp = capture["stamp"]
-        ns = stamp["sec"] * 1_000_000_000 + stamp["nanosec"]
+        time = capture_time(capture)
+        ns = time["stamp_ns"]
+        seconds, nanoseconds = divmod(ns, 1_000_000_000)
         header = [
-            ns / 1e9,
+            f"{seconds}.{nanoseconds:09d}",
             body["angle_min"],
             body["angle_increment"],
             body["range_min"],
@@ -77,7 +80,7 @@ def write_scan_records(envelopes: Iterable[dict[str, Any]], stream: TextIO) -> l
         frames.append(
             {
                 "filtered_ordinal": ordinal,
-                "stamp_ns": ns,
+                "time": time,
                 "producer_epoch": body["source_epoch"],
                 "continuity_key": continuity,
             }

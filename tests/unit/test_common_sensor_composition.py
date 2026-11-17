@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
 
 from senior_control.motion.hardware_profile import HardwareMotionProfile
 from senior_control.real_runtime import load_real_parameters
@@ -14,12 +13,14 @@ def test_shared_sensor_policy_stays_independent_of_command_ttl():
     p = HardwareMotionProfile.model_validate(
         json.loads(Path("config/hardware-motion.json").read_text())
     )
-    sim = SimulationMotionProfile()
+    sim = HardwareMotionProfile.model_validate_json(
+        Path("ros2/src/senior_sim/config/motion_profile.json").read_text()
+    )
     assert p.max_age_ms == sim.max_age_ms == 1000
     assert p.lag_ms == 500
     assert sim.lag_ms == 200
     assert p.lateral_stop_ms == 1000
-    assert sim.lateral_stop_ms is None
+    assert sim.lateral_stop_ms == 0
     assert p.temporal().prediction_horizon_ms == sim.temporal().prediction_horizon_ms == 1000
     assert p.temporal().history_s == sim.temporal().history_s == 2.0
     loaded = load_real_parameters(Path("config/hardware-safety.yaml").resolve(), p)

@@ -3,7 +3,6 @@
   "profile_id": "wheeltec-senior-4wd-dl-assumed-v1",
   "evidence_basis": "ASSUMED configuration requested by operator; no physical measurements or guarantees",
   "operating_conditions": "Assumed level dry indoor floor, nominal unloaded vehicle; actual load, friction and slope unverified",
-  "simulation_only": false,
   "accel": 0.2,
   "decel": 0.5,
   "jerk": 0.4,

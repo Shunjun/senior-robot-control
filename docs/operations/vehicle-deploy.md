@@ -286,3 +286,10 @@ Agent 会校验完整小写 SHA-256、地图包内容与来源车辆。只读包
 入口与统一目录解析见 [cli.py](../../src/senior_control/cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../src/senior_control/vehicle_deploy.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../src/senior_control/docker_start_helper.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
 
 升级时从自定义配置中移除已退役的 `estop_state` / `safety_state_path` 参数，并从自定义 motion profile 移除 `hardware_estop` 配置块；新版本不保留这些配置的兼容读取。现场旧 `estop-state.json` 保留原样，不作为启动输入。
+
+
+## 标准 ROS 时间接口（2026-11-17）
+
+本项目直接接收标准 `/scan`、配置中的 Odometry/Imu 及 Image/CameraInfo，不要求厂家时间补丁或 `/timed` 话题。首次接入使用原始整数 `header.stamp` 和本地 ROS/单调时钟保留测量年龄，排队与控制期限使用单调时钟。最终执行消息为 `geometry_msgs/Twist`，话题固定 `/cmd_vel`，由项目唯一输出 owner 发布；Nav2 使用私有运行话题，厂家底盘/串口 owner 只启动一次。
+
+更新含消息接口变更的版本时按[干净接口重建](ros-interface-rebuild.md)清理已核对的本项目生成物，避免旧安装库掩盖接口变化。不要安装已退役的 sensor/Nav2/simulation 时间 overlay，不修改厂家组件。通用 profile 不再包含 `simulation_only` 字段，仍须提供明确数值依据；导航配置缺失时保持可选导航不可用的原行为。真实 ROS 构建、DDS 和车端只读状态验证须独立完成，便携单测通过不等于现场链路通过。

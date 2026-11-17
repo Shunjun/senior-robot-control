@@ -45,6 +45,18 @@ def test_simulation_contract_files_are_wired() -> None:
     controller = yaml.safe_load(
         (ROOT / "ros2/src/senior_sim/config/controllers.yaml").read_text(encoding="utf-8")
     )["drive"]["ros__parameters"]
+    control = model.find("ros2_control")
+    assert control.find("hardware/plugin").text == "gz_ros2_control/GazeboSimSystem"
+    assert control.find("gpio") is None
+    assert control.find("sensor") is None
+    ns = {"xacro": "http://www.ros.org/wiki/xacro"}
+    assert len(control.findall("xacro:control_joint", ns)) == 4
+    joint = control.find("xacro:macro/joint", ns)
+    assert [item.get("name") for item in joint.findall("command_interface")] == ["velocity"]
+    assert [item.get("name") for item in joint.findall("state_interface")] == [
+        "position",
+        "velocity",
+    ]
     assert controller["open_loop"] is False
     assert 0 < controller["cmd_vel_timeout"] <= 0.3
     assert len(controller["left_wheel_names"]) == len(controller["right_wheel_names"]) == 2
@@ -106,6 +118,15 @@ def test_baseline_has_visible_obstacle() -> None:
     assert obstacle.find("./link/visual/geometry/box/size") is not None
 
 
+def controller_unstamped(root):
+    return (
+        yaml.safe_load((root / "ros2/src/senior_sim/config/controllers.yaml").read_text())["drive"][
+            "ros__parameters"
+        ]["use_stamped_vel"]
+        is False
+    )
+
+
 def test_drive_remapping_uses_humble_plugin_configuration() -> None:
     import xml.etree.ElementTree as ET
 
@@ -114,11 +135,10 @@ def test_drive_remapping_uses_humble_plugin_configuration() -> None:
     assert plugin is not None
     remaps = {item.text for item in plugin.findall("./ros/remapping")}
     assert remaps == {
-        "/drive/actuator_target:=/control/actuator_target",
+        "/drive/cmd_vel_unstamped:=/cmd_vel",
         "/drive/odom:=/wheel/odom",
-        "/drive/odom/timed:=/wheel/odom/timed",
     }
-    assert not any("cmd_vel" in item or "Twist" in item for item in remaps)
+    assert controller_unstamped(ROOT)
     launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
     assert "--controller-ros-args" not in launch
 

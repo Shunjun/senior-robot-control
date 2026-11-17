@@ -13,6 +13,7 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from senior_robot.rgbd_transport import transport_environment
 
@@ -37,11 +38,13 @@ def _transport_actions(context):
 def generate_launch_description():
     robot = FindPackageShare("senior_robot")
     profile = PathJoinSubstitution([robot, "config", "simulation_rgbd.yaml"])
+    clock = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
     return LaunchDescription(
         [
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("robot_id"),
             DeclareLaunchArgument("headless", default_value="true"),
+            DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("enable_rgbd_transport", default_value="true"),
             DeclareLaunchArgument(
                 "rgbd_transport_profile",
@@ -59,17 +62,23 @@ def generate_launch_description():
                             "agent_socket": LaunchConfiguration("agent_socket"),
                             "robot_id": LaunchConfiguration("robot_id"),
                             "headless": LaunchConfiguration("headless"),
-                            "safety_overlay": profile,
+                            "use_sim_time": LaunchConfiguration("use_sim_time"),
                         }.items(),
                     ),
                     Node(
                         package="senior_sensor_ingress",
                         executable="raw_receipt_node",
-                        parameters=[profile],
+                        parameters=[profile, clock],
                     ),
-                    Node(package="senior_robot", executable="depth_ingress", parameters=[profile]),
                     Node(
-                        package="senior_robot", executable="semantic_ingress", parameters=[profile]
+                        package="senior_robot",
+                        executable="depth_ingress",
+                        parameters=[profile, clock],
+                    ),
+                    Node(
+                        package="senior_robot",
+                        executable="semantic_ingress",
+                        parameters=[profile, clock],
                     ),
                 ],
             ),

@@ -10,11 +10,13 @@ import argparse
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
+
+from senior_control.sensors.sample_time import SampleTime, interval_ns
 
 # Diagnostic discriminators only; these are NOT frozen controller/safety limits.
 WINDOW_S = 0.5
@@ -41,7 +43,7 @@ class Sample:
     index: int
     stream: str
     steady: float
-    stamp: float | None
+    stamp: int | None
     data: dict[str, Any]
 
 
@@ -66,14 +68,48 @@ def _read(path: Path) -> tuple[list[dict[str, Any]], str]:
 def _parse(records: list[dict[str, Any]]) -> tuple[dict[str, list[Sample]], list[int]]:
     streams: dict[str, list[Sample]] = defaultdict(list)
     invalid = []
-    last: dict[str, tuple[float, float | None]] = {}
+    last: dict[str, tuple[float, int | None]] = {}
     for index, row in enumerate(records):
+        if row.get("kind") == "error":
+            stream = row.get("component")
+            if isinstance(stream, str) and stream != "ros":
+                received_ns = row.get("received_steady_ns")
+                previous_steady, previous_stamp = last.get(stream, (0.0, None))
+                steady = (
+                    received_ns / 1e9
+                    if type(received_ns) is int and received_ns >= 0
+                    else previous_steady
+                )
+                invalid.append(index)
+                streams[stream].append(
+                    Sample(index, stream, steady, None, {"break": True, "error": row.get("detail")})
+                )
+                last[stream] = (max(steady, previous_steady), previous_stamp)
+            continue
         if row.get("kind") != "sample":
             continue
-        stream, steady, stamp = (row.get(k) for k in ("stream", "received_steady", "stamp_ros"))
+        stream = row.get("stream")
+        received_ns = row.get("received_steady_ns")
+        steady = received_ns / 1e9 if type(received_ns) is int and received_ns >= 0 else None
+        stamp = None
+        timing_valid = True
+        try:
+            if "time" in row:
+                stamp = SampleTime(**row["time"]).stamp_ns
+            if "first_time" in row or "last_time" in row:
+                first, last_time = (SampleTime(**row[key]) for key in ("first_time", "last_time"))
+                interval = interval_ns(first, last_time)
+                if stamp != interval.end_ns:
+                    raise ValueError("interval endpoint differs from sample")
+        except (ValueError, TypeError, KeyError):
+            timing_valid = False
         data = row.get("data")
+        if stream == "clock" and isinstance(data, dict):
+            stamp = data.get("clock_ros_ns")
+            timing_valid = type(stamp) is int and stamp >= 0
         if (
-            not isinstance(stream, str)
+            not timing_valid
+            or not isinstance(stream, str)
             or not number(steady)
             or (stamp is not None and not number(stamp))
             or not isinstance(data, dict)
@@ -83,6 +119,10 @@ def _parse(records: list[dict[str, Any]]) -> tuple[dict[str, list[Sample]], list
                 barrier_time = float(steady) if number(steady) else last.get(stream, (0.0, None))[0]
                 streams[stream].append(Sample(index, stream, barrier_time, None, {"break": True}))
             continue
+        if "first_time" in row and timing_valid:
+            data = {**data, "interval_start_ns": interval.start_ns}
+        if "time" in row and timing_valid:
+            data = {**data, "clock_generation": row["time"]["clock_generation"]}
         previous = last.get(stream)
         if previous and (
             steady <= previous[0]
@@ -98,11 +138,11 @@ def _parse(records: list[dict[str, Any]]) -> tuple[dict[str, list[Sample]], list
     return streams, invalid
 
 
-def continuity_key(sample: Sample) -> tuple[object, object]:
-    # //Compatible: older traces/fixtures carried only the producer source_epoch.
+def continuity_key(sample: Sample) -> tuple[object, object, object]:
     return (
         sample.data.get("publisher_gid"),
-        sample.data.get("producer_epoch", sample.data.get("source_epoch")),
+        sample.data.get("producer_epoch"),
+        sample.data.get("clock_generation"),
     )
 
 
@@ -111,7 +151,7 @@ def _windows(samples: list[Sample], qualifies: Callable[[Sample], bool]) -> list
     result: list[list[Sample]] = []
     run: list[Sample] = []
     for sample in samples:
-        if not qualifies(sample):
+        if sample.data.get("break") or not qualifies(sample):
             if len(run) >= 3 and run[-1].steady - run[0].steady >= WINDOW_S - 1e-9:
                 result.append(run)
             run = []
@@ -130,7 +170,7 @@ def _windows(samples: list[Sample], qualifies: Callable[[Sample], bool]) -> list
 
 
 def _interval_average(
-    samples: list[Sample], start: float, end: float, *, at_steady: float | None = None
+    samples: list[Sample], start: int, end: int, *, at_steady: float | None = None
 ) -> float | None:
     """Integrate endpoint-interpolated velocities on the scan source interval."""
     if end <= start:
@@ -154,7 +194,7 @@ def _interval_average(
                 sample.steady <= previous.steady
                 or sample.steady - previous.steady > MAX_SAMPLE_GAP_S
                 or sample.stamp <= previous_stamp
-                or sample.stamp - previous_stamp > MAX_SAMPLE_GAP_S
+                or sample.stamp - previous_stamp > MAX_SAMPLE_GAP_S * 1e9
                 or continuity_key(sample) != continuity_key(previous)
             ):
                 runs.append(run)
@@ -196,7 +236,7 @@ def _interval_average(
 
 def _disagreements(streams: dict[str, list[Sample]]) -> list[list[Sample]]:
     def mismatched(scan: Sample) -> bool:
-        start, vx = scan.data.get("interval_start_ros"), scan.data.get("vx")
+        start, vx = scan.data.get("interval_start_ns"), scan.data.get("vx")
         if (
             scan.stamp is None
             or scan.data.get("valid") is not True
@@ -212,9 +252,8 @@ def _disagreements(streams: dict[str, list[Sample]]) -> list[list[Sample]]:
         if not nearby:
             return False
         reference = min(nearby, key=lambda row: abs(row.steady - scan.steady))
-        if (
-            reference.stamp is None
-            or not 0 <= reference.stamp - scan.stamp <= MAX_SOURCE_LAG_S + 1e-9
+        if reference.stamp is None or not 0 <= reference.stamp - scan.stamp <= round(
+            MAX_SOURCE_LAG_S * 1e9
         ):
             return False
         wheel = _interval_average(
@@ -236,6 +275,12 @@ def _disagreements(streams: dict[str, list[Sample]]) -> list[list[Sample]]:
 def analyze_trace(path: Path) -> dict[str, object]:
     records, digest = _read(path)
     streams, invalid = _parse(records)
+    # Continuity markers describe failures; only raw sample rows establish receipt.
+    counts = Counter(
+        row["stream"]
+        for row in records
+        if row.get("kind") == "sample" and isinstance(row.get("stream"), str)
+    )
     evidence: list[dict[str, object]] = []
 
     def add(name: str, runs: list[list[Sample]], fields: list[str]) -> None:
@@ -260,7 +305,7 @@ def analyze_trace(path: Path) -> dict[str, object]:
         if row.stamp is not None:
             constant.append(row)
     pause_runs.extend(_windows(constant, lambda s: s.stamp is not None))
-    add("clock_pause", pause_runs, ["stamp_ros", "received_steady"])
+    add("clock_pause", pause_runs, ["time.stamp_ns", "received_steady_ns"])
     add(
         "alignment_wait",
         _windows(
@@ -276,7 +321,7 @@ def analyze_trace(path: Path) -> dict[str, object]:
     add(
         "wheel_body_disagreement",
         _disagreements(streams),
-        ["wheel.vx", "truth.vx", "scan_motion.vx", "interval_start_ros", "stamp_ros"],
+        ["wheel.vx", "truth.vx", "scan_motion.vx", "first_time.stamp_ns", "last_time.stamp_ns"],
     )
 
     # Starvation needs counter deltas across a sustained window, not reason strings.
@@ -309,16 +354,17 @@ def analyze_trace(path: Path) -> dict[str, object]:
             starving.append(run)
     add("permit_starvation", starving, ["submitted", "completed", "rejected_expired", "admitted"])
     return {
-        "schema": 1,
+        "schema": 2,
         "source": str(path),
         "source_sha256": digest,
         "analyzer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "raw_record_count": len(records),
-        "counts": {k: len(v) for k, v in streams.items()},
+        "counts": dict(counts),
         "findings": sorted({str(row["finding"]) for row in evidence}),
         "evidence": evidence,
         "invalid_samples": invalid,
-        "missing_streams": [k for k in REQUIRED if not streams[k]],
+        "capture_errors": [i for i, row in enumerate(records) if row.get("kind") == "error"],
+        "missing_streams": [k for k in REQUIRED if not counts[k]],
         "physical_stop": "not_evaluated",
         "acceptance_frozen": False,
         "diagnostic_policy": {

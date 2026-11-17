@@ -1,9 +1,16 @@
+import importlib.util
 from pathlib import Path
 
 import pytest
 
-from senior_control.mapping.simulation import baseline_grid, map_to_odom
 from senior_control.models import Pose2D
+
+_SPEC = importlib.util.spec_from_file_location(
+    "world_reference", Path("ros2/src/senior_sim/scripts/world_reference.py")
+)
+_WORLD = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_WORLD)
+baseline_grid, map_to_odom = _WORLD.baseline_grid, _WORLD.map_to_odom
 
 
 def test_baseline_grid_matches_the_pinned_world(tmp_path: Path) -> None:
@@ -13,6 +20,16 @@ def test_baseline_grid_matches_the_pinned_world(tmp_path: Path) -> None:
     assert grid.cells[80 * 160 + 120] == 100  # World x=2, y=0, inside the wall.
     assert grid.cells[80 * 160 + 80] == 0
     assert grid.waypoint_writes
+    from senior_control.hardware_navigation import load_navigation_reference
+
+    reference = _WORLD.generate_reference(world, tmp_path / "assets")
+    generated = load_navigation_reference(reference)
+    assert bytes(generated.grid().cells) == grid.cells
+    assert generated.pose_topic == "/amcl_pose"
+    assert generated.pose_publisher == "amcl"
+    pgm = (reference.parent / "map.pgm").read_bytes()
+    assert pgm.startswith(b"P5\n160 160\n255\n")
+    assert len(pgm.split(b"\n", 3)[-1]) == grid.width * grid.height
     modified = tmp_path / "baseline.sdf"
     modified.write_bytes(world.read_bytes().replace(b"2 0 0.75", b"3 0 0.75"))
     with pytest.raises(ValueError, match="baseline"):
@@ -44,7 +61,7 @@ def test_route_world_raster_includes_cross_walls_and_preserves_start_corridor() 
 def test_scan_projection_accounts_for_robot_and_sensor_mount_and_limits_payload():
     import math
 
-    from senior_control.mapping.simulation import project_scan
+    project_scan = _WORLD.project_scan
 
     points = project_scan(
         Pose2D(1, 2, math.pi / 2),

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Write one latest RGB image from the isolated Gazebo bridge."""
 
 from pathlib import Path
@@ -7,11 +8,11 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
 from sensor_msgs.msg import Image
 
 from senior_control.sensors.policy import default_policy
 from senior_control.vision.simulation_video import publish_image
-from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
 
 _TOPIC = "/camera/color/image_raw"
 
@@ -81,3 +82,7 @@ def main() -> None:
             node.destroy_node()
         # //Compatible: Humble's signal handler may already have shut down the context.
         rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
