@@ -152,6 +152,8 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
     substitutions.PathJoinSubstitution = Action
     ros_actions = ModuleType("launch_ros.actions")
     ros_actions.Node = type("Node", (Action,), {})
+    parameter_descriptions = ModuleType("launch_ros.parameter_descriptions")
+    parameter_descriptions.ParameterValue = Action
     ros_substitutions = ModuleType("launch_ros.substitutions")
     ros_substitutions.FindPackageShare = Action
     for name, module in {
@@ -161,6 +163,7 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
         "launch.substitutions": substitutions,
         "launch_ros": ModuleType("launch_ros"),
         "launch_ros.actions": ros_actions,
+        "launch_ros.parameter_descriptions": parameter_descriptions,
         "launch_ros.substitutions": ros_substitutions,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
