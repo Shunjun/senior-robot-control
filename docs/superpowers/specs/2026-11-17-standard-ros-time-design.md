@@ -21,6 +21,7 @@
 - `/scan/timed`、`/odom/timed`、`/imu/data_raw/timed` 没有发布者。项目强制等待这些消息，导致 `scan_missing` 和独立车体速度不可用。
 - `motion_output_guard.cpp` 目前只发布 `ActuatorTarget`，而厂家驱动接收标准速度消息；输入恢复之后，输出也必须配套迁移。
 - 现有启动修复 `3ceadf8` 已在车端通过 4 包构建并启动，IPC 为 verified，安全状态仍是 braking/scan_missing。该状态不是障碍物证据。
+- 已只读核对车端实际厂家 launch/source：`wheeltec_nav2.launch.py` 会包含 `turn_on_wheeltec_robot.launch.py`、雷达和 Nav2 bringup；基础入口又包含 `base_serial.launch.py`，启动订阅标准 `/cmd_vel` (`geometry_msgs/Twist`) 的同一个 `wheeltec_robot_node`。不能在已有底盘之上再叠加完整厂家导航入口，重复启动串口 owner。`robot_nav` 参数在该安装版本中选择 EKF 配置，不是另一种底盘速度协议。
 
 ## 实施方式
 
@@ -65,6 +66,7 @@
 - `RawCaptureHeader` 等项目内部消息删除新增 `SourceTime timing` 依赖，保留必要的原始 stamp、首次接收和来源信息；派生记录使用统一内部时间接口，不重复出现另一套隐蔽证明字段。
 - 最终输出 owner 使用原厂现有标准速度接口（当前 `/cmd_vel`），保持唯一最终发布者、原始内部命令 deadline、过期归零和关闭时归零。删除依赖厂家订阅 `ActuatorTarget` 的输出契约。
 - Nav2 的结果/速度/定位接入使用原包标准接口，项目内处理导航生命周期、私有运行命令话题、截止时间与最终输出。禁止把 Nav2 直接接成第二个底盘速度 owner。
+- 基础驱动始终只启动一次；导航接入仅组合所需 Nav2 节点，不额外调用会重复启动底盘/雷达的厂家完整导航 launch。标准消息和话题路由通过本项目启动配置实现，不修改厂家驱动。手动和导航的速度来源由项目现有 owner 选择，不能同时竞争向底盘 `/cmd_vel` 发布。
 
 ### 环境设施、定位与建图
 
