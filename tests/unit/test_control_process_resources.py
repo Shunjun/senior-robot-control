@@ -103,6 +103,27 @@ def test_real_spawn_serializes_tasks_and_results_and_cleans_up():
     assert all(p.pid != pid for p in mp.active_children())
 
 
+def test_busy_request_mailbox_retains_one_flight_without_blocking_or_losing_task():
+    worker = ProcessWorker(name="batch-test-contended-geometry")
+    try:
+        worker.requests._lock.acquire()
+        try:
+            started = time.monotonic()
+            future = worker.submit(partial(compute_pid, 7))
+            assert not future.done()
+            assert time.monotonic() - started < 0.05
+            with pytest.raises(RuntimeError, match="geometry_process_busy"):
+                worker.submit(partial(compute_pid, 8))
+            assert worker.flight is future
+        finally:
+            worker.requests._lock.release()
+        pid, result = wait_done(future).result()
+        assert pid != os.getpid() and result == 7
+        assert wait_done(worker.submit(partial(compute_pid, 9))).result()[1] == 9
+    finally:
+        worker.close()
+
+
 def test_process_death_fails_pending_future_and_close_reaps_it():
     worker = ProcessWorker(name="batch-test-killed-geometry")
     future = worker.submit(partial(held_task, 10))
