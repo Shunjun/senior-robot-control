@@ -175,7 +175,7 @@ class TemporalResolver:
 
     def _segments(
         self, source: Source, a: int, b: int, snapshot: SourceSnapshot
-    ) -> list[tuple[float, float, AdaptedObservation]]:
+    ) -> list[tuple[int, int, AdaptedObservation]]:
         points = [
             p
             for p in self._ready_history(source, snapshot)
