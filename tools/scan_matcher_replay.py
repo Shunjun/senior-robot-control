@@ -60,8 +60,9 @@ def write_scan_records(envelopes: Iterable[dict[str, Any]], stream: TextIO) -> l
         previous = continuity
         time = capture_time(capture)
         ns = time["stamp_ns"]
+        seconds, nanoseconds = divmod(ns, 1_000_000_000)
         header = [
-            ns / 1e9,
+            f"{seconds}.{nanoseconds:09d}",
             body["angle_min"],
             body["angle_increment"],
             body["range_min"],
