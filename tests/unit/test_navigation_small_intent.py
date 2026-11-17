@@ -33,7 +33,7 @@ def rig(monkeypatch):
 @pytest.mark.parametrize("vx,wz", [(0.0049, 0.0), (-0.0049, 0.0), (0.0, -0.0037), (0.0099, 0.0037)])
 def test_subcentimeter_nonzero_intent_keeps_exact_twist_and_original_deadline(rig, vx, wz):
     r = rig.r
-    r.msg.vx, r.msg.wz = vx, wz
+    r.msg.linear.x, r.msg.angular.z = vx, wz
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert len(rig.final) == 1 and not rig.barriers
     final = rig.final[0]
@@ -45,7 +45,7 @@ def test_subcentimeter_nonzero_intent_keeps_exact_twist_and_original_deadline(ri
 def test_small_nonzero_keeps_existing_supersedence_interval(rig):
     r = rig.r
     r.node._navigation_source.last_forwarded = r.clock.mono
-    r.msg.vx = 0.0049
+    r.msg.linear.x = 0.0049
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert r.node._navigation_source.sequence == 0
     assert not rig.final and not rig.barriers
@@ -57,9 +57,10 @@ def test_exact_producer_zero_still_stops_immediately(rig):
         "private-execution", 1, Velocity(0.1, 0), 10.0, 10.0
     )
     r.node._navigation_source.sequence = 1
+    r.node._navigation_source.received_sequence = 1
     r.node._navigation_source.last_forwarded = r.clock.mono
     r.node._active = True
-    r.msg.vx = r.msg.wz = 0.0
+    r.msg.linear.x = r.msg.angular.z = 0.0
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert r.node._navigation_source.sequence == 2
     assert not rig.final and len(rig.barriers) == 1

@@ -151,6 +151,7 @@ def native_state_harness(tmp_path_factory):
         "replay",
         "eof",
         "topic",
+        "publish_deadline",
     ],
 )
 def test_exact_native_receiver_state_with_deterministic_clock_and_io(
@@ -161,31 +162,5 @@ def test_exact_native_receiver_state_with_deterministic_clock_and_io(
     )
 
 
-def test_actual_actuator_admission_preserves_origin_boot_order_deadline_and_two_axis_contract(
-    tmp_path,
-):
-    compiler = shutil.which("c++")
-    if compiler is None:
-        pytest.skip("C++ compiler unavailable; actuator admission not compiled")
-    directory = ROOT / "tests/support/native_output"
-    executable = tmp_path / "actuator-admission"
-    subprocess.run(
-        [
-            compiler,
-            "-std=c++17",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-I",
-            str(directory),
-            "-I",
-            str(ROOT / "ros2/src/senior_motion_msgs/include"),
-            str(directory / "actuator_admission_harness.cpp"),
-            "-o",
-            str(executable),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+# Retired: ActuatorTarget admission/driver boot proof belongs to the removed
+# external protocol. Standard Twist output is exercised by both receivers above.

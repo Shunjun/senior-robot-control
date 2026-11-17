@@ -10,7 +10,7 @@ from ament_index_python.packages import get_package_prefix
 
 
 class MotionOutput:
-    def __init__(self, output_topic="/control/actuator_target"):
+    def __init__(self, output_topic="/cmd_vel"):
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         executable = (
             Path(get_package_prefix("senior_motion_msgs"))

@@ -94,7 +94,6 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         "std_msgs.msg": {"String": object},
         "senior_motion_msgs.msg": {
             "DriveExecutionFeedback": object,
-            "NavigationSample": object,
             "FinalCommand": type("FinalCommand", (), {}),
         },
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},

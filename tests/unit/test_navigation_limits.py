@@ -24,7 +24,7 @@ from senior_control.motion.controller import MotionController
 )
 def test_navigation_reaches_verified_nonzero_limited_control_output(rig, vx, wz):  # noqa: F811
     r = rig.r
-    r.msg.vx, r.msg.wz = vx, wz
+    r.msg.linear.x, r.msg.angular.z = vx, wz
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert len(rig.final) == 1
     frame = rig.final[0]
@@ -71,23 +71,19 @@ def test_navigation_reaches_verified_nonzero_limited_control_output(rig, vx, wz)
 @pytest.mark.parametrize(
     "attribute,value",
     [
-        ("clock_domain", "foreign-boot"),
-        ("run_id", "b" * 32),
-        ("produced_steady_ns", 9_600_000_000),
-        ("produced_steady_ns", 11_000_000_000),
-        ("sequence", 0),
         ("vx", float("nan")),
         ("wz", float("inf")),
     ],
 )
 def test_invalid_navigation_never_produces_a_final_target(rig, attribute, value):  # noqa: F811
     r = rig.r
-    setattr(r.msg, attribute, value)
+    axis, field = (r.msg.linear, "x") if attribute == "vx" else (r.msg.angular, "z")
+    setattr(axis, field, value)
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert not rig.final and r.node._navigation_source.sequence == 0
 
 
-def test_writer_identity_replay_old_execution_and_stream_loss(rig):  # noqa: F811
+def test_writer_identity_old_execution_and_stream_loss(rig):  # noqa: F811
     r = rig.r
     r.info["publisher_gid"] = b"foreign"
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
@@ -96,10 +92,6 @@ def test_writer_identity_replay_old_execution_and_stream_loss(rig):  # noqa: F81
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert len(rig.final) == 1
     r.clock.mono += 0.2
-    r.node._on_navigation_sample(r.topic, r.msg, r.info)
-    assert len(rig.final) == 1  # replay cannot refresh deadline
-    r.msg.sequence += 1
-    r.msg.produced_steady_ns = round(r.clock.mono * 1e9)
     r.node._on_navigation_sample(r.topic.replace("a" * 32, "b" * 32), r.msg, r.info)
     assert len(rig.final) == 1
     r.clock.mono += 0.2
@@ -116,8 +108,6 @@ def test_humble_missing_sample_gid_keeps_bound_private_run_identity(rig):  # noq
     r.node._on_navigation_sample(r.topic, r.msg, r.info)
     assert len(rig.final) == 1
     r.clock.mono += 0.2
-    r.msg.sequence += 1
-    r.msg.produced_steady_ns = round(r.clock.mono * 1e9)
     r.node.get_publishers_info_by_topic = lambda _: [
         SimpleNamespace(node_name="controller_server", endpoint_gid=b"new-incarnation")
     ]
