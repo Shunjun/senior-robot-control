@@ -12,9 +12,11 @@ from typing import Any
 from senior_control.models import Pose2D
 from senior_control.motion.estimator import MotionObservation, Origin
 from senior_control.sensors.input_config import OptionalMotionInput
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime, source_time
+from senior_control.sensors.sample_time import StampInterval
+from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.rgbd_body_motion import body_pose_increment, planar_body_twist
 from senior_robot.motion_observation_adapter import observation_origin, stamp_seconds
+from senior_robot.native_receipt import received_sample
 
 
 def static_matrix(status: Any, base: str, camera: str) -> Any:
@@ -59,8 +61,17 @@ def rgbd_observation(message: Any) -> MotionObservation:
     if not message.owner.valid or message.owner.owner_lost or not body.valid:
         raise ValueError("RGB-D source unavailable")
     roots = []
-    # CameraInfo/static TF qualify calibration identity; image captures own age.
-    for header in (body.first_rgb, body.first_depth, body.second_rgb, body.second_depth):
+    # Preserve all original captures; worker completion cannot renew any dependency.
+    for header in (
+        body.first_rgb,
+        body.first_depth,
+        body.first_rgb_info,
+        body.first_depth_info,
+        body.second_rgb,
+        body.second_depth,
+        body.second_rgb_info,
+        body.second_depth_info,
+    ):
         if not header.valid:
             raise ValueError("invalid original RGB-D capture")
         roots.append(
@@ -72,11 +83,7 @@ def rgbd_observation(message: Any) -> MotionObservation:
                 + ":"
                 + str(header.capture_generation),
                 int(header.sequence),
-                stamp_seconds(header.stamp),
-                stamp_seconds(header.received_ros),
-                float(header.received_steady),
-                measurement_steady=source_time(header.timing).end_steady,
-                measurement=source_time(header.timing).measurement,
+                capture_from_message(header).time,
             )
         )
     first = static_matrix(body.first_tf, body.body_frame, body.first_rgb.frame_id)
@@ -86,7 +93,7 @@ def rgbd_observation(message: Any) -> MotionObservation:
     # Initial software planar-domain tolerances, not an installation certificate.
     values = planar_body_twist(
         delta,
-        dt=roots[2].coordinate.elapsed(roots[0].coordinate),
+        dt=((roots[4].time.stamp_ns - roots[0].time.stamp_ns) / 1e9),
         max_tilt_rad=0.1,
         max_vertical_m=0.1,
     )
@@ -99,12 +106,10 @@ def rgbd_observation(message: Any) -> MotionObservation:
         tuple(roots),
         min(1.0, body.inliers / body.matched),
         independent=(True, True, True),
-        measured_steady=roots[2].measurement_steady,
-        interval_half_s=roots[2].coordinate.elapsed(roots[0].coordinate) / 2,
-        measurement=MeasurementTime(
-            roots[0].coordinate.clock_domain, roots[0].coordinate.epoch, roots[2].coordinate.seconds
-        ),
-        measurement_interval=MeasurementInterval(roots[0].coordinate, roots[2].coordinate),
+        measured_steady=roots[4].measurement_steady,
+        interval_half_s=((roots[4].time.stamp_ns - roots[0].time.stamp_ns) / 1e9) / 2,
+        stamp_ns=roots[4].time.stamp_ns,
+        measurement_interval=StampInterval(roots[0].time.stamp_ns, roots[4].time.stamp_ns),
         measurement_delta=Pose2D(
             float(delta[0][3]),
             float(delta[1][3]),
@@ -116,16 +121,16 @@ def rgbd_observation(message: Any) -> MotionObservation:
 class OptionalMotionInputs:
     def __init__(self, node: Any, profile: Any, runtime: Any):
         self.node, self.runtime = node, runtime
-        self._allow_topology = bool(profile.simulation_only and profile.unvalidated)
         self._gps_family = None if profile.gps_input is None else profile.gps_input.origin_family
         if profile.gps_input is not None and self._gps_family is None:
             raise ValueError("GPS input requires original raw acquisition family")
         self._course_frame = None if profile.gps_input is None else profile.gps_input.course_frame
         self._subscriptions = []
-        from senior_motion_msgs.msg import FencedRgbdCandidate, TimedOdometry
+        from nav_msgs.msg import Odometry
+        from senior_motion_msgs.msg import FencedRgbdCandidate
 
         for name, cls, handler in (
-            ("gps", TimedOdometry, self.gps),
+            ("gps", Odometry, self.gps),
             ("rgbd", FencedRgbdCandidate, self.rgbd),
         ):
             setting = getattr(profile, name + "_input", None)
@@ -143,7 +148,6 @@ class OptionalMotionInputs:
                 self.node.get_publishers_info_by_topic(setting.topic),
                 setting.publisher,
                 expected_namespace=setting.namespace,
-                allow_topology_only=self._allow_topology,
             )
             if origin is None:
                 return
@@ -153,28 +157,18 @@ class OptionalMotionInputs:
                 # A bad optional source never clears other motion sources.
                 self._invalidate(name)
 
-        if self._allow_topology:
-            # //Compatible: use the existing isolated-simulation ROS receipt path.
-            from rclpy.qos import qos_profile_sensor_data
-
-            self._subscriptions.append(
-                self.node.create_subscription(
-                    cls, setting.topic, with_dds_info(receive), qos_profile_sensor_data
-                )
+        self._subscriptions.append(
+            subscribe(
+                self.node,
+                cls,
+                setting.topic,
+                with_dds_info(receive),
+                writer=setting.publisher,
+                namespace=setting.namespace,
+                qos="reliable",
+                invalidate=lambda: self._invalidate(name),
             )
-        else:
-            self._subscriptions.append(
-                subscribe(
-                    self.node,
-                    cls,
-                    setting.topic,
-                    with_dds_info(receive),
-                    writer=setting.publisher,
-                    namespace=setting.namespace,
-                    qos="reliable",
-                    invalidate=lambda: self._invalidate(name),
-                )
-            )
+        )
 
     def _invalidate(self, name):
         self.runtime.estimator.invalidate(name)
@@ -189,13 +183,12 @@ class OptionalMotionInputs:
             time.monotonic(),
         )
 
-    def gps(self, timed: Any, info: Any, origin: Any) -> None:
-        proof = source_time(timed.timing)
-        message = timed.data
+    def gps(self, message: Any, info: Any, origin: Any) -> None:
+        sample = received_sample(info)
         # An Odometry twist is expressed in child_frame_id, never silently ENU.
         # //Compatible: body-frame replay adapters may have no course binding.
         if getattr(self, "_course_frame", None) is not None:
-            self._course(message, info, origin, proof)
+            self._course(message, info, origin, sample)
             return
         from rclpy.time import Time
         from tf2_ros import TransformException
@@ -224,7 +217,7 @@ class OptionalMotionInputs:
             )
         stamp = stamp_seconds(message.header.stamp)
         ros = self.node.get_clock().now().nanoseconds / 1e9
-        root = self._gps_root(message, info, origin, ros, proof)
+        root = self._gps_root(message, info, origin, ros, sample)
         roots = (root,)
         if transform_stamp:
             roots += (
@@ -232,11 +225,7 @@ class OptionalMotionInputs:
                     "gps_transform",
                     root.epoch,
                     root.sequence,
-                    transform_stamp,
-                    ros,
-                    time.monotonic(),
-                    measurement_steady=root.measurement_steady,
-                    measurement=root.coordinate,
+                    root.time,
                 ),
             )
         self.runtime.ingest_observation(
@@ -247,27 +236,23 @@ class OptionalMotionInputs:
                 roots,
                 independent=(self._gps_family != "wheel", self._gps_family != "wheel", False),
                 measured_steady=root.measurement_steady,
-                measurement=root.coordinate,
+                stamp_ns=root.time.stamp_ns,
             ),
             ros,
             time.monotonic(),
         )
         self._gps_pose(message, roots, body_from_child)
 
-    def _gps_root(self, message, info, origin, ros, proof):
-        from senior_robot.native_receipt import received_steady
-
+    def _gps_root(self, message, info, origin, ros, sample):
         return Origin(
             self._gps_family,
-            str(origin.sample_gid or origin.topology_gid) + ":" + proof.source_epoch,
-            proof.sequence,
-            stamp_seconds(message.header.stamp),
-            info["received_timestamp"] / 1e9
-            if isinstance(info, dict) and info.get("received_timestamp", 0)
-            else ros,
-            received_steady(info),
-            measurement_steady=proof.end_steady,
-            measurement=proof.measurement,
+            str(origin.sample_gid)
+            + ":"
+            + str(info["receipt_generation"])
+            + ":"
+            + str(sample.clock_generation),
+            int(info["receipt_sequence"]),
+            sample,
         )
 
     def _gps_pose(
@@ -317,11 +302,7 @@ class OptionalMotionInputs:
                             "gps_pose_transform",
                             root.epoch,
                             root.sequence,
-                            tf_stamp,
-                            self.node.get_clock().now().nanoseconds / 1e9,
-                            time.monotonic(),
-                            measurement_steady=root.measurement_steady,
-                            measurement=root.coordinate,
+                            root.time,
                         ),
                     )
             self.runtime.pose_estimator.ingest(
@@ -331,7 +312,7 @@ class OptionalMotionInputs:
                     stamp_seconds(message.header.stamp),
                     roots,
                     measurement_steady=roots[0].measurement_steady,
-                    measurement=roots[0].coordinate,
+                    stamp_ns=roots[0].time.stamp_ns,
                     frame=frame,
                 )
             )
@@ -339,7 +320,7 @@ class OptionalMotionInputs:
             # Missing absolute heading/frame removes only this pose contribution.
             return
 
-    def _course(self, message: Any, info: Any, origin: Any, proof) -> None:
+    def _course(self, message: Any, info: Any, origin: Any, sample) -> None:
         """Heading-only ENU path; no static TF can manufacture antenna heading."""
         from senior_control.localization.gps_course import CourseFix
 
@@ -354,7 +335,7 @@ class OptionalMotionInputs:
             return
         ros = self.node.get_clock().now().nanoseconds / 1e9
         steady = time.monotonic()
-        root = self._gps_root(message, info, origin, ros, proof)
+        root = self._gps_root(message, info, origin, ros, sample)
         estimate = runtime.latest
         wheel = runtime.wheel_linear(steady, with_deadline=True)
         if estimate is None or wheel is None or estimate.independent_axes is None:

@@ -1,7 +1,7 @@
 """Explicit hardware response evidence, independent of product preferences and ROS.
 
 No measured values are supplied by this module. The same T3/T4/T5 consumers
-receive this profile and the isolated simulation profile through the same API.
+receive the same explicit deployment numerics through this API.
 """
 
 import json
@@ -29,7 +29,6 @@ class HardwareMotionProfile(BaseModel):
     profile_id: str = Field(min_length=1)
     evidence_basis: str = ""
     operating_conditions: str = ""
-    simulation_only: Literal[False]
     # Software evidence TTL; acceptance still checks original receipts.
     diagnostics: DiagnosticsSettings = Field(default_factory=DiagnosticsSettings)
 
@@ -183,9 +182,4 @@ def load_hardware_profile(path: Path) -> HardwareMotionProfile:
     if not path.is_absolute():
         raise ValueError("hardware motion profile path must be absolute")
     value = json.loads(path.read_bytes())
-    # //Compatible: older generated files carried manual draft/confirmation flags.
-    # Ignore these obsolete inputs; they never change numeric control behavior.
-    if isinstance(value, dict):
-        for key in ("unvalidated", "geometry_confirmed"):
-            value.pop(key, None)
     return HardwareMotionProfile.model_validate(value)

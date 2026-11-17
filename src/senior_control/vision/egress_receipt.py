@@ -129,10 +129,10 @@ def safety_scan_capture(
             or capture.capture_generation <= 0
             or capture.sequence <= 0
             or capture.stamp_ns != sec * 1_000_000_000 + nano
-            or capture.stamp_ns <= 0
+            or capture.stamp_ns < 0
             or capture.frame_id != body.frame_id
             or capture.raw_gid != body.raw_source
-            or capture.received_ros_ns <= 0
+            or capture.received_ros_ns < 0
             or capture.received_ros_ns / 1e9 != body.ingress_ros
             or capture.received_steady != body.ingress_steady
             or not math.isfinite(now_steady)

@@ -15,6 +15,7 @@ from types import SimpleNamespace as N
 import pytest
 from control_process_test_support import (
     capture_inputs,
+    generic_motion_profile,
     local_resources,
     make_core,
     publish_inputs,
@@ -22,8 +23,6 @@ from control_process_test_support import (
 )
 from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output as module
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import synthetic_capture_schedule, wire_time
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Velocity
@@ -37,16 +36,17 @@ class Node:
         self.output = []
         self._depth_policy = "laser_only"
         scan = case["scan"]
-        measured_label = scan["stamp"]["sec"] + scan["stamp"]["nanosec"] / 1e9
         message = N(**scan)
-        message.raw_capture = N(timing=wire_time(scan["ingress_steady"], tick=measured_label))
+        message.raw_capture = N(**scan["raw_capture"])
+        message.raw_capture.stamp = N(**scan["raw_capture"]["stamp"])
+        message.raw_capture.received_ros = N(**scan["raw_capture"]["received_ros"])
         self._scans = [
             N(
                 message=message,
                 stamp=1.4,
                 received=scan["ingress_steady"],
                 measurement_steady=scan["ingress_steady"],
-                raw_capture=N(timing=wire_time(scan["ingress_steady"], tick=1.4)),
+                raw_capture=message.raw_capture,
                 received_ros=scan["ingress_ros"],
             )
         ]
@@ -88,15 +88,13 @@ def replay(monkeypatch):
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, message.__name__, message)
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
-    case = synthetic_capture_schedule(
-        json.loads(Path("tests/fixtures/motion_reference_backlog.json").read_text())
-    )
+    case = json.loads(Path("tests/fixtures/motion_reference_backlog.json").read_text())
     old = case["packets"][0]
     clock = N(steady=old["sampled_steady"], ros=old["sampled_ros"])
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
     node = Node(case, clock)
     local_resources(monkeypatch)
-    core = make_core(monkeypatch, node, SimulationMotionProfile())
+    core = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(core, N(data=json.dumps(old)))
     # Restore the captured one-way phase checkpoint; never invent body speed.
     core._startup_motion_unconfirmed = case["tick"]["startup_unconfirmed"]

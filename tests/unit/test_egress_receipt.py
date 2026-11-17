@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from source_time_test_support import synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import capture_fields, sample_time
 
 
 def test_retired_owner_packet_does_not_revoke_successor():
@@ -170,10 +170,6 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
 
     def wire(raw_gid, bridge_gid, sequence):
         return SimpleNamespace(
-            stamp=SimpleNamespace(sec=1, nanosec=0),
-            received_ros=SimpleNamespace(sec=1, nanosec=1),
-            received_steady=10.0,
-            timing=wire_time(10.0, tick=1.0),
             frame_id="optical",
             raw_gid=raw_gid,
             bridge_gid=bridge_gid,
@@ -183,6 +179,13 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
             sequence=sequence,
             valid=True,
             reason="",
+            **capture_fields(
+                time=sample_time(
+                    stamp_ns=round((1.0) * 1e9),
+                    received_ros_ns=round((1.0) * 1e9),
+                    received_steady_ns=round((10.0) * 1e9),
+                )
+            ),
         )
 
     depth = wire("11" * 24, "01" * 24, 1)
@@ -260,12 +263,7 @@ def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
     from senior_control.vision.egress_receipt import safety_scan_capture
 
     stamp = SimpleNamespace(sec=1, nanosec=0)
-    receipt = SimpleNamespace(sec=1, nanosec=100)
     header = SimpleNamespace(
-        stamp=stamp,
-        received_ros=receipt,
-        received_steady=10.0,
-        timing=wire_time(10.0, tick=1.0),
         frame_id="laser",
         raw_gid="11" * 24,
         bridge_gid="22" * 24,
@@ -275,13 +273,20 @@ def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
         sequence=1,
         valid=True,
         reason="",
+        **capture_fields(
+            time=sample_time(
+                stamp_ns=round((1.0) * 1e9),
+                received_ros_ns=round((1.0) * 1e9),
+                received_steady_ns=round((10.0) * 1e9),
+            )
+        ),
     )
     body = SimpleNamespace(
         raw_capture=header,
         stamp=stamp,
         frame_id="laser",
         raw_source=header.raw_gid,
-        ingress_ros=1.0000001,
+        ingress_ros=1.0,
         ingress_steady=10.0,
     )
     args = dict(

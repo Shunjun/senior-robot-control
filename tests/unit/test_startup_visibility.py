@@ -161,12 +161,12 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
     from pathlib import Path
     from types import SimpleNamespace as N
 
+    from control_process_test_support import generic_motion_profile
     from senior_robot.motion_profile import select_motion_profile
-    from senior_robot.simulation_motion_profile import PROFILE_ID
 
     from senior_control.motion.hardware_profile import HardwareMotionProfile
 
-    raw = json.loads(Path("config/hardware-motion.json").read_text())
+    raw = generic_motion_profile().model_dump(mode="json")
     raw.update(
         startup_learning_front_occlusion_stop=front_stop,
         startup_learning_rear_occlusion_stop=rear_stop,
@@ -174,12 +174,8 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
     path = tmp_path / "hardware.json"
     path.write_text(json.dumps(raw))
     profiles = [
-        select_motion_profile(
-            "", hardware_path=str(path), simulated_clock=False, localhost_only="0", domain_id=""
-        ),
-        select_motion_profile(
-            PROFILE_ID, hardware_path="", simulated_clock=True, localhost_only="1", domain_id="42"
-        ),
+        select_motion_profile(hardware_path=str(path)),
+        generic_motion_profile(),
     ]
     assert profiles[0].startup_learning_front_occlusion_stop is front_stop
     assert profiles[0].startup_learning_rear_occlusion_stop is rear_stop

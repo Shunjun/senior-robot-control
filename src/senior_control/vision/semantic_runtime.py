@@ -7,10 +7,10 @@ from typing import TypeVar
 
 from senior_control.runtime.diagnostics import DiagnosticPending
 from senior_control.sensors.policy import default_policy, sensor_current
-from senior_control.sensors.time_proof import source_time
 from senior_control.vision.depth import GeometrySample
 from senior_control.vision.depth_runtime import CameraInfoFrame, _intrinsics
 from senior_control.vision.detector import Detection
+from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.synchronizer import ImageFrame
 
 
@@ -60,8 +60,8 @@ def qualify_registration(
         or not math.isfinite(now_steady)
         or not math.isfinite(max_age_ms)
         or not 0 < max_age_ms <= hard_age_ms
-        or now_ros_ns <= 0
-        or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) <= 0
+        or now_ros_ns < 0
+        or min(rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns) < 0
         or len({rgb_stamp_ns, depth.stamp_ns, depth.info_stamp_ns, info.stamp_ns}) != 1
         or not _text(rgb_frame, 128)
         or info.frame_id != rgb_frame
@@ -234,10 +234,10 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
     steady, info_steady = float(wire.received_steady), float(wire.camera_info_received_steady)
     if (
         not wire.valid
-        or stamp <= 0
+        or stamp < 0
         or info_stamp != stamp
-        or received <= 0
-        or info_received <= 0
+        or received < 0
+        or info_received < 0
         or int(wire.sequence) <= 0
         or not _text(wire.frame_id, 128)
         or not _text(wire.body_frame, 128)
@@ -342,8 +342,8 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
         (origin[0], origin[1], origin[2]),
         (quaternion[0], quaternion[1], quaternion[2], quaternion[3]),
         tuple(samples),
-        measurement_steady=source_time(wire.depth_capture.timing).end_steady,
-        info_measurement_steady=source_time(wire.camera_info_capture.timing).end_steady,
+        measurement_steady=capture_from_message(wire.depth_capture).measurement_steady,
+        info_measurement_steady=capture_from_message(wire.camera_info_capture).measurement_steady,
     )
 
 

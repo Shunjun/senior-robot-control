@@ -7,7 +7,7 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
-from source_time_test_support import wire_time
+from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier, core  # noqa: F401
 
 from senior_control.models import Velocity
@@ -103,7 +103,24 @@ def test_startup_flows_through_real_tick_and_safety_checks(
                     sensor_y=0.0,
                     sensor_yaw=0.0,
                     transform_stamp=t,
-                    raw_capture=N(timing=wire_time(t, sequence=i + 1, epoch="scan")),
+                    raw_capture=N(
+                        frame_id="laser_link",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="scan",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=i + 1,
+                        valid=True,
+                        reason="",
+                        **capture_fields(
+                            time=sample_time(
+                                stamp_ns=round((t) * 1e9),
+                                received_ros_ns=round((t) * 1e9),
+                                received_steady_ns=round((t) * 1e9),
+                            )
+                        ),
+                    ),
                 ),
                 measurement_steady=t,
             )

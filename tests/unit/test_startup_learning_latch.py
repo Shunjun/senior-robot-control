@@ -11,7 +11,7 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
-from source_time_test_support import capture_time, wire_time
+from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier, core  # noqa: F401
 from test_startup_learning import observation
 from test_startup_learning_feasibility import BOUNDARY
@@ -22,6 +22,7 @@ from senior_control.motion.contracts import MotionEventKind as K
 from senior_control.motion.contracts import MotionMode
 from senior_control.motion.state_machine import RecoveryObservation
 from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 @pytest.mark.parametrize("event", [K.SOFTWARE_ESTOP, K.EXECUTION_FAULT])
@@ -35,9 +36,22 @@ def test_latched_unmoved_learning_survives_wait_and_static_sampling(core, tmp_pa
         core.startup.frame(
             core.self_returns,
             captured(observation(0.15), t),
-            capture=capture_time(
-                (captured(observation(0.15), t)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    received_ros_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    received_steady_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), t)).scan.stamp * 1000) + 1,
+                valid=True,
+                reason="",
             ),
         )
         core._startup_target(t)
@@ -81,7 +95,7 @@ def test_lock_after_emitted_motion_never_replays_forward(core, tmp_path):  # noq
 def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkeypatch, event):  # noqa: F811
     import math
 
-    from learning_test_support import simulation_point as point
+    from learning_test_support import learning_point
 
     from senior_control.config import DeviceProfile
     from senior_control.motion.estimator import MotionObservation, Origin
@@ -102,7 +116,12 @@ def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkey
     for i in range(1, 31):
         t = now[0] = (10.0 if i < 16 else 50.0) + i * 0.1
         for source, values in ((Source.WHEEL, (0.0, 0.0)), (Source.IMU, (0.0,))):
-            core.node._reception_test.sensors.ingest(point(source, t, t, values, i), t, t, t)
+            core.node._reception_test.sensors.ingest(
+                learning_point(source, round(t * 1e9), round(t * 1e9), round(t * 1e9), values, i),
+                t,
+                t,
+                t,
+            )
         core.node._reception_test.sensors.ingest_observation(
             MotionObservation(
                 "laser",
@@ -113,16 +132,32 @@ def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkey
                         "laser",
                         "a",
                         i,
-                        t,
-                        t,
-                        t,
-                        measurement_steady=t,
-                        measurement=capture_time(t).measurement,
+                        sample_time(
+                            stamp_ns=round((t) * 1e9),
+                            received_ros_ns=round((t) * 1e9),
+                            received_steady_ns=round((t) * 1e9),
+                        ),
                     ),
                 ),
                 independent=(True, True, True),
                 measured_steady=t,
-                measurement=capture_time(t).measurement,
+                stamp_ns=RawCaptureHeader(
+                    time=sample_time(
+                        stamp_ns=round((t) * 1e9),
+                        received_ros_ns=round((t) * 1e9),
+                        received_steady_ns=round((t) * 1e9),
+                        clock_generation=1,
+                    ),
+                    frame_id="laser",
+                    raw_gid="01",
+                    bridge_gid="02",
+                    source_epoch="producer",
+                    bridge_boot_id="boot",
+                    capture_generation=1,
+                    sequence=1,
+                    valid=True,
+                    reason="",
+                ).stamp_ns,
             ),
             t,
             t,
@@ -147,7 +182,24 @@ def test_actual_tick_samples_under_latch_and_never_drives(core, tmp_path, monkey
                     sensor_y=0.0,
                     sensor_yaw=0.0,
                     transform_stamp=t,
-                    raw_capture=N(timing=wire_time(t, sequence=i, epoch="scan")),
+                    raw_capture=N(
+                        frame_id="laser_link",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="scan",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=i,
+                        valid=True,
+                        reason="",
+                        **capture_fields(
+                            time=sample_time(
+                                stamp_ns=round((t) * 1e9),
+                                received_ros_ns=round((t) * 1e9),
+                                received_steady_ns=round((t) * 1e9),
+                            )
+                        ),
+                    ),
                 ),
                 measurement_steady=t,
             )
@@ -181,9 +233,26 @@ def test_withdrawn_move_validates_delayed_frames_without_restarting_budget(tmp_p
         owner.frame(
             model,
             captured(observation(0.15), t - 0.05),
-            capture=capture_time(
-                (captured(observation(0.15), t - 0.05)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), t - 0.05)).scan.stamp) * 1e9),
+                    received_ros_ns=round(
+                        ((captured(observation(0.15), t - 0.05)).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((captured(observation(0.15), t - 0.05)).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), t - 0.05)).scan.stamp * 1000) + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.state == "unconfirmed"
@@ -200,12 +269,25 @@ def test_pending_motion_keeps_a_fresh_bounded_static_window(tmp_path):
         owner.frame(
             model,
             captured(observation(0.15), t),
-            capture=capture_time(
-                (captured(observation(0.15), t)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    received_ros_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    received_steady_ns=round(((captured(observation(0.15), t)).scan.stamp) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), t)).scan.stamp * 1000) + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.state == "moving" and not owner.motion_started
     assert len(model.frames) == 5
-    assert [m.seconds for m in model.frame_measurements][-1] == 10.0
+    assert [m / 1e9 for m in model.frame_measurements][-1] == 10.0
     assert len(owner._frame_keys) <= 5

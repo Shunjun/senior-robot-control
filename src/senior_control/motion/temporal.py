@@ -17,7 +17,7 @@ from senior_control.motion.observations import (
     is_current,
 )
 from senior_control.motion.sample_types import DeltaObservation, PointObservation, physical_support
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
+from senior_control.sensors.sample_time import StampInterval
 
 Key = tuple[str, str, int]
 Values = tuple[float | None, float | None, float | None]
@@ -85,11 +85,11 @@ class ResolvedSource:
 
 @dataclass(frozen=True)
 class ResolvedWindow:
-    start_measurement_seconds: float
-    end_measurement_seconds: float
+    start_ns: int
+    end_ns: int
     sources: tuple[ResolvedSource, ...]
     diagnostics: tuple[str, ...]
-    measurement_interval: MeasurementInterval | None = None
+    measurement_interval: StampInterval | None = None
     start_ros: float | None = None
     end_ros: float | None = None
 
@@ -105,7 +105,6 @@ class TemporalResolver:
     def __init__(self, config: TemporalConfig):
         self.config = config
         self.cursor = 0
-        self._measurement_axis: MeasurementTime | None = None
         self._history: dict[Source, deque[AdaptedObservation]] = {
             s: deque(maxlen=config.max_samples) for s in Source
         }
@@ -158,68 +157,62 @@ class TemporalResolver:
         history = [
             p
             for p in self._history[source]
-            if p.original.epoch == latest.epoch
-            and p.original.sequence <= latest.sequence
-            and (
-                self._measurement_axis is None
-                or physical_support(p.original).end.same_axis(self._measurement_axis)
-            )
+            if p.original.epoch == latest.epoch and p.original.sequence <= latest.sequence
         ]
         if not history:
             raise CoverageError(f"dependency_{source.value}_history_missing")
         return history
 
-    def _check_span(self, stamp: float, until: float) -> None:
+    def _check_span(self, stamp: int, until: int) -> None:
         # The old two injected ceilings intersect: one effective ZOH support
         # horizon, enforced identically for known intervals, open tails and holds.
         gap_s = self.config.max_gap_ms / 1000
         hold_s = self.config.max_hold_ms / 1000
         limit = min(gap_s, hold_s)
-        if until - stamp > limit:
+        if (until - stamp) / 1e9 > limit:
             reason = "sample_gap" if gap_s < hold_s else "hold_expired"
             raise CoverageError(reason)
 
     def _segments(
-        self, source: Source, a: float, b: float, snapshot: SourceSnapshot
+        self, source: Source, a: int, b: int, snapshot: SourceSnapshot
     ) -> list[tuple[float, float, AdaptedObservation]]:
         points = [
             p
             for p in self._ready_history(source, snapshot)
             if isinstance(p.original, PointObservation)
         ]
-        left = [p for p in points if physical_support(p.original).end.seconds <= a]
+        left = [p for p in points if physical_support(p.original).end_ns <= a]
         if not left:
             raise CoverageError("missing_left_coverage")
         current = left[-1]
         cursor = a
         segments = []
-        for following in [p for p in points if a < physical_support(p.original).end.seconds < b]:
-            end = physical_support(following.original).end.seconds
-            self._check_span(physical_support(current.original).end.seconds, end)
+        for following in [p for p in points if a < physical_support(p.original).end_ns < b]:
+            end = physical_support(following.original).end_ns
+            self._check_span(physical_support(current.original).end_ns, end)
             segments.append((cursor, end, current))
             cursor = end
             current = following
-        self._check_span(physical_support(current.original).end.seconds, b)
+        self._check_span(physical_support(current.original).end_ns, b)
         segments.append((cursor, b, current))
         return segments
 
-    def _held(self, source: Source, t: float, snapshot: SourceSnapshot) -> AdaptedObservation:
+    def _held(self, source: Source, t: int, snapshot: SourceSnapshot) -> AdaptedObservation:
         points = [
             p
             for p in self._ready_history(source, snapshot)
-            if isinstance(p.original, PointObservation)
-            and physical_support(p.original).end.seconds <= t
+            if isinstance(p.original, PointObservation) and physical_support(p.original).end_ns <= t
         ]
         if not points:
             raise CoverageError("missing_left_coverage")
         p = points[-1]
-        self._check_span(physical_support(p.original).end.seconds, t)
+        self._check_span(physical_support(p.original).end_ns, t)
         return p
 
     def _gyro(
         self,
-        a: float,
-        b: float,
+        a: int,
+        b: int,
         snapshot: SourceSnapshot,
         override: dict[tuple[Key, int], float] | None = None,
     ) -> float:
@@ -228,7 +221,7 @@ class TemporalResolver:
         if a > b:
             raise CoverageError("noncausal_heading")
         return sum(
-            (right - left) * self._value(p, 0, override)
+            (right - left) / 1e9 * self._value(p, 0, override)
             for left, right, p in self._segments(Source.IMU, a, b, snapshot)
         )
 
@@ -279,14 +272,14 @@ class TemporalResolver:
         return (sigma[0] ** 2, sigma[1] ** 2, sigma[2] ** 2)
 
     def _independent_interval(
-        self, source: Source, a: float, b: float, snapshot: SourceSnapshot
+        self, source: Source, a: int, b: int, snapshot: SourceSnapshot
     ) -> ResolvedSource | None:
         for sample in reversed(self._ready_history(source, snapshot)):
             o = sample.original
             if (
                 isinstance(o, PointObservation)
-                or physical_support(o).start.seconds != a
-                or physical_support(o).end.seconds != b
+                or physical_support(o).start_ns != a
+                or physical_support(o).end_ns != b
             ):
                 continue
             if isinstance(o, DeltaObservation):
@@ -302,7 +295,7 @@ class TemporalResolver:
                     pose = Pose2D(*values)
                     return logarithm(
                         body_delta(pose, o.body_from_sensor) if o.frame is Frame.SENSOR else pose,
-                        b - a,
+                        (b - a) / 1e9,
                     )
 
                 values = mean({})
@@ -345,11 +338,11 @@ class TemporalResolver:
         return None
 
     def _point_source(
-        self, source: Source, a: float, b: float, snapshot: SourceSnapshot
+        self, source: Source, a: int, b: int, snapshot: SourceSnapshot
     ) -> ResolvedSource:
         segments = self._segments(source, a, b, snapshot)
         used = [p for _, _, p in segments]
-        dt = b - a
+        dt = (b - a) / 1e9
         if source is Source.IMU:
             value = self._gyro(a, b, snapshot) / dt
             vs = [variances(p) for _, _, p in segments]
@@ -357,7 +350,7 @@ class TemporalResolver:
                 None
                 if any(v is None for v in vs)
                 else sum(
-                    (right - left) / dt * math.sqrt(v[0])
+                    ((right - left) / 1e9) / dt * math.sqrt(v[0])
                     for (left, right, _), v in zip(segments, vs, strict=True)
                     if v is not None
                 )
@@ -387,7 +380,7 @@ class TemporalResolver:
             for left, right in zip(knots, knots[1:], strict=False):
                 vx = self._held(source, left, snapshot).original.values[0]
                 w = self._held(Source.IMU, left, snapshot).original.values[0]
-                delta = compose(delta, exponential(vx, 0.0, w, right - left))
+                delta = compose(delta, exponential(vx, 0.0, w, (right - left) / 1e9))
             vx = logarithm(delta, dt)[0]
             return ResolvedSource(
                 source,
@@ -400,7 +393,8 @@ class TemporalResolver:
                 delta,
                 "wheel_kinematic_reference_not_independent",
                 tuple(used),
-                sum((right - left) * p.original.values[1] for left, right, p in segments) / dt,
+                sum((right - left) / 1e9 * p.original.values[1] for left, right, p in segments)
+                / dt,
                 dependencies=(((Source.IMU, 2),), (), ((Source.IMU, 2),)),
             )
         if source is not Source.GPS:
@@ -411,13 +405,11 @@ class TemporalResolver:
                 h = p.heading_context
                 if h is None:
                     raise CoverageError("heading_missing")
-                if not h.coordinate.same_axis(physical_support(p.original).end):
-                    raise CoverageError("heading_physical_axis_mismatch")
-                if h.coordinate.seconds > physical_support(p.original).end.seconds:
+                if h.time.stamp_ns > physical_support(p.original).end_ns:
                     raise CoverageError("noncausal_heading")
                 used += (
-                    [x for _, _, x in self._segments(Source.IMU, h.coordinate.seconds, a, snapshot)]
-                    if h.coordinate.seconds < a
+                    [x for _, _, x in self._segments(Source.IMU, h.time.stamp_ns, a, snapshot)]
+                    if h.time.stamp_ns < a
                     else []
                 )
 
@@ -433,10 +425,10 @@ class TemporalResolver:
                     and o.body_from_sensor is not None
                 )
                 yaw = override.get((sample_key(p), len(o.values)), h.yaw_rad) + self._gyro(
-                    h.coordinate.seconds, left, snapshot, override
+                    h.time.stamp_ns, left, snapshot, override
                 )
                 w = self._value(self._held(Source.IMU, left, snapshot), 0, override)
-                theta = w * (right - left)
+                theta = w * ((right - left) / 1e9)
                 east, north = self._value(p, 0, override), self._value(p, 1, override)
                 vx, vy = (
                     math.cos(yaw) * east + math.sin(yaw) * north,
@@ -444,8 +436,8 @@ class TemporalResolver:
                 )
                 x, y = o.body_from_sensor.x, o.body_from_sensor.y
                 step = Pose2D(
-                    vx * (right - left) + x - math.cos(theta) * x + math.sin(theta) * y,
-                    vy * (right - left) + y - math.sin(theta) * x - math.cos(theta) * y,
+                    vx * ((right - left) / 1e9) + x - math.cos(theta) * x + math.sin(theta) * y,
+                    vy * ((right - left) / 1e9) + y - math.sin(theta) * x - math.cos(theta) * y,
                     theta,
                 )
                 delta = compose(delta, step)
@@ -467,32 +459,18 @@ class TemporalResolver:
 
     def resolve(
         self,
-        a: float,
-        b: float,
+        a: int,
+        b: int,
         snapshot: SourceSnapshot,
-        *,
-        measurement: MeasurementTime | None = None,
     ) -> ResolvedWindow:
         live = dict(snapshot.sources)
-        if measurement is None:
-            view = live.get(Source.LASER) or next(iter(live.values()), None)
-            measurement = (
-                physical_support(view.observation.original).end
-                if view
-                else MeasurementTime("host", None, snapshot.now_steady)
-            )
-        self._measurement_axis = measurement
-        points = [
-            physical_support(v.observation.original).end.seconds
-            for v in live.values()
-            if physical_support(v.observation.original).end.same_axis(measurement)
-        ]
+        points = [physical_support(v.observation.original).end_ns for v in live.values()]
         frontier = max(points, default=b)
-        if not (math.isfinite(a) and math.isfinite(b) and a <= b <= frontier):
+        if type(a) is not int or type(b) is not int or not 0 <= a <= b <= frontier:
             raise ValueError("invalid causal window")
         live = dict(snapshot.sources)
         if a == b:
-            interval = MeasurementInterval(measurement, measurement)
+            interval = StampInterval(a, b)
             return ResolvedWindow(
                 a,
                 b,
@@ -522,10 +500,7 @@ class TemporalResolver:
             sources.append(resolved)
         diagnostics = tuple(self._diagnostics)
         self._diagnostics.clear()
-        interval = MeasurementInterval(
-            MeasurementTime(measurement.clock_domain, measurement.epoch, a),
-            MeasurementTime(measurement.clock_domain, measurement.epoch, b),
-        )
+        interval = StampInterval(a, b)
         labels: tuple[float | None, float | None] = (None, None)
         for view in live.values():
             original = view.observation.original

@@ -125,7 +125,10 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
             if len(endpoints) != 1:
                 return depth
             capture.stamp, capture.received_ros = stamp, stamp
-            capture.received_steady, capture.frame_id = depth.received_steady, "optical"
+            capture.received_steady_ns = capture.sample_steady_ns = round(
+                depth.received_steady * 1e9
+            )
+            capture.clock_generation, capture.frame_id = 1, "optical"
             capture.bridge_gid, capture.raw_gid = bytes(endpoints[0].endpoint_gid).hex(), raw
             capture.source_epoch, capture.bridge_boot_id = raw, "bridge-boot"
             capture.capture_generation = rgb_info_generation if topic.endswith("rgb_info") else 1
@@ -168,8 +171,8 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         assert all(capture.bridge_boot_id == "bridge-boot" for capture in captures)
         assert all(capture.capture_generation == 1 for capture in captures)
         assert all(capture.stamp == result.rgb_stamp for capture in captures)
-        assert result.rgb_received_steady == result.rgb_capture.received_steady
-        assert result.depth.received_steady == result.depth.depth_capture.received_steady
+        assert result.rgb_received_steady == result.rgb_capture.received_steady_ns / 1e9
+        assert result.depth.received_steady == result.depth.depth_capture.received_steady_ns / 1e9
         assert len(result.registration_id) == 64
         assert len(result.objects) == len(result.associations) == 1
         assert result.associations[0].sample_index == 0

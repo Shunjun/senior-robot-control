@@ -4,10 +4,9 @@ import logging
 from dataclasses import replace
 
 import pytest
-from control_process_test_support import read_inputs, read_observation
+from control_process_test_support import generic_motion_profile, read_inputs, read_observation
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import capture_time, synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import sample_time
 from test_reference_nanosecond_boundary import replay  # noqa: F401
 from test_unified_estimator import observation
 
@@ -31,7 +30,7 @@ def summary(d, emitted):
 
 def test_source_use_includes_conflict_loser_and_expired_without_axis_or_view_duplicates():
     d, emitted = reporter()
-    s = MotionSensorRuntime(SimulationMotionProfile(), d)
+    s = MotionSensorRuntime(generic_motion_profile(), d)
     s.ingest_observation(observation("laser", (0.9, None, 0.9), stamp=9.4), 10, 20)
     s.ingest_observation(observation("wheel", (0.1, None, 0.1), stamp=9.9), 10, 20)
     s.estimate(10, 20)
@@ -48,7 +47,7 @@ def test_source_use_includes_conflict_loser_and_expired_without_axis_or_view_dup
 
 def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
     d, emitted = reporter()
-    s = MotionSensorRuntime(SimulationMotionProfile(), d)
+    s = MotionSensorRuntime(generic_motion_profile(), d)
     late = observation("laser", (0.2, None, 0.1), stamp=8.9)
     s.ingest_observation(late, 10, 20)
     # The same original observation is not another raw observation on replay.
@@ -59,10 +58,11 @@ def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
             replace(
                 late.roots[0],
                 family="imu",
-                stamp_ros=10.2,
-                received_ros=10.2,
-                received_steady=20.2,
-                measurement_steady=20.2,
+                time=sample_time(
+                    stamp_ns=round((10.2) * 1e9),
+                    received_ros_ns=round((10.2) * 1e9),
+                    received_steady_ns=round((20.2) * 1e9),
+                ),
             ),
         ),
         measured_ros=10.2,
@@ -120,12 +120,13 @@ def test_relative_integration_accumulates_known_motion_errors():
         now_steady=20.2,
         motion=e.estimate(10.2, 20.2),
         measurement_steady=(10.2) + 10.0,
+        stamp_ns=round((10.2) * 1e9),
     )
     assert r.error_m is not None and r.error_m >= 0.04
     assert r.error_yaw_rad is not None and r.error_yaw_rad >= 0.06 - 1e-12
 
 
-def test_actual_scan_space_keeps_unknown_absolute_error_without_host_integration_during_sim_pause(
+def test_actual_scan_space_preserves_unknown_error_and_original_deadline_as_standard_time_advances(
     replay,  # noqa: F811
 ):
     c = replay.core
@@ -134,16 +135,16 @@ def test_actual_scan_space_keeps_unknown_absolute_error_without_host_integration
     initial = c._space_estimate
     assert initial.unknown_pose_sources == ("scan",)
     assert c._perception_pose.error_m is None
-    assert initial.alignment_error_m == 0
-    assert initial.software_alignment_error_m == 0
+    assert initial.alignment_error_m is None
+    assert initial.software_alignment_error_m > 0
     replay.clock.ns += 300_000_000
     replay.clock.steady += 0.3
     read_inputs(c, replay.clock.steady)
     later, _ = read_observation(c, replay.clock.steady)
     assert c._space_estimate.unknown_pose_sources == ("scan",)
-    assert c._space_estimate.alignment_error_m == 0
-    assert c._space_estimate.software_alignment_error_m == 0
-    assert later.free_space.area == first.free_space.area
+    assert c._space_estimate.alignment_error_m is None
+    assert c._space_estimate.software_alignment_error_m >= initial.software_alignment_error_m
+    assert later.free_space.area <= first.free_space.area
     assert later.deadline_steady == first.deadline_steady
 
 
@@ -158,9 +159,11 @@ def test_current_independent_projection_keeps_raw_support_and_error_in_risk(repl
         roots=(
             replace(
                 observation("laser", (0.2, None, 0.1), stamp=t).roots[0],
-                received_ros=t,
-                received_steady=now,
-                measurement_steady=now,
+                time=sample_time(
+                    stamp_ns=observation("laser", (0.2, None, 0.1), stamp=t).roots[0].time.stamp_ns,
+                    received_ros_ns=round((t) * 1e9),
+                    received_steady_ns=round((now) * 1e9),
+                ),
             ),
         ),
         error=(0.2, None, 0.3),
@@ -195,11 +198,25 @@ def test_common_unknown_absolute_anchor_cancels_but_motion_error_does_not():
             9.5,
             raw.roots,
             measurement_steady=(raw.roots)[0].measurement_steady,
-            measurement=(raw.roots)[0].coordinate,
+            stamp_ns=(raw.roots)[0].coordinate,
         )
     )
-    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion, measurement_steady=(9.5) + 10.0)
-    current = p.at(10, now_ros=10, now_steady=20, motion=motion, measurement_steady=(10) + 10.0)
+    old = p.at(
+        9.5,
+        now_ros=10,
+        now_steady=20,
+        motion=motion,
+        measurement_steady=(9.5) + 10.0,
+        stamp_ns=round((9.5) * 1e9),
+    )
+    current = p.at(
+        10,
+        now_ros=10,
+        now_steady=20,
+        motion=motion,
+        measurement_steady=(10) + 10.0,
+        stamp_ns=round((10) * 1e9),
+    )
     assert old.error_m is current.error_m is None
     relative = p.relative_error(old, current)
     assert relative.position_m > 0 and relative.yaw_rad > 0
@@ -213,7 +230,7 @@ def test_common_unknown_absolute_anchor_cancels_but_motion_error_does_not():
 
 def test_raw_replay_dedup_survives_another_sample_and_quality_zero_is_observed():
     d, emitted = reporter()
-    s = MotionSensorRuntime(SimulationMotionProfile(), d)
+    s = MotionSensorRuntime(generic_motion_profile(), d)
     first = observation("imu", (None, None, 0.1), stamp=9.5)
     second = observation("imu", (None, None, 0.1), stamp=9.6, sequence=2, quality=0)
     s.ingest_observation(first, 10, 20)
@@ -226,7 +243,7 @@ def test_raw_replay_dedup_survives_another_sample_and_quality_zero_is_observed()
 
 def test_invalid_candidate_clock_has_use_rejection_counter_without_age():
     d, emitted = reporter()
-    s = MotionSensorRuntime(SimulationMotionProfile(), d)
+    s = MotionSensorRuntime(generic_motion_profile(), d)
     future = observation("laser", (0.3, None, 0.1), stamp=10.2)
     s.estimator.ingest(future)  # Offline/unclocked ingress; owner still checks at evaluation.
     s.estimate(10, 20)
@@ -245,7 +262,7 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
     d, emitted = reporter()
     monkeypatch.setattr("senior_control.runtime.diagnostics.process_diagnostics", lambda: d)
     monkeypatch.setattr(adapter, "time", N(monotonic=lambda: 21.0))
-    p = SimulationMotionProfile()
+    p = generic_motion_profile()
     s = MotionSensorRuntime(p, d)
     core = adapter.NativeObservations(p.admission(), p.temporal(), p.fusion(), sample_sink=s.ingest)
     core.receipt_ros = 10
@@ -257,19 +274,40 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
         child_frame_id="base_link",
         twist=N(twist=N(linear=N(x=0.1), angular=N(z=0.1))),
     )
-    core.wheel(msg, provenance, 10, 20, timing=capture_time(19.8, tick=9.8), now_steady=20)
+    core.wheel(
+        msg,
+        provenance,
+        10,
+        20,
+        timing=sample_time(
+            stamp_ns=round((9.8) * 1e9),
+            received_ros_ns=round((9.8) * 1e9),
+            received_steady_ns=round((19.8) * 1e9),
+            clock_generation=1,
+        ),
+        now_steady=20,
+        generation=1,
+        sequence=1,
+    )
     bridge = object.__new__(adapter.NativeObservationRosBridge)
     bridge.core = core
     bridge.node = N(get_clock=lambda: N(now=lambda: N(nanoseconds=11_000_000_000)))
     before = core._sequences.copy()
     bridge._record_rejected_receipt(
-        N(data=msg, timing=wire_time(19.8, tick=9.8)),
+        msg,
         dict(
-            publisher_gid=b"wheel",
-            received_timestamp=10_000_000_000,
-            native_received_steady=20,
-            receipt_generation=1,
-            receipt_sequence=1,
+            dict(
+                publisher_gid=b"wheel",
+                received_timestamp=10_000_000_000,
+                native_received_steady=20,
+                receipt_generation=1,
+                receipt_sequence=1,
+            ),
+            sample_time=sample_time(
+                stamp_ns=round((9.8) * 1e9),
+                received_ros_ns=round((9.8) * 1e9),
+                received_steady_ns=round((19.8) * 1e9),
+            ),
         ),
         Source.WHEEL,
     )
@@ -289,9 +327,11 @@ def test_steady_elapsed_prediction_error_is_preserved_when_ros_is_paused(replay)
         roots=(
             replace(
                 observation("laser", (0.2, None, 0.1), stamp=5).roots[0],
-                received_ros=5,
-                received_steady=now,
-                measurement_steady=now,
+                time=sample_time(
+                    stamp_ns=observation("laser", (0.2, None, 0.1), stamp=5).roots[0].time.stamp_ns,
+                    received_ros_ns=round((5) * 1e9),
+                    received_steady_ns=round((now) * 1e9),
+                ),
             ),
         ),
         independent=(True, False, True),
@@ -345,11 +385,25 @@ def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose
             error_m=0.0,
             error_yaw_rad=0.2,
             measurement_steady=(raw.roots)[0].measurement_steady,
-            measurement=(raw.roots)[0].coordinate,
+            stamp_ns=(raw.roots)[0].coordinate,
         )
     )
-    old = p.at(9.5, now_ros=10, now_steady=20, motion=motion, measurement_steady=(9.5) + 10.0)
-    current = p.at(10, now_ros=10, now_steady=20, motion=motion, measurement_steady=(10) + 10.0)
+    old = p.at(
+        9.5,
+        now_ros=10,
+        now_steady=20,
+        motion=motion,
+        measurement_steady=(9.5) + 10.0,
+        stamp_ns=round((9.5) * 1e9),
+    )
+    current = p.at(
+        10,
+        now_ros=10,
+        now_steady=20,
+        motion=motion,
+        measurement_steady=(10) + 10.0,
+        stamp_ns=round((10) * 1e9),
+    )
     relative = p.relative_error(old, current)
     assert current.error_m >= 0.1 + current.prediction_error.position_m - 1e-12
     assert relative.position_m == current.prediction_error.position_m
@@ -365,17 +419,19 @@ def test_interval_projection_support_and_software_error_are_not_expanded_twice(r
         roots=(
             replace(
                 o.roots[0],
-                stamp_ros=4.8,
-                received_ros=5.0,
-                received_steady=now,
-                measurement_steady=now - 0.2,
+                time=sample_time(
+                    stamp_ns=round((4.8) * 1e9),
+                    received_ros_ns=round((5.0) * 1e9),
+                    received_steady_ns=round((now) * 1e9),
+                ),
             ),
             replace(
                 o.roots[0],
-                stamp_ros=5.0,
-                received_ros=5.0,
-                received_steady=now,
-                measurement_steady=now,
+                time=sample_time(
+                    stamp_ns=round((5.0) * 1e9),
+                    received_ros_ns=round((5.0) * 1e9),
+                    received_steady_ns=round((now) * 1e9),
+                ),
             ),
         ),
         measured_steady=now - 0.1,
@@ -462,9 +518,10 @@ def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(repl
     assert ctx.envelope.linear_interval[1] >= (
         c.sensors.independent.velocity.vx + c.profile.linear_error + axis.prediction_error - 1e-12
     )
-    # Correct shared-history cancellation can restore this low-speed software
-    # permit; old raw velocity error is still present, and occupancy still blocks.
-    assert c.engine.refine(ctx, now).permit is not None
+    # This historical geometry has an unobserved ROS-time tail. Retiring its old
+    # sim-domain query shortcut must not turn that unknown coverage into permission.
+    result = c.engine.refine(ctx, now)
+    assert result.permit is None and result.brake.reason == "sweep_unknown"
     from shapely.geometry import box
 
     obstructed = replace(

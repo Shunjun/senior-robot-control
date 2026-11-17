@@ -50,7 +50,7 @@ from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 from senior_control.sensors.policy import default_policy
-from senior_control.sensors.time_proof import source_time
+from senior_control.vision.raw_capture import capture_from_message
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
@@ -685,11 +685,7 @@ class MotionCoreOutput:
             "scan",
             m.source_epoch,
             m.sequence,
-            raw.stamp,
-            raw.received_ros,
-            raw.received,
-            measurement_steady=raw.measurement_steady,
-            measurement=source_time(raw.message.raw_capture.timing).measurement,
+            capture_from_message(raw.message.raw_capture).time,
         )
         raw_key = (root.epoch, root.sequence)
         try:
@@ -713,7 +709,7 @@ class MotionCoreOutput:
         current = self.sensors.pose_estimator.at(
             ros,
             measurement_steady=motion.measurement_host_steady,
-            measurement=motion.measurement,
+            stamp_ns=motion.stamp_ns,
             now_ros=ros,
             now_steady=now,
             motion=motion,
@@ -742,7 +738,7 @@ class MotionCoreOutput:
                 self._learning_scan_key = raw_key
                 unmasked, _ = self._filtered_scan(raw)
                 self.startup.frame(
-                    self.self_returns, unmasked, capture=source_time(m.raw_capture.timing)
+                    self.self_returns, unmasked, capture=capture_from_message(m.raw_capture)
                 )
                 if signature != self._filter_key():
                     raise ValueError("scan_geometry_pending")
@@ -751,7 +747,7 @@ class MotionCoreOutput:
             old = self.sensors.pose_estimator.at(
                 selected.stamp,
                 measurement_steady=selected.measurement_steady,
-                measurement=source_time(selected.message.raw_capture.timing).measurement,
+                stamp_ns=capture_from_message(selected.message.raw_capture).stamp_ns,
                 now_ros=ros,
                 now_steady=now,
                 motion=motion,
@@ -763,11 +759,7 @@ class MotionCoreOutput:
                 "scan",
                 selected_message.source_epoch,
                 selected_message.sequence,
-                selected.stamp,
-                selected.received_ros,
-                selected.received,
-                measurement_steady=selected.measurement_steady,
-                measurement=source_time(selected.message.raw_capture.timing).measurement,
+                capture_from_message(selected.message.raw_capture).time,
             )
             self.space_estimator.ingest(
                 SpaceObservation(
@@ -815,7 +807,7 @@ class MotionCoreOutput:
         latest_pose = self.sensors.pose_estimator.at(
             raw.stamp,
             measurement_steady=raw.measurement_steady,
-            measurement=source_time(raw.message.raw_capture.timing).measurement,
+            stamp_ns=capture_from_message(raw.message.raw_capture).stamp_ns,
             now_ros=ros,
             now_steady=now,
             motion=motion,
@@ -953,7 +945,7 @@ class MotionCoreOutput:
             p.lateral_drift_mps,
             cap,
             p.yaw_cap,
-            bool(p.simulation_only and p.unvalidated),
+            False,
             lateral_stop_s=None if p.lateral_stop_ms is None else p.lateral_stop_ms / 1000,
             brake_drive_overshoot=Velocity(p.drive_linear_overshoot, p.drive_yaw_overshoot),
             brake_tracking_basis=p.brake_tracking_basis or p.profile_id,

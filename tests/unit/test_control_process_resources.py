@@ -7,6 +7,7 @@ import time
 from functools import partial
 
 import pytest
+from control_process_test_support import generic_motion_profile
 
 from senior_control.motion.cadence import ControlCadence
 from senior_control.motion.process_resources import LatestSnapshot, ProcessWorker
@@ -117,13 +118,13 @@ def test_process_death_fails_pending_future_and_close_reaps_it():
 
 
 def test_real_spawn_carries_geometry_and_complete_sensor_snapshot():
+    from control_process_test_support import generic_motion_profile
     from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-    from senior_robot.simulation_motion_profile import SimulationMotionProfile
     from test_directional_constraints import engine, snapshot
 
     from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
-    sensors = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    sensors = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     reference = sensors.estimate(10, 10)
     state = {k: v for k, v in vars(sensors).items() if k not in {"profile", "diagnostics"}}
     worker = ProcessWorker(name="batch-test-real-geometry")
@@ -189,13 +190,13 @@ def test_reception_child_inherits_typed_sensor_remaps_without_twist_or_untyped_f
     monkeypatch.setattr(control_inputs, "LatestSnapshot", lambda _: object())
     names = []
     node = N(
+        _motion_core=N(profile=generic_motion_profile()),
         get_parameters_by_prefix=lambda prefix: {},
         resolve_topic_name=lambda topic: names.append(topic) or "/isolated" + topic,
     )
     channel = control_inputs.ControlInputs(node)
     mappings = dict(captured["args"][1])
     assert captured["started"]
-    assert mappings["/wheel/odom/timed"] == "/isolated/wheel/odom/timed"
-    assert mappings["/imu/data/timed"] == "/isolated/imu/data/timed"
-    assert "/wheel/odom" not in mappings and "/imu/data" not in mappings
+    assert mappings["/wheel/odom"] == "/isolated/wheel/odom"
+    assert mappings["/imu/data"] == "/isolated/imu/data"
     assert channel.slot is captured["args"][2]

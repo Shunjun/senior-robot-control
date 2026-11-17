@@ -51,8 +51,8 @@ class ControlInputs:
         remaps = [
             (topic, node.resolve_topic_name(topic))
             for topic in (
-                "/wheel/odom/timed",
-                "/imu/data/timed",
+                str(node._motion_core.profile.wheel_topic),
+                str(node._motion_core.profile.imu_topic),
                 "/motion/scan",
                 "/tf",
                 "/tf_static",

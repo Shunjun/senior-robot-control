@@ -10,7 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from senior_control.models import Pose2D
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
+from senior_control.sensors.sample_time import SampleTime
 
 if TYPE_CHECKING:
     from senior_control.motion.sample_types import MotionSample
@@ -52,13 +52,9 @@ class Covariance:
 class Observation:
     source: Source
     frame: Frame
-    start_ros: float
-    end_ros: float
-    measurement_interval: MeasurementInterval | None = field(default=None, kw_only=True)
+    first_time: SampleTime
+    last_time: SampleTime
     measurement_delta: "Pose2D | None" = field(default=None, kw_only=True)
-    start_steady: float = field(kw_only=True)
-    end_steady: float = field(kw_only=True)
-    received_steady: float
     epoch: str
     sequence: int
     quality: float
@@ -68,6 +64,26 @@ class Observation:
     # //Compatible: legacy normalized intervals have no certified statistical model by default.
     model_id: str | None = None
 
+    @property
+    def start_ros(self) -> float:
+        return self.first_time.stamp_ns / 1e9
+
+    @property
+    def end_ros(self) -> float:
+        return self.last_time.stamp_ns / 1e9
+
+    @property
+    def start_steady(self) -> float:
+        return self.first_time.sample_steady_ns / 1e9
+
+    @property
+    def end_steady(self) -> float:
+        return self.last_time.sample_steady_ns / 1e9
+
+    @property
+    def received_steady(self) -> float:
+        return self.last_time.received_steady_ns / 1e9
+
 
 @dataclass(frozen=True)
 class Heading:
@@ -75,16 +91,21 @@ class Heading:
 
     yaw_rad: float
     variance_rad2: float
-    stamp_ros: float
-    measurement_steady: float = field(kw_only=True)
-    measurement: MeasurementTime | None = field(default=None, kw_only=True)
-    received_steady: float
+    time: SampleTime
     epoch: str
     basis: str
 
     @property
-    def coordinate(self) -> MeasurementTime:
-        return self.measurement or MeasurementTime("host", None, self.measurement_steady)
+    def stamp_ros(self) -> float:
+        return self.time.stamp_ns / 1e9
+
+    @property
+    def measurement_steady(self) -> float:
+        return self.time.sample_steady_ns / 1e9
+
+    @property
+    def received_steady(self) -> float:
+        return self.time.received_steady_ns / 1e9
 
 
 @dataclass(frozen=True)
@@ -215,6 +236,18 @@ def metadata_error(
         return "invalid_metadata"
     if not isinstance(observation.frame, Frame) or not isinstance(observation.status, SourceStatus):
         return "invalid_structure"
+    times = (
+        (observation.time,)
+        if isinstance(observation, PointObservation)
+        else (observation.first_time, observation.last_time)
+    )
+    if not all(isinstance(t, SampleTime) for t in times):
+        return "invalid_sample_time"
+    if len(times) == 2 and (
+        times[0].clock_generation != times[1].clock_generation
+        or times[0].stamp_ns >= times[1].stamp_ns
+    ):
+        return "future_or_invalid_interval"
     stamps = (
         observation.start_ros,
         observation.end_ros,
@@ -262,7 +295,11 @@ def metadata_error(
     ):
         return "invalid_structure"
     if observation.source is Source.GPS and heading is not None:
-        if not isinstance(heading, Heading) or type(heading.epoch) is not str:
+        if (
+            not isinstance(heading, Heading)
+            or not isinstance(heading.time, SampleTime)
+            or type(heading.epoch) is not str
+        ):
             return "invalid_heading_structure"
         if not isinstance(heading.basis, str) or not all(
             _number(value)
@@ -319,7 +356,8 @@ def validate(
     if (
         now_steady - observation.end_steady > (rule.max_age_ms / 1000)
         or now_steady - observation.received_steady > (rule.max_age_ms / 1000)
-        or physical_support(observation).duration > (rule.max_interval_ms / 1000)
+        or (physical_support(observation).end_ns - physical_support(observation).start_ns) / 1e9
+        > (rule.max_interval_ms / 1000)
     ):
         return "expired_or_long_interval"
     if observation.status is not SourceStatus.VALID:
@@ -376,8 +414,8 @@ def validate(
             or heading.received_steady > now_steady
             or now_steady - heading.measurement_steady > (config.heading_max_age_ms / 1000)
             or now_steady - heading.received_steady > (config.heading_max_age_ms / 1000)
-            or abs(heading.measurement_steady - observation.end_steady)
-            > (config.alignment_max_skew_ms / 1000)
+            or abs(heading.time.stamp_ns - physical_support(observation).end_ns)
+            > round(config.alignment_max_skew_ms * 1_000_000)
         ):
             return "heading_unqualified"
     return None

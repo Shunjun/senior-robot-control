@@ -1,8 +1,8 @@
-from source_time_test_support import DOMAIN, synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.localization.gps_course import CourseFix, GPSCourseObserver
 from senior_control.motion.estimator import Origin
-from senior_control.sensors.time_proof import MeasurementTime
+from senior_control.sensors.sample_time import StampInterval
 
 
 def motion(o, start, end, vx=0.2, wz=0, domain=None):
@@ -12,13 +12,29 @@ def motion(o, start, end, vx=0.2, wz=0, domain=None):
             wheel_vx=vx,
             imu_wz=wz,
             generation=1,
-            measurement=None if domain is None else MeasurementTime("host:" + domain, None, i / 10),
+            stamp_ns=round(i / 10 * 1e9),
+            interval=StampInterval(max(0, round((i - 1) / 10 * 1e9)), round(i / 10 * 1e9)),
         )
 
 
 def fix(i, x, *, sigma=0.01, vx=0.2):
     return CourseFix(
-        x, 0, sigma, vx, 0, 0.01, Origin("gnss", "boot", i, i, i, i, measurement_steady=i)
+        x,
+        0,
+        sigma,
+        vx,
+        0,
+        0.01,
+        Origin(
+            "gnss",
+            "boot",
+            i,
+            sample_time(
+                stamp_ns=round((i) * 1e9),
+                received_ros_ns=round((i) * 1e9),
+                received_steady_ns=round((i) * 1e9),
+            ),
+        ),
     )
 
 
@@ -80,7 +96,7 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
     covariance = [0.0] * 36
     covariance[0] = covariance[7] = 0.0001
     for i, x in ((1, 0), (3, 0.4)):
-        motion(observer, 1, i, domain=DOMAIN)
+        motion(observer, 1, i, domain="test-boot")
         adapter.node = N(get_clock=lambda i=i: N(now=lambda: N(nanoseconds=i * 1e9)))
         monkeypatch.setattr("senior_robot.optional_motion_inputs.time.monotonic", lambda i=i: i)
         message = N(
@@ -90,12 +106,19 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
             twist=N(twist=N(linear=N(x=0.2, y=0)), covariance=covariance),
         )
         adapter.gps(
-            N(data=message, timing=wire_time(i, tick=i, basis="driver_read", sequence=i)),
+            message,
             dict(
-                received_timestamp=i * 1e9,
-                native_received_steady=i,
-                receipt_sequence=i,
-                receipt_generation=1,
+                dict(
+                    received_timestamp=i * 1e9,
+                    native_received_steady=i,
+                    receipt_sequence=i,
+                    receipt_generation=1,
+                ),
+                sample_time=sample_time(
+                    stamp_ns=round((i) * 1e9),
+                    received_ros_ns=round((i) * 1e9),
+                    received_steady_ns=round((i) * 1e9),
+                ),
             ),
             N(sample_gid=b"g"),
         )

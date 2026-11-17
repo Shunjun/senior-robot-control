@@ -31,7 +31,8 @@ from senior_control.motion.sample_types import (
 from senior_control.motion.source_admission import AdmissionOwner
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.temporal import TemporalConfig, TemporalResolver
-from senior_control.sensors.time_proof import MeasurementInterval, SourceTime, source_time
+from senior_control.sensors.sample_time import SampleTime
+from senior_control.vision.raw_capture import capture_from_message
 
 
 def publisher_gid(info: Any) -> bytes:
@@ -57,7 +58,6 @@ def observation_origin(
     endpoints: list[Any],
     expected_name: str,
     *,
-    allow_topology_only: bool,
     expected_namespace: str = "/",
 ) -> PublisherOrigin | None:
     """Validate real metadata; never label a discovery GID as a sample GID."""
@@ -90,12 +90,13 @@ def observation_origin(
             if gid == topology_gid
             else None
         )
-    # //Compatible: Humble omits per-sample GID. Only the explicit isolated
-    # simulation composition may rely on sole expected publisher discovery;
-    # this has weaker provenance and remains labelled topology-only downstream.
-    if allow_topology_only:
-        return PublisherOrigin(None, topology_gid, "simulation_topology_only")
     return None
+
+
+def stamp_nanoseconds(stamp: Any) -> int:
+    if type(stamp.sec) is not int or stamp.sec < 0 or not 0 <= stamp.nanosec < 1_000_000_000:
+        raise ValueError("invalid native stamp")
+    return stamp.sec * 1_000_000_000 + stamp.nanosec
 
 
 def stamp_seconds(stamp: Any) -> float:
@@ -117,8 +118,7 @@ class NativeObservations:
         sample_sink: Any = None,
         source_invalidated: Any = None,
     ):
-        # //Compatible: isolated simulation and pure callers retain odom.
-        # ROS supplies its actual configured odometry frame for hardware.
+        # The configured odometry frame is explicit for each deployment.
         if not wheel_frame:
             raise ValueError("wheel_frame must be nonempty")
         self.wheel_frame = wheel_frame
@@ -181,10 +181,8 @@ class NativeObservations:
         self.resolver.consume(snapshot)
         if sample.source is Source.LASER:
             support = physical_support(sample)
-            self._window = (
-                (support.start.seconds, support.end.seconds) if decision.accepted else None
-            )
-            self._window_axis = support.end if decision.accepted else None
+            self._window = (support.start_ns, support.end_ns) if decision.accepted else None
+            self._window_axis = support.end_ns if decision.accepted else None
         return decision.accepted
 
     # //Compatible: isolated pure callers inject one clock; ROS facades separately
@@ -196,18 +194,32 @@ class NativeObservations:
         now_ros: float,
         received: float,
         *,
-        timing: SourceTime,
+        timing: SampleTime,
+        generation: int,
+        sequence: int,
         now_steady: float | None = None,
     ) -> bool:
         if msg.child_frame_id != "base_link":
             raise ValueError("wheel twist is not in body frame")
-        epoch = self.source_epoch(gid, timing.source_epoch)
-        seq = timing.sequence
+        epoch = self.source_epoch(gid, f"{generation}:{timing.clock_generation}")
+        seq = sequence
+        if stamp_nanoseconds(msg.header.stamp) != timing.stamp_ns:
+            raise ValueError("header does not match native sample time")
+        matrix = getattr(msg.twist, "covariance", None)
+        covariance = (
+            None
+            if matrix is None
+            else Covariance(
+                tuple(float(matrix[i]) for i in (0, 5, 30, 35)),
+                CovarianceKind.FULL,
+                "standard Odometry vx/wz covariance; statistical model unverified",
+                None,
+            )
+        )
         sample = PointObservation(
             Source.WHEEL,
             Frame.BODY,
-            stamp_seconds(msg.header.stamp),
-            received,
+            timing,
             epoch,
             seq,
             1.0,
@@ -216,11 +228,9 @@ class NativeObservations:
                 float(msg.twist.twist.linear.x),
                 float(msg.twist.twist.angular.z),
             ),
-            None,
+            covariance,
             None,
             Pose2D(0, 0, 0),
-            measurement_steady=timing.end_steady,
-            measurement=timing.measurement,
         )
         accepted = self.ingest(sample, now_ros, received if now_steady is None else now_steady)
         if accepted and msg.header.frame_id == self.wheel_frame and hasattr(msg, "pose"):
@@ -234,9 +244,7 @@ class NativeObservations:
             ):
                 self.poses.append(
                     {
-                        "stamp_ros": sample.stamp_ros,
-                        "measurement_steady": sample.measurement_steady,
-                        "measurement": timing.measurement,
+                        "time": asdict(timing),
                         "sequence": sample.sequence,
                         "received_ros": self.receipt_ros
                         if self.receipt_ros is not None
@@ -257,7 +265,9 @@ class NativeObservations:
         now_ros: float,
         received: float,
         *,
-        timing: SourceTime,
+        timing: SampleTime,
+        generation: int,
+        sequence: int,
         now_steady: float | None = None,
     ) -> bool:
         # A non-body IMU must be transformed by the ROS facade before admission.
@@ -267,23 +277,32 @@ class NativeObservations:
         available = covariance is None or len(covariance) == 0 or covariance[0] != -1
         if available and msg.header.frame_id != "base_link":
             raise ValueError("IMU requires explicit body rotation")
-        epoch = self.source_epoch(gid, timing.source_epoch)
-        seq = timing.sequence
+        epoch = self.source_epoch(gid, f"{generation}:{timing.clock_generation}")
+        seq = sequence
+        if stamp_nanoseconds(msg.header.stamp) != timing.stamp_ns:
+            raise ValueError("header does not match native sample time")
+        uncertainty = (
+            None
+            if not available or covariance is None or len(covariance) != 9
+            else Covariance(
+                (float(covariance[8]),),
+                CovarianceKind.FULL,
+                "standard Imu z-rate covariance; statistical model unverified",
+                None,
+            )
+        )
         sample = PointObservation(
             Source.IMU,
             Frame.BODY,
-            stamp_seconds(msg.header.stamp),
-            received,
+            timing,
             epoch,
             seq,
             1.0 if available else 0.0,
             SourceStatus.VALID if available else SourceStatus.UNAVAILABLE,
             (float(msg.angular_velocity.z) if available else 0.0,),
-            None,
+            uncertainty,
             None,
             Pose2D(0, 0, 0),
-            measurement_steady=timing.end_steady,
-            measurement=timing.measurement,
         )
         return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
 
@@ -296,100 +315,65 @@ class NativeObservations:
         *,
         now_steady: float | None = None,
     ) -> bool:
-        if msg.header.frame_id != "base_link":
-            raise ValueError("scan delta is not body-frame")
-        epoch, seq = self.identity(Source.LASER, gid, str(msg.source_epoch), now_ros)
-        first_time = source_time(msg.first_capture.timing)
-        second_time = source_time(msg.second_capture.timing)
-        if (
-            first_time.clock_domain != second_time.clock_domain
-            or first_time.source_epoch != second_time.source_epoch
-            or first_time.sequence >= second_time.sequence
-        ):
-            raise ValueError("scan interval crossed original source lineage")
-        sample: MotionSample
         if not msg.valid:
-            sample = PointObservation(
-                Source.LASER,
-                Frame.BODY,
-                stamp_seconds(msg.header.stamp),
-                received,
-                epoch,
-                seq,
-                1.0,
-                SourceStatus.UNAVAILABLE,
-                (float(msg.body_delta.x), float(msg.body_delta.y), float(msg.body_delta.theta)),
-                None,
-                None,
-                Pose2D(0, 0, 0),
-                measurement_steady=second_time.end_steady,
-                measurement=second_time.measurement,
-            )
-            return self.ingest(sample, now_ros, received if now_steady is None else now_steady)
-        covariance = Covariance(
-            tuple(float(x) for x in msg.covariance),
-            CovarianceKind.FULL,
-            "native ScanMotion displacement covariance; statistical model unverified",
-            None,
+            # A negative matcher result may have no usable raw endpoints.
+            self.invalidate_source(Source.LASER)
+            return False
+        if msg.header.frame_id != "base_link":
+            self.invalidate_source(Source.LASER)
+            raise ValueError("scan delta is not body-frame")
+        first = capture_from_message(msg.first_capture)
+        second = capture_from_message(msg.second_capture)
+        if (
+            not first.valid
+            or not second.valid
+            or not first.raw_gid
+            or first.raw_gid != second.raw_gid
+            or first.source_epoch != second.source_epoch
+            or first.bridge_boot_id != second.bridge_boot_id
+            or first.capture_generation != second.capture_generation
+            or first.time.clock_generation != second.time.clock_generation
+            or first.sequence >= second.sequence
+            or first.stamp_ns != stamp_nanoseconds(msg.interval_start)
+            or second.stamp_ns != stamp_nanoseconds(msg.header.stamp)
+        ):
+            self.invalidate_source(Source.LASER)
+            raise ValueError("scan interval crossed original capture lineage")
+        epoch = self.source_epoch(
+            gid,
+            f"{msg.source_epoch}:{second.bridge_boot_id}:{second.source_epoch}:"
+            f"{second.capture_generation}:{second.time.clock_generation}",
         )
         sample = DeltaObservation(
             Source.LASER,
             Frame.BODY,
-            stamp_seconds(msg.interval_start),
-            stamp_seconds(msg.header.stamp),
-            received,
+            first.time,
+            second.time,
             epoch,
-            seq,
+            second.sequence,
             float(msg.response),
-            SourceStatus.VALID if msg.valid else SourceStatus.UNAVAILABLE,
+            SourceStatus.VALID,
             Pose2D(float(msg.body_delta.x), float(msg.body_delta.y), float(msg.body_delta.theta)),
-            covariance,
+            Covariance(
+                tuple(float(x) for x in msg.covariance),
+                CovarianceKind.FULL,
+                "standard ScanMotion displacement covariance; model unverified",
+                None,
+            ),
             None,
             Pose2D(0, 0, 0),
-            measurement_interval=MeasurementInterval(
-                first_time.measurement, second_time.measurement
-            ),
-            start_steady=first_time.end_steady,
-            end_steady=second_time.end_steady,
         )
-        origins = None
-        if self.sample_sink is not None:
-            from senior_control.motion.estimator import Origin
+        from senior_control.motion.estimator import Origin
 
-            first, second = (
-                getattr(msg, "first_capture", None),
-                getattr(msg, "second_capture", None),
+        origins = tuple(
+            Origin(
+                "laser",
+                f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                h.sequence,
+                h.time,
             )
-            if first is None or second is None:
-                raise ValueError("scan interval needs original capture lineage")
-            if (
-                not first.valid
-                or not second.valid
-                or not first.raw_gid
-                or first.raw_gid != second.raw_gid
-                or first.source_epoch != second.source_epoch
-                or first.bridge_boot_id != second.bridge_boot_id
-                or first.capture_generation != second.capture_generation
-                or stamp_seconds(first.stamp) != sample.start_ros
-                or stamp_seconds(second.stamp) != sample.end_ros
-                or first.sequence >= second.sequence
-            ):
-                raise ValueError("scan interval needs original capture lineage")
-            origins = tuple(
-                Origin(
-                    "laser",
-                    f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
-                    int(h.sequence),
-                    stamp_seconds(h.stamp),
-                    stamp_seconds(h.received_ros),
-                    float(h.received_steady),
-                    measurement_steady=source_time(h.timing).end_steady,
-                    measurement=source_time(h.timing).measurement,
-                )
-                for h in (first, second)
-            )
-        # //Compatible: diagnostic/progress-only legacy callers retain their
-        # interval snapshot; it never supplies the production driving estimator.
+            for h in (first, second)
+        )
         return self.ingest(
             sample, now_ros, received if now_steady is None else now_steady, origins=origins
         )
@@ -402,17 +386,17 @@ class NativeObservations:
         self.resolver.consume(snapshot)
         views = dict(snapshot.sources)
         chosen = views.get(Source.LASER) or next(iter(views.values()), None)
-        axis = physical_support(chosen.observation.original).end if chosen else None
-        b = axis.seconds if axis is not None else now_steady
+        axis = physical_support(chosen.observation.original).end_ns if chosen else None
+        b = axis if axis is not None else round(now_ros * 1e9)
         compatible_window = (
             self._window is not None
             and self._window_axis is not None
             and axis is not None
-            and axis.same_axis(self._window_axis)
+            and axis >= self._window_axis
         )
-        a, b = self._window if compatible_window else (max(0.0, b - 0.1), b)
+        a, b = self._window if compatible_window else (max(0, b - 100_000_000), b)
         result = self.fusion.update(
-            self.resolver.resolve(a, b, snapshot, measurement=axis), snapshot, self.resolver
+            self.resolver.resolve(a, b, snapshot), snapshot, self.resolver
         )
         self._sequence += 1
         return {
@@ -464,14 +448,14 @@ class NativeObservationRosBridge:
         source_invalidated: Any = None,
         publish: bool = True,
     ):
+        from nav_msgs.msg import Odometry
         from rclpy.clock import Clock, ClockType
-        from rclpy.qos import qos_profile_sensor_data
-        from senior_motion_msgs.msg import ScanMotion, TimedImu, TimedOdometry
+        from senior_motion_msgs.msg import ScanMotion
+        from sensor_msgs.msg import Imu
         from std_msgs.msg import String
 
         self.node = node
         self.profile = profile
-        self.allow_topology_only = bool(profile.simulation_only and profile.unvalidated)
         self.core = NativeObservations(
             profile.admission(),
             profile.temporal(),
@@ -486,64 +470,42 @@ class NativeObservationRosBridge:
         self._message_type = String
         self._warn_at = 0.0
         self._subscriptions = []
-        for cls, topic, handler in [
+        from senior_robot.native_receipt import subscribe
+
+        for cls, topic, logical, handler, source, writer in (
             (
-                TimedOdometry,
+                Odometry,
+                profile.wheel_topic,
                 "/wheel/odom",
-                self.core.wheel if profile.simulation_only else self._wheel,
+                self._wheel,
+                Source.WHEEL,
+                profile.wheel_publisher,
             ),
-            (TimedImu, "/imu/data", self._imu),
+            (Imu, profile.imu_topic, "/imu/data", self._imu, Source.IMU, profile.imu_publisher),
             (
                 ScanMotion,
                 "/motion/scan",
-                self.core.laser if profile.simulation_only else self._laser,
+                "/motion/scan",
+                self._laser,
+                Source.LASER,
+                "scan_motion_node",
             ),
-        ]:
-            wire_topic = (
-                ("/wheel/odom" if profile.simulation_only else str(profile.wheel_topic)) + "/timed"
-                if topic == "/wheel/odom"
-                else ("/imu/data" if profile.simulation_only else str(profile.imu_topic)) + "/timed"
-                if topic == "/imu/data"
-                else topic
-            )
-            callback = self._callback(handler, topic, wire_topic)
-            if profile.simulation_only:
-                # //Compatible: keep the isolated simulation subscription path.
-                subscription = node.create_subscription(
-                    cls, wire_topic, callback, qos_profile_sensor_data
-                )
-            else:
-                from senior_robot.native_receipt import subscribe
-
-                source = {
-                    "/wheel/odom": Source.WHEEL,
-                    "/imu/data": Source.IMU,
-                    "/motion/scan": Source.LASER,
-                }[topic]
-                writer = {
-                    "/wheel/odom": profile.wheel_publisher,
-                    "/imu/data": profile.imu_publisher,
-                    "/motion/scan": "scan_motion_node",
-                }[topic]
-
-                def invalidate(source=source):
-                    self.core.invalidate_source(source)
-
-                def expired(message, info, source=source):
-                    self._record_rejected_receipt(message, info, source)
-
-                subscription = subscribe(
+        ):
+            self._subscriptions.append(
+                subscribe(
                     node,
                     cls,
-                    wire_topic,
-                    callback,
+                    topic,
+                    self._callback(handler, logical, topic),
                     writer=writer,
                     namespace=profile.source_namespace if source is not Source.LASER else "/",
                     qos="sensor" if source is not Source.LASER else "reliable",
-                    invalidate=invalidate,
-                    expired=expired,
+                    invalidate=lambda source=source: self.core.invalidate_source(source),
+                    expired=lambda message, info, source=source: self._record_rejected_receipt(
+                        message, info, source
+                    ),
                 )
-            self._subscriptions.append(subscription)
+            )
         self._timer = (
             node.create_timer(0.05, self._publish, clock=Clock(clock_type=ClockType.STEADY_TIME))
             if publish
@@ -555,7 +517,6 @@ class NativeObservationRosBridge:
         from senior_control.motion.estimator import Origin, origin_key, validate_origins
         from senior_control.runtime.diagnostics import process_diagnostics
         from senior_control.sensors.policy import default_policy
-        from senior_robot.native_receipt import received_steady
 
         d = process_diagnostics()
         key = ("rejected_receipt", info.get("receipt_generation"), info.get("receipt_sequence"))
@@ -566,29 +527,27 @@ class NativeObservationRosBridge:
                         "laser",
                         f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
                         int(h.sequence),
-                        stamp_seconds(h.stamp),
-                        stamp_seconds(h.received_ros),
-                        float(h.received_steady),
-                        measurement_steady=source_time(h.timing).end_steady,
-                        measurement=source_time(h.timing).measurement,
+                        capture_from_message(h).time,
                     )
                     for h in (message.first_capture, message.second_capture)
                 )
             else:
-                gid = bytes(info["publisher_gid"])
-                provenance = PublisherOrigin(gid, gid, "native_message_info_and_writer_binding")
+                from senior_robot.native_receipt import received_sample
+
+                sample = received_sample(info)
                 roots = (
                     Origin(
                         source.value,
                         self.core.source_epoch(
-                            provenance, source_time(message.timing).source_epoch
+                            PublisherOrigin(
+                                bytes(info["publisher_gid"]),
+                                bytes(info["publisher_gid"]),
+                                "native_message_info_and_writer_binding",
+                            ),
+                            f"{info['receipt_generation']}:{sample.clock_generation}",
                         ),
-                        source_time(message.timing).sequence,
-                        stamp_seconds(message.data.header.stamp),
-                        info["received_timestamp"] / 1e9,
-                        received_steady(info),
-                        measurement_steady=source_time(message.timing).end_steady,
-                        measurement=source_time(message.timing).measurement,
+                        int(info["receipt_sequence"]),
+                        sample,
                     ),
                 )
             validate_origins(roots)
@@ -615,7 +574,7 @@ class NativeObservationRosBridge:
 
             from tf2_ros import TransformException
 
-            from senior_robot.native_receipt import received_steady
+            from senior_robot.native_receipt import received_sample, received_steady
 
             now = received_steady(info)
             expected = {
@@ -627,7 +586,6 @@ class NativeObservationRosBridge:
                 info,
                 self.node.get_publishers_info_by_topic(self.node.resolve_topic_name(wire_topic)),
                 expected[topic],
-                allow_topology_only=self.allow_topology_only,
                 expected_namespace=self.profile.source_namespace
                 if topic != "/motion/scan"
                 else "/",
@@ -642,19 +600,25 @@ class NativeObservationRosBridge:
                     self.node.get_logger().warning(
                         f"native motion source rejected on {topic}: expected sole "
                         f"publisher {expected[topic]} with per-sample DDS identity; "
-                        "topology-only fallback is confined to isolated simulation"
+                        "per-sample identity is required"
                     )
                 return
             try:
                 ros_now = self.node.get_clock().now().nanoseconds / 1e9
-                # Native receipt runs on the real ROS clock; simulation uses callback receipt.
-                native_ros = info.get("received_timestamp", 0) if isinstance(info, dict) else 0
-                self.core.receipt_ros = native_ros / 1e9 if native_ros > 0 else ros_now
                 if topic == "/motion/scan":
                     accepted = handler(msg, origin, ros_now, now)
                 else:
-                    proof = source_time(msg.timing)
-                    accepted = handler(msg.data, origin, ros_now, now, timing=proof)
+                    sample = received_sample(info)
+                    self.core.receipt_ros = sample.received_ros_ns / 1e9
+                    accepted = handler(
+                        msg,
+                        origin,
+                        ros_now,
+                        now,
+                        timing=sample,
+                        generation=int(info["receipt_generation"]),
+                        sequence=int(info["receipt_sequence"]),
+                    )
                 if accepted and topic == "/motion/scan":
                     self._publish(laser_update=True)
             except (
@@ -674,6 +638,7 @@ class NativeObservationRosBridge:
                         topic
                     ]
                     process_diagnostics().sensor_attempt(role, "raw", None, ("invalid_data",))
+                    self.core.invalidate_source(Source(role))
                 if now - self._warn_at > 1:
                     self._warn_at = now
                     self.node.get_logger().warning("native motion observation unavailable")
@@ -694,13 +659,22 @@ class NativeObservationRosBridge:
         now_ros: float,
         received: float,
         *,
-        timing: SourceTime,
+        timing: SampleTime,
+        generation: int,
+        sequence: int,
     ) -> bool:
         # //Compatible: WHEELTEC defaults to base_footprint; the common core uses
         # base_link. Transform the actual stamped twist/pose, never relabel it.
         if msg.child_frame_id == "base_link":
             return self.core.wheel(
-                msg, gid, now_ros, received, timing=timing, now_steady=time.monotonic()
+                msg,
+                gid,
+                now_ros,
+                received,
+                timing=timing,
+                generation=generation,
+                sequence=sequence,
+                now_steady=time.monotonic(),
             )
         from types import SimpleNamespace as N
 
@@ -739,7 +713,10 @@ class NativeObservationRosBridge:
         normalized = N(
             header=msg.header,
             child_frame_id="base_link",
-            twist=N(twist=N(linear=N(x=vx), angular=N(z=w.z))),
+            twist=N(
+                twist=N(linear=N(x=vx), angular=N(z=w.z)),
+                covariance=self._wheel_covariance(msg.twist.covariance, c, sn, t.y),
+            ),
             pose=N(
                 pose=N(
                     position=N(x=odom_body.x, y=odom_body.y),
@@ -750,8 +727,29 @@ class NativeObservationRosBridge:
             ),
         )
         return self.core.wheel(
-            normalized, gid, now_ros, received, timing=timing, now_steady=time.monotonic()
+            normalized,
+            gid,
+            now_ros,
+            received,
+            timing=timing,
+            generation=generation,
+            sequence=sequence,
+            now_steady=time.monotonic(),
         )
+
+    @staticmethod
+    def _wheel_covariance(matrix, cosine, sine, lateral_offset):
+        """Project the same body-frame vx/wz Jacobian used for the measured twist."""
+        rows = ((cosine, -sine, 0, 0, 0, lateral_offset), (0, 0, 0, 0, 0, 1))
+        result = [0.0] * 36
+        for i, target_i in enumerate((0, 5)):
+            for j, target_j in enumerate((0, 5)):
+                result[target_i * 6 + target_j] = sum(
+                    rows[i][a] * float(matrix[a * 6 + b]) * rows[j][b]
+                    for a in range(6)
+                    for b in range(6)
+                )
+        return result
 
     def _imu(
         self,
@@ -760,7 +758,9 @@ class NativeObservationRosBridge:
         now_ros: float,
         received: float,
         *,
-        timing: SourceTime,
+        timing: SampleTime,
+        generation: int,
+        sequence: int,
     ) -> bool:
         from types import SimpleNamespace
 
@@ -771,7 +771,14 @@ class NativeObservationRosBridge:
             covariance is not None and len(covariance) > 0 and covariance[0] == -1
         ) or msg.header.frame_id == "base_link":
             return self.core.imu(
-                msg, gid, now_ros, received, timing=timing, now_steady=time.monotonic()
+                msg,
+                gid,
+                now_ros,
+                received,
+                timing=timing,
+                generation=generation,
+                sequence=sequence,
+                now_steady=time.monotonic(),
             )
         tf = self.node._tf.lookup_transform(
             "base_link", msg.header.frame_id, Time.from_msg(msg.header.stamp)
@@ -786,12 +793,31 @@ class NativeObservationRosBridge:
             + 2 * (q.y * q.z + q.x * q.w) * v.y
             + (1 - 2 * (q.x * q.x + q.y * q.y)) * v.z
         )
+        row = (
+            2 * (q.x * q.z - q.y * q.w),
+            2 * (q.y * q.z + q.x * q.w),
+            1 - 2 * (q.x * q.x + q.y * q.y),
+        )
+        projected = None
+        if covariance is not None and len(covariance) == 9:
+            projected = [0.0] * 9
+            projected[8] = sum(
+                row[i] * covariance[i * 3 + j] * row[j] for i in range(3) for j in range(3)
+            )
         normalized = SimpleNamespace(
             header=SimpleNamespace(stamp=msg.header.stamp, frame_id="base_link"),
             angular_velocity=SimpleNamespace(z=z),
+            angular_velocity_covariance=projected,
         )
         return self.core.imu(
-            normalized, gid, now_ros, received, timing=timing, now_steady=time.monotonic()
+            normalized,
+            gid,
+            now_ros,
+            received,
+            timing=timing,
+            generation=generation,
+            sequence=sequence,
+            now_steady=time.monotonic(),
         )
 
     def _publish(self, *, laser_update: bool = False) -> None:

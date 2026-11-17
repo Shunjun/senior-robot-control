@@ -179,7 +179,8 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
                 h.sequence = sequence
                 h.frame_id = "optical"
                 h.stamp = h.received_ros = stamp
-                h.received_steady = steady
+                h.received_steady_ns = h.sample_steady_ns = round(steady * 1e9)
+                h.clock_generation = 1
                 value.width, value.height = 320, 240
                 if index == 0:
                     value.step, value.encoding, value.data = 960, "rgb8", rgb.tobytes()
