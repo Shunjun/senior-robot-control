@@ -770,6 +770,8 @@ class MotionCoreOutput:
             raise ValueError("scan_expired")
         self._sync_learning_model(m)
         motion = self.sensors.latest
+        if motion is None or motion.measurement_host_steady is None or motion.stamp_ns is None:
+            raise ValueError("all_relevant_motion_feedback_unavailable")
         current = self.sensors.pose_estimator.at(
             ros,
             measurement_steady=motion.measurement_host_steady,
