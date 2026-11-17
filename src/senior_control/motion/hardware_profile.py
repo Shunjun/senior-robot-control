@@ -48,9 +48,9 @@ class HardwareMotionProfile(BaseModel):
     requested_linear_mps: float = Field(default=25 / 18, gt=0)
     degraded_cap: float = Field(gt=0)
     yaw_cap: float = Field(default=2.0, gt=0)
-    # Nominal project/vendor geometry, never an installation certificate.
-    length: float = Field(default=0.674, gt=0)
-    width: float = Field(default=0.552, gt=0)
+    # Physical body dimensions must be supplied by the vehicle configuration.
+    length: float = Field(gt=0)
+    width: float = Field(gt=0)
     track_width_m: float = Field(default=0.481154, gt=0)
     wheel_speed_mps: float = Field(gt=0)
     stationary_linear_mps: float = Field(gt=0)
