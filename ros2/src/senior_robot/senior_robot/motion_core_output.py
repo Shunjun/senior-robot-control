@@ -1085,6 +1085,15 @@ class MotionCoreOutput:
                 model_horizon_exceeded=prediction.horizon_s > ctx.envelope.max_horizon_s,
             )
         self.diagnostics.summary("stopping", values)
+        return {
+            key: values.get(key)
+            for key in (
+                "linear_interval_mps",
+                "yaw_interval_rps",
+                "linear_stop_distance_m",
+                "yaw_stop_angle_rad",
+            )
+        }
 
     def _stop_fallback(self, prepared, now):
         # Recompute from original raw roots once at output time. A tick projection
@@ -1103,7 +1112,7 @@ class MotionCoreOutput:
             raise ValueError(error)
         return self.controller.prepare_stop(prepared, ctx, body, wheel, now)
 
-    def _decision_output(self, decision, body, ctx, epoch, now):
+    def _decision_output(self, decision, body, ctx, epoch, now, *, stopping_context=None):
         reason = decision.reason
         output = Velocity(0, 0)
         if decision.command is not None:
@@ -1131,7 +1140,10 @@ class MotionCoreOutput:
             else:
                 condition = (reason, epoch)
                 if condition != self._last_fault_condition:
+                    first_fault = not self._first_fault_status
                     self._event(K.EXECUTION_FAULT, now, detail=reason)
+                    if first_fault and stopping_context is not None:
+                        self._first_fault_status.update(stopping_context)
                     self._last_fault_condition = condition
         elif not decision.emergency:
             self._last_fault_condition = None
@@ -1215,7 +1227,7 @@ class MotionCoreOutput:
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
-            self._diagnose_stopping(
+            stopping_context = self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
             estop = self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
@@ -1248,7 +1260,9 @@ class MotionCoreOutput:
                     self._body_epoch_used = body.epoch
                 if wheel is not None:
                     self._wheel_epoch_used = wheel.epoch
-            output = self._decision_output(decision, body, ctx, epoch, event_now)
+            output = self._decision_output(
+                decision, body, ctx, epoch, event_now, stopping_context=stopping_context
+            )
             reason = f"{mode.value}:{reason}"
             if output != Velocity(0, 0):
                 # The decision already selects its applicable drive/brake deadlines.
