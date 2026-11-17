@@ -22,6 +22,10 @@ def test_fixture_has_dedicated_actuation_and_reviewable_physics(tmp_path):
     assert manifest["source_model_sha256"] == before
     assert manifest["domain"] == 173
     model = ET.parse(output / "model.xacro")
+    control = model.find("ros2_control")
+    assert control.find("gpio") is None
+    assert control.find("sensor") is None
+    assert control.find("hardware/plugin").text == "gz_ros2_control/GazeboSimSystem"
     mappings = [node.text for node in model.iter("remapping")]
     assert "/drive/cmd_vel_unstamped:=/vehicle_motion_calibration/review1/cmd_vel" in mappings
     assert "/drive/cmd_vel_unstamped:=/cmd_vel" not in mappings

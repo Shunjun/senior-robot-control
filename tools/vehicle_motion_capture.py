@@ -227,6 +227,57 @@ def attach_dds_identity(
     record["data"]["publisher_gid"] = publisher_gid
 
 
+class RawCaptureFrontiers:
+    """Keep each admitted identity's last original record for this bounded capture.
+
+    Full identity slots are never evicted: an unseen source beyond the recording
+    budget is reported as an error rather than allowing an old source to look new.
+    """
+
+    MAX_IDENTITIES_PER_STREAM = 64
+
+    def __init__(self) -> None:
+        self._streams: dict[str, dict[tuple[bytes, int], tuple[int, dict[str, Any]]]] = {}
+
+    def cached(
+        self, stream: str, identity: bytes, generation: int, stamp_ns: int
+    ) -> dict[str, Any] | None:
+        sources = self._streams.setdefault(stream, {})
+        previous = sources.get((identity, generation))
+        if previous is None:
+            if len(sources) >= self.MAX_IDENTITIES_PER_STREAM:
+                raise ValueError("source_identity_capacity")
+            return None
+        old_stamp, record = previous
+        if stamp_ns < old_stamp:
+            raise ValueError("out_of_order_stamp")
+        return record if stamp_ns == old_stamp else None
+
+    def remember(
+        self, stream: str, identity: bytes, generation: int, stamp_ns: int, record: dict[str, Any]
+    ) -> None:
+        self._streams[stream][identity, generation] = (stamp_ns, record)
+
+
+def capture_error(
+    stream: str, detail: str, *, steady_ns: int, body: Any, info: dict[str, Any]
+) -> dict[str, Any]:
+    """Retain the rejected callback's time, payload and transport identity."""
+    gid = info.get("publisher_gid")
+    return {
+        "kind": "error",
+        "component": stream,
+        "detail": detail,
+        "received_steady_ns": steady_ns,
+        "raw": _safe(body),
+        "dds": {
+            "publisher_gid": bytes(gid).hex() if gid is not None else None,
+            "source_timestamp_ns": info.get("source_timestamp"),
+            "received_timestamp_ns": info.get("received_timestamp"),
+        },
+    }
+
+
 class RosCapture:
     """Lazy ROS imports leave fixture analysis runnable without a ROS installation."""
 
@@ -247,69 +298,63 @@ class RosCapture:
         self.executor = MotionExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.clock = ClockTracker()
-        self._latest_raw: dict[str, tuple[bytes, int, int, dict[str, Any]]] = {}
+        self._raw_frontiers = RawCaptureFrontiers()
         try:
             for name, (topic, type_name) in TOPICS.items():
 
                 def make_callback(stream: str) -> Any:
                     def receive(msg: Any, info: Any) -> None:
                         steady_ns = time.monotonic_ns()
-                        ros_ns = self.node.get_clock().now().nanoseconds
-                        generation = self.clock.observe(
-                            ros_ns=ros_ns, steady_ns=steady_ns
-                        ).generation
-                        body = message_to_ordereddict(msg)
-                        stamp_ns = _stamp(_path(body, "header", "stamp"))
-                        identity = bytes(info.get("publisher_gid") or b"")
-                        previous = self._latest_raw.get(stream)
-                        raw_stream = stream not in {"clock", "scan_motion", "motion"}
-                        if raw_stream and stamp_ns is not None and previous is not None:
-                            old_gid, old_generation, old_stamp, old_record = previous
-                            if (identity, generation) == (old_gid, old_generation):
-                                if stamp_ns == old_stamp:
-                                    repeated = {**old_record, "received_steady_ns": steady_ns}
-                                    attach_dds_identity(
-                                        repeated,
-                                        publisher_gid=identity.hex() if identity else None,
-                                        source_ns=info["source_timestamp"],
-                                        received_ns=info["received_timestamp"],
-                                    )
-                                    writer.emit(repeated)
-                                    return
-                                if stamp_ns < old_stamp:
-                                    writer.emit(
-                                        {
-                                            "kind": "error",
-                                            "component": stream,
-                                            "detail": "out_of_order_stamp",
-                                            "raw": _safe(body),
-                                            "received_steady_ns": steady_ns,
-                                        }
-                                    )
-                                    return
+                        body = None
                         try:
-                            record = ros_sample(
-                                stream,
-                                body,
-                                steady_ns,
-                                received_ros_ns=ros_ns,
-                                clock_generation=generation,
+                            ros_ns = self.node.get_clock().now().nanoseconds
+                            generation = self.clock.observe(
+                                ros_ns=ros_ns, steady_ns=steady_ns
+                            ).generation
+                            body = message_to_ordereddict(msg)
+                            stamp_ns = _stamp(_path(body, "header", "stamp"))
+                            identity = bytes(info.get("publisher_gid") or b"")
+                            raw_stream = stream not in {"clock", "scan_motion", "motion"}
+                            cached = None
+                            if raw_stream and stamp_ns is not None:
+                                cached = self._raw_frontiers.cached(
+                                    stream, identity, generation, stamp_ns
+                                )
+                            if cached is not None:
+                                record = {
+                                    **cached,
+                                    "data": dict(cached["data"]),
+                                    "received_steady_ns": steady_ns,
+                                }
+                            else:
+                                record = ros_sample(
+                                    stream,
+                                    body,
+                                    steady_ns,
+                                    received_ros_ns=ros_ns,
+                                    clock_generation=generation,
+                                )
+                            # //Compatible: Humble drops callback metadata and may omit GID.
+                            # MotionExecutor retains metadata; missing GID stays unknown.
+                            raw_gid = info.get("publisher_gid")
+                            gid = bytes(raw_gid).hex() if raw_gid is not None else None
+                            attach_dds_identity(
+                                record,
+                                publisher_gid=gid,
+                                source_ns=info["source_timestamp"],
+                                received_ns=info["received_timestamp"],
                             )
                         except (ValueError, KeyError, TypeError) as exc:
-                            writer.emit({"kind": "error", "component": stream, "detail": str(exc)})
+                            writer.emit(
+                                capture_error(
+                                    stream, str(exc), steady_ns=steady_ns, body=body, info=info
+                                )
+                            )
                             return
-                        # //Compatible: Humble drops callback metadata and may omit GID.
-                        # MotionExecutor preserves available metadata; missing GID stays unknown.
-                        raw_gid = info.get("publisher_gid")
-                        gid = bytes(raw_gid).hex() if raw_gid is not None else None
-                        attach_dds_identity(
-                            record,
-                            publisher_gid=gid,
-                            source_ns=info["source_timestamp"],
-                            received_ns=info["received_timestamp"],
-                        )
-                        if raw_stream and stamp_ns is not None:
-                            self._latest_raw[stream] = (identity, generation, stamp_ns, record)
+                        if raw_stream and stamp_ns is not None and cached is None:
+                            self._raw_frontiers.remember(
+                                stream, identity, generation, stamp_ns, record
+                            )
                         writer.emit(record)
 
                     return with_dds_info(receive)
@@ -339,7 +384,14 @@ async def capture(
         ros = RosCapture(writer, use_sim_time=use_sim_time)
     except (ImportError, RuntimeError) as exc:
         ros_error = f"ROS subscriptions unavailable: {type(exc).__name__}"
-        writer.emit({"kind": "error", "component": "ros", "detail": ros_error})
+        writer.emit(
+            {
+                "kind": "error",
+                "component": "ros",
+                "detail": ros_error,
+                "received_steady_ns": time.monotonic_ns(),
+            }
+        )
     client = IpcClient(socket, timeout_ms=(min(0.2, seconds)) * 1000)
     deadline, next_poll = time.monotonic() + seconds, time.monotonic()
     pending: asyncio.Task[dict[str, Any]] | None = None

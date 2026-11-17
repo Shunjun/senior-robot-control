@@ -45,6 +45,18 @@ def test_simulation_contract_files_are_wired() -> None:
     controller = yaml.safe_load(
         (ROOT / "ros2/src/senior_sim/config/controllers.yaml").read_text(encoding="utf-8")
     )["drive"]["ros__parameters"]
+    control = model.find("ros2_control")
+    assert control.find("hardware/plugin").text == "gz_ros2_control/GazeboSimSystem"
+    assert control.find("gpio") is None
+    assert control.find("sensor") is None
+    ns = {"xacro": "http://www.ros.org/wiki/xacro"}
+    assert len(control.findall("xacro:control_joint", ns)) == 4
+    joint = control.find("xacro:macro/joint", ns)
+    assert [item.get("name") for item in joint.findall("command_interface")] == ["velocity"]
+    assert [item.get("name") for item in joint.findall("state_interface")] == [
+        "position",
+        "velocity",
+    ]
     assert controller["open_loop"] is False
     assert 0 < controller["cmd_vel_timeout"] <= 0.3
     assert len(controller["left_wheel_names"]) == len(controller["right_wheel_names"]) == 2

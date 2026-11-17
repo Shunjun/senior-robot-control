@@ -107,6 +107,32 @@ def test_out_of_order_stamps_break_evidence_window(tmp_path):
     assert "clock_pause" not in result["findings"]
     assert result["invalid_samples"]
 
+    # The recorder rejects older stamps as errors, rather than sample rows.
+    from tools.vehicle_motion_analyze import _interval_average, _parse, _windows
+
+    rows = []
+    for i in range(7):
+        if i == 3:
+            rows.extend(
+                {
+                    "kind": "error",
+                    "component": stream,
+                    "detail": "out_of_order_stamp",
+                    "received_steady_ns": 100_250_000_000,
+                    "dds": {"publisher_gid": "41"},
+                    "raw": {"header": {}},
+                }
+                for stream in ("wheel", "clock")
+            )
+        rows.extend([sample("wheel", i / 10, i / 10, vx=1.0), sample("clock", i / 10, 1.0)])
+    streams, invalid = _parse(rows)
+    assert invalid == [6, 7]
+    assert _interval_average(streams["wheel"], 100_000_000, 500_000_000) is None
+    assert _windows(streams["clock"], lambda row: True) == []
+    result = analyze(tmp_path, rows)
+    assert result["capture_errors"] == result["invalid_samples"] == [6, 7]
+    assert "clock_pause" not in result["findings"]
+
 
 def test_unknown_alignment_or_only_one_expired_result_is_insufficient(tmp_path):
     records = [
@@ -304,7 +330,7 @@ def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypat
     node = SimpleNamespace(
         create_subscription=lambda kind, topic, cb, qos: callbacks.append(cb),
         destroy_node=lambda: None,
-        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=100_000_000_000)),
     )
     calls = []
 
@@ -346,6 +372,20 @@ def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypat
     module("rclpy.qos", qos_profile_sensor_data=object())
     module("rosidl_runtime_py.convert", message_to_ordereddict=lambda msg: msg)
     module("rosidl_runtime_py.utilities", get_message=lambda name: object())
+    import tools.vehicle_motion_capture as recorder
+
+    ticks = iter(
+        [
+            199_800_000_000,
+            199_900_000_000,
+            200_000_000_000,
+            200_100_000_000,
+            200_200_000_000,
+            200_300_000_000,
+            200_400_000_000,
+        ]
+    )
+    monkeypatch.setattr(recorder.time, "monotonic_ns", lambda: next(ticks))
     writer = TraceWriter(io.StringIO())
     capture = RosCapture(writer)
     capture.spin()
@@ -354,11 +394,48 @@ def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypat
         {"source_epoch": "producer"},
         {"publisher_gid": [1, 2], "source_timestamp": 1, "received_timestamp": 2},
     )
-    capture.close()
-    assert calls == [context, "spin", "shutdown"]
     assert writer.counts["scan_motion"] == 1
     callbacks[2]({"source_epoch": "producer"}, {"source_timestamp": 3, "received_timestamp": 4})
     assert json.loads(writer.stream.getvalue().splitlines()[-1])["dds"]["publisher_gid"] is None
+    for gid, nanosec in (
+        (65, 800_000_000),
+        (66, 900_000_000),
+        (65, 800_000_000),
+        (65, 700_000_000),
+        (65, 1_100_000_000),
+    ):
+        sec, nanos = divmod(99_000_000_000 + nanosec, 1_000_000_000)
+        callbacks[4](
+            {
+                "header": {"stamp": {"sec": sec, "nanosec": nanos}},
+                "twist": {"twist": {"linear": {"x": 1.0}}},
+            },
+            {"publisher_gid": [gid], "source_timestamp": nanosec, "received_timestamp": nanosec},
+        )
+    records = [json.loads(line) for line in writer.stream.getvalue().splitlines()]
+    wheel = [row for row in records if row.get("stream") == "wheel"]
+    assert len(wheel) == 3
+    assert wheel[0]["time"] == wheel[2]["time"]
+    assert wheel[0]["time"]["clock_generation"] == 1
+    assert wheel[0]["time"]["received_steady_ns"] == 200_000_000_000
+    assert wheel[0]["time"]["sample_steady_ns"] == 199_800_000_000
+    assert wheel[2]["received_steady_ns"] == 200_200_000_000
+    assert wheel[2]["dds"]["publisher_gid"] == "41"
+    errors = [row for row in records if row["kind"] == "error"]
+    assert len(errors) == writer.errors == 2
+    assert errors[0]["detail"] == "out_of_order_stamp"
+    assert [row["received_steady_ns"] for row in errors] == [200_300_000_000, 200_400_000_000]
+    assert all(row["dds"]["publisher_gid"] == "41" and row["raw"] for row in errors)
+    from tools.vehicle_motion_analyze import _parse
+
+    streams, invalid = _parse(records)
+    assert {i for i, row in enumerate(records) if row["kind"] == "error"} <= set(invalid)
+    assert [row.data["error"] for row in streams["wheel"] if "error" in row.data] == [
+        row["detail"] for row in errors
+    ]
+
+    capture.close()
+    assert calls == [context, "spin", "shutdown"]
 
 
 def test_fresh_scan_after_reset_cannot_use_old_matching_ros_stamps(tmp_path):

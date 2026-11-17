@@ -34,8 +34,6 @@
   <ros2_control name="GazeboSimSystem" type="system"><hardware><plugin>gz_ros2_control/GazeboSimSystem</plugin></hardware>
     <xacro:macro name="control_joint" params="name"><joint name="${name}_joint"><command_interface name="velocity"/><state_interface name="position"/><state_interface name="velocity"/></joint></xacro:macro>
     <xacro:control_joint name="left_front"/><xacro:control_joint name="left_back"/><xacro:control_joint name="right_front"/><xacro:control_joint name="right_back"/>
-    <gpio name="control_clock"><command_interface name="valid_until_steady"/></gpio>
-    <sensor name="source_clock"><state_interface name="measurement_steady"/><state_interface name="world_key"/></sensor>
   </ros2_control>
   <gazebo>
     <!-- //Compatible: Humble spawner lacks controller ROS argument support. -->

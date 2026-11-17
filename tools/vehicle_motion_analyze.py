@@ -70,6 +70,22 @@ def _parse(records: list[dict[str, Any]]) -> tuple[dict[str, list[Sample]], list
     invalid = []
     last: dict[str, tuple[float, int | None]] = {}
     for index, row in enumerate(records):
+        if row.get("kind") == "error":
+            stream = row.get("component")
+            if isinstance(stream, str) and stream != "ros":
+                received_ns = row.get("received_steady_ns")
+                previous_steady, previous_stamp = last.get(stream, (0.0, None))
+                steady = (
+                    received_ns / 1e9
+                    if type(received_ns) is int and received_ns >= 0
+                    else previous_steady
+                )
+                invalid.append(index)
+                streams[stream].append(
+                    Sample(index, stream, steady, None, {"break": True, "error": row.get("detail")})
+                )
+                last[stream] = (max(steady, previous_steady), previous_stamp)
+            continue
         if row.get("kind") != "sample":
             continue
         stream = row.get("stream")
@@ -135,7 +151,7 @@ def _windows(samples: list[Sample], qualifies: Callable[[Sample], bool]) -> list
     result: list[list[Sample]] = []
     run: list[Sample] = []
     for sample in samples:
-        if not qualifies(sample):
+        if sample.data.get("break") or not qualifies(sample):
             if len(run) >= 3 and run[-1].steady - run[0].steady >= WINDOW_S - 1e-9:
                 result.append(run)
             run = []
@@ -341,6 +357,7 @@ def analyze_trace(path: Path) -> dict[str, object]:
         "findings": sorted({str(row["finding"]) for row in evidence}),
         "evidence": evidence,
         "invalid_samples": invalid,
+        "capture_errors": [i for i, row in enumerate(records) if row.get("kind") == "error"],
         "missing_streams": [k for k in REQUIRED if not streams[k]],
         "physical_stop": "not_evaluated",
         "acceptance_frozen": False,
