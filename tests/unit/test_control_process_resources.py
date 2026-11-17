@@ -189,7 +189,7 @@ def test_reception_child_inherits_typed_sensor_remaps_without_twist_or_untyped_f
     monkeypatch.setattr(control_inputs, "LatestSnapshot", lambda _: object())
     names = []
     node = N(
-        list_parameters=lambda *a, **kw: N(names=[]),
+        get_parameters_by_prefix=lambda prefix: {},
         resolve_topic_name=lambda topic: names.append(topic) or "/isolated" + topic,
     )
     channel = control_inputs.ControlInputs(node)

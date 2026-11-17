@@ -83,22 +83,24 @@ def default_policy() -> SensorTiming:
     return SensorTiming(**values)
 
 
-def ros_sensor_parameters(diagnostics: "DiagnosticsSettings | None" = None) -> dict[str, float]:
+def ros_sensor_parameters(
+    diagnostics: "DiagnosticsSettings | None" = None,
+) -> dict[str, int | float]:
     from senior_control.runtime.diagnostics import QueueWarningPolicy
 
     q = QueueWarningPolicy() if diagnostics is None else diagnostics.queue
     p = default_policy()
     return dict(
         queue_warn_count=q.count,
-        queue_warn_ratio=q.ratio,
-        queue_warn_repeat_s=q.repeat_s,
-        queue_warn_recovery_ratio=q.recovery_ratio,
-        queue_warn_oldest_wait_ms=q.oldest_wait_ms,
-        sensor_soft_age_ms=p.soft_age_ms,
-        sensor_hard_age_ms=p.hard_age_ms,
-        sensor_diagnostics_period_s=p.diagnostics_period_s
-        if diagnostics is None
-        else diagnostics.period_s,
+        queue_warn_ratio=float(q.ratio),
+        queue_warn_repeat_s=float(q.repeat_s),
+        queue_warn_recovery_ratio=float(q.recovery_ratio),
+        queue_warn_oldest_wait_ms=float(q.oldest_wait_ms),
+        sensor_soft_age_ms=float(p.soft_age_ms),
+        sensor_hard_age_ms=float(p.hard_age_ms),
+        sensor_diagnostics_period_s=float(
+            p.diagnostics_period_s if diagnostics is None else diagnostics.period_s
+        ),
     )
 
 
