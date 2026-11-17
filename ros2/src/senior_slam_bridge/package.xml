@@ -20,6 +20,7 @@
   <test_depend>ament_cmake_test</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>geometry_msgs</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
   <test_depend>senior_sensor_ingress</test_depend>
   <exec_depend>rclpy</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
