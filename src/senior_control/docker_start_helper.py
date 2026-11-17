@@ -147,7 +147,6 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-p",
         f"robot_id:={robot_id}",
         "-p",
-        "-p",
         "ipc_replace_existing_socket:=false",
         *(
             [
