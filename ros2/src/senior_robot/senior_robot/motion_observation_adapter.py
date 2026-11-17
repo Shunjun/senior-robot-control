@@ -395,9 +395,7 @@ class NativeObservations:
             and axis >= self._window_axis
         )
         a, b = self._window if compatible_window else (max(0, b - 100_000_000), b)
-        result = self.fusion.update(
-            self.resolver.resolve(a, b, snapshot), snapshot, self.resolver
-        )
+        result = self.fusion.update(self.resolver.resolve(a, b, snapshot), snapshot, self.resolver)
         self._sequence += 1
         return {
             "schema": 1,

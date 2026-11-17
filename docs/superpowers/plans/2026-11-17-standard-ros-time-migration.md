@@ -67,20 +67,26 @@ class SampleTime:
     sample_steady_ns: int
     clock_generation: int
 
-def map_sample(*, stamp_ns: int, received_ros_ns: int,
-               received_steady_ns: int, clock_generation: int) -> SampleTime: ...
+
+def map_sample(
+    *, stamp_ns: int, received_ros_ns: int, received_steady_ns: int, clock_generation: int
+) -> SampleTime: ...
+
 
 @dataclass(frozen=True)
 class StampInterval:
     start_ns: int
     end_ns: int
 
+
 def interval_ns(first: SampleTime, last: SampleTime) -> StampInterval: ...
+
 
 @dataclass(frozen=True)
 class ClockObservation:
     generation: int
     discontinuity: bool
+
 
 class ClockTracker:
     def observe(self, *, ros_ns: int, steady_ns: int) -> ClockObservation: ...

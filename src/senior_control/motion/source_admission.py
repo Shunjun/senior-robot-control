@@ -135,8 +135,7 @@ class AdmissionOwner:
 
     def _admit_heading(self, heading: Heading, state: _State) -> str | None:
         if heading.received_steady < self._heading_received or (
-            heading.epoch == self._heading_epoch
-            and heading.time.stamp_ns < self._heading_stamp
+            heading.epoch == self._heading_epoch and heading.time.stamp_ns < self._heading_stamp
         ):
             return "heading_reordering"
         if heading.epoch in self._retired_headings:

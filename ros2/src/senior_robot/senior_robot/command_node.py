@@ -710,9 +710,7 @@ class CommandNode(Node):
         # ACK admission checks both endpoint frontiers before matching a nonce.
         self._retirement_incarnation_current()
 
-    def _on_navigation_sample(
-        self, topic: str, msg: Twist, info: dict[str, Any]
-    ) -> None:
+    def _on_navigation_sample(self, topic: str, msg: Twist, info: dict[str, Any]) -> None:
         received = self._monotonic_clock.monotonic()
         source = self._navigation_source
         if source is None or source.topic != topic:
