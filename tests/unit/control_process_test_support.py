@@ -5,14 +5,30 @@ owner, then crosses the real serialized mailbox and ControlInputs consumer.
 These adapters do not emulate motion approval or restore core_reference ingress.
 """
 
+import json
 import multiprocessing as mp
 from collections import deque
 from concurrent.futures import Future
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from senior_robot.control_inputs import ControlInputs
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
 from senior_control.motion.process_resources import LatestSnapshot
+
+if TYPE_CHECKING:
+    from senior_control.motion.hardware_profile import HardwareMotionProfile
+
+
+def generic_motion_profile(**overrides: Any) -> "HardwareMotionProfile":
+    """Load explicit test numerics through the same profile model as deployment."""
+    from senior_control.motion.hardware_profile import HardwareMotionProfile
+
+    path = Path(__file__).resolve().parents[1] / "fixtures/generic_motion_profile.json"
+    values = json.loads(path.read_text())
+    values.update(overrides)
+    return HardwareMotionProfile.model_validate(values)
 
 
 class LocalWorker:
