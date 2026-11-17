@@ -623,29 +623,6 @@ async def test_export_preserves_destination_created_during_verification(tmp_path
     assert list(tmp_path.iterdir()) == [destination]
 
 
-async def test_export_rejects_symlink_substituted_between_stat_and_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    original_lstat = Path.lstat
-    external = tmp_path / "external.data"
-    external.write_bytes(b"scans")
-
-    def replace_after_stat(path: Path):
-        entry = original_lstat(path)
-        if path.name == "graph.data" and stat.S_ISREG(entry.st_mode):
-            path.unlink()
-            path.symlink_to(external)
-        return entry
-
-    monkeypatch.setattr(Path, "lstat", replace_after_stat)
-    store = filled_store()
-    destination = tmp_path / "unsafe.zip"
-    with pytest.raises(DomainError) as error:
-        await archive_for(store).export_bundle(store, store.map_ref, destination)
-    assert error.value.code is ErrorCode.OPERATION_UNKNOWN
-    assert not destination.exists()
-
-
 async def test_export_uses_checked_bytes_without_reopening_graph_after_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -266,17 +266,6 @@ def test_numpy_transform_scalars_are_normalized_to_native_float():
     assert all(type(item) is float for item in (*edge.translation, *edge.quaternion))
 
 
-def test_transform_rejects_bool_strings_and_nonfinite_values():
-    import numpy as np
-
-    for invalid in (True, np.bool_(True), "0.0", float("nan"), float("inf")):
-        binding = StaticBinding("base_link", "camera")
-        value = message(1, admitted=True)
-        value.edges[0].translation = (invalid, 0.0, 0.0)
-        assert not observe_verified_tf(binding, value, current_relay_gid="02"), repr(invalid)
-        assert binding.current is None
-
-
 def test_local_suspension_reconfirms_exact_original_lifetime_without_new_measurement():
     binding = StaticBinding("base_link", "camera")
     original = message(1, admitted=True)

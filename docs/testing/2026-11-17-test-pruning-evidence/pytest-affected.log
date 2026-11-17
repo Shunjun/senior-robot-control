@@ -1,0 +1,37 @@
+........................................................................ [ 16%]
+........................................................................ [ 33%]
+........................................................................ [ 50%]
+........................................................................ [ 67%]
+........................................................................ [ 84%]
+................................................................         [100%]
+- generated xml file: /Users/zhangshunjun/Wheel 机器人/senior-robot-control/docs/testing/2026-11-17-test-pruning-evidence/pytest-affected.xml -
+============================= slowest 25 durations =============================
+1.38s call     tests/unit/test_shared_sensor_cpp.py::test_cpp_age_queue_boundaries_and_transient_crossing
+1.21s call     tests/integration/test_agent.py::test_idle_connected_robot_stays_fresh_past_stale_after
+0.75s call     tests/integration/test_agent.py::test_failed_collect_does_not_end_the_keepalive[TimeoutError]
+0.74s call     tests/integration/test_agent.py::test_failed_collect_does_not_end_the_keepalive[OSError]
+0.64s call     tests/integration/test_agent.py::test_recovery_after_five_failed_attempts_preserves_ros_adapter
+0.50s call     tests/integration/test_agent.py::test_agent_release_is_bounded_for_stubborn_cleanup
+0.42s call     tests/integration/test_agent.py::test_replay_of_needs_review_is_not_acknowledged_as_success
+0.41s call     tests/integration/test_agent.py::test_long_map_export_does_not_block_heartbeat_or_stop
+0.35s call     tests/unit/test_control_process_resources.py::test_real_spawn_carries_geometry_and_complete_sensor_snapshot
+0.35s call     tests/unit/test_control_process_resources.py::test_cpu_busy_spawn_does_not_hold_parent_snapshot_or_heartbeat
+0.30s call     tests/unit/test_rgbd_parent_ledger.py::test_bounded_ticket_eviction_supports_sustained_stream_without_epoch_churn
+0.29s call     tests/unit/test_control_process_resources.py::test_real_spawn_serializes_tasks_and_results_and_cleans_up
+0.22s call     tests/integration/test_agent.py::test_state_change_is_pushed_without_an_edit
+0.11s call     tests/integration/test_agent.py::test_offline_edit_fails_not_queued
+0.09s call     tests/integration/test_agent.py::test_delayed_replies_preserve_send_cadence_and_connection
+0.07s call     tests/integration/test_agent.py::test_edit_ack_only_after_device_commit
+0.06s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[multiple_gaps]
+0.06s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[actual]
+0.06s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[interior_nan]
+0.06s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[edge_nan]
+0.05s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[multiple_masks]
+0.05s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[reversed_rays]
+0.05s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[different_origin]
+0.05s call     tests/unit/test_map_archive.py::test_capture_freeze_is_released_before_uncooperative_backend_finishes[False]
+0.05s call     tests/unit/test_rear_fan_optimization.py::test_partial_fans_exactly_match_original_pairwise_triangle_union[partial_fov]
+=========================== short test summary info ============================
+SKIPPED [2] tests/unit/test_independent_motion.py:9: could not import 'cv2': No module named 'cv2'
+424 passed, 2 skipped in 10.50s
+PYTEST_EXIT:0

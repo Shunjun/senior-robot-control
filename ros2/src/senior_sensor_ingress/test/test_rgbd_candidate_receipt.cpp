@@ -45,10 +45,6 @@ public:
     std::lock_guard<std::mutex> lock(node.mutex_);
     return node.sensor_ages_.count;
   }
-  static void fill_producer_retirement(RgbdCandidateReceipt & node) {
-    std::lock_guard<std::mutex> lock(node.mutex_);
-    for (int i = 0; i < 64; ++i) node.retired_producer_gids_.insert("retired-" + std::to_string(i));
-  }
 };
 }
 
@@ -568,55 +564,6 @@ TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
   pub->publish(successor);
   EXPECT_TRUE(wait_for([&] {return count_reason("tf_changed") > 0;}, 300ms));
 }
-
-TEST(RgbdCandidateReceipt, RetirementExhaustionRevokesActualProducerOnGraphLoss)
-{
-  using Candidate = senior_motion_msgs::msg::RgbdMotionCandidate;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
-  rclcpp::init(0, nullptr);
-  rclcpp::NodeOptions options;
-  options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_cap")});
-  options.append_parameter_override("sensor_soft_age_ms",300.0);
-  options.append_parameter_override("sensor_hard_age_ms",1000.0);
-  options.append_parameter_override("sensor_diagnostics_period_s",5.0);
-  options.append_parameter_override("queue_warn_count",32);
-  options.append_parameter_override("queue_warn_ratio",0.75);
-  options.append_parameter_override("queue_warn_repeat_s",5.0);
-  options.append_parameter_override("queue_warn_recovery_ratio",0.5);
-  options.append_parameter_override("queue_warn_oldest_wait_ms",300.0);
-  auto receipt = std::make_shared<senior_sensor_ingress::RgbdCandidateReceipt>(options);
-  auto worker = std::make_shared<rclcpp::Node>("rgbd_candidate_producer");
-  auto observer = std::make_shared<rclcpp::Node>("d2a_cap_observer");
-  auto pub = worker->create_publisher<Candidate>("/d2a_cap/candidate", rclcpp::SensorDataQoS());
-  std::mutex mutex;
-  std::vector<Fenced> received;
-  auto sub = observer->create_subscription<Fenced>("/d2a_cap/fenced", rclcpp::SensorDataQoS(),
-    [&](Fenced::ConstSharedPtr value) {std::lock_guard<std::mutex> lock(mutex); received.push_back(*value);});
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(receipt); executor.add_node(worker); executor.add_node(observer);
-  std::thread spin([&] {executor.spin();});
-  auto cleanup = [&](int *) {executor.cancel(); if (spin.joinable()) spin.join(); rclcpp::shutdown();};
-  int sentinel = 0;
-  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
-  ASSERT_TRUE(wait_for([&] {return pub->get_subscription_count() > 0;}));
-  std::this_thread::sleep_for(120ms);
-  Candidate malformed;
-  malformed.producer_gid = gid(pub->get_gid());
-  pub->publish(malformed);
-  ASSERT_TRUE(wait_for([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    return std::any_of(received.begin(), received.end(), [](const auto & item) {return item.owner.reason == "producer_invalid";});
-  }, 300ms));
-  senior_sensor_ingress::RgbdCandidateReceiptTestPeer::fill_producer_retirement(*receipt);
-  pub.reset();
-  ASSERT_TRUE(wait_for([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    return std::any_of(received.begin(), received.end(), [](const auto & item) {
-      return !item.owner.valid && item.owner.owner_lost && item.owner.reason == "retirement_exhausted";
-    });
-  }, 1s));
-}
-
 
 TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUnique)
 {

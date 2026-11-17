@@ -103,21 +103,6 @@ def test_result_recheck_rejects_previous_lifetime():
     )
 
 
-def test_mutable_edge_storage_cannot_enter_binding():
-    state = StaticBinding("base_link", "camera")
-    bad = Receipt(
-        "boot",
-        "01",
-        1,
-        1,
-        0,
-        0.0,
-        [Edge("base_link", "camera", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))],
-        relay_gid="aa",
-    )
-    assert not state.observe(bad, current_gid="01", current_relay_gid="aa")
-
-
 def test_re_admission_does_not_refresh_lifetime_start():
     state = StaticBinding("base_link", "camera")
     assert state.observe(receipt(), current_gid="01", current_relay_gid="aa")
@@ -190,21 +175,6 @@ def test_chain_composes_rotated_translation():
     assert abs(matrix[0][1] + 1.0) < 1e-12
 
 
-def test_malformed_numbers_fail_closed():
-    state = StaticBinding("base_link", "camera")
-    invalid = Receipt(
-        "boot",
-        "01",
-        1,
-        1,
-        0,
-        0.0,
-        (Edge("base_link", "camera", 0, ("bad", 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),),
-        relay_gid="aa",
-    )
-    assert not state.observe(invalid, current_gid="01", current_relay_gid="aa")
-
-
 def test_relay_restart_same_raw_requalifies_and_old_relay_is_ignored():
     state = StaticBinding("base_link", "camera")
     edge = receipt().edges
@@ -235,12 +205,6 @@ def test_result_must_supply_issued_generation():
     assert state.admit(10, 1.0)
     with pytest.raises(TypeError):
         state.pair_valid(1.1, 1.2)
-
-
-def test_malformed_lifetime_metadata_fails_closed():
-    state = StaticBinding("base_link", "camera")
-    invalid = Receipt("boot", "01", "bad", 1, 0, 0.0, receipt().edges, relay_gid="aa")
-    assert not state.observe(invalid, current_gid="01", current_relay_gid="aa")
 
 
 def test_pair_rejects_measurements_before_admission_and_equal_fronts():

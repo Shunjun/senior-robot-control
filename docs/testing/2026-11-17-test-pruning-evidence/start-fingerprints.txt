@@ -1,0 +1,4 @@
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  docs/testing/2026-11-17-test-pruning-evidence/start-git-diff.patch
+0481540f61bf5277b79ce79857edd441acc34083c3b5bd03f58dc22d48a40751  docs/testing/2026-11-17-test-pruning-evidence/start-git-status.txt
+b4e7aa60c90ec46136e78c06193f25b136b40a038e15e839a80540bc055c86c4  docs/testing/2026-11-17-test-pruning-evidence/start-head.txt
+192c8582311e821a4a0d5c5dc27437d7a94289bfcdd0fef50ab790115abf0fea  docs/testing/2026-11-17-test-pruning-evidence/start-source-inventory.txt

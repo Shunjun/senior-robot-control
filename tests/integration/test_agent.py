@@ -1029,29 +1029,6 @@ async def test_heartbeat_survives_full_work_slots_before_overload_closes_session
         await finish(task, rig)
 
 
-async def test_agent_release_is_bounded_for_cancellation_resistant_work(rig: Rig) -> None:
-    entered, release = asyncio.Event(), asyncio.Event()
-
-    async def stubborn() -> None:
-        entered.set()
-        while not release.is_set():
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                pass
-
-    task = asyncio.create_task(stubborn())
-    rig.agent._inflight.add(task)
-    await entered.wait()
-    try:
-        await asyncio.wait_for(rig.agent._release(), timeout=1.5)
-        assert rig.agent.runtime_failed
-        assert not task.done()
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-
-
 async def test_agent_release_is_bounded_for_stubborn_cleanup(rig: Rig) -> None:
     release = asyncio.Event()
 

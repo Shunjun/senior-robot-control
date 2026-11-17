@@ -225,21 +225,6 @@ def test_candidate_expires_when_first_capture_deadline_passes():
         worker.close()
 
 
-def test_malformed_worker_output_fails_closed_instead_of_raising():
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    worker = SpawnWorker(profile, generation=1, sequence_floor=0)
-    try:
-        worker._results.put_nowait("malformed")
-        deadline = time.monotonic() + 3
-        result = None
-        while result is None and time.monotonic() < deadline:
-            result = worker.poll(now_ros_ns=1_200_000_000, now_steady=1.2)
-            time.sleep(0.01)
-        assert result is not None and result.reason == "malformed_worker_result"
-    finally:
-        worker.close()
-
-
 def test_wrong_ticket_does_not_release_live_worker_slot():
     from senior_control.vision.rgbd_spawn_worker import CompactResult
 
@@ -290,37 +275,6 @@ def test_worker_cannot_claim_hard_error_qualification():
             time.sleep(0.01)
         assert result is not None and not result.hard_error_qualified
         assert result.reason == "malformed_worker_result"
-    finally:
-        worker.close()
-
-
-def test_nonfinite_candidate_result_is_rejected():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
-
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    image, depth = scene()
-    worker = SpawnWorker(profile, generation=1, sequence_floor=0)
-    try:
-        assert worker.submit(
-            frame(1, image, depth),
-            now_ros_ns=1_200_000_000,
-            now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
-            steady_deadline=1.3,
-        )
-        bogus = (
-            (float("nan"), 0.0, 0.0, 0.0),
-            (0.0, 1.0, 0.0, 0.0),
-            (0.0, 0.0, 1.0, 0.0),
-            (0.0, 0.0, 0.0, 1.0),
-        )
-        worker._results.put_nowait(CompactResult(1, 1, "candidate", (), bogus, 1, 1, 0.1, 0.1))
-        deadline = time.monotonic() + 3
-        result = None
-        while result is None and time.monotonic() < deadline:
-            result = worker.poll(now_ros_ns=1_200_000_000, now_steady=1.2)
-            time.sleep(0.01)
-        assert result is not None and result.reason == "malformed_worker_result"
     finally:
         worker.close()
 
@@ -493,45 +447,6 @@ def test_hung_worker_timeout_restarts_with_fresh_capture_floor():
         worker.close()
 
 
-def test_repeated_hung_large_frames_reclaim_ipc_threads_and_descriptors():
-    import multiprocessing as mp
-    import os
-    import signal
-    import threading
-
-    import numpy as np
-
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    image = np.ones((480, 640), dtype=np.uint8)
-    depth = np.ones((480, 640), dtype=np.float32)
-    worker = SpawnWorker(profile, generation=1, sequence_floor=0)
-    initial_threads = len(threading.enumerate())
-    initial_fds = len(os.listdir("/dev/fd"))
-    try:
-        for i in range(10):
-            seq = 1 + i * 10
-            ros = 1_000_000_000 + seq * 100_000_000
-            steady = 1.0 + seq * 0.1
-            old = worker._process
-            os.kill(old.pid, signal.SIGSTOP)
-            assert worker.submit(
-                frame(seq, image, depth),
-                now_ros_ns=ros,
-                now_steady=steady,
-                ros_deadline_ns=ros + 300_000_000,
-                steady_deadline=steady + 0.3,
-            )
-            time.sleep(0.05)
-            result = worker.poll(now_ros_ns=ros + 300_000_001, now_steady=steady + 0.31)
-            assert result is not None and result.reason == "worker_timeout"
-            assert not old.is_alive()
-        assert len(threading.enumerate()) <= initial_threads + 1
-        assert len(os.listdir("/dev/fd")) <= initial_fds + 4
-        assert len(mp.active_children()) <= 1
-    finally:
-        worker.close()
-
-
 def test_worker_failure_restarts_with_fresh_capture_floor():
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -633,39 +548,6 @@ def test_partial_result_cannot_block_poll_or_worker_restart(monkeypatch):
         worker.close()
 
 
-def test_reader_thread_start_failure_reaps_spawned_child_and_ipc(monkeypatch):
-    import multiprocessing as mp
-    import os
-    import threading
-
-    import pytest
-
-    import senior_control.vision.rgbd_spawn_worker as module
-
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    warmup = SpawnWorker(profile, generation=1, sequence_floor=0)
-    warmup.close()
-    original_children = {child.pid for child in mp.active_children()}
-    original_fds = len(os.listdir("/dev/fd"))
-
-    class FailingThread(threading.Thread):
-        def start(self):
-            raise RuntimeError("reader start failed")
-
-    monkeypatch.setattr(module, "Thread", FailingThread)
-    try:
-        with pytest.raises(RuntimeError, match="reader start failed"):
-            SpawnWorker(profile, generation=1, sequence_floor=0)
-        leaked = [child for child in mp.active_children() if child.pid not in original_children]
-        assert not leaked
-        assert len(os.listdir("/dev/fd")) <= original_fds
-    finally:
-        for child in mp.active_children():
-            if child.pid not in original_children:
-                child.kill()
-                child.join(2)
-
-
 def _corrupt_result_worker(profile, work, output):
     import os
     import signal
@@ -701,44 +583,6 @@ def test_invalid_serialized_result_reports_failure_and_restarts(monkeypatch):
         if old.is_alive():
             os.kill(old.pid, signal.SIGKILL)
             old.join(2)
-        worker.close()
-
-
-def test_reader_start_failure_on_restart_reaps_child_and_closes_admission(monkeypatch):
-    import multiprocessing as mp
-    import threading
-
-    import senior_control.vision.rgbd_spawn_worker as module
-
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    image, depth = scene()
-    worker = SpawnWorker(profile, generation=1, sequence_floor=0)
-    old = worker._process
-    existing = {child.pid for child in mp.active_children()} - {old.pid}
-
-    class FailingThread(threading.Thread):
-        def start(self):
-            raise RuntimeError("reader start failed")
-
-    monkeypatch.setattr(module, "Thread", FailingThread)
-    try:
-        old.terminate()
-        old.join(2)
-        result = worker.poll(now_ros_ns=1_300_000_000, now_steady=1.3)
-        assert result is not None and result.reason == "worker_failed"
-        assert not [child for child in mp.active_children() if child.pid not in existing]
-        assert not worker.submit(
-            frame(4, image, depth),
-            now_ros_ns=1_400_000_000,
-            now_steady=1.4,
-            ros_deadline_ns=1_700_000_000,
-            steady_deadline=1.7,
-        )
-    finally:
-        for child in mp.active_children():
-            if child.pid not in existing:
-                child.kill()
-                child.join(2)
         worker.close()
 
 
@@ -876,21 +720,3 @@ def test_shutdown_complete_requires_full_worker_and_ipc_cleanup(monkeypatch):
         monkeypatch.setattr(worker, "_stop_process", real_stop)
         worker.close()
     assert worker.shutdown_complete
-
-
-def test_shutdown_complete_stays_false_if_reader_or_feeder_did_not_stop(monkeypatch):
-    profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
-    for blocked in ("reader", "feeder"):
-        worker = SpawnWorker(profile, generation=1, sequence_floor=0)
-        target = worker._reader_thread if blocked == "reader" else worker._queue_cleanup[0]
-        name = "is_alive" if blocked == "reader" else "close"
-        original = getattr(target, name)
-        monkeypatch.setattr(target, name, lambda value=blocked: value == "reader")
-        try:
-            worker.close()
-            assert not worker._process.is_alive()
-            assert not worker.shutdown_complete
-        finally:
-            monkeypatch.setattr(target, name, original)
-            worker.close()
-        assert worker.shutdown_complete

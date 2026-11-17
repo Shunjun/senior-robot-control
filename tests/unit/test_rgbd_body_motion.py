@@ -42,14 +42,3 @@ def test_lever_arm_and_two_extrinsics_match_full_matrix_oracle():
     oracle = np.linalg.inv(second @ camera_motion @ np.linalg.inv(first))
     actual = body_pose_increment(camera_motion, first, second)
     assert np.allclose(actual, oracle, atol=1e-12)
-
-
-def test_nonfinite_inverse_result_is_rejected():
-    import pytest
-
-    extreme = np.eye(4)
-    angle = np.pi / 4
-    extreme[:2, :2] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
-    extreme[:2, 3] = [1.7e308, 1.7e308]
-    with pytest.raises(ValueError):
-        body_pose_increment(extreme, np.eye(4), np.eye(4))

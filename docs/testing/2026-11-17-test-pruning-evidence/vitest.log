@@ -1,0 +1,26 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+ RUN  v5.0.5 /Users/zhangshunjun/Wheel 机器人/senior-robot-control/web
+
+········································stderr | src/features/devices/devices.test.tsx > robot switching > test_switch_robot_drops_previous_state
+A component suspended inside an `act` scope, but the `act` call was not awaited. When testing React components that depend on asynchronous data, you must await the result:
+
+await act(() => ...)
+
+································································································································
+
+ Test Files  13 passed (13)
+      Tests  168 passed (168)
+   Start at  03:27:08
+   Duration  3.49s (environment 45%, tests 39%, transform 8%, import 8%)
+
+Environment  jsdom was created 13 times · 8.84s total, 45% of tracked time
+             create it once per worker with pool: 'vmThreads' (keeps per-file isolation) or isolate: false (shares it across files)
+             learn more: https://vitest.dev/guide/improving-performance#test-environments
+
+npm notice
+npm notice New minor version of npm available! 11.11.0 -> 11.21.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.21.2
+npm notice To update run: npm install -g npm@11.21.2
+npm notice
+VITEST_EXIT:0

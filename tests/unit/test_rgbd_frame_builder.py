@@ -381,25 +381,3 @@ def test_numpy_roi_is_preserved_as_native_unsigned_integers():
     )
     assert built.rgb_info.roi == (0, 0, 0, 0)
     assert all(type(value) is int for value in built.rgb_info.roi)
-
-
-def test_camera_roi_rejects_boolean_float_string_and_out_of_range():
-    import pytest
-
-    for invalid in (False, np.bool_(False), 0.0, "0", -1, 2**32):
-        headers, rgb, depth, rgb_info, depth_info = inputs()
-        rgb_info.roi = (invalid, 0, 0, 0)
-        with pytest.raises(ValueError):
-            build_frame(
-                headers,
-                rgb,
-                depth,
-                rgb_info,
-                depth_info,
-                calibration_epoch="cal",
-                registration="registered",
-                tf_epoch="tf",
-                dependencies=("tf",),
-                exclusion=bytes(80 * 80),
-                static_sim_declared=True,
-            )

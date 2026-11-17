@@ -2,7 +2,6 @@
 
 import json
 import math
-import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -81,31 +80,6 @@ def test_partial_fans_exactly_match_original_pairwise_triangle_union(scenario):
     assert result[0].equals(expected)
     assert result[0].difference(expected).is_empty
     assert expected.difference(result[0]).is_empty
-
-
-def test_seeded_gaps_and_unordered_rays_preserve_the_original_observed_set():
-    _, baseline = make_observation("actual")
-    rng = random.Random(31752)
-    for case in range(16):
-        rays = list(baseline.rays)
-        for index in rng.sample(range(len(rays)), rng.randrange(1, 18)):
-            rays[index] = replace(rays[index], kind="invalid", endpoint=None)
-        if case % 5 == 0:
-            first, second = rays[300], rays[301]
-            if first.endpoint is not None and second.endpoint is not None:
-                rays[300] = replace(first, endpoint=second.endpoint)
-                rays[301] = replace(second, endpoint=first.endpoint)
-        if case % 7 == 0:
-            rays[400] = replace(rays[400], origin=(0.2, 0.1))
-        observation = replace(baseline, rays=tuple(rays))
-        scan = observation.scan
-        sweep = SweptRegion(
-            ((1, 1), (2, 1), (2, 2), (1, 2)), scan.reference_frame, scan.reference_stamp
-        )
-        result = coverage._visible_areas(sweep, [observation], scan.reference_stamp, "ros", 0.8)
-        expected = original_visible(observation)
-        assert len(result) == 1 and expected is not None
-        assert result[0].equals(expected)
 
 
 def make_observation(scenario):

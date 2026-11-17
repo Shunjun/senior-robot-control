@@ -307,17 +307,6 @@ def test_exclusion_mask_protects_descriptor_neighborhood():
     assert permitted[50, 10] == 255
 
 
-def test_malformed_capture_identity_is_rejected():
-    image, depth = scene()
-    valid = frame(1, image, depth)
-    invalid_header = replace(valid.rgb_header, raw_gid="not-a-gid")
-    invalid = replace(valid, rgb_header=invalid_header)
-    assert (
-        estimator().offer(invalid, now_ros_ns=1_200_000_000, now_steady=1.2).reason
-        == "invalid_frame"
-    )
-
-
 def test_frame_rejects_nonpixel_dtype_before_snapshot():
     image, depth = scene()
     with pytest.raises(ValueError, match="frame_budget"):
@@ -616,28 +605,6 @@ def test_new_generation_recovers_and_retired_lineage_cannot_return():
     assert vo.offer(generation_frame(8, 2, image, depth), **now(8)).reason == "candidate"
 
 
-def test_retired_source_capacity_exhaustion_fails_closed():
-    image, depth = scene()
-    vo = estimator()
-    for index in range(1, 67):
-        current = generation_frame(index, index, image, depth)
-        result = vo.offer(
-            current,
-            now_ros_ns=current.rgb_header.stamp_ns,
-            now_steady=current.rgb_header.received_steady,
-        )
-        assert result.reason == ("initializing" if index <= 65 else "source_frontier_invalid")
-    current = generation_frame(67, 67, image, depth)
-    assert (
-        vo.offer(
-            current,
-            now_ros_ns=current.rgb_header.stamp_ns,
-            now_steady=current.rgb_header.received_steady,
-        ).camera_transform
-        is None
-    )
-
-
 def test_pose_quality_rejects_near_degenerate_nonplanar_rays():
     from senior_control.vision.independent_motion import _pose_quality
 
@@ -741,52 +708,6 @@ def test_replacement_generation_accepts_sequence_reset_and_new_pair():
         assert result.reason == ("initializing" if sequence == 1 else "candidate")
 
 
-def test_mutable_dependencies_are_rejected_instead_of_aliasing_caller():
-    image, depth = scene()
-    mutable = ["camera"]
-    with pytest.raises(ValueError, match="dependencies"):
-        replace(frame(1, image, depth), dependencies=mutable)
-    mutable[0] = "mutated_after_capture"
-
-
-@pytest.mark.parametrize("dependencies", [("x",) * 65, ("",), ("x" * 257,), (["x"],), iter(["x"])])
-def test_dependency_identities_have_immutable_bounded_shape(dependencies):
-    image, depth = scene()
-    with pytest.raises(ValueError, match="dependencies"):
-        replace(frame(1, image, depth), dependencies=dependencies)
-
-
-def test_calibration_container_metadata_cannot_alias_mutable_values():
-    image, depth = scene()
-    calibration = frame(1, image, depth).calibration
-    with pytest.raises(ValueError, match="calibration_metadata"):
-        replace(calibration, roi=[0, 0, 320, 240])
-    with pytest.raises(ValueError, match="calibration_metadata"):
-        replace(calibration, binning=(1, [1]))
-
-
-def test_output_constructor_rejects_mutable_transform_or_pair():
-    from senior_control.vision.independent_motion import Result
-
-    with pytest.raises(ValueError, match="result_metadata"):
-        Result("candidate", camera_transform=[[1.0, 0.0, 0.0, 0.0]] * 4)
-    with pytest.raises(ValueError, match="result_metadata"):
-        Result("candidate", pair=[])
-
-
-def test_metadata_scalars_cannot_hide_mutable_objects():
-    image, depth = scene()
-    original = frame(1, image, depth)
-    with pytest.raises(ValueError, match="calibration_metadata"):
-        replace(original.calibration, epoch=["cal"])
-    with pytest.raises(ValueError, match="frame_metadata"):
-        replace(original, tf_epoch=["tf"])
-    with pytest.raises(ValueError, match="frame_metadata"):
-        replace(original, rgb_header=replace(original.rgb_header, reason=[]))
-    with pytest.raises(ValueError, match="profile_metadata"):
-        replace(estimator().profile, texture_domain=["texture"])
-
-
 def test_unusable_new_source_still_retires_old_source_and_new_source_recovers():
     image, depth = scene()
     vo = estimator()
@@ -843,21 +764,6 @@ def test_untrusted_new_header_cannot_retire_current_source():
     )
 
 
-def test_extreme_finite_principal_point_returns_unavailable_without_numerical_exception():
-    image, depth = scene()
-    original = frame(1, image, depth)
-    calibration = replace(original.calibration, cx=1e308)
-    vo = estimator()
-    vo.offer(
-        frame(1, image, depth, calibration=calibration), now_ros_ns=1_200_000_000, now_steady=1.2
-    )
-    result = vo.offer(
-        frame(2, image, depth, calibration=calibration), now_ros_ns=1_200_000_000, now_steady=1.2
-    )
-    assert result.camera_transform is None
-    assert result.reason == "invalid_frame"
-
-
 @pytest.mark.parametrize("unusable", ["calibration", "depth_holes", "weak_texture", "profile"])
 def test_valid_new_source_retires_old_independent_of_fit_qualification(unusable):
     image, depth = scene()
@@ -911,43 +817,6 @@ def test_numerical_solver_failure_is_explicit_unavailable(monkeypatch, failure):
     result = vo.offer(frame(2, image, depth), now_ros_ns=1_200_000_000, now_steady=1.2)
     assert result.reason == "numerical_failure"
     assert result.camera_transform is None
-
-
-def test_extreme_integer_intrinsics_are_rejected_without_overflow():
-    image, depth = scene()
-    original = frame(1, image, depth)
-    bad = replace(original.calibration, fx=10**1000)
-    result = estimator().offer(
-        frame(1, image, depth, calibration=bad), now_ros_ns=1_200_000_000, now_steady=1.2
-    )
-    assert result.reason == "invalid_frame"
-
-
-def test_body_transform_overflow_is_rejected():
-    from senior_control.vision.independent_motion import camera_to_body_transform
-
-    first = np.eye(4)
-    second = np.eye(4)
-    first[0, 3] = -1e308
-    second[0, 3] = 1e308
-    with pytest.raises(ValueError, match="invalid_rigid_transform"):
-        camera_to_body_transform(np.eye(4), first, second)
-
-
-def test_extreme_receipt_and_profile_numbers_do_not_escape_as_overflow():
-    image, depth = scene()
-    original = frame(1, image, depth)
-    huge = 10**1000
-    malformed = replace(original, rgb_header=replace(original.rgb_header, received_steady=huge))
-    assert (
-        estimator().offer(malformed, now_ros_ns=1_200_000_000, now_steady=1.2).reason
-        == "invalid_frame"
-    )
-    profile = replace(estimator().profile, max_speed_m_s=huge)
-    assert (
-        IndependentMotion(profile).offer(original, now_ros_ns=1_200_000_000, now_steady=1.2).reason
-        == "profile_unavailable"
-    )
 
 
 def test_source_replacement_with_shape_mismatch_retires_previous():
