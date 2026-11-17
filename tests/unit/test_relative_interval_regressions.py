@@ -362,3 +362,27 @@ def test_exact_three_axis_reproduction_is_bounded_without_resetting_global_error
     assert rows[1][:2] == pytest.approx(rows[0][:2], abs=1e-10)
     assert rows[2][:2] == pytest.approx(rows[0][:2], abs=1e-10)
     assert rows[2][2] > rows[1][2] > rows[0][2]
+
+
+def test_epoch_nanosecond_recorded_path_requires_exact_continuous_coverage():
+    from senior_control.motion.estimator import MotionPath, MotionPathSegment
+    from senior_control.sensors.sample_time import StampInterval
+
+    e = MotionEstimation()
+    assert e.ingest(sample(1.0, 1, lateral=0.0))
+    motion = e.estimate(1.0, 101.0)
+    axes = (motion.vx, motion.vy, motion.wz)
+    start = 1_700_000_000_000_000_001
+    end = start + 100_000_000
+    segment = MotionPathSegment(StampInterval(start, end), 101.0, 101.1, axes, None)
+    path = MotionPath("exact", end, 101.1, (segment,), axes, None)
+    motion = replace(motion, path=path)
+    p = PoseEstimation()
+    delta, _, roots, travel = p._recorded_prediction(motion, start, end)
+    assert delta.x == pytest.approx(0.02)
+    assert delta.y == 0 and delta.yaw == 0
+    assert travel == pytest.approx(0.02) and roots == motion.vx.roots
+    # A real one-nanosecond gap must not disappear through float rounding.
+    motion = replace(motion, path=replace(path, stamp_ns=end + 1))
+    with pytest.raises(ValueError, match="history was evicted"):
+        p._recorded_prediction(motion, start, end + 1)

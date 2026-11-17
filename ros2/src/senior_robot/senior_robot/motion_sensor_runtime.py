@@ -178,7 +178,14 @@ class MotionSensorRuntime:
             ),
         )
         self.sequence += 1
-        r = self.latest = self.estimator.estimate(now_ros, now_steady, stamp_ns=now_ros_ns)
+        generation = self.estimator.generation
+        r = self.estimator.estimate(now_ros, now_steady, stamp_ns=now_ros_ns)
+        if r.generation != generation:
+            # The owner revoked its window; raw recovery evidence shares that window.
+            # Only subsequent accepted raw inputs can rebuild these caches.
+            self.raw_wheel = None
+            self.raw_imu = None
+        self.latest = r
         self.pose_estimator.advance(r)
         gyro = None if r.independent_axes is None else r.independent_axes[1]
         self.gps_course.record_motion(

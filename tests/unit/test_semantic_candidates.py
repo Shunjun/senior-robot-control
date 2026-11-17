@@ -183,21 +183,24 @@ def wire_depth(stamp_ns=1_000_000_000):
     )
 
 
-def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable():
+@pytest.mark.parametrize("stamp_ns", [0, 1_000_000_000])
+def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable(stamp_ns):
     from senior_control.vision.semantic_runtime import depth_snapshot
 
-    wire = wire_depth()
+    wire = wire_depth(stamp_ns)
     depth = depth_snapshot(wire)
     assert depth.samples[0].z == 1.0
+    assert depth.stamp_ns == stamp_ns
+    assert depth.received_ros_ns == depth.info_received_ros_ns == stamp_ns
     wire.samples[0].z = 2.0
     assert depth.samples[0].z == 1.0
     with pytest.raises(ValueError):
         depth_snapshot(wire)
-    wire = wire_depth()
+    wire = wire_depth(stamp_ns)
     wire.samples *= 8193
     with pytest.raises(ValueError):
         depth_snapshot(wire)
-    wire = wire_depth()
+    wire = wire_depth(stamp_ns)
     wire.source_epoch = ""
     with pytest.raises(ValueError):
         depth_snapshot(wire)

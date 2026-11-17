@@ -80,8 +80,8 @@ class PoseEstimate:
 
 @dataclass(frozen=True)
 class _RelativeSegment:
-    start_measurement: float
-    end_measurement: float
+    start_measurement: int
+    end_measurement: int
     rates: tuple[float, float, float]
     motion: MotionEstimate
     missing_linear: bool
@@ -97,7 +97,7 @@ class _PoseCandidate:
     errors: tuple[float | None, float | None, float | None]
     alignment: tuple[float, float, float]
     quality: float
-    raw_time: float
+    raw_time: int
     prediction_error: PoseErrorBudget
     anchor_roots: tuple[Origin, ...]
 
@@ -165,7 +165,7 @@ class PoseEstimation:
         self._segments.clear()
         self._path_serial += 1
 
-    def _interval_error(self, start: float, end: float) -> PoseErrorBudget:
+    def _interval_error(self, start: int, end: int) -> PoseErrorBudget:
         """Reintegrate only this path interval, starting in the old body frame.
 
         The prefix before start is the same uncertain SE(2) transform at both
@@ -179,7 +179,7 @@ class PoseEstimation:
             left, right = max(start, segment.start_measurement), min(end, segment.end_measurement)
             if right <= left:
                 continue
-            if left - cursor > 1e-9:
+            if left > cursor:
                 gap = (left - cursor) / 1e9
                 result = result.plus(
                     PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
@@ -194,7 +194,7 @@ class PoseEstimation:
             )
             result = result.plus(step)
             cursor = right
-        if end - cursor > 1e-9:
+        if end > cursor:
             gap = (end - cursor) / 1e9
             result = result.plus(
                 PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
@@ -220,7 +220,7 @@ class PoseEstimation:
                 right = min(end, segment.interval.end_ns)
                 if right <= left:
                     continue
-                if left > cursor + 1e-9:
+                if left > cursor:
                     raise ValueError("recorded pose prediction has an unknown prefix")
                 dt = (right - left) / 1e9
                 axes = segment.axes
@@ -244,7 +244,7 @@ class PoseEstimation:
                 travel += math.hypot(step.x, step.y)
                 dependencies.extend(root for axis in axes for root in axis.roots)
                 cursor = right
-            if cursor < min(end, path.stamp_ns) - 1e-9:
+            if cursor < min(end, path.stamp_ns):
                 raise ValueError("recorded pose prediction history was evicted")
         if cursor < end:
             dt = (end - cursor) / 1e9

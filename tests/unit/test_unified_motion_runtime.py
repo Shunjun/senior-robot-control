@@ -244,3 +244,46 @@ def test_invalid_scan_motion_withdraws_source_without_fabricating_endpoints():
     invalid = N(header=N(frame_id="base_link"), valid=False, reason="source_changed")
     assert not ingress.laser(invalid, b"writer", 10, 20)
     assert runtime.estimate(10, 20)[1] is None
+
+
+def test_ros_rollback_revokes_raw_stillness_and_recovery_until_new_inputs():
+    from dataclasses import replace
+
+    s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
+    wheel = point(Source.WHEEL, 9.9, 19.9, (0.0, 0.0))
+    imu = point(Source.IMU, 9.9, 19.9, (0.0,))
+    assert s.ingest(wheel, 10, 20)
+    assert s.ingest(imu, 10, 20)
+    s.estimate(10, 20)
+    generation = s.latest.generation
+    assert s.stationary(20)
+    assert s.recovery(20).manual_rearm_ready
+
+    s.estimate(9, 20.1)
+    assert s.latest.generation == generation + 1 and not s.latest.healthy
+    assert s.raw_wheel is None and s.raw_imu is None
+    assert s.raw_feedback("wheel", 20.1) is None
+    assert s.raw_feedback("imu", 20.1) is None
+    assert s.wheel_linear(20.1) is None
+    assert not s.stationary(20.1) and s.recovery(20.1) is None
+    # Even a higher sequence cannot revive the retired source segment.
+    assert not s.ingest(replace(wheel, sequence=2), 9, 20.1)
+    assert not s.ingest(replace(imu, sequence=2), 9, 20.1)
+    s.estimate(9, 20.1)
+    assert not s.stationary(20.1) and s.recovery(20.1) is None
+
+    new_wheel = replace(point(Source.WHEEL, 9.1, 20.2, (0.0, 0.0)), epoch="new")
+    new_imu = replace(point(Source.IMU, 9.1, 20.2, (0.0,)), epoch="new")
+    assert s.ingest(new_wheel, 9.1, 20.2)
+    s.estimate(9.1, 20.2)
+    assert s.raw_feedback("wheel", 20.2) is not None
+    assert not s.stationary(20.2) and s.recovery(20.2) is None
+    assert s.ingest(new_imu, 9.1, 20.2)
+    s.estimate(9.1, 20.2)
+    recovery = s.recovery(20.2)
+    assert recovery.healthy and recovery.stationary and recovery.manual_rearm_ready
+    assert recovery.stamp_steady == 20.2
+    assert recovery.deadline_steady == pytest.approx(21.2)
+    s.estimate(9.2, 20.3)
+    assert s.recovery(20.3).deadline_steady == recovery.deadline_steady
+    assert not s.stationary(21.2) and s.recovery(21.2) is None

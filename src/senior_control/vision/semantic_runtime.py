@@ -236,8 +236,8 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
         not wire.valid
         or stamp < 0
         or info_stamp != stamp
-        or received <= 0
-        or info_received <= 0
+        or received < 0
+        or info_received < 0
         or int(wire.sequence) <= 0
         or not _text(wire.frame_id, 128)
         or not _text(wire.body_frame, 128)
