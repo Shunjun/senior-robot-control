@@ -475,6 +475,7 @@ class BrakingProof:
     deadline_steady: float | None
     # //Compatible: existing standalone brake callers need no prediction payload.
     prediction: StopPrediction | None = None
+    blocked_sweep: BaseGeometry | None = None  # Existing occupied-frame geometry, diagnostics only.
 
 
 class ConstraintEngine:
@@ -637,7 +638,14 @@ class ConstraintEngine:
             yaw,
         )
 
-    def _clear(self, c: SweepCertificate, s: ConstraintSnapshot, now: float) -> str | None:
+    def _clear(
+        self,
+        c: SweepCertificate,
+        s: ConstraintSnapshot,
+        now: float,
+        *,
+        blocked_sweeps: list[BaseGeometry] | None = None,
+    ) -> str | None:
         assert s.envelope is not None
         if (
             s.perception.stamp_steady + s.perception.forecast_horizon_s < now + c.horizon_s
@@ -648,6 +656,8 @@ class ConstraintEngine:
         if not world.is_valid or not math.isfinite(world.area) or world.area <= 0:
             return "geometry_numeric_range"
         if world.intersects(s.perception.occupied):
+            if blocked_sweeps is not None:
+                blocked_sweeps.append(world)  # Retain this exact projection; never recompute it.
             return "sweep_obstructed"
         visibility = (
             s.startup_visibility if s.target.source in {"idle", "startup_learning"} else None
@@ -672,17 +682,21 @@ class ConstraintEngine:
         if error:
             return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, error, False), None)
         prediction = None
+        blocked_sweeps: list[BaseGeometry] = []
         try:
             prediction = self.stop_prediction(s)
             c = self._sweep(s, Velocity(0, 0), stop_only=True, coarse=True, prediction=prediction)
-            reason = self._clear(c, s, now)
+            reason = self._clear(c, s, now, blocked_sweeps=blocked_sweeps)
         except ValueError as error:
             return BrakingProof(
                 BrakeRequest(BrakeKind.CONTROLLED, str(error), False), None, prediction
             )
         if reason == "sweep_obstructed":
             return BrakingProof(
-                BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False), None, prediction
+                BrakeRequest(BrakeKind.EMERGENCY, "stop_envelope_blocked", False),
+                None,
+                prediction,
+                blocked_sweeps[0],
             )
         if reason:
             return BrakingProof(BrakeRequest(BrakeKind.CONTROLLED, reason, False), None, prediction)
@@ -979,6 +993,11 @@ class TickEvaluation:
         self._base_stop()
         assert self._proof is not None
         return self._proof.prediction
+
+    @property
+    def blocked_stop_sweep(self) -> BaseGeometry | None:
+        """Read the already-computed blocked geometry; never initiate evaluation."""
+        return None if self._proof is None else self._proof.blocked_sweep
 
     def zero_stop(self) -> ConstraintResult:
         stopping = replace(
