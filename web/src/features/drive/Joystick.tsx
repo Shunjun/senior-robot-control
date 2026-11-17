@@ -13,6 +13,8 @@ export interface JoystickProps {
   hint: string;
   disabled: boolean;
   resetToken: number;
+  /** A real press edge; false leaves the stick unheld. */
+  onPress: (value: number) => boolean;
   /** Held at `value` in [-1, 1]. Positive is forward (vertical) or a left turn (horizontal). */
   onChange: (value: number) => void;
   onRelease: (reason: ReleaseReason) => void;
@@ -37,6 +39,7 @@ export function Joystick({
   hint,
   disabled,
   resetToken,
+  onPress,
   onChange,
   onRelease,
 }: JoystickProps): ReactElement {
@@ -44,8 +47,8 @@ export function Joystick({
   const [value, setValue] = useState(0);
   const pointer = useRef<number | null>(null);
   const key = useRef<string | null>(null);
-  const callbacks = useRef({ onChange, onRelease });
-  callbacks.current = { onChange, onRelease };
+  const callbacks = useRef({ onPress, onChange, onRelease });
+  callbacks.current = { onPress, onChange, onRelease };
 
   function held(): boolean {
     return pointer.current !== null || key.current !== null;
@@ -111,13 +114,15 @@ export function Joystick({
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>): void {
     if (disabled || pointer.current !== null) return;
+    const next = Math.round(fromPointer(event) * 20) / 20 || 0;
+    if (!callbacks.current.onPress(next)) return;
     pointer.current = event.pointerId;
+    setValue(next);
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
       // The pointer may already be gone; the stick still follows the events it gets.
     }
-    hold(fromPointer(event));
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>): void {
@@ -141,8 +146,9 @@ export function Joystick({
     event.preventDefault();
     // Auto-repeat is not a new press; the drive view resends on its own clock.
     if (event.repeat || key.current === event.key) return;
+    if (!callbacks.current.onPress(next)) return;
     key.current = event.key;
-    hold(next);
+    setValue(next);
   }
 
   function onKeyUp(event: KeyboardEvent<HTMLDivElement>): void {

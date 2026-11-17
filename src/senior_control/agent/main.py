@@ -528,6 +528,8 @@ class Agent:
 
     def _safety_key(self, envelope: Envelope) -> tuple[str, int, str]:
         identity = envelope.session_id
+        if envelope.type == "drive.stop" and envelope.payload.authority_id is not None:
+            identity = json.dumps((identity, envelope.payload.authority_id, envelope.payload.gesture))
         if envelope.type == "safety.estop":
             # Distinct user events require distinct request receipts, even when
             # queued in the same session. Only identical transport retries merge.
@@ -615,7 +617,19 @@ class Agent:
             if self._intent_task is None or self._intent_task.done():
                 self._intent_task = self._spawn(self._drain_intent())
             return
-        if envelope.type in HALT_TYPES or envelope.type == "control.release":
+        if envelope.type == "drive.stop" and envelope.payload.authority_id is not None:
+            queued = self._queued_intent
+            if queued is not None:
+                intent = queued[1]
+                if (
+                    intent.session_id == envelope.session_id
+                    and intent.connection_epoch == envelope.connection_epoch
+                    and intent.controller_generation == envelope.controller_generation
+                    and intent.payload.authority_id == envelope.payload.authority_id
+                    and intent.payload.gesture <= envelope.payload.gesture
+                ):
+                    self._discard_queued_intent()
+        elif envelope.type in HALT_TYPES or envelope.type == "control.release":
             self._discard_queued_intent()
         if envelope.type in HALT_TYPES:
             key = self._safety_key(envelope)

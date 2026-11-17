@@ -200,6 +200,26 @@ class CommandNode(Node):
             return receipt
         source_closed = False
         if envelope.type == "drive.stop" and hasattr(self, "_manual_ingress"):
+            identity, gesture = envelope.payload.authority_id, envelope.payload.gesture
+            if identity is not None:
+                context = self._manual_ingress.context
+                if context is None or (
+                    envelope.connection_epoch, envelope.controller_generation, envelope.session_id
+                ) != (context.agent_epoch, context.controller_generation, context.session_id):
+                    return CommandResult(False, ErrorCode.CONFLICT)
+                if gesture is None or not self._manual_ingress.stop(
+                    identity, gesture, self._monotonic_clock.monotonic()
+                ):
+                    return CommandResult(False, ErrorCode.CONFLICT)
+                target = self._manual_target
+                if target is not None and target.sample.intent.authority_id == identity and (
+                    target.sample.intent.gesture <= gesture
+                ):
+                    self._close_manual("release")
+                # A stale stop must not publish a barrier over a newer gesture.
+                self.publish_command()
+                return CommandResult(True)
+            # //Compatible: unscoped safety stops still revoke the whole authority.
             self._manual_ingress.revoke(self._monotonic_clock.monotonic())
             self._close_reason = "release"
             source_closed = self._close_manual("release")
@@ -924,6 +944,8 @@ class CommandNode(Node):
             )
             if sample is None:
                 return {"ok": False, "accepted": False, "error": "conflict"}
+            if self._manual_target is None:
+                self._generation += 1
             self._manual_target = replace(sample, request_id=envelope.request_id)
             self.publish_command()
             return {"ok": True, "accepted": True}

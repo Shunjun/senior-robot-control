@@ -222,10 +222,23 @@ class ManualAuthorityManager:
         return True
 
     def stop(
-        self, context: ManualAuthorityContext, authority_id: str, *, now_steady: float
+        self, context: ManualAuthorityContext, authority_id: str, gesture: int, *, now_steady: float
     ) -> bool:
-        """Ordinary release/stop also closes the entire authority, not just gesture."""
-        return self.release(context, authority_id, now_steady=now_steady)
+        """Finish only the named gesture; idle permission has no motion TTL."""
+        if not self._observe(now_steady) or context != self._context or self._context_retired:
+            return False
+        record = self._authorities.get(authority_id)
+        if record is None or record.receipt.state is ManualAuthorityState.CLOSED:
+            return False
+        if type(gesture) is not int or gesture < 1:
+            return False
+        if record.session is None:
+            record.session = ManualSession(authority_id, ttl=self._ttl, now_steady=now_steady)
+        if not record.session.stop(gesture, now_steady=now_steady):
+            return False
+        if record.session.idle:
+            record.receipt = replace(record.receipt, state=ManualAuthorityState.PREPARED)
+        return True
 
     def revoke(self, *, now_steady: float) -> None:
         """Close current permission on a fault or other trusted owner revocation."""
