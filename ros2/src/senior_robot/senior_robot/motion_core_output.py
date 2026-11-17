@@ -121,6 +121,9 @@ class MotionCoreOutput:
         from senior_robot.motion_core_perception import ScanGeometry
 
         self.scan_geometry = self._own(ScanGeometry())
+        self._scan_flight_started = None
+        self._scan_job_status = {}
+        self._first_fault_status = {}
         self._space_estimate = None
         self._perception: Perception | None = None
         self.space_estimator = SpaceEstimation(
@@ -143,11 +146,26 @@ class MotionCoreOutput:
         self._diagnostic_pump = self._own(DiagnosticPump(self.diagnostics))
         self._runtime_type = String
 
-    def _event(self, kind: K, now: float, source: str = "", revision: int = 0) -> None:
+    def _record_first_fault(self, now, detector, source=""):
+        state = self.machine.state
+        if state.fault_revision > 0 and not self._first_fault_status:
+            self._first_fault_status = dict(
+                sampled_steady=now,
+                revision=state.fault_revision,
+                detector=detector,
+                state_reason=state.reason,
+                source=source,
+                target_source=self.target.source,
+            )
+
+    def _event(
+        self, kind: K, now: float, source: str = "", revision: int = 0, *, detail: str = ""
+    ) -> None:
         self.event_sequence += 1
         self.machine.reduce(
             MotionEvent(kind, source, revision, self.event_sequence), now_steady=now
         )
+        self._record_first_fault(now, detail or kind.value, source)
         if kind in {K.FEEDBACK_LOST, K.EXECUTION_FAULT}:
             if (
                 kind is K.FEEDBACK_LOST
@@ -308,6 +326,7 @@ class MotionCoreOutput:
                 if evidence is None:
                     return False
                 self.machine.observe(evidence, now)
+                self._record_first_fault(now, "recovery_observation")
                 self._event(
                     K.ESTOP_RESET if reason == "estop_reset" else K.FAULT_RECOVER,
                     now,
@@ -619,7 +638,9 @@ class MotionCoreOutput:
         _, masked = self._filtered_scan(raw)
         key = (m.source_epoch, m.sequence, key[2], self._filter_key())
         policy = self.profile.perception_no_return_policy(m.frame_id, m.range_max)
-        return self.scan_geometry.update(
+        previous = self.scan_geometry.flight
+        previous_key = self.scan_geometry.flight_key
+        result = self.scan_geometry.update(
             key,
             partial(
                 prepare_scan_geometry,
@@ -637,6 +658,49 @@ class MotionCoreOutput:
                 ),
             ),
             snapshot=raw,
+        )
+        self._record_scan_job(previous, previous_key, key, deadline)
+        return result
+
+    def _record_scan_job(self, previous, previous_key, key, deadline):
+        now = time.monotonic()
+        geometry = self.scan_geometry
+        flight, ready = geometry.flight, geometry.ready
+        status = self._scan_job_status
+        if previous is not None and flight is not previous:
+            # update() has already consumed this completed Future; no extra poll.
+            error = None if previous.cancelled() else previous.exception(timeout=0)
+            status["last_error"] = "cancelled" if previous.cancelled() else str(error or "")[:256]
+            status["completed"] = status.get("completed", 0) + 1
+            status["last_scope_matches"] = geometry.scope(previous_key) == geometry.scope(key)
+            status["last_flight_ms"] = (
+                None
+                if self._scan_flight_started is None
+                else (now - self._scan_flight_started) * 1000
+            )
+        if flight is not previous:
+            self._scan_flight_started = now if flight is not None else None
+        process = getattr(geometry.worker, "process", None)
+        status.update(
+            sampled_steady=now,
+            worker_pid=None if process is None else process.pid,
+            worker_alive=None if process is None else process.is_alive(),
+            requested_revision=key[1],
+            requested_alignment=key[2],
+            flight_revision=None if flight is None else geometry.flight_key[1],
+            flight_scope_matches=flight is not None
+            and geometry.scope(geometry.flight_key) == geometry.scope(key),
+            flight_waiting_mailbox=flight is not None
+            and getattr(flight, "_pending_task", None) is not None,
+            flight_age_ms=None
+            if self._scan_flight_started is None
+            else (now - self._scan_flight_started) * 1000,
+            ready_revision=None if ready is None else ready.key[1],
+            ready_deadline_steady=None if ready is None else ready.perception.deadline_steady,
+            ready_remaining_ms=None
+            if ready is None
+            else (ready.perception.deadline_steady - now) * 1000,
+            requested_remaining_ms=(deadline - now) * 1000,
         )
 
     def prefetch_scan(self):
@@ -1065,7 +1129,7 @@ class MotionCoreOutput:
             else:
                 condition = (reason, epoch)
                 if condition != self._last_fault_condition:
-                    self._event(K.EXECUTION_FAULT, now)
+                    self._event(K.EXECUTION_FAULT, now, detail=reason)
                     self._last_fault_condition = condition
         elif not decision.emergency:
             self._last_fault_condition = None
@@ -1122,6 +1186,7 @@ class MotionCoreOutput:
             recovery = self.sensors.recovery(now)
             if recovery is not None:
                 self.machine.observe(recovery, now)
+                self._record_first_fault(now, "recovery_observation")
                 stamp, deadline = recovery.stamp_steady, recovery.deadline_steady
             if healthy:
                 if body is None and wheel is not None:
@@ -1317,7 +1382,14 @@ class MotionCoreOutput:
         self.diagnostics.duration("control_compute", time.monotonic() - now)
 
     def report_status(self, value):
-        self._runtime.status(value)
+        # Existing bounded status transport only; never changes a control decision.
+        values = dict(value["values"])
+        for prefix, status in (
+            ("scan_geometry", self._scan_job_status),
+            ("first_fault", self._first_fault_status),
+        ):
+            values.update({prefix + "." + key: str(item) for key, item in status.items()})
+        self._runtime.status({**value, "values": values})
 
     def close(self) -> None:
         self._closed = True
