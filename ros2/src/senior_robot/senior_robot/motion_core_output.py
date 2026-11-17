@@ -1114,7 +1114,9 @@ class MotionCoreOutput:
 
     def _first_fault_scan_evidence(self, ctx):
         """Report actual latest hit coordinates, not an inferred collision witness."""
+        from shapely.affinity import rotate, translate
         from shapely.geometry import Point, Polygon
+        from shapely.ops import nearest_points
 
         masked = self._latest_masked
         body = Polygon(ctx.footprint.physical_vertices)
@@ -1143,6 +1145,24 @@ class MotionCoreOutput:
             latest_interior_hits=sum(body.contains(point) for _, point in points),
             closest_latest_external_hit=None,
         )
+        # _observation keeps retained scan and latest guard as separate parts.
+        # These points include their existing error expansion; they are not raw hits.
+        world_body = translate(
+            rotate(body, ctx.pose.yaw, origin=(0, 0), use_radians=True), ctx.pose.x, ctx.pose.y
+        )
+        cosine, sine = math.cos(ctx.pose.yaw), math.sin(ctx.pose.yaw)
+        for source, occupied in zip(
+            ("retained_scan", "latest_scan_guard"), ctx.perception.occupied.geoms, strict=True
+        ):
+            value = None
+            if not occupied.is_empty:
+                point = nearest_points(world_body, occupied)[1]
+                dx, dy = point.x - ctx.pose.x, point.y - ctx.pose.y
+                value = dict(
+                    body_xy=(cosine * dx + sine * dy, -sine * dx + cosine * dy),
+                    physical_body_clearance_m=world_body.distance(occupied),
+                )
+            evidence[source + "_expanded_occupied"] = value
         if closest is not None:
             ray, point = closest
             evidence["closest_latest_external_hit"] = dict(
