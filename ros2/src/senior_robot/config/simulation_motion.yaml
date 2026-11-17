@@ -18,8 +18,8 @@ scan_motion_node:
     use_sim_time: true
     body_frame: base_link
     max_interval_ms: 400.0
-    max_linear_speed: 0.5
-    max_yaw_rate: 0.8
+    max_linear_speed: 1.52
+    max_yaw_rate: 2.0
     range_limit: 8.0
     min_response: 0.3
     max_residual: 0.09
@@ -34,16 +34,12 @@ scan_motion_node:
 safety_gate:
   ros__parameters:
     wheel_frame: odom
-    # fortress-candidate-unvalidated-v1 requires localhost + simulated clock.
-    # See simulation_motion_profile.py for individual evidence vs assumptions.
-    motion_core_profile: fortress-candidate-unvalidated-v1
     startup_learning_front_occlusion_stop: true
     startup_learning_rear_occlusion_stop: true
     use_sim_time: true
     # This earlier motion-only fixture deliberately does not qualify low obstacles.
     depth_policy: laser_only
     body_frame: base_link
-    simulation_rate_hz: 20.0
     footprint_xy: [-0.337, -0.276, 0.337, -0.276, 0.337, 0.276, -0.337, 0.276]
 command_node:
   ros__parameters:

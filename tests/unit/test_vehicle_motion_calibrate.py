@@ -234,18 +234,33 @@ def test_motion_evidence_rejects_replayed_truth_and_spinning_start():
 
     assert hasattr(calibration, "SimulationSample"), "typed simulation evidence is required"
     plan = CalibrationPlan.from_dict(plan_data(), hard_seconds=8)
-    sample = calibration.SimulationSample(1.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    from senior_control.sensors.sample_time import map_sample
+
+    def timing(stamp):
+        return map_sample(
+            stamp_ns=stamp,
+            received_ros_ns=1_000_000_000,
+            received_steady_ns=10_000_000_000,
+            clock_generation=1,
+        )
+
+    sample = calibration.SimulationSample(timing(1_000_000_000), 0.0, 0.0, 0.0, 0.0, 0.0)
     calibration.validate_motion_evidence(
-        plan, clock=(10.0, 1.0), clock_advanced=10.0, truth=sample, now=10.0, require_origin=True
+        plan,
+        clock=(10.0, 1_000_000_000),
+        clock_advanced=10.0,
+        truth=sample,
+        now=10.0,
+        require_origin=True,
     )
     # Fresh receipt of old truth cannot keep the calibration alive.
-    stale = calibration.SimulationSample(0.1, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    spinning = calibration.SimulationSample(1.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.5)
+    stale = calibration.SimulationSample(timing(100_000_000), 0.0, 0.0, 0.0, 0.0, 0.0)
+    spinning = calibration.SimulationSample(timing(1_000_000_000), 0.0, 0.0, 0.0, 0.0, 0.5)
     for truth in (stale, spinning):
         with pytest.raises(RuntimeError):
             calibration.validate_motion_evidence(
                 plan,
-                clock=(10.0, 1.0),
+                clock=(10.0, 1_000_000_000),
                 clock_advanced=10.0,
                 truth=truth,
                 now=10.0,
@@ -396,8 +411,12 @@ def test_ros_readiness_probes_overlap_and_failure_never_creates_actuator(monkeyp
     progressed = threading.Event()
     events = []
     callbacks = {}
+    executor_ticks = [0]
 
     class Node:
+        def get_clock(self):
+            return NS(now=lambda: NS(nanoseconds=executor_ticks[0] * 1_000_000_000))
+
         def create_subscription(self, cls, topic, callback, qos):
             callbacks[topic] = callback
 
@@ -426,6 +445,7 @@ def test_ros_readiness_probes_overlap_and_failure_never_creates_actuator(monkeyp
 
         def spin_once(self, **kwargs):
             self.ticks += 1
+            executor_ticks[0] = self.ticks
             callbacks["/clock"](NS(clock=NS(sec=self.ticks, nanosec=0)))
             callbacks["/ground_truth/odom"](
                 NS(

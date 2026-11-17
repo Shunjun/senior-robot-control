@@ -39,7 +39,7 @@
   </ros2_control>
   <gazebo>
     <!-- //Compatible: Humble spawner lacks controller ROS argument support. -->
-    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin"><parameters>$(arg controllers_file)</parameters><ros><remapping>/drive/actuator_target:=/control/actuator_target</remapping><remapping>/drive/odom:=/wheel/odom</remapping><remapping>/drive/odom/timed:=/wheel/odom/timed</remapping></ros></plugin>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin"><parameters>$(arg controllers_file)</parameters><ros><remapping>/drive/cmd_vel_unstamped:=/cmd_vel</remapping><remapping>/drive/odom:=/wheel/odom</remapping></ros></plugin>
     <plugin filename="ignition-gazebo-odometry-publisher-system" name="ignition::gazebo::systems::OdometryPublisher"><odom_frame>world</odom_frame><robot_base_frame>base_link</robot_base_frame><odom_topic>/ground_truth/odom</odom_topic><tf_topic>/ground_truth/pose_unbridged</tf_topic><dimensions>3</dimensions></plugin>
   </gazebo>
 </robot>

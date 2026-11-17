@@ -76,7 +76,7 @@ unit='senior-sim-替换为实际实例哈希.service'
 journalctl --user -u "$unit" -n 100 --no-pager
 ```
 
-`status` 的 Process、ROS IPC、Cloud 分别表示进程、身份探测与本次运行最近连接事件；`last event connected` 不是持续在线、地图有效或运动资格证明。启动失败先检查构建、overlay、用户会话、独立域、凭据、私有目录权限和显示环境，不盲删 socket 或急停文件。
+`status` 的 Process、ROS IPC、Cloud 分别表示进程、身份探测与本次运行最近连接事件；`last event connected` 不是持续在线、地图有效或运动资格证明。启动失败先检查构建、ROS 安装环境、用户会话、独立域、凭据、私有目录权限和显示环境，不盲删 socket 或急停文件。
 
 ## 4. 图形窗口与实例隔离
 
@@ -101,14 +101,9 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 
 ### 工作台实时地图
 
-`.ros-venv/bin/senior-robot start` 的仿真档启动 Gazebo 的运动校验场景，并以 `qualified_reference:=true` 请求带引用的地图和 Nav2；只有参考与运行资格满足时才可用，不保证导航通过。默认不自动启动 `slam_toolbox`。
-栅格由启动使用的 SDF 碰撞几何生成，网页图块和 Nav2 的 `/map` 来自同一份栅格。
-定位参考使用该隔离实例的 Gazebo 真值里程计和轮式里程计，任一来源过期、重复或切换时
-停止提供定位资格。手动调试此链路时，应在同一隔离域的
-`simulation_motion.launch.py` 上显式传入 `qualified_reference:=true`。
-每次导航独立启动控制器和 BT 导航节点，结束或撤销权限后回收。仿真配置的速度限制与
-既有平地校验参数一起使用，运行时仍要求安全门报告新鲜的激光和运动观测。
-其他场景及实车配置继续依赖各自可验证的地图和定位来源。
+`.ros-venv/bin/senior-robot start` 的仿真档按 1 倍时间启动标准 Gazebo 输入，并通过 `navigation_enabled:=true` 编排原装 map_server、AMCL 和 Nav2。地图资产由 `senior_sim` 的 `world_reference` 脚本从固定 SDF 生成到本次运行的私有目录，退出时清理；生成通用 `navigation_reference.json`，Agent 使用与实车相同的地图/定位接入。
+定位来自标准 `/amcl_pose`，真值 `/ground_truth/odom` 仅用于环境诊断，不授予控制或导航资格。只有地图、定位、传感器和任务生命周期满足通用检查时才能使用导航。默认不启动 `slam_toolbox`。
+每次导航独立启动控制器和 BT 节点，结束或撤销权限后回收；底盘 drive 在环境中只启动一次。私有导航 Twist 经过项目唯一最终输出 owner 发布 `/cmd_vel`，原装 drive 使用 unstamped Twist 订阅。其他场景和实车仍使用各自明确配置的地图和定位来源。
 
 网页地图通过状态快照接收地图坐标系中的车辆位置、朝向和实时激光命中点。
 Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点或导航阻断原因变化时，
@@ -124,7 +119,7 @@ Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点�
 
 ### 运动状态与恢复
 
-标准仿真入口默认选择 `fortress-candidate-unvalidated-v1` 共享运动核心，要求本地 ROS 域与模拟时钟。此名称保留其未验证的参数假设，不表示仿真或实车验收通过。未选择有效 profile 时启动失败，不进入旧安全门。
+标准仿真入口通过 `hardware_motion_profile` 显式加载 `senior_sim/config/motion_profile.json`，格式与实车配置相同。文件中的环境候选数值只是未验证假设，不代表实车能力；控制层没有仿真许可、倍率补偿或旧协议回退。`use_sim_time` 通过启动参数传给各节点。世界 reset 由环境运行生命周期管理，标准消息无法观察的同值 reset 不提供自动识别保证。
 
 通过 `/motion/core_reference` 查看原生来源与统一估计，`/motion/runtime` 查看当前运动模式、急停和恢复条件。传感器时效、原始来源身份和本地指令 TTL 各自保持有效；普通障碍和估计退化按当前核心状态处理。急停与执行故障使用工作台明确恢复操作，收到确认后重新准备手动 authority；不会恢复旧杆量或自动续跑手动输入。
 
@@ -136,4 +131,11 @@ Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点�
 
 ## 源码依据与验收边界
 
-配置解析见 [cli.py](../../src/senior_control/cli.py)，用户服务、握手、隔离与恢复见 [simulation_cli.py](../../src/senior_control/simulation_cli.py)，场景/参考入口见 [simulation_motion.launch.py](../../ros2/src/senior_robot/launch/simulation_motion.launch.py) 和 [simulation_reference.py](../../ros2/src/senior_robot/senior_robot/simulation_reference.py)。地图栅格来自 SDF 的 `baseline_grid` / `SimulationReference` 固定场景链路，不是已经完成在线 SLAM 的证明。完整 Linux 渲染、启停、地图、导航、视频与运动恢复仍需对应运行环境验收，静态文档更新不增加通过结论。
+配置解析见 [cli.py](../../src/senior_control/cli.py)，用户服务、握手、隔离与恢复见 [simulation_cli.py](../../src/senior_control/simulation_cli.py)，场景/参考入口见 [simulation_motion.launch.py](../../ros2/src/senior_robot/launch/simulation_motion.launch.py) 和 [world_reference.py](../../ros2/src/senior_sim/scripts/world_reference.py)。地图栅格来自 SDF 的 环境 `baseline_grid` 固定场景生成工具，不是已经完成在线 SLAM 的证明。完整 Linux 渲染、启停、地图、导航、视频与运动恢复仍需对应运行环境验收，静态文档更新不增加通过结论。
+
+
+### 录制与离线分析
+
+`tools/vehicle_motion_capture.py` 只读订阅，环境录制显式传 `--use-sim-time`，实车使用默认标准系统 ROS 时钟。当前记录 schema 为 2：带测量 header 的行使用 `time` 的五个必填整数域 `stamp_ns`、`received_ros_ns`、`received_steady_ns`、`sample_steady_ns`、`clock_generation`；派生扫描另保留完整 `first_time` / `last_time`，后续回放不重新映射。`received_steady_ns` 表示本次录制回调，与原始测量记录分开。`/clock` 行仅记 `data.clock_ros_ns` 与回调 steady，不声称测量身份。无 header 的状态/命令只保留回调时间。
+
+旧捕获文件没有自动兼容入口；缺原始 receipt 的历史几何只能作为明确标记的合成数据，不能证明采集年龄。`vehicle_motion_analyze.py` 保留故障窗口和区间平均分析，不给出物理停车或整车资格结论；录制缺流、解码/时间错误会明确报告 incomplete。离线 `scan_matcher_replay.py` 保留 capture 时间记录并按原顺序输出几何输入，不模拟 DDS/TF 接纳或重新证明年龄。

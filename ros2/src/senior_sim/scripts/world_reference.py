@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Derive the isolated baseline occupancy grid from its pinned SDF."""
 
 import hashlib
@@ -87,3 +88,56 @@ def project_scan(
             }
         )
     return points
+
+
+def generate_reference(world: Path, output: Path) -> Path:
+    """Write pinned map assets for stock map_server/AMCL and the common facade."""
+    import json
+    from dataclasses import asdict
+
+    output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    grid = baseline_grid(world, "environment-map-v1")
+    values = asdict(grid)
+    values["cells"] = list(grid.cells)
+    grid_path = (output / "grid.json").resolve()
+    grid_path.write_text(json.dumps(values) + "\n")
+    # PGM origin is bottom left; image rows run from top to bottom.
+    pixels = bytes(
+        0 if grid.cells[row * grid.width + col] == 100 else 254
+        for row in reversed(range(grid.height))
+        for col in range(grid.width)
+    )
+    (output / "map.pgm").write_bytes(f"P5\n{grid.width} {grid.height}\n255\n".encode() + pixels)
+    (output / "map.yaml").write_text(
+        f"image: map.pgm\nresolution: {grid.resolution}\n"
+        f"origin: [{grid.origin.x}, {grid.origin.y}, {grid.origin.yaw}]\n"
+        "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+    )
+    template = Path(__file__).resolve().parents[1] / "config/navigation_reference.json"
+    if not template.is_file():
+        from ament_index_python.packages import get_package_share_directory
+
+        template = (
+            Path(get_package_share_directory("senior_sim")) / "config/navigation_reference.json"
+        )
+    reference = json.loads(template.read_text())
+    reference.update(
+        grid_path=str(grid_path), grid_sha256=hashlib.sha256(grid_path.read_bytes()).hexdigest()
+    )
+    path = output / "navigation_reference.json"
+    path.write_text(json.dumps(reference, indent=2) + "\n")
+    return path
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--world", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+    generate_reference(args.world, args.output)
+
+
+if __name__ == "__main__":
+    main()

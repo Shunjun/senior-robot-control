@@ -1,5 +1,12 @@
-"""Explicit Fortress-only sensor, arbitration and safety composition."""
+"""Standard 1x environment inputs composed with the common vehicle control path."""
 
+import importlib.util
+import shutil
+import tempfile
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+from ament_index_python.packages import get_package_prefix
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -9,7 +16,7 @@ from launch.actions import (
     SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -21,42 +28,49 @@ from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
 
 
+def environment_assets(context):
+    """Generate environment map files without importing them into control code."""
+    script = Path(get_package_prefix("senior_sim")) / "lib/senior_sim/world_reference"
+    spec = importlib.util.spec_from_loader(
+        "environment_world_reference", SourceFileLoader("environment_world_reference", str(script))
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = Path(tempfile.mkdtemp(prefix="senior-environment-"))
+    try:
+        reference = module.generate_reference(
+            Path(LaunchConfiguration("world").perform(context)), output
+        )
+    except BaseException:
+        shutil.rmtree(output)
+        raise
+
+    def cleanup(context):
+        shutil.rmtree(output)
+        return []
+
+    return [
+        RegisterEventHandler(OnShutdown(on_shutdown=[OpaqueFunction(function=cleanup)])),
+        SetLaunchConfiguration("navigation_reference", str(reference)),
+        SetLaunchConfiguration("map_yaml", str(output / "map.yaml")),
+    ]
+
+
 def generate_launch_description():
-    robot_id = ParameterValue(LaunchConfiguration("robot_id"), value_type=str)
     sim = FindPackageShare("senior_sim")
     robot = FindPackageShare("senior_robot")
-    world = LaunchConfiguration("motion_world")
+    sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
+    navigation = IfCondition(LaunchConfiguration("navigation_enabled"))
     params = PathJoinSubstitution([robot, "config", "simulation_motion.yaml"])
-    qualified = LaunchConfiguration("qualified_reference")
-
-    def profile(context):
-        candidate = LaunchConfiguration("motion_core_profile").perform(context)
-        override = LaunchConfiguration("motion_core_world").perform(context)
-        if override and not candidate:
-            raise ValueError("motion_core_world requires explicit simulation candidate")
-        use_reference = IfCondition(qualified).evaluate(context)
-        return [
-            SetLaunchConfiguration(
-                "motion_world",
-                override
-                or PathJoinSubstitution(
-                    [sim, "worlds", "motion_qualification.sdf" if use_reference else "baseline.sdf"]
-                ),
-            ),
-            SetLaunchConfiguration("core_matcher_linear", "1.52"),
-            SetLaunchConfiguration("core_matcher_yaw", "2.0"),
-        ]
-
+    common = {"use_sim_time": sim_time}
+    profile = ParameterValue(LaunchConfiguration("hardware_motion_profile"), value_type=str)
     controller_params = RewrittenYaml(
         source_file=PathJoinSubstitution([robot, "config", "nav2.yaml"]),
         root_key="",
         param_rewrites={
-            "use_sim_time": "true",
-            # DDS request/response on the shared VM can exceed one BT tick.
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
             "bt_navigator.ros__parameters.default_server_timeout": "250",
-            # Humble loads both trees on activation, including the through-poses tree.
             "bt_navigator.ros__parameters.wait_for_service_timeout": "4000",
-            # Leave VM CPU for the scan and motion workers while MPPI is active.
             "controller_server.ros__parameters.FollowPath.batch_size": "400",
             "controller_server.ros__parameters.FollowPath.vx_max": "0.22",
             "controller_server.ros__parameters.FollowPath.vx_min": "-0.15",
@@ -76,90 +90,112 @@ def generate_launch_description():
             DeclareLaunchArgument("agent_socket"),
             DeclareLaunchArgument("robot_id"),
             DeclareLaunchArgument("headless", default_value="true"),
-            DeclareLaunchArgument("qualified_reference", default_value="false"),
+            DeclareLaunchArgument("use_sim_time", default_value="true"),
+            DeclareLaunchArgument("navigation_enabled", default_value="false"),
+            DeclareLaunchArgument("navigation_reference", default_value=""),
+            DeclareLaunchArgument("map_yaml", default_value=""),
             DeclareLaunchArgument(
-                "motion_core_profile", default_value="fortress-candidate-unvalidated-v1"
+                "world",
+                default_value=PathJoinSubstitution([sim, "worlds", "motion_qualification.sdf"]),
             ),
-            DeclareLaunchArgument("motion_core_world", default_value=""),
-            OpaqueFunction(function=profile),
+            DeclareLaunchArgument(
+                "hardware_motion_profile",
+                default_value=PathJoinSubstitution([sim, "config", "motion_profile.json"]),
+            ),
             DeclareLaunchArgument("video_enabled", default_value="false"),
             DeclareLaunchArgument("video_frame_path", default_value=""),
+            OpaqueFunction(function=environment_assets, condition=navigation),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([sim, "launch", "simulation.launch.py"])
                 ),
                 launch_arguments={
                     "headless": LaunchConfiguration("headless"),
-                    "world": world,
+                    "world": LaunchConfiguration("world"),
                     "rear_attachment": "false",
-                    "use_sim_time": "true",
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
                 }.items(),
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([robot, "launch", "navigation.launch.py"])
                 ),
-                condition=IfCondition(qualified),
-                launch_arguments={"external_controller": "true", "use_sim_time": "true"}.items(),
+                condition=navigation,
+                launch_arguments={
+                    "external_controller": "true",
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
+                }.items(),
             ),
             Node(
-                package="senior_robot",
-                executable="simulation_camera",
-                condition=IfCondition(LaunchConfiguration("video_enabled")),
+                package="nav2_map_server",
+                executable="map_server",
+                name="map_server",
+                condition=navigation,
+                parameters=[common, {"yaml_filename": LaunchConfiguration("map_yaml")}],
+            ),
+            Node(
+                package="nav2_amcl",
+                executable="amcl",
+                name="amcl",
+                condition=navigation,
                 parameters=[
+                    PathJoinSubstitution([robot, "config", "nav2.yaml"]),
+                    common,
                     {
-                        "use_sim_time": True,
-                        "frame_path": ParameterValue(
-                            LaunchConfiguration("video_frame_path"), value_type=str
-                        ),
-                    }
-                ],
-            ),
-            Node(
-                package="senior_robot",
-                executable="scan_adapter",
-                parameters=[params, ros_sensor_parameters()],
-            ),
-            Node(
-                package="senior_scan_matcher",
-                executable="scan_motion_node",
-                parameters=[
-                    params,
-                    ros_sensor_parameters(),
-                    {
-                        "max_linear_speed": ParameterValue(
-                            LaunchConfiguration("core_matcher_linear"), value_type=float
-                        ),
-                        "max_yaw_rate": ParameterValue(
-                            LaunchConfiguration("core_matcher_yaw"), value_type=float
-                        ),
+                        "base_frame_id": "base_link",
+                        "odom_frame_id": "odom",
+                        "global_frame_id": "map",
+                        "scan_topic": "/scan",
+                        "set_initial_pose": True,
+                        "initial_pose.x": 0.0,
+                        "initial_pose.y": 0.0,
+                        "initial_pose.yaw": 0.0,
                     },
                 ],
             ),
             Node(
-                package="senior_sensor_ingress",
-                executable="scan_receipt_node",
-                parameters=[params, ros_sensor_parameters()],
+                package="nav2_lifecycle_manager",
+                executable="lifecycle_manager",
+                name="lifecycle_manager_localization",
+                condition=navigation,
+                parameters=[common, {"autostart": True, "node_names": ["map_server", "amcl"]}],
             ),
             Node(
-                package="senior_robot",
-                executable="safety_scan_ingress",
-                parameters=[params, ros_sensor_parameters()],
+                package="senior_sim",
+                executable="simulation_camera",
+                condition=IfCondition(LaunchConfiguration("video_enabled")),
+                parameters=[
+                    common,
+                    {
+                        "frame_path": ParameterValue(
+                            LaunchConfiguration("video_frame_path"), value_type=str
+                        )
+                    },
+                ],
             ),
+            *[
+                Node(
+                    package=package,
+                    executable=executable,
+                    parameters=[params, ros_sensor_parameters(), common],
+                )
+                for package, executable in (
+                    ("senior_robot", "scan_adapter"),
+                    ("senior_scan_matcher", "scan_motion_node"),
+                    ("senior_sensor_ingress", "scan_receipt_node"),
+                    ("senior_robot", "safety_scan_ingress"),
+                )
+            ],
             Node(
                 package="senior_robot",
                 executable="safety_node",
                 parameters=[
                     params,
                     ros_sensor_parameters(),
+                    common,
                     {
-                        "motion_core_profile": ParameterValue(
-                            LaunchConfiguration("motion_core_profile"), value_type=str
-                        )
-                    },
-                    {
-                        "robot_id": robot_id,
-                        "simulation_rate_hz": ParameterValue("20.0", value_type=float),
+                        "hardware_motion_profile": profile,
+                        "robot_id": ParameterValue(LaunchConfiguration("robot_id"), value_type=str),
                     },
                 ],
             ),
@@ -170,20 +206,20 @@ def generate_launch_description():
                 parameters=[
                     params,
                     ros_sensor_parameters(),
+                    common,
                     {
-                        "robot_id": robot_id,
+                        "robot_id": ParameterValue(LaunchConfiguration("robot_id"), value_type=str),
                         "ipc_replace_existing_socket": False,
-                        "use_sim_time": True,
-                        "simulation_baseline_world": ParameterValue(world, value_type=str),
+                        "hardware_navigation_reference": ParameterValue(
+                            LaunchConfiguration("navigation_reference"), value_type=str
+                        ),
                         "navigation_controller_params": ParameterValue(
                             controller_params, value_type=str
-                        ),
-                        "simulation_qualified_reference": ParameterValue(
-                            LaunchConfiguration("qualified_reference"), value_type=bool
                         ),
                     },
                 ],
                 additional_env={"SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket")},
             ),
+            # Empty reference preserves the common optional-navigation behavior.
         ]
     )

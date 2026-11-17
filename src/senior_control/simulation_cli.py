@@ -309,7 +309,7 @@ async def supervise(
                 "senior_robot",
                 "simulation_motion.launch.py",
                 f"headless:={str(headless).lower()}",
-                "qualified_reference:=true",
+                "navigation_enabled:=true",
                 *video_args,
                 f"agent_socket:={profile.socket}",
                 f"robot_id:={credentials.robot_id}",

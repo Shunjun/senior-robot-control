@@ -23,12 +23,11 @@ def test_fixture_has_dedicated_actuation_and_reviewable_physics(tmp_path):
     assert manifest["domain"] == 173
     model = ET.parse(output / "model.xacro")
     mappings = [node.text for node in model.iter("remapping")]
-    assert "/drive/actuator_target:=/vehicle_motion_calibration/review1/cmd_vel" in mappings
-    assert "/drive/actuator_target:=/control/actuator_target" not in mappings
+    assert "/drive/cmd_vel_unstamped:=/vehicle_motion_calibration/review1/cmd_vel" in mappings
+    assert "/drive/cmd_vel_unstamped:=/cmd_vel" not in mappings
     assert "/drive/odom:=/wheel/odom" in mappings
-    assert "/drive/odom/timed:=/wheel/odom/timed" in mappings
     assert not any(
-        "cmd_vel_unstamped" in (item or "") or "Twist" in (item or "") for item in mappings
+        "actuator_target" in (item or "") or "/timed" in (item or "") for item in mappings
     )
     world = ET.parse(output / "world.sdf")
     assert world.find("world").attrib["name"] == "vehicle_motion_calibration"

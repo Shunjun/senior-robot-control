@@ -20,11 +20,13 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from senior_control.sensors.sample_time import ClockTracker, SampleTime, map_sample
 
 PERIOD = 0.05
 ALLOWED_NODES = {
@@ -226,8 +228,7 @@ def validate_graph(plan: CalibrationPlan, graph: dict[str, Any]) -> None:
 
 @dataclass(frozen=True)
 class SimulationSample:
-    stamp_ros: float
-    received_steady: float
+    time: SampleTime
     x: float
     y: float
     vx: float
@@ -238,7 +239,7 @@ class SimulationSample:
 def validate_motion_evidence(
     plan: CalibrationPlan,
     *,
-    clock: tuple[float, float] | None,
+    clock: tuple[float, int] | None,
     clock_advanced: float,
     truth: SimulationSample | None,
     now: float,
@@ -249,10 +250,10 @@ def validate_motion_evidence(
         or truth is None
         or not 0 <= now - clock[0] <= 0.25
         or not 0 <= now - clock_advanced <= 0.25
-        or not 0 <= now - truth.received_steady <= 0.25
-        or not 0 <= clock[1] - truth.stamp_ros <= 0.25
+        or not 0 <= now - truth.time.sample_steady_ns / 1e9 <= 0.25
+        or not 0 <= clock[1] - truth.time.stamp_ns <= 250_000_000
     ):
-        raise RuntimeError("fresh advancing Gazebo clock and source-timed truth required")
+        raise RuntimeError("fresh advancing Gazebo clock and standard stamped truth required")
     if not all(math.isfinite(v) for v in (truth.x, truth.y, truth.vx, truth.vy, truth.wz)):
         raise RuntimeError("nonfinite simulation pose or speed")
     xmin, ymin, xmax, ymax = plan.field_bounds_m
@@ -374,21 +375,22 @@ class RosCalibrationPort:
 
         self.plan, self.ros, self.twist = plan, rclpy, Twist
         self.context = rclpy.Context()
-        self.ros.init(context=self.context)
+        self.ros.init(args=["--ros-args", "-p", "use_sim_time:=true"], context=self.context)
         self.node = rclpy.create_node(
             f"vehicle_motion_calibrator_{plan.run_id}", context=self.context
         )
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.publisher = None
-        self.clock: tuple[float, float] | None = None
+        self.clock: tuple[float, int] | None = None
         self.clock_advanced = 0.0
         self.truth: SimulationSample | None = None
         self._last_graph_check = float("-inf")
+        self._clock_tracker = ClockTracker()
         self._preflight_parameters: dict[str, Any] = {}
 
         def clock(msg: Any) -> None:
-            stamp = msg.clock.sec + msg.clock.nanosec / 1e9
+            stamp = msg.clock.sec * 1_000_000_000 + msg.clock.nanosec
             now = time.monotonic()
             if self.clock and stamp > self.clock[1]:
                 self.clock_advanced = now
@@ -397,9 +399,23 @@ class RosCalibrationPort:
             self.clock = (now, stamp)
 
         def truth(msg: Any) -> None:
+            if self.clock is None:
+                return
+            steady_ns = time.monotonic_ns()
+            ros_ns = self.node.get_clock().now().nanoseconds
+            generation = self._clock_tracker.observe(ros_ns=ros_ns, steady_ns=steady_ns).generation
+            try:
+                sample_time = map_sample(
+                    stamp_ns=msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec,
+                    received_ros_ns=ros_ns,
+                    received_steady_ns=steady_ns,
+                    clock_generation=generation,
+                )
+            except ValueError:
+                self.truth = None
+                return
             self.truth = SimulationSample(
-                msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9,
-                time.monotonic(),
+                sample_time,
                 msg.pose.pose.position.x,
                 msg.pose.pose.position.y,
                 msg.twist.twist.linear.x,
@@ -596,8 +612,10 @@ def main() -> int:
                 "emitted_wall_ns": time.time_ns(),
             }
             if port is not None and port.clock is not None:
-                record["observed_clock_ros"] = port.clock[1]
-                record["clock_received_steady"] = port.clock[0]
+                record["observed_clock_ros_ns"] = port.clock[1]
+                record["clock_received_steady_ns"] = round(port.clock[0] * 1e9)
+                if port.truth is not None:
+                    record["truth"] = asdict(port.truth)
             output.write(json.dumps(record, allow_nan=False) + "\n")
             output.flush()
 

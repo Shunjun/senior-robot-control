@@ -106,6 +106,15 @@ def test_baseline_has_visible_obstacle() -> None:
     assert obstacle.find("./link/visual/geometry/box/size") is not None
 
 
+def controller_unstamped(root):
+    return (
+        yaml.safe_load((root / "ros2/src/senior_sim/config/controllers.yaml").read_text())["drive"][
+            "ros__parameters"
+        ]["use_stamped_vel"]
+        is False
+    )
+
+
 def test_drive_remapping_uses_humble_plugin_configuration() -> None:
     import xml.etree.ElementTree as ET
 
@@ -114,11 +123,10 @@ def test_drive_remapping_uses_humble_plugin_configuration() -> None:
     assert plugin is not None
     remaps = {item.text for item in plugin.findall("./ros/remapping")}
     assert remaps == {
-        "/drive/actuator_target:=/control/actuator_target",
+        "/drive/cmd_vel_unstamped:=/cmd_vel",
         "/drive/odom:=/wheel/odom",
-        "/drive/odom/timed:=/wheel/odom/timed",
     }
-    assert not any("cmd_vel" in item or "Twist" in item for item in remaps)
+    assert controller_unstamped(ROOT)
     launch = (ROOT / "ros2/src/senior_sim/launch/simulation.launch.py").read_text(encoding="utf-8")
     assert "--controller-ros-args" not in launch
 

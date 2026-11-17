@@ -15,13 +15,29 @@ def analyze(tmp_path, samples):
 
 
 def sample(stream, steady, ros, **data):
-    return {
-        "kind": "sample",
-        "stream": stream,
-        "received_steady": steady,
-        "stamp_ros": ros,
-        "data": data,
-    }
+    stamp_ns = round(ros * 1e9) if ros is not None else None
+    steady_ns = round((steady + 100) * 1e9)
+
+    def timing(ns):
+        return dict(
+            stamp_ns=ns,
+            received_ros_ns=ns,
+            received_steady_ns=100_000_000_000 + ns,
+            sample_steady_ns=100_000_000_000 + ns,
+            clock_generation=1,
+        )
+
+    row = {"kind": "sample", "stream": stream, "received_steady_ns": steady_ns, "data": data}
+    if "source_epoch" in data:
+        data["producer_epoch"] = data["source_epoch"]
+    if stream == "clock":
+        data["clock_ros_ns"] = stamp_ns
+    elif stamp_ns is not None:
+        row["time"] = timing(stamp_ns)
+    if "interval_start_ros" in data:
+        row["first_time"] = timing(round(data.pop("interval_start_ros") * 1e9))
+        row["last_time"] = timing(stamp_ns)
+    return row
 
 
 def test_fixture_distinguishes_measured_failure_windows():
@@ -125,13 +141,17 @@ def test_capture_serializes_ros_stamp_without_using_receive_time_as_source():
     result = ros_sample(
         "wheel",
         {"header": {"stamp": {"sec": 2, "nanosec": 5}}, "twist": {"twist": {"linear": {"x": 0.2}}}},
-        100.0,
+        100_000_000_000,
+        received_ros_ns=3_000_000_000,
+        clock_generation=1,
     )
-    assert result["stamp_ros"] == 2.000000005
-    assert result["received_steady"] == 100.0
+    assert result["time"]["stamp_ns"] == 2_000_000_005
+    assert result["received_steady_ns"] == 100_000_000_000
     assert result["data"]["vx"] == 0.2
-    missing = ros_sample("wheel", {}, 100.0)
-    assert missing["stamp_ros"] is None
+    missing = ros_sample(
+        "wheel", {}, 100_000_000_000, received_ros_ns=3_000_000_000, clock_generation=1
+    )
+    assert "time" not in missing
 
 
 def test_source_changes_cannot_complete_a_pause_window(tmp_path):
@@ -189,7 +209,11 @@ def test_capture_preserves_nonfinite_sensor_semantics_and_redacts_keys():
     from tools.vehicle_motion_capture import ros_sample
 
     row = ros_sample(
-        "scan", {"ranges": [float("inf"), float("nan")], "credentials": "must-not-appear"}, 1
+        "scan",
+        {"ranges": [float("inf"), float("nan")], "credentials": "must-not-appear"},
+        1_000_000_000,
+        received_ros_ns=1_000_000_000,
+        clock_generation=1,
     )
     assert row["raw"]["ranges"] == ["inf", "nan"]
     assert row["raw"]["credentials"] == "[redacted]"
@@ -208,12 +232,12 @@ def test_same_dds_new_producer_epoch_breaks_window_and_interval():
             i,
             "wheel",
             i / 10,
-            i / 10,
+            round(i / 10 * 1e9),
             {"vx": 0.3, "publisher_gid": "same", "producer_epoch": str(i // 3)},
         )
         for i in range(7)
     ]
-    assert _interval_average(wheel, 0.1, 0.5) is None
+    assert _interval_average(wheel, 100_000_000, 500_000_000) is None
 
 
 def analyze_trace_records(records):
@@ -227,12 +251,17 @@ def test_interval_cannot_stitch_two_ros_clock_passes_or_invalid_rows():
     from tools.vehicle_motion_analyze import Sample, _interval_average
 
     def rows(stamps):
-        return [Sample(i, "wheel", i / 10, stamp, {"vx": 0.2}) for i, stamp in enumerate(stamps)]
+        return [
+            Sample(
+                i, "wheel", i / 10, round(stamp * 1e9) if stamp is not None else None, {"vx": 0.2}
+            )
+            for i, stamp in enumerate(stamps)
+        ]
 
     # Neither pass independently covers [0,.3]; they must not be assembled.
-    assert _interval_average(rows([0.0, 0.1, 0.2, 0.1, 0.2, 0.3]), 0.0, 0.3) is None
+    assert _interval_average(rows([0.0, 0.1, 0.2, 0.1, 0.2, 0.3]), 0, 300_000_000) is None
     invalid = rows([0.0, 0.1, None, 0.1, 0.2, 0.3])
-    assert _interval_average(invalid, 0.0, 0.3) is None
+    assert _interval_average(invalid, 0, 300_000_000) is None
 
 
 def test_capture_preserves_producer_epoch_alongside_dds_identity():
@@ -254,14 +283,13 @@ def test_parse_keeps_invalid_sample_as_a_continuity_barrier():
         {
             "kind": "sample",
             "stream": "wheel",
-            "received_steady": 0.15,
-            "stamp_ros": 0.15,
+            "received_steady_ns": 100_150_000_000,
             "data": "invalid",
         },
     )
     streams, invalid = _parse(records)
     assert invalid == [2]
-    assert _interval_average(streams["wheel"], 0, 0.3) is None
+    assert _interval_average(streams["wheel"], 0, 300_000_000) is None
 
 
 def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypatch):
@@ -276,6 +304,7 @@ def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypat
     node = SimpleNamespace(
         create_subscription=lambda kind, topic, cb, qos: callbacks.append(cb),
         destroy_node=lambda: None,
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
     )
     calls = []
 
