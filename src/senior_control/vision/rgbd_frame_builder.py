@@ -162,7 +162,7 @@ def build_frame(
     tf_epoch: str,
     dependencies: tuple[str, ...],
     exclusion: bytes,
-    static_sim_declared: bool,
+    static_background_declared: bool,
 ) -> BuiltFrame:
     """Decode exact RGB8 and registered rectified 32FC1, retaining raw identities."""
     import numpy as np
@@ -207,10 +207,10 @@ def build_frame(
             raise ValueError("image_layout")
         if type(exclusion) is not bytes or len(exclusion) != width * height:
             raise ValueError("invalid_exclusion")
-        if type(static_sim_declared) is not bool or (
-            not any(exclusion) and not static_sim_declared
+        if type(static_background_declared) is not bool or (
+            not any(exclusion) and not static_background_declared
         ):
-            raise ValueError("static_sim_domain_unavailable")
+            raise ValueError("exclusion_scene_unknown")
         intrinsics = _info(rgb_info, width, height)
         if _info(depth_info, width, height) != intrinsics:
             raise ValueError("registration_mismatch")
@@ -278,7 +278,7 @@ def offer_capture(
     tf_epoch: str,
     dependencies: tuple[str, ...],
     exclusion: bytes,
-    static_sim_declared: bool,
+    static_background_declared: bool,
     now_ros_ns: int,
     now_steady: float,
 ) -> Any:
@@ -300,7 +300,7 @@ def offer_capture(
             tf_epoch=tf_epoch,
             dependencies=dependencies,
             exclusion=exclusion,
-            static_sim_declared=static_sim_declared,
+            static_background_declared=static_background_declared,
         )
     except ValueError:
         estimator.observe_unusable_headers(headers, now_ros_ns=now_ros_ns, now_steady=now_steady)

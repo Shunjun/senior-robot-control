@@ -10,7 +10,6 @@ from senior_control.motion.estimator import MotionEstimate, Origin, validate_ori
 from senior_control.motion.kinematics import compose, exponential, logarithm
 from senior_control.sensors.consensus import Vote, combine
 from senior_control.sensors.policy import Age, default_policy
-from senior_control.sensors.time_proof import MeasurementTime
 
 
 def angle(v: float) -> float:
@@ -23,7 +22,7 @@ class PoseObservation:
     pose: Pose2D
     stamp_ros: float
     measurement_steady: float = field(kw_only=True)
-    measurement: MeasurementTime | None = field(default=None, kw_only=True)
+    stamp_ns: int = field(kw_only=True)
     roots: tuple[Origin, ...]
     frame: str = "odom"
     quality: float = 0.5
@@ -31,8 +30,8 @@ class PoseObservation:
     error_yaw_rad: float | None = None
 
     @property
-    def coordinate(self) -> MeasurementTime:
-        return self.measurement or MeasurementTime("host", None, self.measurement_steady)
+    def coordinate(self) -> int:
+        return self.stamp_ns
 
 
 @dataclass(frozen=True)
@@ -60,7 +59,7 @@ class PoseEstimate:
     pose: Pose2D
     stamp_ros: float
     measurement_steady: float = field(kw_only=True)
-    measurement: MeasurementTime | None = field(default=None, kw_only=True)
+    stamp_ns: int = field(kw_only=True)
     roots: tuple[Origin, ...]
     kind: str
     error_m: float | None
@@ -75,8 +74,8 @@ class PoseEstimate:
     integration_path: tuple[str, int] | None = None
 
     @property
-    def coordinate(self) -> MeasurementTime:
-        return self.measurement or MeasurementTime("host", None, self.measurement_steady)
+    def coordinate(self) -> int:
+        return self.stamp_ns
 
 
 @dataclass(frozen=True)
@@ -181,11 +180,11 @@ class PoseEstimation:
             if right <= left:
                 continue
             if left - cursor > 1e-9:
-                gap = left - cursor
+                gap = (left - cursor) / 1e9
                 result = result.plus(
                     PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
                 )
-            dt = right - left
+            dt = (right - left) / 1e9
             step = self._prediction_error(
                 segment.motion,
                 dt,
@@ -196,14 +195,14 @@ class PoseEstimation:
             result = result.plus(step)
             cursor = right
         if end - cursor > 1e-9:
-            gap = end - cursor
+            gap = (end - cursor) / 1e9
             result = result.plus(
                 PoseErrorBudget(None, None, self.unknown_speed * gap, self.unknown_yaw * gap)
             )
         return result
 
     def _recorded_prediction(
-        self, motion: MotionEstimate, start: MeasurementTime, end: MeasurementTime
+        self, motion: MotionEstimate, start: int, end: int
     ) -> tuple[Pose2D, PoseErrorBudget, tuple[Origin, ...], float]:
         """Compose certified pieces before extrapolating the unmeasured tail.
 
@@ -212,23 +211,25 @@ class PoseEstimation:
         The existing rate/error model applies solely after the recorded endpoint.
         """
         path = motion.path
-        cursor = start.seconds
+        cursor = start
         delta, error, travel = Pose2D(0, 0, 0), PoseErrorBudget(), 0.0
         dependencies: list[Origin] = []
-        if path is not None and start.same_axis(path.measurement):
+        if path is not None:
             for segment in path.segments:
-                left = max(cursor, segment.interval.start.seconds)
-                right = min(end.seconds, segment.interval.end.seconds)
+                left = max(cursor, segment.interval.start_ns)
+                right = min(end, segment.interval.end_ns)
                 if right <= left:
                     continue
                 if left > cursor + 1e-9:
                     raise ValueError("recorded pose prediction has an unknown prefix")
-                dt = right - left
+                dt = (right - left) / 1e9
                 axes = segment.axes
                 piece = replace(motion, vx=axes[0], vy=axes[1], wz=axes[2])
                 rates = (axes[0].value or 0.0, axes[1].value or 0.0, axes[2].value or 0.0)
                 if segment.delta is not None:
-                    rates = logarithm(segment.delta, segment.interval.duration)
+                    rates = logarithm(
+                        segment.delta, ((segment.interval.end_ns - segment.interval.start_ns) / 1e9)
+                    )
                 step = exponential(*rates, dt)
                 error = error.plus(
                     self._prediction_error(
@@ -243,10 +244,10 @@ class PoseEstimation:
                 travel += math.hypot(step.x, step.y)
                 dependencies.extend(root for axis in axes for root in axis.roots)
                 cursor = right
-            if cursor < min(end.seconds, path.measurement.seconds) - 1e-9:
+            if cursor < min(end, path.stamp_ns) - 1e-9:
                 raise ValueError("recorded pose prediction history was evicted")
-        if cursor < end.seconds:
-            dt = end.seconds - cursor
+        if cursor < end:
+            dt = (end - cursor) / 1e9
             step = exponential(
                 motion.vx.value or 0.0, motion.vy.value or 0.0, motion.wz.value or 0.0, dt
             )
@@ -303,16 +304,16 @@ class PoseEstimation:
         )
 
     def relative_error(self, old: PoseEstimate, current: PoseEstimate) -> PoseErrorBudget:
-        if old.frame != current.frame or not old.coordinate.same_axis(current.coordinate):
+        if old.frame != current.frame:
             raise ValueError("relative pose frame mismatch")
         distance = math.hypot(current.pose.x - old.pose.x, current.pose.y - old.pose.y)
         if old.anchor_roots is not None and old.anchor_roots == current.anchor_roots:
             if old == current:
                 return PoseErrorBudget()
             if old.integration_path == current.integration_path == self._path:
-                start, end = sorted((old.coordinate.seconds, current.coordinate.seconds))
+                start, end = sorted((old.coordinate, current.coordinate))
                 result = self._interval_error(start, end)
-                if old.coordinate.seconds <= current.coordinate.seconds:
+                if old.coordinate <= current.coordinate:
                     return result
                 # Inverting a relative transform rotates its translation by the
                 # uncertain interval yaw. Forward queries need no extra prefix.
@@ -409,10 +410,7 @@ class PoseEstimation:
                 self.frame_generation += 1
             elif root.sequence <= old.sequence:
                 return False
-            elif (
-                o.coordinate.same_axis(prior.coordinate)
-                and o.coordinate.seconds < prior.coordinate.seconds
-            ):
+            elif o.coordinate < prior.coordinate:
                 return False
         positive = self._positive_frontiers.get(o.source)
         if (
@@ -457,7 +455,7 @@ class PoseEstimation:
                     try:
                         if (
                             o.quality > 0
-                            and self._live(o.roots, motion.computed_steady, motion.computed_steady)
+                            and self._live(o.roots, motion.computed_ros, motion.computed_steady)
                             is not None
                         ):
                             live.append(o)
@@ -482,10 +480,10 @@ class PoseEstimation:
             vx=path.current_axes[0],
             vy=path.current_axes[1],
             wz=path.current_axes[2],
-            measurement=path.measurement,
+            stamp_ns=path.stamp_ns,
             measurement_host_steady=path.host_steady,
         )
-        target = path.measurement
+        target = path.stamp_ns
         target_host = path.host_steady
         eligible = []
         self._clock_epochs = {}
@@ -494,8 +492,7 @@ class PoseEstimation:
                 try:
                     if (
                         o.quality > 0
-                        and o.coordinate.same_axis(target)
-                        and self._live(o.roots, motion.computed_steady, motion.computed_steady)
+                        and self._live(o.roots, motion.computed_ros, motion.computed_steady)
                         is not None
                     ):
                         eligible.append(o)
@@ -517,7 +514,7 @@ class PoseEstimation:
                 now_steady=motion.computed_steady,
                 motion=motion,
                 measurement_steady=target_host,
-                measurement=target,
+                stamp_ns=target,
             )
         except ValueError:
             absolute = None
@@ -528,8 +525,8 @@ class PoseEstimation:
             self._absolute_frame_aligned = True
             if not self._relative:
                 raw_source = max(
-                    (o for o in eligible if o.coordinate.seconds <= target.seconds),
-                    key=lambda o: o.coordinate.seconds,
+                    (o for o in eligible if o.coordinate <= target),
+                    key=lambda o: o.coordinate,
                 )
                 raw_stamp = raw_source.stamp_ros
                 raw_anchor = self.at(
@@ -538,7 +535,7 @@ class PoseEstimation:
                     now_steady=motion.computed_steady,
                     motion=motion,
                     measurement_steady=raw_source.measurement_steady,
-                    measurement=raw_source.coordinate,
+                    stamp_ns=raw_source.coordinate,
                 )
                 self._relative.append(raw_anchor)
             self._relative.append(
@@ -553,7 +550,7 @@ class PoseEstimation:
                     anchor_roots=absolute.anchor_roots,
                     prediction_error=absolute.prediction_error,
                     measurement_steady=target_host,
-                    measurement=target,
+                    stamp_ns=target,
                 )
             )
             self._previous_motion = motion
@@ -571,13 +568,10 @@ class PoseEstimation:
                     anchor_roots=(),
                     integration_path=self._path,
                     measurement_steady=target_host,
-                    measurement=target,
+                    stamp_ns=target,
                 )
             )
         previous = self._relative[-1]
-        if not target.same_axis(previous.coordinate):
-            self._clear_relative()
-            return
         try:
             segments = path.tail(previous.coordinate)
         except ValueError:
@@ -588,14 +582,14 @@ class PoseEstimation:
             previous = replace(previous, integration_path=self._path)
             self._relative[-1] = previous
         for segment in segments:
-            dt = segment.interval.duration
+            dt = (segment.interval.end_ns - segment.interval.start_ns) / 1e9
             axes = segment.axes
             segment_motion = replace(
                 motion,
                 vx=axes[0],
                 vy=axes[1],
                 wz=axes[2],
-                measurement=segment.interval.end,
+                stamp_ns=segment.interval.end_ns,
                 measurement_host_steady=segment.end_host_steady,
             )
             rates = (axes[0].value or 0.0, axes[1].value or 0.0, axes[2].value or 0.0)
@@ -614,8 +608,8 @@ class PoseEstimation:
             budget = previous.prediction_error.plus(step_error)
             self._segments.append(
                 _RelativeSegment(
-                    segment.interval.start.seconds,
-                    segment.interval.end.seconds,
+                    segment.interval.start_ns,
+                    segment.interval.end_ns,
                     rates,
                     segment_motion,
                     missing_linear,
@@ -640,7 +634,7 @@ class PoseEstimation:
                 prediction_error=budget,
                 integration_path=self._path,
                 measurement_steady=segment.end_host_steady,
-                measurement=segment.interval.end,
+                stamp_ns=segment.interval.end_ns,
             )
             self._relative.append(previous)
         self._previous_motion = motion
@@ -650,7 +644,7 @@ class PoseEstimation:
         stamp_ros: float,
         *,
         measurement_steady: float,
-        measurement: MeasurementTime | None = None,
+        stamp_ns: int,
         now_ros: float,
         now_steady: float,
         motion: MotionEstimate | None = None,
@@ -661,9 +655,8 @@ class PoseEstimation:
             or not 0 <= measurement_steady <= now_steady
         ):
             raise ValueError("invalid pose query time")
-        coordinate = measurement or MeasurementTime("host", None, measurement_steady)
-        query = coordinate.seconds
-        simulation = coordinate.clock_domain.startswith("sim_step:")
+        coordinate = stamp_ns
+        query = coordinate
         candidates: list[_PoseCandidate] = []
         for history in self._sources.values():
             live = []
@@ -671,28 +664,25 @@ class PoseEstimation:
                 try:
                     if (
                         observation.quality > 0
-                        and observation.coordinate.same_axis(coordinate)
                         and self._live(observation.roots, now_ros, now_steady) is not None
                     ):
                         live.append(observation)
                 except ValueError:
                     continue
-            left = [o for o in live if o.coordinate.seconds <= query]
+            left = [o for o in live if o.coordinate <= query]
             if not left:
                 continue
             a = left[-1]
-            right = next((o for o in live if o.coordinate.seconds > query), None)
+            right = next((o for o in live if o.coordinate > query), None)
             pose, roots, kind = a.pose, a.roots, "observed_pose"
             errors = (a.error_m, a.error_m, a.error_yaw_rad)
             alignment = (0.0, 0.0, 0.0)
             quality = a.quality
-            raw_time = a.coordinate.seconds
+            raw_time = a.coordinate
             prediction_error = PoseErrorBudget()
             anchor_roots = a.roots
             if right is not None:
-                fraction = (query - a.coordinate.seconds) / (
-                    right.coordinate.seconds - a.coordinate.seconds
-                )
+                fraction = (query - a.coordinate) / (right.coordinate - a.coordinate)
                 pose = Pose2D(
                     a.pose.x + (right.pose.x - a.pose.x) * fraction,
                     a.pose.y + (right.pose.y - a.pose.y) * fraction,
@@ -713,15 +703,12 @@ class PoseEstimation:
                 )
                 errors = (linear, linear, angular)
                 quality = min(a.quality, right.quality)
-                raw_time = right.coordinate.seconds
-            elif query > a.coordinate.seconds:
+                raw_time = right.coordinate
+            elif query > a.coordinate:
                 if motion is None or not motion.healthy:
                     continue
-                dt = query - a.coordinate.seconds
-                if (not simulation and dt >= (default_policy().hard_age_ms / 1000)) or (
-                    simulation
-                    and (motion.measurement is None or not coordinate.same_axis(motion.measurement))
-                ):
+                dt = (query - a.coordinate) / 1e9
+                if dt >= default_policy().hard_age_s:
                     continue
                 try:
                     increment, prediction_error, dependencies, travel = self._recorded_prediction(
@@ -841,41 +828,23 @@ class PoseEstimation:
                 tuple(dict.fromkeys(r for c in chosen for r in c.anchor_roots)),
                 prediction,
                 measurement_steady=measurement_steady,
-                measurement=coordinate,
+                stamp_ns=coordinate,
             )
         # Relative integration is not an absolute-fix freshness claim.
         if motion is not None and motion.healthy:
-            relative_left = [
-                p
-                for p in self._relative
-                if p.coordinate.same_axis(coordinate) and p.coordinate.seconds <= query
-            ]
+            relative_left = [p for p in self._relative if p.coordinate <= query]
             if relative_left:
                 relative = relative_left[-1]
-                dt = query - relative.coordinate.seconds
-                if 0 <= dt and (
-                    (
-                        not simulation
-                        and (
-                            dt < (default_policy().hard_age_ms / 1000)
-                            or any(
-                                s.start_measurement <= relative.coordinate.seconds
-                                and s.end_measurement >= query
-                                for s in self._segments
-                            )
-                        )
-                    )
-                    or (
-                        simulation
-                        and motion.measurement is not None
-                        and coordinate.same_axis(motion.measurement)
-                    )
+                dt = (query - relative.coordinate) / 1e9
+                if 0 <= dt < default_policy().hard_age_s or any(
+                    s.start_measurement <= relative.coordinate and s.end_measurement >= query
+                    for s in self._segments
                 ):
                     segment = next(
                         (
                             s
                             for s in self._segments
-                            if s.start_measurement == relative.coordinate.seconds
+                            if s.start_measurement == relative.coordinate
                             and s.end_measurement >= query
                         ),
                         None,
@@ -909,7 +878,7 @@ class PoseEstimation:
                         pose=compose(relative.pose, increment),
                         stamp_ros=stamp_ros,
                         measurement_steady=measurement_steady,
-                        measurement=coordinate,
+                        stamp_ns=coordinate,
                         kind="relative_dead_reckoning",
                         error_m=None
                         if relative.error_m is None

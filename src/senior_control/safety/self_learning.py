@@ -10,7 +10,7 @@ from shapely.strtree import STRtree
 
 from senior_control.motion.learning_record import MAX_ANCHORS
 from senior_control.safety.self_filter import FilteredObservation, Point2D
-from senior_control.sensors.time_proof import MeasurementTime, SourceTime
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 # User-specified body-return position matching tolerance; not sensor accuracy
 # or a margin on the physical body / external obstacle geometry.
@@ -39,14 +39,15 @@ class SelfReturnModel:
             raise ValueError("invalid self-return boundary")
         self.bounds = self.body.bounds
         self.frames: list[tuple[tuple[float, float], ...]] = []
-        self.frame_measurements: list[MeasurementTime] = []
+        self.frame_measurements: list[int] = []
         self.frame_keys: list[tuple[str, str, int]] = []
         self.segment_id: str | None = None
         self._capture_origin: tuple[str, str] | None = None
-        self._capture_floor: tuple[MeasurementTime, int] | None = None
+        self._capture_floor: tuple[int, int] | None = None
         self._max_sequence = 0
         self._frontier_host = 0.0
-        self._frontier_measurement: MeasurementTime | None = None
+        self._frontier_measurement: int | None = None
+        self._clock_generation = 0
         self._candidates: tuple[Point2D, ...] | None = None
         self._observed_count = 0
         self.learned: tuple[tuple[float, float], ...] = ()
@@ -77,7 +78,7 @@ class SelfReturnModel:
         self,
         observation: FilteredObservation,
         *,
-        capture: SourceTime,
+        capture: RawCaptureHeader,
         segment_id: str,
     ) -> bool:
         points = tuple(
@@ -89,39 +90,40 @@ class SelfReturnModel:
             self.segment_id = segment_id
         if self.segment_id != segment_id:
             return False  # Caller must explicitly establish a new evidence segment.
-        origin = capture.clock_domain, capture.source_epoch
+        origin = capture.bridge_boot_id, capture.source_epoch
+        generation = capture.time.clock_generation
         if self._capture_origin is None:
             self._capture_origin = origin
         if origin != self._capture_origin:
             return False
         key = (*origin, capture.sequence)
-        measurement = capture.measurement
+        measurement = capture.time.stamp_ns
         frontier = self._frontier_measurement
-        if frontier is not None and not measurement.same_axis(frontier):
-            return False  # Caller must open a new evidence segment on world reset.
+        if frontier is not None and capture.time.clock_generation != self._clock_generation:
+            return False  # Caller must open a new evidence segment on clock rollback.
+        self._clock_generation = generation
         if key in self.frame_keys or (
             self._capture_floor is not None
-            and (measurement.seconds, capture.sequence)
-            < (self._capture_floor[0].seconds, self._capture_floor[1])
+            and (measurement, capture.sequence) < (self._capture_floor[0], self._capture_floor[1])
         ):
             return False
         if capture.sequence > self._max_sequence:
             if capture.end_steady < self._frontier_host or (
-                frontier is not None and measurement.elapsed(frontier) < 0
+                frontier is not None and ((measurement - frontier) / 1e9) < 0
             ):
                 raise ValueError("learning_capture_clock_regressed")
             self._max_sequence = capture.sequence
             self._frontier_host, self._frontier_measurement = capture.end_steady, measurement
         elif capture.end_steady > self._frontier_host or (
-            frontier is not None and measurement.elapsed(frontier) > 0
+            frontier is not None and ((measurement - frontier) / 1e9) > 0
         ):
             raise ValueError("learning_capture_sequence_time_mismatch")
         i = bisect_left(
             [
-                (time.seconds, identity[2])
+                (time, identity[2])
                 for time, identity in zip(self.frame_measurements, self.frame_keys, strict=True)
             ],
-            (measurement.seconds, capture.sequence),
+            (measurement, capture.sequence),
         )
         connected = self.connected_points(observation)
         if self._candidates is None:

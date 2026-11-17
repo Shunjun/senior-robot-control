@@ -18,7 +18,7 @@ from senior_control.motion.observations import (
 )
 from senior_control.motion.sample_types import MotionSample, physical_support
 from senior_control.motion.source_modes import SourceView
-from senior_control.sensors.time_proof import MeasurementTime
+from senior_control.sensors.sample_time import ClockTracker
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class _State:
     sequence: int = 0
     end_steady: float = -math.inf
     received_steady: float = -math.inf
-    measurement: MeasurementTime | None = None
+    stamp_ns: int | None = None
     observation: AdaptedObservation | None = None
     count: int = 0
     first_measurement_steady: float = 0.0
@@ -58,6 +58,7 @@ class AdmissionOwner:
         self.config = config
         self._states = {source: _State() for source in Source}
         self._now_steady: float | None = None
+        self._tracker = ClockTracker()
         self._heading_epoch: str | None = None
         self._retired_headings: set[str] = set()
         self._heading_stamp = -math.inf
@@ -65,7 +66,12 @@ class AdmissionOwner:
 
     def _clock(self, now_ros: float, now_steady: float) -> bool:
         finite = math.isfinite(now_ros) and math.isfinite(now_steady)
-        rollback = finite and self._now_steady is not None and now_steady < self._now_steady
+        rollback = (
+            finite
+            and self._tracker.observe(
+                ros_ns=round(now_ros * 1e9), steady_ns=round(now_steady * 1e9)
+            ).discontinuity
+        )
         if not finite or rollback:
             for state in self._states.values():
                 state.interrupt()
@@ -88,12 +94,11 @@ class AdmissionOwner:
     def _source_order(observation: MotionSample, state: _State) -> str | None:
         if observation.epoch in state.retired:
             return "retired_epoch"
-        coordinate = physical_support(observation).end
+        coordinate = physical_support(observation).end_ns
         if (
             observation.epoch == state.epoch
-            and state.measurement is not None
-            and coordinate.same_axis(state.measurement)
-            and coordinate.seconds < state.measurement.seconds
+            and state.stamp_ns is not None
+            and (coordinate < state.stamp_ns)
         ):
             return "physical_measurement_reordering"
         if observation.epoch == state.epoch and (
@@ -124,14 +129,14 @@ class AdmissionOwner:
         ):
             state.sequence = observation.sequence
             state.end_steady = observation.end_steady
-            state.measurement = physical_support(observation).end
+            state.stamp_ns = physical_support(observation).end_ns
             state.received_steady = observation.received_steady
         state.interrupt()
 
     def _admit_heading(self, heading: Heading, state: _State) -> str | None:
         if heading.received_steady < self._heading_received or (
             heading.epoch == self._heading_epoch
-            and heading.measurement_steady < self._heading_stamp
+            and heading.time.stamp_ns < self._heading_stamp
         ):
             return "heading_reordering"
         if heading.epoch in self._retired_headings:
@@ -143,7 +148,7 @@ class AdmissionOwner:
             self._retired_headings.add(self._heading_epoch)
             state.interrupt()
         self._heading_epoch = heading.epoch
-        self._heading_stamp = heading.measurement_steady
+        self._heading_stamp = heading.time.stamp_ns
         self._heading_received = heading.received_steady
         return None
 
@@ -159,7 +164,7 @@ class AdmissionOwner:
         state.epoch = observation.epoch
         state.sequence = 0
         state.end_steady = -math.inf
-        state.measurement = None
+        state.stamp_ns = None
         state.received_steady = -math.inf
         return None
 
@@ -190,7 +195,7 @@ class AdmissionOwner:
         state.count += 1
         state.sequence, state.end_steady = observation.sequence, observation.end_steady
         state.received_steady = observation.received_steady
-        state.measurement = physical_support(observation).end
+        state.stamp_ns = physical_support(observation).end_ns
         state.observation = adapt(
             observation, now_ros=now_ros, now_steady=now_steady, rule=rule, heading=heading
         )

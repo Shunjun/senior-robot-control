@@ -16,7 +16,7 @@ from senior_control.motion.temporal import (
     TemporalResolver,
     Values,
 )
-from senior_control.sensors.time_proof import MeasurementInterval
+from senior_control.sensors.sample_time import StampInterval
 
 
 def covariance_intersection(m1: float, p1: float, m2: float, p2: float) -> tuple[float, float]:
@@ -106,7 +106,7 @@ class FusionSnapshot:
     original_covariances: tuple[tuple[Key, Covariance | None], ...]
     current_reference: CurrentReference
     source_health: tuple[SourceHealth, ...]
-    measurement_interval: MeasurementInterval | None = None
+    measurement_interval: StampInterval | None = None
 
 
 @dataclass(frozen=True)

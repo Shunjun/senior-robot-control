@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from senior_control.motion.learning_record import LearningRecord, Phase
-from senior_control.sensors.time_proof import MeasurementTime, SourceTime
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 if TYPE_CHECKING:
     from senior_control.safety.self_filter import FilteredObservation
@@ -51,7 +51,8 @@ class StartupLearning:
         self._frame_keys: set[tuple[str, str, int]] = set()
         self._capture_origin: tuple[str, str] | None = None
         self._capture_frontier = 0.0
-        self._capture_measurement: MeasurementTime | None = None
+        self._capture_measurement: int | None = None
+        self._capture_generation: int | None = None
         self._segment_floor = 0.0
         self.validation_samples = 0
         self._motion_frames = 0
@@ -242,7 +243,7 @@ class StartupLearning:
         self._phase()
 
     def frame(
-        self, model: SelfReturnModel, observation: FilteredObservation, *, capture: SourceTime
+        self, model: SelfReturnModel, observation: FilteredObservation, *, capture: RawCaptureHeader
     ) -> None:
         self._restore()
         if (
@@ -256,11 +257,12 @@ class StartupLearning:
             self._first_now, self._segment_floor
         ):
             return
-        origin = capture.clock_domain, capture.source_epoch
-        physical = capture.measurement
+        origin = capture.bridge_boot_id, capture.source_epoch
+        generation = capture.time.clock_generation
+        physical = capture.time.stamp_ns
         changed_source = self._capture_origin is not None and self._capture_origin != origin
-        changed_axis = self._capture_measurement is not None and not physical.same_axis(
-            self._capture_measurement
+        changed_axis = (
+            self._capture_generation is not None and generation != self._capture_generation
         )
         if changed_source or changed_axis:
             if capture.end_steady < self._capture_frontier:
@@ -269,11 +271,12 @@ class StartupLearning:
             self._segment_floor = capture.start_steady
         self._capture_origin = origin
         self._capture_measurement = physical
+        self._capture_generation = generation
         self._capture_frontier = max(self._capture_frontier, capture.end_steady)
         if self.resample_required or model.segment_id != self.segment_id:
             model.begin_segment(self.segment_id)
             self.resample_required = False
-        key = capture.clock_domain, capture.source_epoch, capture.sequence
+        key = capture.bridge_boot_id, capture.source_epoch, capture.sequence
         if key in self._frame_keys:
             return
         collecting = (

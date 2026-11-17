@@ -138,7 +138,7 @@ class RgbdCoordinator:
                 tf_epoch=epoch,
                 dependencies=(epoch,),
                 exclusion=exclusion,
-                static_sim_declared=self.profile.static_background_declared,
+                static_background_declared=self.profile.static_background_declared,
             )
         except ValueError:
             self._pending_invalid = "invalid_frame"

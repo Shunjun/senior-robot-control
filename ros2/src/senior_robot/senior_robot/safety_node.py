@@ -1,8 +1,8 @@
 """Independent safety process.
 
-Startup requires an explicit valid hardware or isolated simulation motion profile.
-The default 20 Hz timer is simulation configuration, not a physical braking or
-timing guarantee. The shared motion core owns constraints and continuous braking;
+Startup requires an explicit generic motion profile file.
+The default 20 Hz control frequency is a software setting, not a physical braking
+or timing guarantee. The shared motion core owns constraints and continuous braking;
 original command deadlines use the monotonic clock and need no stop message.
 This process does not arbitrate control, publish heartbeats, or remap Nav2.
 It does not read wheel odometry or /ground_truth/odom, and it does not use a
@@ -43,14 +43,13 @@ from senior_control.motion.source_fences import (
 from senior_control.safety.arbiter import FinalCommandFence
 from senior_control.safety.freshness import SafetyFreshness
 from senior_control.sensors.policy import default_policy
-from senior_control.sensors.time_proof import source_time
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
     egress_from_message,
     safety_scan_capture,
 )
-from senior_control.vision.raw_capture import RawCaptureAdmission
+from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_robot.motion_lifecycle import MotionExecutor, run
 from senior_robot.raw_safety_observation import RawSafetyObservation
@@ -94,27 +93,17 @@ class SafetyGate(Node):
         self.declare_parameter("depth_policy", "required")
         self.declare_parameter("depth_collision_min_z", 1e10)
         self.declare_parameter("depth_collision_max_z", -1e10)
-        self.declare_parameter("output_topic", "/control/actuator_target")
+        self.declare_parameter("output_topic", "/cmd_vel")
         self._body = str(self.get_parameter("body_frame").value)
         rate = float(self.get_parameter("simulation_rate_hz").value)
         if not self._body or not math.isfinite(rate) or rate <= 0:
             raise ValueError("control frequency must be finite/positive and body_frame nonempty")
         self._cadence = ControlCadence((1.0 / rate) * 1000)
-        self.declare_parameter("motion_core_profile", "")
         self.declare_parameter("hardware_motion_profile", "")
         hardware_path = str(self.get_parameter("hardware_motion_profile").value)
-        candidate = str(self.get_parameter("motion_core_profile").value)
-        import os
-
         from senior_robot.motion_profile import select_motion_profile
 
-        candidate_profile = select_motion_profile(
-            candidate,
-            hardware_path=hardware_path,
-            simulated_clock=bool(self.get_parameter("use_sim_time").value),
-            localhost_only=os.environ.get("ROS_LOCALHOST_ONLY", ""),
-            domain_id=os.environ.get("ROS_DOMAIN_ID", ""),
-        )
+        candidate_profile = select_motion_profile(hardware_path=hardware_path)
         from senior_robot.motion_profile import configure_startup_learning
 
         self.declare_parameter(
@@ -170,8 +159,6 @@ class SafetyGate(Node):
         )
         self._depth_relay_gid = ""
         output = str(self.get_parameter("output_topic").value)
-        if output == "/cmd_vel":
-            raise ValueError("typed actuator topic must be independent of /cmd_vel")
         self._bounded_scan_topic = str(self.get_parameter("bounded_scan_topic").value)
         self._raw_scan_topic = str(self.get_parameter("raw_scan_topic").value)
         self._bounded_depth_topic = str(self.get_parameter("bounded_depth_topic").value)
@@ -257,10 +244,11 @@ class SafetyGate(Node):
     def _publish_inputs(self):
         sensors = self._input_sensors
         now = time.monotonic()
-        ros = self.get_clock().now().nanoseconds / 1e9
+        ros_ns = self.get_clock().now().nanoseconds
+        ros = ros_ns / 1e9
         sensors.poses = list(self._input_bridge.core.poses)
         sensors.ingest_poses(sensors.poses)
-        reference = sensors.estimate(ros, now)
+        reference = sensors.estimate(ros, now, now_ros_ns=ros_ns)
         ready = self._scan_topology_ready()
         state = {k: v for k, v in sensors.__dict__.items() if k not in {"profile", "diagnostics"}}
         self._input_channel.put(
@@ -524,7 +512,7 @@ class SafetyGate(Node):
         try:
             steady = time.monotonic()
             stamp = Time.from_msg(msg.stamp).nanoseconds / 1e9
-            proof = source_time(msg.raw_capture.timing)
+            capture = capture_from_message(msg.raw_capture)
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
@@ -534,7 +522,7 @@ class SafetyGate(Node):
                 or not 1 <= len(msg.ranges) <= 2048
                 or not all(math.isfinite(v) for v in (msg.ingress_steady, msg.ingress_ros))
                 or not 0 <= steady - msg.ingress_steady <= self._freshness.max_age
-                or not self._freshness.scan(proof.end_steady, msg.ingress_steady, steady)
+                or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
             self._scans.append(
@@ -543,7 +531,7 @@ class SafetyGate(Node):
                     msg.ingress_steady,
                     msg.ingress_ros,
                     stamp,
-                    proof.end_steady,
+                    capture.measurement_steady,
                 )
             )
         except (ValueError, OverflowError):
@@ -657,9 +645,9 @@ class SafetyGate(Node):
                                 body.frame_id,
                                 body.calibration_id,
                                 False,
-                                measurement_steady=source_time(
-                                    body.depth_capture.timing
-                                ).end_steady,
+                                measurement_steady=capture_from_message(
+                                    body.depth_capture
+                                ).measurement_steady,
                             ),
                             now_ros_ns=ros_ns,
                             now_steady=steady,
@@ -696,7 +684,7 @@ class SafetyGate(Node):
                 msg.frame_id,
                 msg.calibration_id,
                 valid,
-                measurement_steady=source_time(msg.depth_capture.timing).end_steady,
+                measurement_steady=capture_from_message(msg.depth_capture).measurement_steady,
             )
             generation = admission.generation
             admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)

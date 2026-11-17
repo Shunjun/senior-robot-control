@@ -256,7 +256,7 @@ class CaptureJoiner:
         self._identities[stream] = identity
         self._times[stream] = (
             header.measurement_steady,
-            header.timing.sequence,
+            header.sequence,
             header.received_steady,
         )
         self._time_sources[stream] = source
