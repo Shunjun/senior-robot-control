@@ -224,12 +224,11 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
   }
 }
 
-bool RawReceipt::clock_ok()
+bool RawReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
   senior_motion_msgs::time::ClockObservation observed;
   try {
-    observed = clock_.observe(get_clock()->now().nanoseconds(),
-                              senior_motion_msgs::time::monotonic_ns());
+    observed = clock_.observe(ros_ns, steady_ns);
   } catch (const std::invalid_argument & error) {
     invalidate_all(error.what());
     return false;
@@ -285,10 +284,28 @@ bool RawReceipt::qualify_source(size_t index, const rmw_gid_t & incoming,
   return !failed_;
 }
 
+std::optional<ReceiptClock> RawReceipt::begin_receipt()
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const auto ros = get_clock()->now().nanoseconds();
+  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  if (!clock_ok(ros, steady)) return std::nullopt;
+  return ReceiptClock{ros, steady, clock_generation_};
+}
+
+// Caller holds the owner lock. A changed segment invalidates the old callback;
+// its coordinates are never retaken or mapped into the replacement segment.
+bool RawReceipt::current_receipt(const ReceiptClock & receipt)
+{
+  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+    receipt.generation == clock_generation_;
+}
+
 void RawReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok()) return;
+  if (!clock_ok(get_clock()->now().nanoseconds(),
+                senior_motion_msgs::time::monotonic_ns())) return;
   inspect_depth_owner();
   inspect_semantic_owner();
   std::array<bool, 4> changed{};
@@ -314,18 +331,20 @@ void RawReceipt::inspect_topology()
 
 void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message, const rclcpp::MessageInfo & info)
 {
-  const int64_t received_ros_ns = get_clock()->now().nanoseconds();
-  const uint64_t received_steady_ns = senior_motion_msgs::time::monotonic_ns();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros_ns = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   if (before_verify_) before_verify_(index, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok() ||
+  if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
                                      received_steady_ns)) return;
   std::optional<senior_motion_msgs::time::SampleTime> sample;
   try {
     sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
-                                         received_steady_ns, clock_generation_);
+                                         received_steady_ns, receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate_all(error.what(), index, &message.header, received_ros_ns,
                    received_steady_ns, gid_hex(incoming));
@@ -359,23 +378,26 @@ void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message,
   output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
   if (!ledger_.observe(index, output.capture, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   (index == 0 ? rgb_publisher_ : depth_publisher_)->publish(output);
 }
 
 void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & message, const rclcpp::MessageInfo & info)
 {
-  const int64_t received_ros_ns = get_clock()->now().nanoseconds();
-  const uint64_t received_steady_ns = senior_motion_msgs::time::monotonic_ns();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros_ns = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   if (before_verify_) before_verify_(index, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok() ||
+  if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
                                      received_steady_ns)) return;
   std::optional<senior_motion_msgs::time::SampleTime> sample;
   try {
     sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
-                                         received_steady_ns, clock_generation_);
+                                         received_steady_ns, receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate_all(error.what(), index, &message.header, received_ros_ns,
                    received_steady_ns, gid_hex(incoming));
@@ -415,6 +437,7 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
   output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
   if (!ledger_.observe(index, output.capture, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   (index == 2 ? rgb_info_publisher_ : depth_info_publisher_)->publish(output);
 }
 bool RawReceipt::retire_gid(std::set<std::string> & retired, const std::string & gid)

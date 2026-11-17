@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rcl/time.h>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
 
@@ -169,4 +170,90 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
   }));
   (void)output;
 }
+
+TEST(RawScanReceipt, RollbackDuringQualificationCannotRelabelOldCallback)
+{
+  rclcpp::init(0, nullptr);
+  std::atomic<bool> arm{false};
+  rclcpp::Clock::SharedPtr clock;
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  auto bridge = std::make_shared<senior_sensor_ingress::ScanReceipt>(
+    options, [&](size_t stream, const rmw_gid_t &) {
+      if (stream == 6 && arm.exchange(false)) {
+        std::lock_guard<std::mutex> clock_lock(clock->get_clock_mutex());
+        EXPECT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), 90000000000LL), RCL_RET_OK);
+      }
+    });
+  clock = bridge->get_clock();
+  {
+    std::lock_guard<std::mutex> clock_lock(clock->get_clock_mutex());
+    ASSERT_EQ(rcl_enable_ros_time_override(clock->get_clock_handle()), RCL_RET_OK);
+    ASSERT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), 100000000000LL), RCL_RET_OK);
+  }
+  auto fixture = std::make_shared<rclcpp::Node>("scan_clock_qualification_fixture");
+  using Scan = sensor_msgs::msg::LaserScan;
+  using Bounded = senior_motion_msgs::msg::BoundedRawLaserScan;
+  std::mutex mutex;
+  std::vector<Bounded> received;
+  auto publisher = fixture->create_publisher<Scan>("/scan", rclcpp::SensorDataQoS());
+  auto subscription = fixture->create_subscription<Bounded>(
+    "/safety/raw/scan", rclcpp::SensorDataQoS(), [&](Bounded::ConstSharedPtr message) {
+      std::lock_guard<std::mutex> lock(mutex);
+      received.push_back(*message);
+    });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(bridge); executor.add_node(fixture);
+  std::thread thread([&] {executor.spin();});
+  auto cleanup = [&](int *) {
+    executor.cancel(); if (thread.joinable()) thread.join(); rclcpp::shutdown();
+  };
+  int sentinel = 0;
+  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
+  ASSERT_TRUE(wait_until([&] {return publisher->get_subscription_count() > 0;}));
+  Scan scan;
+  scan.header.frame_id = "laser";
+  scan.angle_min = -1; scan.angle_max = 1; scan.angle_increment = 1;
+  scan.range_min = .1; scan.range_max = 10; scan.ranges = {1, 2, 3};
+  scan.header.stamp = rclcpp::Time(99900000000LL);
+  publisher->publish(scan);
+  uint64_t original_generation = 0;
+  ASSERT_TRUE(wait_until([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto & item : received) if (item.capture.valid) {
+      original_generation = item.capture.clock_generation;
+      return true;
+    }
+    return false;
+  }));
+  // Entry is in ROS100; the existing qualification hook changes it to ROS90.
+  scan.header.stamp = rclcpp::Time(99990000000LL);
+  const auto old_stamp = scan.header.stamp;
+  arm = true;
+  publisher->publish(scan);
+  ASSERT_TRUE(wait_until([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto & item : received) if (item.capture.reason == "clock_rollback") return true;
+    return false;
+  }));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto & item : received) EXPECT_FALSE(item.capture.valid && item.capture.stamp == old_stamp);
+  }
+  // The rejected callback must not poison the new segment's stamp frontier.
+  scan.header.stamp = rclcpp::Time(89990000000LL);
+  publisher->publish(scan);
+  ASSERT_TRUE(wait_until([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto & item : received) if (item.capture.valid && item.capture.stamp == scan.header.stamp) {
+      EXPECT_GT(item.capture.clock_generation, original_generation);
+      EXPECT_EQ(rclcpp::Time(item.capture.received_ros).nanoseconds(), 90000000000LL);
+      EXPECT_EQ(item.capture.received_steady_ns - item.capture.sample_steady_ns, 10000000ULL);
+      return true;
+    }
+    return false;
+  }));
+  (void)subscription;
+}
+
 }  // namespace

@@ -138,12 +138,11 @@ void ScanReceipt::invalidate(const std::string & reason, const Scan * source,
   publisher_->publish(output);
 }
 
-bool ScanReceipt::clock_ok()
+bool ScanReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
   senior_motion_msgs::time::ClockObservation observed;
   try {
-    observed = clock_.observe(get_clock()->now().nanoseconds(),
-                              senior_motion_msgs::time::monotonic_ns());
+    observed = clock_.observe(ros_ns, steady_ns);
   } catch (const std::invalid_argument & error) {
     invalidate(error.what());
     return false;
@@ -157,10 +156,28 @@ bool ScanReceipt::clock_ok()
   return !failed_;
 }
 
+std::optional<ReceiptClock> ScanReceipt::begin_receipt()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto ros = get_clock()->now().nanoseconds();
+  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  if (!clock_ok(ros, steady)) return std::nullopt;
+  return ReceiptClock{ros, steady, clock_generation_};
+}
+
+// Caller holds the owner lock. A changed segment invalidates the old callback;
+// its coordinates are never retaken or mapped into the replacement segment.
+bool ScanReceipt::current_receipt(const ReceiptClock & receipt)
+{
+  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+    receipt.generation == clock_generation_;
+}
+
 void ScanReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clock_ok()) return;
+  if (!clock_ok(get_clock()->now().nanoseconds(),
+                senior_motion_msgs::time::monotonic_ns())) return;
   inspect_owner(safety_owner_, 0);
   inspect_owner(filter_owner_, 1);
   if (!active_) return;
@@ -178,13 +195,15 @@ void ScanReceipt::inspect_topology()
 
 void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rclcpp::MessageInfo & info)
 {
-  const int64_t received_ros = get_clock()->now().nanoseconds();
-  const uint64_t received_steady_ns = senior_motion_msgs::time::monotonic_ns();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   const auto actual = gid_hex(incoming);
   if (before_verify_) before_verify_(6, incoming);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clock_ok() || retired_gids_.count(actual) != 0) return;
+  if (!current_receipt(*receipt) || retired_gids_.count(actual) != 0) return;
   const auto graph = get_publishers_info_by_topic(input_topic_);
   const bool nonzero = std::any_of(std::begin(incoming.data), std::end(incoming.data),
                                    [](uint8_t value) {return value != 0;});
@@ -216,7 +235,7 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
   std::optional<senior_motion_msgs::time::SampleTime> sample;
   try {
     sample = stamps_.accept(message.header.stamp, received_ros, received_steady_ns,
-                            clock_generation_);
+                            receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate(error.what(), &message, received_ros, received_steady_ns, actual);
     return;
@@ -256,6 +275,7 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
   header.valid = true;
   invalid_ = false;
   if (!ledger_.observe(output, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   publisher_->publish(output);
 }
 bool ScanReceipt::qualify_owner(Owner & owner, const rmw_gid_t & incoming,

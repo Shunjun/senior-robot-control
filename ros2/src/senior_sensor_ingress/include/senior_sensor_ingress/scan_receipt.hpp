@@ -30,7 +30,9 @@ private:
   using Bounded = senior_motion_msgs::msg::BoundedRawLaserScan;
   std::string new_epoch();
   bool retire(const std::string & gid);
-  bool clock_ok();
+  bool clock_ok(int64_t ros_ns, uint64_t steady_ns);
+  std::optional<ReceiptClock> begin_receipt();
+  bool current_receipt(const ReceiptClock & receipt);
   void invalidate(const std::string & reason, const Scan * source = nullptr,
                   int64_t received_ros = 0, uint64_t received_steady_ns = 0,
                   const std::string & raw_gid = "");

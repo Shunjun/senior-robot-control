@@ -53,15 +53,24 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
   if (closed_) {
     return false;
   }
-  senior_motion_msgs::time::ClockObservation observed;
+  bool discontinuity = now < last_steady_ns_ || (now == 0 && source_);
   try {
-    observed = clock_.observe(node_.get_clock()->now().nanoseconds(), now);
+    discontinuity = clock_.observe(node_.get_clock()->now().nanoseconds(), now).discontinuity ||
+      discontinuity;
   } catch (const std::invalid_argument &) {
-    retire_source();
-    return false;
+    discontinuity = true;
   }
-  if (observed.discontinuity || now < last_steady_ns_ || (now == 0 && source_)) {
-    retire_source();
+  if (discontinuity) {
+    if (source_) {
+      // An established map source remains terminal across a clock segment change.
+      retire_source();
+    } else {
+      pending_.clear();
+      last_sequence_ = 0;
+      last_measurement_ns_ = 0;
+      receipt_floor_ns_ = now > 0 ? static_cast<uint64_t>(now) : 0;
+      last_steady_ns_ = now;
+    }
     return false;
   }
   last_steady_ns_ = now;
@@ -103,7 +112,8 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   const auto & receipt = scan->capture;
   const auto actual = gid_hex(info.get_rmw_message_info().publisher_gid.data);
-  if (actual.empty() || actual != receipt.bridge_gid) {
+  if (actual.empty() || actual != receipt.bridge_gid ||
+    receipt.received_steady_ns < receipt_floor_ns_) {
     return;
   }
   if (source_) {

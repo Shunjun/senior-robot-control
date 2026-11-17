@@ -57,6 +57,7 @@ private:
   std::uint64_t last_sequence_{0};
   std::int64_t last_measurement_ns_{0};
   std::int64_t last_steady_ns_{0};
+  std::uint64_t receipt_floor_ns_{0};
   senior_motion_msgs::time::ClockTracker clock_;
   bool closed_{false};
   rclcpp::Subscription<Message>::SharedPtr subscription_;

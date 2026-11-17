@@ -67,7 +67,9 @@ private:
                       int64_t received_ros_ns = 0, uint64_t received_steady_ns = 0,
                       const std::string & raw_gid = "");
   Header header(size_t index, const std::string & reason);
-  bool clock_ok();
+  bool clock_ok(int64_t ros_ns, uint64_t steady_ns);
+  std::optional<ReceiptClock> begin_receipt();
+  bool current_receipt(const ReceiptClock & receipt);
   void on_image(size_t index, const sensor_msgs::msg::Image & message, const rclcpp::MessageInfo & info);
   void on_info(size_t index, const sensor_msgs::msg::CameraInfo & message, const rclcpp::MessageInfo & info);
   void on_depth(const senior_motion_msgs::msg::BoundedDepthEvidence & message,

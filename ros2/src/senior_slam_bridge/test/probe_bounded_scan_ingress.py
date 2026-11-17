@@ -27,7 +27,9 @@ from probe_read_graph import (
     scan_in_room,
     transform,
 )
+from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from rosgraph_msgs.msg import Clock
 from senior_motion_msgs.msg import BoundedRawLaserScan
 from senior_slam_bridge.srv import CaptureGraph, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
@@ -80,8 +82,10 @@ def bounded_scan(scan, received_ros, bridge_gid, raw_gid, sequence):
     result.capture.received_ros = received_ros
     result.capture.received_steady_ns = time.monotonic_ns()
     result.capture.sample_steady_ns = result.capture.received_steady_ns - (
-        received_ros.sec * 1_000_000_000 + received_ros.nanosec
-        - scan.header.stamp.sec * 1_000_000_000 - scan.header.stamp.nanosec
+        received_ros.sec * 1_000_000_000
+        + received_ros.nanosec
+        - scan.header.stamp.sec * 1_000_000_000
+        - scan.header.stamp.nanosec
     )
     result.capture.clock_generation = 1
     result.capture.frame_id = scan.header.frame_id
@@ -100,7 +104,7 @@ def arguments(executable, capture_directory):
     if capture_directory is None:
         index = result.index("capture_directory:=")
         del result[index - 1 : index + 1]
-    result.extend(["-p", f"bounded_scan_topic:={BOUNDED_TOPIC}"])
+    result.extend(["-p", f"bounded_scan_topic:={BOUNDED_TOPIC}", "-p", "use_sim_time:=true"])
     return result
 
 
@@ -111,7 +115,9 @@ def probe(executable, root, combined):
     if staging is not None:
         staging.mkdir(mode=0o700)
     rclpy.init(args=[])
-    node = rclpy.create_node("slam_candidate_probe")
+    node = rclpy.create_node(
+        "slam_candidate_probe", parameter_overrides=[Parameter("use_sim_time", value=True)]
+    )
     bridge = rclpy.create_node("scan_receipt")
     try:
         graph = node.create_client(ReadGraph, SERVICE)
@@ -121,10 +127,33 @@ def probe(executable, root, combined):
         publisher = bridge.create_publisher(
             BoundedRawLaserScan, BOUNDED_TOPIC, qos_profile_sensor_data
         )
+        clock = node.create_publisher(Clock, "/clock", 10)
+
+        def set_clock(ns):
+            message = Clock()
+            message.clock.sec, message.clock.nanosec = divmod(ns, 1_000_000_000)
+            end = time.monotonic() + 2
+            while time.monotonic() < end:
+                clock.publish(message)
+                rclpy.spin_once(node, timeout_sec=0.01)
+                if node.get_clock().now().nanoseconds == ns:
+                    return message.clock
+            raise AssertionError("test ROS clock did not reach the requested coordinate")
+
+        clock_origin = time.monotonic_ns()
+
+        def next_stamp():
+            return set_clock(90_000_000_000 + time.monotonic_ns() - clock_origin)
+
         static_tf = StaticTransformBroadcaster(node)
         odom_tf = TransformBroadcaster(node)
-        static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER))
         with candidate(arguments(executable, staging)) as process:
+            end = time.monotonic() + 4
+            while clock.get_subscription_count() < 2 and time.monotonic() < end:
+                set_clock(100_000_000_000)
+            assert clock.get_subscription_count() >= 2
+            set_clock(100_000_000_000)
+            spin_for(node, 0.08)
             assert graph.wait_for_service(timeout_sec=8)
             if staging is None:
                 assert not capture.service_is_ready()
@@ -141,10 +170,27 @@ def probe(executable, root, combined):
             assert publisher.get_subscription_count() == 1
             assert not raw.get_subscription_count(), "The legacy LaserScan filter still subscribes"
 
+            # Poll observes100->90 before any scan has been admitted. It must
+            # clear only transient state, not terminally close the unused ingress.
+            old_stamp = set_clock(100_000_000_000)
+            spin_for(node, 0.08)
+            old_scan = scan_in_room(old_stamp, 0.0, 0.37)
+            pre_segment = bounded_scan(old_scan, old_stamp, bridge_gid, raw_gid, 1)
+            set_clock(90_000_000_000)
+            spin_for(node, 0.08)
+            clock_origin = time.monotonic_ns()
+            # Install the static fixture only after the clock transition; this
+            # probe isolates scan ingress from TF buffer jump handling.
+            static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER))
+            odom_tf.sendTransform(transform(old_stamp, ODOM, BASE, 0.0, 0.37))
+            publisher.publish(pre_segment)
+            spin_for(node, 0.08)
+            assert not read_snapshot(node, graph).graph_commit_sequence
+
             # No odometry TF is available. Fill the bounded queue and let every entry expire.
             expired = []
             for sequence in range(1, 12):
-                stamp = node.get_clock().now().to_msg()
+                stamp = next_stamp()
                 expired.append(stamp)
                 scan = scan_in_room(stamp, 0.0, 0.37)
                 publisher.publish(bounded_scan(scan, stamp, bridge_gid, raw_gid, sequence))
@@ -157,7 +203,7 @@ def probe(executable, root, combined):
             assert empty.graph_commit_watermark_valid and not empty.graph_commit_sequence
             assert not empty.last_committed_scan_valid
 
-            stamp = node.get_clock().now().to_msg()
+            stamp = next_stamp()
             odom_tf.sendTransform(transform(stamp, ODOM, BASE, 0.0, 0.37))
             scan = scan_in_room(stamp, 0.0, 0.37)
             # The same typed writer cannot substitute an unauthenticated bridge GID.
@@ -167,10 +213,10 @@ def probe(executable, root, combined):
             spin_for(node, 0.12)
             assert not read_snapshot(node, graph).graph_commit_sequence
 
-            valid = bounded_scan(scan, node.get_clock().now().to_msg(), bridge_gid, raw_gid, 13)
+            valid = bounded_scan(scan, next_stamp(), bridge_gid, raw_gid, 13)
             publisher.publish(valid)
             # Same header, different receipt/body. It must never replace the exact queued scan.
-            duplicate = bounded_scan(scan, node.get_clock().now().to_msg(), bridge_gid, raw_gid, 14)
+            duplicate = bounded_scan(scan, next_stamp(), bridge_gid, raw_gid, 14)
             duplicate.ranges[90] += 0.25
             publisher.publish(duplicate)
             committed = wait_for_graph(node, graph, lambda value: value.graph_commit_sequence == 1)
@@ -181,7 +227,7 @@ def probe(executable, root, combined):
             if staging is not None:
                 # A capture is a historical graph cut, not a renewal of scan freshness.
                 spin_for(node, 0.6)
-                assert time.monotonic() - valid.capture.received_steady_ns > 0.5
+                assert time.monotonic_ns() - valid.capture.sample_steady_ns > 500_000_000
                 cut = request(node, capture, CaptureGraph.Request())
                 prefix = check_capture(cut, staging, committed.boot_id)
                 assert cut.last_committed_scan_valid and cut.last_committed_scan == valid.capture

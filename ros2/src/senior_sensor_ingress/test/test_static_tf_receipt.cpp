@@ -211,13 +211,13 @@ TEST(StaticTfReceipt, ZeroClockAdmitsStaticConfigurationWithoutRestamping)
   std::this_thread::sleep_for(80ms);  // allow the 20 ms monitor to observe clock 1
   tick.clock.sec = 2;
   clock->publish(tick);
-  ASSERT_TRUE(wait_for_tf([&] {
+  ASSERT_TRUE(wait_for_tf([&] {return bridge->get_clock()->now().nanoseconds() == 2000000000LL;}));
+  std::this_thread::sleep_for(80ms);
+  senior_motion_msgs::msg::BoundedStaticTf admitted;
+  {
     std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & item : received) if (item.valid && item.admitted) return true;
-    return false;
-  }));
-  std::lock_guard<std::mutex> lock(mutex);
-  const auto & admitted = received.back();
+    admitted = received.back();
+  }
   EXPECT_EQ(admitted.received_ros.sec, 0);
   EXPECT_EQ(admitted.received_ros.nanosec, 0u);
   EXPECT_GT(admitted.received_steady, 0.0);
@@ -225,6 +225,35 @@ TEST(StaticTfReceipt, ZeroClockAdmitsStaticConfigurationWithoutRestamping)
   EXPECT_EQ(admitted.admitted_from_ros.nanosec, 0u);
   EXPECT_GT(admitted.admitted_from_steady, admitted.received_steady);
   EXPECT_EQ(admitted.edges[0].stamp.sec, 0);
+
+  // The transient-local broadcaster sends the mount exactly once above.
+  // A rollback revokes dynamic admission, then reuses that verified config.
+  tick.clock.sec = 1;
+  clock->publish(tick);
+  ASSERT_TRUE(wait_for_tf([&] {return bridge->get_clock()->now().nanoseconds() == 1000000000LL;}));
+  ASSERT_TRUE(wait_for_tf([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    bool revoked = false, recovered = false;
+    for (const auto & item : received) {
+      revoked = revoked || (!item.valid && item.reason == "clock_rollback");
+      recovered = recovered || (item.valid && item.admitted && item.generation > admitted.generation);
+    }
+    return revoked && recovered;
+  }));
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto & recovered = received.back();
+  ASSERT_TRUE(recovered.valid && recovered.admitted);
+  EXPECT_GT(recovered.generation, admitted.generation);
+  EXPECT_EQ(recovered.raw_gid, admitted.raw_gid);
+  EXPECT_EQ(recovered.bridge_boot_id, admitted.bridge_boot_id);
+  EXPECT_EQ(recovered.edges, admitted.edges);
+  EXPECT_EQ(recovered.received_ros, admitted.received_ros);
+  EXPECT_DOUBLE_EQ(recovered.received_steady, admitted.received_steady);
+  EXPECT_EQ(recovered.first_sequence, admitted.first_sequence);
+  EXPECT_EQ(recovered.first_received_ros, admitted.first_received_ros);
+  EXPECT_DOUBLE_EQ(recovered.first_received_steady, admitted.first_received_steady);
+  EXPECT_EQ(recovered.admitted_from_ros.sec, 1);
+  EXPECT_GT(recovered.admitted_from_steady, admitted.admitted_from_steady);
 }
 
 TEST(StaticTfReceipt, AdditionalPublisherRevokesCurrentBinding)

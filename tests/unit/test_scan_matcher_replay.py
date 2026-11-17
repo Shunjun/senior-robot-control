@@ -43,10 +43,10 @@ def test_replay_retains_source_order_and_marks_real_source_changes():
         2_000_000_000,
         4_000_000_000,
     ]
-    assert lines[0].startswith("S 3.0 ")
-    assert lines[1].startswith("S 2.0 ")  # Do not sort or hide ROS rollback.
+    assert lines[0].startswith("S 3.000000000 ")
+    assert lines[1].startswith("S 2.000000000 ")  # Do not sort or hide ROS rollback.
     assert lines[2] == "R"
-    assert lines[3].startswith("S 4.0 ")
+    assert lines[3].startswith("S 4.000000000 ")
     assert lines[0].endswith("1.0 nan 2.0")
 
 

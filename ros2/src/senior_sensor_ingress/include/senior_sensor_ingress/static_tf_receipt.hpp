@@ -28,6 +28,7 @@ private:
   void inspect();
   bool owner_matches(const std::string & gid);
   bool update_clock(int64_t ros_ns, double steady);
+  void revoke_admission(const std::string & reason);
   void invalidate(const std::string & reason, bool retire_source);
   std::string output_gid() const;
 

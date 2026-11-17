@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rcl/time.h>
 #include <sensor_msgs/msg/image.hpp>
 #include <senior_motion_msgs/msg/bounded_raw_image.hpp>
 #include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
@@ -375,4 +376,113 @@ TEST(RawReceipt, RetiredRealRawCallbackCannotRevokeSuccessor)
   }
   (void)output;
 }
+
+TEST(RawReceipt, ImageAndCameraInfoRollbackDuringQualificationKeepOriginalSegments)
+{
+  rclcpp::init(0, nullptr);
+  std::atomic<int> arm_stream{-1};
+  std::atomic<int64_t> rollback_ros{0};
+  rclcpp::Clock::SharedPtr clock;
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  auto bridge = std::make_shared<senior_sensor_ingress::RawReceipt>(
+    options, [&](size_t stream, const rmw_gid_t &) {
+      if (static_cast<int>(stream) != arm_stream.load()) return;
+      arm_stream = -1;
+      std::lock_guard<std::mutex> clock_lock(clock->get_clock_mutex());
+      EXPECT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), rollback_ros.load()), RCL_RET_OK);
+    });
+  clock = bridge->get_clock();
+  {
+    std::lock_guard<std::mutex> clock_lock(clock->get_clock_mutex());
+    ASSERT_EQ(rcl_enable_ros_time_override(clock->get_clock_handle()), RCL_RET_OK);
+    ASSERT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), 100000000000LL), RCL_RET_OK);
+  }
+  auto fixture = std::make_shared<rclcpp::Node>("image_info_clock_qualification_fixture");
+  using Image = sensor_msgs::msg::Image;
+  using Info = sensor_msgs::msg::CameraInfo;
+  using RawImage = senior_motion_msgs::msg::BoundedRawImage;
+  using RawInfo = senior_motion_msgs::msg::BoundedRawCameraInfo;
+  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  struct Record {int stream; Header capture;};
+  std::mutex mutex;
+  std::vector<Record> received;
+  auto image_pub = fixture->create_publisher<Image>("/camera/color/image_raw", rclcpp::SensorDataQoS());
+  auto info_pub = fixture->create_publisher<Info>("/camera/color/camera_info", rclcpp::SensorDataQoS());
+  auto image_sub = fixture->create_subscription<RawImage>(
+    "/safety/raw/rgb", rclcpp::SensorDataQoS(), [&](RawImage::ConstSharedPtr message) {
+      std::lock_guard<std::mutex> lock(mutex); received.push_back({0, message->capture});
+    });
+  auto info_sub = fixture->create_subscription<RawInfo>(
+    "/safety/raw/rgb_info", rclcpp::SensorDataQoS(), [&](RawInfo::ConstSharedPtr message) {
+      std::lock_guard<std::mutex> lock(mutex); received.push_back({2, message->capture});
+    });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(bridge); executor.add_node(fixture);
+  std::thread thread([&] {executor.spin();});
+  auto cleanup = [&](int *) {
+    executor.cancel(); if (thread.joinable()) thread.join(); rclcpp::shutdown();
+  };
+  int sentinel = 0;
+  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
+  ASSERT_TRUE(wait_until([&] {return image_pub->get_subscription_count() && info_pub->get_subscription_count();}));
+  auto publish = [&](int stream, int64_t ns) {
+    std_msgs::msg::Header header;
+    header.stamp = rclcpp::Time(ns); header.frame_id = "optical";
+    if (stream == 0) {
+      Image image;
+      image.header = header; image.width = image.height = 2;
+      image.encoding = "rgb8"; image.step = 6; image.data.assign(12, 7);
+      image_pub->publish(image);
+    } else {
+      Info info;
+      info.header = header; info.width = info.height = 2; info.distortion_model = "plumb_bob";
+      info_pub->publish(info);
+    }
+  };
+  publish(0, 99900000000LL); publish(2, 99900000000LL);
+  ASSERT_TRUE(wait_until([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    bool image = false, info = false;
+    for (const auto & item : received) if (item.capture.valid) {
+      image = image || item.stream == 0; info = info || item.stream == 2;
+    }
+    return image && info;
+  }));
+  auto check_rollback = [&](int stream, int64_t old_stamp, int64_t new_ros) {
+    rollback_ros = new_ros;
+    arm_stream = stream;
+    size_t begin;
+    {std::lock_guard<std::mutex> lock(mutex); begin = received.size();}
+    publish(stream, old_stamp);
+    EXPECT_TRUE(wait_until([&] {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (size_t i = begin; i < received.size(); ++i)
+        if (received[i].capture.reason == "clock_rollback") return true;
+      return false;
+    }));
+    publish(stream, new_ros - 10000000LL);
+    EXPECT_TRUE(wait_until([&] {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (size_t i = begin; i < received.size(); ++i) {
+        const auto & item = received[i];
+        if (item.stream == stream && item.capture.valid &&
+            rclcpp::Time(item.capture.stamp).nanoseconds() == new_ros - 10000000LL) {
+          EXPECT_EQ(rclcpp::Time(item.capture.received_ros).nanoseconds(), new_ros);
+          EXPECT_EQ(item.capture.received_steady_ns - item.capture.sample_steady_ns, 10000000ULL);
+          return true;
+        }
+      }
+      return false;
+    }));
+    std::lock_guard<std::mutex> lock(mutex);
+    for (size_t i = begin; i < received.size(); ++i)
+      EXPECT_FALSE(received[i].stream == stream && received[i].capture.valid &&
+        rclcpp::Time(received[i].capture.stamp).nanoseconds() == old_stamp);
+  };
+  check_rollback(0, 99990000000LL, 90000000000LL);
+  check_rollback(2, 89990000000LL, 80000000000LL);
+  (void)image_sub; (void)info_sub;
+}
+
 }  // namespace

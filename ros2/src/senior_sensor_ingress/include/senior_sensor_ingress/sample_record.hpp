@@ -5,6 +5,12 @@
 #include <senior_motion_msgs/msg/raw_capture_header.hpp>
 
 namespace senior_sensor_ingress {
+// Receipt coordinates and their serialized owner clock segment travel together.
+struct ReceiptClock {
+  int64_t ros_ns;
+  uint64_t steady_ns, generation;
+};
+
 inline double steady_seconds(uint64_t ns) {return static_cast<double>(ns) / 1e9;}
 
 inline int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
