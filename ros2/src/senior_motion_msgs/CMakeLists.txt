@@ -19,7 +19,6 @@ set_target_properties(simulation_timing PROPERTIES
 target_link_libraries(simulation_timing PUBLIC sensor_timing)
 install(TARGETS sensor_timing simulation_timing EXPORT export_sensor_timing
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
-ament_export_targets(export_sensor_timing HAS_LIBRARY_TARGET)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -79,4 +78,6 @@ if(BUILD_TESTING)
       "-DCONSUMER_CXX=${CMAKE_CXX_COMPILER}"
       -P ${CMAKE_CURRENT_SOURCE_DIR}/test/check_installed_headers.cmake)
 endif()
+# Load generated message targets before the handwritten targets that link them.
+ament_export_targets(export_sensor_timing HAS_LIBRARY_TARGET)
 ament_package()
