@@ -209,6 +209,22 @@ def test_capture_failure_is_bounded_and_reports_actual_absence(tmp_path):
     assert summary["counts"] == {}
     assert summary["complete"] is False
     assert set(summary["missing_streams"]) >= {"truth", "ipc", "scan"}
+    # A failed request is a continuity barrier, never a received IPC state sample.
+    result = analyze(
+        tmp_path,
+        [
+            {
+                "kind": "error",
+                "component": "ipc",
+                "received_steady_ns": 100_000_000_000,
+                "detail": "state.get failed",
+            }
+        ],
+    )
+    assert result["counts"] == {}
+    assert "ipc" in result["missing_streams"]
+    assert result["invalid_samples"] == result["capture_errors"] == [0]
+    assert result["raw_record_count"] == 1
 
 
 def test_worker_success_or_counter_restart_is_not_expiry_starvation(tmp_path):

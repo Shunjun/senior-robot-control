@@ -10,7 +10,7 @@ import argparse
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,6 +275,12 @@ def _disagreements(streams: dict[str, list[Sample]]) -> list[list[Sample]]:
 def analyze_trace(path: Path) -> dict[str, object]:
     records, digest = _read(path)
     streams, invalid = _parse(records)
+    # Continuity markers describe failures; only raw sample rows establish receipt.
+    counts = Counter(
+        row["stream"]
+        for row in records
+        if row.get("kind") == "sample" and isinstance(row.get("stream"), str)
+    )
     evidence: list[dict[str, object]] = []
 
     def add(name: str, runs: list[list[Sample]], fields: list[str]) -> None:
@@ -353,12 +359,12 @@ def analyze_trace(path: Path) -> dict[str, object]:
         "source_sha256": digest,
         "analyzer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "raw_record_count": len(records),
-        "counts": {k: len(v) for k, v in streams.items()},
+        "counts": dict(counts),
         "findings": sorted({str(row["finding"]) for row in evidence}),
         "evidence": evidence,
         "invalid_samples": invalid,
         "capture_errors": [i for i, row in enumerate(records) if row.get("kind") == "error"],
-        "missing_streams": [k for k in REQUIRED if not streams[k]],
+        "missing_streams": [k for k in REQUIRED if not counts[k]],
         "physical_stop": "not_evaluated",
         "acceptance_frozen": False,
         "diagnostic_policy": {
