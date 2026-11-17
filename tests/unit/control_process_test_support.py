@@ -117,6 +117,8 @@ class Reception:
                 packet["sampled_steady"],
                 raw.time.received_ros_ns / 1e9,
             )
+        # Condensed historical identity/geometry summaries are not raw samples.
+        # Only explicit observations enter the strict current packet decoder.
         self.sensors.ingest_packet(
             {
                 **packet,
@@ -124,6 +126,7 @@ class Reception:
                     row
                     for row in packet.get("sources", [])
                     if row["source"] not in {"wheel", "imu"}
+                    and ("values" in row["sample"] or "delta" in row["sample"])
                 ],
             }
         )
