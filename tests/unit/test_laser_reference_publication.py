@@ -28,7 +28,11 @@ def native(value):
 
 def laser_with_captures(value, *, first_time, last_time):
     """Geometry replay with explicit immutable original endpoint records."""
-    value = copy.deepcopy(value)
+    value = {
+        key: item
+        for key, item in copy.deepcopy(value).items()
+        if key not in {"first_time", "last_time"}
+    }
     for name, time in (("first_capture", first_time), ("second_capture", last_time)):
         fields = capture_fields(time=time)
         value[name] = dict(
@@ -179,6 +183,11 @@ def phase(monkeypatch):
             received_ros_ns=round((end + 0.02) * 1e9),
             received_steady_ns=round((128391.498658892 + end) * 1e9),
         )
+    # The shared endpoints override synthetic setup rows and are reused verbatim.
+    for laser in (case["old_laser"], case["new_laser"]):
+        for name in ("first_time", "last_time"):
+            original = SampleTime(**laser[name])
+            originals[original.stamp_ns] = original
     for index in range(4, 16):
         end = index / 10
         clock.steady, clock.ros = 128391.498658892 + end, end + 0.02
@@ -202,8 +211,8 @@ def phase(monkeypatch):
     node.events.clear()
     clock.steady, clock.ros = case["new_received"].values()
     points(1.6)
-    first_time = SampleTime(**case["new_laser"]["first_time"])
-    last_time = SampleTime(**case["new_laser"]["last_time"])
+    first_time = originals[case["new_laser"]["first_time"]["stamp_ns"]]
+    last_time = originals[case["new_laser"]["last_time"]["stamp_ns"]]
 
     def new_laser(value=None):
         return laser_with_captures(
