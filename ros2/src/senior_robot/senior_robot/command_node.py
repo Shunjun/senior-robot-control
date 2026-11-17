@@ -944,8 +944,6 @@ class CommandNode(Node):
             )
             if sample is None:
                 return {"ok": False, "accepted": False, "error": "conflict"}
-            if self._manual_target is None:
-                self._generation += 1
             self._manual_target = replace(sample, request_id=envelope.request_id)
             self.publish_command()
             return {"ok": True, "accepted": True}
