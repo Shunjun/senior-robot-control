@@ -1085,7 +1085,7 @@ class MotionCoreOutput:
                 model_horizon_exceeded=prediction.horizon_s > ctx.envelope.max_horizon_s,
             )
         self.diagnostics.summary("stopping", values)
-        return {
+        context = {
             key: values.get(key)
             for key in (
                 "linear_interval_mps",
@@ -1094,6 +1094,7 @@ class MotionCoreOutput:
                 "yaw_stop_angle_rad",
             )
         }
+        return context, evaluation.blocked_stop_sweep
 
     def _stop_fallback(self, prepared, now):
         # Recompute from original raw roots once at output time. A tick projection
@@ -1112,7 +1113,7 @@ class MotionCoreOutput:
             raise ValueError(error)
         return self.controller.prepare_stop(prepared, ctx, body, wheel, now)
 
-    def _first_fault_scan_evidence(self, ctx):
+    def _first_fault_scan_evidence(self, ctx, blocked_sweep):
         """Report actual latest hit coordinates, not an inferred collision witness."""
         from shapely.affinity import rotate, translate
         from shapely.geometry import Point, Polygon
@@ -1143,39 +1144,52 @@ class MotionCoreOutput:
             latest_external_hits=len(hits),
             latest_self_hits=len(masked.occluded_regions),
             latest_interior_hits=sum(body.contains(point) for _, point in points),
-            closest_latest_external_hit=None,
+            hit_ray=None,
+            hit_body_xy=None,
+            hit_bearing_rad=None,
+            hit_range_m=None,
+            hit_body_gap_m=None,
+            hit_inside_body=None,
         )
         # _observation keeps retained scan and latest guard as separate parts.
         # These points include their existing error expansion; they are not raw hits.
         world_body = translate(
             rotate(body, ctx.pose.yaw, origin=(0, 0), use_radians=True), ctx.pose.x, ctx.pose.y
         )
+        world_sweep = blocked_sweep  # Exact projection retained by the original collision check.
+        evidence["stop_bounds_ref"] = None if world_sweep is None else world_sweep.bounds
         cosine, sine = math.cos(ctx.pose.yaw), math.sin(ctx.pose.yaw)
         for source, occupied in zip(
-            ("retained_scan", "latest_scan_guard"), ctx.perception.occupied.geoms, strict=True
+            ("retained", "guard"), ctx.perception.occupied.geoms, strict=True
         ):
-            value = None
+            near = None
+            gap = None
             if not occupied.is_empty:
                 point = nearest_points(world_body, occupied)[1]
                 dx, dy = point.x - ctx.pose.x, point.y - ctx.pose.y
-                value = dict(
-                    body_xy=(cosine * dx + sine * dy, -sine * dx + cosine * dy),
-                    physical_body_clearance_m=world_body.distance(occupied),
-                )
-            evidence[source + "_expanded_occupied"] = value
+                near = (cosine * dx + sine * dy, -sine * dx + cosine * dy)
+                gap = world_body.distance(occupied)
+            evidence[source + "_bounds_ref"] = None if occupied.is_empty else occupied.bounds
+            evidence[source + "_near_body_xy"] = near
+            evidence[source + "_body_gap_m"] = gap
+            evidence[source + "_stop_intersects"] = (
+                None if world_sweep is None else world_sweep.intersects(occupied)
+            )
         if closest is not None:
             ray, point = closest
-            evidence["closest_latest_external_hit"] = dict(
-                ray_index=ray.index,
-                body_xy=ray.endpoint,
-                body_bearing_rad=math.atan2(point.y, point.x),
-                sensor_range_m=math.dist(ray.origin, ray.endpoint),
-                physical_body_clearance_m=body.distance(point),
-                inside_physical_body=body.contains(point),
+            evidence.update(
+                hit_ray=ray.index,
+                hit_body_xy=ray.endpoint,
+                hit_bearing_rad=math.atan2(point.y, point.x),
+                hit_range_m=math.dist(ray.origin, ray.endpoint),
+                hit_body_gap_m=body.distance(point),
+                hit_inside_body=body.contains(point),
             )
         return evidence
 
-    def _decision_output(self, decision, body, ctx, epoch, now, *, stopping_context=None):
+    def _decision_output(
+        self, decision, body, ctx, epoch, now, *, stopping_context=None, blocked_sweep=None
+    ):
         reason = decision.reason
         output = Velocity(0, 0)
         if decision.command is not None:
@@ -1204,7 +1218,9 @@ class MotionCoreOutput:
                 condition = (reason, epoch)
                 if condition != self._last_fault_condition:
                     first_fault = not self._first_fault_status
-                    scan_evidence = self._first_fault_scan_evidence(ctx) if first_fault else None
+                    scan_evidence = (
+                        self._first_fault_scan_evidence(ctx, blocked_sweep) if first_fault else None
+                    )
                     self._event(K.EXECUTION_FAULT, now, detail=reason)
                     if first_fault:
                         self._first_fault_status.update(scan_evidence)
@@ -1293,7 +1309,7 @@ class MotionCoreOutput:
             mode, epoch = ctx.mode, ctx.motion.source_epoch
             evaluation = self.engine.evaluate(ctx, now)
             permission = self.scheduler.update(ctx, now, evaluation=evaluation)
-            stopping_context = self._diagnose_stopping(
+            stopping_context, blocked_sweep = self._diagnose_stopping(
                 ctx, None if permission.brake is None else permission.brake.reason, evaluation
             )
             estop = self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
@@ -1327,7 +1343,13 @@ class MotionCoreOutput:
                 if wheel is not None:
                     self._wheel_epoch_used = wheel.epoch
             output = self._decision_output(
-                decision, body, ctx, epoch, event_now, stopping_context=stopping_context
+                decision,
+                body,
+                ctx,
+                epoch,
+                event_now,
+                stopping_context=stopping_context,
+                blocked_sweep=blocked_sweep,
             )
             reason = f"{mode.value}:{reason}"
             if output != Velocity(0, 0):
