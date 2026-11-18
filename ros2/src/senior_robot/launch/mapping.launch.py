@@ -86,7 +86,6 @@ def _mapping_nodes(context):
             Node(
                 package="senior_slam_bridge",
                 executable="slam_graph_node",
-                prefix=restart_prefix(),
                 name="slam_toolbox",
                 output="screen",
                 parameters=[params, bridge_parameters],
