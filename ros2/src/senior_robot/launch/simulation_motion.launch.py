@@ -1,6 +1,7 @@
 """Standard 1x environment inputs composed with the common vehicle control path."""
 
 import importlib.util
+import secrets
 import shutil
 import tempfile
 from importlib.machinery import SourceFileLoader
@@ -221,7 +222,10 @@ def generate_launch_description():
                         ),
                     },
                 ],
-                additional_env={"SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket")},
+                additional_env={
+                    "SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket"),
+                    "SENIOR_LAUNCH_SOCKET_OWNER": secrets.token_hex(16),
+                },
             ),
             # Empty reference preserves the common optional-navigation behavior.
         ]

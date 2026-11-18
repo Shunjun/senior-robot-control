@@ -165,6 +165,15 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - 定向新生产链加两项现有直接回归：`pytest -q tests/unit/test_launch_recovery.py tests/unit/test_manual_command_generation.py tests/unit/test_startup_learning_chain.py -k 'recovery_handoff or manual_intents_use_prepared or real_tick_collects_once'` → 3 passed、8 deselected（4.93 秒）；最后只针对核心接线调整重跑 `-k recovery_handoff` 通过。没有重跑已有 Mac/Linux 前缀三项。真实 installed Command → RMW guard → Core 的隔离域用例已写入既有获批 live 文件，本机无 ROS → 1 skipped、1 deselected，不冒充实际 RMW/单一 Twist owner 通过；ruff、格式、差异检查通过。
 - 目前 safety/仿真 command 恢复开关仍关闭，IPC 端点与 Nav2/Gazebo 组仍待实施。若 command 自身先重启而失去原 estop 请求身份，随后又发生 output 换代，不能捏造原身份；当前只保留停止且不发 clear 交接，需新的显式急停才能建立可确认原请求。这种复合故障的原身份延续尚未证明，不把局部生产链通过写成全部 critical 完成。
 
+### 仿真 launch IPC 端点交接阶段（command 恢复开关仍关闭）
+
+- `simulation_motion` 仅给自己创建的 command 节点传入随机、同次 launch 不变的私有 `SENIOR_LAUNCH_SOCKET_OWNER`；叶节点替换仍携带同一上下文，不改变学习 claim，不新增用户 CLI 或业务端点。
+- `agent_adapter._launch_endpoint` 仅在明确上下文存在时持有既有端点旁的同 UID/私有常规文件锁，覆盖准备、bind、记录、服务关闭整个生命周期。初次启动不删 socket；带恢复标记时复用 helper `_prepare_socket(expected_run_id=...)`，要求同一 owner/run、同一 inode/uid、连接明确拒绝且身份复核不变才清理。bind 成功后复用原 `_record` 格式更新身份；活/陌生/不确定 probe 不清理，replace_existing=true 的 launch 上下文被拒绝。锁文件不在退出时删除，进程退出由内核释放锁。
+- 实车 helper 直接 adapter 不传该上下文，继续原 PID/SO_PEERCRED 与已有停机流程，不新增其自动重启。helper 新增可选 expected_run_id 只约束 launch 恢复；原调用未传参数时语义保持。
+- 获批场景 11 使用既有短路径 socket fixture 和真实本机 Unix socket 验证同 owner refused stale 可清、活 socket 原 inode 保留、陌生 owner stale 原 inode 保留；复用已有 active/unrecognized 直接回归，两项定向 `pytest -q tests/unit/test_launch_recovery.py tests/unit/test_docker_start_helper.py -k 'launch_endpoint or active_or_unrecognized'` → 2 passed、13 deselected（0.32 秒）。这不是实际 installed agent_adapter 进程重启通过；本机未运行仿真 command。
+- 只读核对 `LifecycleService.reconcile`：已 sending 的 outbox 只走 query，unknown=None 不执行 execute；`AdapterCore.navigation.task_status` 未知 effect 返回 accepted=None，不调用 routes.start。沿用这些已有行为，不加入任务持久化新框架；对应现有 unknown-send 直接回归定向执行，无修改该测试文件。
+- 现有 `pytest -q tests/integration/test_task_lifecycle_service.py -k unknown_send_is_only_queried` → 1 passed、29 deselected（0.36 秒）；四个改动 Python 文件的 ruff/format/AST 通过，CRLF-aware diff check 通过。已亲查本阶段产品 diff，未改变 Core、启动学习算法或任何 critical 恢复开关。
+
 仅沿已列真实恢复路径验证，不追加 benchmark、全量回归或宽泛异常矩阵：
 
 1. 已确认相机崩溃路径：新 PID/原始图像/发送帧恢复、崩溃日志保留、原 Agent 与学习 run 不变。

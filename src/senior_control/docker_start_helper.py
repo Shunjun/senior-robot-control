@@ -48,7 +48,7 @@ def _record(path: Path, expected: list[int] | None = None, *, run_id: str | None
     os.replace(temporary, marker)
 
 
-async def _prepare_socket(path: Path) -> None:
+async def _prepare_socket(path: Path, *, expected_run_id: str | None = None) -> None:
     """Called under the instance lock; never replace a live or unrecognized socket."""
     if not os.path.lexists(path):
         return
@@ -61,6 +61,10 @@ async def _prepare_socket(path: Path) -> None:
         marker = path.with_suffix(".owner.json")
         try:
             owned = json.loads(marker.read_text())
+            if expected_run_id is not None and (
+                not isinstance(owned, dict) or owned.get("run_id") != expected_run_id
+            ):
+                owned = None
             # //Compatible: pre-isolation ownership records contain only the identity list.
             if isinstance(owned, dict):
                 owned = owned.get("identity")

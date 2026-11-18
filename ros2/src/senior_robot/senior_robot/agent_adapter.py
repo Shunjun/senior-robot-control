@@ -10,9 +10,13 @@ keep their local execution lifetime. This adapter never writes an actuator veloc
 """
 
 import asyncio
+import fcntl
 import os
+import re
+import stat
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -445,6 +449,39 @@ class AdapterCore:
         return {"ok": True, "accepted": True}
 
 
+@asynccontextmanager
+async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
+    """Only this launch/run may reclaim its own definitely refused stale socket.
+
+    The existing helper's direct real adapter never sets this context and keeps
+    its PID/peer credential ownership unchanged. Hold the endpoint lock through
+    bind, recording and server close, including during recovered startup.
+    """
+    owner = os.environ.get("SENIOR_LAUNCH_SOCKET_OWNER")
+    if owner is None:
+        yield None
+        return
+    if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
+        raise ValueError("invalid launch endpoint ownership context")
+    from senior_control.docker_start_helper import _prepare_socket
+
+    descriptor = os.open(
+        path.with_suffix(".launch.lock"),
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError("foreign launch endpoint lock")
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.environ.get("SENIOR_LAUNCH_RECOVERED") == "1":
+            await _prepare_socket(path, expected_run_id=owner)
+        yield owner
+    finally:
+        os.close(descriptor)
+
+
 def main() -> None:
     import rclpy
 
@@ -614,6 +651,7 @@ def main() -> None:
             )
             started = False
             warmer = None
+            ownership = AsyncExitStack()
 
             async def warm_controller() -> None:
                 assert controller is not None
@@ -626,8 +664,15 @@ def main() -> None:
                     await asyncio.sleep(2)
 
             try:
+                owner = await ownership.enter_async_context(_launch_endpoint(path))
+                if owner is not None and node.get_parameter("ipc_replace_existing_socket").value:
+                    raise ValueError("launch endpoint requires replace_existing=false")
                 await server.start()
                 started = True
+                if owner is not None:
+                    from senior_control.docker_start_helper import _record
+
+                    _record(path, run_id=owner)
                 executor.add_node(node)
                 if controller is not None:
                     warmer = asyncio.create_task(warm_controller())
@@ -673,8 +718,11 @@ def main() -> None:
                     if started:
                         await server.close()
                 finally:
-                    # End any active lease through the arbiter before node destruction.
-                    core.release()
+                    try:
+                        await ownership.aclose()
+                    finally:
+                        # End any active lease before node destruction.
+                        core.release()
 
         asyncio.run(serve())
 

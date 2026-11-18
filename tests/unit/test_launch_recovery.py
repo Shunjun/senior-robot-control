@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 import pytest
+from test_docker_start_helper import service_root as endpoint_root  # noqa: F401
 
 
 @contextmanager
@@ -538,3 +539,39 @@ def _check_command_guard_core_recovery(monkeypatch, tmp_path):
             assert Reserve not in requests and Attach not in requests
     finally:
         rig.close()
+
+
+async def test_launch_endpoint_reclaims_only_same_owner_refused_stale_socket(
+    endpoint_root,  # noqa: F811
+    monkeypatch,
+):
+    import socket
+
+    from senior_robot.agent_adapter import _launch_endpoint
+
+    from senior_control.docker_start_helper import _record
+
+    path = endpoint_root / "agent.sock"
+    owner = "a" * 32
+    monkeypatch.setenv("SENIOR_LAUNCH_SOCKET_OWNER", owner)
+    monkeypatch.setenv("SENIOR_LAUNCH_RECOVERED", "1")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(path))
+        _record(path, run_id=owner)
+    async with _launch_endpoint(path) as context:
+        assert context == owner
+        assert not path.exists()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as active:
+        active.bind(str(path))
+        active.listen()
+        _record(path, run_id=owner)
+        identity = path.stat().st_ino
+        with pytest.raises(ValueError, match="active"):
+            async with _launch_endpoint(path):
+                pytest.fail("active endpoint must not be yielded")
+        assert path.stat().st_ino == identity
+    _record(path, run_id="b" * 32)
+    with pytest.raises(ValueError, match="unrecognized"):
+        async with _launch_endpoint(path):
+            pytest.fail("foreign stale endpoint must not be yielded")
+    assert path.stat().st_ino == identity
