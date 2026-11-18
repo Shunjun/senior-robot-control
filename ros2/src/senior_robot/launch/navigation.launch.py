@@ -18,7 +18,6 @@ from nav2_common.launch import RewrittenYaml
 from senior_control.runtime.launch_recovery import (
     lifecycle_group_command,
     lifecycle_owner_prefix,
-    restart_prefix,
 )
 
 
@@ -54,9 +53,9 @@ def _members(context):
             condition=UnlessCondition(external_controller),
             package="nav2_controller",
             executable="controller_server",
-            prefix=restart_prefix(),
-            sigterm_timeout="6.0",
-            sigkill_timeout="1.0",
+            prefix=lifecycle_owner_prefix(),
+            sigterm_timeout="2.5",
+            sigkill_timeout="0.5",
             name="controller_server",
             output="screen",
             parameters=[params],
@@ -65,9 +64,9 @@ def _members(context):
         Node(
             package="nav2_planner",
             executable="planner_server",
-            prefix=restart_prefix(),
-            sigterm_timeout="6.0",
-            sigkill_timeout="1.0",
+            prefix=lifecycle_owner_prefix(),
+            sigterm_timeout="2.5",
+            sigkill_timeout="0.5",
             name="planner_server",
             output="screen",
             parameters=[params],
@@ -77,9 +76,9 @@ def _members(context):
             condition=UnlessCondition(external_controller),
             package="nav2_bt_navigator",
             executable="bt_navigator",
-            prefix=restart_prefix(),
-            sigterm_timeout="6.0",
-            sigkill_timeout="1.0",
+            prefix=lifecycle_owner_prefix(),
+            sigterm_timeout="2.5",
+            sigkill_timeout="0.5",
             name="bt_navigator",
             output="screen",
             parameters=[params],
@@ -100,8 +99,7 @@ def _members(context):
                 {
                     "use_sim_time": use_sim_time,
                     "autostart": True,
-                    "attempt_respawn_reconnection": True,
-                    "bond_respawn_max_duration": 10.0,
+                    "attempt_respawn_reconnection": False,
                     "node_names": ["planner_server"],
                 }
             ],
@@ -119,8 +117,7 @@ def _members(context):
                 {
                     "use_sim_time": use_sim_time,
                     "autostart": True,
-                    "attempt_respawn_reconnection": True,
-                    "bond_respawn_max_duration": 10.0,
+                    "attempt_respawn_reconnection": False,
                     "node_names": lifecycle,
                 }
             ],
@@ -131,15 +128,15 @@ def _members(context):
             condition=UnlessCondition(external_controller),
             package="senior_robot",
             executable="navigation_adapter",
-            prefix=restart_prefix(),
-            sigterm_timeout="6.0",
-            sigkill_timeout="1.0",
+            prefix=lifecycle_owner_prefix(),
+            sigterm_timeout="2.5",
+            sigkill_timeout="0.5",
             name="navigation_adapter",
             output="screen",
             parameters=[params],
         ),
     ]
-    return context.locals.senior_lifecycle_recovery.bind(servers, managers, adapters)
+    return context.locals.senior_lifecycle_recovery.bind([*servers, *managers, *adapters])
 
 
 def _entry(context):
@@ -157,10 +154,6 @@ def _entry(context):
             cmd=lifecycle_group_command(
                 str(Path(__file__).resolve()),
                 arguments,
-                "lifecycle_manager_navigation",
-                ["planner_server"]
-                if external
-                else ["controller_server", "planner_server", "bt_navigator"],
             ),
             prefix="",
             output="screen",

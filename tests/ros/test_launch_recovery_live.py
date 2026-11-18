@@ -391,8 +391,8 @@ def native_navigation(isolated_ros, tmp_path):
     from lifecycle_msgs.msg import State
     from lifecycle_msgs.srv import GetState
     from nav_msgs.msg import OccupancyGrid, Odometry
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-    from senior_robot.motion_lifecycle import MotionExecutor
     from sensor_msgs.msg import LaserScan
     from std_srvs.srv import Trigger
     from test_rgbd_diagnostic_launch import _child_with_argument, _group_exists
@@ -430,7 +430,7 @@ def native_navigation(isolated_ros, tmp_path):
         + yaml.safe_dump(parameters, sort_keys=False)
     )
     probe = isolated_ros.create_node("launch_recovery_nav_probe")
-    executor = MotionExecutor()
+    executor = SingleThreadedExecutor()
     executor.add_node(probe)
     map_pub = probe.create_publisher(
         OccupancyGrid,
@@ -545,7 +545,7 @@ def native_navigation(isolated_ros, tmp_path):
     def pids():
         values = {
             name: _child_with_argument(process.pid, ("/" + name).encode())
-            for name in (*managed, "lifecycle_manager")
+            for name in (*managed, "lifecycle_manager", "navigation_adapter")
         }
         for pid in values.values():
             if pid is not None and (identity := birth(pid)) is not None:
@@ -590,36 +590,30 @@ def native_navigation(isolated_ros, tmp_path):
             probe.destroy_node()
 
 
-def test_native_nav2_server_crash_reconnects_active_without_rebuilding_manager(native_navigation):
+def test_native_nav2_server_crash_rebuilds_old_group_before_active(native_navigation):
     nav = native_navigation
     before = nav.pids()
     os.kill(before["planner_server"], signal.SIGKILL)
     nav.until(lambda: nav.pids()["planner_server"] not in (None, before["planner_server"]))
+    assert all(not Path(f"/proc/{pid}").exists() for pid in before.values())
     nav.reset()
     nav.until(nav.active)
-    assert nav.pids()["lifecycle_manager"] == before["lifecycle_manager"]
-    assert nav.pids()["controller_server"] == before["controller_server"]
-    assert not Path(f"/proc/{before['planner_server']}").exists()
+    assert all(pid is not None and pid != before[name] for name, pid in nav.pids().items())
 
 
 def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(native_navigation):
-    from action_msgs.msg import GoalStatusArray
+    from action_msgs.msg import GoalStatus, GoalStatusArray
     from nav2_msgs.action import NavigateToPose
     from rclpy.action import ActionClient
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_robot.motion_lifecycle import with_dds_info
 
     nav = native_navigation
     statuses = deque(maxlen=128)
 
-    @with_dds_info
-    def status(message, info):
-        statuses.append((bytes(info["publisher_gid"]), message))
-
-    nav.probe.create_subscription(
+    old_subscription = nav.probe.create_subscription(
         GoalStatusArray,
         "/navigate_to_pose/_action/status",
-        status,
+        statuses.append,
         QoSProfile(
             depth=10,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -639,11 +633,13 @@ def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(nat
     nav.until(
         lambda: any(
             bytes(item.goal_info.goal_id.uuid) == goal_id
-            for _, message in statuses
+            for message in statuses
             for item in message.status_list
         )
     )
     before = nav.pids()
+    nav.probe.destroy_subscription(old_subscription)
+    statuses.clear()
     os.kill(before["lifecycle_manager"], signal.SIGKILL)
     nav.until(lambda: nav.pids()["lifecycle_manager"] not in (None, before["lifecycle_manager"]))
     assert all(not Path(f"/proc/{pid}").exists() for pid in before.values())
@@ -652,15 +648,32 @@ def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(nat
     nav.until(
         lambda: len(nav.probe.get_publishers_info_by_topic("/navigate_to_pose/_action/status")) == 1
     )
-    publisher = bytes(
-        nav.probe.get_publishers_info_by_topic("/navigate_to_pose/_action/status")[0].endpoint_gid
+    # Old native members are all gone and the rebuilt graph has one writer.
+    # A fresh volatile reader cannot reuse the old subscriber's queued history;
+    # no unavailable RMW publisher_gid field is invented or inferred.
+    subscription = nav.probe.create_subscription(
+        GoalStatusArray,
+        "/navigate_to_pose/_action/status",
+        statuses.append,
+        QoSProfile(
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE,
+        ),
     )
+    nav.until(lambda: subscription.get_publisher_count() == 1)
+    # Humble publishes action status on changes, not an empty idle heartbeat.
+    # Query the original UUID through the public goal handle as a causal real
+    # response from the new server; silence on the status topic cannot pass it.
+    forgotten = accepted.get_result_async()
+    nav.until(forgotten.done)
+    assert forgotten.result().status == GoalStatus.STATUS_UNKNOWN
     for _ in range(20):
         nav.tick()
     assert not any(
         bytes(item.goal_info.goal_id.uuid) == goal_id
-        for gid, message in statuses
-        if gid == publisher
+        for message in statuses
         for item in message.status_list
     )
+    nav.probe.destroy_subscription(subscription)
     action.destroy()

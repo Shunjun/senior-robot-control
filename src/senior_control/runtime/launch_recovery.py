@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import shlex
 import signal
 import subprocess
@@ -114,16 +113,14 @@ def run_node(command: list[str]) -> int:
                 signal.signal(number, handler)
 
 
-def lifecycle_group_command(
-    filename: str, arguments: dict[str, str], manager: str, servers: list[str]
-) -> list[str]:
+def lifecycle_group_command(filename: str, arguments: dict[str, str]) -> list[str]:
     """Private Nav2/localization launch boundary; never a user CLI entry point."""
-    packet = {"launch": filename, "arguments": arguments, "manager": manager, "servers": servers}
+    packet = {"launch": filename, "arguments": arguments, "parent_pid": os.getpid()}
     return [sys.executable, "-m", _MODULE, "--lifecycle-group", json.dumps(packet)]
 
 
 def lifecycle_owner_prefix() -> str:
-    """Exec the native manager in its own cleanup group, without a retry loop."""
+    """Exec one launch member in its own cleanup group, without a retry loop."""
     return shlex.join(owner_command([]))
 
 
@@ -148,81 +145,43 @@ def _exec_owner(command: list[str], parent_pid: int) -> None:
 
 
 class _LifecycleGroup:
-    """One existing Nav2 manager and its launch-owned members, with read-only state probes."""
+    """One retry owner for all members of an existing Nav2/localization launch."""
 
-    def __init__(self, service: Any, packet: dict[str, Any], stop: Any) -> None:
-        self.service, self.packet, self.stop = service, packet, stop
-        self.servers: set[Any] = set()
-        self.managers: set[Any] = set()
-        self.wrapped: set[Any] = set()
+    def __init__(self, stop: Any) -> None:
+        self.stop = stop
+        self.members: set[Any] = set()
         self.owner_groups: set[int] = set()
-        self.stderr: dict[int, bytes] = {}
         self.failed = self.normal = self.unsafe = False
-        self.server_failed = False
-        self.failure_generation = 0
-        self.inactive_since: float | None = None
 
-    def bind(self, servers: list[Any], managers: list[Any], adapters: list[Any]) -> list[Any]:
-        self.servers.update(servers)
-        self.managers.update(managers)
-        self.wrapped.update([*servers, *adapters])
-        return [*servers, *managers, *adapters]
+    def bind(self, members: list[Any]) -> list[Any]:
+        self.members.update(members)
+        return members
 
     def setup(self, context: Any) -> list[Any]:
-        # Humble LaunchService's default SIGTERM cancels its loop and warns of
-        # orphans. This private owner turns both stop signals into normal public
-        # Shutdown events and lets every member finish its cleanup first.
+        # Humble's default SIGTERM cancels the loop. Both stop signals instead
+        # request public Shutdown and wait for all native members and cleanup.
         for number in (signal.SIGINT, signal.SIGTERM):
             context.asyncio_loop.add_signal_handler(number, self.stop)
-        context.add_completion_future(context.asyncio_loop.create_task(self.monitor()))
         return []
 
     def started(self, event: Any, context: Any) -> list[Any]:
-        if event.action in self.managers:
+        if event.action in self.members:
             self.owner_groups.add(event.pid)
         return []
-
-    def process_io(self, event: Any) -> None:
-        if event.action not in self.servers:
-            return
-        data = self.stderr.get(event.pid, b"") + event.text
-        lines = data.split(b"\n")
-        self.stderr[event.pid] = lines.pop()[-16384:]
-        for line in lines:
-            # This is the existing prefix's own actual PID/returncode record,
-            # never a vendor warning or a timeout/liveness guess. It only arms
-            # a read-only lifecycle check; it does not restart the server here.
-            match = re.fullmatch(
-                rb"\[launch_recovery\] exited pid=\d+ returncode=(-?\d+) attempt=\d+\r?", line
-            )
-            if match is not None and int(match[1]) != 0:
-                self.server_failed = True
-                self.failure_generation += 1
-                self.inactive_since = None
 
     def exited(self, event: Any, context: Any) -> list[Any]:
         from launch.events import Shutdown
 
-        self.stderr.pop(event.pid, None)
-        if event.action in self.managers:
-            # The exec bootstrap retained the native PID/returncode, with no
-            # independent manager respawn owner.
-            context.add_completion_future(
-                context.asyncio_loop.create_task(self.clear_owner(event.pid))
-            )
-            if not context.is_shutdown:
-                self.failed = event.returncode != 0
-                self.normal = event.returncode == 0
-                context.emit_event_sync(Shutdown(reason="lifecycle manager exited"))
-        elif event.action in self.wrapped:
-            if event.returncode != 0:
-                # A leaf wrapper exits nonzero only when it could not complete
-                # its own launch/cleanup contract. No new group may overlap it.
-                self.unsafe = True
-                context.emit_event_sync(Shutdown(reason="lifecycle member cleanup failed"))
-            elif not context.is_shutdown:
-                self.normal = True
-                context.emit_event_sync(Shutdown(reason="lifecycle member finished normally"))
+        if event.action not in self.members:
+            return []
+        # Every member execs its original command in a registered process group;
+        # there is no leaf retry loop or separate lifecycle reconnection owner.
+        context.add_completion_future(context.asyncio_loop.create_task(self.clear_owner(event.pid)))
+        if not context.is_shutdown:
+            self.failed = self.failed or event.returncode != 0
+            self.normal = self.normal or event.returncode == 0
+            _LOG.info("lifecycle member exited pid=%s returncode=%s", event.pid, event.returncode)
+            context.emit_event_sync(Shutdown(reason="lifecycle member exited"))
         return []
 
     async def clear_owner(self, pid: int) -> None:
@@ -241,114 +200,11 @@ class _LifecycleGroup:
         self.unsafe = True
         _LOG.error("lifecycle owner group %s still exists; replacement refused", pid)
 
-    async def monitor(self) -> None:
-        import rclpy
-        from launch.events import Shutdown
-        from lifecycle_msgs.msg import State
-        from lifecycle_msgs.srv import GetState
-        from rclpy.context import Context
-        from rclpy.executors import SingleThreadedExecutor
-        from rclpy.node import Node
-        from rclpy.parameter import Parameter
-        from rclpy.signals import SignalHandlerOptions
-        from std_srvs.srv import Trigger
-
-        ros = Context()
-        node = executor = None
-        try:
-            rclpy.init(args=[], context=ros, signal_handler_options=SignalHandlerOptions.NO)
-            simulated = self.packet["arguments"].get("use_sim_time", "false") == "true"
-            node = Node(
-                f"launch_recovery_{os.getpid()}",
-                context=ros,
-                use_global_arguments=False,
-                start_parameter_services=False,
-                enable_rosout=False,
-                parameter_overrides=[Parameter("use_sim_time", value=simulated)],
-            )
-            executor = SingleThreadedExecutor(context=ros)
-            executor.add_node(node)
-            active = node.create_client(Trigger, f"/{self.packet['manager']}/is_active")
-            clients = [
-                node.create_client(GetState, f"/{name}/get_state")
-                for name in self.packet["servers"]
-            ]
-            reported = False
-            while not self.service.context.is_shutdown:
-                generation = self.failure_generation
-                manager_future = (
-                    active.call_async(Trigger.Request()) if active.service_is_ready() else None
-                )
-                states = [
-                    client.call_async(GetState.Request()) if client.service_is_ready() else None
-                    for client in clients
-                ]
-                futures = [item for item in [manager_future, *states] if item is not None]
-                deadline = time.monotonic() + 0.5
-                while time.monotonic() < deadline and any(not item.done() for item in futures):
-                    executor.spin_once(timeout_sec=0)
-                    if self.service.context.is_shutdown:
-                        return
-                    await asyncio.sleep(0.02)
-                manager_active = (
-                    manager_future.result().success
-                    if manager_future is not None
-                    and manager_future.done()
-                    and manager_future.exception() is None
-                    else None
-                )
-                all_active = manager_active is True and all(
-                    item is not None
-                    and item.done()
-                    and item.exception() is None
-                    and item.result().current_state.id == State.PRIMARY_STATE_ACTIVE
-                    for item in states
-                )
-                # A reply requested before the actual crash cannot acknowledge
-                # its recovery, even if it arrives after the exit event.
-                if generation != self.failure_generation:
-                    pass
-                elif all_active:
-                    if not reported or self.server_failed:
-                        _LOG.info("lifecycle group ACTIVE manager=%s", self.packet["manager"])
-                    reported = True
-                    self.server_failed = False
-                    self.inactive_since = None
-                elif self.server_failed and manager_active is False:
-                    # Humble's native bond reset starts its ten-second reconnect
-                    # window after detecting a real crash. Respect its clock;
-                    # normal pause/reset without a witnessed crash never retries.
-                    now = node.get_clock().now().nanoseconds / 1e9
-                    if self.inactive_since is None:
-                        # Native Humble's first respawn check runs one second
-                        # after bond reset, and only then starts its window.
-                        self.inactive_since = now + 1.0
-                    elif now - self.inactive_since >= 10.0:
-                        self.failed = True
-                        self.service.context.emit_event_sync(
-                            Shutdown(reason="native lifecycle reconnection window exhausted")
-                        )
-                for item in futures:
-                    if not item.done():
-                        item.cancel()
-                await asyncio.sleep(0.2)
-        except Exception as exc:
-            self.unsafe = True
-            _LOG.error("lifecycle state probe failed: %s", exc)
-            self.service.context.emit_event_sync(Shutdown(reason="lifecycle probe failed"))
-        finally:
-            if executor is not None:
-                executor.shutdown()
-            if node is not None:
-                node.destroy_node()
-            if ros.ok():
-                ros.shutdown()
-
 
 async def _run_lifecycle_group(packet: dict[str, Any]) -> int:
     from launch import LaunchDescription, LaunchService
     from launch.actions import IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
-    from launch.event_handlers import OnProcessExit, OnProcessIO, OnProcessStart
+    from launch.event_handlers import OnProcessExit, OnProcessStart
     from launch.events import Shutdown
     from launch.launch_description_sources import PythonLaunchDescriptionSource
 
@@ -362,17 +218,16 @@ async def _run_lifecycle_group(packet: dict[str, Any]) -> int:
 
     previous = {number: signal.signal(number, stop) for number in (signal.SIGINT, signal.SIGTERM)}
     try:
-        child_lifetime(os.getppid())
+        child_lifetime(packet["parent_pid"])
         while not stopped.is_set():
             service = LaunchService(noninteractive=True)
-            owner = _LifecycleGroup(service, packet, stop)
+            owner = _LifecycleGroup(stop)
             service.context.extend_globals({"senior_lifecycle_recovery": owner})
             service.include_launch_description(
                 LaunchDescription(
                     [
                         RegisterEventHandler(OnProcessStart(on_start=owner.started)),
                         RegisterEventHandler(OnProcessExit(on_exit=owner.exited)),
-                        RegisterEventHandler(OnProcessIO(on_stderr=owner.process_io)),
                         OpaqueFunction(function=owner.setup),
                         IncludeLaunchDescription(
                             PythonLaunchDescriptionSource(packet["launch"]),

@@ -191,9 +191,9 @@ def _localization_members(context):
     map_server = Node(
         package="nav2_map_server",
         executable="map_server",
-        prefix=restart_prefix(),
-        sigterm_timeout="6.0",
-        sigkill_timeout="1.0",
+        prefix=lifecycle_owner_prefix(),
+        sigterm_timeout="2.5",
+        sigkill_timeout="0.5",
         name="map_server",
         condition=navigation,
         parameters=[common, {"yaml_filename": LaunchConfiguration("map_yaml")}],
@@ -201,9 +201,9 @@ def _localization_members(context):
     amcl = Node(
         package="nav2_amcl",
         executable="amcl",
-        prefix=restart_prefix(),
-        sigterm_timeout="6.0",
-        sigkill_timeout="1.0",
+        prefix=lifecycle_owner_prefix(),
+        sigterm_timeout="2.5",
+        sigkill_timeout="0.5",
         name="amcl",
         condition=navigation,
         parameters=[
@@ -233,13 +233,12 @@ def _localization_members(context):
             common,
             {
                 "autostart": True,
-                "attempt_respawn_reconnection": True,
-                "bond_respawn_max_duration": 10.0,
+                "attempt_respawn_reconnection": False,
                 "node_names": ["map_server", "amcl"],
             },
         ],
     )
-    return context.locals.senior_lifecycle_recovery.bind([map_server, amcl], [manager], [])
+    return context.locals.senior_lifecycle_recovery.bind([map_server, amcl, manager])
 
 
 def _localization_entry(context):
@@ -254,8 +253,6 @@ def _localization_entry(context):
             cmd=lifecycle_group_command(
                 str(Path(__file__).resolve()),
                 arguments,
-                "lifecycle_manager_localization",
-                ["map_server", "amcl"],
             ),
             prefix="",
             output="screen",

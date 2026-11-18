@@ -52,8 +52,8 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 | safety_motion → wheeltec_lidar | 所选 LS/LD/RPLidar 分支；双雷达分支的两台驱动和融合；lscx 分支的点云转扫描 | 同上；本地默认 `/x10/lslidar_driver_node` 的实际 C++ 是普通 rclcpp::Node，不能因 launch 使用 LifecycleNode 就猜测需生命周期转换；现场若不同则先收口真实 owner |
 | safety_motion | `scan_receipt_node`、`scan_adapter`、`safety_scan_ingress`、`scan_motion_node` | 分别恢复新进程，保留健康的上下游；真实新帧沿既有换代接纳路径恢复 |
 | safety_motion / simulation_motion | `safety_node` | 仅恢复该 launch 节点，旧私有输出组清理完再创建替代者；先完成下述 critical 交接，不能先开放重启开关 |
-| navigation，external_controller=true | `planner_server`、`lifecycle_manager_navigation` | 仅 planner 生命周期组，不接管 DedicatedController |
-| navigation，external_controller=false | `controller_server`、`planner_server`、`bt_navigator`、`lifecycle_manager_navigation`、`navigation_adapter` | 本 navigation 组；server 进程恢复与现有 manager bond 重连，manager 自身异常按整组边界重建；不重发目标 |
+| navigation，external_controller=true | `planner_server`、`lifecycle_manager_navigation` | 仅 planner 生命周期组；任一组成员真实异常退出时完整重建该组，不接管 DedicatedController 内部故障 |
+| navigation，external_controller=false | `controller_server`、`planner_server`、`bt_navigator`、`lifecycle_manager_navigation`、`navigation_adapter` | 同一 navigation 组唯一重试 owner；server/manager/adapter 真实异常均先清旧组再重建，不重发目标 |
 | mapping 默认分支 | `async_slam_toolbox_node`、`slam_adapter` | 长驻节点分别恢复；新内存图不能冒充原建图会话延续 |
 | mapping capture/verified 分支 | `slam_graph_node`（名 slam_toolbox），verified 时另有 `slam_static_lidar_tf_receipt` | 长驻进程恢复；capture 目录重开是否被现有节点接受需实证，不自动创建新 capture 目录/新任务绕过 |
 | rgbd_diagnostic | `static_tf_receipt_node`、`rgbd_candidate_receipt_node`、`rgbd_candidate_producer` | 长驻前缀 |
@@ -66,8 +66,8 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ### Nav2 的组边界与 Gazebo 范围取消
 
-1. Nav2 server 异常：前缀恢复真实 server，使用现有 manager 的 `attempt_respawn_reconnection=true`、bond reset/startup 完成 configure/activate；采用上游已有窗口（本地源码默认 10 秒），不能据进程起来就宣称恢复。超出窗口时由同一 navigation/定位组进行一次有序重建，不另造 lifecycle 协调器。
-2. Nav2 manager 自身异常：在所属 launch 建立的独立组运行边界内结束该组，等待所有旧 server/adapter 退出，再创建全新的 manager 与成员；仍活跃的 ACTIVE server 不可直接配一个新 manager。组运行调用同一项目 launch 的内部成员分支，成员分支不再创建组运行入口，避免递归；只传原参数、不复制节点定义。正常组关闭不触发恢复。外层保留 Agent、safety、其他 launch。
+1. Nav2/定位组任一实际 launch 成员异常退出：唯一组 owner 通过公开 Shutdown 结束全部旧 server、manager 和 adapter；LaunchService 等待成员退出及每个 exec-owner PGID 清理完成，固定退避两秒后重建原组。各成员只 exec 原命令，无叶重试循环；native manager 禁止 attempt_respawn_reconnection，不再与整组恢复竞争。新 manager 沿原 autostart configure/activate，真实验收以 GetState 和 is_active 确认 ACTIVE，不能以进程存在代替。
+2. 正常零退出或取消不重开；任何旧组清理失败/PGID 残留拒绝替代。仍调用同一项目 launch 成员分支、只传原参数，不复制节点定义；外层 Agent/safety/Gazebo 不重启。旧执行丢弃，不自动发送旧 goal。首版“叶恢复+native 重连/独立状态 monitor”已因真实场景未在窗口内恢复而被负责人收口撤销，不增加新超时、资格或状态监督框架。
 3. **用户取消整个 senior_sim/simulation 专用自动恢复**：server/world/GUI、robot_state_publisher、senior_sim_bridge 均人工处理，保留原有 Gazebo include、启动退出及 create/spawner 单次初始化逻辑；不实现环境组、不新增对应故障场景。此前仅只读研究上游，尚未写入任何 Gazebo 专属产品或测试改动，没有需要回退的代码或提交。Nav2 重连判定仍使用既有 lifecycle state/service，不增加运动许可接口。
 
 ## critical 交接与端点清理：仅保留三个必要产品文件
@@ -125,7 +125,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 - [ ] 先完成三个 critical/端点文件的交接并验证，再开放 safety_node 与仿真 command_node 恢复；内部子进程监督保持范围外。
 - [ ] 接齐表中 mapping、RGBD、simulation_motion 所有条件分支；相同策略只接一次，单次工具无前缀。
-- [ ] 接齐 navigation/定位组：真实 server 崩溃后 native manager 恢复 ACTIVE；manager 崩溃/重连窗口耗尽时仅本组有序恢复，确认旧 goal 不重发；复用 `tests/ros/test_navigation.py` 的真实 Nav2 启动设施。
+- [ ] 接齐 navigation/定位组：真实 server 或 manager 崩溃后仅本组有序清理并重建到 ACTIVE，确认旧 goal 不重发；复用 `tests/ros/test_navigation.py` 的真实 Nav2 启动设施。
 - [x] 用户取消 Gazebo server/world/GUI 热恢复及候选 10：未实现该恢复与新测试，保留原启动退出逻辑。
 - [ ] 负责人亲阅实际 diff 与版本对应证据后合回；本任务不执行这些步骤或自动部署。
 
@@ -186,7 +186,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 这些是待负责人筛选的候选场景，不代表本次运行过或通过；不同独立输入需按实际场景计数。重点人工复核前缀解释器/日志、停止与重试竞态、Nav2 ACTIVE、estop/旧目标交接四处；任何未通过处报告具体缺口，不能用局部 mock 替代实际链路，也不能以缺口为理由扩成内部子进程监督。
 
 
-### Nav2 navigation / localization 组阶段
+### 首版 Nav2 navigation / localization 组阶段（已由后述单一组方案替代）
 
 - navigation 与 simulation_motion 定位分支通过当前解释器的私有入口，使用公开 LaunchService/IncludeLaunchDescription/Shutdown 重入同一项目 launch；成员定义只保留一份，仍仅传入原参数，不新增 launch 参数、ROS 端点或依赖。原 Node 参数/条件/remapping 已按 AST 逐项比对，差异仅为恢复前缀、退出预算和显式原生重连默认值。
 - server/adapter 使用原叶前缀；manager 仅通过 exec 引导建立自身清理 PGID，不设叶重试循环。真实 manager 非零退出触发公开 Shutdown，LaunchService 等待所有旧叶退出和 manager 组清理完成，再固定退避两秒；任何叶清理失败、旧 manager PGID 残留均拒绝替代。正常零退出、外层停止、退避取消不重开；组运行复用已有 Linux 父死 SIGTERM 保障。叶清理五秒，launch 给六秒余量；外层九秒，保持 helper 十秒预算。
@@ -362,3 +362,15 @@ PY
 - 负责人亲阅 `a0b8309` 的实际诊断 diff 后，在独立 Linux 源码、各自 TemporaryDirectory 中直接调用现有同步父死函数及 asyncio.run 现有 async 取消函数：**DIRECT_RESULTS passed2 / failed[]，exit=0**。没有安装 pytest async 插件、没有改现场测试或生产服务；两台替身进程已回收，本次严格 exit=0 与 SIGTERM 标记、启动取消/parent 不匹配检查通过。
 - 保留 `819f2ec` 那次未知非正常 wait 状态失败：后续一次通过没有解释此前原因，诊断修正也不是产品信号策略修复，不据此宣称产品退出路径稳定或所有真实 Nav2 native 退出已验收。不会为该未知失败重复跑循环或扩大矩阵。
 - 临时 MPPI 1.1.9 fixture 代码提交 `6b9340468847f26bca5f24cb851b78adf1fb3ad7` 已交负责人，待仅重跑原 Nav2 两项；上述退出回收与 `8da12b9` critical 已有充分结果，不因文档记录或临时参数变更重复跑。safety/仿真 command 前缀仍未开放，复合急停 identity 延续缺口保持。
+
+
+### 真实 Nav2 反馈后收敛：单一组 owner（当前方案）
+
+- 负责人亲阅并执行 `6b93404` 实际 **2 failed / 2 deselected，82.62 秒**。临时 Obstacles 配置成功 configure/ACTIVE；server 场景 planner -9 后叶起新 PID，但 manager bond reset 日志最后为 Deactivating planner_server，30 秒内未回 ACTIVE，不能称永久死锁。manager 场景在故障注入前因该 RMW MessageInfo 只有 source/received_timestamp、没有 publisher_gid 而 KeyError。未把这两项写为通过。
+- 经负责人已向用户说明并授权，本次在原 18 文件内撤掉 server 叶重试、stderr 解析、独立 rclpy monitor、重连窗口和多角色跟踪。navigation 的 server/manager/adapter 及可选定位 map/amcl/manager 都只用同一个 exec-owner 引导原命令；真实非零退出触发公开 Shutdown，所有成员退出与清理完成后统一两秒重建。native manager 的 attempt_respawn_reconnection=false，不与 launch 组 owner 竞争；原 autostart 与正常 configure/activate 保留，没有新服务、模块、线程或配置文件。
+- 清理完成的源级条件：每个实际启动成员在公开 OnProcessStart 登记自身 PGID，OnProcessExit 把清理 task 交给公开 add_completion_future；LaunchService.run_async 返回前必须等所有成员与清理 task 完成，owner_groups 非空或 unsafe 即退出 1，绝不新起。原生退出预算 2.5+.5 秒，清组上限五秒并行，外层九秒，保持 helper 十秒上限。叶通用 run_node 与 DedicatedController exec-owner 已验证路径未改，不重跑旧批。
+- 正常停止源级条件：stop 先置 stopped，再发公开 Shutdown；等待完整退出后直接返回零。成员独立零退出置 normal 并关闭组，runner 同样直接退出；只有 failed 且非 normal/非 stopped 且完整清理，才进入可取消的两秒等待。测试 fixture 的最终 SIGINT/返回零/全部旧 native lifetime 消失断言保留，下一次真实两项执行也检查该正常停机路径；本地无 ROS，不将源审查冒充真实新方案通过。
+- 同两项原故障输入不变：server 预期改为整个旧组（包含 navigation_adapter）全部消失、新组每个 PID 更新后 GetState+manager is_active 回 ACTIVE。manager 场景丢弃旧订阅/旧历史，旧组全退与新图唯一 writer 后创建新 volatile 状态订阅，不读取/捏造不存在的 GID；沿公共旧 goal handle 发 get_result 查询，真实新 server 应答 STATUS_UNKNOWN，防止没有空闲 status 消息时仅凭沉默空过，再确认新订阅收到的消息无旧 UUID。没有发送新 goal 或增加场景/矩阵。
+- 真实查询依据：[Humble rclcpp_action ServerBase](https://raw.githubusercontent.com/ros2/rclcpp/humble/rclcpp_action/src/server.cpp) 对不存在 UUID 应答 UNKNOWN，status 仅在状态变化时发送，不保证新建空闲 server 有空数组心跳。ACTIVE 仍由实际 lifecycle 服务确认，未退化成进程存在断言。
+- 本机仅对两项受影响 live 场景收集 **2 skipped / 2 deselected，0.03 秒**（无 ROS）。ruff/格式/模块 mypy 通过；生产配置不改，critical/父死已有结果不重复。safety/command 恢复继续关闭，复合 estop identity 缺口保持。待负责人亲审本阶段实际 diff 并仅重跑这两项新方案，不能将旧方案首次 ACTIVE 冒称本次故障恢复通过。
+- 额外源级核对：两个 launch 的全部原 Node argv/参数/条件/remapping 及公开 DeclareLaunchArgument 逐项 AST 比对保留（仅排除获准的 owner 前缀、退出预算、native reconnect 策略差异）；通用 run_node/_clean_group 与 owner_command/_exec_owner 函数 AST 对比未变。组入口的私有启动数据保存 spawner 已知 parent PID，沿同一 child_lifetime 机制拒绝已换父的启动，不在组启动后把 PID 1 当原 owner；未新增 ROS/业务字段或公开接口。
