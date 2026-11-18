@@ -202,12 +202,26 @@ def _check_dedicated_parent_death(root):
         "asyncio.run(_run_dedicated_fixture(Path(sys.argv[1])))"
     )
     parent = subprocess.Popen([sys.executable, "-c", code, str(root)])
-    children = set()
+    children = {}
+
+    def birth(pid):
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        except FileNotFoundError:
+            return None
+
+    def stopped():
+        return {
+            name: path.read_text() if (path := root / f"{name}.stopped").exists() else None
+            for name in ("controller_server", "bt_navigator")
+        }
+
     try:
         for name in ("controller_server", "bt_navigator"):
             record = json.loads(wait_for(root / f"{name}.ready", parent))
             pid, group, arguments = record
-            children.add(pid)
+            children[pid] = birth(pid)
+            assert children[pid] is not None, (pid, stopped())
             assert pid == group
             assert arguments == [
                 "--ros-args",
@@ -227,12 +241,21 @@ def _check_dedicated_parent_death(root):
             while time.monotonic() < deadline:
                 collected, status = os.waitpid(pid, os.WNOHANG)
                 if collected:
-                    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
-                    children.remove(pid)
+                    # waitpid already consumed this lifetime, even on failure.
+                    # Never signal it again from finally or mask its real status.
+                    del children[pid]
+                    detail = {
+                        "pid": pid,
+                        "raw_status": status,
+                        "exit": os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,
+                        "signal": os.WTERMSIG(status) if os.WIFSIGNALED(status) else None,
+                        "stopped": stopped(),
+                    }
+                    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, detail
                     assert not Path(f"/proc/{pid}").exists()
                     break
                 time.sleep(0.02)
-            assert pid not in children, "native child survived its owner"
+            assert pid not in children, ("native child survived its owner", pid, stopped())
         for name in ("controller_server", "bt_navigator"):
             # //Compatible: IntEnum.__str__ changed in Python 3.11; the handler gets int.
             assert (root / f"{name}.stopped").read_text() == str(int(signal.SIGTERM))
@@ -240,9 +263,22 @@ def _check_dedicated_parent_death(root):
         if parent.poll() is None:
             parent.kill()
             parent.wait(timeout=3)
-        for pid in children:
-            os.kill(pid, signal.SIGKILL)
-            os.waitpid(pid, 0)
+        for pid, identity in children.items():
+            try:
+                collected, _ = os.waitpid(pid, os.WNOHANG)
+                if collected:
+                    continue
+                # Only an unreaped child of this reaper with the same birth
+                # identity may receive failure-path cleanup signals.
+                if birth(pid) != identity:
+                    continue
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                continue  # No longer our child; never signal a reused PID.
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux parent-death binding requires prctl")

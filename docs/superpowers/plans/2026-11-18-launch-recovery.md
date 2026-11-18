@@ -343,3 +343,9 @@ PY
 - 负责人亲审 `f424770` 后在 Linux 用现有同步函数和 asyncio.run（未安装 pytest async 插件、未改测试）运行新定向检查。首项的两个 child 已实际 waitpid exit=0、/proc 消失、从待回收集删除，随后仅失败于信号文本比较；第二个 async 取消函数因首项 raise 尚未运行，不能说失败或通过。
 - 已在本机**实际解释器**核对：Python 3.10.22 的 str(SIGTERM) 为 `Signals.SIGTERM`、str(int(SIGTERM)) 为 `15`；Python 3.12.15 两者均为 `15`。handler 参数为 int，fixture 原本写 `15`，所以只将期望改为 str(int(SIGTERM)) 并标注 //Compatible，不改产品信号/父死策略/进程清理。依据还包括 [Python 3.11 IntEnum 变更说明](https://docs.python.org/3.11/library/enum.html#enum.IntEnum)。本地 ruff/差异检查通过；负责人只重跑受影响两函数，不重复 critical。
 - actual MPPI 已确认是 `/home/wheeltec/wheeltec_ros2/install/nav2_mppi_controller` 的 **1.1.9**，导出 XML 无 CostCritic、MPPIController 本身存在。负责人不批准正式 nav2.yaml/算法整改或升级，范围仍 18 文件；仅批准在现有 live fixture 临时生成明确标为隔离恢复用的 1.1.9 参数，仍经原 parameters 入口验证同两项场景，不能称默认生产导航通过。默认定义须按该实际旧实现核对，不能把较新 1.1.20 的默认值冒充现场 1.1.9。
+
+### Linux 父死用例二轮反馈：保留原始退出证据
+
+- `819f2ec` 的 Linux 独立两函数检查首项在 waitpid 状态非正常零退出处再次失败，finally 又对已回收 PID 发 SIGKILL 引发 ProcessLookupError，掩盖了原始 status；async 取消函数仍未执行。本轮不能宣称父死路径完整通过，也不能在缺少 status 时断定重复信号或产品故障。
+- 最小修正仅同一 unit 用例：waitpid 一旦 collected 即移出待清理集合；严格退出零断言保留，消息加入 PID、raw status、exit/signal 和两个已有 stopped 标记；失败清理先确认仍是本测试未回收 child，再核对 /proc birth 身份，忽略已失去 child 所有权/已消失的 PID，不重复信号已回收或复用 PID，以便继续尽力回收其它已知 child，保留原始失败。未改产品或扩大场景。
+- ruff/格式/差异检查通过；本机无 Linux，不冒称真实父死结果已修复。负责人只重跑这两个受影响函数取得原始状态，已通过 critical 不重跑。
