@@ -280,11 +280,16 @@ class ScanGapCompensator:
         tangent = np.array((-normal[1], normal[0]))
         position = float((directions[index] * distance) @ tangent)
         old_interval = historical @ tangent
-        if not float(old_interval.min()) <= position <= float(old_interval.max()):
+        # Dot products/intersection division can round an exact endpoint outward.
+        # This is arithmetic roundoff only, never sensor error or physical padding.
+        scale = max(1.0, abs(distance), np.max(np.abs(historical)), np.max(np.abs(current)))
+        roundoff = 32 * np.finfo(float).eps * scale
+        old_low, old_high = float(old_interval.min()), float(old_interval.max())
+        if position < old_low - roundoff or position > old_high + roundoff:
             return None
         interval = current @ tangent
         low, high = float(interval.min()), float(interval.max())
         if internal:
-            return distance if low <= position <= high else None
+            return distance if low - roundoff <= position <= high + roundoff else None
         extension = max(low - position, position - high, 0.0)
-        return distance if extension <= high - low else None
+        return distance if extension <= high - low + roundoff else None
