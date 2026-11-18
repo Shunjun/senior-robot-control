@@ -1,6 +1,6 @@
 # 同 run 学习：连续录帧、独立计算与单写保存
 
-状态：2026-11-18 用户已确认流式解耦方向；本规格更新待负责人亲阅，产品尚未实现。当前实车仍部署 `61555f8`、本次模型为 None；`5b65286` 仅保存阶段成果，未合入／部署，不作为最终方案，也不为它追加测试。识别算法继续使用[稳定连续表面设计](2026-11-16-self-return-matching-design.md)，不把历史报告改写成新架构验收。
+状态：2026-11-18 用户已确认流式解耦及网页显式新校准方向，负责人已收口最简语义；本规格更新待负责人亲阅，产品尚未实现。当前实车仍部署 `61555f8`、本次模型为 None；`5b65286` 仅保存阶段成果，未合入／部署，不作为最终方案，也不为它追加测试。识别算法继续使用[稳定连续表面设计](2026-11-16-self-return-matching-design.md)，不把历史报告改写成新架构验收。
 
 ## 职责与执行上下文
 
@@ -59,6 +59,8 @@
 1. 第 5 验证帧已在接管前录入，但其 batch／ACK 比取消消息晚到：排空同 attempt 的截至前缀，确认完整后封闭；当前 Core 即使已 manual，后台照常计算和保存。
 2. 接管时尚未录齐窗口或验证帧，后来 batch 或封闭候选先于迟到取消到服务：用接管时刻和录入事实判定不完整；不能拿接管后补录的第 5 帧倒填。未收尾前禁止发布模型。
 
+收尾私有接口限于 `FrameAck(through_index)`、`IngressFrontier(stream_id, last_index, gap)` 和 `MotionObservedThrough(segment_id, through_steady_ns, first_takeover_ns)`；共同带原 run／attempt 身份。已有 start／end／停车边界仍是生命周期报告，不复制第二套时钟。只在收尾取这些事实：它们没有“允许运动／允许保存”字段，不按当前 source 投票，不需要每帧交换证书。若计算先完成，结果仅暂存到相同 attempt 的封闭事实确定；一旦封闭，保存不再向 Core 请求任何许可。
+
 封闭后普通接管不是撤销数据。封闭前 manual／nav／estop 仍立即停止学习动作，窗口不足不造结果，已消费 action 不清除、不重播。已完成持久模型不因缺帧、遮挡、换控制源或后续无匹配被撤销。本文新增的用户验收场景是正常手动接管；不扩为急停复位、自动恢复旧目标或程序崩溃后的 raw 恢复承诺。
 
 ## 保存、恢复与资源退出
@@ -73,8 +75,58 @@
 
 前后各 60°、两个独立布尔开关、70% 学习遮挡阈值与当前 +Inf 角覆盖语义保持；不恢复旧规格中的扫掠／未知区运动门槛。1 cm 不是 sensor_error；尺寸乘 1.10、单次 sensor_error、lag、输出 150 ms 和 scan TTL 均不改。固定参考可按原离散规则延伸到车外，不另裁剪。
 
-采用单一有状态流式 CPU 子进程，不选停车后整个窗口才启动的 batch 替代。本阶段针对原自动启动 attempt；用户新要求的网页手动新校准入口正在只读收口，不能把它接成复用已消费动作，也不在本阶段擅定公开命令、并发或旧模型切换策略。
+采用单一有状态流式 CPU 子进程，不选停车后整个窗口才启动的 batch 替代。自动启动和网页显式校准共用一条流式实现；新校准创建独立 attempt，不复用旧已消费动作。以下公开接口、身份和持久化规则覆盖旧“同 run 只可能有一次学习”的接线假定；单个 attempt 的动作仍不可重播。
 
-项目完整范围为产品新增 1／修改 7，测试新增 1／修改 10，文档新增 1／修改 1，共 21 文件；根 CURRENT_TASK 由负责人另行维护。具体文件与只读测试候选见[实施计划](../plans/2026-11-18-startup-learning-isolation.md)。不改配置／构建／工具，不删除文件。
+完整范围为产品新增 1／修改 21（22），测试新增 1／修改 20（21），文档新增 1／修改 1（2），共 45 项目文件；根 CURRENT_TASK 由负责人另行维护 1 文件，总预报 46。具体文件与只读测试候选见[实施计划](../plans/2026-11-18-startup-learning-isolation.md)。不改配置／构建／工具，不删除文件。
 
 新架构当前尚无验收。54 帧 JSON 可核对候选输入和采集时刻，不代表原 Core 实际选帧；Linux IPC／spawn 与实际模型仍需负责人按阶段核对。不能用局部测试、completed 但 0 点、候选点数或模拟提交替代真实运动／停车和模型点分布证据，不承诺端到端 30 ms。
+
+
+## 网页新校准：公开 API 与接纳
+
+公开命令确定为 `learning.start`、`learning.status`，沿原 v1 Envelope；robot_id／session_id／connection_epoch／request_id／seq／expires_at 保留，controller_generation 仍只能由 relay 注入。严格 DTO 同时进入根协议和 TS；请求／回执按原 controller 上下文关联，不广播给其它控制端，不把 start 放进 drive.intent latest 合并通路。
+
+| API | 最小 payload／回执 |
+| --- | --- |
+| learning.start | payload：expected_active_revision（非负整数）、expected_authority_id（当前 prepared authority 或 null；null 只代表预期 idle 且无 holder，不是通配）。request_id 使用 Envelope 的原值 |
+| start 回执 | data：start_request_id、attempt_id、state=accepted 或 busy；busy 指当前在途 attempt，不分配新一轮、不排队。accepted 只证明接纳请求，运动／结果以状态为准；鉴权／版本／状态冲突仍沿原错误类型 |
+| learning.status | payload：attempt_id 或 start_request_id，最多一个；都不填查询当前。查询自己的新 request_id 与被查 start_request_id 分开 |
+| status 回执 | run_id、active_revision、active_model（attempt_id／model_id／point_count 或 null）、当前／被查 attempt_id、phase／reason、motion_complete／capture_complete／compute_complete／durable、can_start／不能开始的原因；不传点集或 raw 历史 |
+
+busy 是有类型的请求处理回执，不是新动作被接受；不能把其解码成 succeeded。相同 start_request_id 与相同指纹返回原 attempt／结果，payload 或归属冲突拒绝，不借新的 active_revision 重新执行。超时／断线重连先查询原请求或当前 attempt，绝不自动再 start。
+
+完整链路为 VehicleStateView → VehiclePort／VehicleTransport → client／TS 协议 → relay → Agent → IpcMotion → AdapterCore → CommandNode → Core。CommandNode 做真实操作者／当前来源检查，Core 在真正开始时再次原子核对同一可信上下文、原期限及停车／来源状态；检查后出现新手动／导航目标，旧请求不能等它结束后再突然发动。使用已有真实 stationary／来源，不新增独立车速资格。学习服务只分配 attempt／记录，不绕过 Core 发运动。
+
+不抢占行驶／导航、不自动 stop 旧任务、不隐式恢复旧目标。idle 无 holder 或同操作者 prepared 且停稳可显式开始；其它来源冲突返回拒绝。busy 包括录制、计算和提交，即使已停车后台仍忙也不接受另一不同 request；完成或明确失败后才由操作者重新点击。初始启动也占同一串行 attempt 槽。
+
+学习能力通过已有 vehicle_ui.capabilities 的 learning.v1 明确宣告；校准明细用 status 查询，不扩成高频历史报告。无能力的旧 peer 不接收未知命令。后台完成／普通接管不会重新申请运动；封闭后切到 manual 仍按上文完成保存。
+
+## 程序身份、attempt 与 active 引用
+
+固定 `run_id` 是本次程序运行／原学习服务地址／原采集运行身份；网页校准不调用 start_environment、不改 ROS 采集源、连接 epoch 或进程 boot。`attempt_id` 是 owner 生成的 32hex 校准身份；初始自动 attempt 由 run_id + startup 标记唯一确定，手动 attempt 由 run_id + 原 start_request_id 确定性摘要得到，保留请求内容和可信发起上下文的指纹并拒绝碰撞／不一致；普通投递 seq／expires_at 不用来制造另一个 attempt，原请求时效仍由接纳检查。因此按请求可直接查原记录，不用无限内存幂等表，也不回收旧动作再用。
+
+最小持久化结构（新结构 version 2；不在旧 v1 run 文件中原地清 action）：
+
+| 记录 | 必需内容 |
+| --- | --- |
+| ProgramManifest | schema_version=2、run_id、owner_epoch、revision、latest_attempt_id、active_revision、active_ref=null 或 {attempt_id, model_id, record_revision} |
+| AttemptRecord | schema_version=2、run_id、attempt_id、trigger=startup/manual、start_request_id／请求指纹（自动为空）、原 owner_epoch／revision／committed_steady_ns、geometry／phase／reason／action／model、capture_summary |
+| capture_summary | open/complete/incomplete、stream_id、连续 through_index、validation_after_steady_ns 与录入收尾时刻；仅事实摘要，无 raw 数组。原 action 已有 start／end，不能重复改写另一套期限 |
+
+每个 attempt 独立保存完整原 action，consumed／首提交／截止不被下一轮重置；对旧 attempt 的 Attach／State 只是读取，不发新写会话。当前 candidate 与 active 模型是两个对象：旧 active 存在不能让新 attempt 被误判 completed。Core／只读观察者只从 manifest.active_ref 安装运行过滤 view，新计算始终从未补点原始流学习。
+
+owner 单写程序 manifest 和各 attempt，不增加第二磁盘 writer。文件名由 owner 根据 ID 确定：程序 `.startup-learning-<run_id>`；attempt `.startup-learning-<run_id>.attempt-<attempt_id>`，临时提交仍同目录 `.pending`。网页不能传路径；记录仍有界、完整原子提交。当前旧 v1 已完成事实不被新校准覆盖，也不作为可再执行的空 action。
+
+切换顺序固定：先将候选完整 AttemptRecord 原子写入并 fsync；再将 manifest.active_ref／active_revision 原子切到该已持久模型；两个持久步骤都成功后才对外发布新 active。失败／不完整保留旧 active；候选已写但引用未写不等于已生效，不假报整体 durable。成功后按版本在一次扫描／控制帧边界替换 view，不改变当前控制源、目标或重播学习运动。既有有 view 就停止 State 的客户端规则须改为小版本观察，未变不重传目录，只在新 active durable 后安装一次；不逐帧读文件。
+
+cleanup 按程序组识别生成文件，保留当前 run 的 manifest、active、candidate 及该 run 旧 attempt 动作事实，不在每次校准清除上一模型；旧程序组只在原成功启动清理边界、既有 peer 锁约束下清理。扩展精确白名单，不递归、不跟链接、不碰非生成文件；没有 raw spool，也不承诺崩溃后重建未算完数据。
+
+## 原位置交互提案与临时预览边界
+
+在现有 VehicleStateView 卡片内，速度／连接信息之后、任务区之前增加“固定回波校准”区，复用本组件 CSS module；任务与手动控制不被遮罩或禁用。显示生效模型及参考点数，单个“重新校准”按钮旁常驻文案：“停稳且无任务时，将以 0.05 m/s 前进 3 秒并停车；可随时手动接管。”不另加隐式 acquire／取消导航／重启步骤。
+
+状态用实际事实区分：等待接纳、录制／前进、已停车验证、已录齐后台计算、保存中、已更新或未完成；busy 只禁用新校准按钮。旧模型仍生效要明确显示；0 点显示真实参考点数，不说识别成功。超时显示“结果未确认”及“查询本次结果”，不能用另一个 start 充当查询；无能力／离线保留最后状态并禁用 start。
+
+负责人安排后才制作临时交互预览：新增 `web/src/features/devices/CalibrationPreview.tsx`，仅 mock 场景／本地交互；临时修改 `VehicleStateView.tsx`，在原卡片位置、仅现有 demo + 显式 preview 开关下挂入。共临时 2 文件（新增 1／修改 1），不改 App／路由／依赖／配置／服务；preview 不接真实 API、socket 或车端。使用既有 demo 壳的模拟标记，场景包括 busy、录齐后手动接管、未录齐中断、旧模型保留、持久化成功切换和超时查询，不自动控制车辆。
+
+此时工作区会临时多 1 文件，不计最终 45 文件；预览确认后删除临时组件与开关，最终真实 UI 仍落回原已预报 VehicleStateView。是否运行现有网页预览由负责人安排，本轮不启服务、不创建预览文件。
