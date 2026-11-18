@@ -15,6 +15,7 @@ import subprocess
 import time
 from collections import deque
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix
@@ -159,7 +160,8 @@ class SafetyGate(Node):
         )
         self._status_counts: dict[str, int] = {}
         self._last_status = float("-inf")
-        self._status_geometry: dict[str, object] = {}
+        self._control_timing: dict[str, float] = {}
+        self._last_control_tick: float | None = None
         self._command_topic = str(self.get_parameter("final_command_topic").value)
         if input_channel is not None:
             from tf2_ros import Buffer, TransformListener
@@ -234,9 +236,19 @@ class SafetyGate(Node):
             reference = None
             sensors.independent = sensors.tracking = None
         ready = self._scan_topology_ready()
-        state = {k: v for k, v in sensors.__dict__.items() if k not in {"profile", "diagnostics"}}
+        # The decision owner reads current values, not estimator/pose histories.
+        # raw_feedback/wheel_linear only need these roots and the local age policy.
+        state = {
+            "latest": None if sensors.latest is None else replace(sensors.latest, path=None),
+            "independent": sensors.independent,
+            "raw_wheel": sensors.raw_wheel,
+            "raw_imu": sensors.raw_imu,
+        }
+        if reference is not None:
+            # Only the reporting average/mode is consumed; tracking stays with its owner.
+            reference = ({key: reference[0][key] for key in ("average", "mode")}, None, None)
         self._input_channel.put(
-            (state, tuple(self._scans), ready, self._scan_generation, reference)
+            (state, tuple(self._scans)[-1:], ready, self._scan_generation, reference)
         )
 
     def _clock_ok(self, now: float) -> bool:
@@ -693,27 +705,40 @@ class SafetyGate(Node):
         values = {
             "buffered_scans": str(len(self._scans)),
             **{f"count.{key}": str(value) for key, value in self._status_counts.items()},
+            # Temporary stage timings describe the last completed control callback.
+            **{f"timing.{key}": str(value) for key, value in self._control_timing.items()},
         }
         self._motion_core.report_status(dict(body=self._body, reason=reason, values=values))
 
     def _on_timer(self) -> None:
         started = False
+        timing = {}
         try:
-            self._cadence.observe(time.monotonic())
-            self._input_process.update(self, self._motion_core.sensors)
-            if not self._cadence.due(time.monotonic()):
+            entered = time.monotonic()
+            if not self._cadence.due(entered):
                 return
             started = True
+            timing["sampled_steady"] = entered
+            if self._last_control_tick is not None:
+                timing["tick_gap_ms"] = (entered - self._last_control_tick) * 1000
+            self._last_control_tick = entered
+            self._input_process.update(self, self._motion_core.sensors)
+            updated = time.monotonic()
+            timing["input_update_ms"] = (updated - entered) * 1000
             self._poll_command_guard()
             if not self._command_topology_ready():
                 self._motion_core.revoke("command_topology_unqualified")
+            guarded = time.monotonic()
+            timing["command_guard_ms"] = (guarded - updated) * 1000
             # Sample control time after command ingress has been drained.
             self._motion_core.tick()
+            timing["tick_ms"] = (time.monotonic() - guarded) * 1000
         except ValueError as exc:
             self._motion_core.revoke(str(exc))
             self._emit_motion_core(Velocity(0, 0), str(exc), computed_steady=time.monotonic())
         finally:
             if started:
+                self._control_timing = timing
                 self._cadence.finished(time.monotonic())
 
     def _stop_guard(self):
