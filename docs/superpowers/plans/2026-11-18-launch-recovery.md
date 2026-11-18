@@ -349,3 +349,10 @@ PY
 - `819f2ec` 的 Linux 独立两函数检查首项在 waitpid 状态非正常零退出处再次失败，finally 又对已回收 PID 发 SIGKILL 引发 ProcessLookupError，掩盖了原始 status；async 取消函数仍未执行。本轮不能宣称父死路径完整通过，也不能在缺少 status 时断定重复信号或产品故障。
 - 最小修正仅同一 unit 用例：waitpid 一旦 collected 即移出待清理集合；严格退出零断言保留，消息加入 PID、raw status、exit/signal 和两个已有 stopped 标记；失败清理先确认仍是本测试未回收 child，再核对 /proc birth 身份，忽略已失去 child 所有权/已消失的 PID，不重复信号已回收或复用 PID，以便继续尽力回收其它已知 child，保留原始失败。未改产品或扩大场景。
 - ruff/格式/差异检查通过；本机无 Linux，不冒称真实父死结果已修复。负责人只重跑这两个受影响函数取得原始状态，已通过 critical 不重跑。
+
+### 获准的临时 MPPI 1.1.9 恢复 fixture
+
+- 负责人已只读获取实际对应源码 `/home/wheeltec/wheeltec_ros2/src/navigation2-humble/nav2_mppi_controller/src/critics/obstacles_critic.cpp`：评分默认 repulsion_weight=1.5、critical_weight=20、collision_cost=10000、collision_margin_distance=0.10、near_goal_distance=0.5、cost_power=1；原生 consider_footprint 默认为 false。inflation 分支默认 scaling=10/radius=.55，与项目 .35/3 不同，不能直接套新版或原生 inflation 默认。
+- 仅在既有 native_navigation live fixture 中读取生产参数副本，明确命名临时 `test-only-nav2-mppi-1.1.9.yaml` 并带“仅隔离恢复测试”注释，经既有 parameters 入口使用。只将不支持的 CostCritic 选择/参数块替换为已安装 ObstaclesCritic 的上述真实评分默认；不映射 CostCritic 权重。保留项目原有 consider_footprint=true 的碰撞模式，inflation 从同一原参数 local_costmap 读取为 .35/3；其余速度、footprint、TF、传感话题、controller/planner/BT 及 launch 参数不变。
+- 0.10 来自厂家旧 critic 评分默认，仅用于无底盘合成场景；不是新安全框、停车资格或产品避障修改。正式 nav2.yaml 未改、未升级依赖，当前默认生产导航仍因缺少 CostCritic 不可启动；此配置未来通过也只验证该临时参数下两个既有恢复场景，不表示算法等价或生产导航通过。
+- 本机仅对两项受影响 live 场景收集为 2 skipped / 2 deselected（无 ROS，0.03 秒）。另外直接执行同一 fixture 的参数生成代码，YAML roundtrip 成功；恢复原 CostCritic 选择/参数后整个结构与生产原 YAML 完全一致，确认只有该 critic 区域不同。ruff/格式/差异检查通过；不重复已通过 critical 或原前缀/IPC 检查，不新增用例或跟踪配置文件，范围仍 18 文件。负责人亲审后仅运行此前两项 Nav2 初始化失败场景。

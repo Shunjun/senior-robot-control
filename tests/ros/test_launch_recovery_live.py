@@ -385,7 +385,8 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
 
 @pytest.fixture
 def native_navigation(isolated_ros, tmp_path):
-    """Reuse the existing synthetic map/TF/GetState bringup facility, with no simulator."""
+    """Synthetic lifecycle recovery with explicit test-only installed MPPI 1.1.9 parameters."""
+    import yaml
     from geometry_msgs.msg import TransformStamped
     from lifecycle_msgs.msg import State
     from lifecycle_msgs.srv import GetState
@@ -398,6 +399,36 @@ def native_navigation(isolated_ros, tmp_path):
     from test_scan_epoch_live import _room_scan
     from tf2_ros import StaticTransformBroadcaster
 
+    parameters = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/config/nav2.yaml").read_text()
+    )
+    follow = parameters["controller_server"]["ros__parameters"]["FollowPath"]
+    # //Compatible: actual wheeltec MPPI 1.1.9 exports ObstaclesCritic, not
+    # CostCritic. This temporary recovery fixture does not validate or modify
+    # production navigation scoring. No CostCritic weights are mapped across.
+    follow["critics"][follow["critics"].index("CostCritic")] = "ObstaclesCritic"
+    del follow["CostCritic"]
+    inflation = parameters["local_costmap"]["local_costmap"]["ros__parameters"]["inflation_layer"]
+    follow["ObstaclesCritic"] = {
+        "enabled": True,
+        "consider_footprint": True,  # Keep the project's existing footprint collision mode.
+        "cost_power": 1,
+        # Exact defaults from actual 1.1.9 obstacles_critic.cpp, used only for
+        # this synthetic no-chassis scene. The margin is a critic score term,
+        # not a new static safety frame or a control stopping threshold.
+        "repulsion_weight": 1.5,
+        "critical_weight": 20.0,
+        "collision_cost": 10000.0,
+        "collision_margin_distance": 0.10,
+        "near_goal_distance": 0.5,
+        "cost_scaling_factor": inflation["cost_scaling_factor"],
+        "inflation_radius": inflation["inflation_radius"],
+    }
+    parameters_path = tmp_path / "test-only-nav2-mppi-1.1.9.yaml"
+    parameters_path.write_text(
+        "# ISOLATED RECOVERY TEST ONLY: not production navigation parameters.\n"
+        + yaml.safe_dump(parameters, sort_keys=False)
+    )
     probe = isolated_ros.create_node("launch_recovery_nav_probe")
     executor = MotionExecutor()
     executor.add_node(probe)
@@ -447,6 +478,7 @@ def native_navigation(isolated_ros, tmp_path):
             "senior_robot",
             "navigation.launch.py",
             "use_sim_time:=false",
+            f"parameters:={parameters_path}",
         ],
         stdout=log,
         stderr=subprocess.STDOUT,
