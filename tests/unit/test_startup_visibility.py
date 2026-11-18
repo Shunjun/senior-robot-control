@@ -245,7 +245,7 @@ def test_sector_edges_clip_ray_cells_by_actual_angle(center, expected, yaw):
     assert result.front_occluded == pytest.approx(expected, abs=1e-14)
 
 
-def test_validated_no_return_keeps_existing_available_coverage_contract():
+def test_no_return_supplies_angular_coverage_without_changing_ray_evidence():
     base = observation()
     ray = next(
         r
@@ -253,11 +253,16 @@ def test_validated_no_return_keeps_existing_available_coverage_contract():
         if abs(math.remainder(base.scan.angle_min + r.index * base.scan.angle_increment, math.tau))
         < 0.01
     )
-    rays = tuple(replace(r, kind="invalid") if r.index == ray.index else r for r in base.rays)
     ranges = list(base.scan.ranges)
     ranges[ray.index] = math.inf
-    obs = replace(base, rays=rays, scan=replace(base.scan, ranges=tuple(ranges)))
-    unknown = startup_visibility(obs, front_stop=True, rear_stop=True)
-    validated = startup_visibility(obs, front_stop=True, rear_stop=True, no_return_clear=True)
-    assert unknown.front_occluded == pytest.approx(1 / 60)
-    assert validated.front_occluded == 0
+    obs = filter_self(replace(base.scan, ranges=tuple(ranges)), DeviceProfile())
+    assert startup_visibility(obs, front_stop=True, rear_stop=True).front_occluded == 0
+    assert obs.rays[ray.index].kind == "invalid"
+    assert obs.rays[ray.index].endpoint is None
+    assert all(r.index != ray.index for r in obs.free_rays)
+    for invalid in (math.nan, -math.inf, 0.01):
+        ranges[ray.index] = invalid
+        obs = filter_self(replace(base.scan, ranges=tuple(ranges)), DeviceProfile())
+        assert startup_visibility(
+            obs, front_stop=True, rear_stop=True
+        ).front_occluded == pytest.approx(1 / 60)
