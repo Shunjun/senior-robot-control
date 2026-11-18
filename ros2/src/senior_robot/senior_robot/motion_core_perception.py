@@ -78,8 +78,19 @@ def _approach(current, target, rate, dt):
     return min(target, current + delta) if target > current else max(target, current - delta)
 
 
+def _braking_speed_limit(distance, decel, lag_s):
+    """Solve distance = speed*lag + speed²/(2*decel), without cancellation."""
+    if distance <= 0:
+        return 0.0
+    if math.isinf(distance):
+        return math.inf
+    braking_term = 2 * decel * distance
+    lag_speed = decel * lag_s
+    return braking_term / (math.sqrt(lag_speed**2 + braking_term) + lag_speed)
+
+
 def limit_velocity(requested, previous, measured_linear, clearance, profile, dt):
-    """v² <= 2*a*d: positive clearance always permits a positive speed.
+    """v*lag + v²/(2*a) <= d: positive clearance permits a positive speed.
 
     Ramp ordinary requests from the last output; wheel speed selects the braking
     rate when the vehicle is already faster than the requested/capped speed.
@@ -87,8 +98,9 @@ def limit_velocity(requested, previous, measured_linear, clearance, profile, dt)
     """
     linear = max(-profile.cap, min(profile.cap, requested.vx))
     yaw = max(-profile.yaw_cap, min(profile.yaw_cap, requested.wz))
+    lag_s = profile.lag_ms / 1000
     distance = clearance.front if linear >= 0 else clearance.rear
-    cap = math.sqrt(2 * profile.decel * distance)
+    cap = _braking_speed_limit(distance, profile.decel, lag_s)
     desired = math.copysign(min(abs(linear), cap), linear)
     measured = previous.vx if measured_linear is None else measured_linear
     reversing = previous.vx * desired < 0
@@ -97,7 +109,7 @@ def limit_velocity(requested, previous, measured_linear, clearance, profile, dt)
     vx = _approach(previous.vx, ramp_target, profile.decel if braking else profile.accel, dt)
     # Cap the direction actually commanded, also during a requested reversal.
     actual_distance = clearance.front if vx >= 0 else clearance.rear
-    actual_cap = math.sqrt(2 * profile.decel * actual_distance)
+    actual_cap = _braking_speed_limit(actual_distance, profile.decel, lag_s)
     vx = math.copysign(min(abs(vx), actual_cap), vx)
     if linear == 0:
         vx = 0.0
