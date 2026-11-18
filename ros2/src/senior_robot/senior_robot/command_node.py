@@ -985,6 +985,7 @@ class CommandNode(Node):
                 can_start = (
                     runtime is not None
                     and runtime.stationary
+                    and getattr(self, "_output_handoff_boot", None) is None
                     and runtime.mode in {"idle", "manual"}
                     and self._navigation_source is None
                     and not self._arbiter.task_navigation_active
@@ -1010,6 +1011,7 @@ class CommandNode(Node):
                 return {
                     "ok": True,
                     "owner_boot_id": self._owner_boot,
+                    "output_boot_id": None if runtime is None else runtime.boot_id,
                     "generation": self._generation,
                     "deadline_steady": deadline,
                     "can_start": can_start,

@@ -156,6 +156,7 @@ class AdapterCore:
                             ).encode()
                         ).hexdigest(),
                         owner_boot_id=admission["owner_boot_id"],
+                        output_boot_id=admission["output_boot_id"],
                         generation=admission["generation"],
                         admitted=admission["can_start"],
                         deadline_steady=admission["deadline_steady"],

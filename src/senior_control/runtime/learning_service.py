@@ -20,6 +20,7 @@ from senior_control.runtime.learning_wire import (
     ActionReport,
     Attach,
     BeginAttempt,
+    DeclineAttempt,
     FrameBatch,
     GeometryReport,
     MotionObservedThrough,
@@ -28,6 +29,7 @@ from senior_control.runtime.learning_wire import (
     RecordedFrame,
     Reply,
     Reserve,
+    RetireMotionOwner,
     SessionRequest,
     State,
 )
@@ -47,7 +49,8 @@ class LearningService:
         self.listener: socket.socket | None = None
         self.stop = asyncio.Event()
         self.task: asyncio.Task[None] | None = None
-        self.peers: set[asyncio.Task[None]] = set()
+        self.peers: dict[asyncio.Task[None], int] = {}
+        self._peer_sequence = 0
         self.compute: LearningCompute | None = None
         self.proposal: BeginAttempt | None = None
         self._reset_stream()
@@ -79,7 +82,9 @@ class LearningService:
             self.stream_id = batch.stream_id
             self.through_index = batch.after_index
         if self.stream_id != batch.stream_id:
-            self.gap = True
+            # A replacement receiver cannot close the old recording stream. Its
+            # causal retirement settles earlier accepted old-stream packets first.
+            return
         self.gap |= batch.gap
         for frame in batch.frames:
             if frame.index <= self.through_index:
@@ -133,17 +138,7 @@ class LearningService:
         if record.capture_summary.state != "open":
             return
         if self.gap:
-            owner.capture(
-                CaptureSummary(
-                    state="incomplete",
-                    stream_id=self.stream_id,
-                    through_index=self.through_index,
-                    accepted_frames=self.accepted_frames,
-                )
-            )
-            if owner._session is not None:
-                owner.set_phase(owner._session, "failed", "learning_stream_incomplete")
-            self.frames.clear()
+            self._fail_capture("learning_stream_incomplete")
             return
         start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
         if start is None or end is None:
@@ -186,16 +181,15 @@ class LearningService:
 
     def _fail_capture(self, reason: str) -> None:
         assert self.owner is not None
-        self.owner.capture(
+        self.owner.fail_capture(
+            reason,
             CaptureSummary(
                 state="incomplete",
                 stream_id=self.stream_id,
                 through_index=self.through_index,
                 accepted_frames=self.accepted_frames,
-            )
+            ),
         )
-        if self.owner._session is not None:
-            self.owner.set_phase(self.owner._session, "failed", reason)
         self.frames.clear()
 
     def _pump_compute(self) -> None:
@@ -322,9 +316,10 @@ class LearningService:
                         if len(self.peers) >= 8:
                             connection.close()
                         else:
-                            peer = asyncio.create_task(self._serve(connection))
-                            self.peers.add(peer)
-                            peer.add_done_callback(self.peers.discard)
+                            self._peer_sequence += 1
+                            peer = asyncio.create_task(self._serve(connection, self._peer_sequence))
+                            self.peers[peer] = self._peer_sequence
+                            peer.add_done_callback(lambda done: self.peers.pop(done, None))
                         accepting = asyncio.create_task(loop.sock_accept(self.listener))
                 except (OSError, ValueError, RuntimeError) as exc:
                     _LOG.warning("Learning owner component error: %s", exc)
@@ -334,7 +329,7 @@ class LearningService:
             accepting.cancel()
             await asyncio.gather(accepting, return_exceptions=True)
 
-    async def handle(self, request) -> Reply:
+    async def handle(self, request, *, earlier=()) -> Reply:
         assert self.owner is not None
         owner = self.owner
         owner.poll()
@@ -343,10 +338,22 @@ class LearningService:
         ready = False
         session = None
         if isinstance(request, Attach):
+            if owner.record.trigger == "manual" and owner.record.model is None:
+                proposal = self.proposal
+                if (
+                    proposal is None
+                    or request.attempt_id != owner.record.attempt_id
+                    or request.output_boot_id != proposal.output_boot_id
+                    or request.generation != proposal.generation
+                    or owner.record.action.consumed
+                ):
+                    raise ValueError("learning_attempt_identity")
             session, _ = owner.begin_consumer()
         elif isinstance(request, State):
             pass
         elif isinstance(request, Reserve):
+            if owner.record.trigger == "manual" and self.proposal is not None:
+                raise ValueError("learning_attempt_unconfirmed")
             revision = owner.reserve_action(request.session)
         elif isinstance(request, ActionReady):
             ready = owner.action_ready(request.session, request.revision)
@@ -407,12 +414,15 @@ class LearningService:
                 state = "accepted"
                 attempt = existing.attempt_id
             else:
+                if request.output_boot_id is None:
+                    raise ValueError("learning_active_conflict")
                 previous_attempt = owner.record.attempt_id
                 state = owner.new_attempt(
                     request.start_request_id,
                     request.fingerprint,
                     request.payload.expected_active_revision,
                     request.admitted,
+                    output_boot_id=request.output_boot_id,
                 )
                 attempt = owner.record.attempt_id
                 if state == "accepted" and previous_attempt != attempt:
@@ -426,6 +436,31 @@ class LearningService:
             self.proposal = None
             if not request.accepted:
                 self._fail_capture(request.reason)
+        elif isinstance(request, RetireMotionOwner):
+            # Each sender has one flight. Settle earlier accepted connections, not
+            # CPU work or unseen history; both raw and closing facts may be in flight.
+            if earlier:
+                await asyncio.gather(*earlier, return_exceptions=True)
+            record = owner.record
+            if (
+                request.attempt_id == record.attempt_id
+                and request.owner_epoch == record.owner_epoch
+                and request.motion_owner_id == record.motion_owner_id
+                and request.motion_generation == record.motion_generation
+                and record.expected_output_boot_id != request.replacement_output_boot_id
+            ):
+                self._advance_capture()
+                if owner.record.capture_summary.state == "open":
+                    self._fail_capture("motion_owner_replaced")
+        elif isinstance(request, DeclineAttempt):
+            record = owner.record
+            if (
+                request.attempt_id == record.attempt_id
+                and request.output_boot_id == record.expected_output_boot_id
+                and not record.action.consumed
+            ):
+                self._fail_capture(request.reason)
+                self.proposal = None
         elif isinstance(request, QueryAttempt):
             identity = request.payload.attempt_id
             if request.payload.start_request_id is not None:
@@ -469,7 +504,7 @@ class LearningService:
             durable_revision=owner.durable_revision,
         )
 
-    async def _serve(self, connection: socket.socket) -> None:
+    async def _serve(self, connection: socket.socket, sequence: int) -> None:
         try:
             # The endpoint is a private same-user, same-run capability, not a
             # cloud route. Peer credentials are kernel supplied on target Linux.
@@ -488,7 +523,12 @@ class LearningService:
                 raise ValueError("learning_request_size")
             assert self.owner is not None
             request = REQUEST.validate_json(raw)
-            reply = await self.handle(request)
+            earlier = (
+                tuple(task for task, order in self.peers.items() if order < sequence)
+                if isinstance(request, RetireMotionOwner)
+                else ()
+            )
+            reply = await self.handle(request, earlier=earlier)
         except asyncio.CancelledError:
             connection.close()
             raise

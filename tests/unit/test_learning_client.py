@@ -172,6 +172,7 @@ def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_pat
                     expected_active_revision=0, expected_authority_id=None
                 ),
                 owner_boot_id="b" * 32,
+                output_boot_id="c" * 32,
                 generation=1,
                 deadline_steady=time.monotonic() + 5,
                 admitted=True,
@@ -196,7 +197,7 @@ def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durabl
     from senior_control.runtime.learning_wire import BeginAttempt
 
     run = TestRun(tmp_path / "live-client-next")
-    _, lock = wire_owner(monkeypatch, run)
+    requests, lock = wire_owner(monkeypatch, run)
     client = learning_client.LearningClient(run.path)
     try:
         until(client, lambda: client.ready)
@@ -210,7 +211,12 @@ def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durabl
         until(client, lambda: client.view is not None)
         assert not client.reserve_action()
         old = client.record
+        client.close()
+        client = learning_client.LearningClient(run.path, read_only=True)
+        until(client, lambda: client.view is not None)
         with lock:
+            observed_from = len(requests)
+
             request = BeginAttempt(
                 start_request_id="next",
                 fingerprint="a" * 64,
@@ -218,11 +224,18 @@ def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durabl
                     expected_active_revision=1, expected_authority_id=None
                 ),
                 owner_boot_id="b" * 32,
+                output_boot_id="c" * 32,
                 generation=1,
                 deadline_steady=time.monotonic() + 5,
                 admitted=True,
             )
             identity = run.rpc(request).data["attempt_id"]
+
+        until(client, lambda: client.record.attempt_id == identity)
+        assert client.read_only and client._session is None and not client.ready
+        with lock:
+            assert all(request is State for request in requests[observed_from:])
+        assert client.bind_attempt(identity, "c" * 32, 1) is False
 
         def advanced():
             client.observed(

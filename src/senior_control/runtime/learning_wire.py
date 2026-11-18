@@ -18,6 +18,9 @@ from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 class Attach(FrozenFact):
+    attempt_id: RunId | None = None
+    output_boot_id: RunId | None = None
+    generation: Nonnegative | None = None
     active_revision: Nonnegative = 0
     type: Literal["attach"] = "attach"
 
@@ -107,6 +110,7 @@ class BeginAttempt(FrozenFact):
     payload: LearningStartPayload
     fingerprint: str = Field(min_length=64, max_length=64)
     owner_boot_id: RunId
+    output_boot_id: RunId | None
     generation: Nonnegative
     admitted: bool
     deadline_steady: float = Field(allow_inf_nan=False, ge=0)
@@ -124,6 +128,22 @@ class AcceptAttempt(SessionRequest):
     reason: str = Field(max_length=256)
 
 
+class RetireMotionOwner(FrozenFact):
+    type: Literal["retire_motion_owner"] = "retire_motion_owner"
+    attempt_id: RunId
+    owner_epoch: RunId
+    motion_owner_id: RunId
+    motion_generation: Nonnegative
+    replacement_output_boot_id: RunId
+
+
+class DeclineAttempt(FrozenFact):
+    type: Literal["decline_attempt"] = "decline_attempt"
+    attempt_id: RunId
+    output_boot_id: RunId
+    reason: str = Field(max_length=256)
+
+
 Request: TypeAlias = Annotated[
     Attach
     | State
@@ -136,7 +156,9 @@ Request: TypeAlias = Annotated[
     | MotionObservedThrough
     | BeginAttempt
     | QueryAttempt
-    | AcceptAttempt,
+    | AcceptAttempt
+    | RetireMotionOwner
+    | DeclineAttempt,
     Field(discriminator="type"),
 ]
 REQUEST = TypeAdapter[Request](Request)

@@ -48,7 +48,11 @@ def finish_writes(owner, worker):
 
 def test_strict_record_roundtrip_and_corrupt_or_unknown_inputs():
     record = LearningRecord(
-        attempt_id="0" * 32, run_id="a" * 32, clock_domain=DOMAIN, owner_epoch="b" * 32
+        motion_owner_id="9" * 32,
+        attempt_id="0" * 32,
+        run_id="a" * 32,
+        clock_domain=DOMAIN,
+        owner_epoch="b" * 32,
     )
     assert parse_record(record.to_bytes()) == record
     for data in (
@@ -97,7 +101,11 @@ def test_atomic_write_failure_keeps_previous_complete_snapshot(tmp_path, monkeyp
 
     path = tmp_path / (".startup-learning-" + "e" * 32)
     original = LearningRecord(
-        attempt_id="0" * 32, run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32
+        motion_owner_id="9" * 32,
+        attempt_id="0" * 32,
+        run_id="e" * 32,
+        clock_domain=DOMAIN,
+        owner_epoch="f" * 32,
     )
     write_record(path, original)
     newer = LearningRecord.model_validate({**original.model_dump(), "revision": 1})
@@ -122,7 +130,11 @@ def test_pending_symlink_never_overwrites_unrelated_file(tmp_path):
     other.write_text("keep")
     path.with_name(path.name + ".pending").symlink_to(other)
     record = LearningRecord(
-        attempt_id="0" * 32, run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32
+        motion_owner_id="9" * 32,
+        attempt_id="0" * 32,
+        run_id="e" * 32,
+        clock_domain=DOMAIN,
+        owner_epoch="f" * 32,
     )
     with pytest.raises(OSError):
         write_record(path, record)
@@ -244,6 +256,7 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
             fingerprint="a" * 64,
             payload=LearningStartPayload(expected_active_revision=0, expected_authority_id=None),
             owner_boot_id="b" * 32,
+            output_boot_id="c" * 32,
             generation=1,
             deadline_steady=100.0,
             admitted=True,
@@ -251,7 +264,16 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
         accepted = run.rpc(request)
         identity = accepted.data["attempt_id"]
         assert accepted.data["state"] == "accepted"
-        duplicate = run.rpc(request.model_copy(update={"deadline_steady": 200.0, "generation": 2}))
+        duplicate = run.rpc(
+            request.model_copy(
+                update={
+                    "deadline_steady": 200.0,
+                    "generation": 2,
+                    "output_boot_id": None,
+                    "admitted": False,
+                }
+            )
+        )
         assert duplicate.data == accepted.data
         assert run.service.proposal.deadline_steady == 100.0
         busy = run.rpc(request.model_copy(update={"start_request_id": "another"}))
@@ -264,5 +286,101 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
         queried = run.rpc(QueryAttempt(payload=LearningStatusPayload(attempt_id=old.attempt_id)))
         assert queried.data["phase"] == "failed" and queried.data["reason"] == "control_takeover"
 
+    finally:
+        run.close()
+
+
+def test_orphan_without_raw_or_session_finishes_and_late_retirement_cannot_kill_new_attempt(
+    tmp_path,
+):
+    from senior_control.runtime.learning_wire import RetireMotionOwner
+
+    run = TestRun(tmp_path / "orphan")
+    try:
+        old = run.owner.record
+        assert run.owner._session is None and run.service.stream_id is None
+        notice = RetireMotionOwner(
+            attempt_id=old.attempt_id,
+            owner_epoch=old.owner_epoch,
+            motion_owner_id=old.motion_owner_id,
+            motion_generation=old.motion_generation,
+            replacement_output_boot_id="b" * 32,
+        )
+        run.rpc(notice)
+        run.pump()
+        assert run.owner.record.phase == "failed"
+        assert run.owner.record.action == old.action and run.owner._session is None
+        assert not run.owner.busy
+        assert (
+            run.owner.new_attempt("manual-after-orphan", "a" * 64, 0, output_boot_id="b" * 32)
+            == "accepted"
+        )
+        current = run.owner.record
+        run.rpc(notice)
+        run.pump()
+        assert run.owner.record == current
+        assert run.owner.record.phase == "not_started"
+        assert run.owner.record.motion_owner_id != old.motion_owner_id
+    finally:
+        run.close()
+
+
+def test_retirement_settles_earlier_raw_and_closing_fact_before_deciding_incomplete(tmp_path):
+    import asyncio
+
+    from test_learning_compute import opened, recorded, send
+
+    from senior_control.runtime.learning_wire import MotionObservedThrough, RetireMotionOwner
+
+    run = TestRun(tmp_path / "retire-in-flight")
+    try:
+        session = opened(run)
+        motion = [recorded(i, 10 + i / 10) for i in range(1, 25)]
+        validation = [recorded(25 + i, 13.1 + i / 10) for i in range(5)]
+        send(run, motion + validation[:4])
+        old = run.owner.record
+        notice = RetireMotionOwner(
+            attempt_id=old.attempt_id,
+            owner_epoch=old.owner_epoch,
+            motion_owner_id=old.motion_owner_id,
+            motion_generation=old.motion_generation,
+            replacement_output_boot_id="b" * 32,
+        )
+
+        async def settle():
+            released = asyncio.Event()
+
+            async def earlier_connection():
+                await released.wait()
+                send(run, validation[4:], through=13.7)
+                await run.service.handle(
+                    MotionObservedThrough(
+                        session=session,
+                        attempt_id=old.attempt_id,
+                        segment_id=old.segment_id,
+                        through_steady_ns=13_600_000_000,
+                        validation_after_steady_ns=13_000_000_000,
+                        first_takeover_ns=13_600_000_000,
+                        stationary=True,
+                        reason="control_takeover",
+                    )
+                )
+
+            preceding = asyncio.create_task(earlier_connection())
+            retiring = asyncio.create_task(run.service.handle(notice, earlier=(preceding,)))
+            await asyncio.sleep(0)
+            assert not retiring.done() and run.owner.record.capture_summary.state == "open"
+            released.set()
+            await retiring
+
+        asyncio.run(settle())
+        assert run.owner.record.capture_summary.state == "complete"
+        assert run.owner.record.action == old.action
+        run.service.compute.held = False
+        for _ in range(12):
+            run.pump()
+        assert run.owner.active_record.model is not None
+        run.rpc(notice)  # Closed/durable data is not revoked by duplicate or late owner loss.
+        assert run.owner.record.phase == "completed"
     finally:
         run.close()

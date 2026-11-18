@@ -22,6 +22,7 @@ from senior_control.runtime.learning_wire import (
     ActionReady,
     ActionReport,
     Attach,
+    DeclineAttempt,
     FrameBatch,
     GeometryReport,
     MotionObservedThrough,
@@ -30,6 +31,7 @@ from senior_control.runtime.learning_wire import (
     Reply,
     Request,
     Reserve,
+    RetireMotionOwner,
     SessionRequest,
     State,
 )
@@ -98,7 +100,7 @@ class LearningClient:
                     active_revision=self.active_revision,
                 )
             elif isinstance(pending, Attach):
-                pending = Attach(active_revision=self.active_revision)
+                pending = pending.model_copy(update={"active_revision": self.active_revision})
             elif isinstance(pending, SessionRequest):
                 pending = pending.model_copy(
                     update={
@@ -136,8 +138,10 @@ class LearningClient:
                     "learning_consumer_not_ready",
                     "learning_model_not_durable",
                 }:
-                    self._enqueue(Attach())
+                    self._enqueue(request)
                     continue
+                if isinstance(request, Attach):
+                    self._attaching = False
                 self.error = reply.error or "learning_record_unavailable"
                 continue
             self.error = reply.error
@@ -155,7 +159,7 @@ class LearningClient:
                     continue
                 changed = self._record is not None and self._record.attempt_id != record.attempt_id
                 self._record = record
-                if changed and not self.read_only:
+                if changed:
                     self._takeover_sent = False
                     self._last_stationary = None
                     self._observed_gap = False
@@ -165,8 +169,7 @@ class LearningClient:
                     self._revision = None
                     self._action_ready = self._reserving = self._checking_action = False
                     self._last_geometry = self._last_phase = None
-                    self._attaching = True
-                    self._enqueue(Attach())
+                    self._attaching = False
             self.accepted_frames = reply.accepted_frames
             self.proposal = reply.proposal
             if reply.manifest is not None and reply.manifest.active_revision > self.active_revision:
@@ -176,7 +179,9 @@ class LearningClient:
                     self.active_revision = reply.manifest.active_revision
             if self.read_only:
                 continue
-            if isinstance(request, Attach):
+            if isinstance(request, Attach) and (
+                request.attempt_id is None or request.attempt_id == reply.attempt_id
+            ):
                 self._session, self._attaching = reply.session, False
             if isinstance(request, Reserve):
                 self._revision = reply.revision
@@ -224,6 +229,40 @@ class LearningClient:
         if self._session is not None and not self._reserving:
             self._reserving = self._enqueue(Reserve(session=self._session))
         return False
+
+    def bind_attempt(self, attempt_id: str, output_boot_id: str, generation: int) -> bool:
+        """Only Core's final explicit-request admission may turn observation into writing."""
+        self.poll()
+        if self._record is None or self._record.attempt_id != attempt_id:
+            return False
+        if self._session is not None:
+            return self.ready
+        if not self._attaching:
+            request = Attach(
+                attempt_id=attempt_id, output_boot_id=output_boot_id, generation=generation
+            )
+            if self._enqueue(request):
+                self.read_only = False
+                self._attaching = True
+        return False
+
+    def retire_motion_owner(self, record: LearningRecord, output_boot_id: str) -> bool:
+        return self._enqueue(
+            RetireMotionOwner(
+                attempt_id=record.attempt_id,
+                owner_epoch=record.owner_epoch,
+                motion_owner_id=record.motion_owner_id,
+                motion_generation=record.motion_generation,
+                replacement_output_boot_id=output_boot_id,
+            )
+        )
+
+    def decline_attempt(self, record: LearningRecord, output_boot_id: str, reason: str) -> bool:
+        return self._enqueue(
+            DeclineAttempt(
+                attempt_id=record.attempt_id, output_boot_id=output_boot_id, reason=reason
+            )
+        )
 
     def accept_attempt(self, accepted: bool, reason: str) -> None:
         if self._session and self._record:

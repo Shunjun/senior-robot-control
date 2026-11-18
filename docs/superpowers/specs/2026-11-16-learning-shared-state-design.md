@@ -141,3 +141,12 @@ cleanup 按程序组识别生成文件，保留当前 run 的 manifest、active�
 - 未启动开发服务、未 SSH/控车、未执行物理校准；Linux abstract SEQPACKET/SO_PEERCRED 与实际 spawn 服务用例保留但本机跳过。接收与控制时序、ARM 负载、真实原始流及最终模型点数/分布，仍由负责人部署后验证，不承诺 30 ms。
 
 停车验证仍使用原 wheel stationary 事实；服务只暂存有界的轻量状态变化以匹配原始录入时刻，不引入独立速度资格。状态变化与取消事实通过原单个有序控制 FIFO 传递，观察事实最多占 12 项，为动作/phase 留 4 项；记录丢失只影响模型完整性，不停止已预留的三秒输出。Root 新恢复接线需要正常合并；恢复时禁止自动学习与恢复后显式网页新 attempt 的接纳边界待合并后共同收敛。
+
+
+### launch 恢复与新的显式校准
+
+恢复 Core 永久保留 `_launch_recovered` 历史、boot echo 和急停 revision，初始仅 State 观察；不将旧 startup 或已消费 manual attempt adopt 为可执行动作。因果交接完成后，仅一次异步通报旧 `attempt_id / owner_epoch / motion_owner_id / motion_generation` 失活，附新 output boot。motion_owner_id 是 owner 创建 attempt 时固定的运动分配身份，不是新的运动资格；没有 raw 或写 session 也能准确结束旧未完成尝试，action/consumed 原值保留。迟到通知不匹配当前 attempt/代次则无操作，不依赖墙钟或“最新记录”猜身份。
+
+失活处理先等同一服务此前已接纳连接中的 raw/收尾事实处理完，再按原 frontier 规则确认录齐；已封闭继续 CPU/持久化，不因 seal 尚在另一通路误丢。接收进程的新 stream 不覆盖旧 stream；未接纳或进程丢失的内存历史不承诺恢复。此等待只在异步服务，最多原有 8 连接和原有 2 秒单包收发超时，不阻塞 Core，也不等 CPU。
+
+新显式 BeginAttempt 额外携带可信 CommandNode 所见 `output_boot_id`。Core 在交接、原 T2 owner/generation、原 deadline、停稳/无冲突复核后，才异步 scoped Attach(`attempt_id, output_boot_id, generation`) 绑定写 session，再确认 AcceptAttempt；服务在确认前拒绝 Reserve。仅观察到 record 不绑定、不执行。不允许的新请求以本 attempt/output boot 的 DeclineAttempt 结束，不为拒绝而 Attach。原已消费动作不重放，已失败 run 不原地复活；当前控制来源与后台模型保存相互独立。

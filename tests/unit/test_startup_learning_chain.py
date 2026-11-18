@@ -31,7 +31,8 @@ class LearningRig:
         monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
         monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
         monkeypatch.setattr(
-            "senior_robot.motion_core_output.LearningClient", lambda _: self.run.client()
+            "senior_robot.motion_core_output.LearningClient",
+            lambda _, **kwargs: self.run.client(**kwargs),
         )
         monkeypatch.setattr(
             "senior_control.motion.diagnostic_pump.DiagnosticPump",
@@ -131,6 +132,7 @@ class LearningRig:
         self.step(self.now + 0.05)
         prepared = barrier("prepared")
         prepared.owner_boot_id = "d" * 32
+        prepared.generation = max(prepared.generation, self.core.output_generation + 1)
         assert self.core.command(prepared)
         self.run.pump()
         request = BeginAttempt(
@@ -138,11 +140,15 @@ class LearningRig:
             fingerprint="a" * 64,
             payload=LearningStartPayload(expected_active_revision=0, expected_authority_id=None),
             owner_boot_id=self.core._input_boot,
+            output_boot_id=self.core.boot,
             generation=self.core.output_generation,
             deadline_steady=self.now + 5,
             admitted=True,
         )
-        assert self.run.owner.new_attempt("manual-round", "a" * 64, 0) == "accepted"
+        assert (
+            self.run.owner.new_attempt("manual-round", "a" * 64, 0, output_boot_id=self.core.boot)
+            == "accepted"
+        )
         self.run.service._reset_stream()
         self.run.service.proposal = request
         self.run.owner.record = self.run.owner.record.model_copy(update={"created_steady_ns": 0})
@@ -342,15 +348,19 @@ def test_new_calibration_request_is_rejected_if_core_source_generation_changed(r
     prepared.owner_boot_id = "d" * 32
     assert rig.core.command(prepared)
     rig.run.pump()
-    assert rig.run.owner.new_attempt("manual-new", "a" * 64, 0) == "accepted"
+    assert (
+        rig.run.owner.new_attempt("manual-new", "a" * 64, 0, output_boot_id=rig.core.boot)
+        == "accepted"
+    )
     rig.run.owner.record = rig.run.owner.record.model_copy(update={"created_steady_ns": 0})
-    rig.run.pump()
     rig.run.service._reset_stream()
+    rig.run.pump()
     rig.run.service.proposal = BeginAttempt(
         start_request_id="manual-new",
         fingerprint="a" * 64,
         payload=LearningStartPayload(expected_active_revision=0, expected_authority_id=None),
         owner_boot_id=rig.core._input_boot,
+        output_boot_id=rig.core.boot,
         generation=rig.core.output_generation + 1,
         deadline_steady=rig.now + 1,
         admitted=True,
@@ -375,3 +385,38 @@ def test_consumed_manual_attempt_reconstruction_does_not_require_a_new_proposal_
     assert rig.core.startup.started is None and not rig.core.startup.prepare_action()
     assert rig.run.owner.record.action == action
     assert action.first_submitted_steady_ns == round(start * 1e9)
+
+
+def test_recovered_core_stays_read_only_until_handoff_then_can_run_a_new_explicit_attempt(
+    rig, monkeypatch
+):
+    # Existing reservation is durable but no raw stream or successful output exists.
+    session = rig.core._learning_client.session
+    rig.run.owner.reserve_action(session)
+    rig.run.pump()
+    old = rig.run.owner.record
+    monkeypatch.setenv("SENIOR_LAUNCH_RECOVERED", "1")
+    rig.core = rig.new_core()
+    assert rig.step(rig.now + 0.05, new_scan=False) == Velocity(0, 0)
+    assert rig.core._learning_client.read_only and not rig.core.startup.active
+    assert rig.run.owner.record.phase != "failed"
+    assert rig.run.owner.record.action == old.action
+
+    echo = barrier("prepared")
+    echo.owner_boot_id = "d" * 32
+    echo.source_kind, echo.source_id, echo.request_id = "idle", rig.core.boot, rig.core.boot
+    echo.source_epoch = 0
+    assert rig.core.command(echo)
+    assert rig.step(rig.now + 0.05, new_scan=False) == Velocity(0, 0)
+    assert rig.core._launch_recovered and not rig.core._recovery_pending
+    assert rig.run.owner.record.phase == "failed"
+    assert rig.run.owner.record.reason == "motion_owner_replaced"
+    assert rig.run.owner.record.action == old.action
+    assert rig.core._learning_client.read_only
+    rig.manual_attempt()
+    start = rig.start()
+    assert start is not None and rig.core._launch_recovered
+    assert rig.run.owner.record.expected_output_boot_id == rig.core.boot
+    assert rig.run.owner.record.attempt_id != old.attempt_id
+    assert rig.core._old_learning_owner.attempt_id == old.attempt_id
+    assert rig.run.owner.record.action.first_submitted_steady_ns == round(start * 1e9)

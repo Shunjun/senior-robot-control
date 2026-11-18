@@ -150,6 +150,10 @@ def attempt_identity(run_id: str, request_id: str | None = None) -> str:
 class LearningRecord(FrozenFact):
     schema_version: Literal[2] = 2
     attempt_id: RunId
+    # Immutable motion assignment; distinct from the disk owner and successor Core boot.
+    motion_owner_id: RunId
+    motion_generation: Nonnegative = 0
+    expected_output_boot_id: RunId | None = None
     created_steady_ns: Nonnegative = Field(default_factory=time.monotonic_ns)
     trigger: Literal["startup", "manual"] = "startup"
     start_request_id: str | None = Field(default=None, min_length=1, max_length=128)

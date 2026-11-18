@@ -81,6 +81,8 @@ class MotionCoreOutput:
             )
             self.self_returns = None
             self._learning_geometry = None
+            self._retired_learning_owner = False
+            self._old_learning_owner = None
         except BaseException:
             self._resources.close()
             raise
@@ -391,19 +393,46 @@ class MotionCoreOutput:
             return None
         client.poll()
         record = client.record
-        if record is not None and getattr(self, "_learning_attempt", None) != record.attempt_id:
+        if self._launch_recovered:
+            if (
+                self._old_learning_owner is None
+                and record is not None
+                and record.expected_output_boot_id != self.boot
+            ):
+                # Pin the observed old assignment before reporting its loss. A
+                # later State reply/new manual attempt cannot retarget this fact.
+                self._old_learning_owner = record
+            if (
+                not self._recovery_pending
+                and not self._retired_learning_owner
+                and self._old_learning_owner is not None
+            ):
+                self._retired_learning_owner = client.retire_motion_owner(
+                    self._old_learning_owner, self.boot
+                )
+        if (
+            self._launch_recovered
+            and record is not None
+            and record.expected_output_boot_id != self.boot
+        ):
+            # Preserve launch history and initial read-only observation; never
+            # adopt a consumed predecessor or reopen automatic startup.
+            pass
+        elif record is not None and getattr(self, "_learning_attempt", None) != record.attempt_id:
             needs_admission = (
                 record.trigger == "manual"
                 and not record.action.consumed
                 and record.phase not in {"completed", "failed", "unconfirmed"}
                 and record.capture_summary.state != "complete"
             )
-            if needs_admission and not client.ready:
-                return None
             if needs_admission:
+                # An observed candidate is not an executable/adopted session.
+                self.startup = StartupLearning(None)
                 proposal = client.proposal
                 permitted = (
-                    proposal is not None
+                    not self._recovery_pending
+                    and proposal is not None
+                    and proposal.output_boot_id == self.boot
                     and time.monotonic() < proposal.deadline_steady
                     and proposal.owner_boot_id == self._input_boot
                     and proposal.generation == self.output_generation
@@ -412,15 +441,20 @@ class MotionCoreOutput:
                     and self.machine.state.mode
                     not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
                 )
-                self._manual_learning_request = proposal if permitted else None
-                client.accept_attempt(
-                    permitted, "accepted" if permitted else "control_source_changed"
-                )
+                if permitted:
+                    if not client.bind_attempt(
+                        record.attempt_id, self.boot, self.output_generation
+                    ):
+                        return None
+                    self._manual_learning_request = proposal
+                    client.accept_attempt(True, "accepted")
+                else:
+                    if not client.decline_attempt(record, self.boot, "control_source_changed"):
+                        return None
+                    self._learning_attempt = record.attempt_id
+                    return None
             self.startup = StartupLearning(client)
             self._learning_attempt = record.attempt_id
-            if needs_admission and not permitted:
-                self._interrupt_learning("control_source_changed", now)
-                return None
         self.startup.advance(
             self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
         )
@@ -461,7 +495,7 @@ class MotionCoreOutput:
         return self.self_returns.filter(observation, provisional=self.startup.provisional)
 
     def _startup_target(self, now, observation):
-        if self._launch_recovered:
+        if self._launch_recovered and getattr(self, "_manual_learning_request", None) is None:
             return
         if self.target.source not in {"idle", "startup_learning"}:
             return
@@ -486,6 +520,7 @@ class MotionCoreOutput:
             and not self.startup.motion_started
             and (
                 now >= proposal.deadline_steady
+                or proposal.output_boot_id != self.boot
                 or proposal.owner_boot_id != self._input_boot
                 or proposal.generation != self.output_generation
             )

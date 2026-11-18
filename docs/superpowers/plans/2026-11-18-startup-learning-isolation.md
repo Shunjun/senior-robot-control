@@ -147,3 +147,10 @@ M3 就是 C3～C5 的录齐前后接管和双通路顺序，不再增重复候�
 补充本机直接回归已复现并修正：新 attempt 首先收到空心跳时的全局索引误判；活跃控制客户端完成模型后继续查询新 attempt；已消费手动 attempt 重建不依赖已清除的 proposal；原五个停车验证帧仍逐项关联真实 stationary 事实。最新四个相关文件定向 20 passed，先前相关单元 96 passed/1 Linux skip、入口集成 3 passed，网页 25 passed 加修正后的单项 passed 与 typecheck/build 通过；这些是阶段证据，不是实车验收。
 
 负责人要求同步主分支 `94f07ef` 的 boot echo、急停 revision 恢复与只读学习恢复。先保存当前成果再正常 merge，逐段处理 Core/Command 冲突，保留恢复不自动运动、显式新校准与新 attempt 的边界；未完成该集成前不交付部署。
+
+
+已正常 merge `94f07ef` 为 `626a72a`，保留两方 Core 接线。随后在原授权文件内补两个真实集成缺口：恢复初始仍只读，交接后用旧 attempt/运动分配身份的一次异步失活通知结束无 raw 的旧未完成尝试；新显式校准经 output boot/原来源代次/期限复核后 scoped Attach，再确认并 Reserve。服务等待此前已接纳的在途 raw/收尾连接，已封闭结果不撤销；迟到旧通知不伤新轮。未引入新的资格或历史恢复机制。
+
+回归复用原 chain/client/owner/夹具：Core 验证恢复不自动学习但新显式轮可执行；实际客户端验证 State 观察不自动 Attach、显式绑定后才写；owner/service 验证无 raw/session 旧轮能终止、旧通知幂等不伤新轮、在途数据/事实录齐后仍保存。原 launch 测试未修改、未重跑。Linux 私有 socket 凭据/真实 spawn、完整原始流与 ARM 负载、网页至 Core 的真实跨进程入口、实际三秒运动与停车模型结果均留负责人部署后验收，本机替身结果不替代。
+
+本次集成定向命令：`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests/unit:tests/integration:ros2/src/senior_robot <原项目 .venv>/bin/python -m pytest tests/unit/test_startup_learning_chain.py tests/unit/test_learning_client.py tests/unit/test_learning_record_owner.py -q`，25 passed；compute/review 与三条 learning 入口边界合计 25 passed/73 deselected（与前项重叠，不累加）。随后固定旧 owner 引用，单独恢复接新显式轮场景通过。全部 34 个修改 Python 文件 AST、五个运行时模块实际导入与 Ruff 通过；网页未再改动，沿用前述定向/typecheck/build 证据。临时 node_modules 仅链接已删除，目标依赖未删除；未启动服务、SSH、push 或车辆操作。

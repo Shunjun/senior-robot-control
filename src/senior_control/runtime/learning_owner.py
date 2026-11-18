@@ -68,6 +68,7 @@ class LearningRecordOwner:
             attempt_id=attempt_identity(run_id),
             clock_domain=clock_domain,
             owner_epoch=uuid4().hex,
+            motion_owner_id=uuid4().hex,
         )
         self.manifest = ProgramManifest(
             run_id=run_id,
@@ -283,7 +284,13 @@ class LearningRecordOwner:
         )
 
     def new_attempt(
-        self, request_id: str, fingerprint: str, expected_revision: int, admitted: bool = True
+        self,
+        request_id: str,
+        fingerprint: str,
+        expected_revision: int,
+        admitted: bool = True,
+        *,
+        output_boot_id: str | None = None,
     ) -> str:
         identity = attempt_identity(self.record.run_id, request_id)
         if self.record.attempt_id == identity:
@@ -301,6 +308,9 @@ class LearningRecordOwner:
             run_id=self.record.run_id,
             attempt_id=identity,
             trigger="manual",
+            motion_owner_id=uuid4().hex,
+            motion_generation=self.manifest.revision + 1,
+            expected_output_boot_id=output_boot_id,
             start_request_id=request_id,
             request_fingerprint=fingerprint,
             clock_domain=self.record.clock_domain,
@@ -408,6 +418,15 @@ class LearningRecordOwner:
         ):
             self._revise(phase=phase, reason=reason, segment_id=segment_id)
             self.poll()
+
+    def fail_capture(self, reason: str, summary: CaptureSummary) -> None:
+        """The recording owner can close an orphan without minting a motion session."""
+        if self.record.phase in {"completed", "failed", "unconfirmed"}:
+            return
+        if self.record.capture_summary.state == "complete":
+            summary = self.record.capture_summary
+        self._revise(phase="failed", reason=reason, capture_summary=summary)
+        self.poll()
 
     def complete_model(self, session: str, points: tuple[tuple[float, float], ...]) -> int:
         self._check(session)

@@ -124,8 +124,8 @@ class TestRun:
                 )
             )
 
-    def client(self):
-        client = InProcessClient(self)
+    def client(self, *, read_only=False):
+        client = InProcessClient(self, read_only=read_only)
         self.clients.append(client)
         return client
 
@@ -139,12 +139,15 @@ class TestRun:
 
 
 class InProcessClient:
-    def __init__(self, run):
+    def __init__(self, run, *, read_only=False):
+        self.read_only = read_only
+        self.session = None
         self.run, self.closed, self._reservation = run, False, None
         self.view = None
         self._attempt = run.owner.record.attempt_id
         self.active_revision = 0
-        self._attach()
+        if not read_only:
+            self._attach()
 
     def _attach(self):
         self.run.pump()
@@ -168,7 +171,7 @@ class InProcessClient:
         if self._attempt != self.run.owner.record.attempt_id:
             self._attempt = self.run.owner.record.attempt_id
             self._reservation = None
-            self.session, _ = self.run.owner.begin_consumer()
+            self.session = None
         record = self.run.owner.active_record
         if record is not None and record.model is not None:
             if self.active_revision != self.run.owner.public_manifest.active_revision:
@@ -183,7 +186,12 @@ class InProcessClient:
     @property
     def ready(self):
         self.poll()
-        return not self.closed and self.run.owner.ready and self.error is None
+        return (
+            self.session is not None
+            and not self.closed
+            and self.run.owner.ready
+            and self.error is None
+        )
 
     def reserve_action(self):
         if self.session is None:
@@ -233,6 +241,40 @@ class InProcessClient:
             )
             self.run.heartbeat(now_ns)
         self.poll()
+
+    def bind_attempt(self, attempt_id, output_boot_id, generation):
+        from senior_control.runtime.learning_wire import Attach
+
+        if self.session is None:
+            reply = self.run.rpc(
+                Attach(attempt_id=attempt_id, output_boot_id=output_boot_id, generation=generation)
+            )
+            self.session, self.read_only = reply.session, False
+        return self.ready
+
+    def retire_motion_owner(self, record, output_boot_id):
+        from senior_control.runtime.learning_wire import RetireMotionOwner
+
+        self.run.rpc(
+            RetireMotionOwner(
+                attempt_id=record.attempt_id,
+                owner_epoch=record.owner_epoch,
+                motion_owner_id=record.motion_owner_id,
+                motion_generation=record.motion_generation,
+                replacement_output_boot_id=output_boot_id,
+            )
+        )
+        return True
+
+    def decline_attempt(self, record, output_boot_id, reason):
+        from senior_control.runtime.learning_wire import DeclineAttempt
+
+        self.run.rpc(
+            DeclineAttempt(
+                attempt_id=record.attempt_id, output_boot_id=output_boot_id, reason=reason
+            )
+        )
+        return True
 
     def accept_attempt(self, accepted, reason):
         from senior_control.runtime.learning_wire import AcceptAttempt
@@ -331,6 +373,7 @@ def write_geometry_record(path, boundary):
         run_id="f" * 32,
         attempt_id="d" * 32,
         clock_domain=DOMAIN,
+        motion_owner_id="9" * 32,
         owner_epoch="e" * 32,
         geometry=geometry(boundary),
     )
