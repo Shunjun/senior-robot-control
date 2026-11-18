@@ -1,10 +1,8 @@
 """Self-filter a native bounded scan without changing original beam identities."""
 
 import math
-import os
 import time
 import uuid
-from pathlib import Path
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from rclpy.clock import Clock, ClockType
@@ -152,13 +150,7 @@ class ScanAdapter(Node):
                 no_return_clear=self.no_return_clear,
             )
             filtered = filter_self(observation, self.profile)
-            claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
-            if claim:
-                from senior_control.safety.external_motion_features import external_feature_ranges
-
-                ranges = list(external_feature_ranges(filtered, Path(claim)))
-            else:
-                ranges = list(msg.ranges)
+            ranges = list(msg.ranges)
             for ray in filtered.rays:
                 if ray.kind in ("self", "invalid"):
                     ranges[ray.index] = float("nan")
