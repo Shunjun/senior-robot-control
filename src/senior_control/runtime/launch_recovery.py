@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 
+from senior_control.motion.process_resources import child_lifetime
+
 _LOG = logging.getLogger(__name__)
 _RETRY_DELAY = 2.0
 
@@ -53,6 +55,7 @@ def run_node(command: list[str]) -> int:
     """Run a long-lived launch command; only nonzero, uncancelled exits retry."""
     if not command:
         raise ValueError("launch recovery requires a node command")
+    parent_pid = os.getppid()
     stopping = threading.Event()
     stop_signal: int = signal.SIGINT
 
@@ -65,6 +68,9 @@ def run_node(command: list[str]) -> int:
     process = None
     attempt = 0
     try:
+        # Reuse the existing Linux parent-death safeguard: a dead launch owner
+        # cancels this prefix and cleans its node instead of leaving a retry loop.
+        child_lifetime(parent_pid)
         while not stopping.is_set():
             environment = dict(os.environ)
             # The marker belongs to this owner, not to a recovered ancestor.

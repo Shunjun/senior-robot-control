@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -220,3 +221,115 @@ async def test_matching_robot_id_does_not_establish_process_ownership(service_ro
             await _verify_adapter_peer(path, os.getpid() + 1)
         assert path.exists()
         assert not path.with_suffix(".owner.json").exists()
+
+
+async def test_camera_leaf_recovers_without_restarting_helper_owners(service_root, monkeypatch):
+    """Real helper/children; only ROS sourcing and readiness are substituted."""
+    from senior_control import docker_start_helper as helper
+
+    profile = real_profile(service_root)
+    monkeypatch.setenv("PYTHONPATH", str(Path("src").resolve()))
+    sleeper = """
+import json, os, sys, time
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps([os.getpid(), os.environ['SENIOR_STARTUP_LEARNING_CLAIM']]))
+time.sleep(60)
+"""
+
+    def child(name):
+        return [sys.executable, "-c", sleeper, str(service_root / name)]
+
+    camera = """
+import json, os, resource, signal, sys, time
+from pathlib import Path
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+root = Path(sys.argv[1])
+record = [os.getpid(), os.environ['SENIOR_STARTUP_LEARNING_CLAIM'], time.monotonic()]
+with (root / 'camera-attempts').open('a') as file:
+    file.write(json.dumps(record) + '\\n')
+if not os.environ.get('SENIOR_LAUNCH_RECOVERED'):
+    os.kill(os.getpid(), signal.SIGSEGV)
+"""
+    launcher = """
+import json, os, shlex, subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+with (root / 'launch-attempts').open('a') as file:
+    file.write(str(os.getpid()) + '\\n')
+options = dict(argument.split(':=', 1) for argument in sys.argv[2:])
+prefix = shlex.split(options['launch-prefix'])
+raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(root)]))
+""".replace("LEAF_CODE", repr(camera))
+    launch_arguments = []
+
+    def launch_command(profile, robot_id, package, filename, *arguments):
+        assert (package, filename) == ("turn_on_wheeltec_robot", "wheeltec_camera.launch.py")
+        launch_arguments.extend(arguments)
+        return [sys.executable, "-c", launcher, str(service_root), *arguments]
+
+    async def video_environment(profile, environment):
+        return environment
+
+    async def ready(*args):
+        # No ROS adapter or Linux peer credential claim: readiness is outside
+        # this camera-owner contract. All four child lifetimes remain real.
+        for _ in range(200):
+            if (service_root / "adapter").exists():
+                return None
+            await asyncio.sleep(0.01)
+        pytest.fail("adapter fixture did not start")
+
+    monkeypatch.setattr(helper, "_motion_command", lambda *_: child("motion"))
+    monkeypatch.setattr(helper, "_adapter_command", lambda *_: child("adapter"))
+    monkeypatch.setattr(helper, "_ros_launch_command", launch_command)
+    monkeypatch.setattr(helper, "_video_environment", video_environment)
+    monkeypatch.setattr(helper, "_wait_for_adapter", ready)
+    task = asyncio.create_task(
+        helper.supervise(service_root, child("agent"), dict(os.environ), profile=profile)
+    )
+    try:
+        await wait_for_socket(service_root, task)
+        for _ in range(500):
+            assert not task.done()
+            path = service_root / "camera-attempts"
+            attempts = (
+                [json.loads(line) for line in path.read_text().splitlines()]
+                if path.exists()
+                else []
+            )
+            if len(attempts) >= 2:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("abnormal camera leaf did not recover")
+        assert len(attempts) == 2
+        assert attempts[0][0] != attempts[1][0]
+        assert attempts[1][2] - attempts[0][2] >= 2
+        owners = [
+            json.loads((service_root / name).read_text()) for name in ("agent", "motion", "adapter")
+        ]
+        assert all(owner[1] == attempts[0][1] == attempts[1][1] for owner in owners)
+        for pid, _ in owners:
+            os.kill(pid, 0)
+        assert any(argument.startswith("launch-prefix:=") for argument in launch_arguments)
+        assert (
+            "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$"
+            in launch_arguments
+        )
+        await asyncio.sleep(2.1)
+        assert len(path.read_text().splitlines()) == 2
+        assert len((service_root / "launch-attempts").read_text().splitlines()) == 1
+        assert not task.done()
+        client = IpcClient(service_root / "service.sock")
+        try:
+            assert (await client.request("stop"))["ok"] is True
+        finally:
+            await client.close()
+        assert await asyncio.wait_for(task, 8) == 0
+        for pid, _ in owners:
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, signal.SIGCONT)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
