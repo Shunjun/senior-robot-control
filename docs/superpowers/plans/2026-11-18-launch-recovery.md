@@ -130,6 +130,13 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ## 最少验证候选与 Review Focus
 
+### 实施记录（2026-11-18）
+
+- 视频隔离工作区从 `d670323` 正常 fast-forward merge 到冻结基线 `cdbeeea`，无独有提交或冲突，保留视频三项提交及 `7b5a034` 补点。负责人已批准按本计划实施与选定直接测试；本文件前述“等待审阅”是计划创建时的状态。
+- 首个阶段仅新增独立 `launch_recovery` 前缀模块和获批的三个真实子进程测试：SIGSEGV 后固定 2 秒恢复/第二轮正常退出不复活、退避取消、旧进程组完整清理及停止回收。模块不导入 ROS、不改学习 claim，不开放任何产品 launch 恢复开关；相机接线等待负责人提供 installed prefix/递归 include 证据。
+- 本地 macOS Python 3.12 的独立非运动子进程验证不代表 Humble installed launch 或相机现场通过；Nav2 ACTIVE、critical 交接、Gazebo 组及实机图像恢复均尚未实现/验收。
+- 阶段命令使用现有仓库 `.venv/bin/python` 并设置 `PYTHONPATH=src`：`-m pytest -q tests/unit/test_launch_recovery.py` → 3 passed（9.37 秒）；两个新文件 `ruff check`、`ruff format --check`、AST/import 检查通过，产品模块 `mypy --follow-imports=skip` 通过。只运行获批的三个新增场景，无实机/ROS/服务操作；尚无需迁移现有回归。
+
 仅沿已列真实恢复路径验证，不追加 benchmark、全量回归或宽泛异常矩阵：
 
 1. 已确认相机崩溃路径：新 PID/原始图像/发送帧恢复、崩溃日志保留、原 Agent 与学习 run 不变。
