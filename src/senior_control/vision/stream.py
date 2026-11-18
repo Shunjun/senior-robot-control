@@ -20,6 +20,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from typing import Any, Literal, Protocol
 
 from senior_control.vision.synchronizer import ImageFrame
@@ -474,6 +475,8 @@ def _make_track(aiortc: Any) -> Any:
             super().__init__()
             self._image: ImageFrame | None = None
             self._arrived = asyncio.Event()
+            self._start_stamp: float | None = None
+            self._last_pts = -1
 
         def push(self, image: ImageFrame) -> None:
             self._image = image
@@ -492,10 +495,15 @@ def _make_track(aiortc: Any) -> Any:
                 self._arrived.clear()
                 if image is None:
                     continue
-                pts, time_base = await self.next_timestamp()
+                if self._start_stamp is None:
+                    self._start_stamp = image.stamp
+                # Preserve capture gaps, including frames replaced by newer arrivals.
+                # A repeated or backwards source clock must not reverse RTP timestamps.
+                pts = max(self._last_pts + 1, round((image.stamp - self._start_stamp) * 90000))
                 frame = await asyncio.to_thread(_to_av_frame, av, image)
                 frame.pts = pts
-                frame.time_base = time_base
+                frame.time_base = Fraction(1, 90000)
+                self._last_pts = pts
                 return frame
 
     return LatestFrameTrack()
