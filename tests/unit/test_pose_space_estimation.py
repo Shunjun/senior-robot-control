@@ -23,7 +23,7 @@ def test_pose_interpolation_wrap_and_motion_prediction_without_150ms_gate():
             9.5,
             o.roots,
             measurement_steady=(o.roots)[0].measurement_steady,
-            measurement=(o.roots)[0].coordinate,
+            stamp_ns=(o.roots)[0].coordinate,
         )
     )
     p.ingest(
@@ -35,14 +35,28 @@ def test_pose_interpolation_wrap_and_motion_prediction_without_150ms_gate():
             measurement_steady=(
                 observation("wheel", (0.4, None, 0.0), stamp=9.75, sequence=2).roots
             )[0].measurement_steady,
-            measurement=(observation("wheel", (0.4, None, 0.0), stamp=9.75, sequence=2).roots)[
+            stamp_ns=(observation("wheel", (0.4, None, 0.0), stamp=9.75, sequence=2).roots)[
                 0
             ].coordinate,
         )
     )
-    mid = p.at(9.625, now_ros=10, now_steady=20, motion=m, measurement_steady=(9.625) + 10.0)
+    mid = p.at(
+        9.625,
+        now_ros=10,
+        now_steady=20,
+        motion=m,
+        measurement_steady=(9.625) + 10.0,
+        stamp_ns=round((9.625) * 1e9),
+    )
     assert abs(abs(mid.pose.yaw) - math.pi) < 1e-6
-    result = p.at(10, now_ros=10, now_steady=20, motion=m, measurement_steady=(10) + 10.0)
+    result = p.at(
+        10,
+        now_ros=10,
+        now_steady=20,
+        motion=m,
+        measurement_steady=(10) + 10.0,
+        stamp_ns=round((10) * 1e9),
+    )
     assert result.pose.x < 0.01  # .4m/s along almost-negative world X for .25s
     assert result.kind == "predicted_pose"
 
@@ -66,7 +80,14 @@ def test_single_motion_source_builds_relative_pose_without_new_absolute_claim():
     m = e.estimate(10, 20)
     p = PoseEstimation()
     p.advance(m)
-    r = p.at(10, now_ros=10, now_steady=20, motion=m, measurement_steady=(10) + 10.0)
+    r = p.at(
+        10,
+        now_ros=10,
+        now_steady=20,
+        motion=m,
+        measurement_steady=(10) + 10.0,
+        stamp_ns=round((10) * 1e9),
+    )
     assert r.pose.x == pytest.approx(0.04)
     assert r.kind == "relative_dead_reckoning"
 
@@ -88,11 +109,16 @@ def test_prediction_keeps_motion_dependencies_and_unknown_errors():
             9.5,
             gps.roots,
             measurement_steady=(gps.roots)[0].measurement_steady,
-            measurement=(gps.roots)[0].coordinate,
+            stamp_ns=(gps.roots)[0].coordinate,
         )
     )
     result = p.at(
-        10.0, now_ros=10.0, now_steady=20.0, motion=motion, measurement_steady=(10.0) + 10.0
+        10.0,
+        now_ros=10.0,
+        now_steady=20.0,
+        motion=motion,
+        measurement_steady=(10.0) + 10.0,
+        stamp_ns=round((10.0) * 1e9),
     )
     assert {r.family for r in result.roots} == {"gps", "wheel"}
     assert result.error_m is None and result.error_yaw_rad is None
@@ -112,20 +138,30 @@ def test_absolute_expiry_preserves_coordinate_origin_in_relative_prediction():
             9.5,
             o.roots,
             measurement_steady=(o.roots)[0].measurement_steady,
-            measurement=(o.roots)[0].coordinate,
+            stamp_ns=(o.roots)[0].coordinate,
         )
     )
     first = e.estimate(10.0, 20.0)
     p.advance(first)
     before = p.at(
-        10.0, now_ros=10.0, now_steady=20.0, motion=first, measurement_steady=(10.0) + 10.0
+        10.0,
+        now_ros=10.0,
+        now_steady=20.0,
+        motion=first,
+        measurement_steady=(10.0) + 10.0,
+        stamp_ns=round((10.0) * 1e9),
     )
     assert before.pose.x == pytest.approx(4.2)
     e.ingest(observation("wheel", (0.4, None, 0.0), stamp=10.5, sequence=2))
     second = e.estimate(10.5, 20.5)
     p.advance(second)
     after = p.at(
-        10.5, now_ros=10.5, now_steady=20.5, motion=second, measurement_steady=(10.5) + 10.0
+        10.5,
+        now_ros=10.5,
+        now_steady=20.5,
+        motion=second,
+        measurement_steady=(10.5) + 10.0,
+        stamp_ns=round((10.5) * 1e9),
     )
     assert after.kind == "relative_dead_reckoning"
     assert after.pose.x == pytest.approx(4.4)
@@ -168,13 +204,19 @@ def test_pose_zero_quality_veto_and_cached_republication_do_not_create_new_fix()
         9.9,
         observation("gps", (0.1, None, None)).roots,
         measurement_steady=(observation("gps", (0.1, None, None)).roots)[0].measurement_steady,
-        measurement=(observation("gps", (0.1, None, None)).roots)[0].coordinate,
+        stamp_ns=(observation("gps", (0.1, None, None)).roots)[0].coordinate,
     )
     assert p.ingest(original)
     invalid = replace(original, quality=0.0, roots=(replace(original.roots[0], sequence=2),))
     assert p.ingest(invalid)
     with pytest.raises(ValueError, match="cannot support"):
-        p.at(10.0, now_ros=10.0, now_steady=20.0, measurement_steady=(10.0) + 10.0)
+        p.at(
+            10.0,
+            now_ros=10.0,
+            now_steady=20.0,
+            measurement_steady=(10.0) + 10.0,
+            stamp_ns=round((10.0) * 1e9),
+        )
     assert not p.ingest(replace(original, roots=(replace(original.roots[0], sequence=3),)))
 
 
@@ -191,8 +233,15 @@ def test_absolute_prediction_rejects_unknown_prefix_before_first_motion_endpoint
             9.5,
             gps.roots,
             measurement_steady=19.5,
-            measurement=gps.roots[0].coordinate,
+            stamp_ns=gps.roots[0].coordinate,
         )
     )
     with pytest.raises(ValueError, match="cannot support"):
-        p.at(10.0, now_ros=10.0, now_steady=20.0, motion=motion, measurement_steady=20.0)
+        p.at(
+            10.0,
+            now_ros=10.0,
+            now_steady=20.0,
+            motion=motion,
+            measurement_steady=20.0,
+            stamp_ns=round((10.0) * 1e9),
+        )

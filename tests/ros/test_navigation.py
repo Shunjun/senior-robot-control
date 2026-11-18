@@ -209,8 +209,19 @@ def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
                         else:
                             assert actual == wanted, (name, parameter, actual)
 
+                # The launch assigns a private standard Twist run topic. Nav2
+                # never acquires the final chassis publication boundary.
+                import re
+
+                private_topics = [
+                    topic
+                    for topic, types in probe.get_topic_names_and_types()
+                    if re.fullmatch(r"/control/navigation/run_[0-9a-f]{32}/cmd_vel", topic)
+                    and types == ["geometry_msgs/msg/Twist"]
+                ]
+                assert len(private_topics) == 1, private_topics
                 expected_owners = {
-                    "/control/navigation_cmd": {"controller_server"},
+                    private_topics[0]: {"controller_server"},
                     "/control/recovery_cmd": {"navigation_adapter"},
                 }
                 publishers = {}

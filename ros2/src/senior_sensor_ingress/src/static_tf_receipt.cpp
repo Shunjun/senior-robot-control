@@ -1,7 +1,9 @@
 #include "senior_sensor_ingress/static_tf_receipt.hpp"
+#include <senior_motion_msgs/sample_time.hpp>
 
 #include <cmath>
 #include <map>
+#include <limits>
 #include <set>
 
 namespace senior_sensor_ingress {
@@ -68,7 +70,7 @@ std::string hex_gid(const uint8_t * data, size_t length)
 }
 double steady_now()
 {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
 }
 std::string make_boot()
 {
@@ -125,7 +127,7 @@ bool StaticTfReceipt::owner_matches(const std::string & gid)
     hex_gid(graph[0].endpoint_gid().data(), RMW_GID_STORAGE_SIZE) == gid;
 }
 
-void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
+void StaticTfReceipt::revoke_admission(const std::string & reason)
 {
   if (have_body_ || active_) {
     Output invalid = first_;
@@ -139,6 +141,20 @@ void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
     invalid.reason = reason;
     publisher_->publish(invalid);
   }
+  ++generation_;
+  // The mount configuration and its first receipt are persistent. Only its
+  // admission to dynamic windows changes when the local clock segment changes.
+  if (have_body_) {
+    first_.generation = generation_;
+    first_.admitted = false;
+    first_.admitted_from_ros = builtin_interfaces::msg::Time();
+    first_.admitted_from_steady = 0.0;
+  }
+}
+
+void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
+{
+  revoke_admission(reason);
   if (retire_source && !raw_gid_.empty()) {
     if (retired_.size() >= 64) failed_ = true;
     else retired_.insert(raw_gid_);
@@ -146,14 +162,21 @@ void StaticTfReceipt::invalidate(const std::string & reason, bool retire_source)
     active_ = false;
   }
   have_body_ = false;
-  ++generation_;
 }
 
 bool StaticTfReceipt::update_clock(int64_t ros_ns, double steady)
 {
-  if (!std::isfinite(steady) || steady <= 0 ||
-      (last_steady_ > 0 && steady < last_steady_)) {
-    invalidate("clock_invalid", false);
+  if (ros_ns < 0 || !std::isfinite(steady) || steady < 0 ||
+      steady >= static_cast<double>(std::numeric_limits<uint64_t>::max()) / 1e9) {
+    revoke_admission("clock_invalid");
+    clock_ready_ = false;
+    last_ros_ns_ = ros_ns;
+    last_steady_ = steady;
+    return false;
+  }
+  const auto observed = clock_.observe(ros_ns, static_cast<uint64_t>(steady * 1e9));
+  if (observed.discontinuity) {
+    revoke_admission("clock_rollback");
     clock_ready_ = false;
     last_ros_ns_ = ros_ns;
     last_steady_ = steady;
@@ -183,6 +206,12 @@ void StaticTfReceipt::on_message(const Input & message, const rclcpp::MessageInf
     invalidate("source_mismatch", true);
     return;
   }
+  if (!validate_static_tf(message, base_, camera_)) {
+    invalidate("invalid_static_tf", false);
+    return;
+  }
+  const bool changed = have_body_ && message != body_;
+  if (changed) invalidate("static_tf_changed", false);
   // The callback's original receipt can precede a later timer sample. Compare
   // clock progress at qualification time while retaining the original receipt.
   if (!update_clock(get_clock()->now().nanoseconds(), steady_now())) return;
@@ -194,12 +223,6 @@ void StaticTfReceipt::on_message(const Input & message, const rclcpp::MessageInf
     ++generation_;
     sequence_ = 0;
   }
-  if (!validate_static_tf(message, base_, camera_)) {
-    invalidate("invalid_static_tf", false);
-    return;
-  }
-  const bool changed = have_body_ && message != body_;
-  if (changed) invalidate("static_tf_changed", false);
   Output output;
   output.bridge_boot_id = boot_id_;
   output.bridge_gid = output_gid();

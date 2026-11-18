@@ -40,6 +40,8 @@ def fenced_scan_fixture(monkeypatch):
     from rclpy.time import Time
     from senior_motion_msgs.msg import FencedSafetyScan
 
+    from senior_control.sensors.sample_time import map_sample
+
     def wrap(gate, body):
         monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)
         gate._scan_relay_gid = "aa" * 24
@@ -49,12 +51,22 @@ def fenced_scan_fixture(monkeypatch):
             lambda _: [SimpleNamespace(endpoint_gid=bytes.fromhex("bb" * 24))],
         )
         body.raw_source = "cc" * 24
-        body.ingress_steady = time.monotonic()
+        received_steady_ns = time.monotonic_ns()
+        body.ingress_steady = received_steady_ns / 1e9
         receipt = gate.get_clock().now().nanoseconds
         body.ingress_ros = receipt / 1e9
         capture = body.raw_capture
         capture.stamp, capture.received_ros = body.stamp, Time(nanoseconds=receipt).to_msg()
-        capture.received_steady, capture.frame_id = body.ingress_steady, body.frame_id
+        mapped = map_sample(
+            stamp_ns=body.stamp.sec * 1_000_000_000 + body.stamp.nanosec,
+            received_ros_ns=receipt,
+            received_steady_ns=received_steady_ns,
+            clock_generation=1,
+        )
+        capture.received_steady_ns = mapped.received_steady_ns
+        capture.sample_steady_ns = mapped.sample_steady_ns
+        capture.clock_generation = mapped.clock_generation
+        capture.frame_id = body.frame_id
         capture.raw_gid, capture.bridge_gid = body.raw_source, "bb" * 24
         capture.source_epoch, capture.bridge_boot_id = "raw-epoch", "bridge-boot"
         capture.capture_generation, capture.sequence, capture.valid = 1, body.sequence, True

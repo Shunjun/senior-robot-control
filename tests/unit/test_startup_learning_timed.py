@@ -3,11 +3,12 @@
 from dataclasses import replace
 
 from learning_test_support import begin_action, learning_runs, startup_for  # noqa: F401
-from source_time_test_support import capture_time
+from sensor_time_test_support import sample_time
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def test_fixed_three_seconds_never_waits_for_exact_displacement(tmp_path):
@@ -72,18 +73,52 @@ def test_real_monotonic_regression_still_stops_action(tmp_path):
     assert owner.velocity == 0 and owner.reason == "learning_monotonic_clock_regressed"
 
 
-def test_ros_labels_do_not_order_or_deduplicate_learning_frames():
+def test_original_stamp_and_source_identity_order_and_deduplicate_learning_frames():
     model = SelfReturnModel(BOUNDARY)
-    for sequence, ros in enumerate((1000.0, 900.0, 10000.0, 1.0, 2.0), 1):
+    for sequence, _ros in enumerate((1000.0, 900.0, 10000.0, 1.0, 2.0), 1):
         observation = side_observation(0.15)
-        observation = replace(observation, scan=replace(observation.scan, stamp=ros))
+        observation = replace(
+            observation, scan=replace(observation.scan, stamp=10 + sequence * 0.1)
+        )
         model.observe(
             observation,
-            capture=capture_time(10 + sequence * 0.1, sequence=sequence),
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round((10 + sequence * 0.1) * 1e9),
+                    received_ros_ns=round((10 + sequence * 0.1) * 1e9),
+                    received_steady_ns=round((10 + sequence * 0.1) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
+                sequence=sequence,
+                valid=True,
+                reason="",
+            ),
             segment_id="segment",
         )
-    assert [m.seconds for m in model.frame_measurements] == [10.1, 10.2, 10.3, 10.4, 10.5]
-    proof = capture_time(10.3, sequence=3)
+    assert [m / 1e9 for m in model.frame_measurements] == [10.1, 10.2, 10.3, 10.4, 10.5]
+    proof = RawCaptureHeader(
+        time=sample_time(
+            stamp_ns=round((10.3) * 1e9),
+            received_ros_ns=round((10.3) * 1e9),
+            received_steady_ns=round((10.3) * 1e9),
+            clock_generation=1,
+        ),
+        frame_id="laser",
+        raw_gid="01",
+        bridge_gid="02",
+        source_epoch="producer",
+        bridge_boot_id="boot",
+        capture_generation=1,
+        sequence=3,
+        valid=True,
+        reason="",
+    )
     assert not model.observe(side_observation(0.15), capture=proof, segment_id="segment")
     model.begin_segment("new-segment")
     assert not model.observe(side_observation(0.15), capture=proof, segment_id="segment")
@@ -94,7 +129,23 @@ def test_stable_attachment_classifies_without_displacement_or_turn_proof():
     for i in range(12):
         model.observe(
             side_observation(0.15),
-            capture=capture_time(10 + i * 0.1, sequence=i + 1),
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round((10 + i * 0.1) * 1e9),
+                    received_ros_ns=round((10 + i * 0.1) * 1e9),
+                    received_steady_ns=round((10 + i * 0.1) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
+                sequence=i + 1,
+                valid=True,
+                reason="",
+            ),
             segment_id="small-se2",
         )
     assert model.validate() == 1
@@ -120,7 +171,23 @@ def test_single_interior_echo_is_not_lost_by_external_point_subsampling():
     for i in range(12):
         model.observe(
             side_observation(0.15),
-            capture=capture_time(10 + i * 0.1, sequence=i + 1),
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round((10 + i * 0.1) * 1e9),
+                    received_ros_ns=round((10 + i * 0.1) * 1e9),
+                    received_steady_ns=round((10 + i * 0.1) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
+                sequence=i + 1,
+                valid=True,
+                reason="",
+            ),
             segment_id="segment",
         )
     assert model.validate() == 1

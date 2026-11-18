@@ -35,13 +35,12 @@ bool text_ok(const std::string & value, size_t max_length)
 
 bool stamp_ok(const builtin_interfaces::msg::Time & value)
 {
-  return value.sec >= 0 && value.nanosec < 1000000000u &&
-         (value.sec > 0 || value.nanosec > 0);
+  return value.sec >= 0 && value.nanosec < 1000000000u;
 }
 
 double steady_now()
 {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
 }
 
 bool dimensions_ok(uint32_t width, uint32_t height)
@@ -79,10 +78,10 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
 : Node("raw_receipt", options), before_verify_(std::move(before_verify))
 {
   input_topics_ = {
-    declare_parameter<std::string>("rgb_topic", "/camera/color/image_raw") + "/timed",
-    declare_parameter<std::string>("depth_topic", "/camera/depth/image_raw") + "/timed",
-    declare_parameter<std::string>("rgb_info_topic", "/camera/color/camera_info") + "/timed",
-    declare_parameter<std::string>("depth_info_topic", "/camera/depth/camera_info") + "/timed"};
+    declare_parameter<std::string>("rgb_topic", "/camera/color/image_raw"),
+    declare_parameter<std::string>("depth_topic", "/camera/depth/image_raw"),
+    declare_parameter<std::string>("rgb_info_topic", "/camera/color/camera_info"),
+    declare_parameter<std::string>("depth_info_topic", "/camera/depth/camera_info")};
   const std::array<std::string, 4> outputs = {
     declare_parameter<std::string>("rgb_output", "/safety/raw/rgb"),
     declare_parameter<std::string>("depth_output", "/safety/raw/depth"),
@@ -134,20 +133,20 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
   depth_publisher_ = create_publisher<RawImage>(outputs[1], qos);
   rgb_info_publisher_ = create_publisher<RawInfo>(outputs[2], qos);
   depth_info_publisher_ = create_publisher<RawInfo>(outputs[3], qos);
-  rgb_subscription_ = create_subscription<senior_motion_msgs::msg::TimedImage>(
-    input_topics_[0], qos, [this](senior_motion_msgs::msg::TimedImage::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
+  rgb_subscription_ = create_subscription<sensor_msgs::msg::Image>(
+    input_topics_[0], qos, [this](sensor_msgs::msg::Image::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
       on_image(0, *message, info);
     }, depth_options);
-  depth_subscription_ = create_subscription<senior_motion_msgs::msg::TimedImage>(
-    input_topics_[1], qos, [this](senior_motion_msgs::msg::TimedImage::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
+  depth_subscription_ = create_subscription<sensor_msgs::msg::Image>(
+    input_topics_[1], qos, [this](sensor_msgs::msg::Image::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
       on_image(1, *message, info);
     }, depth_options);
-  rgb_info_subscription_ = create_subscription<senior_motion_msgs::msg::TimedCameraInfo>(
-    input_topics_[2], qos, [this](senior_motion_msgs::msg::TimedCameraInfo::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
+  rgb_info_subscription_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+    input_topics_[2], qos, [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
       on_info(2, *message, info);
     }, depth_options);
-  depth_info_subscription_ = create_subscription<senior_motion_msgs::msg::TimedCameraInfo>(
-    input_topics_[3], qos, [this](senior_motion_msgs::msg::TimedCameraInfo::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
+  depth_info_subscription_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+    input_topics_[3], qos, [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
       on_info(3, *message, info);
     }, depth_options);
   timer_ = create_wall_timer(20ms, [this] {inspect_topology();});
@@ -191,7 +190,7 @@ RawReceipt::Header RawReceipt::header(size_t index, const std::string & reason)
 
 void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
                                 const std_msgs::msg::Header * original,
-                                int64_t received_ros_ns, double received_steady,
+                                int64_t received_ros_ns, uint64_t received_steady_ns,
                                 const std::string & raw_gid)
 {
   if (failed_ || capture_generation_ == std::numeric_limits<uint64_t>::max()) {
@@ -210,7 +209,7 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
       value.stamp = original->stamp;
       if (text_ok(original->frame_id, 128)) value.frame_id = original->frame_id;
       if (received_ros_ns > 0) value.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros_ns));
-      value.received_steady = received_steady;
+      value.received_steady_ns = received_steady_ns;
       value.raw_gid = raw_gid;
     }
     if (index == 0 || index == 1) {
@@ -225,21 +224,29 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
   }
 }
 
-bool RawReceipt::clock_ok()
+bool RawReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
-  const auto now = steady_now();
-  if (!std::isfinite(now) || now < last_steady_) {
-    invalidate_all("monotonic_clock_invalid");
-    failed_ = true;
+  senior_motion_msgs::time::ClockObservation observed;
+  try {
+    observed = clock_.observe(ros_ns, steady_ns);
+  } catch (const std::invalid_argument & error) {
+    invalidate_all(error.what());
     return false;
   }
-  last_steady_ = now;
+  clock_generation_ = observed.generation;
+  if (observed.discontinuity) {
+    invalidate_all("clock_rollback");
+    clear_depth_history();
+    if (depth_active_) invalidate_depth("clock_rollback", false);
+    if (semantic_active_) invalidate_semantic("clock_rollback", false, true);
+    for (auto & source : sources_) {source.stamps.reset(); source.epoch = new_epoch();}
+  }
   return !failed_;
 }
 
 bool RawReceipt::qualify_source(size_t index, const rmw_gid_t & incoming,
                                 const std_msgs::msg::Header & source_header,
-                                int64_t received_ros_ns, double received_steady)
+                                int64_t received_ros_ns, uint64_t received_steady_ns)
 {
   const auto graph = get_publishers_info_by_topic(input_topics_[index]);
   const std::string actual = gid_hex(incoming);
@@ -248,33 +255,57 @@ bool RawReceipt::qualify_source(size_t index, const rmw_gid_t & incoming,
   const bool nonzero = std::any_of(std::begin(incoming.data), std::end(incoming.data),
                                    [](uint8_t value) {return value != 0;});
   if (!nonzero || graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
+    if (source.active && graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == source.raw_gid) {
+      retire_gid(source.retired_gids, actual);
+      return false;
+    }
     if (!retire_gid(source.retired_gids, source.raw_gid) ||
         !retire_gid(source.retired_gids, actual)) return false;
     invalidate_all("raw_gid_mismatch", index, &source_header, received_ros_ns,
-                   received_steady, actual);
+                   received_steady_ns, actual);
     sources_[index].active = false;
     sources_[index].raw_gid.clear();
     sources_[index].epoch = new_epoch();
     sources_[index].sequence = 0;
+    sources_[index].stamps.reset();
     return false;
   }
   if (!source.active || source.raw_gid != actual) {
     if (!retire_gid(source.retired_gids, source.raw_gid)) return false;
     invalidate_all("raw_source_changed", index, &source_header, received_ros_ns,
-                   received_steady, actual);
+                   received_steady_ns, actual);
     source.active = true;
     source.raw_gid = actual;
     source.epoch = new_epoch();
     source.sequence = 0;
+    source.stamps.reset();
     source.invalid = false;
   }
   return !failed_;
 }
 
+std::optional<ReceiptClock> RawReceipt::begin_receipt()
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const auto ros = get_clock()->now().nanoseconds();
+  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  if (!clock_ok(ros, steady)) return std::nullopt;
+  return ReceiptClock{ros, steady, clock_generation_};
+}
+
+// Caller holds the owner lock. A changed segment invalidates the old callback;
+// its coordinates are never retaken or mapped into the replacement segment.
+bool RawReceipt::current_receipt(const ReceiptClock & receipt)
+{
+  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+    receipt.generation == clock_generation_;
+}
+
 void RawReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok()) return;
+  if (!clock_ok(get_clock()->now().nanoseconds(),
+                senior_motion_msgs::time::monotonic_ns())) return;
   inspect_depth_owner();
   inspect_semantic_owner();
   std::array<bool, 4> changed{};
@@ -294,32 +325,37 @@ void RawReceipt::inspect_topology()
     sources_[index].raw_gid.clear();
     sources_[index].epoch = new_epoch();
     sources_[index].sequence = 0;
+    sources_[index].stamps.reset();
   }
 }
 
-void RawReceipt::on_image(size_t index, const senior_motion_msgs::msg::TimedImage & timed, const rclcpp::MessageInfo & info)
+void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message, const rclcpp::MessageInfo & info)
 {
-  const auto & message = timed.data;
-  const int64_t received_ros_ns = get_clock()->now().nanoseconds();
-  const double received_steady = steady_now();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros_ns = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   if (before_verify_) before_verify_(index, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok() ||
+  if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
-                                     received_steady)) return;
-  const auto ordered = sources_[index].timing_order.accept(timed.timing,
-    static_cast<uint64_t>(received_steady * 1e9));
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::rejected) return;
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::replaced) {
-    invalidate_all("producer_restarted");
-    sources_[index].epoch = new_epoch(); sources_[index].sequence = 0;
+                                     received_steady_ns)) return;
+  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  try {
+    sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
+                                         received_steady_ns, receipt->generation);
+  } catch (const std::invalid_argument & error) {
+    invalidate_all(error.what(), index, &message.header, received_ros_ns,
+                   received_steady_ns, gid_hex(incoming));
+    return;
   }
-  if (received_ros_ns <= 0 || !stamp_ok(message.header.stamp) ||
+  if (!sample) return;
+  if (received_ros_ns < 0 || !stamp_ok(message.header.stamp) ||
       !text_ok(message.header.frame_id, 128) || !image_layout_ok(message, index)) {
     if (!sources_[index].invalid) {
       invalidate_all("raw_image_invalid", index, &message.header, received_ros_ns,
-                     received_steady, gid_hex(incoming));
+                     received_steady_ns, gid_hex(incoming));
       sources_[index].invalid = true;
     }
     return;
@@ -331,44 +367,49 @@ void RawReceipt::on_image(size_t index, const senior_motion_msgs::msg::TimedImag
   output.encoding = message.encoding;
   output.is_bigendian = message.is_bigendian != 0;
   output.data.assign(message.data.begin(), message.data.end());
-  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady)) return;
+  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady_ns)) return;
   output.capture = header(index, "");
   if (failed_) return;
-  output.capture.timing = timed.timing;
+  set_sample(output.capture, *sample);
   output.capture.valid = true;
   output.capture.stamp = message.header.stamp;
   output.capture.frame_id = message.header.frame_id;
   output.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros_ns));
-  output.capture.received_steady = received_steady;
+  output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
   if (!ledger_.observe(index, output.capture, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   (index == 0 ? rgb_publisher_ : depth_publisher_)->publish(output);
 }
 
-void RawReceipt::on_info(size_t index, const senior_motion_msgs::msg::TimedCameraInfo & timed, const rclcpp::MessageInfo & info)
+void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & message, const rclcpp::MessageInfo & info)
 {
-  const auto & message = timed.data;
-  const int64_t received_ros_ns = get_clock()->now().nanoseconds();
-  const double received_steady = steady_now();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros_ns = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   if (before_verify_) before_verify_(index, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (!clock_ok() ||
+  if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
-                                     received_steady)) return;
-  const auto ordered = sources_[index].timing_order.accept(timed.timing,
-    static_cast<uint64_t>(received_steady * 1e9));
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::rejected) return;
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::replaced) {
-    invalidate_all("producer_restarted");
-    sources_[index].epoch = new_epoch(); sources_[index].sequence = 0;
+                                     received_steady_ns)) return;
+  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  try {
+    sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
+                                         received_steady_ns, receipt->generation);
+  } catch (const std::invalid_argument & error) {
+    invalidate_all(error.what(), index, &message.header, received_ros_ns,
+                   received_steady_ns, gid_hex(incoming));
+    return;
   }
-  if (received_ros_ns <= 0 || !stamp_ok(message.header.stamp) ||
+  if (!sample) return;
+  if (received_ros_ns < 0 || !stamp_ok(message.header.stamp) ||
       !text_ok(message.header.frame_id, 128) || !dimensions_ok(message.width, message.height) ||
       !text_ok(message.distortion_model, 32) || message.d.size() > 16) {
     if (!sources_[index].invalid) {
       invalidate_all("raw_camera_info_invalid", index, &message.header, received_ros_ns,
-                     received_steady, gid_hex(incoming));
+                     received_steady_ns, gid_hex(incoming));
       sources_[index].invalid = true;
     }
     return;
@@ -385,17 +426,18 @@ void RawReceipt::on_info(size_t index, const senior_motion_msgs::msg::TimedCamer
   output.binning_y = message.binning_y;
   output.roi = {message.roi.x_offset, message.roi.y_offset, message.roi.width, message.roi.height};
   output.roi_do_rectify = message.roi.do_rectify;
-  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady)) return;
+  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady_ns)) return;
   output.capture = header(index, "");
   if (failed_) return;
-  output.capture.timing = timed.timing;
+  set_sample(output.capture, *sample);
   output.capture.valid = true;
   output.capture.stamp = message.header.stamp;
   output.capture.frame_id = message.header.frame_id;
   output.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros_ns));
-  output.capture.received_steady = received_steady;
+  output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
   if (!ledger_.observe(index, output.capture, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   (index == 2 ? rgb_info_publisher_ : depth_info_publisher_)->publish(output);
 }
 bool RawReceipt::retire_gid(std::set<std::string> & retired, const std::string & gid)
@@ -510,8 +552,8 @@ void RawReceipt::on_depth(
     d.bridge_boot_id == c.bridge_boot_id && d.capture_generation == c.capture_generation &&
     d.stamp == c.stamp && d.stamp == message.stamp && c.stamp == message.camera_info_stamp &&
     d.received_ros == message.received_ros && c.received_ros == message.camera_info_received_ros &&
-    d.received_steady == message.received_steady &&
-    c.received_steady == message.camera_info_received_steady &&
+    steady_seconds(d.received_steady_ns) == message.received_steady &&
+    steady_seconds(c.received_steady_ns) == message.camera_info_received_steady &&
     d.frame_id == message.frame_id && c.frame_id == message.frame_id &&
     d.raw_gid == message.raw_source && c.raw_gid == message.camera_info_source;
   if (!shape) {
@@ -617,8 +659,8 @@ void RawReceipt::on_semantic(
       (depth_retired_gids_.count(message.depth_owner.owner_gid) != 0 ||
        depth_retired_epochs_.count(message.depth_owner.owner_epoch) != 0)) return;
   while (!depth_history_.empty() &&
-         (now < depth_history_.front().body.depth_capture.received_steady ||
-          now - depth_history_.front().body.depth_capture.received_steady > 1.0)) {
+         (now < steady_seconds(depth_history_.front().body.depth_capture.received_steady_ns) ||
+          now - steady_seconds(depth_history_.front().body.depth_capture.sample_steady_ns) > 1.0)) {
     depth_history_retired_sequence_ = depth_history_.front().owner.relay_sequence;
     depth_history_.pop_front();
   }
@@ -666,8 +708,8 @@ void RawReceipt::on_semantic(
     rgb_info.stamp == message.rgb_camera_info_stamp &&
     rgb.received_ros == message.rgb_received_ros &&
     rgb_info.received_ros == message.rgb_camera_info_received_ros &&
-    rgb.received_steady == message.rgb_received_steady &&
-    rgb_info.received_steady == message.rgb_camera_info_received_steady &&
+    steady_seconds(rgb.received_steady_ns) == message.rgb_received_steady &&
+    steady_seconds(rgb_info.received_steady_ns) == message.rgb_camera_info_received_steady &&
     rgb.frame_id == message.rgb_frame_id && rgb_info.frame_id == message.rgb_frame_id &&
     rgb.raw_gid == message.rgb_source && rgb_info.raw_gid == message.rgb_camera_info_source;
   if (!capture_ok) {

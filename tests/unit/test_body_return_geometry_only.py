@@ -52,8 +52,8 @@ def test_global_errors_preserve_model_learning_and_classification(
     assert model.validate() == 1
     anchors = model.learned
     feature_bytes = core._learning_client.run.path.read_bytes()
-    core.profile = replace(
-        core.profile, sensor_error=sensor_error, orientation_error_rad=orientation_error
+    core.profile = core.profile.model_copy(
+        update={"sensor_error": sensor_error, "orientation_error_rad": orientation_error}
     )
     core._sync_learning_model(message)
     assert core.self_returns is model and model.learned == anchors

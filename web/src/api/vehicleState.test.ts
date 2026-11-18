@@ -66,3 +66,17 @@ it('keeps unavailable reports live across reconnect without restoring old permis
   expect(port.getSnapshot().frame?.allowed_actions).toEqual(['acquire']);
   expect(() => decodeVehicleFrame({ ...unavailable, allowed_actions: ['acquire'] })).toThrow();
 });
+
+it('sends a scoped gesture stop separately from releasing authority', async () => {
+  const sent: [string, unknown][] = [];
+  const port = new VehicleTransport(async (type, payload) => { sent.push([type, payload]); });
+  await port.stop('a', 3);
+  await port.release('a');
+  expect(sent).toEqual([
+    ['drive.stop', { authority_id: 'a', gesture: 3 }],
+    ['control.release', { authority_id: 'a' }]
+  ]);
+  await expect(port.stop('a', 0)).rejects.toThrow();
+  await expect(port.stop('', 1)).rejects.toThrow();
+  expect(sent).toHaveLength(2);
+});

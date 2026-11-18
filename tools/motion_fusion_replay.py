@@ -2,7 +2,7 @@
 
 Use PYTHONPATH=.:src .venv/bin/python -m tools.motion_fusion_replay
 with --input FILE --output NEW_DIR.
-Replay steady time is synthesized from bag receipt deltas: this is not an RTF/TTL qualification.
+Replay preserves explicit first-receipt records; it does not prove ROS/DDS transport behavior.
 All policy values here are reproduction settings, not frozen physical limits.
 """
 
@@ -19,7 +19,7 @@ from typing import Any
 
 from senior_control.motion.fusion import FusionConfig, FusionSnapshot, NumericalFusion
 from senior_control.motion.observations import AdmissionConfig, Heading, Source, SourceRule
-from senior_control.motion.sample_types import MotionSample
+from senior_control.motion.sample_types import MotionSample, PointObservation
 from senior_control.motion.source_admission import AdmissionDecision, AdmissionOwner
 from senior_control.motion.temporal import ResolvedWindow, TemporalConfig, TemporalResolver
 from tools.motion_replay_records import NativeAdapter, TruthIndex
@@ -82,7 +82,7 @@ class ReplayChain:
             after_cursor=self.resolver.cursor, now_ros=now_ros, now_steady=now_steady
         )
         self.resolver.consume(snapshot)
-        self.last_window = self.resolver.resolve(a, b, snapshot)
+        self.last_window = self.resolver.resolve(round(a * 1e9), round(b * 1e9), snapshot)
         return self.fusion.update(self.last_window, snapshot, self.resolver)
 
 
@@ -111,7 +111,7 @@ def run_native(path: Path, output: Path, max_records: int = 500000) -> dict[str,
     costs: list[float] = []
     start = time.perf_counter()
     previous: float | None = None
-    steady, segment = 10.0, 0
+    segment = 0
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as data, (output / "admissions.jsonl").open("w") as admissions:
         for ordinal, line in enumerate(data, 1):
@@ -126,18 +126,20 @@ def run_native(path: Path, output: Path, max_records: int = 500000) -> dict[str,
             if previous is not None:
                 if now < previous:
                     segment += 1
-                steady += max(0.0, now - previous)
             previous = now
             if topic == "/ground_truth/odom":
                 truth.add_message(segment, record["message"])
                 continue  # scoring-only object never reaches chain
             try:
-                sample = adapter.convert(record, steady)
+                sample = adapter.convert(record)
             except (KeyError, TypeError, ValueError) as error:
                 errors.append({"ordinal": ordinal, "topic": topic, "error": str(error)})
                 continue
             if sample is None:
                 continue
+            steady = sample.received_steady
+            original = sample.time if isinstance(sample, PointObservation) else sample.last_time
+            now = original.received_ros_ns / 1e9
             tick = time.perf_counter()
             decision = chain.ingest(sample, now, steady)
             decisions[f"{sample.source.value}:{decision.reason}"] += 1
@@ -146,7 +148,7 @@ def run_native(path: Path, output: Path, max_records: int = 500000) -> dict[str,
                     {
                         "ordinal": ordinal,
                         "bag_ros": now,
-                        "virtual_steady": steady,
+                        "received_steady": steady,
                         "sample": asdict(sample),
                         "decision": asdict(decision),
                     },
@@ -247,8 +249,7 @@ def run_native(path: Path, output: Path, max_records: int = 500000) -> dict[str,
         "adapter_errors": errors,
         "clock_receipt_rollbacks": segment,
         "limitations": [
-            "virtual steady = nonnegative bag receipt deltas; "
-            "not measured wall/RTF/TTL qualification",
+            "original first-receipt mappings retained; not measured wall/RTF/TTL qualification",
             "no GPS in real records; no trusted real statistical models, so CI must remain absent",
             "wheel/IMU producer identity unavailable: recording-scoped synthetic epochs",
             "mode support durations sum query intervals, not total recording wall time",

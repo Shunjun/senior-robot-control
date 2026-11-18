@@ -16,7 +16,7 @@ using admission::Message;
 
 Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
 {
-  const auto raw = node->declare_parameter<std::string>("raw_topic", "/scan") + "/timed";
+  const auto raw = node->declare_parameter<std::string>("raw_topic", "/scan");
   const auto bounded = node->declare_parameter<std::string>("bounded_topic", "/safety/raw/scan");
   const auto frame = node->declare_parameter<std::string>("expected_frame", "laser_link");
   if (raw.empty() || raw.front() != '/' || bounded.empty() || bounded.front() != '/' ||
@@ -54,8 +54,8 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
         retired = true;
         return;
       }
-      if (!receipt.valid || !owner->matches(receipt) || static_cast<double>(receipt.timing.capture_start_steady_ns) / 1e9 <= ready_steady ||
-        !(receipt.received_steady > ready_steady) || receipt.sequence == 0 ||
+      if (!receipt.valid || !owner->matches(receipt) || static_cast<double>(receipt.sample_steady_ns) / 1e9 <= ready_steady ||
+        !((static_cast<double>(receipt.received_steady_ns) / 1e9) > ready_steady) || receipt.sequence == 0 ||
         receipt.capture_generation == 0 || receipt.frame_id != frame ||
         !admission::text_ok(receipt.bridge_boot_id) || !admission::text_ok(receipt.source_epoch) ||
         !admission::fresh(receipt, admission::steady_seconds()) ||
@@ -68,7 +68,7 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
         // Pin the resulting epoch and require a later scan in that exact epoch.
         baseline = std::move(scan);
       } else if (receipt.sequence > baseline->capture.sequence &&
-        receipt.timing.capture_end_steady_ns > baseline->capture.timing.capture_end_steady_ns)
+        admission::time_ns(receipt.stamp) > admission::time_ns(baseline->capture.stamp))
       {
         acquired = std::move(scan);
       }

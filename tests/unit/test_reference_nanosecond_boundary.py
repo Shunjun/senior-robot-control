@@ -7,15 +7,18 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
-from control_process_test_support import capture_inputs, local_resources, make_core, read_inputs
+from control_process_test_support import (
+    capture_inputs,
+    generic_motion_profile,
+    local_resources,
+    make_core,
+    read_inputs,
+)
 from senior_robot import motion_core_output as module
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import synthetic_capture_schedule
+from sensor_time_test_support import sample_time
 from test_motion_reference_backlog import Node
 
-CASE = synthetic_capture_schedule(
-    json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
-)
+CASE = json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read_text())
 
 
 @pytest.fixture
@@ -33,7 +36,7 @@ def replay(monkeypatch):
     scan = CASE["scan"]["body"]
     node._scans[0].stamp = scan["stamp"]["sec"] + scan["stamp"]["nanosec"] / 1e9
     local_resources(monkeypatch)
-    core = make_core(monkeypatch, node, SimulationMotionProfile())
+    core = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(core, N(data=json.dumps(CASE["packet"])))
     core._startup_motion_unconfirmed = False
     core.controller._last_now = clock.steady - 0.05
@@ -59,14 +62,16 @@ def test_raw_original_nanosecond_boundary_is_shared_one_second(replay, age_ns, a
                     "laser",
                     "boundary",
                     1,
-                    5.0,
-                    5.0,
-                    replay.clock.steady,
-                    measurement_steady=replay.clock.steady,
+                    sample_time(
+                        stamp_ns=round((5.0) * 1e9),
+                        received_ros_ns=round((5.0) * 1e9),
+                        received_steady_ns=round((replay.clock.steady) * 1e9),
+                    ),
                 ),
             ),
             independent=(True, True, True),
             measured_steady=replay.clock.steady,
+            stamp_ns=round((5.0) * 1e9),
         )
     )
     original = replay.clock.steady

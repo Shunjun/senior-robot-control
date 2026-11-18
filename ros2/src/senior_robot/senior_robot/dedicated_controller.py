@@ -12,14 +12,11 @@ from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 from rclpy.node import Node
 
-from senior_robot.navigation_overlay import require_navigation_overlay
-
 
 class DedicatedController:
     def __init__(self, node: Node, params: Path, *, odometry_topic: str = "/wheel/odom") -> None:
         self._node = node
         self._params = params
-        # //Compatible: the default retains the simulation wheel topic.
         self._odometry_topic = odometry_topic
         self._lock = asyncio.Lock()
         self._standby: tuple[AsyncExitStack, str] | None = None
@@ -125,15 +122,12 @@ class DedicatedController:
                 for name, _ in self._node.get_node_names_and_namespaces()
             ):
                 raise RuntimeError("a Nav2 controller or navigator is already present")
-            require_navigation_overlay()
             run_id = secrets.token_hex(16)
             topic = f"/control/navigation/run_{run_id}/cmd_vel"
             await self._start(
                 stack,
                 "nav2_controller",
                 "controller_server",
-                "-p",
-                f"navigation_run_id:={run_id}",
                 "-r",
                 f"cmd_vel:={topic}",
                 "-r",

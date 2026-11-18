@@ -8,12 +8,12 @@ from control_process_test_support import publish_inputs
 from learning_test_support import (  # noqa: F401
     begin_action,
     bind_core,
+    learning_point,
     learning_runs,
     startup_for,
     write_geometry_record,
 )
-from learning_test_support import simulation_point as point
-from source_time_test_support import capture_time, wire_time
+from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_chain import InlineWorker
 from test_motion_core_handoff import core  # noqa: F401
 
@@ -22,7 +22,8 @@ from senior_control.models import Pose2D
 from senior_control.motion.constraint_worker import ConstraintScheduler
 from senior_control.motion.estimator import MotionObservation, Origin
 from senior_control.motion.observations import Source
-from senior_control.sensors.time_proof import MeasurementInterval
+from senior_control.sensors.sample_time import StampInterval
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 @pytest.mark.parametrize(
@@ -72,8 +73,20 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
         # supplies the next measured speed. No permit or obstacle is patched.
         v = core.node.emitted[-1][0].vx if core.node.emitted else 0.0
         positions.append((t, positions[-1][1] + v * 0.05))
-        core.node._reception_test.sensors.ingest(point(Source.WHEEL, t, t, (v, 0.0), i), t, t, t)
-        core.node._reception_test.sensors.ingest(point(Source.IMU, t, t, (0.0,), i), t, t, t)
+        core.node._reception_test.sensors.ingest(
+            learning_point(
+                Source.WHEEL, round(t * 1e9), round(t * 1e9), round(t * 1e9), (v, 0.0), i
+            ),
+            t,
+            t,
+            t,
+        )
+        core.node._reception_test.sensors.ingest(
+            learning_point(Source.IMU, round(t * 1e9), round(t * 1e9), round(t * 1e9), (0.0,), i),
+            t,
+            t,
+            t,
+        )
         core.node._reception_test.sensors.ingest_observation(
             MotionObservation(
                 "laser",
@@ -84,23 +97,70 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
                         "laser",
                         "native",
                         i,
-                        t,
-                        t,
-                        t,
-                        measurement_steady=t,
-                        measurement=capture_time(t).measurement,
+                        sample_time(
+                            stamp_ns=round((t) * 1e9),
+                            received_ros_ns=round((t) * 1e9),
+                            received_steady_ns=round((t) * 1e9),
+                        ),
                     ),
                 ),
                 quality=1.0,
                 independent=(True, True, True),
                 measured_steady=t,
-                measurement=capture_time(t).measurement,
-                # v is the preceding output actually applied throughout this
-                # completed plant interval, not an instantaneous new rate.
-                measurement_interval=MeasurementInterval(
-                    capture_time(t - 0.05).measurement, capture_time(t).measurement
+                measurement_interval=StampInterval(
+                    RawCaptureHeader(
+                        time=sample_time(
+                            stamp_ns=round((t - 0.05) * 1e9),
+                            received_ros_ns=round((t - 0.05) * 1e9),
+                            received_steady_ns=round((t - 0.05) * 1e9),
+                            clock_generation=1,
+                        ),
+                        frame_id="laser",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="producer",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=1,
+                        valid=True,
+                        reason="",
+                    ).time.stamp_ns,
+                    RawCaptureHeader(
+                        time=sample_time(
+                            stamp_ns=round((t) * 1e9),
+                            received_ros_ns=round((t) * 1e9),
+                            received_steady_ns=round((t) * 1e9),
+                            clock_generation=1,
+                        ),
+                        frame_id="laser",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="producer",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=1,
+                        valid=True,
+                        reason="",
+                    ).time.stamp_ns,
                 ),
                 measurement_delta=Pose2D(v * 0.05, 0, 0),
+                stamp_ns=RawCaptureHeader(
+                    time=sample_time(
+                        stamp_ns=round((t) * 1e9),
+                        received_ros_ns=round((t) * 1e9),
+                        received_steady_ns=round((t) * 1e9),
+                        clock_generation=1,
+                    ),
+                    frame_id="laser",
+                    raw_gid="01",
+                    bridge_gid="02",
+                    source_epoch="producer",
+                    bridge_boot_id="boot",
+                    capture_generation=1,
+                    sequence=1,
+                    valid=True,
+                    reason="",
+                ).stamp_ns,
             ),
             t,
             t,
@@ -135,7 +195,22 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
                     sensor_yaw=0.0,
                     transform_stamp=stamp,
                     raw_capture=N(
-                        timing=wire_time(stamp, sequence=max(1, round(stamp * 1000)), epoch="scan")
+                        frame_id="laser_link",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="scan",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=max(1, round(stamp * 1000)),
+                        valid=True,
+                        reason="",
+                        **capture_fields(
+                            time=sample_time(
+                                stamp_ns=round((stamp) * 1e9),
+                                received_ros_ns=round((stamp) * 1e9),
+                                received_steady_ns=round((stamp) * 1e9),
+                            )
+                        ),
                     ),
                 ),
                 measurement_steady=stamp,
@@ -164,8 +239,8 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
     )
     assert core.startup.validation_samples >= 5
     assert stopped_stamp is not None
-    assert [m.seconds for m in core.self_returns.frame_measurements] == sorted(
-        set([m.seconds for m in core.self_returns.frame_measurements])
+    assert [m / 1e9 for m in core.self_returns.frame_measurements] == sorted(
+        set([m / 1e9 for m in core.self_returns.frame_measurements])
     )
     # Completion can occur while consuming the exit geometry snapshot. The
     # next fixed control slot retires its lifecycle identity and stays zero.
@@ -178,7 +253,7 @@ def test_full_core_cycle_with_delayed_and_reordered_raw_scans(
         assert any(a > b for a, b in zip(captures, captures[1:], strict=False))
 
     assert all(
-        core.startup.started <= m.seconds < core.startup.deadline
+        core.startup.started <= m / 1e9 < core.startup.deadline
         for m in core.self_returns.frame_measurements
     )
     assert core._learning_client.record.model is not None

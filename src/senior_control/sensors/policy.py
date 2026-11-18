@@ -7,6 +7,8 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Literal
 
+from senior_control.sensors.sample_time import SampleTime
+
 if TYPE_CHECKING:
     from senior_control.runtime.diagnostics import DiagnosticsSettings
 
@@ -48,6 +50,29 @@ class SensorTiming:
         """
         return self.hard_age_ms / 1000
 
+    def sample_age(self, time: SampleTime, *, now_steady_ns: int) -> Age:
+        """Apply the existing age bands to the original integer mapping."""
+        if type(now_steady_ns) is not int or not 0 <= now_steady_ns < 1 << 64:
+            raise SensorClockError("now_steady_ns outside integer nanosecond range")
+        if now_steady_ns < time.received_steady_ns:
+            raise SensorClockError("reversed monotonic sensor clock")
+        return self._age_ns(time.sample_steady_ns, now_steady_ns)
+
+    def _age_ns(self, measured: int, now: int) -> Age:
+        elapsed_ns = now - measured
+        soft_ns = round(self.soft_age_ms * 1_000_000)
+        hard_ns = round(self.hard_age_ms * 1_000_000)
+        if elapsed_ns >= hard_ns:
+            band: Literal["normal", "low", "invalid"] = "invalid"
+            freshness = 0.0
+        elif elapsed_ns < soft_ns:
+            band = "normal"
+            freshness = 1.0
+        else:
+            band = "low"
+            freshness = 0.1 + 0.9 * (hard_ns - elapsed_ns) / (hard_ns - soft_ns)
+        return Age(elapsed_ns / 1_000_000_000, band, freshness, (measured + hard_ns) / 1e9)
+
     def age(self, *, measured_steady: float, received_steady: float, now_steady: float) -> Age:
         values = (measured_steady, received_steady, now_steady)
         if not all(math.isfinite(v) for v in values):
@@ -58,22 +83,7 @@ class SensorTiming:
             raise SensorClockError("sensor clock outside numeric range") from exc
         if measured < 0 or received < measured or now < received:
             raise SensorClockError("future or reversed monotonic sensor clock")
-        age = (now - measured) / 1_000_000_000
-        soft_s = self.soft_age_ms / 1000
-        hard_s = self.hard_age_ms / 1000
-        if age >= hard_s:
-            band: Literal["normal", "low", "invalid"] = "invalid"
-        elif age >= soft_s:
-            band = "low"
-        else:
-            band = "normal"
-        if band == "invalid":
-            freshness = 0.0
-        elif band == "normal":
-            freshness = 1.0
-        else:
-            freshness = 0.1 + 0.9 * (hard_s - age) / (hard_s - soft_s)
-        return Age(age, band, freshness, measured_steady + hard_s)
+        return self._age_ns(measured, now)
 
 
 @lru_cache(maxsize=1)
@@ -83,22 +93,24 @@ def default_policy() -> SensorTiming:
     return SensorTiming(**values)
 
 
-def ros_sensor_parameters(diagnostics: "DiagnosticsSettings | None" = None) -> dict[str, float]:
+def ros_sensor_parameters(
+    diagnostics: "DiagnosticsSettings | None" = None,
+) -> dict[str, int | float]:
     from senior_control.runtime.diagnostics import QueueWarningPolicy
 
     q = QueueWarningPolicy() if diagnostics is None else diagnostics.queue
     p = default_policy()
     return dict(
         queue_warn_count=q.count,
-        queue_warn_ratio=q.ratio,
-        queue_warn_repeat_s=q.repeat_s,
-        queue_warn_recovery_ratio=q.recovery_ratio,
-        queue_warn_oldest_wait_ms=q.oldest_wait_ms,
-        sensor_soft_age_ms=p.soft_age_ms,
-        sensor_hard_age_ms=p.hard_age_ms,
-        sensor_diagnostics_period_s=p.diagnostics_period_s
-        if diagnostics is None
-        else diagnostics.period_s,
+        queue_warn_ratio=float(q.ratio),
+        queue_warn_repeat_s=float(q.repeat_s),
+        queue_warn_recovery_ratio=float(q.recovery_ratio),
+        queue_warn_oldest_wait_ms=float(q.oldest_wait_ms),
+        sensor_soft_age_ms=float(p.soft_age_ms),
+        sensor_hard_age_ms=float(p.hard_age_ms),
+        sensor_diagnostics_period_s=float(
+            p.diagnostics_period_s if diagnostics is None else diagnostics.period_s
+        ),
     )
 
 

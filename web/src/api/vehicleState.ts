@@ -188,6 +188,7 @@ export interface VehiclePort {
   onManualFenced(listener: () => void): () => void;
   acquire(): Promise<Authority>;
   release(authorityId: string): Promise<void>;
+  stop(authorityId: string, gesture: number): Promise<void>;
   /** Resolves after local send; vehicle status arrives independently. */
   intent(value: Intent): Promise<void>;
   recover(kind: 'estop_reset' | 'fault_recover'): Promise<void>;
@@ -514,6 +515,10 @@ export class VehicleTransport implements VehiclePort {
   }
   async release(id: string): Promise<void> {
     await this.send('control.release', { authority_id: id });
+  }
+  async stop(authorityId: string, gesture: number): Promise<void> {
+    if (!text(authorityId) || count(gesture) < 1) throw new VehicleDecodeError();
+    await this.send('drive.stop', { authority_id: authorityId, gesture });
   }
   async intent(value: Intent): Promise<void> {
     number(value.linear, -1, 1);

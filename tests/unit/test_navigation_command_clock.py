@@ -23,7 +23,6 @@ def navigation(monkeypatch):
         "senior_motion_msgs.msg": {
             "DriveExecutionFeedback": object,
             "FinalCommand": object,
-            "NavigationSample": object,
         },
         "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
     }
@@ -81,15 +80,11 @@ def navigation(monkeypatch):
     node.get_logger = lambda: SimpleNamespace(warning=logs.append)
     topic = "/control/navigation/run_" + "a" * 32 + "/cmd_vel"
     node._navigation_source = module._NavigationSource(
-        "private-execution", topic, object(), 9.0, "same-boot", b"controller", qualified
+        "private-execution", topic, object(), b"controller", qualified
     )
     msg = SimpleNamespace(
-        vx=0.08,
-        wz=0.0,
-        produced_steady_ns=10_000_000_000,
-        clock_domain="same-boot",
-        run_id="a" * 32,
-        sequence=1,
+        linear=SimpleNamespace(x=0.08, y=0.0, z=0.0),
+        angular=SimpleNamespace(x=0.0, y=0.0, z=0.0),
     )
     info = {"source_timestamp": 100_000_000_000, "publisher_gid": b"controller"}
     return SimpleNamespace(
@@ -122,8 +117,6 @@ def test_wall_clock_corrections_preserve_source_and_fresh_commands(navigation, j
     rig.clock.jump = jump
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
     rig.clock.mono += 0.2
-    rig.msg.produced_steady_ns = round(rig.clock.mono * 1e9)
-    rig.msg.sequence += 1
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
     assert rig.node._navigation_source is source and len(rig.accepted) == 2
     assert not rig.ended and not rig.logs
@@ -139,13 +132,13 @@ def test_freshness_uses_current_time_after_all_qualification_work(navigation, de
     assert rig.attempts[0][1] == pytest.approx(10.35)
 
 
-def test_old_production_time_is_never_restamped_by_slow_qualification(navigation):
+def test_first_receipt_is_never_restamped_by_slow_qualification(navigation):
     rig = navigation
-    rig.msg.produced_steady_ns = 9_600_000_000
+    rig.clock.qualification = 0.35
     rig.node._on_navigation_sample(rig.topic, rig.msg, rig.info)
     assert not rig.accepted and rig.node._navigation_source is not None
-    assert rig.attempts[0][0] == pytest.approx(9.6)
-    assert rig.node._navigation_source.producer_sequence == 0
+    assert rig.attempts[0][0] == pytest.approx(10.0)
+    assert rig.node._navigation_source.sequence == 0
 
 
 def test_real_qualification_loss_is_cleared_with_one_reason(navigation):

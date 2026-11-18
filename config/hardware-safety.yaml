@@ -42,15 +42,6 @@ safety_gate:
     simulation_rate_hz: 20.0
     hard_margin: 0.0
     depth_policy: laser_only
-    footprint_xy:
-    - -0.337
-    - -0.276
-    - 0.337
-    - -0.276
-    - 0.337
-    - 0.276
-    - -0.337
-    - 0.276
 command_node:
   ros__parameters:
     use_sim_time: false

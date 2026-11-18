@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from senior_control.sensors.policy import default_policy
-from senior_control.sensors.time_proof import SourceTime
+from senior_control.sensors.sample_time import SampleTime
 from senior_control.vision.raw_capture import (
     RawCaptureAdmission,
     RawCaptureHeader,
@@ -224,7 +224,7 @@ class Result:
 def _immutable_header(header: Any) -> bool:
     return (
         type(header) is RawCaptureHeader
-        and type(header.timing) is SourceTime
+        and type(header.time) is SampleTime
         and all(
             type(getattr(header, name)) is int
             for name in ("stamp_ns", "received_ros_ns", "capture_generation", "sequence")
@@ -364,8 +364,8 @@ class IndependentMotion:
             header.bridge_boot_id,
             header.capture_generation,
             header.frame_id,
-            header.timing.measurement.clock_domain,
-            header.timing.measurement.epoch,
+            header.bridge_boot_id,
+            header.time.clock_generation,
         )
 
     def _advance(self, incoming: tuple[RawCaptureHeader, ...]) -> tuple[bool, bool]:
@@ -389,8 +389,8 @@ class IndependentMotion:
                 return False, False
             if old_key == new_key:
                 if new.sequence <= old.sequence or (
-                    new.timing.measurement.same_axis(old.timing.measurement)
-                    and new.timing.measurement.seconds < old.timing.measurement.seconds
+                    new.time.clock_generation == old.time.clock_generation
+                    and new.time.stamp_ns < old.time.stamp_ns
                 ):
                     return False, False
                 continue
@@ -410,7 +410,7 @@ class IndependentMotion:
                     )
                 )
                 or (not same_boot and new.bridge_gid != old.bridge_gid)
-                or (same_boot and not new.timing.measurement.same_axis(old.timing.measurement))
+                or (same_boot and not new.time.clock_generation == old.time.clock_generation)
             )
             if not valid_replacement:
                 return False, False
@@ -496,9 +496,7 @@ class IndependentMotion:
                 b.sequence <= a.sequence
                 for a, b in zip(_headers(previous), _headers(frame), strict=True)
             )
-            or not 0
-            < frame.rgb_header.timing.measurement.elapsed(previous.rgb_header.timing.measurement)
-            <= 0.2
+            or not 0 < ((frame.rgb_header.stamp_ns - previous.rgb_header.stamp_ns) / 1e9) <= 0.2
         ):
             return Result("pair_revoked")
         self._previous = frame
@@ -507,9 +505,7 @@ class IndependentMotion:
             self._previous = None
         if result.camera_transform is not None:
             translation = [result.camera_transform[i][3] for i in range(3)]
-            elapsed = frame.rgb_header.timing.measurement.elapsed(
-                previous.rgb_header.timing.measurement
-            )
+            elapsed = (frame.rgb_header.stamp_ns - previous.rgb_header.stamp_ns) / 1e9
             if math.sqrt(sum(v * v for v in translation)) / elapsed > self.profile.max_speed_m_s:
                 self._previous = None
                 return Result("profile_domain_exceeded")

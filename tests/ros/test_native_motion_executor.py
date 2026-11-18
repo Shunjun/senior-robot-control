@@ -27,9 +27,11 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
         NativeObservations,
     )
     from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-    from senior_robot.simulation_motion_profile import SimulationMotionProfile
+    from senior_robot.native_receipt import subscribe
     from std_msgs.msg import String
 
+    from senior_control.motion.hardware_profile import load_hardware_profile
+    from senior_control.motion.observations import Source
     from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
     assert os.environ.get("ROS_DOMAIN_ID") == "173" and os.environ.get("ROS_LOCALHOST_ONLY") == "1"
@@ -43,20 +45,24 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
         def __init__(self):
             super().__init__("native_dds_smoke")
             self.declare_parameter("robot_id", "route-sim")
-            p = SimulationMotionProfile()
+            p = load_hardware_profile(
+                original.parents[3] / "tests/fixtures/generic_motion_profile.json"
+            )
             self.sensors = MotionSensorRuntime(p, RuntimeDiagnostics(lambda *_: None))
             self.bridge = object.__new__(NativeObservationRosBridge)
             self.bridge.node = self
-            self.bridge.allow_topology_only = True
+            self.bridge.profile = p
             self.bridge._warn_at = 0.0
             self.bridge.core = NativeObservations(
                 p.admission(), p.temporal(), p.fusion(), sample_sink=self.sensors.ingest
             )
-            self.wheel_sub = self.create_subscription(
+            self.wheel_sub = subscribe(
+                self,
                 Odometry,
                 "/wheel/odom",
-                self.bridge._callback(self.bridge.core.wheel, "/wheel/odom"),
-                10,
+                self.bridge._callback(self.bridge.core.wheel, "/wheel/odom", "/wheel/odom"),
+                writer="drive",
+                invalidate=lambda: self.sensors.invalidate(Source.WHEEL),
             )
 
             @with_dds_info

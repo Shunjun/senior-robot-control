@@ -7,6 +7,7 @@ import time
 from functools import partial
 
 import pytest
+from control_process_test_support import generic_motion_profile
 
 from senior_control.motion.cadence import ControlCadence
 from senior_control.motion.process_resources import LatestSnapshot, ProcessWorker
@@ -102,6 +103,27 @@ def test_real_spawn_serializes_tasks_and_results_and_cleans_up():
     assert all(p.pid != pid for p in mp.active_children())
 
 
+def test_busy_request_mailbox_retains_one_flight_without_blocking_or_losing_task():
+    worker = ProcessWorker(name="batch-test-contended-geometry")
+    try:
+        worker.requests._lock.acquire()
+        try:
+            started = time.monotonic()
+            future = worker.submit(partial(compute_pid, 7))
+            assert not future.done()
+            assert time.monotonic() - started < 0.05
+            with pytest.raises(RuntimeError, match="geometry_process_busy"):
+                worker.submit(partial(compute_pid, 8))
+            assert worker.flight is future
+        finally:
+            worker.requests._lock.release()
+        pid, result = wait_done(future).result()
+        assert pid != os.getpid() and result == 7
+        assert wait_done(worker.submit(partial(compute_pid, 9))).result()[1] == 9
+    finally:
+        worker.close()
+
+
 def test_process_death_fails_pending_future_and_close_reaps_it():
     worker = ProcessWorker(name="batch-test-killed-geometry")
     future = worker.submit(partial(held_task, 10))
@@ -117,13 +139,13 @@ def test_process_death_fails_pending_future_and_close_reaps_it():
 
 
 def test_real_spawn_carries_geometry_and_complete_sensor_snapshot():
+    from control_process_test_support import generic_motion_profile
     from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-    from senior_robot.simulation_motion_profile import SimulationMotionProfile
     from test_directional_constraints import engine, snapshot
 
     from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
-    sensors = MotionSensorRuntime(SimulationMotionProfile(), RuntimeDiagnostics(lambda *_: None))
+    sensors = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     reference = sensors.estimate(10, 10)
     state = {k: v for k, v in vars(sensors).items() if k not in {"profile", "diagnostics"}}
     worker = ProcessWorker(name="batch-test-real-geometry")
@@ -189,13 +211,13 @@ def test_reception_child_inherits_typed_sensor_remaps_without_twist_or_untyped_f
     monkeypatch.setattr(control_inputs, "LatestSnapshot", lambda _: object())
     names = []
     node = N(
-        list_parameters=lambda *a, **kw: N(names=[]),
+        _motion_core=N(profile=generic_motion_profile()),
+        get_parameters_by_prefix=lambda prefix: {},
         resolve_topic_name=lambda topic: names.append(topic) or "/isolated" + topic,
     )
     channel = control_inputs.ControlInputs(node)
     mappings = dict(captured["args"][1])
     assert captured["started"]
-    assert mappings["/wheel/odom/timed"] == "/isolated/wheel/odom/timed"
-    assert mappings["/imu/data/timed"] == "/isolated/imu/data/timed"
-    assert "/wheel/odom" not in mappings and "/imu/data" not in mappings
+    assert mappings["/wheel/odom"] == "/isolated/wheel/odom"
+    assert mappings["/imu/data"] == "/isolated/imu/data"
     assert channel.slot is captured["args"][2]

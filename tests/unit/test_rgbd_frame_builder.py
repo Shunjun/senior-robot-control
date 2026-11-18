@@ -1,7 +1,7 @@
 from types import SimpleNamespace as NS
 
 import numpy as np
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_frame_builder import build_frame
@@ -9,9 +9,7 @@ from senior_control.vision.rgbd_frame_builder import build_frame
 
 def inputs():
     header = RawCaptureHeader(
-        100,
-        101,
-        1.1,
+        sample_time(stamp_ns=100, received_ros_ns=101, received_steady_ns=round((1.1) * 1e9)),
         "optical",
         "01",
         "02",
@@ -21,7 +19,6 @@ def inputs():
         1,
         True,
         "",
-        timing=capture_time(1.1, sequence=max(1, 1), epoch="source", tick=(100) / 1e9),
     )
     w, h = 80, 80
     rgb = NS(
@@ -73,7 +70,7 @@ def test_rgb8_conversion_preserves_encoding_and_immutable_source_identity():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert built.raw_rgb_encoding == "rgb8"
     assert built.preprocessing_version == "rgb8-mono-v1"
@@ -98,7 +95,7 @@ def test_unknown_scene_does_not_default_to_empty_exclusion():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=None,
-            static_sim_declared=True,
+            static_background_declared=True,
         )
 
 
@@ -121,7 +118,7 @@ def test_rejects_capture_body_from_other_header():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=bytes(80 * 80),
-            static_sim_declared=True,
+            static_background_declared=True,
         )
 
 
@@ -143,7 +140,7 @@ def test_rejects_nonrectified_or_unregistered_camera_info():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=bytes(80 * 80),
-            static_sim_declared=True,
+            static_background_declared=True,
         )
 
 
@@ -163,7 +160,7 @@ def test_padded_big_endian_depth_is_decoded_from_real_rows():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert np.all(built.frame.depth == 1.0)
 
@@ -189,7 +186,7 @@ def test_bad_image_consumes_headers_and_prevents_same_capture_replay():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
         now_ros_ns=101,
         now_steady=1.1,
     )
@@ -207,18 +204,18 @@ def test_bad_image_consumes_headers_and_prevents_same_capture_replay():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
         now_ros_ns=101,
         now_steady=1.1,
     )
     assert result.reason == "source_frontier_invalid"
 
 
-def test_empty_exclusion_requires_explicit_static_sim_domain():
+def test_empty_exclusion_requires_explicit_static_scene_declaration():
     import pytest
 
     headers, rgb, depth, rgb_info, depth_info = inputs()
-    with pytest.raises(ValueError, match="static"):
+    with pytest.raises(ValueError, match="exclusion_scene_unknown"):
         build_frame(
             headers,
             rgb,
@@ -230,7 +227,7 @@ def test_empty_exclusion_requires_explicit_static_sim_domain():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=bytes(80 * 80),
-            static_sim_declared=False,
+            static_background_declared=False,
         )
 
 
@@ -250,7 +247,7 @@ def test_missing_registration_declaration_cannot_build_a_frame():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=bytes(80 * 80),
-            static_sim_declared=True,
+            static_background_declared=True,
         )
 
 
@@ -269,7 +266,7 @@ def test_built_frame_and_calibration_are_snapshots_of_mutable_input():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     rgb.data[0] = 0
     depth_info.d[0] = 0.5
@@ -294,7 +291,7 @@ def test_original_image_hash_binds_exact_padded_native_body():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert built.rgb_layout.sha256 == hashlib.sha256(rgb.data).digest()
     assert built.depth_layout.sha256 == hashlib.sha256(depth.data).digest()
@@ -315,7 +312,7 @@ def test_numpy_camera_matrices_produce_native_float_calibration_snapshots():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert all(
         type(value) is float
@@ -343,7 +340,7 @@ def test_camera_matrices_reject_non_numeric_boolean_nonfinite_and_wrong_shape():
                 tf_epoch="tf",
                 dependencies=("tf",),
                 exclusion=bytes(80 * 80),
-                static_sim_declared=True,
+                static_background_declared=True,
             )
     headers, rgb, depth, rgb_info, depth_info = inputs()
     rgb_info.k = rgb_info.k[:-1]
@@ -359,7 +356,7 @@ def test_camera_matrices_reject_non_numeric_boolean_nonfinite_and_wrong_shape():
             tf_epoch="tf",
             dependencies=("tf",),
             exclusion=bytes(80 * 80),
-            static_sim_declared=True,
+            static_background_declared=True,
         )
 
 
@@ -377,7 +374,7 @@ def test_numpy_roi_is_preserved_as_native_unsigned_integers():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert built.rgb_info.roi == (0, 0, 0, 0)
     assert all(type(value) is int for value in built.rgb_info.roi)

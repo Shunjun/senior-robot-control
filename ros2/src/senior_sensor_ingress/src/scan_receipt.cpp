@@ -27,12 +27,12 @@ bool text_ok(const std::string & value, size_t maximum)
 
 bool stamp_ok(const builtin_interfaces::msg::Time & value)
 {
-  return value.sec >= 0 && value.nanosec < 1000000000u && (value.sec > 0 || value.nanosec > 0);
+  return value.sec >= 0 && value.nanosec < 1000000000u;
 }
 
 double steady_now()
 {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
 }
 
 bool layout_ok(const sensor_msgs::msg::LaserScan & scan)
@@ -50,7 +50,7 @@ ScanReceipt::ScanReceipt(const rclcpp::NodeOptions & options, BeforeVerify befor
                          bool test_reentrant_callbacks)
 : Node("scan_receipt", options), before_verify_(std::move(before_verify))
 {
-  input_topic_ = declare_parameter<std::string>("scan_topic", "/scan") + "/timed";
+  input_topic_ = declare_parameter<std::string>("scan_topic", "/scan");
   const auto output = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
   if (!text_ok(input_topic_, 128) || !text_ok(output, 128) || input_topic_ == output) {
     throw std::invalid_argument("invalid scan receipt topics");
@@ -84,8 +84,8 @@ ScanReceipt::ScanReceipt(const rclcpp::NodeOptions & options, BeforeVerify befor
     filter_owner_.topic, qos,
     [this](senior_motion_msgs::msg::BoundedFilteredScan::ConstSharedPtr message,
            const rclcpp::MessageInfo & info) {on_filtered(*message, info);}, options_for_scan);
-  subscription_ = create_subscription<senior_motion_msgs::msg::TimedLaserScan>(
-    input_topic_, qos, [this](senior_motion_msgs::msg::TimedLaserScan::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
+  subscription_ = create_subscription<sensor_msgs::msg::LaserScan>(
+    input_topic_, qos, [this](sensor_msgs::msg::LaserScan::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
       on_scan(*message, info);
     }, options_for_scan);
   timer_ = create_wall_timer(20ms, [this] {inspect_topology();});
@@ -109,7 +109,7 @@ bool ScanReceipt::retire(const std::string & gid)
 }
 
 void ScanReceipt::invalidate(const std::string & reason, const Scan * source,
-                             int64_t received_ros, double received_steady,
+                             int64_t received_ros, uint64_t received_steady_ns,
                              const std::string & raw_gid)
 {
   if (failed_ || generation_ == std::numeric_limits<uint64_t>::max() ||
@@ -133,27 +133,51 @@ void ScanReceipt::invalidate(const std::string & reason, const Scan * source,
     if (received_ros > 0) {
       header.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros));
     }
-    header.received_steady = received_steady;
+    header.received_steady_ns = received_steady_ns;
   }
   publisher_->publish(output);
 }
 
-bool ScanReceipt::clock_ok()
+bool ScanReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
-  const auto now = steady_now();
-  if (!std::isfinite(now) || now < last_steady_) {
-    invalidate("monotonic_clock_invalid");
-    failed_ = true;
+  senior_motion_msgs::time::ClockObservation observed;
+  try {
+    observed = clock_.observe(ros_ns, steady_ns);
+  } catch (const std::invalid_argument & error) {
+    invalidate(error.what());
     return false;
   }
-  last_steady_ = now;
+  clock_generation_ = observed.generation;
+  if (observed.discontinuity) {
+    invalidate("clock_rollback");
+    stamps_.reset();
+    epoch_ = new_epoch();
+  }
   return !failed_;
+}
+
+std::optional<ReceiptClock> ScanReceipt::begin_receipt()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto ros = get_clock()->now().nanoseconds();
+  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  if (!clock_ok(ros, steady)) return std::nullopt;
+  return ReceiptClock{ros, steady, clock_generation_};
+}
+
+// Caller holds the owner lock. A changed segment invalidates the old callback;
+// its coordinates are never retaken or mapped into the replacement segment.
+bool ScanReceipt::current_receipt(const ReceiptClock & receipt)
+{
+  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+    receipt.generation == clock_generation_;
 }
 
 void ScanReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clock_ok()) return;
+  if (!clock_ok(get_clock()->now().nanoseconds(),
+                senior_motion_msgs::time::monotonic_ns())) return;
   inspect_owner(safety_owner_, 0);
   inspect_owner(filter_owner_, 1);
   if (!active_) return;
@@ -165,19 +189,21 @@ void ScanReceipt::inspect_topology()
   raw_gid_.clear();
   epoch_ = new_epoch();
   sequence_ = 0;
+  stamps_.reset();
   invalid_ = false;
 }
 
-void ScanReceipt::on_scan(const senior_motion_msgs::msg::TimedLaserScan & timed, const rclcpp::MessageInfo & info)
+void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rclcpp::MessageInfo & info)
 {
-  const auto & message = timed.data;
-  const int64_t received_ros = get_clock()->now().nanoseconds();
-  const double received_steady = steady_now();
+  const auto receipt = begin_receipt();
+  if (!receipt) return;
+  const int64_t received_ros = receipt->ros_ns;
+  const uint64_t received_steady_ns = receipt->steady_ns;
   const auto incoming = info.get_rmw_message_info().publisher_gid;
   const auto actual = gid_hex(incoming);
   if (before_verify_) before_verify_(6, incoming);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clock_ok() || retired_gids_.count(actual) != 0) return;
+  if (!current_receipt(*receipt) || retired_gids_.count(actual) != 0) return;
   const auto graph = get_publishers_info_by_topic(input_topic_);
   const bool nonzero = std::any_of(std::begin(incoming.data), std::end(incoming.data),
                                    [](uint8_t value) {return value != 0;});
@@ -187,33 +213,38 @@ void ScanReceipt::on_scan(const senior_motion_msgs::msg::TimedLaserScan & timed,
       return;
     }
     if (!retire(raw_gid_) || !retire(actual)) return;
-    invalidate("raw_gid_mismatch", &message, received_ros, received_steady, actual);
+    invalidate("raw_gid_mismatch", &message, received_ros, received_steady_ns, actual);
     active_ = false;
     raw_gid_.clear();
     epoch_ = new_epoch();
     sequence_ = 0;
+    stamps_.reset();
     invalid_ = false;
     return;
   }
   if (!active_ || raw_gid_ != actual) {
     if (!retire(raw_gid_)) return;
-    invalidate("raw_source_changed", &message, received_ros, received_steady, actual);
+    invalidate("raw_source_changed", &message, received_ros, received_steady_ns, actual);
     active_ = true;
     raw_gid_ = actual;
     epoch_ = new_epoch();
     sequence_ = 0;
+    stamps_.reset();
     invalid_ = false;
   }
-  const auto ordered = source_order_.accept(timed.timing,
-    static_cast<uint64_t>(received_steady * 1e9));
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::rejected) return;
-  if (ordered == senior_motion_msgs::timing::SourceOrder::Result::replaced) {
-    invalidate("producer_restarted"); epoch_ = new_epoch(); sequence_ = 0;
+  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  try {
+    sample = stamps_.accept(message.header.stamp, received_ros, received_steady_ns,
+                            receipt->generation);
+  } catch (const std::invalid_argument & error) {
+    invalidate(error.what(), &message, received_ros, received_steady_ns, actual);
+    return;
   }
-  if (received_ros <= 0 || !stamp_ok(message.header.stamp) ||
+  if (!sample) return;
+  if (received_ros < 0 || !stamp_ok(message.header.stamp) ||
       !text_ok(message.header.frame_id, 128) || !layout_ok(message)) {
     if (!invalid_) {
-      invalidate("raw_scan_invalid", &message, received_ros, received_steady, actual);
+      invalidate("raw_scan_invalid", &message, received_ros, received_steady_ns, actual);
       invalid_ = true;
     }
     return;
@@ -230,11 +261,11 @@ void ScanReceipt::on_scan(const senior_motion_msgs::msg::TimedLaserScan & timed,
   output.ranges.assign(message.ranges.begin(), message.ranges.end());
   output.intensities.assign(message.intensities.begin(), message.intensities.end());
   auto & header = output.capture;
-  header.timing = timed.timing;
+  set_sample(header, *sample);
   header.stamp = message.header.stamp;
   header.frame_id = message.header.frame_id;
   header.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros));
-  header.received_steady = received_steady;
+  header.received_steady_ns = received_steady_ns;
   header.raw_gid = actual;
   header.bridge_gid = gid_hex(publisher_->get_gid());
   header.source_epoch = epoch_;
@@ -244,6 +275,7 @@ void ScanReceipt::on_scan(const senior_motion_msgs::msg::TimedLaserScan & timed,
   header.valid = true;
   invalid_ = false;
   if (!ledger_.observe(output, steady_now())) return;
+  if (!current_receipt(*receipt)) return;
   publisher_->publish(output);
 }
 bool ScanReceipt::qualify_owner(Owner & owner, const rmw_gid_t & incoming,
@@ -344,7 +376,7 @@ void ScanReceipt::on_safety(const senior_motion_msgs::msg::BoundedSafetyScan & m
   const auto same = [](float a, float b) {return std::memcmp(&a, &b, sizeof(float)) == 0;};
   const bool exact = source != nullptr && ledger_.same_ranges(c, message.ranges, now) &&
     message.stamp == c.stamp && message.frame_id == c.frame_id && message.raw_source == c.raw_gid &&
-    message.ingress_steady == c.received_steady &&
+    message.ingress_steady == steady_seconds(c.received_steady_ns) &&
     message.ingress_ros == static_cast<double>(rclcpp::Time(c.received_ros).nanoseconds()) / 1e9 &&
     same(message.angle_min, source->angle_min) &&
     same(message.angle_increment, source->angle_increment) &&

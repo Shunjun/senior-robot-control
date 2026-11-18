@@ -1,2 +1,0 @@
-senior_motion_msgs/SourceTime timing
-sensor_msgs/Imu data

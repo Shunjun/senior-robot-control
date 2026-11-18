@@ -1,7 +1,9 @@
 # Sensor stamp and first bridge receipts, not Python receipt or publication time.
 builtin_interfaces/Time stamp
 builtin_interfaces/Time received_ros
-float64 received_steady
+uint64 received_steady_ns
+uint64 sample_steady_ns
+uint64 clock_generation
 string<=128 frame_id
 # Lowercase hex encoding of the actual rclcpp MessageInfo publisher GID.
 string<=128 raw_gid
@@ -14,6 +16,3 @@ uint64 capture_generation
 uint64 sequence
 bool valid
 string<=64 reason
-
-# Original producer proof; bridge receipt does not replace its clock or sequence.
-senior_motion_msgs/SourceTime timing

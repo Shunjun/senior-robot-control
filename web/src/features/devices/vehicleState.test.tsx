@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { runtime, testPort } from '../../api/vehicleState.testUtils';
 import { VehicleStateView } from './VehicleStateView';
 afterEach(cleanup);
-it('keeps disconnected running task as last known and never replaces missing body with wheels', () => {
+it('keeps disconnected wheel speed and running task as last measurements', () => {
   const port = testPort();
   port.update(runtime({
     sequence: 2, mode: 'task', task: {
@@ -18,7 +18,9 @@ it('keeps disconnected running task as last known and never replaces missing bod
   }), true);
   port.setConnection(false);
   render(<VehicleStateView port={port} />);
-  expect(screen.getByText('—', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('1.44', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('轮速里程计 · 已过期 / 最后测量')).toBeTruthy();
+  expect(screen.getByText('最后已知 · 非实时')).toBeTruthy();
   expect(screen.getByText(/任务可能继续/)).toBeTruthy();
   expect(screen.getByText(/task-1 · 运行中/)).toBeTruthy();
   expect((screen.getByRole('button', { name: '暂停当前任务' }) as HTMLButtonElement).disabled).toBe(true);
@@ -69,4 +71,20 @@ it('shows missing runtime as an online report with unknown safety and speed', ()
   expect(screen.getByText('尚未收到有效运行状态')).toBeTruthy();
   expect(screen.getByText(/急停状态未知/)).toBeTruthy();
   expect(screen.getByText('—', { selector: 'strong' })).toBeTruthy();
+});
+
+it('shows measured wheel speed with its source when the body estimate is absent', () => {
+  const port = testPort();
+  port.update(runtime({ sequence: 2, body_reference: null, wheel_linear_mps: -0.5 }), true);
+  render(<VehicleStateView port={port} />);
+  expect(screen.getByText('-1.80', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('轮速里程计')).toBeTruthy();
+  expect(screen.queryByText(/已过期 \/ 最后测量/)).toBeNull();
+});
+it('shows a measured zero wheel speed as zero instead of missing', () => {
+  const port = testPort();
+  port.update(runtime({ sequence: 2, body_reference: null, wheel_linear_mps: 0 }), true);
+  render(<VehicleStateView port={port} />);
+  expect(screen.getByText('0.00', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('轮速里程计')).toBeTruthy();
 });

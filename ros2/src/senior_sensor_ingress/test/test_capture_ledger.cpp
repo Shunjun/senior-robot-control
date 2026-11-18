@@ -16,14 +16,19 @@ TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)
   first.raw_gid = "0101";
   first.bridge_gid = "0202";
   first.frame_id = "optical";
-  first.received_steady = 10.0;
-  first.timing.capture_end_steady_ns = 10000000000ULL;
+  first.received_steady_ns = 10000000000ULL;
+  first.stamp.sec = 99; first.stamp.nanosec = 800000000;
+  first.received_ros.sec = 100;
+  first.sample_steady_ns = 9800000000ULL;
+  first.clock_generation = 1;
   first.valid = true;
   ASSERT_TRUE(ledger.observe(0, first, 10.0));
   EXPECT_EQ(ledger.match(0, first, 10.5), CaptureLedger::Match::exact);
   auto changed = first;
-  changed.received_steady = 10.1;
+  changed.received_steady_ns = 10100000000ULL;
   EXPECT_EQ(ledger.match(0, changed, 10.5), CaptureLedger::Match::missing);
+  // A queued/retransmitted header keeps the original .2 s sensor age.
+  EXPECT_EQ(ledger.match(0, first, 10.85), CaptureLedger::Match::retired);
   EXPECT_EQ(ledger.match(0, first, 11.001), CaptureLedger::Match::retired);
 }
 
@@ -37,8 +42,9 @@ TEST(CaptureLedger, OldGenerationIsRetiredAndCapacityIsBounded)
   value.raw_gid = "0101";
   value.bridge_gid = "0202";
   value.frame_id = "optical";
-  value.received_steady = 10.0;
-  value.timing.capture_end_steady_ns = 10000000000ULL;
+  value.received_steady_ns = 10000000000ULL;
+  value.sample_steady_ns = 10000000000ULL;
+  value.clock_generation = 1;
   value.valid = true;
   value.sequence = 1;
   ASSERT_TRUE(ledger.observe(0, value, 10.0));

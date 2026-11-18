@@ -109,12 +109,25 @@ def _refinement_loop(
 
 
 class _ProcessFuture(Future[ResultT]):
-    def __init__(self, owner: ProcessWorker[ResultT], version: int) -> None:
+    def __init__(
+        self,
+        owner: ProcessWorker[ResultT],
+        version: int,
+        pending_task: Callable[[], ResultT] | None,
+    ) -> None:
         super().__init__()
         self.owner, self.version = owner, version
+        self._pending_task = pending_task
 
     def done(self) -> bool:
         if not super().done():
+            if self._pending_task is not None:
+                if not self.owner.process.is_alive():
+                    self.set_exception(RuntimeError("geometry_process_exited"))
+                    return True
+                if not self.owner.requests.put(self._pending_task):
+                    return False
+                self._pending_task = None
             row = self.owner.responses.take(self.version)
             if row is not None:
                 self.owner.response_version, reply = row
@@ -153,9 +166,11 @@ class ProcessWorker(Generic[ResultT]):
             raise RuntimeError("geometry_process_unavailable")
         if self.flight is not None and not self.flight.done():
             raise RuntimeError("geometry_process_busy")
-        if not self.requests.put(task):
-            raise RuntimeError("geometry_mailbox_busy")
-        self.flight = _ProcessFuture(self, self.response_version)
+        # A reader's try-lock contention is temporary. Retain this one flight
+        # and retry on polling; schedulers keep their latest pending snapshot
+        # and original submission budget/deadlines without a blocking wait.
+        pending_task = None if self.requests.put(task) else task
+        self.flight = _ProcessFuture(self, self.response_version, pending_task)
         return self.flight
 
     def close(self) -> None:

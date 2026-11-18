@@ -1,18 +1,16 @@
 """Identity and first-receipt fences for a per-message-verified raw bridge."""
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from senior_control.sensors.policy import sensor_current
-from senior_control.sensors.time_proof import SourceTime, source_time
+from senior_control.sensors.sample_time import SampleTime
 
 
 @dataclass(frozen=True)
 class RawCaptureHeader:
-    stamp_ns: int
-    received_ros_ns: int
-    received_steady: float
+    time: SampleTime
     frame_id: str
     raw_gid: str
     bridge_gid: str
@@ -22,19 +20,30 @@ class RawCaptureHeader:
     sequence: int
     valid: bool
     reason: str
-    timing: SourceTime = field(kw_only=True)
+
+    @property
+    def stamp_ns(self) -> int:
+        return self.time.stamp_ns
+
+    @property
+    def received_ros_ns(self) -> int:
+        return self.time.received_ros_ns
+
+    @property
+    def received_steady(self) -> float:
+        return self.time.received_steady_ns / 1e9
 
     @property
     def measurement_steady(self) -> float:
-        return self.timing.end_steady
+        return self.time.sample_steady_ns / 1e9
 
     @property
     def start_steady(self) -> float:
-        return self.timing.start_steady
+        return self.measurement_steady
 
     @property
     def end_steady(self) -> float:
-        return self.timing.end_steady
+        return self.measurement_steady
 
 
 def capture_from_message(message: Any) -> RawCaptureHeader:
@@ -47,9 +56,13 @@ def capture_from_message(message: Any) -> RawCaptureHeader:
         return seconds * 1_000_000_000 + nanos
 
     return RawCaptureHeader(
-        stamp_ns=nanoseconds(message.stamp),
-        received_ros_ns=nanoseconds(message.received_ros),
-        received_steady=float(message.received_steady),
+        time=SampleTime(
+            nanoseconds(message.stamp),
+            nanoseconds(message.received_ros),
+            int(message.received_steady_ns),
+            int(message.sample_steady_ns),
+            int(message.clock_generation),
+        ),
         frame_id=str(message.frame_id),
         raw_gid=str(message.raw_gid),
         bridge_gid=str(message.bridge_gid),
@@ -59,7 +72,6 @@ def capture_from_message(message: Any) -> RawCaptureHeader:
         sequence=int(message.sequence),
         valid=bool(message.valid),
         reason=str(message.reason),
-        timing=source_time(message.timing),
     )
 
 
@@ -211,11 +223,6 @@ def compatible_captures(*headers: RawCaptureHeader) -> bool:
         and all(
             header.valid
             and header.stamp_ns == first.stamp_ns
-            and header.timing.measurement.same_axis(first.timing.measurement)
-            and (
-                first.timing.time_basis != "sim_step"
-                or header.timing.measurement.seconds == first.timing.measurement.seconds
-            )
             and header.bridge_boot_id == first.bridge_boot_id
             and header.capture_generation == first.capture_generation
             for header in headers

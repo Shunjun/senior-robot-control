@@ -17,11 +17,18 @@ def test_native_imu_has_no_fabricated_interval_or_statistical_model():
             "angular_velocity_covariance": [0] * 9,
         },
     }
-    p = adapter.convert(row, 5)
+    row["time"] = dict(
+        stamp_ns=1_000_000_000,
+        received_ros_ns=1_000_000_000,
+        received_steady_ns=5_000_000_000,
+        sample_steady_ns=5_000_000_000,
+        clock_generation=1,
+    )
+    p = adapter.convert(row)
     assert p.source is Source.IMU
     assert p.start_ros == p.end_ros == 1
     assert p.received_steady == 5 and p.model_id is None and p.covariance.values == (0.0,)
-    assert adapter.convert({"topic": "/ground_truth/odom"}, 5) is None
+    assert adapter.convert({"topic": "/ground_truth/odom"}) is None
 
 
 def test_truth_same_window_turning_and_no_gap_bridge():
@@ -93,6 +100,13 @@ def test_native_wheel_retains_relevant_cross_covariance_without_certifying_it():
             "twist": {"twist": {"linear": {"x": 0.3}, "angular": {"z": 0.2}}, "covariance": c},
         },
     }
-    p = NativeAdapter("recording").convert(row, 5)
+    row["time"] = dict(
+        stamp_ns=1_000_000_000,
+        received_ros_ns=1_000_000_000,
+        received_steady_ns=5_000_000_000,
+        sample_steady_ns=5_000_000_000,
+        clock_generation=1,
+    )
+    p = NativeAdapter("recording").convert(row)
     assert p.covariance.values == (0.02, 0.001, 0.001, 0.03)
     assert p.model_id is None

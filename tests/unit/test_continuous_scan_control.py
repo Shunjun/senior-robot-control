@@ -5,11 +5,11 @@ from concurrent.futures import Future
 from types import SimpleNamespace as NS
 
 import pytest
+from control_process_test_support import generic_motion_profile
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.motion_core_perception import ScanGeometry
 from senior_robot.raw_safety_observation import RawSafetyObservation
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
-from source_time_test_support import capture_time, synthetic_domain, wire_time  # noqa: F401
+from sensor_time_test_support import capture_fields, sample_time
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D, Velocity
@@ -65,7 +65,7 @@ class Diagnostics:
 
 
 def make(clock, delay):
-    profile = SimulationMotionProfile()
+    profile = generic_motion_profile()
     core = MotionCoreOutput.__new__(MotionCoreOutput)
     core.profile = profile
     core.node = NS(
@@ -82,7 +82,12 @@ def make(clock, delay):
         latest=NS(
             generation=0,
             measurement_host_steady=clock[0],
-            measurement=capture_time(clock[0], tick=clock[0]).measurement,
+            stamp_ns=sample_time(
+                stamp_ns=round((clock[0]) * 1e9),
+                received_ros_ns=round((clock[0]) * 1e9),
+                received_steady_ns=round((clock[0]) * 1e9),
+                clock_generation=1,
+            ).stamp_ns,
         ),
         pose_estimator=Pose(),
     )
@@ -108,7 +113,24 @@ def scan(t, seq, obstacle=False):
         ranges[360] = 0.38
     m = NS(
         source_epoch="scan",
-        raw_capture=NS(timing=wire_time(t, tick=t, sequence=seq, epoch="scan")),
+        raw_capture=NS(
+            frame_id="laser_link",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="scan",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=seq,
+            valid=True,
+            reason="",
+            **capture_fields(
+                time=sample_time(
+                    stamp_ns=round((t) * 1e9),
+                    received_ros_ns=round((t) * 1e9),
+                    received_steady_ns=round((t) * 1e9),
+                )
+            ),
+        ),
         sequence=seq,
         ranges=ranges,
         angle_min=-math.pi,

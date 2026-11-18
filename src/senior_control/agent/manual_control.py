@@ -102,6 +102,13 @@ class ManualIngress:
             and self.manager.release(self.context, authority_id, now_steady=now)
         )
 
+    def stop(self, authority_id: str, gesture: int, now: float) -> bool:
+        return bool(
+            self.manager is not None
+            and self.context is not None
+            and self.manager.stop(self.context, authority_id, gesture, now_steady=now)
+        )
+
     def retire(self, now: float) -> None:
         if self.manager is not None and self.context is not None:
             self.manager.retire_context(self.context, now_steady=now)

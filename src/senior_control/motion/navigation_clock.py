@@ -1,4 +1,4 @@
-"""Same-host Linux CLOCK_MONOTONIC domain for navigation production timestamps."""
+"""Linux boot identity for persisted local learning-run ownership."""
 
 from pathlib import Path
 from uuid import UUID
@@ -10,4 +10,6 @@ def monotonic_domain() -> str:
         value = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         return str(UUID(value))
     except (OSError, ValueError) as exc:
-        raise RuntimeError("navigation requires a same-host Linux monotonic boot domain") from exc
+        raise RuntimeError(
+            "learning ownership requires a same-host Linux monotonic boot domain"
+        ) from exc

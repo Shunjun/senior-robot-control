@@ -5,8 +5,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from control_process_test_support import generic_motion_profile
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
 from test_unified_motion_runtime import point
 
 from senior_control.models import Velocity
@@ -23,7 +23,7 @@ def sample(vx=0.0, wz=0.0, *, epoch="wheel", axes=(True, True)):
 def test_stationary_without_laser_gps_vision_or_independent_body():
     wheel, imu = sample(0.015, 0.02), sample(wz=0.015, epoch="imu", axes=(False, True))
     assert stationary(wheel, imu, 10.1, linear_limit=0.02, yaw_limit=0.03)
-    profile = SimulationMotionProfile()
+    profile = generic_motion_profile()
     sensors = MotionSensorRuntime(profile, RuntimeDiagnostics(lambda *_: None))
     sensors.ingest(point(Source.WHEEL, 10, 10, (0.015, 0.02)), 10, 10, 10)
     sensors.ingest(point(Source.IMU, 10, 10, (0.015,)), 10, 10, 10)

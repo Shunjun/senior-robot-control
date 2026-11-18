@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 from senior_control.motion.observations import (
     AdmissionConfig,
@@ -18,7 +18,6 @@ from senior_control.motion.observations import (
     SourceStatus,
 )
 from senior_control.motion.source_admission import AdmissionOwner
-from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def config():
@@ -45,21 +44,22 @@ def sample(source=Source.LASER, seq=1, end=10.0, received=20.0, epoch="a", **cha
     observation = Observation(
         source,
         Frame.ENU if source is Source.GPS else Frame.BODY,
-        end - 0.1,
-        end,
-        received,
+        sample_time(
+            stamp_ns=round((end - 0.1) * 1e9),
+            received_ros_ns=round((end - 0.1) * 1e9),
+            received_steady_ns=round(((received) - ((end) - (end - 0.1))) * 1e9),
+        ),
+        sample_time(
+            stamp_ns=round((end) * 1e9),
+            received_ros_ns=round((end) * 1e9),
+            received_steady_ns=round((received) * 1e9),
+        ),
         epoch,
         seq,
         0.9,
         SourceStatus.VALID,
         values,
         Covariance((0.01,) * len(values), CovarianceKind.DIAGONAL_ONLY, "synthetic variance", None),
-        start_steady=(received) - ((end) - (end - 0.1)),
-        end_steady=received,
-        measurement_interval=MeasurementInterval(
-            capture_time((received) - ((end) - (end - 0.1)), tick=end - 0.1).measurement,
-            capture_time(received, tick=end).measurement,
-        ),
     )
     return replace(observation, **changes)
 
@@ -112,12 +112,13 @@ def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_indepen
     heading = Heading(
         math.pi / 2,
         0.02,
-        10.0,
-        20.0,
+        sample_time(
+            stamp_ns=round((10.0) * 1e9),
+            received_ros_ns=round((10.0) * 1e9),
+            received_steady_ns=round((20.0) * 1e9),
+        ),
         "heading-a",
         "synthetic heading",
-        measurement_steady=20.0,
-        measurement=capture_time(20.0, tick=10.0).measurement,
     )
     assert ingest(owner, sample(Source.GPS, seq=2), heading).accepted
     assert ingest(owner, sample(Source.IMU)).accepted
@@ -126,10 +127,12 @@ def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_indepen
         sample(Source.GPS, seq=3, end=10.1, received=20.1),
         replace(
             heading,
-            stamp_ros=10.1,
-            received_steady=20.1,
-            measurement_steady=20.1,
-            measurement=capture_time(20.1, tick=10.1).measurement,
+            time=sample_time(
+                stamp_ns=round((10.1) * 1e9),
+                received_ros_ns=round((10.1) * 1e9),
+                received_steady_ns=round((20.1) * 1e9),
+                clock_generation=1,
+            ),
         ),
     ).accepted
     assert ingest(owner, sample(Source.IMU, seq=2, end=10.1, received=20.1)).accepted
@@ -171,7 +174,7 @@ def test_expiry_future_replay_epoch_restart_and_ros_rollback_do_not_refresh_heal
     assert not views(owner, now_ros=10.6, now_steady=20.6)
     assert ingest(owner, sample(seq=1, end=10.7, received=20.7, epoch="b")).accepted
     assert not ingest(owner, sample(seq=99, end=10.8, received=20.8)).accepted
-    assert views(owner, now_ros=1.0, now_steady=21.0)
+    assert not views(owner, now_ros=1.0, now_steady=21.0)
     assert not owner.ingest(
         sample(seq=2, end=1.0, received=20.9, epoch="b"), now_ros=1.0, now_steady=21.0
     ).accepted
@@ -232,21 +235,24 @@ def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference(
     heading = Heading(
         0.0,
         0.01,
-        10.2,
-        20.2,
+        sample_time(
+            stamp_ns=round((10.2) * 1e9),
+            received_ros_ns=round((10.2) * 1e9),
+            received_steady_ns=round((20.2) * 1e9),
+        ),
         "h1",
         "synthetic heading",
-        measurement_steady=20.2,
-        measurement=capture_time(20.2, tick=10.2).measurement,
     )
     assert ingest(owner, sample(Source.GPS, end=10.2, received=20.2), heading).accepted
     h2 = replace(
         heading,
-        stamp_ros=10.3,
-        received_steady=20.3,
         epoch="h2",
-        measurement_steady=20.3,
-        measurement=capture_time(20.3, tick=10.3).measurement,
+        time=sample_time(
+            stamp_ns=round((10.3) * 1e9),
+            received_ros_ns=round((10.3) * 1e9),
+            received_steady_ns=round((20.3) * 1e9),
+            clock_generation=1,
+        ),
     )
     assert ingest(owner, sample(Source.GPS, seq=2, end=10.3, received=20.3), h2).accepted
     assert not ingest(
@@ -254,10 +260,12 @@ def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference(
         sample(Source.GPS, seq=3, end=10.31, received=20.31),
         replace(
             heading,
-            stamp_ros=10.31,
-            received_steady=20.31,
-            measurement_steady=20.31,
-            measurement=capture_time(20.31, tick=10.31).measurement,
+            time=sample_time(
+                stamp_ns=round((10.31) * 1e9),
+                received_ros_ns=round((10.31) * 1e9),
+                received_steady_ns=round((20.31) * 1e9),
+                clock_generation=1,
+            ),
         ),
     ).accepted
 
@@ -267,12 +275,13 @@ def test_heading_out_of_order_and_high_uncertainty_are_rejected():
     heading = Heading(
         0.0,
         0.01,
-        10.0,
-        20.0,
+        sample_time(
+            stamp_ns=round((10.0) * 1e9),
+            received_ros_ns=round((10.0) * 1e9),
+            received_steady_ns=round((20.0) * 1e9),
+        ),
         "h1",
         "synthetic heading",
-        measurement_steady=20.0,
-        measurement=capture_time(20.0, tick=10.0).measurement,
     )
     assert ingest(owner, sample(Source.GPS), heading).accepted
     assert not ingest(
@@ -280,10 +289,12 @@ def test_heading_out_of_order_and_high_uncertainty_are_rejected():
         sample(Source.GPS, seq=2, end=10.01, received=20.01),
         replace(
             heading,
-            stamp_ros=9.99,
-            received_steady=19.99,
-            measurement_steady=19.99,
-            measurement=capture_time(19.99, tick=9.99).measurement,
+            time=sample_time(
+                stamp_ns=round((9.99) * 1e9),
+                received_ros_ns=round((9.99) * 1e9),
+                received_steady_ns=round((19.99) * 1e9),
+                clock_generation=1,
+            ),
         ),
     ).accepted
     assert not ingest(
@@ -291,11 +302,13 @@ def test_heading_out_of_order_and_high_uncertainty_are_rejected():
         sample(Source.GPS, seq=3, end=10.02, received=20.02),
         replace(
             heading,
-            stamp_ros=10.02,
-            received_steady=20.02,
             variance_rad2=10.0,
-            measurement_steady=20.02,
-            measurement=capture_time(20.02, tick=10.02).measurement,
+            time=sample_time(
+                stamp_ns=round((10.02) * 1e9),
+                received_ros_ns=round((10.02) * 1e9),
+                received_steady_ns=round((20.02) * 1e9),
+                clock_generation=1,
+            ),
         ),
     ).accepted
 
@@ -323,12 +336,13 @@ def test_gps_drift_does_not_revoke_healthy_wheel_and_imu():
     heading = Heading(
         0.0,
         0.01,
-        10.0,
-        20.0,
+        sample_time(
+            stamp_ns=round((10.0) * 1e9),
+            received_ros_ns=round((10.0) * 1e9),
+            received_steady_ns=round((20.0) * 1e9),
+        ),
         "h1",
         "synthetic heading",
-        measurement_steady=20.0,
-        measurement=capture_time(20.0, tick=10.0).measurement,
     )
     ingest(owner, sample(Source.GPS), heading)
     assert ready(owner, Source.GPS, now_ros=10.0, now_steady=20.0)
@@ -338,10 +352,12 @@ def test_gps_drift_does_not_revoke_healthy_wheel_and_imu():
         drift,
         replace(
             heading,
-            stamp_ros=10.1,
-            received_steady=20.1,
-            measurement_steady=20.1,
-            measurement=capture_time(20.1, tick=10.1).measurement,
+            time=sample_time(
+                stamp_ns=round((10.1) * 1e9),
+                received_ros_ns=round((10.1) * 1e9),
+                received_steady_ns=round((20.1) * 1e9),
+                clock_generation=1,
+            ),
         ),
     ).accepted
     current = views(owner, now_ros=10.1, now_steady=20.1)
@@ -386,12 +402,13 @@ def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
     heading = Heading(
         0.0,
         0.01,
-        10.0,
-        20.0,
+        sample_time(
+            stamp_ns=round((10.0) * 1e9),
+            received_ros_ns=round((10.0) * 1e9),
+            received_steady_ns=round((20.0) * 1e9),
+        ),
         "old-heading",
         "synthetic heading",
-        measurement_steady=20.0,
-        measurement=capture_time(20.0, tick=10.0).measurement,
     )
     assert ingest(owner, sample(Source.GPS), heading).accepted
     assert not views(owner, now_ros=1.0, now_steady=2.0)
@@ -399,12 +416,13 @@ def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
     new_heading = Heading(
         0.0,
         0.01,
-        1.0,
-        2.0,
+        sample_time(
+            stamp_ns=round((1.0) * 1e9),
+            received_ros_ns=round((1.0) * 1e9),
+            received_steady_ns=round((2.0) * 1e9),
+        ),
         "new-heading",
         "synthetic heading",
-        measurement_steady=2.0,
-        measurement=capture_time(2.0, tick=1.0).measurement,
     )
     assert owner.ingest(fresh, now_ros=1.0, now_steady=2.0, heading=new_heading).accepted
 

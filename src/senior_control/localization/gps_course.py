@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from senior_control.motion.estimator import Origin
 from senior_control.sensors.policy import default_policy
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
+from senior_control.sensors.sample_time import StampInterval
 
 
 def wrap(value: float) -> float:
@@ -41,9 +41,9 @@ class GPSCourseObserver:
         self.wheel_distance = 0.0
         self.turn = 0.0
         self.heading: CourseHeading | None = None
-        self.motion: deque[tuple[MeasurementTime, float, float, int, float]] = deque(maxlen=1024)
+        self.motion: deque[tuple[int, float, float, int, float]] = deque(maxlen=1024)
         self.motion_total = (0.0, 0.0)
-        self.anchor_motion: tuple[MeasurementTime, float, float, int, float] | None = None
+        self.anchor_motion: tuple[int, float, float, int, float] | None = None
         self.motion_direction = 0
 
     def record_motion(
@@ -53,8 +53,8 @@ class GPSCourseObserver:
         wheel_vx: float | None,
         imu_wz: float | None,
         generation: int,
-        measurement: MeasurementTime | None = None,
-        interval: MeasurementInterval | None = None,
+        stamp_ns: int | None,
+        interval: StampInterval | None = None,
     ) -> None:
         """Continuous estimator ticks qualify the whole GPS course window."""
         if wheel_vx is None or imu_wz is None:
@@ -65,18 +65,15 @@ class GPSCourseObserver:
         if not direction or self.motion_direction not in (0, direction):
             self.reset()
         self.motion_direction = direction
-        coordinate = measurement or MeasurementTime("host", None, measurement_steady)
+        if stamp_ns is None:
+            self.motion.clear()
+            self.reset()
+            return
+        coordinate = stamp_ns
         if self.motion:
             previous = self.motion[-1]
-            compatible = coordinate.same_axis(previous[0])
-            dt = coordinate.elapsed(previous[0]) if compatible else -1
-            covered = (
-                not coordinate.clock_domain.startswith("sim_step:")
-                or interval is not None
-                and interval.end == coordinate
-                and interval.start.same_axis(previous[0])
-                and interval.start.seconds <= previous[0].seconds <= interval.end.seconds
-            )
+            dt = (coordinate - previous[0]) / 1e9
+            covered = interval is not None and interval.start_ns <= previous[0] <= interval.end_ns
             if (
                 generation != previous[3]
                 or dt < 0
@@ -129,11 +126,7 @@ class GPSCourseObserver:
             return None
         # Use original capture time, not callback time. GPS can be slower than
         # the estimator; absence of a continuous IMU/wheel window stays unknown.
-        records = [
-            m
-            for m in self.motion
-            if m[0].same_axis(r.coordinate) and m[0].seconds <= r.coordinate.seconds
-        ]
+        records = [m for m in self.motion if m[0] <= r.time.stamp_ns]
         current = records[-1] if records else None
         hard_s = default_policy().hard_age_ms / 1000
         if current is None or r.measurement_steady - current[4] >= hard_s:
@@ -147,16 +140,12 @@ class GPSCourseObserver:
             self.anchor_motion is None
             or current[3] != self.anchor_motion[3]
             or not self.motion
-            or self.motion[0][0].seconds > self.anchor_motion[0].seconds
+            or self.motion[0][0] > self.anchor_motion[0]
         ):
             self.reset()
             return None
         assert self.previous is not None
-        dt = (
-            r.coordinate.elapsed(self.previous.origin.coordinate)
-            if r.coordinate.same_axis(self.previous.origin.coordinate)
-            else -1
-        )
+        dt = (r.time.stamp_ns - self.previous.origin.time.stamp_ns) / 1e9
         if dt <= 0 or wheel_vx * self.wheel_distance < 0:
             self.reset()
             return None

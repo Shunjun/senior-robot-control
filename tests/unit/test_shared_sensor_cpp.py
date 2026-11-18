@@ -15,9 +15,26 @@ def test_cpp_age_queue_boundaries_and_transient_crossing(tmp_path: Path) -> None
     source = tmp_path / "policy.cpp"
     source.write_text(r"""
 #include "senior_motion_msgs/sensor_timing.hpp"
+#include "senior_motion_msgs/sample_time.hpp"
 #include <cassert>
 #include <limits>
 int main() {
+  using namespace senior_motion_msgs::time;
+  const auto original = map_sample(99800000000LL, 100000000000LL, 20000000000ULL, 1);
+  assert(original.sample_steady_ns == 19800000000ULL);
+  assert(20150000000ULL - original.sample_steady_ns == 350000000ULL);
+  const auto next = map_sample(99800000001LL, 100000000000LL, 20000000000ULL, 1);
+  assert(interval_ns(original, next).end_ns - interval_ns(original, next).start_ns == 1);
+  assert(map_sample(0, 0, 0, 1).stamp_ns == 0);
+  ClockTracker clock;
+  assert(clock.observe(100, 200).generation == 1);
+  const auto rollback = clock.observe(99, 201);
+  assert(rollback.discontinuity && rollback.generation == 2);
+  bool changed = false;
+  try { interval_ns(original, map_sample(99800000001LL,100000000000LL,20000000000ULL,2)); }
+  catch (const std::invalid_argument &) { changed = true; }
+  assert(changed);
+
   sensor_timing::Policy p(300.,1000.,5.);
   assert(p.age_ns(4800000000ULL,5.,5.7)==900000000);
   bool bad=false; try {sensor_timing::Policy q(0.,std::numeric_limits<double>::quiet_NaN(),5.);}

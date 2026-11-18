@@ -19,8 +19,9 @@ from typing import Any
 
 from senior_control.runtime.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
 from senior_control.sensors.policy import default_policy
+from senior_control.sensors.sample_time import SampleTime
 
-_HEADER = struct.Struct("!4sBBQQQqq24sI")
+_HEADER = struct.Struct("!4sBBQQQqq24sBqqQQQI")
 _MAX_PAYLOAD = 20 * 1024 * 1024
 _MAX_TRANSPORT_AGE = default_policy().hard_age_s
 _MAX_PENDING_SAMPLES = 64
@@ -28,9 +29,18 @@ _MAX_PENDING_BYTES = 32 * 1024 * 1024
 
 
 def received_steady(info: Any) -> float:
-    # //Compatible: ordinary rclpy callbacks retain their local receipt behavior.
-    value = info.get("native_received_steady") if isinstance(info, dict) else None
-    return float(value) if value is not None else time.monotonic()
+    """Native callback transport time; never a Python delivery-time fallback."""
+    if not isinstance(info, dict) or "native_received_steady" not in info:
+        raise ValueError("missing native callback receipt")
+    return float(info["native_received_steady"])
+
+
+def received_sample(info: dict[str, Any]) -> SampleTime:
+    """Return the immutable original mapping decoded from SDR2 metadata."""
+    value = info.get("sample_time")
+    if not isinstance(value, SampleTime):
+        raise ValueError("missing native sample time")
+    return value
 
 
 @dataclass
@@ -125,6 +135,8 @@ class NativeReceiptGroup:
             message = entry.message_type
             kind = f"{message.__module__.split('.')[0]}/msg/{message.__name__}"
             arguments.extend([kind, entry.topic, entry.writer, entry.namespace, entry.qos])
+        use_sim_time = bool(self.node.get_parameter("use_sim_time").value)
+        arguments.extend(["--ros-args", "-p", f"use_sim_time:={str(use_sim_time).lower()}"])
         self._started_at = time.monotonic()
         try:
             self._process = subprocess.Popen(arguments, pass_fds=(child.fileno(),), close_fds=True)
@@ -183,17 +195,33 @@ class NativeReceiptGroup:
                     source_ns,
                     received_ns,
                     gid,
+                    time_mode,
+                    original_stamp_ns,
+                    received_ros_ns,
+                    original_received_steady_ns,
+                    sample_steady_ns,
+                    clock_generation,
                     size,
                 ) = _HEADER.unpack(self._read(_HEADER.size))
                 if (
-                    magic != b"SDR1"
+                    magic != b"SDR2"
                     or kind not in (0, 1, 2)
+                    or time_mode not in (0, 1, 2)
                     or key >= len(self.inputs)
                     or size > _MAX_PAYLOAD
                     or (kind != 1 and size)
                     or generation < 1
                 ):
                     raise ValueError("invalid native receipt frame")
+                sample_time = None
+                if time_mode:
+                    sample_time = SampleTime(
+                        original_stamp_ns,
+                        received_ros_ns,
+                        original_received_steady_ns,
+                        sample_steady_ns,
+                        clock_generation,
+                    )
                 stamp = stamp_ns / 1e9
                 age = time.monotonic() - stamp
                 if age < 0:
@@ -242,6 +270,7 @@ class NativeReceiptGroup:
                                 payload,
                                 {
                                     "publisher_gid": gid,
+                                    "sample_time": sample_time,
                                     "native_receipt_authenticated": True,
                                     "native_writer_name": entry.writer,
                                     "native_writer_namespace": entry.namespace,

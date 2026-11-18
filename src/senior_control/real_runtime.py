@@ -194,7 +194,7 @@ def load_real_parameters(
         for key in fields:
             if key not in params or params[key] is None:
                 errors.append(f"{node}.{key} missing")
-        if params.get("motion_core_profile") or params.get("hardware_motion_profile"):
+        if params.get("hardware_motion_profile"):
             errors.append(
                 f"{node}: select the motion model only through config.json.motion_profile"
             )
@@ -202,13 +202,8 @@ def load_real_parameters(
     # silently claim required depth is included in the T4 sweep.
     if result["safety_gate"].get("depth_policy") != "laser_only":
         errors.append("safety_gate.depth_policy: shared core currently supports laser_only")
-    if (
-        result["safety_gate"].get("output_topic", "/control/actuator_target")
-        != "/control/actuator_target"
-    ):
-        errors.append(
-            "safety_gate.output_topic must stay /control/actuator_target (sole actuator owner)"
-        )
+    if result["safety_gate"].get("output_topic", "/cmd_vel") != "/cmd_vel":
+        errors.append("safety_gate.output_topic must stay /cmd_vel (sole actuator owner)")
     for node in ("command_node", "safety_gate"):
         p = result[node]
         for key, expected in (("final_command_topic", "/safety/final_command"),):

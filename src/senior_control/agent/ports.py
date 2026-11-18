@@ -373,7 +373,6 @@ class PoseReply(BaseModel):
     anchor_yaw: float
     # //Compatible: legacy pose IPC remains readable but cannot authorize Home.
     map_generation: str | None = None
-    simulation: bool = False
 
 
 class IpcHomePort:
@@ -396,8 +395,7 @@ class IpcHomePort:
                 ErrorCode.UNAVAILABLE, "qualified ROS localization unavailable"
             ) from exc
         if (
-            not pose.simulation
-            or not 0 <= time.monotonic() - pose.sampled_at <= 0.5
+            not 0 <= time.monotonic() - pose.sampled_at <= 0.5
             or not state.localized
             or state.map_ref != map_ref
             or not pose.map_generation

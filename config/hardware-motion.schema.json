@@ -243,11 +243,6 @@
       "title": "Operating Conditions",
       "type": "string"
     },
-    "simulation_only": {
-      "const": false,
-      "title": "Simulation Only",
-      "type": "boolean"
-    },
     "diagnostics": {
       "$ref": "#/$defs/DiagnosticsSettings"
     },
@@ -520,7 +515,6 @@
   "required": [
     "schema_version",
     "profile_id",
-    "simulation_only",
     "accel",
     "decel",
     "jerk",

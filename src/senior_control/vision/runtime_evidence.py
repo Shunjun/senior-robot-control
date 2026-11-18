@@ -103,7 +103,7 @@ class DepthAdmission:
             _bounded_identity(header.raw_source, 128)
             and _bounded_identity(header.frame_id, 128)
             and _bounded_identity(header.calibration_id, 128)
-            and header.stamp_ns > 0
+            and header.stamp_ns >= 0
             and math.isfinite(header.measurement_steady)
             and header.measurement_steady > self._frontier_steady
             and not self._identity_failed

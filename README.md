@@ -95,3 +95,6 @@
 运动路径已收敛：标准实车与仿真均使用共享 MotionCoreOutput；旧网页挑战/校时、旧租约速度仲裁、MotionEvidence 安全门与进展恢复入口已退休。上文若引用已删除测试文件，仅保留为历史验证记录，不能作为当前执行命令。当前清理映射与精确回归见 [路径收敛记录](docs/testing/2026-11-15-motion-path-convergence.md)。完整 Linux 同版重建与运行验收仍 Draft。
 
 软件急停由最终输出侧 `MotionStateMachine` 单独拥有，仅在本次运行内锁存；完整启动不恢复急停文件。网页复位须车端确认并保持旧指令不恢复。实体急停由车辆独立控制，本项目不订阅其状态或要求网页联动复位。详见[硬件与急停职责](docs/operations/hardware.md)。
+
+
+标准 ROS 传感器和 `/cmd_vel` 接口的部署要求见[实车部署](docs/operations/vehicle-deploy.md)，1 倍仿真使用[标准环境入口](docs/operations/simulation.md)。旧时间协议 overlay 已退役，无需修改厂家、Nav2 或 Gazebo 组件。

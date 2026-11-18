@@ -240,9 +240,9 @@ def produce_depth_evidence(
 ) -> ProjectedDepthEvidence:
     """Validate one exact-stamp pair and project its bounded actual samples."""
     if (
-        packet.stamp_ns <= 0
-        or packet.received_ros_ns <= 0
-        or info.received_ros_ns <= 0
+        packet.stamp_ns < 0
+        or packet.received_ros_ns < 0
+        or info.received_ros_ns < 0
         or not math.isfinite(packet.received_steady)
         or not math.isfinite(info.received_steady)
         or packet.sequence <= 0

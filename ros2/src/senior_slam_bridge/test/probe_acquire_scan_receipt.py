@@ -110,7 +110,7 @@ def probe(executable):
                 assert header.bridge_gid == bridge_gid and header.raw_gid == raw_gid
                 assert header.bridge_boot_id and header.source_epoch
                 assert header.capture_generation > 0 and header.sequence > 0
-                assert header.received_steady > 0
+                assert header.received_steady_ns > 0
                 sample_ns = header.stamp.sec * 1_000_000_000 + header.stamp.nanosec
                 receipt_ns = header.received_ros.sec * 1_000_000_000 + header.received_ros.nanosec
                 assert ready_ros < sample_ns <= receipt_ns

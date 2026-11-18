@@ -13,7 +13,7 @@ from uuid import uuid4
 from senior_control.models import Pose2D
 from senior_control.sensors.consensus import Vote, combine
 from senior_control.sensors.policy import Age, SensorTiming, default_policy
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
+from senior_control.sensors.sample_time import ClockTracker, SampleTime, StampInterval
 
 
 @dataclass(frozen=True)
@@ -21,21 +21,32 @@ class Origin:
     family: str
     epoch: str
     sequence: int
-    stamp_ros: float
-    received_ros: float
-    received_steady: float
-    measurement_steady: float = field(kw_only=True)
-    measurement: MeasurementTime | None = field(default=None, kw_only=True)
+    time: SampleTime
 
     @property
-    def coordinate(self) -> MeasurementTime:
-        # An explicit host coordinate is sufficient for pure host-only observations.
-        return self.measurement or MeasurementTime("host", None, self.measurement_steady)
+    def stamp_ros(self) -> float:
+        return self.time.stamp_ns / 1e9
+
+    @property
+    def measurement_steady(self) -> float:
+        return self.time.sample_steady_ns / 1e9
+
+    @property
+    def received_steady(self) -> float:
+        return self.time.received_steady_ns / 1e9
+
+    @property
+    def received_ros(self) -> float:
+        return self.time.received_ros_ns / 1e9
+
+    @property
+    def coordinate(self) -> int:
+        return self.time.stamp_ns
 
 
-def origin_key(roots: tuple[Origin, ...]) -> tuple[tuple[str, str, int, float], ...]:
+def origin_key(roots: tuple[Origin, ...]) -> tuple[tuple[str, str, int, int], ...]:
     """Acquisition identity, independent of processing/delivery sequence."""
-    return tuple((r.family, r.epoch, r.sequence, r.measurement_steady) for r in roots)
+    return tuple((r.family, r.epoch, r.sequence, r.time.stamp_ns) for r in roots)
 
 
 def validate_origins(roots: tuple[Origin, ...]) -> None:
@@ -52,16 +63,7 @@ def validate_origins(roots: tuple[Origin, ...]) -> None:
             or len(r.epoch) > 4096
             or type(r.sequence) is not int
             or r.sequence < 1
-            or not all(
-                math.isfinite(v)
-                for v in (r.stamp_ros, r.received_ros, r.received_steady, r.measurement_steady)
-            )
-            or not 0 <= r.stamp_ros <= 9_223_372_036
-            or not 0 <= r.received_ros <= 9_223_372_036
-            or r.measurement is not None
-            and not isinstance(r.measurement, MeasurementTime)
-            or r.measurement_steady < 0
-            or round(r.measurement_steady * 1e9) > round(r.received_steady * 1e9)
+            or not isinstance(r.time, SampleTime)
         ):
             raise ValueError("invalid original motion metadata")
 
@@ -73,8 +75,8 @@ class MotionObservation:
     measured_ros: float
     roots: tuple[Origin, ...]
     measured_steady: float = field(kw_only=True)
-    measurement: MeasurementTime | None = field(default=None, kw_only=True)
-    measurement_interval: MeasurementInterval | None = field(default=None, kw_only=True)
+    stamp_ns: int = field(kw_only=True)
+    measurement_interval: StampInterval | None = field(default=None, kw_only=True)
     measurement_delta: Pose2D | None = field(default=None, kw_only=True)
     quality: float | None = None
     error: tuple[float | None, float | None, float | None] = (None, None, None)
@@ -104,17 +106,17 @@ class MotionObservation:
         ):
             raise ValueError("invalid motion observation")
         validate_origins(self.roots)
-        if self.measurement is not None and not isinstance(self.measurement, MeasurementTime):
-            raise ValueError("invalid physical observation coordinate")
+        if type(self.stamp_ns) is not int or self.stamp_ns < 0:
+            raise ValueError("invalid ROS observation coordinate")
         if self.measurement_interval is not None and not isinstance(
-            self.measurement_interval, MeasurementInterval
+            self.measurement_interval, StampInterval
         ):
             raise ValueError("invalid physical observation support")
         if self.measurement_delta is not None and (
             not isinstance(self.measurement_delta, Pose2D)
             or self.measurement_interval is None
-            or self.measurement_interval.duration <= 0
-            or self.measurement_interval.end != self.coordinate
+            or ((self.measurement_interval.end_ns - self.measurement_interval.start_ns) / 1e9) <= 0
+            or self.measurement_interval.end_ns != self.coordinate
         ):
             raise ValueError("body increment needs its original physical interval")
         if (self.epoch is None) != (self.sequence is None) or (
@@ -135,13 +137,8 @@ class MotionObservation:
             raise ValueError("measurement time outside original observation support")
 
     @property
-    def coordinate(self) -> MeasurementTime:
-        if self.measurement is not None:
-            return self.measurement
-        root = self.roots[0].coordinate
-        if root.clock_domain.startswith("sim_step:"):
-            raise ValueError("simulation observation requires an explicit physical coordinate")
-        return MeasurementTime(root.clock_domain, root.epoch, self.measured_steady)
+    def coordinate(self) -> int:
+        return self.stamp_ns
 
     @property
     def identity_epoch(self) -> str:
@@ -186,7 +183,7 @@ class MotionPathSegment:
     retains its own zero-order-hold rates/error; coverage alone is not a rate.
     """
 
-    interval: MeasurementInterval
+    interval: StampInterval
     start_host_steady: float
     end_host_steady: float
     axes: tuple[AxisEstimate, AxisEstimate, AxisEstimate]
@@ -198,30 +195,27 @@ class MotionPathSegment:
 @dataclass(frozen=True)
 class MotionPath:
     path_id: str
-    measurement: MeasurementTime
+    stamp_ns: int
     host_steady: float
     segments: tuple[MotionPathSegment, ...]
     current_axes: tuple[AxisEstimate, AxisEstimate, AxisEstimate]
     current_independent_axes: tuple[AxisEstimate, AxisEstimate, AxisEstimate] | None
 
-    def tail(self, previous: MeasurementTime) -> tuple[MotionPathSegment, ...]:
-        if not previous.same_axis(self.measurement) or previous.seconds > self.measurement.seconds:
+    def tail(self, previous: int) -> tuple[MotionPathSegment, ...]:
+        if previous > self.stamp_ns:
             raise ValueError("incompatible motion path cursor")
         cursor = previous
         result = []
         for segment in self.segments:
-            if segment.interval.end.seconds <= cursor.seconds:
+            if segment.interval.end_ns <= cursor:
                 continue
-            if (
-                not segment.interval.start.same_axis(cursor)
-                or segment.interval.start.seconds > cursor.seconds
-            ):
+            if segment.interval.start_ns > cursor:
                 raise ValueError("motion path gap or evicted history")
-            if cursor != segment.interval.start:
+            if cursor != segment.interval.start_ns:
                 raise ValueError("motion path cursor has no original host endpoint")
             result.append(segment)
-            cursor = segment.interval.end
-        if cursor != self.measurement:
+            cursor = segment.interval.end_ns
+        if cursor != self.stamp_ns:
             raise ValueError("motion path endpoint not covered")
         return tuple(result)
 
@@ -242,10 +236,10 @@ class MotionEstimate:
     computed_steady: float
     generation: int
     independent_axes: tuple[AxisEstimate, AxisEstimate] | None = None
-    # The coordinate actually used to align all returned axes; never host now for simulation.
-    measurement: MeasurementTime | None = None
+    # Original ROS nanosecond coordinate used to align all returned axes.
+    stamp_ns: int | None = None
     # Aligned support coverage only; geometric increments live in path.segments.
-    measurement_interval: MeasurementInterval | None = None
+    measurement_interval: StampInterval | None = None
     measurement_host_steady: float | None = None
     path: MotionPath | None = None
 
@@ -297,11 +291,11 @@ class MotionEstimation:
         self._positive_frontiers: dict[str, MotionObservation] = {}
         self._retired: dict[str, set[str]] = {}
         self._last_axes: list[AxisEstimate | None] = [None, None, None]
-        self._clock: tuple[float, float] | None = None
+        self._clock_tracker = ClockTracker()
         self.generation = 1
         self._clock_epochs: dict[str, str] = {}
         self._evaluations: dict[MotionObservation, tuple[Age | None, set[str]]] = {}
-        self._measurement_target: MeasurementTime | None = None
+        self._measurement_target: int | None = None
         self._last_estimate: MotionEstimate | None = None
         self._path_id = uuid4().hex
         self._path_segments: deque[MotionPathSegment] = deque(maxlen=256)
@@ -349,16 +343,17 @@ class MotionEstimation:
             if observation.identity_epoch == old.identity_epoch:
                 if observation.identity_sequence <= old.identity_sequence:
                     return False
-                if (
-                    observation.coordinate.same_axis(old.coordinate)
-                    and observation.coordinate.seconds < old.coordinate.seconds
-                ):
+                if observation.coordinate < old.coordinate:
                     return False
             else:
                 if root.received_steady < prior.received_steady or len(retired) >= 32:
                     return False
                 retired.add(old.identity_epoch)
                 self.invalidate(observation.source)
+                self._path_point = None
+                self._path_segments.clear()
+                self._path_id = uuid4().hex
+                self._last_estimate = None
         elif len(self._frontiers) >= 32:
             raise ValueError("motion source capacity")
         positive = self._positive_frontiers.get(observation.source)
@@ -407,17 +402,7 @@ class MotionEstimation:
             ):
                 return
         coordinate, host = incoming.coordinate, incoming.measured_steady
-        if (
-            point is not None
-            and not coordinate.same_axis(point.measurement)
-            and host < point.host_steady
-        ):
-            return  # Late input from the previous physical world cannot restore it.
-        if (
-            point is not None
-            and coordinate.same_axis(point.measurement)
-            and coordinate.seconds < point.measurement.seconds
-        ):
+        if point is not None and coordinate < point.stamp_ns:
             return  # A late older interval cannot revise already consumed path geometry.
         previous_target, previous_axes = self._measurement_target, list(self._last_axes)
         try:
@@ -434,12 +419,12 @@ class MotionEstimation:
             else None
         )
         live = any(a.observed for a in (axes[0], axes[2]))
-        same = point is not None and coordinate.same_axis(point.measurement)
+        same = point is not None
         if not same:
             self._path_segments.clear()
             self._path_id = uuid4().hex
-        elif point is not None and coordinate.seconds > point.measurement.seconds:
-            span = MeasurementInterval(point.measurement, coordinate)
+        elif point is not None and coordinate > point.stamp_ns:
+            span = StampInterval(point.stamp_ns, coordinate)
             support = incoming.measurement_interval
             measured_delta = incoming.measurement_delta
             direct = (
@@ -490,10 +475,11 @@ class MotionEstimation:
                             replace(
                                 axis,
                                 prediction_error=axis.prediction_error
-                                + self.acceleration[i] * span.duration,
+                                + self.acceleration[i] * ((span.end_ns - span.start_ns) / 1e9),
                                 error=None
                                 if axis.error is None
-                                else axis.error + self.acceleration[i] * span.duration,
+                                else axis.error
+                                + self.acceleration[i] * ((span.end_ns - span.start_ns) / 1e9),
                             )
                             for i, axis in enumerate(values)
                         ),
@@ -508,22 +494,21 @@ class MotionEstimation:
                 # that endpoint the fused path is explicitly unknown; clipping
                 # the nominal rate retains the already supported displacement.
                 fused = list(bounded(point.current_axes))
-                if coordinate.clock_domain.startswith("host"):
-                    host_span = host - point.host_steady
-                    for i, axis in enumerate(fused):
-                        if axis.sources and host > axis.deadline_steady:
-                            fraction = max(
-                                0.0,
-                                min(1.0, (axis.deadline_steady - point.host_steady) / host_span),
-                            )
-                            fused[i] = replace(
-                                axis,
-                                observed=False,
-                                confidence=0.0,
-                                value=None if axis.value is None else axis.value * fraction,
-                                error=None,
-                                reason="expired_path_span",
-                            )
+                host_span = host - point.host_steady
+                for i, axis in enumerate(fused):
+                    if axis.sources and host > axis.deadline_steady:
+                        fraction = max(
+                            0.0,
+                            min(1.0, (axis.deadline_steady - point.host_steady) / host_span),
+                        )
+                        fused[i] = replace(
+                            axis,
+                            observed=False,
+                            confidence=0.0,
+                            value=None if axis.value is None else axis.value * fraction,
+                            error=None,
+                            reason="expired_path_span",
+                        )
                 segment = MotionPathSegment(
                     span,
                     point.host_steady,
@@ -561,14 +546,7 @@ class MotionEstimation:
         return None
 
     def _age(self, roots: tuple[Origin, ...], ros: float, steady: float) -> Age:
-        ages = [
-            self.timing.age(
-                measured_steady=r.measurement_steady,
-                received_steady=r.received_steady,
-                now_steady=steady,
-            )
-            for r in roots
-        ]
+        ages = [self.timing.sample_age(r.time, now_steady_ns=round(steady * 1e9)) for r in roots]
         worst = max(ages, key=lambda a: a.seconds)
         return replace(
             worst,
@@ -595,11 +573,7 @@ class MotionEstimation:
                 self._assessed(item, age, "expired")
             elif item.measured_steady <= steady:
                 target = self._measurement_target
-                if (
-                    target is not None
-                    and item.coordinate.same_axis(target)
-                    and item.coordinate.seconds <= target.seconds
-                ):
+                if target is not None and item.coordinate <= target:
                     eligible.append((item, age))
                 else:
                     self._assessed(item, age, "incompatible_measurement_axis")
@@ -616,7 +590,7 @@ class MotionEstimation:
             previous = eligible[-2][0]
             self._assessed(previous, eligible[-2][1], "alignment_history")
             v0 = previous.values[axis]
-            dt = o.coordinate.elapsed(previous.coordinate)
+            dt = (o.coordinate - previous.coordinate) / 1e9
             try:
                 usable = self._age(previous.roots, ros, steady).band != "invalid"
             except ValueError:
@@ -627,9 +601,13 @@ class MotionEstimation:
                 )
         target = self._measurement_target
         assert target is not None
-        elapsed = target.elapsed(o.coordinate)
+        elapsed = (target - o.coordinate) / 1e9
         aligned = value + accel * elapsed
-        alignment_error = self.acceleration[axis] * (elapsed + o.interval_half_s)
+        # Stale evidence increases uncertainty even if the ROS coordinate is unchanged.
+        # Only the original ROS difference predicts the value; this is a steady age budget.
+        alignment_error = self.acceleration[axis] * (
+            max(elapsed, max(0.0, steady - o.measured_steady)) + o.interval_half_s
+        )
         raw_error = o.error[axis]
         error = None if raw_error is None else raw_error + alignment_error
         quality = 0.5 if o.quality is None else o.quality
@@ -709,8 +687,7 @@ class MotionEstimation:
                 )
             previous = None if independent_only else self._last_axes[axis]
             if previous is not None and (
-                self._measurement_target is None
-                or all(r.coordinate.same_axis(self._measurement_target) for r in previous.roots)
+                self._measurement_target is None or all(True for r in previous.roots)
             ):
                 try:
                     age = self._age(previous.roots, ros, steady)
@@ -779,49 +756,34 @@ class MotionEstimation:
             self._last_axes[axis] = result
         return result
 
-    def estimate(self, now_ros: float, now_steady: float) -> MotionEstimate:
+    def estimate(
+        self, now_ros: float, now_steady: float, *, stamp_ns: int | None = None
+    ) -> MotionEstimate:
         self._evaluations.clear()
         if not all(math.isfinite(v) for v in (now_ros, now_steady)):
             raise ValueError("invalid estimation clock")
-        if self._clock is not None and now_steady < self._clock[1]:
-            retained = {}
-            for source, histories in self._samples.items():
-                rows = []
-                for history in histories:
-                    keep = []
-                    for o in history:
-                        if o.identity_epoch == self._clock_epochs.get(source):
-                            continue
-                        try:
-                            if (
-                                self._age(o.roots, now_ros, now_steady).band != "invalid"
-                                and o.measured_steady <= now_steady
-                            ):
-                                keep.append(o)
-                        except ValueError:
-                            continue
-                    rows.append(deque(keep, maxlen=2))
-                if any(rows):
-                    retained[source] = tuple(rows)
-            self._samples = retained
+        query_ns = round(now_ros * 1e9) if stamp_ns is None else stamp_ns
+        clock = self._clock_tracker.observe(ros_ns=query_ns, steady_ns=round(now_steady * 1e9))
+        if clock.discontinuity:
+            # This local owner cannot reuse queued positive evidence across its rollback.
+            for source, observation in self._frontiers.items():
+                self._retired.setdefault(source, set()).add(observation.identity_epoch)
+            self._samples.clear()
+            self._frontiers.clear()
+            self._positive_frontiers.clear()
             self._last_axes = [None, None, None]
+            self._path_point = None
+            self._path_segments.clear()
+            self._path_id = uuid4().hex
+            self._last_estimate = None
             self.generation += 1
-        self._clock = now_ros, now_steady
         observations = [h[-1] for histories in self._samples.values() for h in histories if h]
-        simulations = [o for o in observations if o.coordinate.clock_domain.startswith("sim_step:")]
         self._measurement_target = None
         measurement_host = None
-        if simulations:
-            # Latest admitted acquisition chooses the active physical segment. All axes
-            # must then align on this exact segment; incompatible worlds cannot vote.
-            newest = max(simulations, key=lambda o: o.measured_steady)
-            same = [o for o in simulations if o.coordinate.same_axis(newest.coordinate)]
-            endpoint = max(same, key=lambda o: o.coordinate.seconds)
-            self._measurement_target = endpoint.coordinate
-            measurement_host = endpoint.measured_steady
-        elif observations:
-            c = observations[0].coordinate
-            self._measurement_target = MeasurementTime(c.clock_domain, c.epoch, now_steady)
+        if observations:
+            self._measurement_target = query_ns
+            if type(self._measurement_target) is not int or self._measurement_target < 0:
+                raise ValueError("invalid ROS alignment coordinate")
             measurement_host = now_steady
         axes = tuple(self._axis(i, now_ros, now_steady) for i in range(3))
         independent = tuple(
@@ -846,20 +808,19 @@ class MotionEstimation:
         if (
             self._measurement_target is not None
             and previous is not None
-            and previous.measurement is not None
+            and (previous.stamp_ns is not None)
             and previous.healthy
-            and previous.measurement.same_axis(self._measurement_target)
-            and self._measurement_target.seconds >= previous.measurement.seconds
-            and measurement_host is not None
-            and measurement_host <= previous.deadline_steady
+            and (self._measurement_target >= previous.stamp_ns)
+            and (measurement_host is not None)
+            and (measurement_host <= previous.deadline_steady)
         ):
             start = (
-                previous.measurement_interval.start
+                previous.measurement_interval.start_ns
                 if previous.measurement_interval is not None
-                and previous.measurement_interval.end == previous.measurement
-                else previous.measurement
+                and previous.measurement_interval.end_ns == previous.stamp_ns
+                else previous.stamp_ns
             )
-            interval = MeasurementInterval(start, self._measurement_target)
+            interval = StampInterval(start, self._measurement_target)
         result = MotionEstimate(
             axes[0],
             axes[1],

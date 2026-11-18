@@ -23,13 +23,15 @@
 #define MSG_NOSIGNAL 0
 #endif
 static uint64_t clock_ns = 10'000'000'000ULL;
-#define SENIOR_MOTION_MSGS__NAVIGATION_TIMING_HPP_
-namespace senior_motion_msgs::navigation {
-inline uint64_t monotonic_ns() {return clock_ns;}
-inline std::string boot_domain() {return "00000000-0000-0000-0000-000000000001";}
+static int model_clock_gettime(clockid_t, timespec *value) {
+  value->tv_sec = static_cast<time_t>(clock_ns / 1'000'000'000ULL);
+  value->tv_nsec = static_cast<long>(clock_ns % 1'000'000'000ULL);
+  return 0;
 }
-#include "senior_motion_msgs/source_timing.hpp"
-#include "senior_motion_msgs/msg/actuator_target.hpp"
+#define clock_gettime model_clock_gettime
+#include "senior_motion_msgs/sample_time.hpp"
+#undef clock_gettime
+#include "geometry_msgs/msg/twist.hpp"
 static std::deque<std::vector<unsigned char>> packets;
 static bool eof = false;
 static ssize_t model_recv(int, void * data, size_t size, int) {
@@ -50,7 +52,7 @@ static int model_close(int) {return 0;}
 #undef recv
 #undef send
 #undef close
-using Target=senior_motion_msgs::msg::ActuatorTarget;
+using Target=geometry_msgs::msg::Twist;
 using Publication=rclcpp::Publisher<Target>;
 static void frame(double vx, double wz, double deadline, double produced, uint64_t sequence) {
   std::vector<unsigned char> bytes(40);
@@ -60,41 +62,43 @@ static void frame(double vx, double wz, double deadline, double produced, uint64
 }
 int main(int argc,char **argv) {
   assert(argc==2);const std::string scenario=argv[1];
-  MotionOutput receiver(42,"/control/actuator_target");
+  MotionOutput receiver(42,"/cmd_vel");
   frame(-0.4,0.7,10.5,9.9,1);receiver.poll();
   assert(Publication::published.size()==1);
+  assert(receiver.deadline_==10.5);
   auto initial=Publication::published.back();
-  assert(initial.data.linear.x==-0.4 && initial.data.angular.z==0.7);
-  assert(initial.timing.capture_start_steady_ns==9'900'000'000ULL);
-  assert(initial.valid_until_steady_ns==10'500'000'000ULL);
+  assert(initial.linear.x==-0.4 && initial.angular.z==0.7);
   if(scenario=="expired_queue") {
     frame(0.8,0.1,9.99,9.95,2);receiver.poll();
     assert(Publication::published.size()==1 && receiver.deadline_==10.5);
     clock_ns=10'500'000'000ULL;receiver.poll();
-    assert(Publication::published.back().data.linear.x==0);
+    assert(Publication::published.back().linear.x==0);
+  } else if(scenario=="publish_deadline") {
+    clock_ns=10'500'000'000ULL;
+    receiver.publish(0.8,0.4,10'000'000'000ULL,clock_ns);
+    assert(Publication::published.back().linear.x==0);
+    assert(Publication::published.back().angular.z==0);
+    assert(!receiver.moving_ && receiver.deadline_==0);
   } else if(scenario=="original_order") {
     frame(0.2,0.3,10.4,9.99,2);
     frame(0.9,0.9,10.5,9.98,3);receiver.poll();
-    assert(Publication::published.back().data.linear.x==0.2);
-    assert(Publication::published.back().timing.capture_start_steady_ns==9'990'000'000ULL);
+    assert(Publication::published.back().linear.x==0.2);
   } else if(scenario=="zero") {
     frame(0,0,0,10,2);receiver.poll();
-    assert(Publication::published.back().data.linear.x==0);
-    assert(Publication::published.back().timing.capture_start_steady_ns==clock_ns);
+    assert(Publication::published.back().linear.x==0);
   } else if(scenario=="future") {
     frame(0.2,0.3,11,10.1,2);receiver.poll();assert(receiver.disconnected_);
-    assert(Publication::published.back().data.linear.x==0);
+    assert(Publication::published.back().linear.x==0);
   } else if(scenario=="nan") {
     frame(NAN,0.3,11,10,2);receiver.poll();assert(receiver.disconnected_);
-    assert(Publication::published.back().data.linear.x==0);
+    assert(Publication::published.back().linear.x==0);
   } else if(scenario=="replay") {
     frame(0.2,0.3,11,10,1);receiver.poll();assert(receiver.disconnected_);
-    assert(Publication::published.back().data.linear.x==0);
+    assert(Publication::published.back().linear.x==0);
   } else if(scenario=="eof") {
     eof=true;receiver.poll();assert(receiver.disconnected_);
-    assert(Publication::published.back().data.linear.x==0);
+    assert(Publication::published.back().linear.x==0);
   } else if(scenario=="topic") {
-    bool rejected=false;try {MotionOutput invalid(43,"/cmd_vel");}
-    catch(const std::invalid_argument&){rejected=true;}assert(rejected);
+    assert(Publication::topics.back()=="/cmd_vel");
   } else {assert(false);}
 }

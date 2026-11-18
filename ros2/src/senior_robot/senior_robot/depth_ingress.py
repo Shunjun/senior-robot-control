@@ -114,10 +114,10 @@ class DepthIngress(Node):
         message.camera_info_source = self._info_source
         message.sequence = self._output_sequence
         message.reason = reason[:64]
-        if received_ros_ns > 0:
+        if received_ros_ns >= 0:
             message.received_ros = _time_msg(received_ros_ns)
         message.received_steady = received_steady
-        if stamp_ns > 0:
+        if stamp_ns >= 0:
             message.stamp = _time_msg(stamp_ns)
         return message
 

@@ -7,7 +7,7 @@ from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs, publish_inputs
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
-from source_time_test_support import capture_time, wire_time
+from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier, core  # noqa: F401 -- shared fake ROS fixture
 
 from senior_control.config import DeviceProfile
@@ -39,14 +39,28 @@ def feed(adapter, t, vx=0.0, wz=0.0):
         b"wheel",
         t,
         t,
-        timing=capture_time(t, sequence=round(t * 1e9)),
+        timing=sample_time(
+            stamp_ns=round((t) * 1e9),
+            received_ros_ns=round((t) * 1e9),
+            received_steady_ns=round((t) * 1e9),
+            clock_generation=1,
+        ),
+        generation=1,
+        sequence=round(t * 1e9),
     )
     adapter.imu(
         N(header=N(stamp=timestamp(t), frame_id="base_link"), angular_velocity=N(z=wz)),
         b"imu",
         t,
         t,
-        timing=capture_time(t, sequence=round(t * 1e9)),
+        timing=sample_time(
+            stamp_ns=round((t) * 1e9),
+            received_ros_ns=round((t) * 1e9),
+            received_steady_ns=round((t) * 1e9),
+            clock_generation=1,
+        ),
+        generation=1,
+        sequence=round(t * 1e9),
     )
     captures = {}
     if True:
@@ -59,11 +73,16 @@ def feed(adapter, t, vx=0.0, wz=0.0):
                 bridge_boot_id="capture-boot",
                 capture_generation=1,
                 sequence=round(stamp * 1e9),
-                stamp=timestamp(stamp),
-                received_ros=timestamp(stamp),
-                received_steady=stamp,
                 frame_id="laser_link",
-                timing=wire_time(stamp, sequence=round(stamp * 1e9), epoch="raw-scan"),
+                bridge_gid="02",
+                reason="",
+                **capture_fields(
+                    time=sample_time(
+                        stamp_ns=round((stamp) * 1e9),
+                        received_ros_ns=round((stamp) * 1e9),
+                        received_steady_ns=round((stamp) * 1e9),
+                    )
+                ),
             )
 
         captures = {"first_capture": capture(t - 0.05), "second_capture": capture(t)}
@@ -110,7 +129,22 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
                 stamp=t,
                 message=N(
                     raw_capture=N(
-                        timing=wire_time(t, sequence=round(t * 100), epoch="scan-driver")
+                        frame_id="laser_link",
+                        raw_gid="01",
+                        bridge_gid="02",
+                        source_epoch="scan-driver",
+                        bridge_boot_id="boot",
+                        capture_generation=1,
+                        sequence=round(t * 100),
+                        valid=True,
+                        reason="",
+                        **capture_fields(
+                            time=sample_time(
+                                stamp_ns=round((t) * 1e9),
+                                received_ros_ns=round((t) * 1e9),
+                                received_steady_ns=round((t) * 1e9),
+                            )
+                        ),
                     ),
                     source_epoch="scan",
                     frame_id="laser_link",

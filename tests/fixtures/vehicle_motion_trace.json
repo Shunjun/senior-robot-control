@@ -1,559 +1,820 @@
 {
-  "schema": 1,
+  "schema": 2,
   "synthetic": true,
-  "purpose": "Diagnostic test data, not measured evidence",
+  "purpose": "Synthetic diagnostic geometry/windows only; explicit synthetic first-receipt coordinates, never measured capture-age evidence",
   "samples": [
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.0,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100000000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.0,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100000000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.0,
-      "stamp_ros": null,
       "data": {
         "submitted": 1,
         "completed": 0,
         "rejected_expired": 0,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100000000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.1,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100100000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.1,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100100000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.1,
-      "stamp_ros": null,
       "data": {
         "submitted": 2,
         "completed": 1,
         "rejected_expired": 1,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100100000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.2,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100200000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.2,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100200000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.2,
-      "stamp_ros": null,
       "data": {
         "submitted": 3,
         "completed": 2,
         "rejected_expired": 2,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100200000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.3,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100300000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.3,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100300000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.3,
-      "stamp_ros": null,
       "data": {
         "submitted": 4,
         "completed": 3,
         "rejected_expired": 3,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100300000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.4,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100400000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.4,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100400000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.4,
-      "stamp_ros": null,
       "data": {
         "submitted": 5,
         "completed": 4,
         "rejected_expired": 4,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100400000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.5,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100500000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.5,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100500000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.5,
-      "stamp_ros": null,
       "data": {
         "submitted": 6,
         "completed": 5,
         "rejected_expired": 5,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100500000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.6,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100600000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.6,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100600000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.6,
-      "stamp_ros": null,
       "data": {
         "submitted": 7,
         "completed": 6,
         "rejected_expired": 6,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100600000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 0.7,
-      "stamp_ros": 0.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 0
+      },
+      "received_steady_ns": 100700000000
     },
     {
       "kind": "sample",
       "stream": "fusion_diagnostic",
-      "received_steady": 0.7,
-      "stamp_ros": null,
       "data": {
         "pending": true,
         "alignment_wait_s": 0.258
-      }
+      },
+      "received_steady_ns": 100700000000
     },
     {
       "kind": "sample",
       "stream": "worker_diagnostic",
-      "received_steady": 0.7,
-      "stamp_ros": null,
       "data": {
         "submitted": 8,
         "completed": 7,
         "rejected_expired": 7,
         "admitted": 0,
         "pending": true
-      }
+      },
+      "received_steady_ns": 100700000000
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.0,
-      "stamp_ros": 2.0,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2000000000
+      },
+      "received_steady_ns": 102000000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.0,
-      "stamp_ros": 2.0,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102000000000,
+      "time": {
+        "stamp_ns": 2000000000,
+        "received_ros_ns": 2000000000,
+        "received_steady_ns": 102000000000,
+        "sample_steady_ns": 102000000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.0,
-      "stamp_ros": 2.0,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102000000000,
+      "time": {
+        "stamp_ns": 2000000000,
+        "received_ros_ns": 2000000000,
+        "received_steady_ns": 102000000000,
+        "sample_steady_ns": 102000000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.1,
-      "stamp_ros": 2.1,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2100000000
+      },
+      "received_steady_ns": 102100000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.1,
-      "stamp_ros": 2.1,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102100000000,
+      "time": {
+        "stamp_ns": 2100000000,
+        "received_ros_ns": 2100000000,
+        "received_steady_ns": 102100000000,
+        "sample_steady_ns": 102100000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.1,
-      "stamp_ros": 2.1,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102100000000,
+      "time": {
+        "stamp_ns": 2100000000,
+        "received_ros_ns": 2100000000,
+        "received_steady_ns": 102100000000,
+        "sample_steady_ns": 102100000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.1,
-      "stamp_ros": 2.1,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.0,
         "valid": true
+      },
+      "received_steady_ns": 102100000000,
+      "time": {
+        "stamp_ns": 2100000000,
+        "received_ros_ns": 2100000000,
+        "received_steady_ns": 102100000000,
+        "sample_steady_ns": 102100000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2000000000,
+        "received_ros_ns": 2000000000,
+        "received_steady_ns": 102000000000,
+        "sample_steady_ns": 102000000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2100000000,
+        "received_ros_ns": 2100000000,
+        "received_steady_ns": 102100000000,
+        "sample_steady_ns": 102100000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.2,
-      "stamp_ros": 2.2,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2200000000
+      },
+      "received_steady_ns": 102200000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.2,
-      "stamp_ros": 2.2,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102200000000,
+      "time": {
+        "stamp_ns": 2200000000,
+        "received_ros_ns": 2200000000,
+        "received_steady_ns": 102200000000,
+        "sample_steady_ns": 102200000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.2,
-      "stamp_ros": 2.2,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102200000000,
+      "time": {
+        "stamp_ns": 2200000000,
+        "received_ros_ns": 2200000000,
+        "received_steady_ns": 102200000000,
+        "sample_steady_ns": 102200000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.2,
-      "stamp_ros": 2.2,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.1,
         "valid": true
+      },
+      "received_steady_ns": 102200000000,
+      "time": {
+        "stamp_ns": 2200000000,
+        "received_ros_ns": 2200000000,
+        "received_steady_ns": 102200000000,
+        "sample_steady_ns": 102200000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2100000000,
+        "received_ros_ns": 2100000000,
+        "received_steady_ns": 102100000000,
+        "sample_steady_ns": 102100000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2200000000,
+        "received_ros_ns": 2200000000,
+        "received_steady_ns": 102200000000,
+        "sample_steady_ns": 102200000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.3,
-      "stamp_ros": 2.3,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2300000000
+      },
+      "received_steady_ns": 102300000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.3,
-      "stamp_ros": 2.3,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102300000000,
+      "time": {
+        "stamp_ns": 2300000000,
+        "received_ros_ns": 2300000000,
+        "received_steady_ns": 102300000000,
+        "sample_steady_ns": 102300000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.3,
-      "stamp_ros": 2.3,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102300000000,
+      "time": {
+        "stamp_ns": 2300000000,
+        "received_ros_ns": 2300000000,
+        "received_steady_ns": 102300000000,
+        "sample_steady_ns": 102300000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.3,
-      "stamp_ros": 2.3,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.1999999999999997,
         "valid": true
+      },
+      "received_steady_ns": 102300000000,
+      "time": {
+        "stamp_ns": 2300000000,
+        "received_ros_ns": 2300000000,
+        "received_steady_ns": 102300000000,
+        "sample_steady_ns": 102300000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2200000000,
+        "received_ros_ns": 2200000000,
+        "received_steady_ns": 102200000000,
+        "sample_steady_ns": 102200000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2300000000,
+        "received_ros_ns": 2300000000,
+        "received_steady_ns": 102300000000,
+        "sample_steady_ns": 102300000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.4,
-      "stamp_ros": 2.4,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2400000000
+      },
+      "received_steady_ns": 102400000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.4,
-      "stamp_ros": 2.4,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102400000000,
+      "time": {
+        "stamp_ns": 2400000000,
+        "received_ros_ns": 2400000000,
+        "received_steady_ns": 102400000000,
+        "sample_steady_ns": 102400000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.4,
-      "stamp_ros": 2.4,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102400000000,
+      "time": {
+        "stamp_ns": 2400000000,
+        "received_ros_ns": 2400000000,
+        "received_steady_ns": 102400000000,
+        "sample_steady_ns": 102400000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.4,
-      "stamp_ros": 2.4,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.3,
         "valid": true
+      },
+      "received_steady_ns": 102400000000,
+      "time": {
+        "stamp_ns": 2400000000,
+        "received_ros_ns": 2400000000,
+        "received_steady_ns": 102400000000,
+        "sample_steady_ns": 102400000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2300000000,
+        "received_ros_ns": 2300000000,
+        "received_steady_ns": 102300000000,
+        "sample_steady_ns": 102300000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2400000000,
+        "received_ros_ns": 2400000000,
+        "received_steady_ns": 102400000000,
+        "sample_steady_ns": 102400000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.5,
-      "stamp_ros": 2.5,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2500000000
+      },
+      "received_steady_ns": 102500000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.5,
-      "stamp_ros": 2.5,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102500000000,
+      "time": {
+        "stamp_ns": 2500000000,
+        "received_ros_ns": 2500000000,
+        "received_steady_ns": 102500000000,
+        "sample_steady_ns": 102500000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.5,
-      "stamp_ros": 2.5,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102500000000,
+      "time": {
+        "stamp_ns": 2500000000,
+        "received_ros_ns": 2500000000,
+        "received_steady_ns": 102500000000,
+        "sample_steady_ns": 102500000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.5,
-      "stamp_ros": 2.5,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.4,
         "valid": true
+      },
+      "received_steady_ns": 102500000000,
+      "time": {
+        "stamp_ns": 2500000000,
+        "received_ros_ns": 2500000000,
+        "received_steady_ns": 102500000000,
+        "sample_steady_ns": 102500000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2400000000,
+        "received_ros_ns": 2400000000,
+        "received_steady_ns": 102400000000,
+        "sample_steady_ns": 102400000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2500000000,
+        "received_ros_ns": 2500000000,
+        "received_steady_ns": 102500000000,
+        "sample_steady_ns": 102500000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.6,
-      "stamp_ros": 2.6,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2600000000
+      },
+      "received_steady_ns": 102600000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.6,
-      "stamp_ros": 2.6,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102600000000,
+      "time": {
+        "stamp_ns": 2600000000,
+        "received_ros_ns": 2600000000,
+        "received_steady_ns": 102600000000,
+        "sample_steady_ns": 102600000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.6,
-      "stamp_ros": 2.6,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102600000000,
+      "time": {
+        "stamp_ns": 2600000000,
+        "received_ros_ns": 2600000000,
+        "received_steady_ns": 102600000000,
+        "sample_steady_ns": 102600000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.6,
-      "stamp_ros": 2.6,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.5,
         "valid": true
+      },
+      "received_steady_ns": 102600000000,
+      "time": {
+        "stamp_ns": 2600000000,
+        "received_ros_ns": 2600000000,
+        "received_steady_ns": 102600000000,
+        "sample_steady_ns": 102600000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2500000000,
+        "received_ros_ns": 2500000000,
+        "received_steady_ns": 102500000000,
+        "sample_steady_ns": 102500000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2600000000,
+        "received_ros_ns": 2600000000,
+        "received_steady_ns": 102600000000,
+        "sample_steady_ns": 102600000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.7,
-      "stamp_ros": 2.7,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2700000000
+      },
+      "received_steady_ns": 102700000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.7,
-      "stamp_ros": 2.7,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102700000000,
+      "time": {
+        "stamp_ns": 2700000000,
+        "received_ros_ns": 2700000000,
+        "received_steady_ns": 102700000000,
+        "sample_steady_ns": 102700000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.7,
-      "stamp_ros": 2.7,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102700000000,
+      "time": {
+        "stamp_ns": 2700000000,
+        "received_ros_ns": 2700000000,
+        "received_steady_ns": 102700000000,
+        "sample_steady_ns": 102700000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.7,
-      "stamp_ros": 2.7,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.6,
         "valid": true
+      },
+      "received_steady_ns": 102700000000,
+      "time": {
+        "stamp_ns": 2700000000,
+        "received_ros_ns": 2700000000,
+        "received_steady_ns": 102700000000,
+        "sample_steady_ns": 102700000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2600000000,
+        "received_ros_ns": 2600000000,
+        "received_steady_ns": 102600000000,
+        "sample_steady_ns": 102600000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2700000000,
+        "received_ros_ns": 2700000000,
+        "received_steady_ns": 102700000000,
+        "sample_steady_ns": 102700000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "clock",
-      "received_steady": 2.8,
-      "stamp_ros": 2.8,
-      "data": {}
+      "data": {
+        "clock_ros_ns": 2800000000
+      },
+      "received_steady_ns": 102800000000
     },
     {
       "kind": "sample",
       "stream": "wheel",
-      "received_steady": 2.8,
-      "stamp_ros": 2.8,
       "data": {
         "vx": 1.0
+      },
+      "received_steady_ns": 102800000000,
+      "time": {
+        "stamp_ns": 2800000000,
+        "received_ros_ns": 2800000000,
+        "received_steady_ns": 102800000000,
+        "sample_steady_ns": 102800000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "truth",
-      "received_steady": 2.8,
-      "stamp_ros": 2.8,
       "data": {
         "vx": 0.0
+      },
+      "received_steady_ns": 102800000000,
+      "time": {
+        "stamp_ns": 2800000000,
+        "received_ros_ns": 2800000000,
+        "received_steady_ns": 102800000000,
+        "sample_steady_ns": 102800000000,
+        "clock_generation": 1
       }
     },
     {
       "kind": "sample",
       "stream": "scan_motion",
-      "received_steady": 2.8,
-      "stamp_ros": 2.8,
       "data": {
         "vx": 0.0,
-        "interval_start_ros": 2.6999999999999997,
         "valid": true
+      },
+      "received_steady_ns": 102800000000,
+      "time": {
+        "stamp_ns": 2800000000,
+        "received_ros_ns": 2800000000,
+        "received_steady_ns": 102800000000,
+        "sample_steady_ns": 102800000000,
+        "clock_generation": 1
+      },
+      "first_time": {
+        "stamp_ns": 2700000000,
+        "received_ros_ns": 2700000000,
+        "received_steady_ns": 102700000000,
+        "sample_steady_ns": 102700000000,
+        "clock_generation": 1
+      },
+      "last_time": {
+        "stamp_ns": 2800000000,
+        "received_ros_ns": 2800000000,
+        "received_steady_ns": 102800000000,
+        "sample_steady_ns": 102800000000,
+        "clock_generation": 1
       }
     }
   ]

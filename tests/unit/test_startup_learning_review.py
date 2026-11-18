@@ -11,13 +11,14 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
-from source_time_test_support import capture_time, wire_time
+from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import core  # noqa: F401
 from test_startup_learning import observation
 from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.motion.estimator import Origin
 from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def captured(obs, stamp):
@@ -40,13 +41,28 @@ def test_capture_order_is_independent_of_delivery_order_and_current_tick(tmp_pat
         owner.frame(
             model,
             captured(observation(0.15), stamp),
-            capture=capture_time(
-                (captured(observation(0.15), stamp)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), stamp)).scan.stamp) * 1e9),
+                    received_ros_ns=round(((captured(observation(0.15), stamp)).scan.stamp) * 1e9),
+                    received_steady_ns=round(
+                        ((captured(observation(0.15), stamp)).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), stamp)).scan.stamp * 1000) + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert len(model.frames) == 3
-    assert [m.seconds for m in model.frame_measurements] == [0.3, 0.6, 0.9]
+    assert [m / 1e9 for m in model.frame_measurements] == [0.3, 0.6, 0.9]
 
 
 def test_old_moving_scans_cannot_fill_post_stop_validation(tmp_path):
@@ -59,9 +75,24 @@ def test_old_moving_scans_cannot_fill_post_stop_validation(tmp_path):
         owner.frame(
             model,
             captured(observation(0.15), stamp),
-            capture=capture_time(
-                (captured(observation(0.15), stamp)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), stamp)).scan.stamp) * 1e9),
+                    received_ros_ns=round(((captured(observation(0.15), stamp)).scan.stamp) * 1e9),
+                    received_steady_ns=round(
+                        ((captured(observation(0.15), stamp)).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), stamp)).scan.stamp * 1000) + 1,
+                valid=True,
+                reason="",
             ),
         )
     assert owner.validation_samples == 0
@@ -100,7 +131,24 @@ def test_body_change_rebuilds_model_but_global_errors_do_not(core, tmp_path):  #
         frame_id="laser_link",
         range_min=0.05,
         range_max=5.0,
-        raw_capture=N(timing=wire_time(10.0, sequence=1, epoch="scan")),
+        raw_capture=N(
+            frame_id="laser_link",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="scan",
+            bridge_boot_id="boot",
+            capture_generation=1,
+            sequence=1,
+            valid=True,
+            reason="",
+            **capture_fields(
+                time=sample_time(
+                    stamp_ns=round((10.0) * 1e9),
+                    received_ros_ns=round((10.0) * 1e9),
+                    received_steady_ns=round((10.0) * 1e9),
+                )
+            ),
+        ),
     )
     core._sync_learning_model(msg)
     original = core.self_returns
@@ -112,10 +160,11 @@ def test_body_change_rebuilds_model_but_global_errors_do_not(core, tmp_path):  #
     assert core.self_returns.filter(observation(0.15), provisional=False).external_hits
     assert external_feature_ranges(observation(0.25), core._learning_client.run.path) == (0.25,)
     previous = core.self_returns
-    core.profile = replace(
-        core.profile,
-        sensor_error=core.profile.sensor_error + 0.1,
-        orientation_error_rad=core.profile.orientation_error_rad + 0.2,
+    core.profile = core.profile.model_copy(
+        update={
+            "sensor_error": core.profile.sensor_error + 0.1,
+            "orientation_error_rad": core.profile.orientation_error_rad + 0.2,
+        }
     )
     core._sync_learning_model(msg)
     assert core.self_returns is previous
@@ -164,10 +213,26 @@ def test_unstarted_action_cannot_use_post_frames_as_moving_evidence(tmp_path):
     for i in range(64):
         model.observe(
             captured(observation(0.15), i / 100),
-            capture=capture_time(
-                (captured(observation(0.15), i / 100)).scan.stamp,
+            capture=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round(((captured(observation(0.15), i / 100)).scan.stamp) * 1e9),
+                    received_ros_ns=round(
+                        ((captured(observation(0.15), i / 100)).scan.stamp) * 1e9
+                    ),
+                    received_steady_ns=round(
+                        ((captured(observation(0.15), i / 100)).scan.stamp) * 1e9
+                    ),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="test-producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
                 sequence=round((captured(observation(0.15), i / 100)).scan.stamp * 1000) + 1,
-                epoch="test-producer",
+                valid=True,
+                reason="",
             ),
             segment_id=owner.segment_id,
         )
@@ -175,9 +240,22 @@ def test_unstarted_action_cannot_use_post_frames_as_moving_evidence(tmp_path):
     owner.frame(
         model,
         captured(observation(0.15), 1.3),
-        capture=capture_time(
-            (captured(observation(0.15), 1.3)).scan.stamp,
+        capture=RawCaptureHeader(
+            time=sample_time(
+                stamp_ns=round(((captured(observation(0.15), 1.3)).scan.stamp) * 1e9),
+                received_ros_ns=round(((captured(observation(0.15), 1.3)).scan.stamp) * 1e9),
+                received_steady_ns=round(((captured(observation(0.15), 1.3)).scan.stamp) * 1e9),
+                clock_generation=1,
+            ),
+            frame_id="laser",
+            raw_gid="01",
+            bridge_gid="02",
+            source_epoch="producer",
+            bridge_boot_id="boot",
+            capture_generation=1,
             sequence=round((captured(observation(0.15), 1.3)).scan.stamp * 1000) + 1,
+            valid=True,
+            reason="",
         ),
     )
     assert owner.validation_samples == 0
@@ -185,7 +263,7 @@ def test_unstarted_action_cannot_use_post_frames_as_moving_evidence(tmp_path):
 
 
 def test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache(core, tmp_path):  # noqa: F811
-    from learning_test_support import simulation_point as point
+    from learning_test_support import learning_point
     from shapely.geometry import Point, Polygon
 
     from senior_control.config import DeviceProfile
@@ -199,7 +277,12 @@ def test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache(core
     bind_core(core, tmp_path / "claim")
     core.startup.state = "completed"
     for source, values in ((Source.WHEEL, (0.0, 0.0)), (Source.IMU, (0.0,))):
-        core.sensors.ingest(point(source, 10.0, 10.0, values), 10.0, 10.0, 10.0)
+        core.sensors.ingest(
+            learning_point(source, 10_000_000_000, 10_000_000_000, 10_000_000_000, values),
+            10.0,
+            10.0,
+            10.0,
+        )
     core.node._reception_test.sensors.ingest_observation(
         MotionObservation(
             "laser",
@@ -210,16 +293,32 @@ def test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache(core
                     "laser",
                     "a",
                     1,
-                    10.0,
-                    10.0,
-                    10.0,
-                    measurement_steady=10.0,
-                    measurement=capture_time(10.0).measurement,
+                    sample_time(
+                        stamp_ns=round((10.0) * 1e9),
+                        received_ros_ns=round((10.0) * 1e9),
+                        received_steady_ns=round((10.0) * 1e9),
+                    ),
                 ),
             ),
             independent=(True, True, True),
             measured_steady=10.0,
-            measurement=capture_time(10.0).measurement,
+            stamp_ns=RawCaptureHeader(
+                time=sample_time(
+                    stamp_ns=round((10.0) * 1e9),
+                    received_ros_ns=round((10.0) * 1e9),
+                    received_steady_ns=round((10.0) * 1e9),
+                    clock_generation=1,
+                ),
+                frame_id="laser",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="producer",
+                bridge_boot_id="boot",
+                capture_generation=1,
+                sequence=1,
+                valid=True,
+                reason="",
+            ).stamp_ns,
         ),
         10.0,
         10.0,
@@ -247,7 +346,24 @@ def test_body_update_preserves_frozen_filter_and_invalidates_geometry_cache(core
                 sensor_y=0.0,
                 sensor_yaw=0.0,
                 transform_stamp=10.0,
-                raw_capture=N(timing=wire_time(10.0, sequence=1, epoch="scan")),
+                raw_capture=N(
+                    frame_id="laser_link",
+                    raw_gid="01",
+                    bridge_gid="02",
+                    source_epoch="scan",
+                    bridge_boot_id="boot",
+                    capture_generation=1,
+                    sequence=1,
+                    valid=True,
+                    reason="",
+                    **capture_fields(
+                        time=sample_time(
+                            stamp_ns=round((10.0) * 1e9),
+                            received_ros_ns=round((10.0) * 1e9),
+                            received_steady_ns=round((10.0) * 1e9),
+                        )
+                    ),
+                ),
             ),
             measurement_steady=10.0,
         )

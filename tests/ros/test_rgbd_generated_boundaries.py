@@ -47,7 +47,9 @@ def test_generated_camera_info_builds_frame_and_native_float_snapshot():
     capture = RosHeader()
     capture.stamp.nanosec = 100
     capture.received_ros.nanosec = 101
-    capture.received_steady = 1.1
+    capture.received_steady_ns = 1_100_000_000
+    capture.sample_steady_ns = 1_099_999_999
+    capture.clock_generation = 1
     capture.frame_id = "optical"
     capture.raw_gid = "01"
     capture.bridge_gid = "02"
@@ -85,7 +87,7 @@ def test_generated_camera_info_builds_frame_and_native_float_snapshot():
         tf_epoch="tf",
         dependencies=("tf",),
         exclusion=bytes(80 * 80),
-        static_sim_declared=True,
+        static_background_declared=True,
     )
     assert isinstance(info.roi[0], np.uint32)
     roundtrip = BoundedRawCameraInfo()

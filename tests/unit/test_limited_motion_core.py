@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 import test_motion_core_handoff as handoff
 from control_process_test_support import capture_inputs
+from sensor_time_test_support import sample_time
 from test_directional_constraints import scene
 from test_motion_core_handoff import barrier
 
@@ -64,6 +65,13 @@ def setup_stop(c, monkeypatch):
                         received_steady=now,
                         measurement_steady=now,
                         stamp_ros=now - 0.001,
+                        time=dict(
+                            stamp_ns=round((now - 0.001) * 1e9),
+                            received_ros_ns=round(now * 1e9),
+                            received_steady_ns=round(now * 1e9),
+                            sample_steady_ns=round(now * 1e9) - 1_000_000,
+                            clock_generation=1,
+                        ),
                     ),
                 )
             )
@@ -157,8 +165,20 @@ def test_first_motion_rechecks_evidence_after_neutral(core, monkeypatch, change)
                 "imu",
                 (None, None, 0.0),
                 now,
-                (Origin("imu", "replacement", 1, now, now, now, measurement_steady=now),),
+                (
+                    Origin(
+                        "imu",
+                        "replacement",
+                        1,
+                        sample_time(
+                            stamp_ns=round((now) * 1e9),
+                            received_ros_ns=round((now) * 1e9),
+                            received_steady_ns=round((now) * 1e9),
+                        ),
+                    ),
+                ),
                 measured_steady=now,
+                stamp_ns=round((now) * 1e9),
             ),
             now,
             now,

@@ -113,7 +113,7 @@ it('a request acknowledgement does not claim confirmed emergency stop', async ()
   expect(screen.queryByText('软件急停已锁存')).toBeNull();
 });
 
-it('actual controls send full high-gear effort, then close the authority on key release', async () => {
+it('actual controls stop on key release and restart with the same authority on a fresh press', async () => {
   const sent: [string, unknown][] = [];
   const port = testPort(async (type, value) => {
     sent.push([type, value]);
@@ -126,6 +126,14 @@ it('actual controls send full high-gear effort, then close the authority on key 
   await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp' }));
   expect(sent.find(item => item[0] === 'drive.intent')?.[1]).toMatchObject({ linear: 1, turn: 0, gear: 'high' });
   await act(async () => fireEvent.keyUp(stick, { key: 'ArrowUp' }));
+  expect(sent.at(-1)).toEqual(['drive.stop', { authority_id: 'a', gesture: 1 }]);
+  expect(screen.getByText('已准备 · 等待新按压')).toBeTruthy();
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp', repeat: true }));
+  expect(sent.at(-1)?.[0]).toBe('drive.stop');
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowDown' }));
+  expect(sent.at(-1)).toEqual(['drive.intent', expect.objectContaining({ authority_id: 'a', gesture: 2, linear: -1 })]);
+  expect(sent.filter(([type]) => type === 'control.acquire')).toHaveLength(1);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '释放控制权' })));
   expect(sent.at(-1)).toEqual(['control.release', { authority_id: 'a' }]);
   expect(screen.getByText('未获取控制')).toBeTruthy();
 });
@@ -158,4 +166,75 @@ it('sends emergency stop before fencing a held input, and requires owner permiss
     allowed_actions: []
   }, true));
   expect((screen.getByRole('button', { name: '复位软件急停' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('keeps stopped ownership idle without heartbeats or acquire and ignores old send failures', async () => {
+  vi.useFakeTimers();
+  const sent: [string, unknown][] = [];
+  let rejectOld!: (error: Error) => void;
+  const port = testPort(async (type, value) => {
+    sent.push([type, value]);
+    if (type === 'drive.intent' && !rejectOld) return new Promise((_, reject) => { rejectOld = reject; });
+    return { authority_id: 'same', state: 'prepared' };
+  });
+  const controller = new ManualController(port, () => {});
+  await controller.prepare();
+  controller.begin(1, 0, 'low');
+  controller.stopGesture();
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(controller.phase).toBe('prepared');
+  expect(sent.map(([type]) => type)).toEqual(['control.acquire', 'drive.intent', 'drive.stop']);
+  expect(controller.begin(-1, 0, 'low')).toBe(true);
+  rejectOld(new Error('old send failure'));
+  await Promise.resolve();
+  expect(controller.phase).toBe('active');
+  expect(sent.at(-1)).toEqual(['drive.intent', expect.objectContaining({ authority_id: 'same', gesture: 2, sequence: 2 })]);
+  controller.dispose();
+});
+
+it('requires a fresh press after stop acknowledgement without replaying a held pointer', async () => {
+  const sent: [string, unknown][] = [];
+  let finishStop!: () => void;
+  const port = testPort(async (type, value) => {
+    sent.push([type, value]);
+    if (type === 'drive.stop') return new Promise<void>(resolve => { finishStop = resolve; });
+    return { authority_id: 'a', state: 'prepared' };
+  });
+  render(<DriveView robotId="robot" link={link(port)} snapshot={null} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
+  const stick = screen.getByRole('group', { name: '前进后退摇杆' });
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp' }));
+  await act(async () => fireEvent.keyUp(stick, { key: 'ArrowUp' }));
+  await act(async () => fireEvent.pointerDown(stick, { pointerId: 7 }));
+  await act(async () => finishStop());
+  await act(async () => fireEvent.pointerMove(stick, { pointerId: 7 }));
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp', repeat: true }));
+  expect(sent.filter(([type]) => type === 'drive.intent')).toHaveLength(1);
+  await act(async () => fireEvent.keyDown(stick, { key: 'ArrowDown' }));
+  expect(sent.at(-1)).toEqual(['drive.intent', expect.objectContaining({ gesture: 2, linear: -1 })]);
+});
+
+it('a late stop receipt cannot restore released ownership and a failed stop revokes it', async () => {
+  let finishStop!: () => void;
+  const port = testPort(async type => {
+    if (type === 'drive.stop') return new Promise<void>(resolve => { finishStop = resolve; });
+    return { authority_id: 'a', state: 'prepared' };
+  });
+  const controller = new ManualController(port, () => {});
+  await controller.prepare();
+  controller.begin(1, 0, 'low');
+  controller.stopGesture();
+  controller.release();
+  finishStop();
+  await Promise.resolve();
+  expect(controller.phase).toBe('none');
+  const failing = new ManualController(testPort(async type => {
+    if (type === 'drive.stop') throw new Error('stop failed');
+    return { authority_id: 'b', state: 'prepared' };
+  }), () => {});
+  await failing.prepare();
+  failing.begin(1, 0, 'low');
+  failing.stopGesture();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(failing.phase).toBe('none');
 });

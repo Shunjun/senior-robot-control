@@ -11,8 +11,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "senior_motion_msgs/msg/actuator_target.hpp"
-#include "senior_motion_msgs/source_timing.hpp"
+#include "geometry_msgs/msg/twist.hpp"
+#include "senior_motion_msgs/sample_time.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 using namespace std::chrono_literals;
@@ -20,8 +20,7 @@ using namespace std::chrono_literals;
 class MotionOutput : public rclcpp::Node {
  public:
   MotionOutput(int fd, const std::string &topic) : Node("motion_output"), fd_(fd) {
-    if (topic == "/cmd_vel") throw std::invalid_argument("typed actuator topic must be independent of /cmd_vel");
-    publisher_ = create_publisher<senior_motion_msgs::msg::ActuatorTarget>(topic, 1);
+    publisher_ = create_publisher<geometry_msgs::msg::Twist>(topic, 1);
     timer_ = create_wall_timer(5ms, [this]() { poll(); });
   }
   ~MotionOutput() override { if (rclcpp::ok()) stop(); ::close(fd_); }
@@ -32,17 +31,19 @@ class MotionOutput : public rclcpp::Node {
   uint64_t sequence_ = 0, last_produced_ = 0;
   double deadline_ = 0;
   bool moving_ = false, disconnected_ = false;
-  senior_motion_msgs::timing::DriverClock producer_;
-  rclcpp::Publisher<senior_motion_msgs::msg::ActuatorTarget>::SharedPtr publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
-  static uint64_t steady_ns() { return senior_motion_msgs::navigation::monotonic_ns(); }
+  static uint64_t steady_ns() { return senior_motion_msgs::time::monotonic_ns(); }
   void publish(double vx, double wz, uint64_t produced, uint64_t deadline) {
     if (produced < last_produced_) return;
-    senior_motion_msgs::msg::ActuatorTarget value;
-    value.timing = producer_.sample(produced, produced, "control_compute");
-    value.valid_until_steady_ns = deadline;
-    value.data.linear.x = vx;
-    value.data.angular.z = wz;
+    geometry_msgs::msg::Twist value;
+    value.linear.x = vx;
+    value.angular.z = wz;
+    // Publication is the final admission boundary, after queue/serialization work.
+    if ((vx != 0 || wz != 0) && steady_ns() >= deadline) {
+      stop();
+      return;
+    }
     publisher_->publish(value);
     last_produced_ = produced;
     moving_ = vx != 0 || wz != 0;

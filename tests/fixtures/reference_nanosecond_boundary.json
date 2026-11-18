@@ -257,7 +257,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.6890577386313607e-20,
         "y": -4.888176453042346e-40,
-        "yaw": 2.25373667261473e-19
+        "yaw": 2.25373667261473e-19,
+        "time": {
+          "stamp_ns": 2920000000,
+          "received_ros_ns": 2920000000,
+          "received_steady_ns": 135883193165005,
+          "sample_steady_ns": 135883193165005,
+          "clock_generation": 1
+        },
+        "sequence": 2920000000
       },
       {
         "stamp_ros": 2.99,
@@ -265,7 +273,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.354771741573813e-20,
         "y": -2.004578001961898e-39,
-        "yaw": 2.2783062675513976e-19
+        "yaw": 2.2783062675513976e-19,
+        "time": {
+          "stamp_ns": 2990000000,
+          "received_ros_ns": 2990000000,
+          "received_steady_ns": 135883274735380,
+          "sample_steady_ns": 135883274735380,
+          "clock_generation": 1
+        },
+        "sequence": 2990000000
       },
       {
         "stamp_ros": 3.02,
@@ -273,7 +289,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.4339083292455553e-20,
         "y": -2.1881611699201442e-39,
-        "yaw": 2.304747261550033e-19
+        "yaw": 2.304747261550033e-19,
+        "time": {
+          "stamp_ns": 3020000000,
+          "received_ros_ns": 3020000000,
+          "received_steady_ns": 135883316682963,
+          "sample_steady_ns": 135883316682963,
+          "clock_generation": 1
+        },
+        "sequence": 3020000000
       },
       {
         "stamp_ros": 3.06,
@@ -281,7 +305,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.992380161847396e-20,
         "y": -1.1721474988060962e-39,
-        "yaw": 2.324797901499409e-19
+        "yaw": 2.324797901499409e-19,
+        "time": {
+          "stamp_ns": 3060000000,
+          "received_ros_ns": 3060000000,
+          "received_steady_ns": 135883354145172,
+          "sample_steady_ns": 135883354145172,
+          "clock_generation": 1
+        },
+        "sequence": 3060000000
       },
       {
         "stamp_ros": 3.09,
@@ -289,7 +321,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.9699054591196724e-20,
         "y": -1.1178458962456231e-39,
-        "yaw": 2.3460917591098444e-19
+        "yaw": 2.3460917591098444e-19,
+        "time": {
+          "stamp_ns": 3090000000,
+          "received_ros_ns": 3090000000,
+          "received_steady_ns": 135883378687588,
+          "sample_steady_ns": 135883378687588,
+          "clock_generation": 1
+        },
+        "sequence": 3090000000
       },
       {
         "stamp_ros": 3.12,
@@ -297,7 +337,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.875749578463443e-20,
         "y": -8.949832558820582e-40,
-        "yaw": 2.3610130170657945e-19
+        "yaw": 2.3610130170657945e-19,
+        "time": {
+          "stamp_ns": 3120000000,
+          "received_ros_ns": 3120000000,
+          "received_steady_ns": 135883413449005,
+          "sample_steady_ns": 135883413449005,
+          "clock_generation": 1
+        },
+        "sequence": 3120000000
       },
       {
         "stamp_ros": 3.16,
@@ -305,7 +353,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.734065523259821e-20,
         "y": -5.588083192517443e-40,
-        "yaw": 2.3379690260279177e-19
+        "yaw": 2.3379690260279177e-19,
+        "time": {
+          "stamp_ns": 3160000000,
+          "received_ros_ns": 3160000000,
+          "received_steady_ns": 135883463946255,
+          "sample_steady_ns": 135883463946255,
+          "clock_generation": 1
+        },
+        "sequence": 3160000000
       },
       {
         "stamp_ros": 3.19,
@@ -313,7 +369,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.7362312431436775e-20,
         "y": -5.642607543026292e-40,
-        "yaw": 2.353922147764881e-19
+        "yaw": 2.353922147764881e-19,
+        "time": {
+          "stamp_ns": 3190000000,
+          "received_ros_ns": 3190000000,
+          "received_steady_ns": 135883483269797,
+          "sample_steady_ns": 135883483269797,
+          "clock_generation": 1
+        },
+        "sequence": 3190000000
       },
       {
         "stamp_ros": 3.22,
@@ -321,7 +385,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.404491541378409e-20,
         "y": 2.13094125032068e-40,
-        "yaw": 2.365535344158701e-19
+        "yaw": 2.365535344158701e-19,
+        "time": {
+          "stamp_ns": 3220000000,
+          "received_ros_ns": 3220000000,
+          "received_steady_ns": 135883515448714,
+          "sample_steady_ns": 135883515448714,
+          "clock_generation": 1
+        },
+        "sequence": 3220000000
       },
       {
         "stamp_ros": 3.26,
@@ -329,7 +401,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.399222761190279e-20,
         "y": 2.26986005610661e-40,
-        "yaw": 2.3733908632909534e-19
+        "yaw": 2.3733908632909534e-19,
+        "time": {
+          "stamp_ns": 3260000000,
+          "received_ros_ns": 3260000000,
+          "received_steady_ns": 135883555914255,
+          "sample_steady_ns": 135883555914255,
+          "clock_generation": 1
+        },
+        "sequence": 3260000000
       },
       {
         "stamp_ros": 3.29,
@@ -337,7 +417,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.634482004884084e-20,
         "y": -3.314178311658816e-40,
-        "yaw": 2.3705210079853527e-19
+        "yaw": 2.3705210079853527e-19,
+        "time": {
+          "stamp_ns": 3290000000,
+          "received_ros_ns": 3290000000,
+          "received_steady_ns": 135883584655964,
+          "sample_steady_ns": 135883584655964,
+          "clock_generation": 1
+        },
+        "sequence": 3290000000
       },
       {
         "stamp_ros": 3.32,
@@ -345,7 +433,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.7512551113270523e-20,
         "y": -6.0443782985796855e-40,
-        "yaw": 2.338561760903161e-19
+        "yaw": 2.338561760903161e-19,
+        "time": {
+          "stamp_ns": 3320000000,
+          "received_ros_ns": 3320000000,
+          "received_steady_ns": 135883617791255,
+          "sample_steady_ns": 135883617791255,
+          "clock_generation": 1
+        },
+        "sequence": 3320000000
       },
       {
         "stamp_ros": 3.36,
@@ -353,7 +449,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.819839775643498e-20,
         "y": -7.685729277731423e-40,
-        "yaw": 2.3294804204167104e-19
+        "yaw": 2.3294804204167104e-19,
+        "time": {
+          "stamp_ns": 3360000000,
+          "received_ros_ns": 3360000000,
+          "received_steady_ns": 135883658178589,
+          "sample_steady_ns": 135883658178589,
+          "clock_generation": 1
+        },
+        "sequence": 3360000000
       },
       {
         "stamp_ros": 3.39,
@@ -361,7 +465,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.780310108377065e-20,
         "y": -6.774505923892901e-40,
-        "yaw": 2.2943773654862293e-19
+        "yaw": 2.2943773654862293e-19,
+        "time": {
+          "stamp_ns": 3390000000,
+          "received_ros_ns": 3390000000,
+          "received_steady_ns": 135883691831464,
+          "sample_steady_ns": 135883691831464,
+          "clock_generation": 1
+        },
+        "sequence": 3390000000
       },
       {
         "stamp_ros": 3.42,
@@ -369,7 +481,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.944211620367286e-20,
         "y": -1.0548985575585548e-39,
-        "yaw": 2.3067162911915127e-19
+        "yaw": 2.3067162911915127e-19,
+        "time": {
+          "stamp_ns": 3420000000,
+          "received_ros_ns": 3420000000,
+          "received_steady_ns": 135883721637422,
+          "sample_steady_ns": 135883721637422,
+          "clock_generation": 1
+        },
+        "sequence": 3420000000
       },
       {
         "stamp_ros": 3.46,
@@ -377,7 +497,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.367559736476789e-20,
         "y": 2.8875915029015414e-40,
-        "yaw": 2.379863120205842e-19
+        "yaw": 2.379863120205842e-19,
+        "time": {
+          "stamp_ns": 3460000000,
+          "received_ros_ns": 3460000000,
+          "received_steady_ns": 135883759492214,
+          "sample_steady_ns": 135883759492214,
+          "clock_generation": 1
+        },
+        "sequence": 3460000000
       },
       {
         "stamp_ros": 3.49,
@@ -385,7 +513,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.455266573282374e-20,
         "y": 7.61644354184685e-41,
-        "yaw": 2.4355524644084567e-19
+        "yaw": 2.4355524644084567e-19,
+        "time": {
+          "stamp_ns": 3490000000,
+          "received_ros_ns": 3490000000,
+          "received_steady_ns": 135883789762255,
+          "sample_steady_ns": 135883789762255,
+          "clock_generation": 1
+        },
+        "sequence": 3490000000
       },
       {
         "stamp_ros": 3.52,
@@ -393,7 +529,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.3727512591016457e-20,
         "y": 2.771967978389628e-40,
-        "yaw": 2.462567094488473e-19
+        "yaw": 2.462567094488473e-19,
+        "time": {
+          "stamp_ns": 3520000000,
+          "received_ros_ns": 3520000000,
+          "received_steady_ns": 135883824559880,
+          "sample_steady_ns": 135883824559880,
+          "clock_generation": 1
+        },
+        "sequence": 3520000000
       },
       {
         "stamp_ros": 3.56,
@@ -401,7 +545,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.962563536568323e-20,
         "y": 1.2962297545170847e-39,
-        "yaw": 2.4955052470240377e-19
+        "yaw": 2.4955052470240377e-19,
+        "time": {
+          "stamp_ns": 3560000000,
+          "received_ros_ns": 3560000000,
+          "received_steady_ns": 135883863273880,
+          "sample_steady_ns": 135883863273880,
+          "clock_generation": 1
+        },
+        "sequence": 3560000000
       },
       {
         "stamp_ros": 3.59,
@@ -409,7 +561,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.7103045726023254e-20,
         "y": 1.9236228725742027e-39,
-        "yaw": 2.4867747304643833e-19
+        "yaw": 2.4867747304643833e-19,
+        "time": {
+          "stamp_ns": 3590000000,
+          "received_ros_ns": 3590000000,
+          "received_steady_ns": 135883894227047,
+          "sample_steady_ns": 135883894227047,
+          "clock_generation": 1
+        },
+        "sequence": 3590000000
       },
       {
         "stamp_ros": 3.62,
@@ -417,7 +577,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.0472069658654e-20,
         "y": 3.582630439362899e-39,
-        "yaw": 2.526769242300614e-19
+        "yaw": 2.526769242300614e-19,
+        "time": {
+          "stamp_ns": 3620000000,
+          "received_ros_ns": 3620000000,
+          "received_steady_ns": 135883929085714,
+          "sample_steady_ns": 135883929085714,
+          "clock_generation": 1
+        },
+        "sequence": 3620000000
       },
       {
         "stamp_ros": 3.66,
@@ -425,7 +593,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.1938298971442618e-20,
         "y": 3.1907533386948664e-39,
-        "yaw": 2.6094404361974996e-19
+        "yaw": 2.6094404361974996e-19,
+        "time": {
+          "stamp_ns": 3660000000,
+          "received_ros_ns": 3660000000,
+          "received_steady_ns": 135883974332714,
+          "sample_steady_ns": 135883974332714,
+          "clock_generation": 1
+        },
+        "sequence": 3660000000
       },
       {
         "stamp_ros": 3.69,
@@ -433,7 +609,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.5359258312827906e-20,
         "y": 2.2955783567695484e-39,
-        "yaw": 2.631830586907127e-19
+        "yaw": 2.631830586907127e-19,
+        "time": {
+          "stamp_ns": 3690000000,
+          "received_ros_ns": 3690000000,
+          "received_steady_ns": 135884003414630,
+          "sample_steady_ns": 135884003414630,
+          "clock_generation": 1
+        },
+        "sequence": 3690000000
       },
       {
         "stamp_ros": 3.7199999999999998,
@@ -441,7 +625,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.89699709853454e-20,
         "y": 1.3396113337708846e-39,
-        "yaw": 2.646182915729852e-19
+        "yaw": 2.646182915729852e-19,
+        "time": {
+          "stamp_ns": 3720000000,
+          "received_ros_ns": 3720000000,
+          "received_steady_ns": 135884036417172,
+          "sample_steady_ns": 135884036417172,
+          "clock_generation": 1
+        },
+        "sequence": 3720000000
       },
       {
         "stamp_ros": 3.76,
@@ -449,7 +641,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.3610633911071546e-20,
         "y": 1.1259420635861579e-40,
-        "yaw": 2.630639157681154e-19
+        "yaw": 2.630639157681154e-19,
+        "time": {
+          "stamp_ns": 3760000000,
+          "received_ros_ns": 3760000000,
+          "received_steady_ns": 135884074839714,
+          "sample_steady_ns": 135884074839714,
+          "clock_generation": 1
+        },
+        "sequence": 3760000000
       },
       {
         "stamp_ros": 3.79,
@@ -457,7 +657,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.4878428668871176e-20,
         "y": -2.2017791378489857e-40,
-        "yaw": 2.637602510940712e-19
+        "yaw": 2.637602510940712e-19,
+        "time": {
+          "stamp_ns": 3790000000,
+          "received_ros_ns": 3790000000,
+          "received_steady_ns": 135884105080047,
+          "sample_steady_ns": 135884105080047,
+          "clock_generation": 1
+        },
+        "sequence": 3790000000
       },
       {
         "stamp_ros": 3.82,
@@ -465,7 +673,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.5241203718139984e-20,
         "y": -3.1018134917363e-40,
-        "yaw": 2.6873023967717037e-19
+        "yaw": 2.6873023967717037e-19,
+        "time": {
+          "stamp_ns": 3820000000,
+          "received_ros_ns": 3820000000,
+          "received_steady_ns": 135884136675047,
+          "sample_steady_ns": 135884136675047,
+          "clock_generation": 1
+        },
+        "sequence": 3820000000
       },
       {
         "stamp_ros": 3.86,
@@ -473,7 +689,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.137243382387942e-20,
         "y": 7.121960935886158e-40,
-        "yaw": 2.6190000500408116e-19
+        "yaw": 2.6190000500408116e-19,
+        "time": {
+          "stamp_ns": 3860000000,
+          "received_ros_ns": 3860000000,
+          "received_steady_ns": 135884176510839,
+          "sample_steady_ns": 135884176510839,
+          "clock_generation": 1
+        },
+        "sequence": 3860000000
       },
       {
         "stamp_ros": 3.89,
@@ -481,7 +705,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.2193584638852636e-20,
         "y": 4.974008980959767e-40,
-        "yaw": 2.632820427500192e-19
+        "yaw": 2.632820427500192e-19,
+        "time": {
+          "stamp_ns": 3890000000,
+          "received_ros_ns": 3890000000,
+          "received_steady_ns": 135884206690131,
+          "sample_steady_ns": 135884206690131,
+          "clock_generation": 1
+        },
+        "sequence": 3890000000
       },
       {
         "stamp_ros": 3.92,
@@ -489,7 +721,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.9033434677529304e-20,
         "y": 1.3355795679947077e-39,
-        "yaw": 2.663634543283894e-19
+        "yaw": 2.663634543283894e-19,
+        "time": {
+          "stamp_ns": 3920000000,
+          "received_ros_ns": 3920000000,
+          "received_steady_ns": 135884238434839,
+          "sample_steady_ns": 135884238434839,
+          "clock_generation": 1
+        },
+        "sequence": 3920000000
       },
       {
         "stamp_ros": 3.99,
@@ -497,7 +737,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.4619170891731583e-20,
         "y": 2.526531619263986e-39,
-        "yaw": 2.68650388260738e-19
+        "yaw": 2.68650388260738e-19,
+        "time": {
+          "stamp_ns": 3990000000,
+          "received_ros_ns": 3990000000,
+          "received_steady_ns": 135884306470797,
+          "sample_steady_ns": 135884306470797,
+          "clock_generation": 1
+        },
+        "sequence": 3990000000
       },
       {
         "stamp_ros": 4.02,
@@ -505,7 +753,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.1450864642698657e-20,
         "y": 3.3913834309767015e-39,
-        "yaw": 2.731318128081866e-19
+        "yaw": 2.731318128081866e-19,
+        "time": {
+          "stamp_ns": 4020000000,
+          "received_ros_ns": 4020000000,
+          "received_steady_ns": 135884345084214,
+          "sample_steady_ns": 135884345084214,
+          "clock_generation": 1
+        },
+        "sequence": 4020000000
       },
       {
         "stamp_ros": 4.06,
@@ -513,7 +769,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.438220134963539e-20,
         "y": 2.5931172940367912e-39,
-        "yaw": 2.727320471857084e-19
+        "yaw": 2.727320471857084e-19,
+        "time": {
+          "stamp_ns": 4060000000,
+          "received_ros_ns": 4060000000,
+          "received_steady_ns": 135884384413672,
+          "sample_steady_ns": 135884384413672,
+          "clock_generation": 1
+        },
+        "sequence": 4060000000
       },
       {
         "stamp_ros": 4.09,
@@ -521,7 +785,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.6752167734525783e-20,
         "y": 1.9429854633751264e-39,
-        "yaw": 2.744687387691349e-19
+        "yaw": 2.744687387691349e-19,
+        "time": {
+          "stamp_ns": 4090000000,
+          "received_ros_ns": 4090000000,
+          "received_steady_ns": 135884412678797,
+          "sample_steady_ns": 135884412678797,
+          "clock_generation": 1
+        },
+        "sequence": 4090000000
       },
       {
         "stamp_ros": 4.12,
@@ -529,7 +801,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.0731068986517775e-20,
         "y": 8.37733354571118e-40,
-        "yaw": 2.7815736724096997e-19
+        "yaw": 2.7815736724096997e-19,
+        "time": {
+          "stamp_ns": 4120000000,
+          "received_ros_ns": 4120000000,
+          "received_steady_ns": 135884444433964,
+          "sample_steady_ns": 135884444433964,
+          "clock_generation": 1
+        },
+        "sequence": 4120000000
       },
       {
         "stamp_ros": 4.16,
@@ -537,7 +817,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.929953498543431e-20,
         "y": -1.5444844398037335e-39,
-        "yaw": 2.76138786679481e-19
+        "yaw": 2.76138786679481e-19,
+        "time": {
+          "stamp_ns": 4160000000,
+          "received_ros_ns": 4160000000,
+          "received_steady_ns": 135884482708922,
+          "sample_steady_ns": 135884482708922,
+          "clock_generation": 1
+        },
+        "sequence": 4160000000
       },
       {
         "stamp_ros": 4.19,
@@ -545,7 +833,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.771408854261239e-20,
         "y": -3.8647172988439146e-39,
-        "yaw": 2.7754524879044076e-19
+        "yaw": 2.7754524879044076e-19,
+        "time": {
+          "stamp_ns": 4190000000,
+          "received_ros_ns": 4190000000,
+          "received_steady_ns": 135884511783172,
+          "sample_steady_ns": 135884511783172,
+          "clock_generation": 1
+        },
+        "sequence": 4190000000
       },
       {
         "stamp_ros": 4.22,
@@ -553,7 +849,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.389609028899641e-20,
         "y": -2.798426469373947e-39,
-        "yaw": 2.8065304470292967e-19
+        "yaw": 2.8065304470292967e-19,
+        "time": {
+          "stamp_ns": 4220000000,
+          "received_ros_ns": 4220000000,
+          "received_steady_ns": 135884547503131,
+          "sample_steady_ns": 135884547503131,
+          "clock_generation": 1
+        },
+        "sequence": 4220000000
       },
       {
         "stamp_ros": 4.26,
@@ -561,7 +865,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.421001090271537e-20,
         "y": -2.886726989439756e-39,
-        "yaw": 2.813766819860764e-19
+        "yaw": 2.813766819860764e-19,
+        "time": {
+          "stamp_ns": 4260000000,
+          "received_ros_ns": 4260000000,
+          "received_steady_ns": 135884585516547,
+          "sample_steady_ns": 135884585516547,
+          "clock_generation": 1
+        },
+        "sequence": 4260000000
       },
       {
         "stamp_ros": 4.29,
@@ -569,7 +881,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.866562790200359e-20,
         "y": -1.3187973327613745e-39,
-        "yaw": 2.8455556918219873e-19
+        "yaw": 2.8455556918219873e-19,
+        "time": {
+          "stamp_ns": 4290000000,
+          "received_ros_ns": 4290000000,
+          "received_steady_ns": 135884616941506,
+          "sample_steady_ns": 135884616941506,
+          "clock_generation": 1
+        },
+        "sequence": 4290000000
       },
       {
         "stamp_ros": 4.32,
@@ -577,7 +897,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.7548302485964176e-20,
         "y": -1.000291641280918e-39,
-        "yaw": 2.8655881524861708e-19
+        "yaw": 2.8655881524861708e-19,
+        "time": {
+          "stamp_ns": 4320000000,
+          "received_ros_ns": 4320000000,
+          "received_steady_ns": 135884650768922,
+          "sample_steady_ns": 135884650768922,
+          "clock_generation": 1
+        },
+        "sequence": 4320000000
       },
       {
         "stamp_ros": 4.36,
@@ -585,7 +913,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.189623177745781e-20,
         "y": 6.2480728754000335e-40,
-        "yaw": 2.891254677166564e-19
+        "yaw": 2.891254677166564e-19,
+        "time": {
+          "stamp_ns": 4360000000,
+          "received_ros_ns": 4360000000,
+          "received_steady_ns": 135884692912297,
+          "sample_steady_ns": 135884692912297,
+          "clock_generation": 1
+        },
+        "sequence": 4360000000
       },
       {
         "stamp_ros": 4.39,
@@ -593,7 +929,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.6007861272936483e-20,
         "y": 2.3255383283019514e-39,
-        "yaw": 2.880964674771092e-19
+        "yaw": 2.880964674771092e-19,
+        "time": {
+          "stamp_ns": 4390000000,
+          "received_ros_ns": 4390000000,
+          "received_steady_ns": 135884718848672,
+          "sample_steady_ns": 135884718848672,
+          "clock_generation": 1
+        },
+        "sequence": 4390000000
       },
       {
         "stamp_ros": 4.42,
@@ -601,7 +945,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -2.5386565710202537e-20,
         "y": 2.5045827132903155e-39,
-        "yaw": 2.9007103249026546e-19
+        "yaw": 2.9007103249026546e-19,
+        "time": {
+          "stamp_ns": 4420000000,
+          "received_ros_ns": 4420000000,
+          "received_steady_ns": 135884754923214,
+          "sample_steady_ns": 135884754923214,
+          "clock_generation": 1
+        },
+        "sequence": 4420000000
       },
       {
         "stamp_ros": 4.46,
@@ -609,7 +961,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.423873360333834e-20,
         "y": -6.640901691374243e-41,
-        "yaw": 2.90222670289264e-19
+        "yaw": 2.90222670289264e-19,
+        "time": {
+          "stamp_ns": 4460000000,
+          "received_ros_ns": 4460000000,
+          "received_steady_ns": 135884798956756,
+          "sample_steady_ns": 135884798956756,
+          "clock_generation": 1
+        },
+        "sequence": 4460000000
       },
       {
         "stamp_ros": 4.49,
@@ -617,7 +977,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -3.859454742737335e-20,
         "y": -1.3213097657753675e-39,
-        "yaw": 2.872755200548116e-19
+        "yaw": 2.872755200548116e-19,
+        "time": {
+          "stamp_ns": 4490000000,
+          "received_ros_ns": 4490000000,
+          "received_steady_ns": 135884824751839,
+          "sample_steady_ns": 135884824751839,
+          "clock_generation": 1
+        },
+        "sequence": 4490000000
       },
       {
         "stamp_ros": 4.52,
@@ -625,7 +993,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.3099647407605575e-20,
         "y": -2.6225301612281908e-39,
-        "yaw": 2.905064681556263e-19
+        "yaw": 2.905064681556263e-19,
+        "time": {
+          "stamp_ns": 4520000000,
+          "received_ros_ns": 4520000000,
+          "received_steady_ns": 135884865014839,
+          "sample_steady_ns": 135884865014839,
+          "clock_generation": 1
+        },
+        "sequence": 4520000000
       },
       {
         "stamp_ros": 4.5600000000000005,
@@ -633,7 +1009,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -4.951668257573613e-20,
         "y": -4.4908148260085785e-39,
-        "yaw": 2.920594609233081e-19
+        "yaw": 2.920594609233081e-19,
+        "time": {
+          "stamp_ns": 4560000000,
+          "received_ros_ns": 4560000000,
+          "received_steady_ns": 135884901849923,
+          "sample_steady_ns": 135884901849923,
+          "clock_generation": 1
+        },
+        "sequence": 4560000000
       },
       {
         "stamp_ros": 4.59,
@@ -641,7 +1025,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": -5.3978819620181394e-20,
         "y": -5.7890873115745725e-39,
-        "yaw": 2.9043166552116956e-19
+        "yaw": 2.9043166552116956e-19,
+        "time": {
+          "stamp_ns": 4590000000,
+          "received_ros_ns": 4590000000,
+          "received_steady_ns": 135884934777798,
+          "sample_steady_ns": 135884934777798,
+          "clock_generation": 1
+        },
+        "sequence": 4590000000
       },
       {
         "stamp_ros": 4.62,
@@ -649,7 +1041,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 1.2291914755878765e-05,
         "y": 1.5109112175811135e-10,
-        "yaw": 2.458382338506429e-05
+        "yaw": 2.458382338506429e-05,
+        "time": {
+          "stamp_ns": 4620000000,
+          "received_ros_ns": 4620000000,
+          "received_steady_ns": 135884970822631,
+          "sample_steady_ns": 135884970822631,
+          "clock_generation": 1
+        },
+        "sequence": 4620000000
       },
       {
         "stamp_ros": 4.66,
@@ -657,7 +1057,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.00011112240280519419,
         "y": 1.1353241960318429e-08,
-        "yaw": 0.00019012635699998615
+        "yaw": 0.00019012635699998615,
+        "time": {
+          "stamp_ns": 4660000000,
+          "received_ros_ns": 4660000000,
+          "received_steady_ns": 135885009459923,
+          "sample_steady_ns": 135885009459923,
+          "clock_generation": 1
+        },
+        "sequence": 4660000000
       },
       {
         "stamp_ros": 4.6899999999999995,
@@ -665,7 +1073,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0002969866258644127,
         "y": 7.228194376818915e-08,
-        "yaw": 0.0004654995470644781
+        "yaw": 0.0004654995470644781,
+        "time": {
+          "stamp_ns": 4690000000,
+          "received_ros_ns": 4690000000,
+          "received_steady_ns": 135885044678131,
+          "sample_steady_ns": 135885044678131,
+          "clock_generation": 1
+        },
+        "sequence": 4690000000
       },
       {
         "stamp_ros": 4.72,
@@ -673,7 +1089,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0005424761298609821,
         "y": 2.2930955370063842e-07,
-        "yaw": 0.0007980967859867043
+        "yaw": 0.0007980967859867043,
+        "time": {
+          "stamp_ns": 4720000000,
+          "received_ros_ns": 4720000000,
+          "received_steady_ns": 135885076193131,
+          "sample_steady_ns": 135885076193131,
+          "clock_generation": 1
+        },
+        "sequence": 4720000000
       },
       {
         "stamp_ros": 4.76,
@@ -681,7 +1105,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0010287960959790986,
         "y": 7.623782178823975e-07,
-        "yaw": 0.0013941572351831011
+        "yaw": 0.0013941572351831011,
+        "time": {
+          "stamp_ns": 4760000000,
+          "received_ros_ns": 4760000000,
+          "received_steady_ns": 135885116150881,
+          "sample_steady_ns": 135885116150881,
+          "clock_generation": 1
+        },
+        "sequence": 4760000000
       },
       {
         "stamp_ros": 4.79,
@@ -689,7 +1121,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0015914188343730674,
         "y": 1.7090338435365815e-06,
-        "yaw": 0.0019399115844098962
+        "yaw": 0.0019399115844098962,
+        "time": {
+          "stamp_ns": 4790000000,
+          "received_ros_ns": 4790000000,
+          "received_steady_ns": 135885144822964,
+          "sample_steady_ns": 135885144822964,
+          "clock_generation": 1
+        },
+        "sequence": 4790000000
       },
       {
         "stamp_ros": 4.82,
@@ -697,7 +1137,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0022529823813711484,
         "y": 3.1892622648852824e-06,
-        "yaw": 0.0025350204397844617
+        "yaw": 0.0025350204397844617,
+        "time": {
+          "stamp_ns": 4820000000,
+          "received_ros_ns": 4820000000,
+          "received_steady_ns": 135885182789714,
+          "sample_steady_ns": 135885182789714,
+          "clock_generation": 1
+        },
+        "sequence": 4820000000
       },
       {
         "stamp_ros": 4.86,
@@ -705,7 +1153,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0034962199494475523,
         "y": 6.877203093891344e-06,
-        "yaw": 0.0032998415688525033
+        "yaw": 0.0032998415688525033,
+        "time": {
+          "stamp_ns": 4860000000,
+          "received_ros_ns": 4860000000,
+          "received_steady_ns": 135885217570631,
+          "sample_steady_ns": 135885217570631,
+          "clock_generation": 1
+        },
+        "sequence": 4860000000
       },
       {
         "stamp_ros": 4.89,
@@ -713,7 +1169,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.0046296502970387295,
         "y": 1.0900352377434105e-05,
-        "yaw": 0.003799196137263965
+        "yaw": 0.003799196137263965,
+        "time": {
+          "stamp_ns": 4890000000,
+          "received_ros_ns": 4890000000,
+          "received_steady_ns": 135885249777339,
+          "sample_steady_ns": 135885249777339,
+          "clock_generation": 1
+        },
+        "sequence": 4890000000
       },
       {
         "stamp_ros": 4.92,
@@ -721,7 +1185,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.00579261028503663,
         "y": 1.557977209229145e-05,
-        "yaw": 0.004217697116309726
+        "yaw": 0.004217697116309726,
+        "time": {
+          "stamp_ns": 4920000000,
+          "received_ros_ns": 4920000000,
+          "received_steady_ns": 135885286923048,
+          "sample_steady_ns": 135885286923048,
+          "clock_generation": 1
+        },
+        "sequence": 4920000000
       },
       {
         "stamp_ros": 4.96,
@@ -729,7 +1201,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.007376858208879447,
         "y": 2.259687810760059e-05,
-        "yaw": 0.004556898792488057
+        "yaw": 0.004556898792488057,
+        "time": {
+          "stamp_ns": 4960000000,
+          "received_ros_ns": 4960000000,
+          "received_steady_ns": 135885327242131,
+          "sample_steady_ns": 135885327242131,
+          "clock_generation": 1
+        },
+        "sequence": 4960000000
       },
       {
         "stamp_ros": 4.99,
@@ -737,7 +1217,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.00854690357549457,
         "y": 2.797442301007015e-05,
-        "yaw": 0.0046094252178580045
+        "yaw": 0.0046094252178580045,
+        "time": {
+          "stamp_ns": 4990000000,
+          "received_ros_ns": 4990000000,
+          "received_steady_ns": 135885354377798,
+          "sample_steady_ns": 135885354377798,
+          "clock_generation": 1
+        },
+        "sequence": 4990000000
       },
       {
         "stamp_ros": 5.02,
@@ -745,7 +1233,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.009702647926842504,
         "y": 3.330953627281391e-05,
-        "yaw": 0.0046228506909201115
+        "yaw": 0.0046228506909201115,
+        "time": {
+          "stamp_ns": 5020000000,
+          "received_ros_ns": 5020000000,
+          "received_steady_ns": 135885398187589,
+          "sample_steady_ns": 135885398187589,
+          "clock_generation": 1
+        },
+        "sequence": 5020000000
       },
       {
         "stamp_ros": 5.06,
@@ -753,7 +1249,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.011140636540064051,
         "y": 3.9957190282162935e-05,
-        "yaw": 0.004622850690920933
+        "yaw": 0.004622850690920933,
+        "time": {
+          "stamp_ns": 5060000000,
+          "received_ros_ns": 5060000000,
+          "received_steady_ns": 135885443277381,
+          "sample_steady_ns": 135885443277381,
+          "clock_generation": 1
+        },
+        "sequence": 5060000000
       },
       {
         "stamp_ros": 5.09,
@@ -761,7 +1265,15 @@
         "epoch": "[\"53c5a9476edd4f5683f168eadf13d703\", {\"sample_gid\": null, \"topology_gid\": \"010fff1a76020e0d00000000000054030000000000000000\", \"basis\": \"simulation_topology_only\"}, \"\", 0]",
         "x": 0.012109832225410717,
         "y": 4.4437669142913186e-05,
-        "yaw": 0.004622850690920976
+        "yaw": 0.004622850690920976,
+        "time": {
+          "stamp_ns": 5090000000,
+          "received_ros_ns": 5090000000,
+          "received_steady_ns": 135885470157798,
+          "sample_steady_ns": 135885470157798,
+          "clock_generation": 1
+        },
+        "sequence": 5090000000
       }
     ],
     "sources": [
@@ -804,6 +1316,20 @@
             "x": 0,
             "y": 0,
             "yaw": 0
+          },
+          "first_time": {
+            "stamp_ns": 4900000000,
+            "received_ros_ns": 4900000000,
+            "received_steady_ns": 135885282156214,
+            "sample_steady_ns": 135885282156214,
+            "clock_generation": 1
+          },
+          "last_time": {
+            "stamp_ns": 5000000000,
+            "received_ros_ns": 5000000000,
+            "received_steady_ns": 135885382156214,
+            "sample_steady_ns": 135885382156214,
+            "clock_generation": 1
           }
         },
         "valid_until_steady": 135886.174156214
@@ -829,6 +1355,13 @@
             "x": 0,
             "y": 0,
             "yaw": 0
+          },
+          "time": {
+            "stamp_ns": 5100000000,
+            "received_ros_ns": 5100000000,
+            "received_steady_ns": 135885479164964,
+            "sample_steady_ns": 135885479164964,
+            "clock_generation": 1
           }
         },
         "valid_until_steady": 135886.27916496398
@@ -855,6 +1388,13 @@
             "x": 0,
             "y": 0,
             "yaw": 0
+          },
+          "time": {
+            "stamp_ns": 5090000000,
+            "received_ros_ns": 5090000000,
+            "received_steady_ns": 135885470157798,
+            "sample_steady_ns": 135885470157798,
+            "clock_generation": 1
           }
         },
         "valid_until_steady": 135886.269157798
@@ -938,7 +1478,6 @@
           "sec": 5,
           "nanosec": 105000000
         },
-        "received_steady": 135885.483487964,
         "frame_id": "laser_link",
         "raw_gid": "010fff1a7b02e6ca00000000000013030000000000000000",
         "bridge_gid": "010fff1ac102ba7100000000000013030000000000000000",
@@ -947,7 +1486,10 @@
         "capture_generation": 3,
         "sequence": 52,
         "valid": true,
-        "reason": ""
+        "reason": "",
+        "received_steady_ns": 135885483487964,
+        "sample_steady_ns": 135885478487964,
+        "clock_generation": 1
       },
       "stamp": {
         "sec": 5,
@@ -1692,5 +2234,6 @@
         3.5694615840911865
       ]
     }
-  }
+  },
+  "sample_time_fixture_provenance": "Synthetic standard-ROS first receipts for geometry/control replay, not measured transport age: receipt ROS equals original stamp, mapped steady equals retained first receipt; interval starts are shifted by original ROS duration. Immutable records are reused by source/epoch/sequence/stamp. Historical numeric observations are retained; no manufacturer acquisition or timing proof is claimed."
 }

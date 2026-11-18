@@ -4,7 +4,7 @@ This process does not publish /cmd_vel. Manual authority and task source samples
 share FinalCommand with immutable local deadlines and source generations.
 Estop, release and source retirement publish explicit barriers. The watchdog reads the injected
 monotonic clock and keeps running when ROS time is frozen. The timer period is
-simulation configuration, not a physical braking guarantee.
+configuration, not a physical braking guarantee.
 """
 
 import math
@@ -14,13 +14,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from geometry_msgs.msg import Twist
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.subscription import Subscription
-from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand, NavigationSample
+from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
 from std_msgs.msg import String
 
 from senior_control.agent.manual_control import (
@@ -33,7 +34,6 @@ from senior_control.errors import ErrorCode
 from senior_control.models import Velocity
 from senior_control.motion.contracts import ManualIntent
 from senior_control.motion.manual_authority import ManualAuthorityError, ManualAuthorityState
-from senior_control.motion.navigation_clock import monotonic_domain
 from senior_control.protocol import (
     Envelope,
     ManualIntentEnvelope,
@@ -51,13 +51,10 @@ class _NavigationSource:
     execution_id: str
     topic: str
     subscription: Subscription
-    bound_steady: float
-    clock_domain: str
     publisher_gid: bytes
     qualified: Callable[[], bool]
     sequence: int = 0
-    producer_sequence: int = 0
-    last_produced: float = float("-inf")
+    received_sequence: int = 0
     last_forwarded: float = float("-inf")
     task_epoch: int = 0
     received_steady: float = 0.0
@@ -148,7 +145,7 @@ class CommandNode(Node):
                 invalidate=self._invalidate_motion_runtime,
             )
         else:
-            # //Compatible: isolated simulation retains its existing metadata path.
+            # //Compatible: ordinary rclpy consumers retain their metadata path.
             self._runtime_subscription = self.create_subscription(
                 String, "/motion/runtime", self._on_motion_runtime, qos_profile_sensor_data
             )
@@ -169,7 +166,6 @@ class CommandNode(Node):
                 self._on_drive_feedback,
                 qos_profile_sensor_data,
             )
-        self._navigation_clock_domain = monotonic_domain()
         self._navigation_source: _NavigationSource | None = None
         self._retirements: dict[str, _NavigationRetirement] = {}
         self._terminal_requests: dict[str, _TerminalRelease] = {}
@@ -204,6 +200,26 @@ class CommandNode(Node):
             return receipt
         source_closed = False
         if envelope.type == "drive.stop" and hasattr(self, "_manual_ingress"):
+            identity, gesture = envelope.payload.authority_id, envelope.payload.gesture
+            if identity is not None:
+                context = self._manual_ingress.context
+                if context is None or (
+                    envelope.connection_epoch, envelope.controller_generation, envelope.session_id
+                ) != (context.agent_epoch, context.controller_generation, context.session_id):
+                    return CommandResult(False, ErrorCode.CONFLICT)
+                if gesture is None or not self._manual_ingress.stop(
+                    identity, gesture, self._monotonic_clock.monotonic()
+                ):
+                    return CommandResult(False, ErrorCode.CONFLICT)
+                target = self._manual_target
+                if target is not None and target.sample.intent.authority_id == identity and (
+                    target.sample.intent.gesture <= gesture
+                ):
+                    self._close_manual("release")
+                # A stale stop must not publish a barrier over a newer gesture.
+                self.publish_command()
+                return CommandResult(True)
+            # //Compatible: unscoped safety stops still revoke the whole authority.
             self._manual_ingress.revoke(self._monotonic_clock.monotonic())
             self._close_reason = "release"
             source_closed = self._close_manual("release")
@@ -310,11 +326,11 @@ class CommandNode(Node):
         try:
 
             @with_dds_info
-            def on_sample(message: NavigationSample, info: dict[str, Any]) -> None:
+            def on_sample(message: Twist, info: dict[str, Any]) -> None:
                 self._on_navigation_sample(topic, message, info)
 
             subscription = self.create_subscription(
-                NavigationSample, topic, on_sample, qos_profile_sensor_data
+                Twist, topic, on_sample, qos_profile_sensor_data
             )
         except Exception:
             self._arbiter.end_navigation(execution_id)
@@ -334,13 +350,10 @@ class CommandNode(Node):
         self._close_reason = "prepared"
         self._publish_barrier()
         self._retirements.pop(execution_id, None)
-        bound_at = self._monotonic_clock.monotonic()
         self._navigation_source = _NavigationSource(
             execution_id,
             topic,
             subscription,
-            bound_at,
-            self._navigation_clock_domain,
             publisher_gid,
             qualified,
             task_epoch=task_epoch,
@@ -717,19 +730,18 @@ class CommandNode(Node):
         # ACK admission checks both endpoint frontiers before matching a nonce.
         self._retirement_incarnation_current()
 
-    def _on_navigation_sample(
-        self, topic: str, msg: NavigationSample, info: dict[str, Any]
-    ) -> None:
+    def _on_navigation_sample(self, topic: str, msg: Twist, info: dict[str, Any]) -> None:
         received = self._monotonic_clock.monotonic()
         source = self._navigation_source
         if source is None or source.topic != topic:
             return
+        source.received_sequence += 1
         if not source.qualified():
             self.clear_navigation_source(source.execution_id, reason="qualification_lost")
             return
         endpoints = self.get_publishers_info_by_topic(source.topic)
         # //Compatible: Humble omits per-sample GID. Retain its private run-topic
-        # identity contract, now also bound to this graph incarnation and boot/run.
+        # identity contract, bound to this graph incarnation and private run.
         gid = info.get("publisher_gid")
         if (
             len(endpoints) != 1
@@ -738,33 +750,21 @@ class CommandNode(Node):
             or (gid is not None and bytes(gid) != source.publisher_gid)
         ):
             return
-        if (
-            msg.clock_domain != source.clock_domain
-            or msg.run_id != source.topic.split("/")[3][4:]
-            or not isinstance(msg.sequence, int)
-            or msg.sequence <= source.producer_sequence
-            or not isinstance(msg.produced_steady_ns, int)
-            or msg.produced_steady_ns <= 0
-            or not all(math.isfinite(v) for v in (msg.vx, msg.wz))
-        ):
+        if not all(math.isfinite(v) for v in (msg.linear.x, msg.angular.z)):
             return
-        sampled = msg.produced_steady_ns / 1e9
-        if sampled < source.bound_steady or sampled < source.last_produced:
-            return
-        velocity = Velocity(float(msg.vx), float(msg.wz))
-        # Qualification/graph work consumes the original producer lifetime.
+        velocity = Velocity(float(msg.linear.x), float(msg.angular.z))
+        # A standard Twist has no measurement/production stamp. Qualification
+        # work consumes its first local callback receipt, never renews it.
         now = self._monotonic_clock.monotonic()
         # Keep the existing supersedence policy; a producer zero takes precedence.
         if velocity != Velocity(0.0, 0.0) and now - source.last_forwarded < 0.16:
             return
         if self._arbiter.accept_navigation_sample(
-            source.execution_id, source.sequence + 1, velocity, sampled, now
+            source.execution_id, source.received_sequence, velocity, received, now
         ):
             source.received_steady = received
-            source.producer_sequence = msg.sequence
-            source.last_produced = sampled
             source.last_forwarded = now
-            source.sequence += 1
+            source.sequence = source.received_sequence
             self.publish_command()
 
     def publish_command(self) -> None:

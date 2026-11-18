@@ -1,5 +1,5 @@
 {
-  "provenance": "Native R3 ScanMotion1.5/1.6, source received/deadline and snapshot/tick clocks. Ingress ROS1.624 is reconstructed from the original admission deadline with unchanged max_age=.8; handler completion is explicitly controlled, not inferred from ingress. Earlier stationary recovery history is constructed through real admission.",
+  "provenance": "Native R3 ScanMotion1.5/1.6, source received/deadline and snapshot/tick clocks. Ingress ROS1.624 is reconstructed from the original admission deadline with unchanged max_age=.8; handler completion is explicitly controlled, not inferred from ingress. Earlier stationary recovery history is constructed through real admission. Migration endpoint records are explicit synthetic geometry replay inputs from the controlled history/receipt schedule; they do not recover or certify hardware acquisition age. Shared raw stamp 1.5 retains one identical original record.",
   "old_laser": {
     "header": {
       "stamp": {
@@ -43,6 +43,20 @@
     "startup_reference_stamp": {
       "sec": 0,
       "nanosec": 0
+    },
+    "first_time": {
+      "stamp_ns": 1400000000,
+      "received_ros_ns": 1420000000,
+      "received_steady_ns": 128392898658892,
+      "sample_steady_ns": 128392878658892,
+      "clock_generation": 1
+    },
+    "last_time": {
+      "stamp_ns": 1500000000,
+      "received_ros_ns": 1520000000,
+      "received_steady_ns": 128392998658892,
+      "sample_steady_ns": 128392978658892,
+      "clock_generation": 1
     }
   },
   "new_laser": {
@@ -88,6 +102,20 @@
     "startup_reference_stamp": {
       "sec": 0,
       "nanosec": 0
+    },
+    "first_time": {
+      "stamp_ns": 1500000000,
+      "received_ros_ns": 1520000000,
+      "received_steady_ns": 128392998658892,
+      "sample_steady_ns": 128392978658892,
+      "clock_generation": 1
+    },
+    "last_time": {
+      "stamp_ns": 1600000000,
+      "received_ros_ns": 1624000000,
+      "received_steady_ns": 128393130531642,
+      "sample_steady_ns": 128393106531642,
+      "clock_generation": 1
     }
   },
   "old_snapshot": {

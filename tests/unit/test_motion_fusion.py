@@ -2,7 +2,7 @@ import math
 from dataclasses import replace
 
 import pytest
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 from test_motion_sources import config, sample
 from test_motion_temporal import feed, owner, point, resolver
 
@@ -18,7 +18,6 @@ from senior_control.motion.observations import (
 )
 from senior_control.motion.source_admission import AdmissionOwner
 from senior_control.motion.source_modes import SourceMode
-from senior_control.sensors.time_proof import MeasurementInterval
 
 
 def test_ci_correlated_and_different_values_without_reciprocal_overflow():
@@ -66,12 +65,13 @@ def synthetic_window():
         h = Heading(
             0,
             0,
-            p.end_ros,
-            p.received_steady,
+            sample_time(
+                stamp_ns=round((p.end_ros) * 1e9),
+                received_ros_ns=round((p.end_ros) * 1e9),
+                received_steady_ns=round((p.received_steady) * 1e9),
+            ),
             "h",
             "synthetic known yaw",
-            measurement_steady=p.received_steady,
-            measurement=capture_time(p.received_steady, tick=p.end_ros).measurement,
         )
         assert o.ingest(
             p,
@@ -81,13 +81,12 @@ def synthetic_window():
         ).accepted
     laser = replace(
         sample(seq=1, end=0.1, received=100.1, values=(0.3, 0, 0)),
-        start_ros=0,
         model_id="synthetic",
     )
     assert o.ingest(laser, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    return o, r, s, r.resolve(0, 0.1, s)
+    return o, r, s, r.resolve(round((0) * 1e9), round((0.1) * 1e9), s)
 
 
 def test_complete_asynchronous_chain_ci_and_no_repeated_tick_precision():
@@ -121,7 +120,7 @@ def test_missing_models_do_not_invent_variances_and_mask_retains_missing_lateral
     )
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    result = fusion().update(r.resolve(0, 0.1, s), s, r)
+    result = fusion().update(r.resolve(round((0) * 1e9), round((0.1) * 1e9), s), s, r)
     assert result.mode is SourceMode.WHEEL_IMU_LIMITED
     assert result.supported_components == (True, False, True)
     assert result.average is None and result.upper is None
@@ -172,43 +171,49 @@ def test_explicit_gps_loss_or_drift_uses_same_owner_recovery(status):
         h = Heading(
             0,
             0,
-            t,
-            100 + t,
+            sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((100 + t) * 1e9),
+            ),
             "h",
             "synthetic",
-            measurement_steady=100 + t,
-            measurement=capture_time(100 + t, tick=t).measurement,
         )
         assert o.ingest(p, now_ros=t, now_steady=100 + t, heading=h).accepted
     assert dict(o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1).sources)[Source.GPS].ready
     bad = replace(
         p,
-        stamp_ros=0.12,
-        measurement_steady=100.12,
-        measurement=capture_time(100.12, tick=0.12).measurement,
-        received_steady=100.12,
         sequence=3,
         status=status,
+        time=sample_time(
+            stamp_ns=round((0.12) * 1e9),
+            received_ros_ns=round((0.12) * 1e9),
+            received_steady_ns=round((100.12) * 1e9),
+            clock_generation=1,
+        ),
     )
     assert not o.ingest(bad, now_ros=0.12, now_steady=100.12).accepted
     for t, seq, ready in [(0.14, 4, False), (0.26, 5, True)]:
         good = replace(
             p,
-            stamp_ros=t,
-            measurement_steady=100 + t,
-            measurement=capture_time(100 + t, tick=t).measurement,
-            received_steady=100 + t,
             sequence=seq,
+            time=sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((100 + t) * 1e9),
+                clock_generation=1,
+            ),
         )
         h = Heading(
             0,
             0,
-            t,
-            100 + t,
+            sample_time(
+                stamp_ns=round((t) * 1e9),
+                received_ros_ns=round((t) * 1e9),
+                received_steady_ns=round((100 + t) * 1e9),
+            ),
             "h",
             "synthetic",
-            measurement_steady=100 + t,
-            measurement=capture_time(100 + t, tick=t).measurement,
         )
         assert o.ingest(good, now_ros=t, now_steady=100 + t, heading=h).accepted
         for _ in range(3):
@@ -303,7 +308,7 @@ def wheel_window():
         ).accepted
     s = o.snapshot(after_cursor=r.cursor, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    return r, s, r.resolve(0, 0.1, s)
+    return r, s, r.resolve(round((0) * 1e9), round((0.1) * 1e9), s)
 
 
 def test_disputed_gyro_cannot_return_through_wheel_prediction_fallback():
@@ -359,9 +364,16 @@ def test_delta_log_translation_does_not_claim_independence_from_disputed_laser_y
     delta = DeltaObservation(
         Source.LASER,
         Frame.BODY,
-        0,
-        0.1,
-        100.1,
+        sample_time(
+            stamp_ns=round((0) * 1e9),
+            received_ros_ns=round((0) * 1e9),
+            received_steady_ns=round(((100.1) - ((0.1) - (0))) * 1e9),
+        ),
+        sample_time(
+            stamp_ns=round((0.1) * 1e9),
+            received_ros_ns=round((0.1) * 1e9),
+            received_steady_ns=round((100.1) * 1e9),
+        ),
         "delta",
         1,
         1,
@@ -370,17 +382,11 @@ def test_delta_log_translation_does_not_claim_independence_from_disputed_laser_y
         None,
         None,
         Pose2D(0, 0, 0),
-        start_steady=(100.1) - ((0.1) - (0)),
-        end_steady=100.1,
-        measurement_interval=MeasurementInterval(
-            capture_time((100.1) - ((0.1) - (0)), tick=0).measurement,
-            capture_time(100.1, tick=0.1).measurement,
-        ),
     )
     assert o.ingest(delta, now_ros=0.1, now_steady=100.1).accepted
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    result = fusion().update(r.resolve(0, 0.1, s), s, r)
+    result = fusion().update(r.resolve(round((0) * 1e9), round((0.1) * 1e9), s), s, r)
     # Delta->twist x/y use its yaw; GPS x/y use gyro. Both yaw hypotheses disputed.
     assert result.supported_components == (False, False, False)
     assert ("laser.vx", "conflicting_component") in result.failures
@@ -396,7 +402,7 @@ def test_cold_snapshot_does_not_let_gps_borrow_recovering_gyro():
         ),
     )
     r.consume(cold)
-    w = r.resolve(0, 0.1, cold)
+    w = r.resolve(round((0) * 1e9), round((0.1) * 1e9), cold)
     assert w.by_source(Source.IMU).reason == "recovering"
     assert w.by_source(Source.GPS).reason == "dependency_imu_recovering"
     assert not w.by_source(Source.GPS).original_keys
@@ -417,6 +423,6 @@ def test_ready_snapshot_new_imu_identity_cannot_consume_old_cached_gyro():
         views.append((src, view))
     changed = replace(s, sources=tuple(views))
     # New identity is ready, but its accepted events have not reached this resolver.
-    result = r.resolve(0, 0.1, changed).by_source(Source.GPS)
+    result = r.resolve(round((0) * 1e9), round((0.1) * 1e9), changed).by_source(Source.GPS)
     assert result.reason == "dependency_imu_history_missing"
     assert not result.original_keys

@@ -1,17 +1,14 @@
 """Raw camera admission binds each bridge/source lifetime and first receipts."""
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 
-from source_time_test_support import capture_time, synthetic_domain  # noqa: F401
+from sensor_time_test_support import sample_time
 
 
 def raw_header(**changes):
     from senior_control.vision.raw_capture import RawCaptureHeader
 
     base = RawCaptureHeader(
-        stamp_ns=1_000_000_000,
-        received_ros_ns=1_000_000_001,
-        received_steady=10.0,
         frame_id="camera_optical_frame",
         raw_gid="01" * 24,
         bridge_gid="02" * 24,
@@ -21,7 +18,11 @@ def raw_header(**changes):
         sequence=1,
         valid=True,
         reason="",
-        timing=capture_time(10.0, sequence=max(1, 1), epoch="epoch-a", tick=(1_000_000_000) / 1e9),
+        time=sample_time(
+            stamp_ns=1_000_000_000,
+            received_ros_ns=1_000_000_001,
+            received_steady_ns=round((10.0) * 1e9),
+        ),
     )
     return replace(base, **changes)
 
@@ -34,8 +35,9 @@ def test_bridge_and_raw_restart_retire_old_data_without_restamping():
     assert admission.offer(old, bridge_gid="02" * 24, now_ros_ns=1_100_000_000, now_steady=10.1)
     assert admission.latest is old
     changed = raw_header(
-        stamp_ns=1_010_000_000,
-        received_ros_ns=1_020_000_000,
+        time=sample_time(
+            stamp_ns=1_010_000_000, received_ros_ns=1_020_000_000, received_steady_ns=10_000_000_000
+        ),
         bridge_gid="03" * 24,
         raw_gid="04" * 24,
         source_epoch="epoch-b",
@@ -127,7 +129,17 @@ def test_same_stamp_cannot_pair_across_bridge_boot_or_global_capture_generation(
     assert compatible_captures(first, aligned)
     assert not compatible_captures(first, replace(aligned, bridge_boot_id="boot-b"))
     assert not compatible_captures(first, replace(aligned, capture_generation=4))
-    assert not compatible_captures(first, replace(aligned, stamp_ns=first.stamp_ns + 1))
+    assert not compatible_captures(
+        first,
+        replace(
+            aligned,
+            time=sample_time(
+                stamp_ns=first.stamp_ns + 1,
+                received_ros_ns=first.received_ros_ns,
+                received_steady_ns=first.time.received_steady_ns,
+            ),
+        ),
+    )
 
 
 def test_delayed_old_global_generation_cannot_reopen_after_replacement():
@@ -160,8 +172,9 @@ def test_capture_header_decoding_preserves_original_metadata_and_rejects_bad_tim
     wire = SimpleNamespace(
         stamp=SimpleNamespace(sec=1, nanosec=0),
         received_ros=SimpleNamespace(sec=1, nanosec=1),
-        received_steady=original.received_steady,
-        timing=SimpleNamespace(**asdict(original.timing)),
+        received_steady_ns=original.time.received_steady_ns,
+        sample_steady_ns=original.time.sample_steady_ns,
+        clock_generation=original.time.clock_generation,
         frame_id=original.frame_id,
         raw_gid=original.raw_gid,
         bridge_gid=original.bridge_gid,

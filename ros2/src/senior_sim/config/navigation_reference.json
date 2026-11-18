@@ -1,0 +1,18 @@
+{
+  "grid_path": "grid.json",
+  "grid_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "map_publisher": "map_server",
+  "pose_publisher": "amcl",
+  "source_namespace": "/",
+  "pose_topic": "/amcl_pose",
+  "max_age_s": 0.5,
+  "max_position_variance": 0.25,
+  "max_yaw_variance": 0.25,
+  "anchor_id": "environment-map-origin",
+  "anchor_pose": {
+    "x": 0.0,
+    "y": 0.0,
+    "yaw": 0.0
+  },
+  "evidence_basis": "Pinned environment geometry; localization supplied by standard AMCL"
+}

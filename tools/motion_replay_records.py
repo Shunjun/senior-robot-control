@@ -15,7 +15,7 @@ from senior_control.motion.observations import (
     SourceStatus,
 )
 from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
-from senior_control.sensors.time_proof import MeasurementInterval, MeasurementTime
+from senior_control.sensors.sample_time import SampleTime
 
 
 def stamp(value: dict[str, Any]) -> float:
@@ -35,12 +35,17 @@ class NativeAdapter:
         self.recording_id = recording_id
         self.sequence: dict[str, int] = defaultdict(int)
 
-    def convert(self, record: dict[str, Any], steady: float) -> MotionSample | None:
+    def convert(self, record: dict[str, Any]) -> MotionSample | None:
         topic = record["topic"]
         if topic not in ("/motion/scan", "/wheel/odom", "/imu/data"):
             return None
         m = record["message"]
-        t = stamp(m["header"]["stamp"])
+        endpoint = SampleTime(**record["last_time" if topic == "/motion/scan" else "time"])
+        header_stamp = m["header"]["stamp"]
+        if endpoint.stamp_ns != int(header_stamp["sec"]) * 1_000_000_000 + int(
+            header_stamp["nanosec"]
+        ):
+            raise ValueError("record sample time does not match original header")
         self.sequence[topic] += 1
         seq = self.sequence[topic]
         epoch = f"recording:{self.recording_id}:{topic}:producer_identity_unavailable"
@@ -52,8 +57,7 @@ class NativeAdapter:
                 return PointObservation(
                     Source.LASER,
                     Frame.BODY,
-                    t,
-                    steady,
+                    endpoint,
                     epoch,
                     seq,
                     0,
@@ -62,16 +66,13 @@ class NativeAdapter:
                     None,
                     None,
                     None,
-                    measurement_steady=steady,
-                    measurement=MeasurementTime("offline-recording", self.recording_id, t),
                 )
             d = m["body_delta"]
             return DeltaObservation(
                 Source.LASER,
                 Frame.BODY,
-                stamp(m["interval_start"]),
-                t,
-                steady,
+                SampleTime(**record["first_time"]),
+                SampleTime(**record["last_time"]),
                 epoch,
                 seq,
                 1,
@@ -85,14 +86,6 @@ class NativeAdapter:
                 ),
                 None,
                 Pose2D(0, 0, 0),
-                start_steady=steady - (t - stamp(m["interval_start"])),
-                end_steady=steady,
-                measurement_interval=MeasurementInterval(
-                    MeasurementTime(
-                        "offline-recording", self.recording_id, stamp(m["interval_start"])
-                    ),
-                    MeasurementTime("offline-recording", self.recording_id, t),
-                ),
             )
         values: tuple[float, ...]
         covariance: Covariance | None = None
@@ -127,8 +120,7 @@ class NativeAdapter:
         return PointObservation(
             source,
             Frame.BODY,
-            t,
-            steady,
+            endpoint,
             epoch,
             seq,
             1,
@@ -137,8 +129,6 @@ class NativeAdapter:
             covariance,
             None,
             None,
-            measurement_steady=steady,
-            measurement=MeasurementTime("offline-recording", self.recording_id, t),
         )
 
 

@@ -1,5 +1,6 @@
 """Real Agent composition/log service; only OS children and remote sockets are fixtures."""
 
+import ast
 import asyncio
 import json
 import os
@@ -254,7 +255,15 @@ def test_launch_exit_only_reports_lifecycle(monkeypatch, code):
         for filename in ("safety_motion.launch.py", "simulation_motion.launch.py"):
             source = Path("ros2/src/senior_robot/launch", filename).read_text()
             assert "OnProcessExit(on_exit=report_ros_exit)" in source
-            assert "Shutdown(" not in source
+            # Cleanup OnShutdown handlers do not request a launch-wide shutdown.
+            assert not any(
+                isinstance(node, ast.Call)
+                and (
+                    (isinstance(node.func, ast.Name) and node.func.id == "Shutdown")
+                    or (isinstance(node.func, ast.Attribute) and node.func.attr == "Shutdown")
+                )
+                for node in ast.walk(ast.parse(source))
+            )
     finally:
         events.close()
 

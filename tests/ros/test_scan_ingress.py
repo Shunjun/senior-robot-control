@@ -196,7 +196,7 @@ def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_
         result = next(item for item in captured if item.capture.reason == "raw_scan_invalid")
         assert not result.capture.valid and not result.ranges
         assert result.capture.raw_gid and result.capture.stamp.sec > 0
-        assert result.capture.received_steady > 0
+        assert result.capture.received_steady_ns > 0
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -242,7 +242,12 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
         capture.stamp = message.stamp
         capture.received_ros = Time(nanoseconds=int(message.ingress_ros * 1e9)).to_msg()
         message.ingress_ros = Time.from_msg(capture.received_ros).nanoseconds / 1e9
-        capture.received_steady, capture.frame_id = message.ingress_steady, message.frame_id
+        capture.received_steady_ns = round(message.ingress_steady * 1e9)
+        capture.sample_steady_ns = capture.received_steady_ns - (
+            Time.from_msg(capture.received_ros).nanoseconds
+            - Time.from_msg(capture.stamp).nanoseconds
+        )
+        capture.clock_generation, capture.frame_id = 1, message.frame_id
         capture.raw_gid, capture.bridge_gid = message.raw_source, "bb" * 24
         capture.source_epoch, capture.bridge_boot_id = "raw-epoch", "bridge-boot"
         capture.capture_generation, capture.sequence, capture.valid = 1, raw_sequence, True

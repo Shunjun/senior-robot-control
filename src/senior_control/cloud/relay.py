@@ -99,11 +99,13 @@ class Outbox:
     def closed(self) -> bool:
         return self._close_code is not None
 
-    def put(self, frame: bytes, kind: str) -> bool:
+    def put(self, frame: bytes, kind: str, *, stop: SimpleEnvelope | None = None) -> bool:
         """Queue a frame; False means the caller must report overload."""
         if self._close_code is not None:
             return False
-        if kind in SAFETY_TYPES or kind in AUTHORITY_TYPES:
+        if stop is not None:
+            self._discard_stopped_intent(stop)
+        elif kind in SAFETY_TYPES or kind in AUTHORITY_TYPES:
             self.discard_intent()
         if kind in ("drive.intent", SNAPSHOT, CONNECTION):
             self._discard_matching(lambda queued: queued == kind, overwritten=True)
@@ -131,6 +133,21 @@ class Outbox:
             self._items.insert(index, (kind, frame))
         self._event.set()
         return True
+
+    def _discard_stopped_intent(self, stop: SimpleEnvelope) -> None:
+        for index, (kind, raw) in enumerate(self._items):
+            if kind != "drive.intent":
+                continue
+            intent = json.loads(raw)
+            if (
+                intent["session_id"] == stop.session_id
+                and intent["connection_epoch"] == stop.connection_epoch
+                and intent.get("controller_generation") == stop.controller_generation
+                and intent["payload"]["authority_id"] == stop.payload.authority_id
+                and intent["payload"]["gesture"] <= stop.payload.gesture
+            ):
+                self._drop(index)
+            return
 
     def discard_intent(self) -> bytes | None:
         for index, (kind, frame) in enumerate(self._items):
@@ -552,7 +569,9 @@ class Hub:
                 if time.monotonic() < pending.deadline:
                     pending.controller.outbox.put(raw, WORKSPACE)
             return
-        if envelope.payload.request_type in {"control.acquire", "control.release"}:
+        if envelope.payload.request_type in {"control.acquire", "control.release"} or (
+            envelope.payload.request_type == "drive.stop" and envelope.controller_generation is not None
+        ):
             if self._route_manual_reply(link, envelope):
                 return
             return
@@ -669,7 +688,7 @@ class Hub:
             isinstance(envelope, ManualIntentEnvelope)
             or (
                 isinstance(envelope, SimpleEnvelope)
-                and envelope.type == "control.release"
+                and envelope.type in {"control.release", "drive.stop"}
                 and envelope.payload.authority_id is not None
             )
             or envelope.type in {"control.acquire", "control.release"}
@@ -708,7 +727,11 @@ class Hub:
             if len(connection.manual_requests) >= 64:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
                 return
-            if not agent.outbox.put(serialize_envelope(envelope), envelope.type):
+            if not agent.outbox.put(
+                serialize_envelope(envelope),
+                envelope.type,
+                stop=envelope if envelope.type == "drive.stop" else None,
+            ):
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
             else:
                 connection.manual_requests[envelope.request_id] = (

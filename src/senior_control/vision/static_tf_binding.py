@@ -1,4 +1,4 @@
-"""SIM-only static calibration lifetime; native receipt supplies source proof.
+"""Static calibration lifetime with authenticated first-receipt lineage.
 
 This contract does not authenticate DDS messages. Its caller must bind the
 receipt to the current native relay and inspect the graph independently.

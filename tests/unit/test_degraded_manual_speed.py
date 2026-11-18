@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from sensor_time_test_support import sample_time
 from test_directional_constraints import scene
 from test_motion_core_handoff import core  # noqa: F401
 from test_unified_motion_runtime import point
@@ -86,7 +87,7 @@ def test_lower_gear_reverse_and_custom_preference_apply_to_whole_range(
 
 
 def test_normal_cap_still_bounds_manual_degraded_speed(core):  # noqa: F811
-    core.profile = replace(core.profile, cap=0.1)
+    core.profile = core.profile.model_copy(update={"requested_linear_mps": 0.1})
     ctx = context(core, 0.5, "high", degraded_limit=0.6)
     assert ctx.envelope.linear_cap_mps == 0.1
     assert ctx.target.velocity.vx == 0.05
@@ -100,9 +101,21 @@ def test_normal_mode_preserves_gear_percentage(core, gear, limit):  # noqa: F811
             "laser",
             (0.0, None, 0.0),
             10.0,
-            (Origin("laser", "boot", 1, 10.0, 10.0, 10.0, measurement_steady=10.0),),
+            (
+                Origin(
+                    "laser",
+                    "boot",
+                    1,
+                    sample_time(
+                        stamp_ns=round((10.0) * 1e9),
+                        received_ros_ns=round((10.0) * 1e9),
+                        received_steady_ns=round((10.0) * 1e9),
+                    ),
+                ),
+            ),
             independent=(True, True, True),
             measured_steady=10.0,
+            stamp_ns=round((10.0) * 1e9),
         ),
         10.0,
         10.0,
@@ -202,7 +215,7 @@ def test_output_owner_rejects_inconsistent_or_invalid_manual_wire_metadata(core,
     [(0.25, 0.075), (0.5, 0.15), (1, 0.3), (-0.25, -0.075), (-0.5, -0.15), (-1, -0.3)],
 )
 def test_old_strategy_cap_cannot_override_saved_manual_default(core, gear, fraction, expected):  # noqa: F811
-    core.profile = replace(core.profile, degraded_cap=0.15)
+    core.profile = core.profile.model_copy(update={"degraded_cap": 0.15})
     ctx = context(core, fraction, gear)
     assert ctx.target.velocity.vx == pytest.approx(expected)
     assert ctx.envelope.linear_cap_mps == 0.3
@@ -210,14 +223,14 @@ def test_old_strategy_cap_cannot_override_saved_manual_default(core, gear, fract
 
 @pytest.mark.parametrize("fraction,expected", [(0.25, 0.15), (0.5, 0.3), (1, 0.6)])
 def test_custom_manual_limit_can_exceed_old_strategy(core, fraction, expected):  # noqa: F811
-    core.profile = replace(core.profile, degraded_cap=0.15)
+    core.profile = core.profile.model_copy(update={"degraded_cap": 0.15})
     ctx = context(core, fraction, "high", degraded_limit=0.6)
     assert ctx.target.velocity.vx == pytest.approx(expected)
     assert ctx.envelope.linear_cap_mps == 0.6
 
 
 def test_navigation_retains_legacy_policy_outside_manual_scope(core):  # noqa: F811
-    core.profile = replace(core.profile, degraded_cap=0.15)
+    core.profile = core.profile.model_copy(update={"degraded_cap": 0.15})
     ctx = context(core, 1, "high", degraded_limit=0.6, source="navigation")
     assert ctx.envelope.linear_cap_mps == 0.15
     assert ctx.target.velocity.vx == pytest.approx(25 / 18)

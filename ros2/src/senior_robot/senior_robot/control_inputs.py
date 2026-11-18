@@ -42,16 +42,17 @@ class ControlInputs:
         self.slot = LatestSnapshot(context)
         self.stop = context.Event()
         self.version = 0
+        # //Compatible: Humble exposes declared parameters through this prefix API.
         parameters = [
-            (name, node.get_parameter(name).value)
-            for name in node.list_parameters([], depth=0).names
-            if node.get_parameter(name).type_.value != 0
+            (name, parameter.value)
+            for name, parameter in node.get_parameters_by_prefix("").items()
+            if parameter.type_.value != 0
         ]
         remaps = [
             (topic, node.resolve_topic_name(topic))
             for topic in (
-                "/wheel/odom/timed",
-                "/imu/data/timed",
+                str(node._motion_core.profile.wheel_topic),
+                str(node._motion_core.profile.imu_topic),
                 "/motion/scan",
                 "/tf",
                 "/tf_static",

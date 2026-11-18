@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from senior_robot.simulation_motion_profile import SimulationMotionProfile
+from control_process_test_support import generic_motion_profile
 from test_directional_constraints import scene
 
 from senior_control.models import Pose2D, Velocity
@@ -20,7 +20,7 @@ from senior_control.motion.source_modes import SourceMode
 
 def context(now, target=None):
     target = target if target is not None else Velocity(0, 0)
-    p = SimulationMotionProfile()
+    p = generic_motion_profile()
     return ConstraintSnapshot(
         MotionTarget(target, "manual", "new-authority", now + 0.2),
         BodyMotion(
@@ -75,7 +75,7 @@ def point(now, sequence, value=None, epoch="wheel"):
 def stopped_controller():
     e = ConstraintEngine(ConstraintConfig((1.0, 0.75, 0.5, 0.25), 0.15, 0.05, 256, 0.005))
     c = MotionController(
-        e, SimulationMotionProfile().controller(), Velocity(0.277, 0), Velocity(0, 0)
+        e, generic_motion_profile().controller(), Velocity(0.277, 0), Velocity(0, 0)
     )
     deadlines = []
     for i in range(170):

@@ -1,4 +1,4 @@
-#include <senior_motion_msgs/source_timing.hpp>
+#include <senior_motion_msgs/sample_time.hpp>
 #include "bounded_scan_ingress.hpp"
 
 #include "scan_receipt_admission.hpp"
@@ -36,7 +36,7 @@ BoundedScanIngress::BoundedScanIngress(
   std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
   StaticLidarTfIngress * static_lidar_tf)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
-  raw_topic_(std::move(raw_topic) + "/timed"), odom_frame_(std::move(odom_frame)),
+  raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
   base_frame_(std::move(base_frame)), submit_(std::move(submit)),
   static_lidar_tf_(static_lidar_tf)
 {
@@ -53,8 +53,24 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
   if (closed_) {
     return false;
   }
-  if (now < last_steady_ns_ || (now == 0 && source_)) {
-    retire_source();
+  bool discontinuity = now < last_steady_ns_ || (now == 0 && source_);
+  try {
+    discontinuity = clock_.observe(node_.get_clock()->now().nanoseconds(), now).discontinuity ||
+      discontinuity;
+  } catch (const std::invalid_argument &) {
+    discontinuity = true;
+  }
+  if (discontinuity) {
+    if (source_) {
+      // An established map source remains terminal across a clock segment change.
+      retire_source();
+    } else {
+      pending_.clear();
+      last_sequence_ = 0;
+      last_measurement_ns_ = 0;
+      receipt_floor_ns_ = now > 0 ? static_cast<uint64_t>(now) : 0;
+      last_steady_ns_ = now;
+    }
     return false;
   }
   last_steady_ns_ = now;
@@ -75,7 +91,7 @@ bool BoundedScanIngress::current_owner(const Receipt & receipt)
 
 bool BoundedScanIngress::source_active()
 {
-  if (!observe_clock(senior_motion_msgs::navigation::monotonic_ns()) || !source_) {
+  if (!observe_clock(senior_motion_msgs::time::monotonic_ns()) || !source_) {
     return false;
   }
   if (!current_owner(source_->capture)) {
@@ -87,7 +103,7 @@ bool BoundedScanIngress::source_active()
 
 void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
 {
-  if (!observe_clock(senior_motion_msgs::navigation::monotonic_ns())) {
+  if (!observe_clock(senior_motion_msgs::time::monotonic_ns())) {
     return;
   }
   if (source_ && !current_owner(source_->capture)) {
@@ -96,7 +112,8 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   }
   const auto & receipt = scan->capture;
   const auto actual = gid_hex(info.get_rmw_message_info().publisher_gid.data);
-  if (actual.empty() || actual != receipt.bridge_gid) {
+  if (actual.empty() || actual != receipt.bridge_gid ||
+    receipt.received_steady_ns < receipt_floor_ns_) {
     return;
   }
   if (source_) {
@@ -134,14 +151,14 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
   {
     return;
   }
-  const auto measured = receipt.timing.capture_end_steady_ns;
+  const auto measured = time_ns(receipt.stamp);
   if (source_ && !same_geometry(*source_, *scan)) {
     retire_source();
     return;
   }
-  // Source sequence and original monotonic measurement order survive ROS clock corrections.
+  // Order measurements on their original integer ROS axis, within the pinned generation.
   last_sequence_ = receipt.sequence;
-  if (measured <= last_measurement_ns_) {
+  if (source_ && measured <= last_measurement_ns_) {
     return;
   }
   last_measurement_ns_ = measured;

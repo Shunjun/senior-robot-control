@@ -1,5 +1,5 @@
 import { IntentBackpressureError, type Authority, type Intent, type VehiclePort } from '../../api/vehicleState';
-export type ManualPhase = 'none' | 'preparing' | 'prepared' | 'active';
+export type ManualPhase = 'none' | 'preparing' | 'prepared' | 'active' | 'stopping';
 /** A prepared receipt is permission, never a queued press. One active latest slot. */
 export class ManualController {
   phase: ManualPhase = 'none';
@@ -82,6 +82,22 @@ export class ManualController {
       }
       this.release();
       this.publish('none', `驾驶意图发送失败：${String(error)}`);
+    });
+  }
+  stopGesture(): void {
+    if (this.phase !== 'active' || this.authority === null) return;
+    const generation = ++this.generation;
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
+    this.current = null;
+    const authority = this.authority;
+    this.publish('stopping');
+    void this.port.stop(authority.authority_id, this.gesture).then(() => {
+      if (generation === this.generation) this.publish('prepared');
+    }).catch(error => {
+      if (generation !== this.generation) return;
+      this.release();
+      this.publish('none', `停车结果待确认：${String(error)}`);
     });
   }
   observeClosed(authorityId: string): void {

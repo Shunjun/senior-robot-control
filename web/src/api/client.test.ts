@@ -319,3 +319,26 @@ it('sends every 100ms while a 400ms independent receipt is unresolved, with no i
     client.disconnect();
   }
 });
+
+it('sends scoped stop over the authenticated socket without retiring ownership', async () => {
+  const { client, socket } = await connected();
+  try {
+    const controller = new ManualController(client.vehicle, () => {});
+    const preparing = controller.prepare();
+    respond(socket, socket.sent.at(-1)!, { authority_id: 'same', state: 'prepared' });
+    await preparing;
+    controller.begin(1, 0, 'low');
+    controller.stopGesture();
+    const stop = socket.sent.at(-1)!;
+    expect(stop).toMatchObject({ type: 'drive.stop', connection_epoch: 3, payload: { authority_id: 'same', gesture: 1 } });
+    respond(socket, stop, undefined);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(controller.phase).toBe('prepared');
+    expect(controller.begin(-1, 0, 'low')).toBe(true);
+    expect(socket.sent.at(-1)).toMatchObject({ type: 'drive.intent', payload: { authority_id: 'same', gesture: 2, sequence: 2 } });
+    expect(socket.sent.filter(item => item.type === 'control.acquire')).toHaveLength(1);
+    controller.dispose();
+  } finally {
+    client.disconnect();
+  }
+});
