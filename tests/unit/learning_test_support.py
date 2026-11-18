@@ -27,25 +27,102 @@ class ImmediateWorker:
         pass
 
 
+class InlineCompute:
+    """Transport substitute only; actual stateful learning kernel stays unchanged."""
+
+    def __init__(self):
+        from senior_control.runtime.learning_compute import LearningKernel
+
+        self.kernel = LearningKernel()
+        self.flight = None
+        self.held = False
+
+    def submit(self, batch):
+        assert self.flight is None
+        self.flight = batch
+
+    def poll(self):
+        if self.flight is None or self.held:
+            return None
+        batch, self.flight = self.flight, None
+        return self.kernel.update(batch)
+
+
 class TestRun:
     __test__ = False
 
     def __init__(self, label):
+        from senior_control.runtime.learning_service import LearningService
+
         identity = hashlib.sha256(str(label).encode()).hexdigest()[:32]
         self.path = Path(label).parent / (".startup-learning-" + identity)
         self.owner = LearningRecordOwner(
-            self.path,
-            identity,
-            DOMAIN,
-            new_run=True,
-            worker_factory=ImmediateWorker,
+            self.path, identity, DOMAIN, new_run=True, worker_factory=ImmediateWorker
         )
+        self.owner.record = self.owner.record.model_copy(update={"created_steady_ns": 0})
+        self.service = LearningService(self.path)
+        self.service.owner = self.owner
+        self.service.compute = InlineCompute()
         self.clients = []
+        self.stream_id = "1" * 32
+        self.index = 0
+        self.hold_ingress = False
+        self.profile = type("Profile", (), {"length": 0.6, "width": 0.4})()
         self.pump()
+
+    def rpc(self, request):
+        import asyncio
+
+        return asyncio.run(self.service.handle(request))
 
     def pump(self):
         for _ in range(4):
             self.owner.poll()
+            self.service._advance_capture()
+            self.service._pump_compute()
+
+    def offer(self, raw):
+        import threading
+        from collections import deque
+        from unittest.mock import patch
+
+        from senior_control.runtime.learning_client import LearningFrames
+        from senior_control.runtime.learning_wire import FrameBatch
+
+        recorder = object.__new__(LearningFrames)
+        recorder.profile, recorder.body_frame = self.profile, "base_link"
+        recorder._index, recorder._frames = self.index, deque()
+        recorder._lock, recorder._gap = threading.Lock(), False
+        with patch(
+            "senior_control.runtime.learning_client.time.monotonic_ns",
+            return_value=round(raw.received * 1e9),
+        ):
+            recorder.offer(raw)
+        self.index = recorder._index
+        batch = FrameBatch(
+            after_index=recorder._frames[0].index - 1,
+            attempt_id=self.owner.record.attempt_id,
+            stream_id=self.stream_id,
+            frames=tuple(recorder._frames),
+            through_steady_ns=round(raw.received * 1e9),
+        )
+        if not self.hold_ingress:
+            self.service._accept_frames(batch)
+        return batch
+
+    def heartbeat(self, now_ns):
+        from senior_control.runtime.learning_wire import FrameBatch
+
+        if not self.hold_ingress:
+            self.service._accept_frames(
+                FrameBatch(
+                    after_index=self.index,
+                    attempt_id=self.owner.record.attempt_id,
+                    stream_id=self.stream_id,
+                    frames=(),
+                    through_steady_ns=now_ns,
+                )
+            )
 
     def client(self):
         client = InProcessClient(self)
@@ -63,17 +140,24 @@ class TestRun:
 
 class InProcessClient:
     def __init__(self, run):
-        self.run = run
-        self.closed = False
-        self._reservation = None
+        self.run, self.closed, self._reservation = run, False, None
         self.view = None
+        self._attempt = run.owner.record.attempt_id
+        self.active_revision = 0
         self._attach()
 
     def _attach(self):
         self.run.pump()
-        self.session, record = self.run.owner.begin_consumer()
-        model = record.model
-        self.view = None if model is None else LearningFilterView(model, record.geometry)
+        self.session, _ = self.run.owner.begin_consumer()
+        self.poll()
+
+    @property
+    def proposal(self):
+        return self.run.service.proposal
+
+    @property
+    def accepted_frames(self):
+        return self.run.service.accepted_frames
 
     @property
     def error(self):
@@ -81,6 +165,15 @@ class InProcessClient:
 
     def poll(self):
         self.run.pump()
+        if self._attempt != self.run.owner.record.attempt_id:
+            self._attempt = self.run.owner.record.attempt_id
+            self._reservation = None
+            self.session, _ = self.run.owner.begin_consumer()
+        record = self.run.owner.active_record
+        if record is not None and record.model is not None:
+            if self.active_revision != self.run.owner.public_manifest.active_revision:
+                self.view = LearningFilterView(record.model, record.geometry)
+                self.active_revision = self.run.owner.public_manifest.active_revision
 
     @property
     def record(self):
@@ -103,23 +196,55 @@ class InProcessClient:
         )
 
     def geometry(self, geometry):
-        if self.view is None:
+        if self.session is not None:
             self.run.owner.set_geometry(self.session, geometry)
             self.poll()
 
     def phase(self, phase, reason, segment_id=None):
+        from senior_control.runtime.learning_wire import PhaseReport
+
         if self.session is not None:
-            self.run.owner.set_phase(self.session, phase, reason, segment_id)
+            self.run.rpc(
+                PhaseReport(session=self.session, phase=phase, reason=reason, segment_id=segment_id)
+            )
         self.poll()
 
     def action(self, start_ns, interval_ns, *, finished):
         self.run.owner.report_action(self.session, start_ns, interval_ns, finished=finished)
         self.poll()
 
-    def complete(self, points):
-        self.run.owner.complete_model(self.session, points)
+    def observed(
+        self, *, segment_id, now_ns, validation_after_ns, first_takeover_ns, stationary, reason=None
+    ):
+        from senior_control.runtime.learning_wire import MotionObservedThrough
+
+        if self.session is not None:
+            self.run.rpc(
+                MotionObservedThrough(
+                    session=self.session,
+                    attempt_id=self.run.owner.record.attempt_id,
+                    segment_id=segment_id,
+                    through_steady_ns=now_ns,
+                    validation_after_steady_ns=validation_after_ns,
+                    first_takeover_ns=first_takeover_ns,
+                    reason=reason,
+                    stationary=stationary,
+                )
+            )
+            self.run.heartbeat(now_ns)
         self.poll()
-        self._attach()
+
+    def accept_attempt(self, accepted, reason):
+        from senior_control.runtime.learning_wire import AcceptAttempt
+
+        self.run.rpc(
+            AcceptAttempt(
+                session=self.session,
+                attempt_id=self.run.owner.record.attempt_id,
+                accepted=accepted,
+                reason=reason,
+            )
+        )
 
     def close(self):
         if not self.closed:
@@ -204,6 +329,7 @@ def write_geometry_record(path, boundary):
 
     record = LearningRecord(
         run_id="f" * 32,
+        attempt_id="d" * 32,
         clock_domain=DOMAIN,
         owner_epoch="e" * 32,
         geometry=geometry(boundary),

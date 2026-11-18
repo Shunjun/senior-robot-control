@@ -362,12 +362,19 @@ class MotionCoreOutput:
         client.poll()
         record = client.record
         if record is not None and getattr(self, "_learning_attempt", None) != record.attempt_id:
-            proposal = client.proposal
-            if record.trigger == "manual":
-                if proposal is None or not client.ready:
-                    return None
+            needs_admission = (
+                record.trigger == "manual"
+                and not record.action.consumed
+                and record.phase not in {"completed", "failed", "unconfirmed"}
+                and record.capture_summary.state != "complete"
+            )
+            if needs_admission and not client.ready:
+                return None
+            if needs_admission:
+                proposal = client.proposal
                 permitted = (
-                    time.monotonic() < proposal.deadline_steady
+                    proposal is not None
+                    and time.monotonic() < proposal.deadline_steady
                     and proposal.owner_boot_id == self._input_boot
                     and proposal.generation == self.output_generation
                     and self.target.source == "idle"
@@ -379,11 +386,11 @@ class MotionCoreOutput:
                 client.accept_attempt(
                     permitted, "accepted" if permitted else "control_source_changed"
                 )
-                if not permitted:
-                    self._learning_attempt = record.attempt_id
-                    return None
             self.startup = StartupLearning(client)
             self._learning_attempt = record.attempt_id
+            if needs_admission and not permitted:
+                self._interrupt_learning("control_source_changed", now)
+                return None
         self.startup.advance(
             self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
         )

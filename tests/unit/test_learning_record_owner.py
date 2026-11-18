@@ -8,6 +8,7 @@ from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.motion.learning_record import (
     MAX_RECORD_BYTES,
+    CaptureSummary,
     LearningAction,
     LearningRecord,
     parse_record,
@@ -37,8 +38,18 @@ class HeldWorker:
         pass
 
 
+def finish_writes(owner, worker):
+    for _ in range(8):
+        if owner._future is None:
+            break
+        worker.finish()
+        owner.poll()
+
+
 def test_strict_record_roundtrip_and_corrupt_or_unknown_inputs():
-    record = LearningRecord(run_id="a" * 32, clock_domain=DOMAIN, owner_epoch="b" * 32)
+    record = LearningRecord(
+        attempt_id="0" * 32, run_id="a" * 32, clock_domain=DOMAIN, owner_epoch="b" * 32
+    )
     assert parse_record(record.to_bytes()) == record
     for data in (
         b'{"schema_version":1,"schema_version":1}',
@@ -85,7 +96,9 @@ def test_atomic_write_failure_keeps_previous_complete_snapshot(tmp_path, monkeyp
     from senior_control.runtime import learning_store
 
     path = tmp_path / (".startup-learning-" + "e" * 32)
-    original = LearningRecord(run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32)
+    original = LearningRecord(
+        attempt_id="0" * 32, run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32
+    )
     write_record(path, original)
     newer = LearningRecord.model_validate({**original.model_dump(), "revision": 1})
     actual = learning_store.os.replace
@@ -108,7 +121,9 @@ def test_pending_symlink_never_overwrites_unrelated_file(tmp_path):
     other = tmp_path / "unrelated"
     other.write_text("keep")
     path.with_name(path.name + ".pending").symlink_to(other)
-    record = LearningRecord(run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32)
+    record = LearningRecord(
+        attempt_id="0" * 32, run_id="e" * 32, clock_domain=DOMAIN, owner_epoch="f" * 32
+    )
     with pytest.raises(OSError):
         write_record(path, record)
     assert other.read_text() == "keep" and not path.exists()
@@ -141,8 +156,7 @@ def test_action_consumption_requires_commit_and_survives_client_rebind(tmp_path)
     try:
         with pytest.raises(ValueError):
             owner.begin_consumer()
-        worker.finish()
-        owner.poll()
+        finish_writes(owner, worker)
         session, _ = owner.begin_consumer()
         revision = owner.reserve_action(session)
         assert revision is not None and not owner.action_ready(session, revision)
@@ -161,21 +175,22 @@ def test_completed_catalog_is_published_only_after_commit_and_attach_is_read_onl
     path = tmp_path / (".startup-learning-" + "c" * 32)
     owner = LearningRecordOwner(path, "c" * 32, DOMAIN, new_run=True, worker_factory=lambda: worker)
     try:
-        worker.finish()
-        owner.poll()
+        finish_writes(owner, worker)
         session, _ = owner.begin_consumer()
         owner.set_geometry(session, geometry(BOUNDARY))
         worker.finish()
         owner.poll()
+        owner.capture(CaptureSummary(state="complete"))
         owner.complete_model(session, ((0.0, 0.15), (0.1, 0.1), (0.4, 0.1)))
         assert owner.public_record.model is None
         with pytest.raises(ValueError, match="model_not_durable"):
             owner.begin_consumer()
-        worker.finish()
-        owner.poll()
+        finish_writes(owner, worker)
         readonly, record = owner.begin_consumer()
         assert readonly is None and record.model.points == ((0.0, 0.15), (0.1, 0.1), (0.4, 0.1))
-        assert read_record(path).model == record.model
+        from senior_control.runtime.learning_store import attempt_path
+
+        assert read_record(attempt_path(path, record.attempt_id)).model == record.model
         with pytest.raises(ValueError, match="consumer_identity"):
             owner.reserve_action(session)
         calls, before = worker.calls, path.read_bytes()
@@ -192,7 +207,9 @@ def test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action(tmp
     client = run.client()
     client.geometry(geometry(BOUNDARY))
     assert client.reserve_action()
-    client.complete(((0.0, 0.15),))
+    run.owner.capture(CaptureSummary(state="complete"))
+    run.owner.complete_model(client.session, ((0.0, 0.15),))
+    run.pump()
     original = client.record.model
     client.close()
     run.owner.close()
@@ -200,9 +217,52 @@ def test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action(tmp
         run.path, run.owner.record.run_id, DOMAIN, new_run=False, worker_factory=ImmediateWorker
     )
     try:
-        restored.poll()
+        for _ in range(4):
+            restored.poll()
         assert restored.record.model == original and restored.record.phase == "completed"
         assert restored.record.action.consumed
         assert restored.begin_consumer()[0] is None
     finally:
         restored.close()
+
+
+def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(tmp_path):
+    from senior_control.protocol import LearningStartPayload
+    from senior_control.runtime.learning_store import attempt_path
+    from senior_control.runtime.learning_wire import BeginAttempt
+
+    run = TestRun(tmp_path / "attempts")
+    try:
+        session, _ = run.owner.begin_consumer()
+        run.owner.reserve_action(session)
+        run.pump()
+        run.owner.set_phase(session, "failed", "control_takeover")
+        run.pump()
+        old = run.owner.record
+        request = BeginAttempt(
+            start_request_id="manual",
+            fingerprint="a" * 64,
+            payload=LearningStartPayload(expected_active_revision=0, expected_authority_id=None),
+            owner_boot_id="b" * 32,
+            generation=1,
+            deadline_steady=100.0,
+            admitted=True,
+        )
+        accepted = run.rpc(request)
+        identity = accepted.data["attempt_id"]
+        assert accepted.data["state"] == "accepted"
+        duplicate = run.rpc(request.model_copy(update={"deadline_steady": 200.0, "generation": 2}))
+        assert duplicate.data == accepted.data
+        assert run.service.proposal.deadline_steady == 100.0
+        busy = run.rpc(request.model_copy(update={"start_request_id": "another"}))
+        assert busy.data["state"] == "busy" and busy.data["attempt_id"] == identity
+        assert run.owner.record.attempt_id == identity and not run.owner.record.action.consumed
+        assert read_record(attempt_path(run.path, old.attempt_id)).action == old.action
+        from senior_control.protocol import LearningStatusPayload
+        from senior_control.runtime.learning_wire import QueryAttempt
+
+        queried = run.rpc(QueryAttempt(payload=LearningStatusPayload(attempt_id=old.attempt_id)))
+        assert queried.data["phase"] == "failed" and queried.data["reason"] == "control_takeover"
+
+    finally:
+        run.close()

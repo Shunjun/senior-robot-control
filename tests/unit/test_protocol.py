@@ -171,3 +171,44 @@ def test_retired_intent_receipt_is_rejected():
         validate_envelope(
             message(type="response", payload={"request_type": "drive.intent", "ok": True}), "r1"
         )
+
+
+def test_learning_contract_keeps_start_identity_separate_from_status_query():
+    from senior_control.protocol import (
+        LearningStartEnvelope,
+        LearningStatusEnvelope,
+        ResponsePayload,
+    )
+
+    base = dict(
+        v=1,
+        robot_id="robot",
+        session_id="operator",
+        connection_epoch=1,
+        request_id="start-1",
+        seq=1,
+        expires_at=10.0,
+    )
+    start = LearningStartEnvelope(
+        **base,
+        type="learning.start",
+        payload={"expected_active_revision": 0, "expected_authority_id": None},
+    )
+    query = LearningStatusEnvelope(
+        **{**base, "request_id": "query-1", "seq": 2},
+        type="learning.status",
+        payload={"start_request_id": start.request_id},
+    )
+    assert query.payload.start_request_id == "start-1" and query.request_id != "start-1"
+    receipt = ResponsePayload(
+        request_type="learning.start",
+        ok=True,
+        data={"start_request_id": "start-1", "attempt_id": "a" * 32, "state": "busy"},
+    )
+    assert receipt.data["state"] == "busy"
+    with pytest.raises(ValueError):
+        LearningStatusEnvelope(
+            **base,
+            type="learning.status",
+            payload={"start_request_id": "start-1", "attempt_id": "a" * 32},
+        )

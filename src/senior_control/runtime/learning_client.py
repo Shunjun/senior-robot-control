@@ -75,6 +75,8 @@ class LearningClient:
         self._observed: MotionObservedThrough | None = None
         self._observed_lock = threading.Lock()
         self._takeover_sent = False
+        self._last_stationary: bool | None = None
+        self._observed_gap = False
         self._thread = threading.Thread(target=self._run, name="learning-control", daemon=True)
         self._thread.start()
 
@@ -117,7 +119,7 @@ class LearningClient:
                     break
                 except queue.Full:
                     pass
-            pending = None
+            pending = State() if isinstance(pending, SessionRequest) and not reply.ok else None
 
     def poll(self) -> None:
         for _ in range(16):
@@ -155,6 +157,10 @@ class LearningClient:
                 self._record = record
                 if changed and not self.read_only:
                     self._takeover_sent = False
+                    self._last_stationary = None
+                    self._observed_gap = False
+                    with self._observed_lock:
+                        self._observed = None
                     self._session = None
                     self._revision = None
                     self._action_ready = self._reserving = self._checking_action = False
@@ -208,7 +214,10 @@ class LearningClient:
 
     def reserve_action(self) -> bool:
         self.poll()
-        if self.read_only:
+        if self.read_only or (
+            self._record is not None
+            and (self._record.model is not None or self._record.action.stage == "window_finished")
+        ):
             return False
         if self._action_ready:
             return True
@@ -262,9 +271,15 @@ class LearningClient:
         now_ns: int,
         validation_after_ns: int | None,
         first_takeover_ns: int | None,
+        stationary: bool,
         reason: str | None = None,
     ) -> None:
-        if self.read_only or self._session is None or self._record is None:
+        if (
+            self.read_only
+            or self._session is None
+            or self._record is None
+            or self._record.capture_summary.state != "open"
+        ):
             return
         # Latest observation contains the immutable FIRST takeover fact, so coalescing
         # observations cannot erase a cancellation or reorder control commands.
@@ -276,12 +291,36 @@ class LearningClient:
             validation_after_steady_ns=validation_after_ns,
             first_takeover_ns=first_takeover_ns,
             reason=reason,
+            stationary=stationary,
+            gap=self._observed_gap,
         )
-        if first_takeover_ns is not None and not self._takeover_sent:
-            self._takeover_sent = self._enqueue(value)
+        first_takeover = first_takeover_ns is not None and not self._takeover_sent
+        if first_takeover or stationary != self._last_stationary:
+            with self._observed_lock:
+                previous, self._observed = self._observed, None
+            if previous is not None:
+                self._offer_fact(previous)
+            value = value.model_copy(update={"gap": self._observed_gap})
+            if self._offer_fact(value):
+                self._last_stationary = stationary
+                self._takeover_sent |= first_takeover
         else:
             with self._observed_lock:
                 self._observed = value
+
+    def _offer_fact(self, value: MotionObservedThrough) -> bool:
+        # Recording loss prevents a model, never an already-granted motion window.
+        # Keep the existing single ordered 16-entry control FIFO. Four entries
+        # remain available for reserve/action/phase records when observation facts burst.
+        if self._commands.qsize() >= 12:
+            self._observed_gap = True
+            return False
+        try:
+            self._commands.put_nowait(value)
+            return True
+        except queue.Full:
+            self._observed_gap = True
+            return False
 
     def close(self) -> None:
         self._stop.set()
@@ -351,6 +390,7 @@ class LearningFrames:
                     self._frames[0].recorded_steady_ns - 1 if self._frames else time.monotonic_ns()
                 )
                 request = FrameBatch(
+                    after_index=frames[0].index - 1 if frames else self._index,
                     attempt_id=self._attempt,
                     stream_id=self._stream,
                     frames=frames,
@@ -361,6 +401,12 @@ class LearningFrames:
                 reply = request_once(self.run_id, request)
                 if not reply.ok:
                     raise ValueError(reply.error)
+                if (
+                    frames
+                    and reply.attempt_id == request.attempt_id
+                    and reply.through_index < frames[-1].index
+                ):
+                    raise ValueError("learning_frame_ack_incomplete")
                 if reply.attempt_id is not None and reply.attempt_id != self._attempt:
                     with self._lock:
                         self._attempt = reply.attempt_id

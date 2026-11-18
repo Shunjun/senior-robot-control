@@ -457,3 +457,44 @@ async def test_agent_epoch_increases_across_cloud_app_restart(tmp_path: Path) ->
         assert await socket.receive() is None
         assert socket.closed
         await socket.aclose()
+
+
+async def test_learning_reply_is_private_and_controller_generation_is_relay_owned(cloud):
+    from senior_control.protocol import LearningStartEnvelope
+
+    csrf = await cloud.login()
+    robot, token = await cloud.pair(csrf)
+    browser = await cloud.control(robot)
+    other = await cloud.control(robot)
+    assert await browser.connect() and await other.connect()
+    agent = await cloud.agent(token)
+    assert await agent.connect()
+    epoch = json.loads(await browser.receive())["connection_epoch"]
+    await other.receive()
+    command = LearningStartEnvelope(
+        v=1,
+        type="learning.start",
+        robot_id=robot,
+        session_id="operator",
+        connection_epoch=epoch,
+        request_id="calibration",
+        seq=1,
+        expires_at=time.time() + 5.0,
+        payload={"expected_active_revision": 0, "expected_authority_id": None},
+    )
+    await browser.send(serialize_envelope(command))
+    received = validate_envelope(await agent.receive(), robot)
+    assert received.controller_generation is not None
+    reply = ResponseEnvelope(
+        **received.model_dump(exclude={"type", "payload"}),
+        type="response",
+        payload=ResponsePayload(
+            request_type="learning.start",
+            ok=True,
+            data={"start_request_id": "calibration", "attempt_id": "a" * 32, "state": "accepted"},
+        ),
+    )
+    await agent.send(serialize_envelope(reply))
+    result = validate_envelope(await browser.receive(), robot)
+    assert result.controller_generation is None and result.request_id == "calibration"
+    assert await other.receive() is None

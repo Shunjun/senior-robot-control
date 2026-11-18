@@ -80,3 +80,26 @@ it('sends a scoped gesture stop separately from releasing authority', async () =
   await expect(port.stop('', 1)).rejects.toThrow();
   expect(sent).toHaveLength(2);
 });
+
+it('keeps calibration start identity and status query on distinct explicit requests', async () => {
+  const sent: unknown[] = [];
+  const status = {
+    run_id: 'b'.repeat(32), active_revision: 1, active_model: null, attempt_id: 'a'.repeat(32),
+    phase: 'validating', reason: 'post_motion_validation', motion_complete: true,
+    capture_complete: true, compute_complete: false, durable: false, can_start: false,
+    cannot_start_reason: 'learning_busy'
+  };
+  const port = new VehicleTransport(async (type, payload, requestId) => {
+    sent.push({ type, payload, requestId });
+    return type === 'learning.start'
+      ? { start_request_id: requestId, attempt_id: 'a'.repeat(32), state: 'busy' } : status;
+  });
+  port.update({ ...frame, capabilities: ['runtime.v1', 'learning.v1'],
+    manual_authority: { authority_id: 'prepared', state: 'prepared' } }, true);
+  expect((await port.learningStart('original-start', 1)).state).toBe('busy');
+  expect(await port.learningStatus({ start_request_id: 'original-start' })).toEqual(status);
+  expect(sent).toEqual([
+    { type: 'learning.start', requestId: 'original-start', payload: { expected_active_revision: 1, expected_authority_id: 'prepared' } },
+    { type: 'learning.status', requestId: undefined, payload: { start_request_id: 'original-start' } }
+  ]);
+});

@@ -2,15 +2,16 @@
 
 import asyncio
 import sys
+import time
 from uuid import uuid4
 
 import pytest
-from learning_test_support import geometry
+from test_learning_compute import recorded
 from test_startup_learning import side_observation
-from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.runtime.learning_client import LearningClient
+from senior_control.runtime.learning_client import LearningClient, request_once
 from senior_control.runtime.learning_service import LearningService
+from senior_control.runtime.learning_wire import FrameBatch, MotionObservedThrough
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="requires Linux abstract SEQPACKET and SO_PEERCRED"
@@ -37,11 +38,35 @@ async def test_native_service_restores_frozen_model_without_replaying_action(tmp
         first = LearningClient(path)
         clients.append(first)
         await until(lambda: first.ready, first)
-        manifest = geometry(BOUNDARY)
-        first.geometry(manifest)
-        await until(lambda: first.record.geometry == manifest, first)
         await until(first.reserve_action, first)
-        first.complete(((0.0, 0.15),))
+        start = time.monotonic() + 1
+        start_ns = round(start * 1e9)
+        first.phase("moving", "learning_forward_window", "c" * 32)
+        first.action(start_ns, 3_000_000_000, finished=True)
+        await until(lambda: first.record.action.first_submitted_steady_ns == start_ns, first)
+        frames = [recorded(i, start + i / 10) for i in range(1, 25)]
+        frames += [recorded(25 + i, start + 3.1 + i / 10) for i in range(5)]
+        for offset in range(0, len(frames), 4):
+            batch = FrameBatch(
+                attempt_id=first.record.attempt_id,
+                stream_id="b" * 32,
+                frames=tuple(frames[offset : offset + 4]),
+                through_steady_ns=round((start + 3.6) * 1e9),
+            )
+            reply = await asyncio.to_thread(request_once, first.run_id, batch)
+            assert reply.ok
+        await asyncio.to_thread(
+            request_once,
+            first.run_id,
+            MotionObservedThrough(
+                stationary=True,
+                session=first._session,
+                attempt_id=first.record.attempt_id,
+                segment_id="c" * 32,
+                through_steady_ns=round((start + 3.7) * 1e9),
+                validation_after_steady_ns=start_ns + 3_000_000_000,
+            ),
+        )
         await until(lambda: first.view is not None, first)
         assert first.view.filter(side_observation(0.15)).rays[180].kind == "self"
         # A mismatch never modifies the frozen model.

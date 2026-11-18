@@ -12,7 +12,15 @@ from senior_control.runtime import learning_cleanup as cleanup
 
 CURRENT = ".startup-learning-" + "a" * 32
 OLD = ".startup-learning-" + "b" * 32
-SUFFIXES = ("", ".features.json", ".features.json.pending", ".pending", ".owner.lock")
+SUFFIXES = (
+    "",
+    ".features.json",
+    ".features.json.pending",
+    ".pending",
+    ".owner.lock",
+    ".attempt-" + "c" * 32,
+    ".attempt-" + "d" * 32 + ".pending",
+)
 
 
 def run_cleanup(root, claim=None):
@@ -180,7 +188,7 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
             stop.set()
         return child
 
-    async def terminate(child):
+    async def terminate(child, **kwargs):
         if child is not None:
             child.terminate()
 
@@ -218,7 +226,7 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
     monkeypatch.setattr(helper, "_terminate_motion_stack", terminate)
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(cleanup, "cleanup_old_learning_files", clean)
-    profile = N(ros_domain=None)
+    profile = N(ros_domain=None, ros_setup=None)
     assert await helper.supervise(tmp_path, ["agent"], {}, profile=profile) == (
         2 if outcome == "agent_exited" else 0
     )

@@ -58,11 +58,13 @@ class LearningService:
         self.through_index = 0
         self.ingress_through = 0
         self.motion_through = 0
+        self._stationarity: deque[tuple[int, bool]] = deque()
         self.first_takeover = None
         self.validation_after = None
         self.gap = False
         self.accepted_frames = 0
         self._frame_origin = None
+        self._last_measurement = None
         self._capture_keys: deque[tuple[str, str, int]] = deque(maxlen=128)
         self._validation: list[RecordedFrame] = []
         self._finish_sent = False
@@ -75,8 +77,7 @@ class LearningService:
             return
         if self.stream_id is None:
             self.stream_id = batch.stream_id
-            if batch.frames:
-                self.through_index = batch.frames[0].index - 1
+            self.through_index = batch.after_index
         if self.stream_id != batch.stream_id:
             self.gap = True
         self.gap |= batch.gap
@@ -99,6 +100,16 @@ class LearningService:
             if self._frame_origin is not None and origin != self._frame_origin:
                 self.gap = True
             self._frame_origin = origin
+            measurement = capture.time.stamp_ns, capture.time.sample_steady_ns
+            if self._last_measurement is not None:
+                if measurement[0] == self._last_measurement[0]:
+                    continue  # One physical capture cannot become five preparation records.
+                if (
+                    measurement[0] < self._last_measurement[0]
+                    or measurement[1] < self._last_measurement[1]
+                ):
+                    self.gap = True
+            self._last_measurement = measurement
             self._capture_keys.append(key)
             if record.geometry is None:
                 owner._revise(geometry=frame.geometry)
@@ -147,6 +158,7 @@ class LearningService:
                 frame
                 for frame in self.frames
                 if frame.capture.time.sample_steady_ns >= max(self.validation_after, end)
+                and self._stationary_at(frame.recorded_steady_ns)
                 and (self.first_takeover is None or frame.recorded_steady_ns < self.first_takeover)
             ][:5]
         if len(self._validation) == 5:
@@ -165,6 +177,12 @@ class LearningService:
                 return
         if self.first_takeover is not None and self.ingress_through >= self.first_takeover:
             self._fail_capture(self._pending_failure or "control_takeover")
+
+    def _stationary_at(self, recorded_ns: int) -> bool:
+        for through, stationary in self._stationarity:
+            if through >= recorded_ns:
+                return stationary
+        return False
 
     def _fail_capture(self, reason: str) -> None:
         assert self.owner is not None
@@ -355,7 +373,17 @@ class LearningService:
             owner._check(request.session)
             if request.attempt_id != owner.record.attempt_id:
                 raise ValueError("learning_attempt_identity")
-            self.motion_through = max(self.motion_through, request.through_steady_ns)
+            if request.through_steady_ns >= self.motion_through:
+                if not owner.record.action.consumed:
+                    self._stationarity.clear()
+                if self._stationarity and self._stationarity[-1][1] == request.stationary:
+                    self._stationarity[-1] = request.through_steady_ns, request.stationary
+                elif len(self._stationarity) < 128:
+                    self._stationarity.append((request.through_steady_ns, request.stationary))
+                else:
+                    self.gap = True
+                self.motion_through = request.through_steady_ns
+            self.gap |= request.gap
             if request.validation_after_steady_ns is not None:
                 self.validation_after = request.validation_after_steady_ns
             if request.first_takeover_ns is not None:

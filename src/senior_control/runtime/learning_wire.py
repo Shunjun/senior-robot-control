@@ -80,6 +80,7 @@ class RecordedFrame(FrozenFact):
 
 
 class FrameBatch(FrozenFact):
+    after_index: Nonnegative = 0
     type: Literal["frames"] = "frames"
     attempt_id: RunId
     stream_id: RunId
@@ -89,6 +90,8 @@ class FrameBatch(FrozenFact):
 
 
 class MotionObservedThrough(SessionRequest):
+    stationary: bool
+    gap: bool = False
     type: Literal["motion_observed"] = "motion_observed"
     attempt_id: RunId
     segment_id: RunId

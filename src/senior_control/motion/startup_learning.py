@@ -31,6 +31,7 @@ class LearningSession(Protocol):
         now_ns: int,
         validation_after_ns: int | None,
         first_takeover_ns: int | None,
+        stationary: bool,
         reason: str | None = None,
     ) -> None: ...
 
@@ -222,13 +223,11 @@ class StartupLearning:
                     else round(self.validation_after_steady * 1e9),
                     first_takeover_ns=self.first_takeover_ns,
                     reason=reason,
+                    stationary=self._stationary,
                 )
             self._phase()
 
-    def advance(self, wheel: float | None, *, now: float, stationary: bool) -> None:
-        self._restore()
-        if self.state in {"braking", "validating"} and not self.motion_started:
-            self.interrupt("learning_output_withdrawn")
+    def _observe(self, now: float) -> None:
         if self.session is not None:
             self.session.observed(
                 segment_id=self.segment_id,
@@ -237,11 +236,11 @@ class StartupLearning:
                 if self.validation_after_steady is None
                 else round(self.validation_after_steady * 1e9),
                 first_takeover_ns=self.first_takeover_ns,
+                reason=self.reason if self.first_takeover_ns is not None else None,
+                stationary=self._stationary,
             )
-        if not self.active:
-            if self.state == "validating" and self.deadline is not None and now >= self.deadline:
-                self._finish_action()
-            return
+
+    def advance(self, wheel: float | None, *, now: float, stationary: bool) -> None:
         if (
             not math.isfinite(now)
             or now < 0
@@ -251,6 +250,15 @@ class StartupLearning:
             return
         self._last_now = now
         self._stationary = stationary and wheel is not None and math.isfinite(wheel)
+        self._restore()
+        if self.state in {"braking", "validating"} and not self.motion_started:
+            self.interrupt("learning_output_withdrawn")
+        if not self.active:
+            if self.state == "validating" and self.deadline is not None and now >= self.deadline:
+                self._finish_action()
+            self._observe(now)
+            self._phase()
+            return
         self._accrue_output(now)
         if self.deadline is not None and now >= self.deadline:
             if self.state == "moving":
@@ -276,6 +284,7 @@ class StartupLearning:
             and self.session.accepted_frames >= 5
         ):
             self.state, self.reason = "moving", "learning_forward_window"
+        self._observe(now)
         self._phase()
 
     def summary(self, learned_count: int = 0) -> dict[str, object]:
