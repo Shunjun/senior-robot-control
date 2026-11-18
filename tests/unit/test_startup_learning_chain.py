@@ -70,7 +70,7 @@ class LearningRig:
         self.cores.append(core)
         return core
 
-    def step(self, now, *, wheel=0.0, new_scan=True):
+    def step(self, now, *, wheel=0.0, new_scan=True, rear_occluded=False):
         self.now = now
         self.sequence += 1
         core = self.core
@@ -82,6 +82,8 @@ class LearningRig:
         if new_scan:
             ranges = [2.0] * 72
             ranges[18] = 0.15  # Body-connected stable side return, outside front/rear sectors.
+            if rear_occluded:
+                ranges[30:43] = [math.nan] * 13
             capture = SimpleNamespace(
                 frame_id="laser_link",
                 raw_gid="01",
@@ -172,6 +174,53 @@ def test_real_tick_collects_once_and_commits_three_second_action_after_idle_hear
     )
     assert rig.core.startup.state == "completed" and rig.core.machine.state.task_id is None
     assert rig.core._learning_client.view.catalog == record.model
+    rig.core.startup.hold_motion("learning_rear_occluded")
+    assert rig.step(rig.now + 1.1, new_scan=False) == Velocity(0, 0)
+    assert rig.core.startup.state == "completed"
+    assert rig.core.machine.state.task_id is None
+    assert rig.run.owner.public_record == record
+
+
+def test_reserved_action_without_submission_is_terminal_when_rear_becomes_occluded(
+    rig, monkeypatch
+):
+    client = rig.core._learning_client
+    reserve = client.reserve_action
+    requests = []
+
+    def pending_reservation():
+        requests.append(reserve())
+        return False  # Durable reservation, with its acknowledgement still in flight.
+
+    monkeypatch.setattr(client, "reserve_action", pending_reservation)
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+        if requests:
+            break
+    assert requests == [True]
+    action = rig.run.owner.public_record.action
+    assert action.consumed and action.stage == "reserved_may_have_output"
+    assert action.first_submitted_steady_ns is None and action.deadline_steady_ns is None
+    assert action.reported_nonzero_interval_ns == 0
+    assert rig.core.startup.started is None
+
+    assert rig.step(rig.now + 0.05, rear_occluded=True) == Velocity(0, 0)
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.startup.reason == "learning_rear_occluded"
+    assert rig.core.machine.state.task_id is None
+    assert rig.core.target.source == "idle"
+    record = rig.run.owner.public_record
+    assert record.phase == "failed" and record.reason == "learning_rear_occluded"
+    assert record.action == action and record.model is None
+
+    rig.core = rig.new_core()
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.machine.state.task_id is None
+    assert not rig.core.startup.prepare_action()
+    assert rig.run.owner.public_record.action == action
+    assert requests == [True]
 
 
 def test_manual_prepared_stops_learning_and_same_run_does_not_resume(rig):
@@ -210,7 +259,12 @@ def test_consumed_running_action_survives_component_reconstruction_without_repla
     for _ in range(8):
         assert rig.step(rig.now + 0.05) == Velocity(0, 0)
     assert rig.core.startup.motion_withdrawn
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.startup.reason == "consumed_action_no_replay"
+    assert rig.core.startup.started is None
+    assert rig.core.machine.state.task_id is None
     assert not rig.core.startup.prepare_action()
+    assert rig.run.owner.record.phase == "failed"
     assert rig.run.owner.record.action == action
 
 
