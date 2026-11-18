@@ -535,9 +535,12 @@ class MotionCoreOutput:
         if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
             output = self._output = Velocity(0, 0)
             reason = "learning_output_expired"
-            self.startup.hold_motion(reason)
-            if not self.startup.active:
-                self._interrupt_learning(self.startup.reason, now)
+            # Before this owner's first successful submission, discard only the
+            # expired frame. Keep its grant; the next tick must compute a new frame.
+            if self.startup.motion_started:
+                self.startup.hold_motion(reason)
+                if not self.startup.active:
+                    self._interrupt_learning(self.startup.reason, now)
         submitted = self.node._emit_motion_core(
             output, reason, output_deadline, computed_steady=now
         )
