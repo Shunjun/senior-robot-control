@@ -13,7 +13,7 @@
 ## 状态与约束
 
 - 本文收口于 `fix/ros-typesupport-export-order@e97720f781d8aa18d5697768b3d7166dfab860b4`；该提交包含原盘点基线 `4bde9a6` 及负责人后续文档/回归，未覆盖后续成果。
-- 原计划与直接测试候选已获负责人批准；后续批准 state_machine 恢复入口和既有 RGBD 测试迁移，最新又取消整个 senior_sim/simulation 专用恢复。当前准确范围为产品 12、测试 4、文档 1，共 17 文件；配置/构建/工具均为 0。
+- 原计划与直接测试候选已获负责人批准；后续批准 state_machine 恢复入口和既有 RGBD 测试迁移，最新又取消整个 senior_sim/simulation 专用恢复。用户随后已获预报并批准 DedicatedController 必要父死清理，当前准确范围为产品 13、测试 4、文档 1，共 18 文件；配置/构建/工具均为 0。
 - 不修改厂家源码、协议、厂家 launch，不复制一套驱动 launcher，不在车端改源；部署由负责人负责。
 - 不重启整车服务、Agent 或 LearningService，不创建新学习 run，不重放学习动作、旧手动指令或旧 goal；不改控制算法、TTL、控制频率或运动资格，不增加第二个 Twist owner。
 - 后续实现使用负责人分配的隔离工作区，从固定功能主分支分叉并正常 merge 合回；本次不创建 worktree，不运行测试/服务，不访问车。
@@ -84,7 +84,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ## 明确剥离的非 launch 范围
 
-`ControlInputs/motion-reception`、`RuntimeReports/motion_reporter`、`final_command_guard`、`motion_output_guard` 是活 owner 内部创建的进程；`DedicatedController` 直接 subprocess 创建的执行作用域 controller/BT 也不是 launch 节点。本轮不为其新增检测/重启，不修改 `control_inputs.py`、`runtime_reports.py`、`safety_node.py`、`motion_output.py` 或 `dedicated_controller.py`；`agent_adapter.py` 仅作上一节的 launch 端点交接，launch 节点真正退出时清理其残留资源属于必要退出清理，不能改写成对子进程独立监督的授权。
+`ControlInputs/motion-reception`、`RuntimeReports/motion_reporter`、`final_command_guard`、`motion_output_guard` 是活 owner 内部创建的进程；`DedicatedController` 直接 subprocess 创建的执行作用域 controller/BT 也不是 launch 节点。本轮不为其新增检测/重启，不修改 `control_inputs.py`、`runtime_reports.py`、`safety_node.py` 或 `motion_output.py`；`dedicated_controller.py` 后续唯一获准例外为原 owner 退出后的必要父死清理，不监督内部故障；`agent_adapter.py` 仅作上一节的 launch 端点交接，launch 节点真正退出时清理其残留资源属于必要退出清理，不能改写成对子进程独立监督的授权。
 
 实车 helper 直接启动的 agent_adapter 也不属于 launch，本轮不加其自动重启、更不套 wrapper 破坏真实 PID 的 SO_PEERCRED。helper 对 camera 的改变仅是传入相同前缀配置，以及 camera 外层明确异常时独立恢复；不重启 motion 外层来同时重建 safety/command 状态。
 
@@ -92,7 +92,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ## 准确候选文件清单与数量
 
-产品代码 12 文件（新增 1、修改 11、删除 0）：
+产品代码 13 文件（新增 1、修改 12、删除 0）：
 
 1. 新增 `src/senior_control/runtime/launch_recovery.py`：前缀、单进程异常恢复、两个既有组的 launch 运行边界。
 2. 修改 `src/senior_control/docker_start_helper.py`：camera 启动接线/独立外层异常恢复。
@@ -106,10 +106,11 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 10. 修改 `ros2/src/senior_robot/senior_robot/command_node.py`：现有输出代次与锁存交接。
 11. 修改 `ros2/src/senior_robot/senior_robot/motion_core_output.py`：恢复不发起学习动作。
 12. 修改 `ros2/src/senior_robot/senior_robot/agent_adapter.py`：仿真 launch 所有 IPC 端点身份记录与 stale socket 清理。
+13. 修改 `ros2/src/senior_robot/senior_robot/dedicated_controller.py`：仅原 owner 强制退出后的既有私有 controller/BT 父死清理，不加检测或重启循环。
 
 测试 4 文件（新增 2、修改 2、删除 0）：`tests/unit/test_launch_recovery.py`（新增）、`tests/ros/test_launch_recovery_live.py`（新增）、`tests/unit/test_docker_start_helper.py`（修改）、`tests/ros/test_rgbd_diagnostic_launch.py`（仅迁移既有进程遍历/PGID 断言，不新增场景）。优先复用既有真实进程设施。
 
-配置/构建 0；工具 0；文档仅本文件新增 1，后续在本文更新结果，不另写报告。最新批准范围共 **17 文件：新增 4、修改 13、删除 0**；取消 simulation.launch.py 使产品 **13 → 12**、总数 **18 → 17**。该文件从未改动，不回退 simulation_motion 的 Nav2/定位与 command IPC 成果；任何新范围仍须先报告。
+配置/构建 0；工具 0；文档仅本文件新增 1，后续在本文更新结果，不另写报告。用户取消 simulation.launch.py 后为产品 12、总 17；随后负责人已提前报告并批准 DedicatedController 必要退出清理，使最新范围为产品 **12 → 13**、总 **17 → 18**，即 **18 文件：新增 4、修改 14、删除 0**。simulation.launch.py 从未改动，不回退 simulation_motion 的 Nav2/定位与 command IPC 成果；任何新范围仍须先报告。
 
 ## 顺序实施及验收
 
@@ -258,7 +259,9 @@ for package, executable in (('senior_motion_msgs', 'final_command_guard'),
                             ('senior_motion_msgs', 'motion_output_guard'),
                             ('senior_motion_msgs', 'native_receipt'),
                             ('senior_sensor_ingress', 'scan_receipt_node'),
-                            ('senior_robot', 'safety_node')):
+                            ('senior_robot', 'safety_node'),
+                            ('nav2_controller', 'controller_server'),
+                            ('nav2_bt_navigator', 'bt_navigator')):
     path = Path(get_package_prefix(package)) / 'lib' / package / executable
     assert os.access(path, os.X_OK), path
 share = Path(get_package_share_directory('senior_robot'))
@@ -317,3 +320,19 @@ PY
 - 具体原因链：`CommandNode.manual_request` 的 ingress bind/view 调用 `ManualAuthorityManager._observe` → `ManualSession.expire/_live`；300ms active 断流 TTL 在固定两秒重启退避中已到期，authority 变 CLOSED/expired。随后 `ManualAuthorityManager.accept` 拒绝 CLOSED，`ManualIngress.accept` 返回 None，manual_request 返回 `error=conflict`。本地直接调用同一生产 ManualIngress 验证：active 两秒后 closed/expired 且拒收，prepared 两秒后仍 prepared 且首次新鲜 intent 可接受；没有更改 TTL、clock 或资格。
 - 经负责人确认，仅修正同一个真实场景：故障前 acquire 后保留真实 prepared authority 与生产 cached barrier，不先激活再断流；新 Core 已起、Command runtime 回调仍排队时，由真实 manual_request 首次生成该旧 authority 的合法 intent。通过实际 DDS 订阅取得生产 FinalCommand，再以原身份、原 received_steady、原 deadline 原样重发；不镜像协议、不复活 CLOSED authority。要求重发时仍在原期限内，并观察随后四个不同新 Core sequence 的 idle，再继续已批准的 boot 交接退休与 revision=3/request/reset 断言。
 - 本机仅对这一受影响用例收集：1 skipped / 3 deselected（无 ROS）；ruff/格式通过。实际 Linux 是否通过待负责人只重跑这一此前失败项，已有前缀/critical 单元/IPC 与运行中的 Nav2 不重复跑。产品代码、恢复开关均未因此修改。
+
+
+### 必要私有 owner 父死清理（新增既有产品文件已获预报批准）
+
+- 原问题为 DedicatedController 用 ros2 run 包裹独立 session，Command 被 SIGKILL 无机会执行 AsyncExitStack，私有 controller/BT 不在 Command 叶 PGID 内。最小修复仅 `_start`：ament 解析同一个包/原生可执行，沿用原 argv、参数、私有 cmd_vel remapping、session、configure/activate 顺序与 `_stop`；启动命令前加已有模块的私有 exec-owner 引导，exec 保留原生 PID/PGID，没有额外长驻监督进程或内部重启循环。
+- exec-owner 的预期 parent PID 在创建子进程之前由真实 spawner 捕获并传入；child_lifetime 先登记 Linux PR_SET_PDEATHSIG(SIGTERM) 再复核 PID，拒绝已经换父的启动，不把 PID 1 当原 owner。Nav2 manager 复用同一引导并同步使用精确 parent PID；没有改动已经验收的 run_node 叶重试路径。
+- 复用已批准 unit 文件/真实进程设施作两个直接检查：Linux 上原 owner SIGKILL 后两台非运动原生替身接收 SIGTERM、退出并被独立测试 reaper 实际 waitpid 回收（zombie 不算成功）；已有 startup 取消路径在生命周期等待中取消后原组消失，并确认预期 parent 不匹配时不 exec。生命周期等待由替身阻塞，仅验证进程退出资源，不冒称 Nav2 ACTIVE 或实际原生控制器通过。本机 1 passed、1 skipped、5 deselected（Linux 父死项明确 skip）；Linux 真实父死项仍需负责人运行。
+- 专用最小 Linux 命令：在上述独立候选源码与现有解释器中执行 `PYTHONPATH=src "$RECOVERY_PY" -m pytest -q -p no:cacheprovider tests/unit/test_launch_recovery.py -k dedicated`。这两项不启动 ROS 节点、学习、物理设备或服务，不重跑已有三项叶恢复/critical/IPC 测试。只能以 Linux 实际结果确认父死清理，不能把 macOS startup 取消结果代替它。
+- 原复合 command/output 急停 identity 延续缺口仍未闭合，command 恢复开关继续关闭。真实原生 controller/BT 若拒绝 SIGTERM 或清理失败，不能假称此父死信号等同所有残留已回收；此处未新增强杀监督或外层重开授权。
+
+### 真实 Nav2 配置前提失败（只读定位）
+
+- 负责人从 837a0c2 运行两项实际 2 errors / 2 deselected（70.21 秒）：都在首次 configure controller_server 时因 installed pluginlib 无 `mppi::critics::CostCritic` 失败，未到崩溃注入。所有进程已退出清理；未把初始化错误记成恢复失败，也未宣称 ACTIVE。
+- `config/nav2.yaml` 的 critics 列表/CostCritic 设置从初始 11393ee 已存在；b3664cd 的 blame 主要来自当时全文件行尾归一化，并非本次恢复引入。现有 test_navigation.py 的真实启动也直接用默认 launch，未提供可复用的兼容参数覆盖；仓库无另一份已获准 MPPI/Humble 参数 fixture，静态 CostCritic 断言只证明字段存在。
+- 这是当前 installed 与默认产品配置不匹配的实际启动缺陷，具体版本/overlay 归因仍需其实际 package.xml/critics.xml/导出路径。上游固定 [Nav2 1.1.20 critics.xml](https://raw.githubusercontent.com/ros-navigation/navigation2/1.1.20/nav2_mppi_controller/critics.xml) 本来导出 CostCritic，不能泛称 Humble 全部没有该类；[同版本 MPPI 文档](https://raw.githubusercontent.com/ros-navigation/navigation2/1.1.20/nav2_mppi_controller/README.md) 分别说明 CostCritic 直接 costmap 评分与 ObstaclesCritic 距离/权重评分，不能改名声称行为等价。
+- 本轮不改配置/安装依赖、不删除 critic，不重复失败两项；若后续用获准的特定参数验证恢复，只能报告该参数下的恢复行为，默认生产导航不可启动仍是缺口。生产配置整改至少涉及既有 nav2.yaml 和 test_navigation.py 对应断言，当前配置 0 范围外，须负责人另行收口预报。

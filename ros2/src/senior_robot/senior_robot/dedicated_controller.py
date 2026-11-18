@@ -8,9 +8,12 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 
+from ament_index_python.packages import get_package_prefix
 from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 from rclpy.node import Node
+
+from senior_control.runtime.launch_recovery import owner_command
 
 
 class DedicatedController:
@@ -93,18 +96,19 @@ class DedicatedController:
         self, stack: AsyncExitStack, package: str, name: str, *remappings: str
     ) -> None:
         process = await asyncio.create_subprocess_exec(
-            "ros2",
-            "run",
-            package,
-            name,
-            "--ros-args",
-            "--params-file",
-            str(self._params),
-            "-p",
-            f"use_sim_time:={str(bool(self._node.get_parameter('use_sim_time').value)).lower()}",
-            "-p",
-            f"odom_topic:={self._odometry_topic}",
-            *remappings,
+            *owner_command(
+                [
+                    str(Path(get_package_prefix(package)) / "lib" / package / name),
+                    "--ros-args",
+                    "--params-file",
+                    str(self._params),
+                    "-p",
+                    f"use_sim_time:={str(bool(self._node.get_parameter('use_sim_time').value)).lower()}",
+                    "-p",
+                    f"odom_topic:={self._odometry_topic}",
+                    *remappings,
+                ]
+            ),
             start_new_session=True,
         )
         stack.push_async_callback(self._stop, process)

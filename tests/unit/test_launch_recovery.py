@@ -1,6 +1,7 @@
 """Recovery contract exercised with real, non-ROS, non-motion processes."""
 
 import ast
+import asyncio
 import json
 import os
 import secrets
@@ -137,6 +138,206 @@ time.sleep(60)
         assert process.wait(timeout=8) == 0
         with pytest.raises(ProcessLookupError):
             os.kill(new, 0)
+
+
+def _dedicated_controller_class(root):
+    """Exercise the actual spawn/stop methods without importing a ROS context."""
+    from contextlib import AsyncExitStack, asynccontextmanager, suppress
+
+    from senior_control.runtime.launch_recovery import owner_command
+
+    path = Path("ros2/src/senior_robot/senior_robot/dedicated_controller.py")
+    source = next(
+        item for item in ast.parse(path.read_text()).body if isinstance(item, ast.ClassDef)
+    )
+    scope = dict(
+        asyncio=asyncio,
+        os=os,
+        signal=signal,
+        secrets=secrets,
+        Path=Path,
+        AsyncExitStack=AsyncExitStack,
+        asynccontextmanager=asynccontextmanager,
+        suppress=suppress,
+        Transition=N(TRANSITION_CONFIGURE=1, TRANSITION_ACTIVATE=3),
+        get_package_prefix=lambda _: str(root),
+        owner_command=owner_command,
+    )
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
+            source,
+        ],
+        type_ignores=[],
+    )
+    exec(compile(ast.fix_missing_locations(module), str(path), "exec"), scope)
+    return scope["DedicatedController"]
+
+
+async def _run_dedicated_fixture(root):
+    from contextlib import AsyncExitStack
+
+    controller = _dedicated_controller_class(root)(
+        N(get_parameter=lambda _: N(value=False)), root / "params.yaml"
+    )
+
+    async def transition(*_):
+        pass  # This check concerns process ownership, not ROS lifecycle activation.
+
+    controller._transition = transition
+    async with AsyncExitStack() as stack:
+        for name in ("controller_server", "bt_navigator"):
+            await controller._start(stack, "fixture", name, "-r", "cmd_vel:=/private/output")
+        await asyncio.sleep(60)
+
+
+def _check_dedicated_parent_death(root):
+    """An isolated Linux reaper proves exit, including reaping orphan zombies."""
+    import ctypes
+
+    assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
+    code = (
+        "import asyncio,sys; from pathlib import Path; "
+        "from test_launch_recovery import _run_dedicated_fixture; "
+        "asyncio.run(_run_dedicated_fixture(Path(sys.argv[1])))"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", code, str(root)])
+    children = set()
+    try:
+        for name in ("controller_server", "bt_navigator"):
+            record = json.loads(wait_for(root / f"{name}.ready", parent))
+            pid, group, arguments = record
+            children.add(pid)
+            assert pid == group
+            assert arguments == [
+                "--ros-args",
+                "--params-file",
+                str(root / "params.yaml"),
+                "-p",
+                "use_sim_time:=false",
+                "-p",
+                "odom_topic:=/wheel/odom",
+                "-r",
+                "cmd_vel:=/private/output",
+            ]
+        parent.kill()  # The real owner has no opportunity to run a finally block.
+        parent.wait(timeout=3)
+        deadline = time.monotonic() + 5
+        for pid in tuple(children):
+            while time.monotonic() < deadline:
+                collected, status = os.waitpid(pid, os.WNOHANG)
+                if collected:
+                    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+                    children.remove(pid)
+                    assert not Path(f"/proc/{pid}").exists()
+                    break
+                time.sleep(0.02)
+            assert pid not in children, "native child survived its owner"
+        for name in ("controller_server", "bt_navigator"):
+            assert (root / f"{name}.stopped").read_text() == str(signal.SIGTERM)
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=3)
+        for pid in children:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux parent-death binding requires prctl")
+def test_dedicated_native_children_exit_when_owner_is_killed(tmp_path):
+    # Real non-motion executables ignore ROS arguments, but retain their exact
+    # argv and install handlers before reporting readiness. No ROS node starts.
+    binary = tmp_path / "lib/fixture"
+    binary.mkdir(parents=True)
+    code = (
+        f"#!{sys.executable}\n"
+        + """
+import json, os, signal, sys, time
+from pathlib import Path
+root = Path(os.environ['SENIOR_TEST_OWNER_ROOT'])
+name = Path(sys.argv[0]).name
+def stop(number, _frame):
+    (root / (name + '.stopped')).write_text(str(number))
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+pending = root / (name + '.pending')
+pending.write_text(json.dumps([os.getpid(), os.getpgrp(), sys.argv[1:]]))
+pending.replace(root / (name + '.ready'))
+while True: time.sleep(.1)
+"""
+    )
+    for name in ("controller_server", "bt_navigator"):
+        path = binary / name
+        path.write_text(code)
+        path.chmod(0o700)
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(Path("src").resolve()), str(Path("tests/unit").resolve())]
+    )
+    environment["SENIOR_TEST_OWNER_ROOT"] = str(tmp_path)
+    check = (
+        "import sys; from pathlib import Path; "
+        "from test_launch_recovery import _check_dedicated_parent_death; "
+        "_check_dedicated_parent_death(Path(sys.argv[1]))"
+    )
+    subprocess.run(
+        [sys.executable, "-c", check, str(tmp_path)], env=environment, check=True, timeout=20
+    )
+
+
+@pytest.mark.asyncio
+async def test_dedicated_startup_cancel_reaps_native_process(tmp_path):
+    from contextlib import AsyncExitStack
+
+    # Resolve a real executable fixture that consumes the unchanged ROS argv
+    # without starting a ROS node.
+    binary = tmp_path / "lib/fixture"
+    binary.mkdir(parents=True)
+    executable = binary / "controller_server"
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n")
+    executable.chmod(0o700)
+    controller = _dedicated_controller_class(tmp_path)(
+        N(get_parameter=lambda _: N(value=False)), tmp_path / "params.yaml"
+    )
+    entered = asyncio.Event()
+    process = None
+
+    async def transition(_name, _transition, child):
+        nonlocal process
+        process = child
+        entered.set()
+        await asyncio.sleep(60)
+
+    controller._transition = transition
+
+    async def start():
+        async with AsyncExitStack() as stack:
+            await controller._start(stack, "fixture", "controller_server")
+
+    task = asyncio.create_task(start())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 6)
+        assert process is not None and process.returncode is not None
+        with pytest.raises(ProcessLookupError):
+            os.killpg(process.pid, 0)
+        # A bootstrap whose expected spawning parent has already gone must
+        # return without ever exec'ing the native command.
+        from senior_control.runtime.launch_recovery import owner_command
+
+        command = owner_command([sys.executable, "-c", "raise SystemExit(29)"])
+        command[command.index("--owner") + 1] = str(os.getppid())
+        rejected = await asyncio.create_subprocess_exec(*command)
+        assert await asyncio.wait_for(rejected.wait(), 3) == 0
+    finally:
+        if not task.done():
+            task.cancel()
+        if process is not None and process.returncode is None:
+            await controller._stop(process)
 
 
 def test_recovery_handoff_restores_original_estop_revision_without_reset(monkeypatch, tmp_path):

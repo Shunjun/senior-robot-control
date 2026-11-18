@@ -124,11 +124,18 @@ def lifecycle_group_command(
 
 def lifecycle_owner_prefix() -> str:
     """Exec the native manager in its own cleanup group, without a retry loop."""
-    return shlex.join([sys.executable, "-m", _MODULE, "--owner", "--"])
+    return shlex.join(owner_command([]))
 
 
-def _exec_owner(command: list[str]) -> None:
-    child_lifetime(os.getppid())
+def owner_command(command: list[str]) -> list[str]:
+    """Private exec bootstrap, bound to this exact spawning parent; never retries."""
+    return [sys.executable, "-m", _MODULE, "--owner", str(os.getpid()), "--", *command]
+
+
+def _exec_owner(command: list[str], parent_pid: int) -> None:
+    # Capture the expected parent in the spawner, before creating this child.
+    # Reading getppid here could bind an already orphaned child to PID 1.
+    child_lifetime(parent_pid)
     # //Compatible: keep a launch child that already has its own process group.
     if os.getpgrp() != os.getpid():
         os.setsid()
@@ -398,8 +405,8 @@ def _main() -> int:
     logging.basicConfig(level=logging.INFO, format="[launch_recovery] %(message)s")
     if len(sys.argv) == 3 and sys.argv[1] == "--lifecycle-group":
         return asyncio.run(_run_lifecycle_group(json.loads(sys.argv[2])))
-    if len(sys.argv) > 3 and sys.argv[1:3] == ["--owner", "--"]:
-        _exec_owner(sys.argv[3:])
+    if len(sys.argv) > 4 and sys.argv[1] == "--owner" and sys.argv[3] == "--":
+        _exec_owner(sys.argv[4:], int(sys.argv[2]))
         return 1  # exec never returns on success.
     if len(sys.argv) < 3 or sys.argv[1] != "--":
         _LOG.error("expected private launch prefix followed by -- and original command")
