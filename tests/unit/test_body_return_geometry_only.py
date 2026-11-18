@@ -1,52 +1,87 @@
 """Global obstacle error budgets do not expand body-return classification."""
 
+import math
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from learning_test_support import (  # noqa: F401
-    begin_action,
-    bind_core,
-    learning_runs,
-    startup_for,
-    write_geometry_record,
-)
-from test_motion_core_handoff import core  # noqa: F401
+from control_process_test_support import generic_motion_profile
+from learning_test_support import TestRun, geometry
+from senior_robot.motion_core_output import MotionCoreOutput
+from senior_robot.raw_safety_observation import RawSafetyObservation
+from sensor_time_test_support import capture_fields, sample_time
 from test_startup_learning import observation, record, side_observation
 from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.config import DeviceProfile
+from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
+from senior_control.motion.startup_learning import StartupLearning
 from senior_control.safety.external_motion_features import (
     external_feature_ranges,
 )
+from senior_control.safety.learning_view import LearningFilterView
 from senior_control.safety.self_filter import filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 
 
-@pytest.mark.parametrize("sensor_error,orientation_error", [(0.0, 0.0), (0.05, 0.05), (0.5, 0.7)])
-def test_global_errors_preserve_model_learning_and_classification(
-    core,  # noqa: F811
-    tmp_path,
-    sensor_error,
-    orientation_error,
-):
-    bind_core(core, tmp_path / "claim")
-
-    core.node._profile = lambda: DeviceProfile(footprint=BOUNDARY)
+@pytest.fixture
+def core(tmp_path):
+    run = TestRun(tmp_path / "geometry")
+    value = MotionCoreOutput.__new__(MotionCoreOutput)
+    value.profile = generic_motion_profile(length=0.6, width=0.4)
+    value._learning_client = run.client()
+    value.startup = StartupLearning(value._learning_client)
+    value.sensors = SimpleNamespace(wheel_linear=lambda _: 0.0, stationary=lambda _: True)
+    capture = SimpleNamespace(
+        frame_id="laser_link",
+        raw_gid="01",
+        bridge_gid="02",
+        source_epoch="scan",
+        bridge_boot_id="boot",
+        capture_generation=1,
+        sequence=1,
+        valid=True,
+        reason="",
+        **capture_fields(
+            time=sample_time(
+                stamp_ns=10_000_000_000,
+                received_ros_ns=10_000_000_000,
+                received_steady_ns=10_000_000_000,
+            )
+        ),
+    )
     message = SimpleNamespace(
         source_epoch="scan",
+        sequence=1,
+        frame_id="laser_link",
+        ranges=[0.15],
         sensor_x=0.0,
         sensor_y=0.0,
         sensor_yaw=0.0,
         angle_min=0.0,
         angle_increment=0.01,
-        ranges=[0.15],
-        frame_id="laser_link",
         range_min=0.05,
         range_max=5.0,
+        transform_stamp=10.0,
+        raw_capture=capture,
     )
-    core._sync_learning_model(message)
+    value.node = SimpleNamespace(
+        _body="base_link", _scans=[RawSafetyObservation(message, 10.0, 10.0, 10.0, 10.0)]
+    )
+    value._learning_geometry = value._learning_scan_key = value.self_returns = None
+    yield value
+    run.close()
+
+
+@pytest.mark.parametrize("sensor_error,orientation_error", [(0.0, 0.0), (0.05, 0.05), (0.5, 0.7)])
+def test_global_errors_preserve_model_learning_and_classification(
+    core,
+    sensor_error,
+    orientation_error,
+):
+    core._learning_observation(10.0)
     model = core.self_returns
+    model.begin_segment("model-test")
     for _i in range(12):
         record(model, side_observation(0.15))
     assert model.validate() == 1
@@ -55,14 +90,14 @@ def test_global_errors_preserve_model_learning_and_classification(
     core.profile = core.profile.model_copy(
         update={"sensor_error": sensor_error, "orientation_error_rad": orientation_error}
     )
-    core._sync_learning_model(message)
+    core._learning_observation(10.0)
     assert core.self_returns is model and model.learned == anchors
     assert core._learning_client.run.path.read_bytes() == feature_bytes
     assert model.filter(side_observation(0.15), provisional=False).rays[180].kind == "self"
     assert model.filter(observation(0.301), provisional=False).external_hits
 
 
-def test_actual_geometry_has_only_user_match_tolerance_and_no_outside_mask(tmp_path):
+def test_actual_geometry_has_only_user_match_tolerance_and_no_outside_mask():
     model = SelfReturnModel(BOUNDARY)
     model.learned = ((0.15, 0.0),)
     # A small changed measurement is within the explicit user tolerance.
@@ -70,12 +105,18 @@ def test_actual_geometry_has_only_user_match_tolerance_and_no_outside_mask(tmp_p
     assert model.learned == ((0.15, 0.0),)
     assert model.filter(observation(0.161), provisional=False).external_hits
     assert model.learned
-    claim = tmp_path / "claim"
-    write_geometry_record(claim, BOUNDARY)
-    assert "error_m" not in claim.read_text()
-    # Matcher exclusion stops exactly at the body, leaving a nearby outside hit.
-    assert external_feature_ranges(observation(0.301), claim) == (0.301,)
-    assert observation(0.15).external_hits  # Raw obstacle evidence is untouched.
+    manifest = geometry(BOUNDARY)
+    assert "error_m" not in manifest.model_dump()
+    raw = observation(0.15)
+    assert external_feature_ranges(raw) == raw.scan.ranges
+    view = LearningFilterView(
+        LearnedCatalog(model_id="a" * 32, anchors=(LearningAnchor(id=0, point=(0.4, 0.0)),)),
+        manifest,
+    )
+    assert external_feature_ranges(observation(0.301), view) == (0.301,)
+    assert math.isnan(external_feature_ranges(observation(0.405), view)[0])
+    assert external_feature_ranges(observation(0.411), view) == (0.411,)
+    assert raw.external_hits and raw.rays[0].kind == "hit"  # No raw evidence mutation.
 
 
 def test_mask_does_not_extend_ray_towards_nearby_body_geometry():

@@ -13,7 +13,7 @@ from senior_control.models import Velocity
 
 @pytest.fixture
 def profile():
-    return generic_motion_profile(length=0.8, width=0.4, sensor_error=0.03, decel=0.5)
+    return generic_motion_profile(length=0.8, width=0.4, sensor_error=0.03, decel=0.5, lag_ms=500.0)
 
 
 def scan(ranges, *, angle_min=0.0, sensor=(0.0, 0.0, 0.0)):
@@ -56,7 +56,7 @@ def test_forward_approach_remains_positive_until_the_boundary(profile):
         clearance = directional_clearance(scan([front_range]), profile, 10.0)
         previous = limit_velocity(requested, previous, previous.vx, clearance, profile, 0.05)
         outputs.append(previous.vx)
-    assert outputs == pytest.approx([0.4, 0.1414213562, 0.0707106781, 0.0])
+    assert outputs == pytest.approx([0.4, 0.0372281323, 0.0098076211, 0.0])
 
 
 def test_rear_approach_stops_at_boundary_and_still_allows_forward(profile):
@@ -66,7 +66,7 @@ def test_rear_approach_stops_at_boundary_and_still_allows_forward(profile):
         clearance = directional_clearance(scan([2.47, rear_range]), profile, 10.0)
         previous = limit_velocity(requested, previous, previous.vx, clearance, profile, 0.05)
         outputs.append(previous.vx)
-    assert outputs == pytest.approx([-0.4, -0.1414213562, -0.0707106781, 0.0])
+    assert outputs == pytest.approx([-0.4, -0.0372281323, -0.0098076211, 0.0])
     forward = limit_velocity(Velocity(0.4, 0.0), previous, 0.0, clearance, profile, 0.05)
     assert forward.vx == pytest.approx(0.015)
 
