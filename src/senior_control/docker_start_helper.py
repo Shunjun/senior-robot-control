@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import fcntl
 import json
+import logging
 import os
 import signal
 import socket
@@ -161,6 +162,73 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
         "-p",
         f"navigation_odometry_topic:={hardware.wheel_topic}",
     ]
+
+
+async def _video_environment(
+    profile: "VehicleProfile", environment: dict[str, str]
+) -> dict[str, str]:
+    """Prepare only the Agent's video imports; failure preserves its control environment."""
+    original = dict(environment)
+    original.pop("SENIOR_ROS_VIDEO_TOPIC", None)
+    process = None
+    try:
+        if profile.ros_setup is None:
+            raise ValueError("ROS workspace setup is missing")
+        keys = (
+            "AMENT_PREFIX_PATH",
+            "COLCON_PREFIX_PATH",
+            "CMAKE_PREFIX_PATH",
+            "PYTHONPATH",
+            "LD_LIBRARY_PATH",
+            "PATH",
+            "ROS_DISTRO",
+            "ROS_VERSION",
+            "ROS_PYTHON_VERSION",
+            "RMW_IMPLEMENTATION",
+            "ROS_DOMAIN_ID",
+            "ROS_LOCALHOST_ONLY",
+        )
+        probe = (
+            "import json, os; import rclpy; from sensor_msgs.msg import Image; "
+            f"print(json.dumps({{key: os.environ[key] for key in {keys!r} if key in os.environ}}))"
+        )
+        process = await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "-c",
+            'source "$1" || exit; source "$2" || exit; '
+            'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
+            'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$3" -c "$4"',
+            "senior-video-environment",
+            str(profile.vendor_ros_setup),
+            str(profile.ros_setup),
+            sys.executable,
+            probe,
+            env=original,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), 5.0)
+        if process.returncode != 0:
+            raise ValueError("ROS overlay or camera Python imports failed")
+        values = json.loads(stdout.decode().splitlines()[-1])
+        if not isinstance(values, dict) or any(
+            key not in keys or not isinstance(value, str) for key, value in values.items()
+        ):
+            raise ValueError("invalid ROS environment")
+        return {**original, **values, "SENIOR_ROS_VIDEO_TOPIC": "/camera/color/image_raw"}
+    except (OSError, ValueError, IndexError, asyncio.TimeoutError) as exc:
+        logging.getLogger(__name__).warning(
+            "ROS video unavailable; starting Agent with original control environment: %s", exc
+        )
+        return original
+    finally:
+        if process is not None and process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.communicate()
 
 
 def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
@@ -441,6 +509,8 @@ async def supervise(
                 loop.add_signal_handler(number, stopping.set)
             # //Compatible: profile=None still propagates a single arbitrary child's exit.
             agent_env = events.agent_environment(environment) if events else environment
+            if profile is not None:
+                agent_env = await _video_environment(profile, agent_env)
             process = await asyncio.create_subprocess_exec(
                 *command, env=agent_env, pass_fds=(events.reader,) if events else ()
             )

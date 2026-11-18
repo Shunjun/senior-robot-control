@@ -52,6 +52,7 @@ from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigati
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vehicle_logs.service import VehicleLogService
 from senior_control.vehicle_logs.store import VehicleLogStore
+from senior_control.vision.ros_video import RosCameraSource
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.vision.stream import AiortcPeerFactory, VideoSession
 from senior_control.waypoints.store import WaypointStore
@@ -69,6 +70,7 @@ class AgentConfig:
     workspace_map_bundle: Path | None = None
     workspace_map_sha256: str | None = None
     simulation_video_frame: Path | None = None
+    ros_video_topic: str | None = None
     # //Compatible: accepted from old simulation environments; no longer gates settings.
     simulation_settings: bool = False
     diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
@@ -109,6 +111,7 @@ class AgentConfig:
                 workspace_map_bundle=Path(bundle) if bundle is not None else None,
                 workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
                 simulation_video_frame=Path(video) if video is not None else None,
+                ros_video_topic=environment.get("SENIOR_ROS_VIDEO_TOPIC"),
                 simulation_settings=environment.get("SENIOR_SIMULATION_SETTINGS") == "1",
                 diagnostics=diagnostics_from_environment(environment),
             )
@@ -483,22 +486,38 @@ async def run_agent(config: AgentConfig) -> int:
                 await runtime.tick(datetime.now(timezone.utc), time.monotonic(), context)
                 await asyncio.sleep(0.2)
 
-        video_path = config.simulation_video_frame
-        if video_path is not None and find_spec("aiortc") is None:
-            logger.warning("simulation video disabled because the video extra is unavailable")
-            video_path = None
         video_factory: AiortcPeerFactory | None = None
 
         def video_session() -> VideoSession | None:
             nonlocal video_factory
-            if video_path is None:
+            if config.ros_video_topic is None and config.simulation_video_frame is None:
+                return None
+            if find_spec("aiortc") is None:
+                logger.warning("video disabled because the video extra is unavailable")
                 return None
             if video_factory is None:
                 video_factory = AiortcPeerFactory()
+            if config.ros_video_topic is not None:
+                source = RosCameraSource(config.ros_video_topic)
+
+                class RosVideoSession(VideoSession):
+                    async def close(self) -> None:
+                        try:
+                            await super().close()
+                        finally:
+                            await source.close()
+
+                return RosVideoSession(
+                    robot_id=config.robot_id,
+                    viewer=_ControlViewer(config.robot_id),
+                    source=source,
+                    factory=video_factory,
+                )
+            assert config.simulation_video_frame is not None
             return VideoSession(
                 robot_id=config.robot_id,
                 viewer=_ControlViewer(config.robot_id),
-                source=LatestFrameFile(video_path),
+                source=LatestFrameFile(config.simulation_video_frame),
                 factory=video_factory,
             )
 
