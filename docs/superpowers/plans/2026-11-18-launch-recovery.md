@@ -374,3 +374,11 @@ PY
 - 真实查询依据：[Humble rclcpp_action ServerBase](https://raw.githubusercontent.com/ros2/rclcpp/humble/rclcpp_action/src/server.cpp) 对不存在 UUID 应答 UNKNOWN，status 仅在状态变化时发送，不保证新建空闲 server 有空数组心跳。ACTIVE 仍由实际 lifecycle 服务确认，未退化成进程存在断言。
 - 本机仅对两项受影响 live 场景收集 **2 skipped / 2 deselected，0.03 秒**（无 ROS）。ruff/格式/模块 mypy 通过；生产配置不改，critical/父死已有结果不重复。safety/command 恢复继续关闭，复合 estop identity 缺口保持。待负责人亲审本阶段实际 diff 并仅重跑这两项新方案，不能将旧方案首次 ACTIVE 冒称本次故障恢复通过。
 - 额外源级核对：两个 launch 的全部原 Node argv/参数/条件/remapping 及公开 DeclareLaunchArgument 逐项 AST 比对保留（仅排除获准的 owner 前缀、退出预算、native reconnect 策略差异）；通用 run_node/_clean_group 与 owner_command/_exec_owner 函数 AST 对比未变。组入口的私有启动数据保存 spawner 已知 parent PID，沿同一 child_lifetime 机制拒绝已换父的启动，不在组启动后把 PID 1 当原 owner；未新增 ROS/业务字段或公开接口。
+
+### 单一组真实验收首轮：server 通过、manager 用例 API 修正
+
+- 负责人亲阅 `1d615c4` 后独立新 overlay 构建 4.19 秒、候选 module/launch 一致性核对通过。真实两项 **1 passed / 1 failed / 2 deselected，82.26 秒**：server 整组恢复完整通过，保留该结果不重跑。
+- manager 场景已验证旧 goal accepted、全部旧组退出、新 manager/组回 ACTIVE、图中唯一 status writer；随后仅在 Humble Subscription 没有 get_publisher_count API 处 AttributeError，尚未执行公共 get_result UNKNOWN/旧 goal 未重发的最终断言，因此完整场景仍 fail，不能混称 PASS。
+- 最小修正只删除这一不可用计数调用，保留前一段已现场通过的 Node.get_publishers_info_by_topic 唯一 writer 检查，不增加重复 matcher/图计数或兼容 fallback。新 volatile 订阅、公共旧 goal handle.get_result_async → UNKNOWN 和旧 UUID 不重发断言均保留，未改产品、未增场景。
+- 已亲查 [Humble Subscription](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/subscription.py) 确无该计数方法；[Humble Node](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/node.py) 提供既用 graph query/create/destroy subscription；[Humble ClientGoalHandle](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/action/client.py) 提供公共 get_result_async，ActionClient.destroy 也存在。余下 Future.done/result 与 GoalStatus.UNKNOWN 沿现有公开接口，没有臆造 GID 或新 matcher 语义。
+- 本机仅收集受影响 manager 用例为 skip（无 ROS）；负责人只需 `-m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py -k native_nav2_manager_crash`，不重跑 server/critical/owner。当前生产仍 61555f8，恢复开关继续关闭，复合 estop identity 与默认生产配置缺口保留。

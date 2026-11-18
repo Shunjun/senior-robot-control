@@ -661,7 +661,8 @@ def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(nat
             reliability=ReliabilityPolicy.RELIABLE,
         ),
     )
-    nav.until(lambda: subscription.get_publisher_count() == 1)
+    # //Compatible: Humble has no Subscription publisher-count API; the public
+    # Node graph query above already confirmed the unique rebuilt writer.
     # Humble publishes action status on changes, not an empty idle heartbeat.
     # Query the original UUID through the public goal handle as a causal real
     # response from the new server; silence on the status topic cannot pass it.
