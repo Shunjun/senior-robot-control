@@ -36,7 +36,7 @@ git clone https://github.com/Shunjun/senior-robot-control.git /home/wheeltec/ros
 
 cd /home/wheeltec/ros2_shared_dir/senior-robot-control
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[agent,safety,video]'
+.venv/bin/python -m pip install -e '.[agent,safety]'
 .venv/bin/senior-robot --help
 ```
 
