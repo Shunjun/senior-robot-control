@@ -23,12 +23,14 @@ class Attach(FrozenFact):
 
 
 class State(FrozenFact):
+    record_attempt_id: RunId | None = None
     record_revision: int = Field(default=-1, ge=-1, strict=True)
     active_revision: Nonnegative = 0
     type: Literal["state"] = "state"
 
 
 class SessionRequest(FrozenFact):
+    record_attempt_id: RunId | None = None
     active_revision: Nonnegative = 0
     record_revision: int = Field(default=-1, ge=-1, strict=True)
     session: RunId
@@ -93,6 +95,7 @@ class MotionObservedThrough(SessionRequest):
     through_steady_ns: Nonnegative
     validation_after_steady_ns: Nonnegative | None = None
     first_takeover_ns: Nonnegative | None = None
+    reason: str | None = Field(default=None, max_length=256)
 
 
 class BeginAttempt(FrozenFact):

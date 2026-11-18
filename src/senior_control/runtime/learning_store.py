@@ -9,6 +9,7 @@ from senior_control.motion.learning_record import (
     MAX_RECORD_BYTES,
     LearningRecord,
     ProgramManifest,
+    parse_manifest,
     parse_record,
 )
 
@@ -74,7 +75,7 @@ def read_manifest(path: Path) -> ProgramManifest:
     with os.fdopen(fd, "rb") as file:
         if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
             raise ValueError("learning_manifest_not_regular")
-        return ProgramManifest.model_validate_json(file.read(MAX_RECORD_BYTES + 1))
+        return parse_manifest(file.read(MAX_RECORD_BYTES + 1))
 
 
 def attempt_path(path: Path, attempt_id: str) -> Path:

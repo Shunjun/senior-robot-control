@@ -6,7 +6,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from functools import partial
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import uuid4
 
 from senior_control.motion.learning_record import (
@@ -33,13 +33,16 @@ from senior_control.runtime.learning_store import (
 _LOG = logging.getLogger(__name__)
 
 
+CommitResult = int | LearningRecord | None
+
+
 class CommitWorker(Protocol):
-    def submit(self, task: Callable[[], int]) -> Future[int]: ...
+    def submit(self, task: Callable[[], CommitResult]) -> Future[CommitResult]: ...
     def close(self) -> None: ...
 
 
 def _worker() -> CommitWorker:
-    return ProcessWorker[int](name="learning-record-io")
+    return ProcessWorker[CommitResult](name="learning-record-io")
 
 
 def _read_optional(path: Path) -> LearningRecord | None:
@@ -79,8 +82,8 @@ class LearningRecordOwner:
         self.error: str | None = None
         self._lock: RecordWriterLock | None = None
         self._worker: CommitWorker | None = None
-        self._future: Future[int] | None = None
-        self._lookup_future: Future[LearningRecord | None] | None = None
+        self._future: Future[CommitResult] | None = None
+        self._lookup_future: Future[CommitResult] | None = None
         self._lookup_target: str | None = None
         self._writing: LearningRecord | ProgramManifest | None = None
         self._session: str | None = None
@@ -102,9 +105,17 @@ class LearningRecordOwner:
                     }
                 )
                 if manifest.active_ref is not None:
-                    self.active_record = read_record(
-                        attempt_path(path, manifest.active_ref.attempt_id)
-                    )
+                    active = read_record(attempt_path(path, manifest.active_ref.attempt_id))
+                    reference = manifest.active_ref
+                    if (
+                        active.run_id != run_id
+                        or active.attempt_id != reference.attempt_id
+                        or active.revision != reference.record_revision
+                        or active.model is None
+                        or active.model.model_id != reference.model_id
+                    ):
+                        raise ValueError("learning_active_identity")
+                    self.active_record = active
             except FileNotFoundError:
                 if not new_run:
                     raise ValueError("learning_record_missing") from None
@@ -157,7 +168,11 @@ class LearningRecordOwner:
         if self._future is not None and self._future.done():
             try:
                 revision = self._future.result()
-                if self._writing is None or revision != self._writing.revision:
+                if (
+                    type(revision) is not int
+                    or self._writing is None
+                    or revision != self._writing.revision
+                ):
                     raise ValueError("learning_commit_identity")
                 if isinstance(self._writing, ProgramManifest):
                     self._manifest_durable = revision
@@ -223,8 +238,10 @@ class LearningRecordOwner:
                 {
                     **self.record.model_dump(),
                     "model": None,
-                    "phase": "validating",
-                    "reason": "learning_completion_pending_commit",
+                    "phase": "failed" if self._io_failed else "validating",
+                    "reason": "learning_completion_not_durable"
+                    if self._io_failed
+                    else "learning_completion_pending_commit",
                 }
             )
         return self.record
@@ -239,14 +256,16 @@ class LearningRecordOwner:
                 return False, None
             future, self._lookup_future = self._lookup_future, None
             self._lookup_target = None
-            return True, future.result()
+            result = future.result()
+            if result is not None and not isinstance(result, LearningRecord):
+                raise ValueError("learning_lookup_identity")
+            return True, result
         self.poll()
         if self._future is not None or self._worker is None:
             return False, None
         self._lookup_target = attempt_id
-        self._lookup_future = cast(
-            Future[LearningRecord | None],
-            self._worker.submit(partial(_read_optional, attempt_path(self.path, attempt_id))),
+        self._lookup_future = self._worker.submit(
+            partial(_read_optional, attempt_path(self.path, attempt_id))
         )
         return False, None
 
@@ -268,7 +287,10 @@ class LearningRecordOwner:
     ) -> str:
         identity = attempt_identity(self.record.run_id, request_id)
         if self.record.attempt_id == identity:
-            if self.record.request_fingerprint != fingerprint:
+            if (
+                self.record.request_fingerprint != fingerprint
+                or self.record.start_request_id != request_id
+            ):
                 raise ValueError("learning_request_conflict")
             return "accepted"
         if self.busy:
@@ -311,7 +333,10 @@ class LearningRecordOwner:
         if not self.ready:
             raise ValueError("learning_consumer_not_ready")
         if self.record.model is not None:
-            if self.record.model.model_id != self._durable_model:
+            if (
+                self.record.model.model_id != self._durable_model
+                or self.active_record != self.record
+            ):
                 raise ValueError("learning_model_not_durable")
             return None, self.record
         if self._session is None:
@@ -371,7 +396,7 @@ class LearningRecordOwner:
     def set_phase(
         self, session: str, phase: Phase, reason: str, segment_id: str | None = None
     ) -> None:
-        if self.record.phase == "completed":
+        if self.record.phase in {"completed", "failed", "unconfirmed"}:
             return
         self._check(session)
         if phase == "completed":

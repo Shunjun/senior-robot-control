@@ -31,6 +31,7 @@ class LearningSession(Protocol):
         now_ns: int,
         validation_after_ns: int | None,
         first_takeover_ns: int | None,
+        reason: str | None = None,
     ) -> None: ...
 
 
@@ -130,9 +131,16 @@ class StartupLearning:
             self.motion_withdrawn = True
             self.state = "interrupted"
             self.reason = "restored_terminal_attempt_no_replay"
+        elif not self._record_seen and record.capture_summary.state == "complete":
+            self.state, self.reason = "validating", "capture_complete_waiting_compute"
+            self.motion_withdrawn = True
         elif not self._record_seen and record.action.consumed:
             # A new consumer has no local collection to validate or motion to replay.
             self.interrupt("consumed_action_no_replay")
+        if self._record_seen and not self.active and record.phase in {"failed", "unconfirmed"}:
+            self.state = "unconfirmed" if record.phase == "unconfirmed" else "interrupted"
+            self.reason = record.reason
+            self.motion_withdrawn = True
         self._record_seen = True
         if self.session.error is not None and self.active:
             self.motion_withdrawn = True
@@ -213,6 +221,7 @@ class StartupLearning:
                     if self.validation_after_steady is None
                     else round(self.validation_after_steady * 1e9),
                     first_takeover_ns=self.first_takeover_ns,
+                    reason=reason,
                 )
             self._phase()
 
@@ -230,6 +239,8 @@ class StartupLearning:
                 first_takeover_ns=self.first_takeover_ns,
             )
         if not self.active:
+            if self.state == "validating" and self.deadline is not None and now >= self.deadline:
+                self._finish_action()
             return
         if (
             not math.isfinite(now)

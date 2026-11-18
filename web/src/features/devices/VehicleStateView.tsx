@@ -155,7 +155,7 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
         : learning.phase === 'failed' || learning.phase === 'unconfirmed' ? '本次未完成'
         : learning.compute_complete ? '正在保存新结果'
         : learning.capture_complete ? '已录齐 · 后台计算中'
-        : learning.motion_complete ? '已停车 · 验证录制中'
+        : learning.motion_complete ? '前进已结束 · 停车验证中'
         : learning.phase === 'moving' ? '前进并录制'
         : learning.phase === 'sampling' ? '正在录制准备帧' : '等待校准'}</p>}
       {learning && !learning.durable && learning.active_model && <p>新结果成功保存前，沿用上次生效结果。</p>}

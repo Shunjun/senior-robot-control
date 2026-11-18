@@ -159,12 +159,17 @@ class IpcMotion:
     async def learning(
         self, envelope: Envelope, *, received_steady: float, deadline_steady: float
     ) -> dict[str, Any]:
-        result = await self._ok(
-            "learning",
-            envelope=serialize_envelope(envelope).decode(),
-            received_steady=received_steady,
-            deadline_steady=deadline_steady,
-        )
+        try:
+            result = await self._ok(
+                "learning",
+                envelope=serialize_envelope(envelope).decode(),
+                received_steady=received_steady,
+                deadline_steady=deadline_steady,
+            )
+        except MotionRejected as exc:
+            raise DomainError(
+                exc.code or ErrorCode.CONFLICT, "learning request was refused"
+            ) from exc
         data = result.get("data")
         if not isinstance(data, dict):
             raise DomainError(ErrorCode.UNAVAILABLE, "learning reply unavailable")

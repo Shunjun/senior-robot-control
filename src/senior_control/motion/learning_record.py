@@ -204,3 +204,10 @@ def parse_record(data: bytes) -> LearningRecord:
     # JSON decoding keeps strict primitive types while accepting JSON arrays for
     # immutable tuple fields; the first pass rejects duplicate keys explicitly.
     return LearningRecord.model_validate_json(data)
+
+
+def parse_manifest(data: bytes) -> ProgramManifest:
+    if len(data) > MAX_RECORD_BYTES:
+        raise ValueError("learning_manifest_size")
+    json.loads(data, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+    return ProgramManifest.model_validate_json(data)

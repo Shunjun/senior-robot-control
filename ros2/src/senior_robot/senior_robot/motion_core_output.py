@@ -71,7 +71,7 @@ class MotionCoreOutput:
                 self._resources.callback(self._learning_client.close)
             self.startup = StartupLearning(self._learning_client)
             self.self_returns = None
-            self._learning_geometry = self._learning_scan_key = None
+            self._learning_geometry = None
         except BaseException:
             self._resources.close()
             raise

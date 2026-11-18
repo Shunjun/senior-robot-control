@@ -91,6 +91,7 @@ class LearningClient:
                         pending = State()
             if isinstance(pending, State):
                 pending = State(
+                    record_attempt_id=None if self._record is None else self._record.attempt_id,
                     record_revision=-1 if self._record is None else self._record.revision,
                     active_revision=self.active_revision,
                 )
@@ -99,6 +100,9 @@ class LearningClient:
             elif isinstance(pending, SessionRequest):
                 pending = pending.model_copy(
                     update={
+                        "record_attempt_id": None
+                        if self._record is None
+                        else self._record.attempt_id,
                         "record_revision": -1 if self._record is None else self._record.revision,
                         "active_revision": self.active_revision,
                     }
@@ -126,14 +130,24 @@ class LearningClient:
             if isinstance(request, ActionReady):
                 self._checking_action = False
             if not reply.ok:
-                if isinstance(request, Attach) and reply.error == "learning_consumer_not_ready":
+                if isinstance(request, Attach) and reply.error in {
+                    "learning_consumer_not_ready",
+                    "learning_model_not_durable",
+                }:
                     self._enqueue(Attach())
                     continue
                 self.error = reply.error or "learning_record_unavailable"
                 continue
             self.error = reply.error
-            if reply.record is not None:
-                record = reply.record
+            incoming = reply.record
+            if (
+                incoming is None
+                and reply.active_record is not None
+                and reply.active_record.attempt_id == reply.attempt_id
+            ):
+                incoming = reply.active_record
+            if incoming is not None:
+                record = incoming
                 if record.run_id != self.run_id:
                     self.error = "learning_reply_run_mismatch"
                     continue
@@ -214,6 +228,8 @@ class LearningClient:
             )
 
     def geometry(self, geometry: LearningGeometry) -> None:
+        if self.view is not None:
+            return
         if not self.read_only and self._session and self._last_geometry != geometry:
             if self._enqueue(GeometryReport(session=self._session, geometry=geometry)):
                 self._last_geometry = geometry
@@ -246,6 +262,7 @@ class LearningClient:
         now_ns: int,
         validation_after_ns: int | None,
         first_takeover_ns: int | None,
+        reason: str | None = None,
     ) -> None:
         if self.read_only or self._session is None or self._record is None:
             return
@@ -258,6 +275,7 @@ class LearningClient:
             through_steady_ns=now_ns,
             validation_after_steady_ns=validation_after_ns,
             first_takeover_ns=first_takeover_ns,
+            reason=reason,
         )
         if first_takeover_ns is not None and not self._takeover_sent:
             self._takeover_sent = self._enqueue(value)
