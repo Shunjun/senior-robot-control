@@ -80,13 +80,13 @@ def startup_visibility(
     *,
     front_stop: bool,
     rear_stop: bool,
-    no_return_clear: bool = False,
 ) -> StartupVisibility:
     """Union angular cells of usable rays; complement is unavailable coverage.
 
     Self returns, missing/invalid rays and unobserved FOV supply no usable cell.
-    Validated no-return rays keep their existing clear-space contract. Unioning
-    cells avoids counting an inclusive 360-degree duplicate sample twice.
+    Positive infinity means no return within range and supplies angular coverage
+    only, without changing measured rays or free space. Unioning cells avoids
+    counting an inclusive 360-degree duplicate sample twice.
     """
     scan = observation.scan
     fractions = []
@@ -95,7 +95,7 @@ def startup_visibility(
         base = math.remainder(scan.sensor_to_body.yaw + scan.angle_min - center, math.tau)
         for ray in observation.rays:
             usable = ray.kind in {"hit", "clear"} or (
-                no_return_clear and ray.kind == "invalid" and scan.ranges[ray.index] == math.inf
+                ray.kind == "invalid" and scan.ranges[ray.index] == math.inf
             )
             if not usable:
                 continue
