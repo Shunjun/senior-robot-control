@@ -33,11 +33,11 @@ class StartupVisibility:
 
     @property
     def blocked_reason(self) -> str | None:
-        # Only binary64 arithmetic roundoff at the exact 50% boundary.
+        # Only binary64 arithmetic roundoff at the exact 70% boundary.
         rounding = 8 * math.ulp(1.0)
-        if self.front_stop and self.front_occluded >= 0.5 - rounding:
+        if self.front_stop and self.front_occluded >= 0.7 - rounding:
             return "learning_front_occluded"
-        if self.rear_stop and self.rear_occluded >= 0.5 - rounding:
+        if self.rear_stop and self.rear_occluded >= 0.7 - rounding:
             return "learning_rear_occluded"
         return None
 

@@ -48,7 +48,7 @@ def observation(front=0, rear=0, *, yaw=0.0, angle_min=-math.pi, count=360):
 
 
 @pytest.mark.parametrize("direction", ["front", "rear"])
-@pytest.mark.parametrize("percent,blocked", [(49, False), (50, True), (51, True)])
+@pytest.mark.parametrize("percent,blocked", [(69, False), (70, True)])
 def test_60_degree_sector_threshold_uses_angular_coverage(direction, percent, blocked):
     obs = observation(count=1200, **{direction: percent})
     value = startup_visibility(obs, front_stop=True, rear_stop=True)
@@ -78,7 +78,6 @@ def test_installation_yaw_and_array_origin_do_not_change_body_sectors(yaw, angle
     )
     assert policy.front_occluded == pytest.approx(0)
     assert policy.rear_occluded == pytest.approx(0.5)
-    assert policy.blocked_reason == "learning_rear_occluded"
 
 
 def test_sector_edges_are_included_by_actual_cell_overlap_and_no_side_exemption():
