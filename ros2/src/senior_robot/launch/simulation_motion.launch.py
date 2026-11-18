@@ -147,6 +147,9 @@ def _simulation_nodes(context):
         Node(
             package="senior_robot",
             executable="safety_node",
+            prefix=restart_prefix(),
+            sigterm_timeout="6.0",
+            sigkill_timeout="1.0",
             parameters=[
                 params,
                 ros_sensor_parameters(),

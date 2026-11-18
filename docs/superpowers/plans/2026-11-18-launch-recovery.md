@@ -16,7 +16,7 @@
 - 原计划与直接测试候选已获负责人批准；后续批准 state_machine 恢复入口和既有 RGBD 测试迁移，最新又取消整个 senior_sim/simulation 专用恢复。用户随后已获预报并批准 DedicatedController 必要父死清理，当前准确范围为产品 13、测试 4、文档 1，共 18 文件；配置/构建/工具均为 0。
 - 不修改厂家源码、协议、厂家 launch，不复制一套驱动 launcher，不在车端改源；部署由负责人负责。
 - 不重启整车服务、Agent 或 LearningService，不创建新学习 run，不重放学习动作、旧手动指令或旧 goal；不改控制算法、TTL、控制频率或运动资格，不增加第二个 Twist owner。
-- 后续实现使用负责人分配的隔离工作区，从固定功能主分支分叉并正常 merge 合回；本次不创建 worktree，不运行测试/服务，不访问车。
+- 使用负责人既有隔离工作区，从固定功能主分支分叉并正常 merge 合回；不新建 worktree。按获批清单做本地非 ROS 定向验证，Linux/ROS 由负责人串行运行；worker 不访问车、不部署或启服务。
 
 ## 已核实的机制与选择
 
@@ -47,18 +47,18 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 | 项目父入口 | 节点或原厂递归分支 | 恢复 owner / 方式 |
 | --- | --- | --- |
-| helper 独立 camera launch | astra/dabai/gemini XML 内 `astra_camera_node`，或所选 `usb_cam`；`republish_color_compressed`、`republish_depth_compressed` | scoped 精确长驻前缀，分别恢复实际崩溃节点；camera 外层本身异常退出时 helper 只重开 camera，先清理旧 camera 组 |
+| helper 独立 camera launch | astra/dabai/gemini XML 内 `astra_camera_node`，或所选 `usb_cam`；`republish_color_compressed`、`republish_depth_compressed` | scoped 精确长驻前缀，分别恢复实际崩溃叶节点；camera 外层自动重开仍关闭，父 PGID 消失不证明独立叶 session 已清理 |
 | safety_motion → turn_on_wheeltec_robot | `wheeltec_robot_node`；所选 H30/N300pro IMU include（stm32 无额外进程）；`ekf_filter_node` 或 carto/nav 参数对应的唯一 EKF；`robot_state_publisher`、`joint_state_publisher`；配置存在的 `base_to_laser/camera/link/gyro/radar` 静态发布者；启用时 ultrasonic include | 原厂启动图不变；每个长驻可执行进程使用前缀，不因一台设备崩溃重开整个底盘 include |
 | safety_motion → wheeltec_lidar | 所选 LS/LD/RPLidar 分支；双雷达分支的两台驱动和融合；lscx 分支的点云转扫描 | 同上；本地默认 `/x10/lslidar_driver_node` 的实际 C++ 是普通 rclcpp::Node，不能因 launch 使用 LifecycleNode 就猜测需生命周期转换；现场若不同则先收口真实 owner |
 | safety_motion | `scan_receipt_node`、`scan_adapter`、`safety_scan_ingress`、`scan_motion_node` | 分别恢复新进程，保留健康的上下游；真实新帧沿既有换代接纳路径恢复 |
-| safety_motion / simulation_motion | `safety_node` | 仅恢复该 launch 节点，旧私有输出组清理完再创建替代者；先完成下述 critical 交接，不能先开放重启开关 |
+| safety_motion / simulation_motion | `safety_node` | 两处现已按已通过的 output 恢复/Command 存活证据开启叶前缀；旧组退出后新起，因果 boot 交接保留急停与退休旧源 |
 | navigation，external_controller=true | `planner_server`、`lifecycle_manager_navigation` | 仅 planner 生命周期组；任一组成员真实异常退出时完整重建该组，不接管 DedicatedController 内部故障 |
 | navigation，external_controller=false | `controller_server`、`planner_server`、`bt_navigator`、`lifecycle_manager_navigation`、`navigation_adapter` | 同一 navigation 组唯一重试 owner；server/manager/adapter 真实异常均先清旧组再重建，不重发目标 |
 | mapping 默认分支 | `async_slam_toolbox_node`、`slam_adapter` | 长驻节点分别恢复；新内存图不能冒充原建图会话延续 |
-| mapping capture/verified 分支 | `slam_graph_node`（名 slam_toolbox），verified 时另有 `slam_static_lidar_tf_receipt` | 长驻进程恢复；capture 目录重开是否被现有节点接受需实证，不自动创建新 capture 目录/新任务绕过 |
+| mapping capture/verified 分支 | `slam_graph_node`（名 slam_toolbox），verified 时另有 `slam_static_lidar_tf_receipt` | slam_graph_node 恢复仍关闭，非空目录无覆盖重开尚未实现；verified receipt 已接叶前缀，不删旧数据或新建任务绕过 |
 | rgbd_diagnostic | `static_tf_receipt_node`、`rgbd_candidate_receipt_node`、`rgbd_candidate_producer` | 长驻前缀 |
 | simulation_rgbd | 原 simulation_motion + `raw_receipt_node`、`depth_ingress`、`semantic_ingress` | 各自长驻前缀；嵌套入口不重复叠前缀 |
-| simulation_motion | `scan_adapter`、`scan_motion_node`、`scan_receipt_node`、`safety_scan_ingress`；可选 `simulation_camera`；`agent_adapter`（名 command_node） | 长驻前缀；command 重启不保留旧 lease/RouteService，不重建旧 goal；safety 和 command 不作为一个组重启 |
+| simulation_motion | `scan_adapter`、`scan_motion_node`、`scan_receipt_node`、`safety_scan_ingress`；可选 `simulation_camera`；`agent_adapter`（名 command_node） | 扫描/可选相机已接叶前缀；command 自动恢复仍关闭，原 estop identity 复合故障和实际 command 恢复未验收；不与 safety 组重启 |
 | simulation_motion 可选定位 | `map_server`、`amcl`、`lifecycle_manager_localization` | 与 navigation 同样的本定位生命周期组，恢复到 ACTIVE 才算完成 |
 | senior_sim/simulation | ros_gz_sim server/可选 GUI | 用户取消热恢复；原启动退出逻辑保持 |
 | senior_sim/simulation | `robot_state_publisher`、`senior_sim_bridge` | 用户确认也取消该仿真专用恢复，保留原逻辑；实车状态发布恢复不受影响 |
@@ -86,7 +86,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 `ControlInputs/motion-reception`、`RuntimeReports/motion_reporter`、`final_command_guard`、`motion_output_guard` 是活 owner 内部创建的进程；`DedicatedController` 直接 subprocess 创建的执行作用域 controller/BT 也不是 launch 节点。本轮不为其新增检测/重启，不修改 `control_inputs.py`、`runtime_reports.py`、`safety_node.py` 或 `motion_output.py`；`dedicated_controller.py` 后续唯一获准例外为原 owner 退出后的必要父死清理，不监督内部故障；`agent_adapter.py` 仅作上一节的 launch 端点交接，launch 节点真正退出时清理其残留资源属于必要退出清理，不能改写成对子进程独立监督的授权。
 
-实车 helper 直接启动的 agent_adapter 也不属于 launch，本轮不加其自动重启、更不套 wrapper 破坏真实 PID 的 SO_PEERCRED。helper 对 camera 的改变仅是传入相同前缀配置，以及 camera 外层明确异常时独立恢复；不重启 motion 外层来同时重建 safety/command 状态。
+实车 helper 直接启动的 agent_adapter 也不属于 launch，本轮不加其自动重启、更不套 wrapper 破坏真实 PID 的 SO_PEERCRED。helper 对 camera 的改变仅是传入叶前缀配置及退出余量，camera 外层自动恢复保持关闭；不重启 motion 外层来同时重建 safety/command 状态。
 
 已有扫描换代路径位于 scan_receipt、scan_adapter、safety_scan_ingress、matcher 与 EgressAdmission；允许新 GID/epoch 进入、拒绝旧身份，不需为恢复更改 admission。真实话题/TF 是否恢复以及有限历史容量不能凭参数设置宣称通过。
 
@@ -95,7 +95,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 产品代码 13 文件（新增 1、修改 12、删除 0）：
 
 1. 新增 `src/senior_control/runtime/launch_recovery.py`：前缀、单进程异常恢复、两个既有组的 launch 运行边界。
-2. 修改 `src/senior_control/docker_start_helper.py`：camera 启动接线/独立外层异常恢复。
+2. 修改 `src/senior_control/docker_start_helper.py`：camera 叶启动接线/退出预算（外层自动恢复保持关闭）。
 3. 修改 `ros2/src/senior_robot/launch/safety_motion.launch.py`。
 4. 修改 `ros2/src/senior_robot/launch/simulation_motion.launch.py`。
 5. 修改 `ros2/src/senior_robot/launch/navigation.launch.py`。
@@ -116,16 +116,18 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ### 第一步：相机与现有设备源
 
-- [ ] 负责人一次性只读核对实机所选 wheeltec YAML、相机 XML/递归 include、已有 respawn/显式 prefix、实际可执行文件、`.ros-venv` 导入与 sourced 环境，不重复采集已定位的相机崩溃证据。
-- [ ] 实现单一前缀模块与 helper camera 接线；先只开放相机/设备长驻分支，不开放 critical safety 自动重启。
+- [x] 负责人已提供当前 wheeltec/N10Plus/相机与条件分支 installed 材料、Humble prefix 和解释器/source 证据；未重复相机崩溃采样。lscx 转换 include 缺失单列末尾边界。
+- [x] 单一叶前缀模块与 helper camera 叶接线完成，camera 外层保持关闭；设备源先交付，critical safety 后续按通过证据单独开启。
 - [ ] 在已确认的 astra -11 路径验证：只让实际 camera node 异常退出，外层保留，图像发布者/发送帧恢复；日志留真实崩溃码，Agent/学习 run 不变，不产生运动。
 - [ ] 覆盖原厂底盘/IMU/EKF/静态发布者/所选雷达的长驻分支，再验证一个真实 scan receipt/adapter 异常恢复后新 GID/epoch 接纳、旧 epoch 拒绝；复用 `tests/ros/test_scan_epoch_live.py` 的设施，不把它当前的局部 matcher 测试冒充全链恢复。
 
 ### 第二步：全部其余 launch 节点与必要组
 
-- [ ] 先完成三个 critical/端点文件的交接并验证，再开放 safety_node 与仿真 command_node 恢复；内部子进程监督保持范围外。
+- [x] 完成已批准 critical/端点及显式 estop restore 接口，output 恢复/Command 存活真实链通过；本阶段仅开启两处 safety_node。
+- [ ] 仿真 command_node 恢复仍关闭：实际 command 恢复与复合 estop identity 尚未验收/闭合；不新增内部监督或持久化框架。
 - [ ] 接齐表中 mapping、RGBD、simulation_motion 所有条件分支；相同策略只接一次，单次工具无前缀。
-- [ ] 接齐 navigation/定位组：真实 server 或 manager 崩溃后仅本组有序清理并重建到 ACTIVE，确认旧 goal 不重发；复用 `tests/ros/test_navigation.py` 的真实 Nav2 启动设施。
+- [x] navigation 单一组恢复及原两故障场景实际通过：完整清旧组、新组 ACTIVE、旧 goal UNKNOWN/不重发；仅临时 1.1.9 参数，默认生产配置仍有缺口。
+- [ ] 可选定位组/external_controller=true 已接同一 owner，未逐一真实故障验收；不把 navigation 默认分支通过当作这些分支实测。
 - [x] 用户取消 Gazebo server/world/GUI 热恢复及候选 10：未实现该恢复与新测试，保留原启动退出逻辑。
 - [ ] 负责人亲阅实际 diff 与版本对应证据后合回；本任务不执行这些步骤或自动部署。
 
@@ -203,7 +205,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - 产品 13 → **12**，总数 18 → **17**（产品 12、测试 4、文档 1）；Gazebo 候选 10 取消，新增故障场景减少一项。create/spawner 保留原单次启动退出，实车状态发布恢复、simulation_motion 的 Nav2/定位与 command IPC 成果保留。
 - Nav2 代码阶段提交为 `87b63d1ab0aae3c6d30e0fbab55f0b668a574cfc`，负责人正在亲审；真实 ROS Nav2/定位 ACTIVE 验收未完成，safety/command 恢复开关继续关闭。本次仅更新同一计划，不新增或重复测试，不自行部署/启动服务。
 
-### 续接：真实 Linux 隔离验收入口与待开放差异
+### 续接：真实 Linux 隔离验收入口与待开放差异（历史准备，当前结果见末尾）
 
 此处是负责人串行执行的最小入口，worker 不 SSH、不运行 ROS 节点或服务。待验收源码须另行放在 Linux 独立目录 `RECOVERY_SRC`，内容为本 worker 待验收提交；不得用车端正在运行的 editable 源目录，也不将本隔离版本混入现车 61555f8。沿用现有 Humble、厂家 underlay、项目原生消息/guard/receipt 和 `.ros-venv`；不安装任何新依赖。Nav2 包/插件缺失是验收阻塞，不能以 skip 或自行安装代替通过。
 
@@ -283,25 +285,11 @@ PY
 
 获批 scan receipt 新 GID/epoch 用例若尚未在 Linux 验收，单独串行执行 `"$RECOVERY_PY" -m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py -k scan_receipt_crash`；不在此重跑已有充分的三项前缀、critical 非 ROS 生产链与 socket 检查。以上命令不启动 helper/Agent/LearningService、厂家底盘或 Gazebo，不调用项目 start/stop，不改变当前服务。
 
-**尚未应用的准确接线补丁**：只在两份已批准 launch 中给三个现有 Node 加下列三行，无新配置/参数/公开 CLI。每处 `prefix=restart_prefix()` 只拥有该节点一次异常重试，正常 0/取消不复活；六秒 launch 余量允许叶五秒清理完成。safety_motion 的 helper 直接 command 不套前缀、不破坏 SO_PEERCRED。
+**当前接线状态**：两份 launch 的 safety_node 已经负责人根据真实 output 恢复/Command 存活验收明确授权，现各加入 prefix、六秒 TERM/一秒 KILL 预算，正常 0/取消不复活。仿真 command 以下三行仍未应用，真实 command 恢复及复合 identity 缺口保留；helper 直接 command 不套前缀，不破坏 SO_PEERCRED。
 
 ```diff
---- ros2/src/senior_robot/launch/safety_motion.launch.py
-+++ ros2/src/senior_robot/launch/safety_motion.launch.py
-@@
-             executable="safety_node",
-+            prefix=restart_prefix(),
-+            sigterm_timeout="6.0",
-+            sigkill_timeout="1.0",
-             parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
 --- ros2/src/senior_robot/launch/simulation_motion.launch.py
 +++ ros2/src/senior_robot/launch/simulation_motion.launch.py
-@@
-             executable="safety_node",
-+            prefix=restart_prefix(),
-+            sigterm_timeout="6.0",
-+            sigkill_timeout="1.0",
-             parameters=[
 @@
              executable="agent_adapter",
 +            prefix=restart_prefix(),
@@ -310,7 +298,7 @@ PY
              name="command_node",
 ```
 
-这不是验收命令一通过就无条件开放的承诺：真实 ROS 交接/清组未证实前上述补丁不落产品；复合 command/output 故障的原 estop identity 丢失仍是未完成项，不能以新显式 estop 建立新身份冒称原身份延续。另只读发现 DedicatedController 以 `start_new_session=True` 启动其私有 controller/BT，现有异常父死路径未见 parent-death 绑定；这两组不在 command 的叶 PGID 内。虽然对子进程独立监督明确不在范围，command 真退出后的既有私有 owner 清理仍须先证明。不能仅凭 launch IPC stale 清理通过就开放带导航的 command 恢复，也不能为通过验收私自把 DedicatedController 纳入新监督层或扩大文件。
+这不是验收命令一通过就无条件开放的承诺：command 恢复与复合 identity 未闭合前上述 command 补丁不落产品；复合 command/output 故障的原 estop identity 丢失仍是未完成项，不能以新显式 estop 建立新身份冒称原身份延续。另只读发现 DedicatedController 以 `start_new_session=True` 启动其私有 controller/BT，现有异常父死路径未见 parent-death 绑定；这两组不在 command 的叶 PGID 内。虽然对子进程独立监督明确不在范围，command 真退出后的既有私有 owner 清理仍须先证明。不能仅凭 launch IPC stale 清理通过就开放带导航的 command 恢复，也不能为通过验收私自把 DedicatedController 纳入新监督层或扩大文件。
 
 本轮仅修正已批准 live 场景的真实接线与隔离：Command 与 Nav2 状态探测复用生产 MotionExecutor/with_dds_info，按 Humble 现有 MessageInfo dict 取真实 publisher_gid，避免普通 executor 丢失 metadata。未新增测试场景或产品文件。本机定向这三项为 3 skipped、1 deselected（无 ROS），不表示 Linux 行为通过；本轮剩余工作明确依赖负责人运行上述隔离用例并返回实际结果，以及收口上述 command 私有退出资源/复合急停身份缺口。
 
@@ -382,3 +370,33 @@ PY
 - 最小修正只删除这一不可用计数调用，保留前一段已现场通过的 Node.get_publishers_info_by_topic 唯一 writer 检查，不增加重复 matcher/图计数或兼容 fallback。新 volatile 订阅、公共旧 goal handle.get_result_async → UNKNOWN 和旧 UUID 不重发断言均保留，未改产品、未增场景。
 - 已亲查 [Humble Subscription](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/subscription.py) 确无该计数方法；[Humble Node](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/node.py) 提供既用 graph query/create/destroy subscription；[Humble ClientGoalHandle](https://raw.githubusercontent.com/ros2/rclpy/humble/rclpy/rclpy/action/client.py) 提供公共 get_result_async，ActionClient.destroy 也存在。余下 Future.done/result 与 GoalStatus.UNKNOWN 沿现有公开接口，没有臆造 GID 或新 matcher 语义。
 - 本机仅收集受影响 manager 用例为 skip（无 ROS）；负责人只需 `-m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py -k native_nav2_manager_crash`，不重跑 server/critical/owner。当前生产仍 61555f8，恢复开关继续关闭，复合 estop identity 与默认生产配置缺口保留。
+
+
+### 负责人明确授权的本阶段收尾：开启两处 safety 叶恢复
+
+- `51625f0` 经负责人亲审最小测试 diff 后，独立 Linux manager 单项真实 **1 passed / 3 deselected，51.65 秒**，包括旧 goal UNKNOWN/不重发最终断言；三项旧 pytest 配置 warning 不作故障。保留 `1d615c4` server 整组恢复完整 PASS，两者都使用明确的临时 1.1.9 恢复参数，不能据此称默认生产导航通过。
+- 按负责人本轮明确授权，仅给 safety_motion 与 simulation_motion 中 safety_node 各加原计划三行 `prefix=restart_prefix()`、sigterm_timeout=6、sigkill_timeout=1。真实 `8da12b9` 已证明 output 恢复、Command 保持存活这一路，因此开启 safety；不因仿真 command 复合缺口把已验的 safety/Nav2 全部关着。仿真 agent_adapter/command 无前缀，helper 直接 adapter 的真实 PID/SO_PEERCRED 不改。
+- 本次产品只增六行，参数与公开 launch arguments、Core/学习/补点/其它 lane 无改动；仅运行必要语法、ruff/格式、差异及原参数 AST 比较，不重跑已有充分的 Linux/Mac 用例。负责人亲阅后正常 merge/push；源码拉取、构建和会触发新学习的 CLI 重启都由负责人负责，worker 未执行部署、SSH、服务启停或车辆控制。当前运行版本仍为负责人报告的 61555f8。
+
+本阶段已有 Linux 证据（不额外重复运行）：
+
+| 对应版本/入口 | 真实结果 | 已覆盖行为与限度 |
+| --- | --- | --- |
+| 叶模块 4898453/30bce4e 后，负责人 ARM 容器既有 `test_launch_recovery.py` 三项 | 3 passed，8.92 秒 | SIGSEGV 后两秒恢复/第二轮 0 不复活、退避取消、旧孙进程组退出回收；不是厂家相机实故障注入 |
+| critical `8da12b9` 独立 ROS 域单项 | 1 passed / 3 deselected，30.47 秒 | 实际 Command→DDS→native guard/Core，旧 prepared/新鲜旧源拒绝、boot 交接退休与 estop revision/reset；Command 本身存活，不涵盖其复合重启 |
+| owner 诊断 `a0b8309`，负责人直接同步函数 + asyncio.run，各独立临时目录 | passed2 / failed[]，exit0 | Linux prctl 父死替身退出、waitpid 回收、严格 0 与 SIGTERM 标记，以及 startup 取消/expected parent 不匹配；不等于实际 Nav2 原生内部故障监督 |
+| Nav2 产品 `1d615c4` 两项运行中的 server 场景 | 完整 PASS；该轮总 1 passed / 1 failed / 2 deselected，82.26 秒 | 真实 planner -9，整个旧组含 adapter 全退、新 PID/新组 ACTIVE，正常 fixture 停机回收；manager 当轮仅测试 API 未完，未混算通过 |
+| manager 测试修正 `51625f0` 单项 | 1 passed / 3 deselected，51.65 秒 | manager 真实异常、旧 goal 已接受、旧组全退、新组 ACTIVE、唯一 writer、新订阅与公共 get_result UNKNOWN/旧 goal 不重发 |
+
+`819f2ec` 那次未知非正常退出状态仍保留为历史失败，后续通过没有给它确定归因；不以诊断修正宣称产品稳定。真实 IPC stale/活/陌生 Unix socket 和 unknown 只 query 的既有本地定向证据沿前节保留，不改称新的 Linux command 重启验收。
+
+本阶段完成不等于全功能/全项目完成，剩余边界明确如下：
+
+1. simulation command 自动恢复仍关闭；实际 command 进程恢复未验收，Command/output 复合故障下原 estop request identity 延续未闭合，不新增持久化框架掩盖。
+2. camera 外层自动重开仍关闭；叶恢复已接线，真实厂家相机 SIGSEGV 后图像恢复并非本 worker 做过的故障注入，后续现场由负责人批准窗口负责。
+3. mapping capture/verified 的 slam_graph_node 恢复仍关闭；非空 CaptureDirectory 无覆盖恢复/原图恢复接口未实现，不删数据、不放开非空限制或换任务。默认 mapping/adapter 与 verified receipt 叶恢复保留。
+4. 默认生产 Nav2 配置仍引用当前厂商 MPPI 1.1.9 不支持的 CostCritic；本轮不改生产配置/依赖，也不声称临时参数与原评分等价。可选定位 map/amcl 组、external_controller=true 分支及所有厂家条件分支未完成逐一真实崩溃验收。
+5. scan receipt 新 GID/epoch live 场景本轮只有本地无 ROS skip，未收到实际 Linux 故障注入通过证据；lscx 转换 include 的实际 installed 文本仍未在提供材料内，其余设备接线与现场行为验收分开列明。
+6. 整车合并/部署及与学习新 lane 的共享 Core 合并检查由负责人执行；本阶段未重启整车或 LearningService，未发起新学习或重播旧 manual/nav goal。
+
+Gazebo server/world/GUI、仿真专用 bridge/RSP 恢复已由用户取消，不作为未完成交付项；simulation.launch.py 保持原样。范围仍为产品 13、测试 4、文档 1，共 18 文件，配置/构建/工具 0。
