@@ -136,8 +136,8 @@ class StartupLearning:
             self.state = "interrupted"
             self.reason = "restored_terminal_attempt_no_replay"
         elif not self._record_seen and record.action.consumed:
-            self.motion_withdrawn = True
-            self.state, self.reason = "validating", "consumed_action_no_replay"
+            # A new consumer has no local collection to validate or motion to replay.
+            self.interrupt("consumed_action_no_replay")
         self._record_seen = True
         if self.session.error is not None and self.active:
             self.motion_withdrawn = True
@@ -182,10 +182,15 @@ class StartupLearning:
             )
             self._reported_finished = True
 
-    def hold_motion(self) -> None:
-        if self.motion_started or self._reservation_requested:
+    def hold_motion(self, reason: str = "learning_output_withdrawn") -> None:
+        if not self.active:
+            return
+        if self.motion_started:
             self.motion_withdrawn = True
-            self.state, self.reason = "braking", "learning_output_withdrawn"
+            self.state, self.reason = "braking", reason
+        elif self._reservation_requested:
+            # Reservation is irreversible, but it is not a submitted motion window.
+            self.interrupt(reason)
 
     def interrupt(self, reason: str) -> None:
         if self.active:
@@ -213,6 +218,8 @@ class StartupLearning:
 
     def advance(self, wheel: float | None, *, now: float, stationary: bool) -> None:
         self._restore()
+        if self.state in {"braking", "validating"} and not self.motion_started:
+            self.interrupt("learning_output_withdrawn")
         if not self.active:
             return
         if (

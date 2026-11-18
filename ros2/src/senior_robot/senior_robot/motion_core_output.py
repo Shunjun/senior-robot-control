@@ -365,14 +365,14 @@ class MotionCoreOutput:
         if not self.startup.active and client.view is None:
             return None
         if not self.node._scans:
-            self.startup.hold_motion()
+            self.startup.hold_motion("learning_scan_unavailable")
             return None
         raw = self.node._scans[-1]
         age = default_policy().age(
             measured_steady=raw.measurement_steady, received_steady=raw.received, now_steady=now
         )
         if age.band == "invalid":
-            self.startup.hold_motion()
+            self.startup.hold_motion("scan_temporarily_unavailable")
             return None
         observation = scan_observation(raw, self.node._body)
         if client.view is not None:
@@ -393,7 +393,7 @@ class MotionCoreOutput:
         client.geometry(geometry)
         if geometry != self._learning_geometry:
             if self._learning_geometry is not None:
-                self.startup.hold_motion()
+                self.startup.hold_motion("scan_or_body_geometry_changed")
                 self.startup.evidence_gap("scan_or_body_geometry_changed")
             self._learning_geometry = geometry
             self.self_returns = SelfReturnModel(geometry.physical_polygon)
@@ -429,7 +429,10 @@ class MotionCoreOutput:
             )
             if visibility.blocked_reason is not None:
                 velocity, reason = 0.0, visibility.blocked_reason
-                self.startup.hold_motion()
+                self.startup.hold_motion(reason)
+                if not self.startup.active:
+                    self._interrupt_learning(self.startup.reason, now)
+                    return
         if self.machine.state.task_id != self.boot:
             self._event(K.TASK_START, now, self.boot)
         if self.machine.state.task_id == self.boot:
@@ -473,7 +476,7 @@ class MotionCoreOutput:
             filtered = self._learning_observation(now)
         except (ValueError, TypeError, KeyError):
             # Learning cannot withdraw manual/navigation or suppress raw scan handling.
-            self.startup.hold_motion()
+            self.startup.hold_motion("learning_scan_unavailable")
             filtered = None
         self._startup_target(now, filtered)
         state = self.machine.state
@@ -521,7 +524,9 @@ class MotionCoreOutput:
         if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
             output = self._output = Velocity(0, 0)
             reason = "learning_output_expired"
-            self.startup.hold_motion()
+            self.startup.hold_motion(reason)
+            if not self.startup.active:
+                self._interrupt_learning(self.startup.reason, now)
         submitted = self.node._emit_motion_core(
             output, reason, output_deadline, computed_steady=now
         )
