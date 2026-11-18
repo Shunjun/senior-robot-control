@@ -6,21 +6,29 @@ import logging
 import os
 import socket
 import struct
+from collections import deque
 from pathlib import Path
 
-from senior_control.motion.learning_record import MAX_RECORD_BYTES
+from senior_control.motion.learning_record import MAX_RECORD_BYTES, CaptureSummary, attempt_identity
 from senior_control.motion.navigation_clock import monotonic_domain
+from senior_control.runtime.learning_compute import ComputeBatch, LearningCompute
 from senior_control.runtime.learning_owner import LearningRecordOwner
 from senior_control.runtime.learning_wire import (
     REQUEST,
+    AcceptAttempt,
     ActionReady,
     ActionReport,
     Attach,
-    Complete,
+    BeginAttempt,
+    FrameBatch,
     GeometryReport,
+    MotionObservedThrough,
     PhaseReport,
+    QueryAttempt,
+    RecordedFrame,
     Reply,
     Reserve,
+    SessionRequest,
     State,
 )
 
@@ -40,6 +48,226 @@ class LearningService:
         self.stop = asyncio.Event()
         self.task: asyncio.Task[None] | None = None
         self.peers: set[asyncio.Task[None]] = set()
+        self.compute: LearningCompute | None = None
+        self.proposal: BeginAttempt | None = None
+        self._reset_stream()
+
+    def _reset_stream(self) -> None:
+        self.frames: deque[RecordedFrame] = deque()
+        self.stream_id = None
+        self.through_index = 0
+        self.ingress_through = 0
+        self.motion_through = 0
+        self.first_takeover = None
+        self.validation_after = None
+        self.gap = False
+        self.accepted_frames = 0
+        self._frame_origin = None
+        self._capture_keys: deque[tuple[str, str, int]] = deque(maxlen=128)
+        self._validation: list[RecordedFrame] = []
+        self._finish_sent = False
+        self._pending_failure = None
+
+    def _accept_frames(self, batch: FrameBatch) -> None:
+        assert self.owner is not None
+        owner, record = self.owner, self.owner.record
+        if batch.attempt_id != record.attempt_id:
+            return
+        if self.stream_id is None:
+            self.stream_id = batch.stream_id
+            if batch.frames:
+                self.through_index = batch.frames[0].index - 1
+        if self.stream_id != batch.stream_id:
+            self.gap = True
+        self.gap |= batch.gap
+        for frame in batch.frames:
+            if frame.index <= self.through_index:
+                continue
+            if frame.index != self.through_index + 1:
+                self.gap = True
+            self.through_index = frame.index
+            if (
+                record.capture_summary.state != "open"
+                or frame.recorded_steady_ns < record.created_steady_ns
+            ):
+                continue
+            capture = frame.capture
+            key = capture.bridge_boot_id, capture.source_epoch, capture.sequence
+            origin = capture.bridge_boot_id, capture.source_epoch, capture.time.clock_generation
+            if key in self._capture_keys:
+                continue
+            if self._frame_origin is not None and origin != self._frame_origin:
+                self.gap = True
+            self._frame_origin = origin
+            self._capture_keys.append(key)
+            if record.geometry is None:
+                owner._revise(geometry=frame.geometry)
+                record = owner.record
+            elif record.geometry != frame.geometry:
+                self.gap = True
+            if len(self.frames) >= 128:
+                self.gap = True
+            else:
+                self.frames.append(frame)
+                self.accepted_frames += 1
+            if not record.action.consumed:
+                while len(self.frames) > 5:
+                    self.frames.popleft()
+        self.ingress_through = max(self.ingress_through, batch.through_steady_ns)
+        self._advance_capture()
+
+    def _advance_capture(self) -> None:
+        assert self.owner is not None
+        owner, record = self.owner, self.owner.record
+        if record.capture_summary.state != "open":
+            return
+        if self.gap:
+            owner.capture(
+                CaptureSummary(
+                    state="incomplete",
+                    stream_id=self.stream_id,
+                    through_index=self.through_index,
+                    accepted_frames=self.accepted_frames,
+                )
+            )
+            if owner._session is not None:
+                owner.set_phase(owner._session, "failed", "learning_stream_incomplete")
+            self.frames.clear()
+            return
+        start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
+        if start is None or end is None:
+            if self.first_takeover is not None and self.ingress_through >= self.first_takeover:
+                self._fail_capture(self._pending_failure or "control_takeover")
+            return
+        # Classify only by original acquisition time. CPU completion never moves this window.
+        while self.frames and self.frames[0].capture.time.sample_steady_ns < start:
+            self.frames.popleft()
+        if self.validation_after is not None:
+            self._validation = [
+                frame
+                for frame in self.frames
+                if frame.capture.time.sample_steady_ns >= self.validation_after
+                and (self.first_takeover is None or frame.recorded_steady_ns < self.first_takeover)
+            ][:5]
+        if len(self._validation) == 5:
+            final = self._validation[-1]
+            if self.motion_through >= final.recorded_steady_ns:
+                owner.capture(
+                    CaptureSummary(
+                        state="complete",
+                        stream_id=self.stream_id,
+                        through_index=self.through_index,
+                        accepted_frames=self.accepted_frames,
+                        validation_after_steady_ns=self.validation_after,
+                        closed_steady_ns=final.recorded_steady_ns,
+                    )
+                )
+                return
+        if self.first_takeover is not None and self.ingress_through >= self.first_takeover:
+            self._fail_capture(self._pending_failure or "control_takeover")
+
+    def _fail_capture(self, reason: str) -> None:
+        assert self.owner is not None
+        self.owner.capture(
+            CaptureSummary(
+                state="incomplete",
+                stream_id=self.stream_id,
+                through_index=self.through_index,
+                accepted_frames=self.accepted_frames,
+            )
+        )
+        if self.owner._session is not None:
+            self.owner.set_phase(self.owner._session, "failed", reason)
+        self.frames.clear()
+
+    def _pump_compute(self) -> None:
+        assert self.owner is not None
+        if self.compute is None:
+            return
+        owner = self.owner
+        result = self.compute.poll()
+        if result is not None and result.attempt_id == owner.record.attempt_id:
+            if result.error is not None:
+                self._fail_capture(result.error)
+            elif result.finished:
+                if result.points is None:
+                    if owner._session is not None:
+                        owner.set_phase(owner._session, "unconfirmed", "classification_unverified")
+                else:
+                    summary = owner.record.capture_summary.model_copy(
+                        update={"compute_complete": True}
+                    )
+                    owner.capture(summary)
+                    if owner._session is not None:
+                        owner.complete_model(owner._session, result.points)
+        record = owner.record
+        if self.compute.flight is not None or self._finish_sent:
+            return
+        if record.capture_summary.state == "incomplete" or record.phase in {
+            "failed",
+            "unconfirmed",
+            "completed",
+        }:
+            return
+        start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
+        if start is None or end is None or record.geometry is None or record.segment_id is None:
+            return
+        batch = []
+        while self.frames and len(batch) < 4:
+            frame = self.frames[0]
+            stamp = frame.capture.time.sample_steady_ns
+            if stamp >= end:
+                break
+            self.frames.popleft()
+            if stamp >= start:
+                batch.append(frame)
+        finish = record.capture_summary.state == "complete" and not any(
+            frame.capture.time.sample_steady_ns < end for frame in self.frames
+        )
+        if batch or finish:
+            self.compute.submit(
+                ComputeBatch(
+                    record.attempt_id, record.segment_id, record.geometry, tuple(batch), finish
+                )
+            )
+            self._finish_sent = finish
+
+    async def _lookup(self, attempt_id):
+        assert self.owner is not None
+        until = asyncio.get_running_loop().time() + 1.5
+        while asyncio.get_running_loop().time() < until:
+            done, record = self.owner.lookup(attempt_id)
+            if done:
+                return record
+            await asyncio.sleep(0.005)
+        raise ValueError("learning_lookup_pending")
+
+    def _status(self, selected=None):
+        assert self.owner is not None
+        owner = self.owner
+        record = owner.record if selected is None else selected
+        active = owner.active_record
+        manifest = owner.public_manifest
+        return dict(
+            run_id=record.run_id,
+            active_revision=manifest.active_revision,
+            active_model=None
+            if active is None or active.model is None
+            else dict(
+                attempt_id=active.attempt_id,
+                model_id=active.model.model_id,
+                point_count=len(active.model.anchors),
+            ),
+            attempt_id=record.attempt_id,
+            phase=owner.public_record.phase,
+            reason=owner.public_record.reason,
+            motion_complete=record.action.stage == "window_finished",
+            capture_complete=record.capture_summary.state == "complete",
+            compute_complete=record.capture_summary.compute_complete,
+            durable=record.model is not None and active == record,
+            can_start=not owner.busy,
+            cannot_start_reason="learning_busy" if owner.busy else None,
+        )
 
     async def start(self) -> None:
         run_id = self.path.name.removeprefix(".startup-learning-")
@@ -50,6 +278,7 @@ class LearningService:
             listener.bind(address(run_id))
             listener.listen(8)
             self.owner = LearningRecordOwner(self.path, run_id, monotonic_domain(), new_run=True)
+            self.compute = LearningCompute()
             self.task = asyncio.create_task(self._run())
         except (OSError, ValueError, RuntimeError) as exc:
             _LOG.warning("Learning service unavailable: %s", exc)
@@ -68,6 +297,8 @@ class LearningService:
             while not self.stop.is_set():
                 try:
                     self.owner.poll()
+                    self._advance_capture()
+                    self._pump_compute()
                     if accepting.done():
                         connection, _ = accepting.result()
                         if len(self.peers) >= 8:
@@ -106,6 +337,7 @@ class LearningService:
             owner = self.owner
             request = REQUEST.validate_json(raw)
             owner.poll()
+            data = None
             revision = None
             ready = False
             session = None
@@ -127,13 +359,92 @@ class LearningService:
             elif isinstance(request, GeometryReport):
                 owner.set_geometry(request.session, request.geometry)
             elif isinstance(request, PhaseReport):
-                owner.set_phase(request.session, request.phase, request.reason, request.segment_id)
-            elif isinstance(request, Complete):
-                revision = owner.complete_model(request.session, request.points)
+                if owner.record.capture_summary.state == "complete":
+                    pass
+                elif request.phase == "failed":
+                    self._pending_failure = request.reason
+                    self._advance_capture()
+                else:
+                    owner.set_phase(
+                        request.session, request.phase, request.reason, request.segment_id
+                    )
+            elif isinstance(request, FrameBatch):
+                self._accept_frames(request)
+            elif isinstance(request, MotionObservedThrough):
+                owner._check(request.session)
+                if request.attempt_id != owner.record.attempt_id:
+                    raise ValueError("learning_attempt_identity")
+                self.motion_through = max(self.motion_through, request.through_steady_ns)
+                if request.validation_after_steady_ns is not None:
+                    self.validation_after = request.validation_after_steady_ns
+                if request.first_takeover_ns is not None:
+                    self.first_takeover = (
+                        request.first_takeover_ns
+                        if self.first_takeover is None
+                        else min(self.first_takeover, request.first_takeover_ns)
+                    )
+                self._advance_capture()
+            elif isinstance(request, BeginAttempt):
+                identity = attempt_identity(owner.record.run_id, request.start_request_id)
+                existing = await self._lookup(identity)
+                if existing is not None:
+                    if existing.request_fingerprint != request.fingerprint:
+                        raise ValueError("learning_request_conflict")
+                    state = "accepted"
+                    attempt = existing.attempt_id
+                else:
+                    previous_attempt = owner.record.attempt_id
+                    state = owner.new_attempt(
+                        request.start_request_id,
+                        request.fingerprint,
+                        request.payload.expected_active_revision,
+                        request.admitted,
+                    )
+                    attempt = owner.record.attempt_id
+                    if state == "accepted" and previous_attempt != attempt:
+                        self._reset_stream()
+                        self.proposal = request
+                data = dict(
+                    start_request_id=request.start_request_id, attempt_id=attempt, state=state
+                )
+            elif isinstance(request, AcceptAttempt):
+                owner._check(request.session)
+                if request.attempt_id != owner.record.attempt_id:
+                    raise ValueError("learning_attempt_identity")
+                self.proposal = None
+                if not request.accepted:
+                    self._fail_capture(request.reason)
+            elif isinstance(request, QueryAttempt):
+                identity = request.payload.attempt_id
+                if request.payload.start_request_id is not None:
+                    identity = attempt_identity(
+                        owner.record.run_id, request.payload.start_request_id
+                    )
+                selected = owner.record if identity is None else await self._lookup(identity)
+                if selected is None:
+                    raise ValueError("learning_request_unknown")
+                data = self._status(selected)
             reply = Reply(
                 ok=True,
                 error=owner.error,
-                record=owner.public_record,
+                record=(
+                    owner.public_record
+                    if not isinstance(request, FrameBatch)
+                    and getattr(request, "record_revision", -1) != owner.record.revision
+                    else None
+                ),
+                manifest=owner.public_manifest,
+                attempt_id=owner.record.attempt_id,
+                active_record=(
+                    owner.active_record
+                    if isinstance(request, (State, Attach, SessionRequest))
+                    and request.active_revision != owner.public_manifest.active_revision
+                    else None
+                ),
+                proposal=self.proposal,
+                data=data,
+                through_index=self.through_index,
+                accepted_frames=self.accepted_frames,
                 session=session,
                 revision=revision,
                 ready=ready,
@@ -171,6 +482,8 @@ class LearningService:
         for peer in self.peers:
             peer.cancel()
         await asyncio.gather(*self.peers, return_exceptions=True)
+        if self.compute is not None:
+            self.compute.close()
         if self.owner is not None:
             # Orderly shutdown is outside control scheduling, with the same
             # bounded resource cleanup horizon as ProcessWorker.close().

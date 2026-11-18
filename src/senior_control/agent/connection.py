@@ -55,6 +55,12 @@ class MotionPort(Protocol):
         **fields: Any,
     ) -> dict[str, Any]: ...
 
+    async def learning_available(self) -> bool: ...
+
+    async def learning(
+        self, envelope: Envelope, *, received_steady: float, deadline_steady: float
+    ) -> dict[str, Any]: ...
+
     async def send_intent(
         self,
         envelope: ManualIntentEnvelope,
@@ -98,6 +104,7 @@ class IpcMotion:
         safety_client: IpcClient | None = None,
     ) -> None:
         self._client = client
+        self._learning_available: bool | None = None
         self._intent_client = intent_client
         # //Compatible: isolated callers can still supply one serialized IPC client.
         self._disable_client = disable_client if disable_client is not None else client
@@ -139,6 +146,29 @@ class IpcMotion:
             envelope=serialize_envelope(envelope).decode(),
             received_at=received_steady,
         )
+
+    async def learning_available(self) -> bool:
+        if self._learning_available is None:
+            try:
+                response = await self._client.request("learning_capability")
+                self._learning_available = response.get("learning_protocol_version") == 1
+            except (IpcError, OSError):
+                return False
+        return self._learning_available
+
+    async def learning(
+        self, envelope: Envelope, *, received_steady: float, deadline_steady: float
+    ) -> dict[str, Any]:
+        result = await self._ok(
+            "learning",
+            envelope=serialize_envelope(envelope).decode(),
+            received_steady=received_steady,
+            deadline_steady=deadline_steady,
+        )
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise DomainError(ErrorCode.UNAVAILABLE, "learning reply unavailable")
+        return data
 
     async def send_intent_frame(
         self,

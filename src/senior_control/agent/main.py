@@ -42,6 +42,8 @@ from senior_control.protocol import (
     HEARTBEAT_INTERVAL_MS,
     EmptyPayload,
     Envelope,
+    LearningStartEnvelope,
+    LearningStatusEnvelope,
     ManualIntentEnvelope,
     OperationEnvelope,
     RecoveryEnvelope,
@@ -529,7 +531,9 @@ class Agent:
     def _safety_key(self, envelope: Envelope) -> tuple[str, int, str]:
         identity = envelope.session_id
         if envelope.type == "drive.stop" and envelope.payload.authority_id is not None:
-            identity = json.dumps((identity, envelope.payload.authority_id, envelope.payload.gesture))
+            identity = json.dumps(
+                (identity, envelope.payload.authority_id, envelope.payload.gesture)
+            )
         if envelope.type == "safety.estop":
             # Distinct user events require distinct request receipts, even when
             # queued in the same session. Only identical transport retries merge.
@@ -591,6 +595,11 @@ class Agent:
 
     def _accept(self, link: Link, envelope: Envelope) -> None:
         if isinstance(envelope, ResponseEnvelope):
+            return
+        if isinstance(envelope, (LearningStartEnvelope, LearningStatusEnvelope)):
+            if len(self._inflight) >= MAX_INFLIGHT:
+                raise ConnectionError("agent command capacity exceeded")
+            self._spawn(self._answer_learning(link, envelope))
             return
         if isinstance(
             envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
@@ -829,6 +838,22 @@ class Agent:
             except Exception:
                 logger.warning("snapshot after edit failed", exc_info=True)
 
+    async def _answer_learning(self, link: Link, envelope) -> None:
+        try:
+            self._admit(envelope)
+            received = envelope._received_steady
+            assert received is not None
+            deadline = received + max(0.0, envelope.expires_at - self._wall_clock())
+            data = await self._motion.learning(
+                envelope, received_steady=received, deadline_steady=deadline
+            )
+        except DomainError as exc:
+            await self._reply(link, envelope, error=exc.code)
+        except (OSError, ValueError, RuntimeError):
+            await self._reply(link, envelope, error=ErrorCode.UNAVAILABLE)
+        else:
+            await self._reply(link, envelope, data=data)
+
     async def _answer_settings(self, link: Link, envelope: SettingsEnvelope) -> None:
         try:
             self._admit(envelope)
@@ -944,6 +969,8 @@ class Agent:
                 SnapshotEnvelope,
                 WorkspaceEnvelope,
                 SettingsGetEnvelope,
+                LearningStartEnvelope,
+                LearningStatusEnvelope,
                 SettingsApplyEnvelope,
                 SettingsResultEnvelope,
             ),
@@ -1113,6 +1140,8 @@ class Agent:
             deleted = await self._journal.deleted_task_ids()
         home = live.home
         ui = dict(live.vehicle_ui or {})
+        if "runtime.v1" in ui.get("capabilities", []) and await self._motion.learning_available():
+            ui["capabilities"] = [*ui.get("capabilities", []), "learning.v1"]
         if self.module_faults:
             ui["module_faults"] = dict(self.module_faults)
             capabilities = list(ui.get("capabilities", []))

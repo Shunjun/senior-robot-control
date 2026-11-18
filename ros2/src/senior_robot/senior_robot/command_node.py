@@ -204,7 +204,9 @@ class CommandNode(Node):
             if identity is not None:
                 context = self._manual_ingress.context
                 if context is None or (
-                    envelope.connection_epoch, envelope.controller_generation, envelope.session_id
+                    envelope.connection_epoch,
+                    envelope.controller_generation,
+                    envelope.session_id,
                 ) != (context.agent_epoch, context.controller_generation, context.session_id):
                     return CommandResult(False, ErrorCode.CONFLICT)
                 if gesture is None or not self._manual_ingress.stop(
@@ -212,8 +214,10 @@ class CommandNode(Node):
                 ):
                     return CommandResult(False, ErrorCode.CONFLICT)
                 target = self._manual_target
-                if target is not None and target.sample.intent.authority_id == identity and (
-                    target.sample.intent.gesture <= gesture
+                if (
+                    target is not None
+                    and target.sample.intent.authority_id == identity
+                    and (target.sample.intent.gesture <= gesture)
                 ):
                     self._close_manual("release")
                 # A stale stop must not publish a barrier over a newer gesture.
@@ -880,6 +884,57 @@ class CommandNode(Node):
                 message["envelope"].encode(), str(self.get_parameter("robot_id").value)
             )
             now = self._monotonic_clock.monotonic()
+            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
+
+            if isinstance(envelope, (LearningStartEnvelope, LearningStatusEnvelope)):
+                if envelope.controller_generation is None:
+                    return {"ok": False, "accepted": False, "error": "conflict"}
+                runtime = self._motion_runtime.current(now)
+                manual = self._manual_ingress.view(now)
+                prepared = manual is not None and manual.state is ManualAuthorityState.PREPARED
+                context = self._manual_ingress.context
+                same_operator = context is not None and (
+                    context.agent_epoch,
+                    context.controller_generation,
+                    context.session_id,
+                ) == (
+                    envelope.connection_epoch,
+                    envelope.controller_generation,
+                    envelope.session_id,
+                )
+                no_holder = manual is None or manual.state is ManualAuthorityState.CLOSED
+                can_start = (
+                    runtime is not None
+                    and runtime.stationary
+                    and runtime.mode in {"idle", "manual"}
+                    and self._navigation_source is None
+                    and not self._arbiter.task_navigation_active
+                    and self._manual_target is None
+                    and getattr(self, "_pending_estop_request", None) is None
+                    and (no_holder or (prepared and same_operator))
+                )
+                if isinstance(envelope, LearningStartEnvelope):
+                    expected = envelope.payload.expected_authority_id
+                    can_start = can_start and (
+                        expected is None
+                        and no_holder
+                        or prepared
+                        and same_operator
+                        and manual.authority_id == expected
+                    )
+                    deadline = message.get("deadline_steady")
+                    if type(deadline) not in {int, float}:
+                        return {"ok": False, "accepted": False, "error": "timeout"}
+                    can_start = can_start and now < deadline
+                else:
+                    deadline = now
+                return {
+                    "ok": True,
+                    "owner_boot_id": self._owner_boot,
+                    "generation": self._generation,
+                    "deadline_steady": deadline,
+                    "can_start": can_start,
+                }
             if isinstance(envelope, RecoveryEnvelope):
                 key = "estop_reset" if envelope.type == "safety.estop.reset" else "fault_recover"
                 if getattr(self, "_pending_estop_request", None) is not None:

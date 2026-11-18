@@ -12,7 +12,7 @@ _LOG = logging.getLogger(__name__)
 _CLAIM = r"\.startup-learning-[0-9a-f]{32}"
 _SUFFIXES = ("", ".pending", ".features.json", ".features.json.pending", ".owner.lock")
 _GENERATED_FILE = re.compile(
-    rf"(?P<claim>{_CLAIM})(?:\.pending|\.owner\.lock|\.features\.json(?:\.pending)?)?"
+    rf"(?P<claim>{_CLAIM})(?:\.attempt-[0-9a-f]{32}(?:\.pending)?|\.pending|\.owner\.lock|\.features\.json(?:\.pending)?)?"
 )
 
 
@@ -38,8 +38,16 @@ def _remove_old_files(directory: int, root: Path, current_name: str) -> None:
                         raise ValueError("old learning owner lock is not regular")
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 # Lock inode is removed last, after all record/temporary files.
-                for suffix in _SUFFIXES:
-                    candidate = name + suffix
+                generated = [name + suffix for suffix in _SUFFIXES]
+                with os.scandir(directory) as group:
+                    generated[:0] = [
+                        item.name
+                        for item in group
+                        if re.fullmatch(
+                            re.escape(name) + r"\.attempt-[0-9a-f]{32}(?:\.pending)?", item.name
+                        )
+                    ]
+                for candidate in generated:
                     try:
                         info = os.stat(candidate, dir_fd=directory, follow_symlinks=False)
                         if stat.S_ISREG(info.st_mode):

@@ -98,6 +98,78 @@ class AdapterCore:
             "navigation.current",
         }:
             return await self._route_request(kind, message)
+        if kind == "learning_capability":
+            import os
+
+            return {
+                "ok": True,
+                "learning_protocol_version": 1
+                if (self._manual is not None and os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM"))
+                else 0,
+            }
+        if kind == "learning":
+            import asyncio
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
+            from senior_control.runtime.learning_client import request_once
+            from senior_control.runtime.learning_wire import BeginAttempt, QueryAttempt
+
+            if self._manual is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            try:
+                envelope = validate_envelope(message["envelope"].encode(), self._robot_id)
+                if not isinstance(envelope, (LearningStartEnvelope, LearningStatusEnvelope)):
+                    raise ValueError("learning_envelope")
+                if envelope.connection_epoch <= self._disabled_through_epoch:
+                    return {"ok": False, "accepted": False, "error": "offline"}
+                claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+                if not claim:
+                    return {"ok": False, "error": "unavailable"}
+                admission = self._manual(message)
+                if not admission.get("ok"):
+                    return admission
+                request = (
+                    QueryAttempt(payload=envelope.payload)
+                    if isinstance(envelope, LearningStatusEnvelope)
+                    else BeginAttempt(
+                        start_request_id=envelope.request_id,
+                        payload=envelope.payload,
+                        fingerprint=hashlib.sha256(
+                            json.dumps(
+                                [
+                                    envelope.robot_id,
+                                    envelope.session_id,
+                                    envelope.connection_epoch,
+                                    envelope.controller_generation,
+                                    envelope.payload.model_dump(),
+                                ],
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode()
+                        ).hexdigest(),
+                        owner_boot_id=admission["owner_boot_id"],
+                        generation=admission["generation"],
+                        admitted=admission["can_start"],
+                        deadline_steady=admission["deadline_steady"],
+                    )
+                )
+                reply = await asyncio.to_thread(
+                    request_once, Path(claim).name.removeprefix(".startup-learning-"), request
+                )
+                if not reply.ok or reply.data is None:
+                    return {"ok": False, "accepted": False, "error": "conflict"}
+                data = dict(reply.data)
+                if isinstance(envelope, LearningStatusEnvelope):
+                    data["can_start"] = bool(data["can_start"] and admission["can_start"])
+                    if not admission["can_start"]:
+                        data["cannot_start_reason"] = "control_source_conflict"
+                return {"ok": True, "data": data}
+            except (KeyError, TypeError, ValueError, OSError):
+                return {"ok": False, "error": "unavailable"}
         if kind in {"manual", "manual_intent"}:
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unsupported"}

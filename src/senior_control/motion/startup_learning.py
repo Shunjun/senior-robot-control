@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from senior_control.motion.learning_record import LearningRecord, Phase
-from senior_control.vision.raw_capture import RawCaptureHeader
-
-if TYPE_CHECKING:
-    from senior_control.safety.self_filter import FilteredObservation
-    from senior_control.safety.self_learning import SelfReturnModel
 
 
 class LearningSession(Protocol):
@@ -25,11 +21,21 @@ class LearningSession(Protocol):
     def reserve_action(self) -> bool: ...
     def phase(self, phase: Phase, reason: str, segment_id: str | None = None) -> None: ...
     def action(self, start_ns: int, interval_ns: int, *, finished: bool) -> None: ...
-    def complete(self, points: tuple[tuple[float, float], ...]) -> None: ...
+
+    accepted_frames: int
+
+    def observed(
+        self,
+        *,
+        segment_id: str,
+        now_ns: int,
+        validation_after_ns: int | None,
+        first_takeover_ns: int | None,
+    ) -> None: ...
 
 
 class StartupLearning:
-    active_states = {"initializing", "sampling", "moving", "braking", "validating", "unconfirmed"}
+    active_states = {"initializing", "sampling", "moving", "braking"}
     duration_s = 3.0
 
     def __init__(
@@ -44,22 +50,12 @@ class StartupLearning:
         self.deadline: float | None = None
         self.motion_withdrawn = False
         self.segment_id = uuid4().hex
-        self.resample_required = False
         self._last_now: float | None = None
-        self._first_now: float | None = None
         self._stationary = False
-        self._frame_keys: set[tuple[str, str, int]] = set()
-        self._capture_origin: tuple[str, str] | None = None
-        self._capture_frontier = 0.0
-        self._capture_measurement: int | None = None
-        self._capture_generation: int | None = None
-        self._segment_floor = 0.0
-        self.validation_samples = 0
-        self._motion_frames = 0
+        self.first_takeover_ns: int | None = None
         self._record_seen = False
         self._action_granted = False
         self._reservation_requested = False
-        self._completion_pending = False
         self._reported_finished = False
         self._last_output: float | None = None
         self._last_output_deadline = 0.0
@@ -130,7 +126,6 @@ class StartupLearning:
         if record.phase == "completed" and record.model is not None:
             self.state, self.reason = "completed", "restored_completed_record"
             self.motion_withdrawn = True
-            self._completion_pending = False
         elif not self._record_seen and record.phase in {"failed", "unconfirmed"}:
             self.motion_withdrawn = True
             self.state = "interrupted"
@@ -155,7 +150,6 @@ class StartupLearning:
             raise ValueError("learning_output_clock_or_reservation")
         self._accrue_output(now)
         if self.started is None:
-            self._segment("learning_collection_started")
             self.started, self.deadline = now, now + self.duration_s
             if self.session is not None:
                 self.session.action(round(now * 1e9), 0, finished=False)
@@ -193,33 +187,48 @@ class StartupLearning:
             self.interrupt(reason)
 
     def interrupt(self, reason: str) -> None:
-        if self.active:
+        if self.state in {"completed", "failed", "interrupted", "disabled"}:
+            return
+        if (
+            self.session is not None
+            and self.session.record is not None
+            and self.session.record.capture_summary.state == "complete"
+        ):
+            return  # Closed raw data belongs to the compute owner, irrespective of control.
+        if self.first_takeover_ns is None:
+            self.first_takeover_ns = (
+                time.monotonic_ns() if self._last_now is None else round(self._last_now * 1e9)
+            )
+        if self.active or self.state == "validating":
             if reason in {"control_takeover", "other_control_source"}:
                 self._stop_confirmed = True
             self.motion_withdrawn = True
             self.state, self.reason = "interrupted", reason
             self._finish_action()
+            if self.session is not None:
+                self.session.observed(
+                    segment_id=self.segment_id,
+                    now_ns=self.first_takeover_ns,
+                    validation_after_ns=None
+                    if self.validation_after_steady is None
+                    else round(self.validation_after_steady * 1e9),
+                    first_takeover_ns=self.first_takeover_ns,
+                )
             self._phase()
-
-    def evidence_gap(self, reason: str) -> None:
-        if self.active:
-            self._segment(reason)
-
-    def _segment(self, reason: str) -> None:
-        self.segment_id = uuid4().hex
-        self._segment_floor = 0.0 if self._last_now is None else self._last_now
-        self.resample_required = True
-        self.validation_samples = 0
-        self._motion_frames = 0
-        self._frame_keys.clear()
-        self._capture_origin = None
-        self._capture_measurement = None
-        self.reason = reason
 
     def advance(self, wheel: float | None, *, now: float, stationary: bool) -> None:
         self._restore()
         if self.state in {"braking", "validating"} and not self.motion_started:
             self.interrupt("learning_output_withdrawn")
+        if self.session is not None:
+            self.session.observed(
+                segment_id=self.segment_id,
+                now_ns=round(now * 1e9),
+                validation_after_ns=None
+                if self.validation_after_steady is None
+                else round(self.validation_after_steady * 1e9),
+                first_takeover_ns=self.first_takeover_ns,
+            )
         if not self.active:
             return
         if (
@@ -230,8 +239,6 @@ class StartupLearning:
             self.interrupt("learning_monotonic_clock_regressed")
             return
         self._last_now = now
-        if self._first_now is None:
-            self._first_now = now
         self._stationary = stationary and wheel is not None and math.isfinite(wheel)
         self._accrue_output(now)
         if self.deadline is not None and now >= self.deadline:
@@ -251,83 +258,13 @@ class StartupLearning:
             self.validation_after_steady = now
         if self.state == "validating" and self.validation_after_steady is None and self._stationary:
             self.validation_after_steady = now
-        self._phase()
-
-    def frame(
-        self, model: SelfReturnModel, observation: FilteredObservation, *, capture: RawCaptureHeader
-    ) -> None:
-        self._restore()
         if (
-            not self.active
-            or self._completion_pending
-            or self.validation_samples >= 5
-            and self.state == "unconfirmed"
+            self.state == "sampling"
+            and self.session is not None
+            and self.session.ready
+            and self.session.accepted_frames >= 5
         ):
-            return
-        if self._first_now is None or capture.end_steady < max(
-            self._first_now, self._segment_floor
-        ):
-            return
-        origin = capture.bridge_boot_id, capture.source_epoch
-        generation = capture.time.clock_generation
-        physical = capture.time.stamp_ns
-        changed_source = self._capture_origin is not None and self._capture_origin != origin
-        changed_axis = (
-            self._capture_generation is not None and generation != self._capture_generation
-        )
-        if changed_source or changed_axis:
-            if capture.end_steady < self._capture_frontier:
-                return  # Late old segment cannot reset the current one.
-            self._segment("scan_evidence_segment_changed")
-            self._segment_floor = capture.start_steady
-        self._capture_origin = origin
-        self._capture_measurement = physical
-        self._capture_generation = generation
-        self._capture_frontier = max(self._capture_frontier, capture.end_steady)
-        if self.resample_required or model.segment_id != self.segment_id:
-            model.begin_segment(self.segment_id)
-            self.resample_required = False
-        key = capture.bridge_boot_id, capture.source_epoch, capture.sequence
-        if key in self._frame_keys:
-            return
-        collecting = (
-            self.started is not None
-            and self.deadline is not None
-            and self.started <= capture.start_steady <= capture.end_steady < self.deadline
-        )
-        if self.started is None or collecting:
-            if not model.observe(observation, capture=capture, segment_id=self.segment_id):
-                return
-            self._frame_keys = set(model.frame_keys)
-            if collecting:
-                self._motion_frames += 1
-            elif self.state == "moving":
-                model.retain_recent(5)
-                self._frame_keys = set(model.frame_keys)
-            if self.state == "sampling" and len(model.frames) >= 5:
-                self.state, self.reason = "moving", "learning_forward_window"
-        elif (
-            self.state in {"validating", "unconfirmed"}
-            and self.validation_after_steady is not None
-            and capture.start_steady >= self.validation_after_steady
-            and self._stationary
-        ):
-            # These fresh post-stop frames confirm the collection lifecycle,
-            # never reclassify or revoke the surface measured during the action.
-            self._frame_keys.add(key)
-            self.validation_samples += 1
-            if self.validation_samples >= 5:
-                count = model.validate() if self._motion_frames else 0
-                no_interior = any(model.frames) and not any(
-                    model.interior(point) for points in model.frames for point in points
-                )
-                if self._motion_frames and (count or no_interior):
-                    if self.session is not None:
-                        self.session.complete(model.learned)
-                        self._completion_pending = True
-                        self.reason = "learning_completion_pending_commit"
-                else:
-                    self.state, self.reason = "unconfirmed", "classification_unverified"
+            self.state, self.reason = "moving", "learning_forward_window"
         self._phase()
 
     def summary(self, learned_count: int = 0) -> dict[str, object]:
