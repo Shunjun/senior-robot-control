@@ -234,7 +234,8 @@ def _check_dedicated_parent_death(root):
                 time.sleep(0.02)
             assert pid not in children, "native child survived its owner"
         for name in ("controller_server", "bt_navigator"):
-            assert (root / f"{name}.stopped").read_text() == str(signal.SIGTERM)
+            # //Compatible: IntEnum.__str__ changed in Python 3.11; the handler gets int.
+            assert (root / f"{name}.stopped").read_text() == str(int(signal.SIGTERM))
     finally:
         if parent.poll() is None:
             parent.kill()

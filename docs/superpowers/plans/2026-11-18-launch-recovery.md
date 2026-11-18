@@ -336,3 +336,10 @@ PY
 - `config/nav2.yaml` 的 critics 列表/CostCritic 设置从初始 11393ee 已存在；b3664cd 的 blame 主要来自当时全文件行尾归一化，并非本次恢复引入。现有 test_navigation.py 的真实启动也直接用默认 launch，未提供可复用的兼容参数覆盖；仓库无另一份已获准 MPPI/Humble 参数 fixture，静态 CostCritic 断言只证明字段存在。
 - 这是当前 installed 与默认产品配置不匹配的实际启动缺陷，具体版本/overlay 归因仍需其实际 package.xml/critics.xml/导出路径。上游固定 [Nav2 1.1.20 critics.xml](https://raw.githubusercontent.com/ros-navigation/navigation2/1.1.20/nav2_mppi_controller/critics.xml) 本来导出 CostCritic，不能泛称 Humble 全部没有该类；[同版本 MPPI 文档](https://raw.githubusercontent.com/ros-navigation/navigation2/1.1.20/nav2_mppi_controller/README.md) 分别说明 CostCritic 直接 costmap 评分与 ObstaclesCritic 距离/权重评分，不能改名声称行为等价。
 - 本轮不改配置/安装依赖、不删除 critic，不重复失败两项；若后续用获准的特定参数验证恢复，只能报告该参数下的恢复行为，默认生产导航不可启动仍是缺口。生产配置整改至少涉及既有 nav2.yaml 和 test_navigation.py 对应断言，当前配置 0 范围外，须负责人另行收口预报。
+
+### Linux 实际反馈与 Python 3.10 信号文本修正
+
+- 负责人已对 `8da12b9` 独立源码重跑此前失败的 critical 场景：**1 passed / 3 deselected，30.47 秒**。真实 Command → DDS → native guard/Core、prepared/新鲜旧源拒绝、boot 退休及急停 revision/reset 通过；不因后续父死补丁重复跑，不将这一场景说成复合 command/output 原急停 identity 延续已闭合。
+- 负责人亲审 `f424770` 后在 Linux 用现有同步函数和 asyncio.run（未安装 pytest async 插件、未改测试）运行新定向检查。首项的两个 child 已实际 waitpid exit=0、/proc 消失、从待回收集删除，随后仅失败于信号文本比较；第二个 async 取消函数因首项 raise 尚未运行，不能说失败或通过。
+- 已在本机**实际解释器**核对：Python 3.10.22 的 str(SIGTERM) 为 `Signals.SIGTERM`、str(int(SIGTERM)) 为 `15`；Python 3.12.15 两者均为 `15`。handler 参数为 int，fixture 原本写 `15`，所以只将期望改为 str(int(SIGTERM)) 并标注 //Compatible，不改产品信号/父死策略/进程清理。依据还包括 [Python 3.11 IntEnum 变更说明](https://docs.python.org/3.11/library/enum.html#enum.IntEnum)。本地 ruff/差异检查通过；负责人只重跑受影响两函数，不重复 critical。
+- actual MPPI 已确认是 `/home/wheeltec/wheeltec_ros2/install/nav2_mppi_controller` 的 **1.1.9**，导出 XML 无 CostCritic、MPPIController 本身存在。负责人不批准正式 nav2.yaml/算法整改或升级，范围仍 18 文件；仅批准在现有 live fixture 临时生成明确标为隔离恢复用的 1.1.9 参数，仍经原 parameters 入口验证同两项场景，不能称默认生产导航通过。默认定义须按该实际旧实现核对，不能把较新 1.1.20 的默认值冒充现场 1.1.9。
