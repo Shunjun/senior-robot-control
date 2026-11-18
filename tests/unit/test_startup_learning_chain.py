@@ -2,8 +2,10 @@
 
 import json
 import math
+import pickle
 import sys
 from collections import deque
+from dataclasses import asdict, replace
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -107,6 +109,7 @@ class LearningRig:
             message = SimpleNamespace(
                 source_epoch="scan",
                 sequence=self.sequence,
+                raw_source="01",
                 frame_id="laser_link",
                 ranges=ranges,
                 angle_min=0.0,
@@ -469,3 +472,242 @@ def test_recovered_core_stays_read_only_until_handoff_then_can_run_a_new_explici
     assert rig.run.owner.record.attempt_id != old.attempt_id
     assert rig.core._old_learning_owner.attempt_id == old.attempt_id
     assert rig.run.owner.record.action.first_submitted_steady_ns == round(start * 1e9)
+
+
+def uncached_scan(core, raw, *, avoidance=False):
+    from senior_robot import motion_core_perception as perception
+
+    from senior_control.safety.learning_view import LearningFilterView
+    from senior_control.safety.self_learning import SelfReturnModel
+
+    decode = perception.avoidance_observation if avoidance else perception.scan_observation
+    expected = decode(raw, core.node._body)
+    view = core._learning_client.view
+    if view is not None:
+        expected = LearningFilterView(view.catalog, view.geometry).filter(expected)
+    elif core.self_returns is not None:
+        expected = SelfReturnModel(core._learning_geometry.physical_polygon).filter(
+            expected, provisional=core.startup.provisional
+        )
+    return expected
+
+
+def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
+    from senior_robot import motion_core_perception as perception
+
+    from senior_control.safety.startup_visibility import startup_visibility
+
+    expected = uncached_scan(core, raw, avoidance=avoidance)
+    # JSON gives NaN its original nonfinite category; finite coordinates compare exactly.
+    assert json.dumps(asdict(actual), sort_keys=True) == json.dumps(
+        asdict(expected), sort_keys=True
+    )
+    flags = dict(front_stop=True, rear_stop=True)
+    assert startup_visibility(actual, **flags) == startup_visibility(expected, **flags)
+    clearance = perception.directional_clearance([raw], core.profile, now, filtered=actual)
+    reference = perception.directional_clearance([raw], core.profile, now, filtered=expected)
+    assert clearance == reference
+    if clearance is not None:
+        arguments = (Velocity(0.05, 0), Velocity(0.01, 0), 0.0)
+        assert perception.limit_velocity(*arguments, clearance, core.profile, 0.05) == (
+            perception.limit_velocity(*arguments, reference, core.profile, 0.05)
+        )
+    return clearance
+
+
+def checked_current_velocity(core, now, function, *arguments):
+    from senior_robot.motion_core_perception import directional_clearance
+
+    raw = core.node._scans[-1]
+    filtered = uncached_scan(core, raw, avoidance=bool(raw.predictions))
+    clearance = directional_clearance([raw], core.profile, now, filtered=filtered)
+    request, previous, measured, actual_clearance, profile, dt = arguments
+    assert actual_clearance == clearance
+    actual = function(*arguments)
+    assert actual == function(request, previous, measured, clearance, profile, dt)
+    return actual
+
+
+def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(rig, monkeypatch):
+    from senior_robot import motion_core_output
+
+    rig.start()
+    calls = []
+    decode = motion_core_output.scan_observation
+    filter_scan = rig.core.self_returns.filter
+
+    def decoded(*args):
+        calls.append("decode")
+        return decode(*args)
+
+    def filtered(*args, **kwargs):
+        calls.append("filter")
+        return filter_scan(*args, **kwargs)
+
+    monkeypatch.setattr(motion_core_output, "scan_observation", decoded)
+    monkeypatch.setattr(rig.core.self_returns, "filter", filtered)
+    limit = motion_core_output.limit_velocity
+    monkeypatch.setattr(
+        motion_core_output,
+        "limit_velocity",
+        lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
+    )
+    velocities = [rig.step(rig.now + 0.05)]
+    raw = rig.core.node._scans[-1]
+    deadlines = [rig.core.node.emitted[-1][3]]
+    for _ in range(2):
+        rebuilt = pickle.loads(pickle.dumps(raw))  # Same identity, different snapshot objects.
+        rig.core.node._scans.clear()
+        rig.core.node._scans.append(rebuilt)
+        velocities.append(rig.step(rig.now + 0.05, new_scan=False))
+        deadlines.append(rig.core.node.emitted[-1][3])
+        assert deadlines[-1] == rig.now + 0.15
+        actual = rig.core._scan_results[0][3]
+        assert_original_scan_result(rig.core, rebuilt, actual, rig.now)
+    assert calls == ["decode", "filter"]
+    assert velocities[0] != velocities[-1] and all(value.vx > 0 for value in velocities)
+    assert deadlines[0] < deadlines[1] < deadlines[2]
+    from senior_control.sensors.policy import default_policy
+
+    expires = raw.measurement_steady + default_policy().hard_age_s
+    assert all(deadline <= expires for deadline in deadlines)
+    assert rig.step(expires + 1e-6, new_scan=False) == Velocity(0, 0)
+    assert calls == ["decode", "filter"]
+    assert rig.core.startup.motion_withdrawn  # Cached facts cannot make an expired scan current.
+
+
+def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_versions(
+    rig, monkeypatch
+):
+
+    from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
+    from senior_control.safety.learning_view import LearningFilterView
+    from senior_control.safety.self_learning import SelfReturnModel
+
+    rig.start()
+    calls = []
+    filter_scan = SelfReturnModel.filter
+
+    def filtered(model, *args, **kwargs):
+        client = rig.core._learning_client
+        if model is rig.core.self_returns or (
+            client.view is not None and model is client.view._model
+        ):
+            calls.append(model)
+        return filter_scan(model, *args, **kwargs)
+
+    monkeypatch.setattr(SelfReturnModel, "filter", filtered)
+    rig.step(rig.now + 0.05)
+    raw = rig.core.node._scans[-1]
+    assert len(calls) == 1
+
+    def check(value):
+        before = len(calls)
+        actual = rig.core._filtered_scan(value)
+        assert len(calls) == before + 1
+        assert_original_scan_result(rig.core, value, actual, rig.now)
+        assert rig.core._filtered_scan(pickle.loads(pickle.dumps(value))) is actual
+        assert len(calls) == before + 1
+        return actual
+
+    source = pickle.loads(pickle.dumps(raw))
+    source.message.source_epoch += "-replacement"
+    source.message.raw_capture.source_epoch += "-replacement"  # Same sequence, different source.
+    check(source)
+    payload = pickle.loads(pickle.dumps(source))
+    payload.message.ranges[0] += 0.1  # Same capture identity; the value snapshot still invalidates.
+    check(payload)
+    rig.core.startup.hold_motion("scan_temporarily_unavailable")
+    assert not rig.core.startup.provisional
+    check(payload)
+    transformed = pickle.loads(pickle.dumps(payload))
+    transformed.message.sensor_x += 0.01
+    transformed.message.transform_stamp += 0.01
+    check(transformed)
+    assert rig.core.startup.reason == "scan_or_body_geometry_changed"
+
+    client = rig.core._learning_client
+    for revision, point in ((1, (0.01, 0.15)), (2, (0.2, 0.1))):
+        catalog = LearnedCatalog(
+            model_id=str(revision) * 32, anchors=(LearningAnchor(id=0, point=point),)
+        )
+        client.view = LearningFilterView(catalog, rig.core._learning_geometry)
+        client.active_revision = revision
+        check(transformed)
+
+    incomplete = pickle.loads(pickle.dumps(transformed))
+    del incomplete.message.raw_source
+    before = len(calls)
+    for _ in range(2):
+        actual = rig.core._filtered_scan(incomplete)
+        assert_original_scan_result(rig.core, incomplete, actual, rig.now)
+    assert len(calls) == before + 2 and rig.core._scan_results == [None, None]
+
+
+def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning_raw(
+    rig, monkeypatch
+):
+    from senior_robot import motion_core_output
+    from senior_robot.raw_safety_observation import PredictedReturn
+
+    from senior_control.vision.raw_capture import capture_from_message
+
+    rig.start()
+    seed = capture_from_message(rig.core.node._scans[-1].message.raw_capture)
+    other_seed = capture_from_message(rig.core.node._scans[-2].message.raw_capture)
+    offer = rig.run.offer
+    batches = []
+    calls = []
+    decode, avoid = motion_core_output.scan_observation, motion_core_output.avoidance_observation
+
+    def original_frame(raw):
+        raw.message.ranges[0] = math.inf
+        batch = offer(raw)
+        batches.append(batch)
+        return batch
+
+    def decoded(*args):
+        calls.append("original")
+        return decode(*args)
+
+    def avoided(*args):
+        calls.append("avoidance")
+        return avoid(*args)
+
+    monkeypatch.setattr(rig.run, "offer", original_frame)
+    monkeypatch.setattr(motion_core_output, "scan_observation", decoded)
+    monkeypatch.setattr(motion_core_output, "avoidance_observation", avoided)
+    limit = motion_core_output.limit_velocity
+    monkeypatch.setattr(
+        motion_core_output,
+        "limit_velocity",
+        lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
+    )
+    rig.step(rig.now + 0.05)
+    raw = rig.core.node._scans[-1]
+    original = rig.core._scan_results[0][3]
+    boundary = rig.core.profile.length / 2 * 1.10 + rig.core.profile.sensor_error
+    prediction = PredictedReturn(0, boundary, 1, seed)
+
+    def step_with(value):
+        current = replace(raw, predictions=(value,))
+        rig.core.node._scans.clear()
+        rig.core.node._scans.append(pickle.loads(pickle.dumps(current)))
+        output = rig.step(rig.now + 0.05, new_scan=False)
+        assert rig.core._scan_results[0][3] is original
+        actual = rig.core._scan_results[1][3]
+        clearance = assert_original_scan_result(rig.core, current, actual, rig.now, avoidance=True)
+        assert_original_scan_result(rig.core, current, original, rig.now)
+        return output, clearance
+
+    output, clearance = step_with(prediction)
+    assert output == Velocity(0, 0) and clearance.front == 0.0
+    step_with(prediction)  # Rebuilt snapshot, unchanged prediction: both slots hit.
+    assert calls == ["original", "avoidance"]
+    prediction = replace(prediction, distance=boundary + 0.1, missing_frames=2)
+    assert step_with(prediction)[0].vx > 0
+    step_with(replace(prediction, seed_capture=other_seed))
+    assert calls == ["original", "avoidance", "avoidance", "avoidance"]
+    assert raw.message.ranges[0] == math.inf and original.scan.ranges[0] == math.inf
+    assert batches[0].frames[0].ranges[0] == "inf"
+    assert batches[0].frames[0].capture == capture_from_message(raw.message.raw_capture)

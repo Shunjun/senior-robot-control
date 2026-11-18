@@ -25,6 +25,7 @@ from senior_control.runtime.learning_client import LearningClient
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.startup_visibility import startup_visibility
 from senior_control.sensors.policy import default_policy
+from senior_control.vision.raw_capture import capture_from_message
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_core_perception import (
     avoidance_observation,
@@ -81,6 +82,8 @@ class MotionCoreOutput:
             )
             self.self_returns = None
             self._learning_geometry = None
+            self._scan_result_key = None
+            self._scan_results = [None, None]
             self._retired_learning_owner = False
             self._old_learning_owner = None
         except BaseException:
@@ -470,29 +473,81 @@ class MotionCoreOutput:
         if age.band == "invalid":
             self.startup.hold_motion("scan_temporarily_unavailable")
             return None
-        observation = scan_observation(raw, self.node._body)
-        if client.view is not None:
-            return client.view.filter(observation)
-        m = raw.message
-        x, y = self.profile.length / 2, self.profile.width / 2
-        geometry = LearningGeometry(
-            body_frame=self.node._body,
-            sensor_frame=m.frame_id,
-            physical_polygon=((-x, -y), (x, -y), (x, y), (-x, y)),
-            sensor_to_body=(m.sensor_x, m.sensor_y, m.sensor_yaw),
-            angle_min=m.angle_min,
-            angle_increment=m.angle_increment,
-            count=len(m.ranges),
-            range_min=m.range_min,
-            range_max=m.range_max,
+        return self._filtered_scan(raw)
+
+    def _scan_key(self, raw):
+        """Value identity survives snapshot unpickling; missing metadata only skips reuse."""
+        try:
+            m = raw.message
+            ranges = tuple(m.ranges)
+            return (
+                capture_from_message(m.raw_capture),
+                (m.source_epoch, m.sequence, m.raw_source),
+                (raw.stamp, raw.received, raw.received_ros, raw.measurement_steady),
+                (self.node._body, m.frame_id),
+                (m.angle_min, m.angle_increment, m.range_min, m.range_max),
+                (m.sensor_x, m.sensor_y, m.sensor_yaw, m.transform_stamp),
+                (self.profile.length, self.profile.width, len(ranges)),
+                ranges,
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+
+    def _filtered_scan(self, raw, *, avoidance=False):
+        key = self._scan_key(raw)
+        if key is None or key != self._scan_result_key:
+            self._scan_result_key = key
+            self._scan_results = [None, None]
+        slot = int(avoidance)
+        composition = tuple(raw.predictions) if avoidance else ()
+        entry = self._scan_results[slot]
+        self._scan_results[slot] = None  # Never retain a partial result after an exception.
+        if entry is not None and entry[0] == composition:
+            _, observation, previous_filter, result = entry
+        else:
+            decode = avoidance_observation if avoidance else scan_observation
+            observation = decode(raw, self.node._body)
+            previous_filter = result = None
+        client = self._learning_client
+        view = None if client is None else client.view
+        if not avoidance and client is not None and view is None:
+            # Preserve decoding before geometry reports/holds, even on a cold cache.
+            m = raw.message
+            x, y = self.profile.length / 2, self.profile.width / 2
+            geometry = LearningGeometry(
+                body_frame=self.node._body,
+                sensor_frame=m.frame_id,
+                physical_polygon=((-x, -y), (x, -y), (x, y), (-x, y)),
+                sensor_to_body=(m.sensor_x, m.sensor_y, m.sensor_yaw),
+                angle_min=m.angle_min,
+                angle_increment=m.angle_increment,
+                count=len(m.ranges),
+                range_min=m.range_min,
+                range_max=m.range_max,
+            )
+            client.geometry(geometry)
+            if geometry != self._learning_geometry:
+                if self._learning_geometry is not None:
+                    self.startup.hold_motion("scan_or_body_geometry_changed")
+                self._learning_geometry = geometry
+                self.self_returns = SelfReturnModel(geometry.physical_polygon)
+        filter_key = (
+            self.startup.provisional,
+            self._learning_geometry,
+            None
+            if view is None
+            else (client.active_revision, view.catalog.model_id, view.geometry),
         )
-        client.geometry(geometry)
-        if geometry != self._learning_geometry:
-            if self._learning_geometry is not None:
-                self.startup.hold_motion("scan_or_body_geometry_changed")
-            self._learning_geometry = geometry
-            self.self_returns = SelfReturnModel(geometry.physical_polygon)
-        return self.self_returns.filter(observation, provisional=self.startup.provisional)
+        if previous_filter != filter_key:
+            if view is not None:
+                result = view.filter(observation)
+            elif self.self_returns is not None:
+                result = self.self_returns.filter(observation, provisional=self.startup.provisional)
+            else:
+                result = observation
+        if key is not None:
+            self._scan_results[slot] = (composition, observation, filter_key, result)
+        return result
 
     def _startup_target(self, now, observation):
         if self._launch_recovered and getattr(self, "_manual_learning_request", None) is None:
@@ -596,14 +651,7 @@ class MotionCoreOutput:
             if requested != Velocity(0, 0):
                 control_filtered = filtered
                 if self.node._scans and self.node._scans[-1].predictions:
-                    control_filtered = avoidance_observation(self.node._scans[-1], self.node._body)
-                    view = None if self._learning_client is None else self._learning_client.view
-                    if view is not None:
-                        control_filtered = view.filter(control_filtered)
-                    elif self.self_returns is not None:
-                        control_filtered = self.self_returns.filter(
-                            control_filtered, provisional=self.startup.provisional
-                        )
+                    control_filtered = self._filtered_scan(self.node._scans[-1], avoidance=True)
                 clearance = directional_clearance(
                     self.node._scans, self.profile, now, filtered=control_filtered
                 )
