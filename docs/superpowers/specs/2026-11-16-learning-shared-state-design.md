@@ -1,47 +1,80 @@
-# 同run学习结果保存、只读恢复与动作防重放
+# 同 run 学习：连续录帧、独立计算与单写保存
 
-状态：2026-11-16 用户已批准固定结果并删除运行期撤销，产品已返修；验证结果以本轮固定参考测试报告为准，旧shared-state/recorded-path报告不改写为新行为通过。识别规则见[稳定连续表面设计](2026-11-16-self-return-matching-design.md)。
+状态：2026-11-18 用户已确认流式解耦方向；本规格更新待负责人亲阅，产品尚未实现。当前实车仍部署 `61555f8`、本次模型为 None；`5b65286` 仅保存阶段成果，未合入／部署，不作为最终方案，也不为它追加测试。识别算法继续使用[稳定连续表面设计](2026-11-16-self-return-matching-design.md)，不把历史报告改写成新架构验收。
 
-## 实际职责与生命周期
+## 职责与执行上下文
 
-学习是safety_node内MotionCoreOutput的StartupLearning状态机，不是完成后退出的独立进程。现有实车/仿真supervise先分配run文件，创建唯一LearningService及LearningRecordOwner，再启动ROS和Agent；finally先关闭既有子进程，再关闭学习服务及记录owner。owner持稳定 `.owner.lock` inode，磁盘原子提交由其专用ProcessWorker执行；结束关闭fd，真实进程退出也由内核关闭fd。完成保存不会退出控制/监督进程。
+本文替代旧“Core 内 StartupLearning 收集扫描并同步重算”的接线，以及根任务中对应的恢复步骤。用户新要求是：接收连续录下原始帧，计算收到后流式串行处理，慢可停车后排空；运动和控制权从来不等 CPU。
 
-文件同时单写沿用此唯一owner，不新增学习接管、PID存活猜测、等待超时或强杀策略。正常受管入口已有进程互斥锁；绕过入口直接启动控制节点的单实例缺口单独记录，不在学习模块补另一套互斥。完整新启动生成新run；同run消费者重建可恢复已保存结果，不新增跨run标定或重新学习功能。
-
-| 模块 | 职责 |
+| 角色 | 唯一责任与执行位置 |
 | --- | --- |
-| motion/startup_learning.py | 固定0.05m/s、host steady 3秒学习目标，收集扫描及生命周期；不积分位姿 |
-| safety/self_learning.py | 离散连接与逐帧1cm位置稳定分类；固定参考逐点过滤 |
-| motion/learning_record.py | 严格有界不可变记录、模型目录及动作预消耗事实 |
-| runtime/learning_owner.py、learning_store.py | 单写owner、异步完整快照原子保存、只读模型交付及动作确认 |
-| runtime/learning_service.py、learning_client.py、learning_wire.py | 有界本地请求/回复、客户端线程与本地快照；控制不等待磁盘或记录IPC |
-| safety/learning_view.py | 已完成模型的纯只读过滤视图，无回写和逐帧状态 |
-| runtime/learning_cleanup.py | 保留现有成功启动后一次旧文件精确清理 |
+| MotionCoreOutput / StartupLearning | 原控制进程中的轻量动作时钟与接管；0.05 m/s 目标、首次成功非零私有提交起算 3 秒、到期零输出并退休学习运动目标；保留当前感知及原纯过滤 |
+| SafetyGate 接收进程 | 原准入成功后、补点前非阻塞录入每个原始帧；正常控制仍只有最新轻量快照 |
+| LearningFrames 发送器 | 同进程 I/O 线程负责有界 FIFO 与私有 IPC，不执行 observe，不 Attach／Reserve 或抢写会话 |
+| LearningService | 复用 supervisor asyncio 控制面：原始流接纳、顺序／窗口事实、进度和计算调度；不运行重计算 |
+| 新 learning_compute 子进程 | 一个常驻 SelfReturnModel、逐帧串行 observe／连通性／候选交集／validate；不含运动出口或磁盘写权 |
+| LearningRecordOwner 与原 I/O ProcessWorker | 单写事实和一次性窗口封闭；最终不可变模型原子落盘、durable 后交付 |
 
-## 保存、恢复与动作
+仅新增一个非 ROS CPU 子进程。LearningService 自身共享 supervisor 事件循环，不能把同步 observe 包进 asyncio task 当作隔离。现有 ProcessWorker 只有单 callable flight，不是有状态 FIFO；新计算 loop 复用 child_lifetime、stop_process 和共享槽原语，使用固定 batch、单 flight／ACK，parent 未获 ACK 不覆盖下一 batch。模型及历史常驻 child，不逐帧 pickle 整个 model，不使用隐藏全局模型缓存。原磁盘 worker 仍只做记录 I/O，不能被学习占用；无 Core 同步 fallback。
 
-动作仅在最终选出合格非零学习输出时申请持久预消耗，持久确认前输出零；首次私有提交成功记录host steady起点，截止固定为起点加3秒，控制期限仍按既有安全输出裁剪。已消费或不确定是否输出的动作不重放，消费者重建也不再次发放。私有提交不是底盘物理执行ACK。
+## 连续原始帧与内存上限
 
-模型首次完成只有对应完整快照原子保存成功才向消费者发布。目录和动作事实由原schema严格检查，拒绝非有限数、重复键、超容量及未知字段。完成模型可包含按批准离散连接规则获得的车外参考点，因此记录层不再用严格车内几何否定整个模型。当前几何保存用于首次学习及matcher原有物理边界用途；正常运行不能以几何报告撤销完成结果或增加模型资格门。
+录帧入口是 `SafetyGate._on_scan` 原身份／时间／源准入通过、构造 raw 后、补点 update 前。不能从 `_publish_inputs` 或 Core latest 抽取学习历史。录入端复制有界不可变值，编码、socket 等待移到发送线程；溢出或发送失败不能 clear 正常 scan、阻塞接收／避障或造成手动／导航 fault。
 
-完成后Attach返回保存结果，不发写会话；同run多次只读恢复不修改模型或消费新动作。学习未完成时沿用owner的同一写会话身份，不新增抢占或接管流程。完成后旧写会话也不能替换模型。owner异常退出后恢复已原子保存的完成模型；原writer_state及基于它清空模型的链路均删除；已消费动作事实继续保留。
+每帧保留原 RawCaptureHeader／SampleTime、capture 序号／来源／stamp、ranges、角栅格、实际外参及 transform_stamp；Inf、-Inf、NaN 使用可逆标签，不合并成一个无效值，不造 hit。预测点从不进入学习或测速。另记本机 `recorded_steady_ns`，只表示接收端成功入录帧队列的事实，不覆盖原采集／接收时间。
 
-## IPC与已删除机制
+工程容量固定为：发送 FIFO 16 帧、服务 FIFO 128 帧、单 flight 最多 4 帧；每帧最多 2048 束、私有包沿用 256 KiB 上限。它们是内存／传输界，不是采样率、识别阈值或运动资格。模型目录仍最多 2048 个真实参考点，不抽样缩减。没有无限队列、后台文件 spool 或 raw 历史磁盘恢复承诺。
 
-保留Linux abstract SOCK_SEQPACKET、同UID内核SO_PEERCRED校验、最多8个异步peer、客户端16项有界命令/回复队列、一次一请求和2秒传输期限，服务有界退出沿用既有资源清理。这些用于模型交付和动作防重放。
+私有通路使用同 run／attempt／segment、stream_id 和递增入队 index，原 capture 身份不变。FIFO 连续 ACK 与 frontier 只核对接收端已接纳记录是否完整送达；同身份同 payload 可幂等去重，不多算，不把传输序号冒充传感器序号。不能声称硬件／DDS 上游没有丢帧。动作／取消控制 RPC 与数据 FIFO 分开，不被数据积压挤掉。
 
-彻底删除撤销pipe、SCM_RIGHTS传fd、49字节memfd、IN_FRAME/IDLE/FAILED/CLOSED逐帧门、撤销事件容量/PIPE_BUF核验、owner drain、consumer PID/EOF撤销会话同步、永久删除集合、accepted/durable撤销前沿、撤销持久化及崩溃后模型失效。删除仅供学习积分的LearningPoseHistory；不删除其他运动估计消费者的MotionPath/原始分段积分。
+完整性缺口或预算溢出为本学习 attempt 的粘性事实；不能默默丢旧帧后发布完整模型。动作仍由原时钟与真正接管／传感安全处理，到点停车；数据不完整只阻止模型发布，最终报告 failed／unconfirmed 和具体原因，不夺取普通控制权，不靠重复运动补数据。
 
-正常运行过滤不向owner报告、不写文件、不等待记录线程、不改变目录或模型身份。没有兼容开关、空壳撤销接口、逐帧持久化或额外模型健康资格门。完成保存和动作预消耗仍异步原子提交，记录I/O错误局部报告，不导致主Agent主动退出。
+## 三个不同的完成事实
 
-## 验证边界
+| 事实 | 条件 | 后果 |
+| --- | --- | --- |
+| motion-complete | Core 首次成功私有非零提交建立 start，host 单调到 start + 3 秒，发零并退休运动目标 | 立即让出学习运动身份；不等计算或结果保存，原停车验证观察可继续 |
+| capture-complete | 原三秒采集窗口、原 5 个停车验证帧均已成功录入，连续数据 frontier 无缺口，生命周期顺序已收尾 | 单写 owner 封闭一次性窗口事实；后续普通接管不取消已录完数据 |
+| compute-complete / durable | worker 排空封闭窗口并完成原算法；原 I/O owner 再成功原子提交 | durable 前只显示等待／验证，不能假报 completed 或安装冻结 view |
 
-集中验证学习→保存→恢复、邻近方向和车外连续段、无效束断连、位置不稳定反例、1cm内外、遮挡/缺帧后回归、未匹配外部点保留、运行多帧无写入、完成后只读、动作不重放、host3秒与实际core链。Linux原生SO_PEERCRED/abstract SEQPACKET和spawn I/O在macOS不能声称通过；本地线程到真实owner适配测试不代替目标Linux部署或ROS/实车执行。
+初始 5 个预帧 ready 由真实已接纳记录的小计数给出，不以 observe 完成为前提，不增加新资格。原预消耗持久确认和成功非零提交起点不变；3 秒是原固定目标窗口，不是位移积分或物理执行 ACK。输出仍经过当前 directional_clearance／limit_velocity、原 150 ms 输出期限和 scan TTL。
 
-## 亲审后明确bug返修
+窗口归属按原 `capture.time.sample_steady_ns` 与 host 窗口比较；原 stamp_ns 保留源物理顺序，不能将 ROS 标签直接混比 host 单调时钟。start／end 或停车确认消息晚到时，有限记录暂留尚未定归属帧，按原采集时间分类，不按计算到达／完成时间移动窗口。历史帧已在入口合法接纳，不能在计算时再次以当前 freshness 抛弃；行驶当前 scan TTL 完全不变。
 
-参考目录上限与原扫描点预算统一为2048，保存全部稳定点而非从128个抽样点冒充完整表面。规范记录/IPC统一使用256KiB有界载荷；Complete及anchor id上限同步，客户端不再保留64KiB收包截断。空间索引仅加速完全相同的1cm逐点距离判断，不扩大过滤区域。新证据与非空core可用性未解决限制见[本轮报告](../../testing/2026-11-16-learning-surface-review.md)，旧136项报告不改写。
+首次提交开启原新 segment，三秒内帧交原 SelfReturnModel，原停车验证边界与 5 帧规则保留；停车后帧只确认生命周期，不撤销或重算窗口内候选。相同有序输入的 1 cm、车内连接、稳定交集、坐标及全部参考点输出保持原算法；完整流会包含旧 latest 曾漏掉的帧，不能把不同输入宣称同点数。
 
-## 用户后续批准：启动学习可用回波政策
+## 完整录完后的手动接管与跨通路顺序
 
-原先非空core因后方小块未知区无法开始的局限，按用户新授权只在启动学习阶段处理：前后各60度，独立默认true开关，遮挡达到50%阻止，false忽略该方向遮挡。以单独政策字段豁免相应未知覆盖要求，真实free/occupied数据及原风险误差不变；完成后不用于正常驾驶。当前[局部设计](2026-11-16-startup-learning-visibility.md)及[新验证报告](../../testing/2026-11-16-startup-learning-occlusion.md)记录本轮实现，不改写此前失败或Linux缺证。
+用户明确的场景：三秒运动及停车验证数据已经完整录完，CPU 仍忙，此时手动接管。手动控制立即生效，已完整数据继续计算并保存；不再等 computed-ready 后向仍占学习身份的 Core 请求结果许可。Core 不向服务发送点集／批准候选，单写 owner 根据一次性封闭事实接受该 attempt 的计算结果。
+
+封闭不能仅靠 Core 延迟看到的 progress，也不能按两条 socket 的消息到达先后判断。只用以下收尾事实，不引入新资格证明框架：
+
+- 数据通路的连续 ACK／frontier 给出已录入前缀；帧采集时间决定窗口归属，recorded_steady_ns 决定“接管前已经录完”。
+- 控制通路保留本 attempt 首次有效接管时刻（Core 接受命令的 host 时刻），按同一个有序控制 FIFO 传递；退出运动身份后仍保留这一项事实，不要求当前 mode 是 learning。
+- 收尾时使用一次轻量顺序屏障：数据已够时，服务取得运动 owner 已处理至该数据录入时刻之后的生命周期事实；取消先到时，取得录帧端的有序截至 frontier，排空到该 frontier 后再判定。回执只回答时间／序号事实，不等待 CPU、不重新申请控制权、不询问当前 source 是否准许保存。
+- 服务只有在数据前缀完整且生命周期顺序已确定后，才由原单写 owner 固定 capture-complete。屏障前不抢先提交，即使计算恰好已经结束。
+
+两种真实顺序必须分别成立：
+
+1. 第 5 验证帧已在接管前录入，但其 batch／ACK 比取消消息晚到：排空同 attempt 的截至前缀，确认完整后封闭；当前 Core 即使已 manual，后台照常计算和保存。
+2. 接管时尚未录齐窗口或验证帧，后来 batch 或封闭候选先于迟到取消到服务：用接管时刻和录入事实判定不完整；不能拿接管后补录的第 5 帧倒填。未收尾前禁止发布模型。
+
+封闭后普通接管不是撤销数据。封闭前 manual／nav／estop 仍立即停止学习动作，窗口不足不造结果，已消费 action 不清除、不重播。已完成持久模型不因缺帧、遮挡、换控制源或后续无匹配被撤销。本文新增的用户验收场景是正常手动接管；不扩为急停复位、自动恢复旧目标或程序崩溃后的 raw 恢复承诺。
+
+## 保存、恢复与资源退出
+
+最终仍由原单写 owner 持稳定 `.owner.lock`，I/O worker 执行完整记录写入、fsync、原子替换及目录 fsync。durable 之前不交付模型；完成后 Attach／只读 State 返回冻结模型，不发新动作或写会话。正常控制／测速只用已有内存 view，不逐帧读文件，不等待学习文件。
+
+动作预消耗、原 start／deadline／累计本地提交事实保持不可变约束。同 run 消费者重建不能重新发动作；计算消息、队列重试和子进程退出均没有运动重启能力。已 failed 的当前 attempt 不能原地复活。CPU 失败不能假报模型；程序关闭沿既有有界清理，未算完 raw 只在内存中，可能丢失；只承诺恢复已经成功持久化的最终记录／模型。
+
+保留同 UID SO_PEERCRED、abstract SOCK_SEQPACKET、8 个有界 peer、16 项控制请求／回复及原传输期限。模型和记录仍拒绝非有限参考点、重复键、超量、身份不符。原撤销 pipe／memfd／证书、独立车速资格、复杂扫掠、定位积分、运行期清空模型、兼容 frame API 及同步 fallback 均不恢复。
+
+## 不变规则、范围与验证边界
+
+前后各 60°、两个独立布尔开关、70% 学习遮挡阈值与当前 +Inf 角覆盖语义保持；不恢复旧规格中的扫掠／未知区运动门槛。1 cm 不是 sensor_error；尺寸乘 1.10、单次 sensor_error、lag、输出 150 ms 和 scan TTL 均不改。固定参考可按原离散规则延伸到车外，不另裁剪。
+
+采用单一有状态流式 CPU 子进程，不选停车后整个窗口才启动的 batch 替代。本阶段针对原自动启动 attempt；用户新要求的网页手动新校准入口正在只读收口，不能把它接成复用已消费动作，也不在本阶段擅定公开命令、并发或旧模型切换策略。
+
+项目完整范围为产品新增 1／修改 7，测试新增 1／修改 10，文档新增 1／修改 1，共 21 文件；根 CURRENT_TASK 由负责人另行维护。具体文件与只读测试候选见[实施计划](../plans/2026-11-18-startup-learning-isolation.md)。不改配置／构建／工具，不删除文件。
+
+新架构当前尚无验收。54 帧 JSON 可核对候选输入和采集时刻，不代表原 Core 实际选帧；Linux IPC／spawn 与实际模型仍需负责人按阶段核对。不能用局部测试、completed 但 0 点、候选点数或模拟提交替代真实运动／停车和模型点分布证据，不承诺端到端 30 ms。
