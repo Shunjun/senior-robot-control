@@ -50,7 +50,13 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     <p>等待车辆报告当前状态与可用操作。</p>
     <p>连接 RTT：{view.rtt_ms === null ? '—' : `${Math.round(view.rtt_ms)} ms`}</p>
   </section>;
-  const body = frame.body_reference, task = frame.task;
+  const body = frame.body_reference, wheel = frame.wheel_linear_mps, task = frame.task;
+  const speedBody = body && (!body.stale || wheel === null) ? body : null;
+  const speed = speedBody ? speedBody.average.vx : wheel;
+  const lastMeasurement = !view.connected || !view.available || speedBody?.stale;
+  const source = speedBody
+    ? `${speedBody.source} · ${(speedBody.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`
+    : wheel !== null ? '轮速里程计' : '实际速度测量不可用';
   async function command(action: TaskAction): Promise<void> {
     if (!port || !task) return;
     const current = port.getSnapshot().frame?.task;
@@ -81,10 +87,10 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     <p>{frame.observation && frame.mode === 'unknown' ? AVAILABILITY[frame.observation.status] : frame.reason}</p>
     {frame.observation && <p>最后有效观测：{frame.observation.age_seconds === null ? '尚无' : `${(frame.observation.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`} · 急停状态{frame.confirmed_estop_status === 'unknown' ? '未知' : '已报告'}</p>}
     <div className={styles.speed}>
-      <strong>{body ? (body.average.vx * 3.6).toFixed(2) : '—'}</strong>
-      <span>km/h · 车体纵向区间平均</span>
+      <strong>{speed === null ? '—' : (speed * 3.6).toFixed(2)}</strong>
+      <span>km/h · {speedBody ? '车体纵向区间平均' : '纵向测量速度'}</span>
     </div>
-    <p className={styles.source}>{body ? `${body.source} · ${(body.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前${body.stale || !view.connected || !view.available ? ' · 已过期 / 最后测量' : ''}` : '独立车体速度不可用'}</p>
+    <p className={styles.source}>{source}{speed !== null && lastMeasurement ? ' · 已过期 / 最后测量' : ''}</p>
     <p className={styles.connection}>连接 RTT：{view.rtt_ms === null ? '—' : `${Math.round(view.rtt_ms)} ms`} · 仅作连接诊断</p>
     {task && <div className={styles.task}>
       <h4>当前任务 {task.task_id} · {TASKS[task.phase]}</h4>
@@ -94,7 +100,7 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     {note && <p role="status">{note}</p>}
     <details>
       <summary>测量与安全诊断</summary>
-      <p>轮速参考：{frame.wheel_linear_mps === null ? '—' : `${frame.wheel_linear_mps.toFixed(2)} m/s`}（不替代主速度）</p>
+      <p>轮速参考：{frame.wheel_linear_mps === null ? '—' : `${frame.wheel_linear_mps.toFixed(2)} m/s`}（轮速里程计）</p>
       <p>急停版本 {frame.estop_revision} · 故障版本 {frame.fault_revision}</p>
     </details>
   </section>;
