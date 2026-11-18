@@ -2,6 +2,7 @@
 
 import math
 
+import pytest
 from learning_test_support import TestRun, geometry
 from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY
@@ -163,5 +164,95 @@ def test_actual_service_fifo_overflow_cannot_publish_a_model(tmp_path):
         assert run.owner.record.capture_summary.state == "incomplete"
         assert run.owner.record.phase == "failed" and run.owner.active_record is None
         assert run.owner.record.action.consumed
+    finally:
+        run.close()
+
+
+def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp_path):
+    from senior_control.models import Pose2D
+    from senior_control.safety.self_filter import ScanObservation, filter_self
+
+    first = recorded(1, 10.1)
+    first = first.model_copy(
+        update={
+            "geometry": first.geometry.model_copy(
+                update={
+                    "sensor_to_body": (0.15699, 0.00201, 0.0),
+                }
+            )
+        }
+    )
+    second = recorded(2, 10.2)
+    second = second.model_copy(
+        update={
+            "geometry": first.geometry.model_copy(
+                update={
+                    "sensor_to_body": (
+                        0.1569900000000001,
+                        0.0020100000000000022,
+                        -6.001611513070753e-19,
+                    ),
+                }
+            )
+        }
+    )
+    run = TestRun(tmp_path / "actual-tf")
+    try:
+        send(run, [first, second])
+        run.pump()
+        assert run.service.accepted_frames == 2 and not run.service.gap
+        assert run.owner.record.capture_summary.state == "open"
+        kernel = LearningKernel()
+        for frame in (first, second):
+            result = kernel.update(
+                ComputeBatch("a" * 32, "c" * 32, frame.geometry, (frame,), False)
+            )
+            expected = filter_self(
+                ScanObservation(
+                    tuple(float(value) for value in frame.ranges),
+                    frame.geometry.angle_min,
+                    frame.geometry.angle_increment,
+                    frame.geometry.range_min,
+                    frame.geometry.range_max,
+                    frame.capture.stamp_ns / 1e9,
+                    "ros",
+                    Pose2D(*frame.geometry.sensor_to_body),
+                    frame.transform_stamp,
+                    frame.geometry.body_frame,
+                    frame.capture.stamp_ns / 1e9,
+                ),
+                kernel.profile,
+            )
+            assert kernel.model.frames[-1] == tuple(
+                ray.endpoint for ray in expected.rays if ray.kind == "hit"
+            )
+        assert result.processed == 2
+        assert kernel.model.frames[0] != kernel.model.frames[1]
+        assert kernel.model.frame_keys[-1][-1] == second.capture.sequence
+        assert first.geometry.sensor_to_body != second.geometry.sensor_to_body
+
+        changed = recorded(3, 10.3).model_copy(
+            update={
+                "geometry": second.geometry.model_copy(
+                    update={"angle_increment": second.geometry.angle_increment * 2}
+                )
+            }
+        )
+        send(run, [changed])
+        run.pump()
+        assert run.service.gap and run.owner.record.capture_summary.state == "incomplete"
+        with pytest.raises(ValueError, match="learning_geometry_changed"):
+            kernel.update(ComputeBatch("a" * 32, "c" * 32, changed.geometry, (changed,), False))
+        body_change = second.geometry.model_copy(update={"body_frame": "other_body"})
+        with pytest.raises(ValueError, match="learning_geometry_changed"):
+            kernel.update(
+                ComputeBatch(
+                    "a" * 32,
+                    "c" * 32,
+                    second.geometry,
+                    (changed.model_copy(update={"geometry": body_change}),),
+                    False,
+                )
+            )
     finally:
         run.close()

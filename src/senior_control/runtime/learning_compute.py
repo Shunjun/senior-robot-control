@@ -48,12 +48,12 @@ class LearningKernel:
             self.model = SelfReturnModel(batch.geometry.physical_polygon)
             self.model.begin_segment(batch.segment_id)
             self.processed = 0
-        if batch.geometry != self.geometry:
+        if not batch.geometry.same_structure(self.geometry):
             raise ValueError("learning_geometry_changed")
         assert self.model is not None
         for frame in batch.frames:
             geometry, capture = frame.geometry, frame.capture
-            if geometry != self.geometry:
+            if not geometry.same_structure(self.geometry):
                 raise ValueError("learning_geometry_changed")
             ranges = tuple(float(value) for value in frame.ranges)
             observation = filter_self(

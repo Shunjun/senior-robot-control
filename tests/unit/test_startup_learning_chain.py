@@ -616,14 +616,21 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
     check(source)
     payload = pickle.loads(pickle.dumps(source))
     payload.message.ranges[0] += 0.1  # Same capture identity; the value snapshot still invalidates.
-    check(payload)
-    rig.core.startup.hold_motion("scan_temporarily_unavailable")
-    assert not rig.core.startup.provisional
-    check(payload)
+    before_transform = check(payload)
+    model = rig.core.self_returns
     transformed = pickle.loads(pickle.dumps(payload))
     transformed.message.sensor_x += 0.01
     transformed.message.transform_stamp += 0.01
+    after_transform = check(transformed)
+    assert after_transform.rays[0].endpoint != before_transform.rays[0].endpoint
+    assert rig.core.startup.provisional and rig.core.self_returns is model
+    assert rig.core._learning_geometry.sensor_to_body[0] == transformed.message.sensor_x
+    rig.core.startup.hold_motion("scan_temporarily_unavailable")
+    assert not rig.core.startup.provisional
     check(transformed)
+    layout = pickle.loads(pickle.dumps(transformed))
+    layout.message.angle_min += 0.01
+    check(layout)
     assert rig.core.startup.reason == "scan_or_body_geometry_changed"
 
     client = rig.core._learning_client
@@ -711,3 +718,48 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
     assert raw.message.ranges[0] == math.inf and original.scan.ranges[0] == math.inf
     assert batches[0].frames[0].ranges[0] == "inf"
     assert batches[0].frames[0].capture == capture_from_message(raw.message.raw_capture)
+
+
+def test_async_incomplete_before_submission_retires_target_without_consuming(rig, monkeypatch):
+    reservations = []
+    reserve = rig.run.owner.reserve_action
+    monkeypatch.setattr(
+        rig.run.owner,
+        "reserve_action",
+        lambda session: (reservations.append(session), reserve(session))[1],
+    )
+    rig.step(rig.now + 0.05)
+    assert rig.core.startup.state == "sampling"
+    action = rig.run.owner.record.action
+    rig.run.service.gap = True
+    rig.run.pump()
+    assert rig.run.owner.record.reason == "learning_stream_incomplete"
+    for _ in range(3):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+        assert not rig.core.startup.active
+        assert rig.core.startup.reason == "learning_stream_incomplete"
+        assert rig.core.target.source == "idle" and rig.core.machine.state.task_id is None
+    assert rig.run.owner.record.action == action and not action.consumed
+    assert reservations == []
+
+
+def test_async_failure_after_submission_preserves_window_then_projects_terminal(rig):
+    start = rig.start()
+    deadline = rig.core.startup.deadline
+    grant = rig.run.owner._reservation
+    rig.run.service.gap = True
+    rig.run.pump()
+    assert rig.run.owner.record.phase == "failed"
+    while rig.now + 0.05 < deadline:
+        assert rig.step(rig.now + 0.05, wheel=0.05).vx > 0
+        assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+        assert rig.run.owner._reservation == grant
+    assert rig.step(deadline) == Velocity(0, 0)
+    assert rig.core.startup.reason == "learning_stream_incomplete"
+    assert not rig.core.startup.active and rig.core.target.source == "idle"
+    action = rig.run.owner.record.action
+    assert action.stage == "window_finished"
+    assert action.first_submitted_steady_ns == round(start * 1e9)
+    assert action.deadline_steady_ns == round(deadline * 1e9)
+    assert rig.step(deadline + 0.05) == Velocity(0, 0)
+    assert rig.run.owner.record.action == action

@@ -526,11 +526,12 @@ class MotionCoreOutput:
                 range_max=m.range_max,
             )
             client.geometry(geometry)
-            if geometry != self._learning_geometry:
-                if self._learning_geometry is not None:
+            previous_geometry = self._learning_geometry
+            if previous_geometry is None or not geometry.same_structure(previous_geometry):
+                if previous_geometry is not None:
                     self.startup.hold_motion("scan_or_body_geometry_changed")
-                self._learning_geometry = geometry
                 self.self_returns = SelfReturnModel(geometry.physical_polygon)
+            self._learning_geometry = geometry
         filter_key = (
             self.startup.provisional,
             self._learning_geometry,
