@@ -214,6 +214,56 @@ def test_completed_catalog_is_published_only_after_commit_and_attach_is_read_onl
         owner.close()
 
 
+def test_new_attempt_manifest_and_failed_replacement_preserve_durable_active_model(tmp_path):
+    from senior_control.runtime.learning_store import read_manifest
+
+    run = TestRun(tmp_path / "keep-active")
+    try:
+        owner = run.owner
+        session, _ = owner.begin_consumer()
+        owner.set_geometry(session, geometry(BOUNDARY))
+        owner.capture(CaptureSummary(state="complete"))
+        owner.complete_model(session, ((0.0, 0.15),))
+        run.pump()
+        old = owner.active_record
+        published = owner.public_manifest
+        assert old.model is not None and published.active_revision == 1
+
+        assert (
+            owner.new_attempt("review-new-manual", "a" * 64, 1, output_boot_id="b" * 32)
+            == "accepted"
+        )
+        run.pump()  # Complete the actual latest-attempt manifest write.
+        persisted = read_manifest(run.path)
+        assert persisted.latest_attempt_id == owner.record.attempt_id != old.attempt_id
+        assert persisted.active_ref == published.active_ref
+        assert owner.active_record == old
+        assert run.service._status()["active_model"] == dict(
+            attempt_id=old.attempt_id, model_id=old.model.model_id, point_count=1
+        )
+        assert owner.public_manifest.active_revision == 1
+
+        session, _ = owner.begin_consumer()
+        owner.set_geometry(session, geometry(BOUNDARY))
+        owner.capture(CaptureSummary(state="complete"))
+        run.pump()
+        held = HeldWorker()
+        owner._worker = held
+        owner.complete_model(session, ((0.0, 0.10),))
+        held.finish()  # Candidate is durable; its active reference is not yet durable.
+        owner.poll()
+        assert owner.active_record == old
+        held.future.set_exception(OSError("injected active reference failure"))
+        owner.poll()
+        assert owner.public_record.phase == "failed"
+        assert owner.active_record == old
+        assert owner.public_manifest.active_ref == persisted.active_ref
+        assert read_manifest(run.path).active_ref == persisted.active_ref
+        assert run.service._status()["active_model"]["model_id"] == old.model.model_id
+    finally:
+        run.close()
+
+
 def test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action(tmp_path):
     run = TestRun(tmp_path / "unclean")
     client = run.client()

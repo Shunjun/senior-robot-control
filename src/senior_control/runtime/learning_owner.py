@@ -178,7 +178,14 @@ class LearningRecordOwner:
                 if isinstance(self._writing, ProgramManifest):
                     self._manifest_durable = revision
                     self._published_manifest = self._writing
-                    if self._writing.active_ref is not None:
+                    reference = self._writing.active_ref
+                    if (
+                        reference is not None
+                        and self.record.model is not None
+                        and reference.attempt_id == self.record.attempt_id
+                        and reference.model_id == self.record.model.model_id
+                        and reference.record_revision == self.record.revision
+                    ):
                         self.active_record = self.record
                 else:
                     self.durable_revision = max(self.durable_revision, revision)
