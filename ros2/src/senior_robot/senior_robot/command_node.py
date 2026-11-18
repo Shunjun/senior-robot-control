@@ -128,6 +128,13 @@ class CommandNode(Node):
         self._motion_runtime = MotionRuntimeReceiver()
         # Request delivery frontier only; the output state machine owns the latch.
         self._pending_estop_request: FinalCommand | None = None
+        self._latched_estop_request: FinalCommand | None = None
+        self._latched_estop_revision = 0
+        self._pending_estop_reset: FinalCommand | None = None
+        self._output_incarnation: tuple[bytes, str] | None = None
+        self._output_handoff_boot: str | None = None
+        self._pending_output_handoff: FinalCommand | None = None
+        self._output_handoff_missing_estop = False
         self._close_reason = "prepared"
         self._last_close_source = ("idle", "", 0, 0.0, "", 0)
         self._consuming_runtime = False
@@ -204,7 +211,9 @@ class CommandNode(Node):
             if identity is not None:
                 context = self._manual_ingress.context
                 if context is None or (
-                    envelope.connection_epoch, envelope.controller_generation, envelope.session_id
+                    envelope.connection_epoch,
+                    envelope.controller_generation,
+                    envelope.session_id,
                 ) != (context.agent_epoch, context.controller_generation, context.session_id):
                     return CommandResult(False, ErrorCode.CONFLICT)
                 if gesture is None or not self._manual_ingress.stop(
@@ -212,8 +221,10 @@ class CommandNode(Node):
                 ):
                     return CommandResult(False, ErrorCode.CONFLICT)
                 target = self._manual_target
-                if target is not None and target.sample.intent.authority_id == identity and (
-                    target.sample.intent.gesture <= gesture
+                if (
+                    target is not None
+                    and target.sample.intent.authority_id == identity
+                    and (target.sample.intent.gesture <= gesture)
                 ):
                     self._close_manual("release")
                 # A stale stop must not publish a barrier over a newer gesture.
@@ -243,6 +254,15 @@ class CommandNode(Node):
 
     def _explicit_estop(self, envelope: Envelope, received: float | None) -> FinalCommand:
         now = self._monotonic_clock.monotonic()
+        runtime = self._motion_runtime.value
+        self._latched_estop_revision = (
+            max(
+                getattr(self, "_latched_estop_revision", 0),
+                runtime.estop_revision if runtime is not None else 0,
+            )
+            + 1
+        )
+        self._output_handoff_missing_estop = False
         target, self._manual_target = getattr(self, "_manual_target", None), None
         if hasattr(self, "_manual_ingress"):
             self._manual_ingress.revoke(now)
@@ -258,6 +278,7 @@ class CommandNode(Node):
         self._active = False
         self._close_reason = "estop"
         self._publish_barrier(envelope.request_id, reason="estop")
+        self._latched_estop_request = self._barrier_frame
         return self._barrier_frame
 
     def disconnect(self, connection_epoch: int) -> None:
@@ -768,6 +789,9 @@ class CommandNode(Node):
             self.publish_command()
 
     def publish_command(self) -> None:
+        if getattr(self, "_output_handoff_boot", None) is not None:
+            self._publish_barrier()
+            return
         if getattr(self, "_pending_estop_request", None) is not None:
             # Retransmit the original request until the output owner confirms it.
             # Source cleanup must not supersede an emergency event still in transit.
@@ -821,6 +845,30 @@ class CommandNode(Node):
         self._retirement_core = None
         self._retirement_feedback_gid = None
 
+    def _on_output_incarnation_changed(self, previous, current) -> None:
+        """Retire old sources before echoing the verified output boot in a zero."""
+        now = self._monotonic_clock.monotonic()
+        self._output_handoff_boot = current.boot_id
+        self._pending_output_handoff = None
+        if previous is not None and previous.confirmed_estop_status == "software_latched":
+            self._latched_estop_revision = max(
+                self._latched_estop_revision, previous.estop_revision
+            )
+            # Without an original request identity there is no authorized
+            # clear-state handoff. Remain stopped until a new explicit estop.
+            self._output_handoff_missing_estop = self._latched_estop_request is None
+        self._manual_ingress.revoke(now)
+        self._manual_target = None
+        source = self._navigation_source
+        if source is not None:
+            self.clear_navigation_source(source.execution_id, reason="requested")
+        self._arbiter.shutdown()
+        self._generation = max(self._generation, current.output_generation) + 1
+        self._active = False
+        self._last_close_source = ("idle", "", 0, now, "", 0)
+        self._close_reason = "prepared"
+        self._publish_barrier()
+
     @with_dds_info
     def _on_motion_runtime(self, msg: String, info: dict[str, Any] | None = None) -> None:
         endpoints = self.get_publishers_info_by_topic("/motion/runtime")
@@ -841,9 +889,29 @@ class CommandNode(Node):
         now = self._monotonic_clock.monotonic()
         if value.robot_id != str(self.get_parameter("robot_id").value):
             return
+        previous = self._motion_runtime.value
         if not self._motion_runtime.accept(value, bytes(endpoint.endpoint_gid), now):
             return
+        identity = (bytes(endpoint.endpoint_gid), value.boot_id)
+        if identity != self._output_incarnation:
+            self._output_incarnation = identity
+            self._on_output_incarnation_changed(previous, value)
         self._observe_retirement_core(bytes(endpoint.endpoint_gid), value.boot_id)
+        handoff = self._pending_output_handoff
+        if (
+            handoff is not None
+            and value.boot_id == self._output_handoff_boot
+            and value.output_generation >= handoff.generation
+            and (
+                handoff.close_reason != "estop"
+                or (
+                    value.confirmed_estop_status == "software_latched"
+                    and value.estop_revision >= handoff.source_epoch
+                )
+            )
+        ):
+            self._output_handoff_boot = None
+            self._pending_output_handoff = None
         pending = getattr(self, "_pending_estop_request", None)
         if (
             pending is not None
@@ -851,6 +919,21 @@ class CommandNode(Node):
             and value.confirmed_estop_status == "software_latched"
         ):
             self._pending_estop_request = None
+        if value.confirmed_estop_status == "software_latched":
+            self._latched_estop_revision = max(self._latched_estop_revision, value.estop_revision)
+        reset = self._pending_estop_reset
+        if (
+            reset is not None
+            and value.output_generation >= reset.generation
+            and value.confirmed_estop_status == "clear"
+            and self._output_handoff_boot is None
+        ):
+            self._latched_estop_request = None
+            self._pending_estop_reset = None
+        if self._output_handoff_boot is not None:
+            # Do not expose the replacement's initial clear report as current
+            # while the original latch/source handoff is still unconfirmed.
+            self._motion_runtime.invalidate()
 
     def runtime_observation(self) -> dict[str, Any]:
         return self._motion_runtime.observation(self._monotonic_clock.monotonic()).model_dump()
@@ -882,7 +965,10 @@ class CommandNode(Node):
             now = self._monotonic_clock.monotonic()
             if isinstance(envelope, RecoveryEnvelope):
                 key = "estop_reset" if envelope.type == "safety.estop.reset" else "fault_recover"
-                if getattr(self, "_pending_estop_request", None) is not None:
+                if (
+                    getattr(self, "_pending_estop_request", None) is not None
+                    or getattr(self, "_output_handoff_boot", None) is not None
+                ):
                     return {"ok": False, "accepted": False, "error": "conflict"}
                 current = envelope.payload.revision
                 self._manual_ingress.revoke(now)
@@ -1077,6 +1163,42 @@ class CommandNode(Node):
         revision: int = 0,
         source_override: tuple[str, str, int, float, str, int] | None = None,
     ) -> None:
+        handoff_boot = getattr(self, "_output_handoff_boot", None)
+        if handoff_boot is not None:
+            if self._output_handoff_missing_estop:
+                return
+            retained = self._latched_estop_request
+            estop_id = (
+                request_id
+                if reason == "estop"
+                else (retained.request_id if retained is not None else "")
+            )
+            latch_revision = self._latched_estop_revision if estop_id else 0
+            cached_handoff = self._pending_output_handoff
+            if (
+                cached_handoff is not None
+                and cached_handoff.generation == self._generation
+                and cached_handoff.request_id == (estop_id or handoff_boot)
+                and cached_handoff.source_epoch == latch_revision
+            ):
+                self._final_publisher.publish(cached_handoff)
+                return
+            # Private idle zero semantics: echo the output boot, preserving the
+            # original estop request and revision. Manual/navigation epochs keep
+            # their original meaning. Native v3 requires estop gesture == 0.
+            request_id = estop_id or handoff_boot
+            reason = "estop" if estop_id else "prepared"
+            generation = self._generation
+            session_id = ""
+            source_override = (
+                "idle",
+                handoff_boot,
+                latch_revision,
+                self._monotonic_clock.monotonic(),
+                "",
+                0,
+            )
+            revision = 0  # gesture is not the restored latch revision in a v3 estop barrier.
         pending = getattr(self, "_pending_estop_request", None)
         if pending is not None and not (reason == "estop" and request_id):
             self._final_publisher.publish(pending)
@@ -1111,6 +1233,12 @@ class CommandNode(Node):
         msg.gesture = revision
         if msg.generation == self._generation:
             self._barrier_frame = msg
+        if handoff_boot is not None:
+            self._pending_output_handoff = msg
+            if reason == "estop":
+                self._pending_estop_request = msg
+        elif reason == "estop_reset":
+            self._pending_estop_reset = msg
         self._final_publisher.publish(msg)
 
     def shutdown_motion(self) -> None:

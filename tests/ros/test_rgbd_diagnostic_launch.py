@@ -27,6 +27,11 @@ def _child_with_argument(parent: int, argument: bytes) -> int | None:
         except FileNotFoundError:
             continue
         for child in children:
+            # A launch prefix is an intermediate owner; find the actual node
+            # (or worker) below it instead of mistaking its argv for the node.
+            nested = _child_with_argument(int(child), argument)
+            if nested is not None:
+                return nested
             try:
                 command = Path(f"/proc/{child}/cmdline").read_bytes()
             except FileNotFoundError:
@@ -101,7 +106,14 @@ def test_installed_diagnostic_launch_reaps_active_worker(signum, tmp_path):
                     time.sleep(0.05)
                 assert producer is not None and worker is not None, logfile.read_text()
                 assert expected.issubset(source.get_node_names()), logfile.read_text()
-                assert os.getpgid(producer) == os.getpgid(worker) == process.pid
+                # The prefix remains a launch child; the actual node owns its
+                # private cleanup group, inherited by its internal worker.
+                status = Path(f"/proc/{producer}/status").read_text()
+                parent = re.search(r"^PPid:\s+(\d+)$", status, re.MULTILINE)
+                assert parent is not None
+                prefix = int(parent[1])
+                assert os.getpgid(prefix) == process.pid
+                assert os.getpgid(producer) == os.getpgid(worker) == producer
 
                 if signum == signal.SIGTERM:
                     # Exercise SIGTERM on the producer itself. Its owned worker
@@ -125,8 +137,7 @@ def test_installed_diagnostic_launch_reaps_active_worker(signum, tmp_path):
                 assert not Path(f"/proc/{worker}").exists(), output
                 assert not expected.intersection(source.get_node_names()), output
                 assert re.search(
-                    r"rgbd_candidate_producer[^\n]*process has finished cleanly"
-                    rf"[^\n]*\b{producer}\b",
+                    rf"process has finished cleanly[^\n]*\b{prefix}\b",
                     output,
                 ), output
                 assert "Traceback (most recent call last)" not in output, output
