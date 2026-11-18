@@ -28,6 +28,7 @@ from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import capture_from_message
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_core_perception import (
+    avoidance_observation,
     directional_clearance,
     limit_velocity,
     scan_observation,
@@ -484,8 +485,18 @@ class MotionCoreOutput:
         if state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
             requested = self.target.velocity
             if requested != Velocity(0, 0):
+                control_filtered = filtered
+                if self.node._scans and self.node._scans[-1].predictions:
+                    control_filtered = avoidance_observation(self.node._scans[-1], self.node._body)
+                    view = None if self._learning_client is None else self._learning_client.view
+                    if view is not None:
+                        control_filtered = view.filter(control_filtered)
+                    elif self.self_returns is not None:
+                        control_filtered = self.self_returns.filter(
+                            control_filtered, provisional=self.startup.provisional
+                        )
                 clearance = directional_clearance(
-                    self.node._scans, self.profile, now, filtered=filtered
+                    self.node._scans, self.profile, now, filtered=control_filtered
                 )
                 if clearance is None:
                     reason = "scan_temporarily_unavailable"

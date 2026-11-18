@@ -20,12 +20,11 @@ class DirectionalClearance:
     deadline: float
 
 
-def scan_observation(raw, body_frame):
-    """Decode original endpoints for the existing learner and frozen filter."""
+def _scan_observation(raw, body_frame, ranges):
     scan = raw.message
     return filter_self(
         ScanObservation(
-            tuple(scan.ranges),
+            tuple(ranges),
             scan.angle_min,
             scan.angle_increment,
             scan.range_min,
@@ -39,6 +38,20 @@ def scan_observation(raw, body_frame):
         ),
         DeviceProfile(),
     )
+
+
+def scan_observation(raw, body_frame):
+    """Decode only original endpoints for learning and its visibility policy."""
+    return _scan_observation(raw, body_frame, raw.message.ranges)
+
+
+def avoidance_observation(raw, body_frame):
+    """Compose the current sparse predictions without modifying the raw message."""
+    ranges = list(raw.message.ranges)
+    for prediction in raw.predictions:
+        if ranges[prediction.index] == math.inf:
+            ranges[prediction.index] = prediction.distance
+    return _scan_observation(raw, body_frame, ranges)
 
 
 def directional_clearance(scans, profile, now, *, filtered=None):
@@ -56,6 +69,7 @@ def directional_clearance(scans, profile, now, *, filtered=None):
     if age.band == "invalid":
         return None
     scan = raw.message
+    ranges = scan.ranges if filtered is None else filtered.scan.ranges
     geometry = (
         scan.angle_min,
         scan.angle_increment,
@@ -74,7 +88,7 @@ def directional_clearance(scans, profile, now, *, filtered=None):
     boundary_y = half_width * 1.10 + profile.sensor_error
     front = rear = math.inf
     observed = False
-    for index, distance in enumerate(scan.ranges):
+    for index, distance in enumerate(ranges):
         if distance == math.inf:
             observed = True
             continue

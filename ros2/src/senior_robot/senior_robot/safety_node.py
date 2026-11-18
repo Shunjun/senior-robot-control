@@ -118,7 +118,8 @@ class SafetyGate(Node):
         self._guard_process = None
         self._guard_seen = float("-inf")
         self._guard_ready = False
-        self._scans: deque[RawSafetyObservation] = deque(maxlen=8)
+        self._scans: deque[RawSafetyObservation] = deque(maxlen=1)
+        self._scan_compensator = None
         self._scan_fence = SourceEpochFence(max_retired=256)
         self._scan_sequence = 0
         self._scan_source = ""
@@ -181,7 +182,9 @@ class SafetyGate(Node):
             from senior_control.runtime.diagnostics import configure_diagnostics
             from senior_robot.motion_observation_adapter import NativeObservationRosBridge
             from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+            from senior_robot.scan_gap_compensation import ScanGapCompensator
 
+            self._scan_compensator = ScanGapCompensator(candidate_profile)
             self._input_sensors = MotionSensorRuntime(
                 candidate_profile, configure_diagnostics(candidate_profile.diagnostics)
             )
@@ -248,6 +251,11 @@ class SafetyGate(Node):
             reference = None
             sensors.independent = sensors.tracking = None
         ready = self._scan_topology_ready()
+        if self._scans:
+            # Odometry may arrive after scan admission; retry only this current raw identity.
+            self._scans[-1] = self._scan_compensator.update(
+                self._scans[-1], self._input_bridge.core.poses, now=now
+            )
         # The decision owner reads current values, not estimator/pose histories.
         # raw_feedback/wheel_linear only need these roots and the local age policy.
         state = {
@@ -406,6 +414,8 @@ class SafetyGate(Node):
 
     def _clear_scan(self) -> None:
         self._scans.clear()
+        if self._scan_compensator is not None:
+            self._scan_compensator.clear()
         self._scan_masked_count = self._scan_ambiguous_count = 0
         if self._freshness is not None:
             self._freshness.scan_received = None
@@ -516,14 +526,15 @@ class SafetyGate(Node):
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
+            raw = RawSafetyObservation(
+                msg,
+                msg.ingress_steady,
+                msg.ingress_ros,
+                stamp,
+                capture.measurement_steady,
+            )
             self._scans.append(
-                RawSafetyObservation(
-                    msg,
-                    msg.ingress_steady,
-                    msg.ingress_ros,
-                    stamp,
-                    capture.measurement_steady,
-                )
+                self._scan_compensator.update(raw, self._input_bridge.core.poses, now=steady)
             )
         except (ValueError, OverflowError):
             self._clear_scan()
