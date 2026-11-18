@@ -1,204 +1,229 @@
+"""Current startup lifecycle through the real output core; ROS I/O stays local."""
+
+import json
+import math
+import sys
+from collections import deque
+from types import ModuleType, SimpleNamespace
+
 import pytest
-from control_process_test_support import capture_inputs, publish_inputs
-from learning_test_support import (  # noqa: F401
-    begin_action,
-    bind_core,
-    learning_runs,
-    startup_for,
-    write_geometry_record,
-)
+from control_process_test_support import generic_motion_profile
+from learning_test_support import TestRun, learning_point
+from senior_robot.motion_core_output import MotionCoreOutput
+from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
-from test_motion_core_handoff import barrier, core  # noqa: F401
+from test_motion_core_handoff import barrier
 
 from senior_control.models import Velocity
+from senior_control.motion.contracts import MotionMode
+from senior_control.motion.observations import Source
 
 
-def test_core_preserves_unmoved_learning_on_estop(core, tmp_path):  # noqa: F811
-    from senior_control.motion.state_machine import RecoveryObservation
+class LearningRig:
+    def __init__(self, monkeypatch, tmp_path):
+        self.now = 10.0
+        self.sequence = 0
+        self.cores = []
+        self.run = TestRun(tmp_path / "core-learning")
+        messages = ModuleType("std_msgs.msg")
+        messages.String = lambda: SimpleNamespace(data="")
+        monkeypatch.setitem(sys.modules, "std_msgs.msg", messages)
+        monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
+        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
+        monkeypatch.setattr(
+            "senior_robot.motion_core_output.LearningClient", lambda _: self.run.client()
+        )
+        monkeypatch.setattr(
+            "senior_control.motion.diagnostic_pump.DiagnosticPump",
+            lambda _: SimpleNamespace(close=lambda: None),
+        )
+        monkeypatch.setattr(
+            "senior_robot.runtime_reports.RuntimeReports",
+            lambda node: SimpleNamespace(
+                publish=lambda message: node.runtime.append(json.loads(message.data)),
+                status=lambda _: None,
+                close=lambda: None,
+            ),
+        )
+        self.core = self.new_core()
 
-    core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
-    bind_core(core, tmp_path / "claim")
-    core.startup.state = "moving"
-    core._startup_target(10)
-    assert core.target.source == "startup_learning"
-    assert core.target.velocity == Velocity(0.05, 0)
-    assert core.command(barrier("estop", request="explicit-stop"))
-    from senior_control.motion.contracts import MotionMode
+    def new_core(self):
+        node = SimpleNamespace(
+            _body="base_link",
+            _scans=deque(maxlen=8),
+            emitted=[],
+            runtime=[],
+            get_parameter=lambda _: SimpleNamespace(value="robot-test"),
+            _command_topology_ready=lambda: True,
+        )
+        core = MotionCoreOutput(node, generic_motion_profile())
 
-    assert core.machine.state.mode is MotionMode.ESTOP
-    assert core.startup.active
-    core._startup_target(10)
-    assert core.target.velocity == Velocity(0, 0)
+        def emit(velocity, reason, deadline=0.0, *, computed_steady):
+            # Model a successful private submission after calculation entry.
+            if velocity != Velocity(0, 0) and core.startup.started is None:
+                assert self.run.owner.record.action.consumed
+                self.now += 0.007
+            node.emitted.append((self.now, velocity, reason, deadline, core.startup.started))
+            return self.now
 
+        node._emit_motion_core = emit
+        self.cores.append(core)
+        return core
 
-def test_initial_interior_stop_does_not_latch_execution_fault(core, tmp_path):  # noqa: F811
-    from types import SimpleNamespace as N
-
-    from senior_control.motion.contracts import MotionMode
-
-    bind_core(core, tmp_path / "claim")
-    core._startup_target(10)
-    assert core.target.velocity == Velocity(0, 0)
-    result = core._decision_output(
-        N(reason="stop_envelope_blocked", command=None, emergency=True), None, None, "epoch", 10
-    )
-    assert result == Velocity(0, 0)
-    assert core.machine.state.mode != MotionMode.EXECUTION_FAULT
-
-
-@pytest.mark.parametrize("interior_occlusion", [False, True, "front"])
-def test_startup_flows_through_real_tick_and_safety_checks(
-    core,  # noqa: F811
-    tmp_path,
-    monkeypatch,
-    interior_occlusion,
-):
-    import math
-    from types import SimpleNamespace as N
-
-    from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
-    from test_motion_core_chain import InlineWorker, feed
-
-    from senior_control.config import DeviceProfile
-    from senior_control.motion.constraint_worker import ConstraintScheduler
-
-    a = NativeObservations(core.profile.admission(), core.profile.temporal(), core.profile.fusion())
-    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
-    bind_core(core, tmp_path / "claim")
-    node = core.node
-    node._depth_policy = "laser_only"
-    node._scan_topology_ready = lambda: True
-    node._profile = lambda: DeviceProfile(
-        footprint=[(-0.337, -0.276), (0.337, -0.276), (0.337, 0.276), (-0.337, 0.276)]
-    )
-    node.get_publishers_info_by_topic = lambda _: [
-        N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")
-    ]
-    now = [10.0]
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
-    for i in range(45):
-        t = now[0] = 10 + i * 0.025
-        feed(a, t)
-        capture_inputs(core, N(data=strict_reference_json(a.snapshot(t, t))))
-        ranges = [10.0] * 720
-        if interior_occlusion is True:
-            ranges[0] = 0.15  # occlusion behind rear equipment remains unknown
-        if interior_occlusion == "front":
-            ranges[359] = 0.4
-        node._scans = [
-            N(
-                received=t,
-                received_ros=t,
-                stamp=t,
-                message=N(
-                    source_epoch="scan",
-                    frame_id="laser_link",
-                    sequence=i + 1,
-                    ranges=ranges,
-                    angle_min=-math.pi,
-                    angle_increment=2 * math.pi / 719,
-                    range_min=0.08,
-                    range_max=20.0,
-                    sensor_x=0.0,
-                    sensor_y=0.0,
-                    sensor_yaw=0.0,
-                    transform_stamp=t,
-                    raw_capture=N(
-                        frame_id="laser_link",
-                        raw_gid="01",
-                        bridge_gid="02",
-                        source_epoch="scan",
-                        bridge_boot_id="boot",
-                        capture_generation=1,
-                        sequence=i + 1,
-                        valid=True,
-                        reason="",
-                        **capture_fields(
-                            time=sample_time(
-                                stamp_ns=round((t) * 1e9),
-                                received_ros_ns=round((t) * 1e9),
-                                received_steady_ns=round((t) * 1e9),
-                            )
-                        ),
-                    ),
+    def step(self, now, *, wheel=0.0, new_scan=True):
+        self.now = now
+        self.sequence += 1
+        core = self.core
+        ns = round(now * 1e9)
+        for source, values in ((Source.WHEEL, (wheel, 0.0)), (Source.IMU, (0.0,))):
+            point = learning_point(source, ns, ns, ns, values, sequence=self.sequence)
+            assert core.sensors.ingest(point, now, now)
+        core.sensors.input_reference = core.sensors.estimate(now, now, now_ros_ns=ns)
+        if new_scan:
+            ranges = [2.0] * 72
+            ranges[18] = 0.15  # Body-connected stable side return, outside front/rear sectors.
+            capture = SimpleNamespace(
+                frame_id="laser_link",
+                raw_gid="01",
+                bridge_gid="02",
+                source_epoch="scan",
+                bridge_boot_id="scan-boot",
+                capture_generation=1,
+                sequence=self.sequence,
+                valid=True,
+                reason="",
+                **capture_fields(
+                    time=sample_time(
+                        stamp_ns=ns,
+                        received_ros_ns=ns,
+                        received_steady_ns=ns,
+                    )
                 ),
-                measurement_steady=t,
             )
-        ]
-        publish_inputs(core)
-        core.prefetch_scan()
+            message = SimpleNamespace(
+                source_epoch="scan",
+                sequence=self.sequence,
+                frame_id="laser_link",
+                ranges=ranges,
+                angle_min=0.0,
+                angle_increment=math.tau / 72,
+                range_min=0.05,
+                range_max=20.0,
+                sensor_x=0.0,
+                sensor_y=0.0,
+                sensor_yaw=0.0,
+                transform_stamp=now,
+                raw_capture=capture,
+            )
+            core.node._scans.append(RawSafetyObservation(message, now, now, now, now))
         core.tick()
-    assert core.startup.state == "moving", core.startup.summary()
-    if interior_occlusion == "front":
-        assert not any(v.vx > 0 for v, _ in node.emitted)
-    else:
-        assert any(v.vx > 0 for v, _ in node.emitted), (core.startup.summary(), node.emitted[-3:])
-    assert core.self_returns.learned == ()  # prior has never become learned at rest
-    core.revoke("estop", now=now[0])
-    assert core.startup.provisional == (not core.startup.motion_started)
-    assert core.startup.velocity == (0 if core.startup.motion_started else 0.05)
-    assert core.self_returns.learned == ()
+        return core.node.emitted[-1][1]
+
+    def start(self):
+        for _ in range(8):
+            if self.step(self.now + 0.05).vx > 0:
+                return self.core.startup.started
+        raise AssertionError(self.core.startup.summary())
+
+    def close(self):
+        for core in self.cores:
+            core.close()
+        self.run.close()
 
 
-def test_temporary_feedback_loss_segments_without_replaying_action(core, tmp_path):  # noqa: F811
-    bind_core(core, tmp_path / "claim")
-    begin_action(core.startup, 10.0)
-    core.revoke("feedback_lost", now=10.1)
-    assert core.startup.state != "interrupted"
-    assert core.startup.started == 10.0
+@pytest.fixture
+def rig(monkeypatch, tmp_path):
+    value = LearningRig(monkeypatch, tmp_path)
+    yield value
+    value.close()
 
 
-def test_component_reconstruction_restores_consumption_without_repeat(core, tmp_path):  # noqa: F811
-    path = tmp_path / "program-run"
-    bind_core(core, path)
-    begin_action(core.startup, 10.0)
-    core._learning_client.close()
-    bind_core(core, path)
-    core.startup.advance(0.0, now=10.1, stationary=True)
-    core._startup_target(10.1)
-    assert core.startup.velocity == 0
-    assert core.startup.motion_withdrawn
+def test_real_tick_collects_once_and_commits_three_second_action_after_idle_heartbeat(rig):
+    heartbeat = barrier("prepared")
+    heartbeat.source_kind, heartbeat.source_id = "idle", ""
+    assert rig.core.command(heartbeat)
+    assert rig.core.startup.active
+    rig.step(rig.now + 0.05)
+    frame_count = rig.core.self_returns._observed_count
+    rig.step(rig.now + 0.05, new_scan=False)
+    assert rig.core.self_returns._observed_count == frame_count
+    start = rig.start()
+    first = next(row for row in rig.core.node.emitted if row[1].vx > 0)
+    assert first[4] is None  # The owner did not start timing before submission succeeded.
+    assert start == first[0]
+    assert rig.core.startup.deadline == start + 3.0
+    assert rig.core.command(heartbeat) and rig.core.startup.started == start
+    deadline = rig.core.startup.deadline
+    while rig.now + 0.05 < deadline:
+        rig.step(rig.now + 0.05, wheel=0.05)
+    assert rig.step(deadline) == Velocity(0, 0)
+    for _ in range(6):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    record = rig.run.owner.public_record
+    assert record.phase == "completed" and record.model.anchors
+    assert record.action.consumed and record.action.duration_ns == 3_000_000_000
+    assert record.action.first_submitted_steady_ns == round(start * 1e9)
+    assert record.action.deadline_steady_ns == round((start + 3) * 1e9)
+    assert record.action.reported_nonzero_interval_ns == 3_000_000_000
+    assert all(
+        0 < v.vx <= 0.05 and v.wz == 0 and t < deadline
+        for t, v, *_ in rig.core.node.emitted
+        if v.vx
+    )
+    assert rig.core.startup.state == "completed" and rig.core.machine.state.task_id is None
+    assert rig.core._learning_client.view.catalog == record.model
 
 
-def test_startup_registers_and_retires_shared_runtime_task(core, tmp_path):  # noqa: F811
-    from senior_control.motion.contracts import MotionMode
-    from senior_control.motion.state_machine import RecoveryObservation
+def test_manual_prepared_stops_learning_and_same_run_does_not_resume(rig):
+    rig.start()
+    assert rig.core.command(barrier("prepared"))
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.target.velocity == Velocity(0, 0)
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.run.owner.record.phase == "failed"
+    rig.core = rig.new_core()
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.machine.state.mode is MotionMode.IDLE
 
-    core.machine.observe(RecoveryObservation("body", 1, 9.9, 11.0, True, True), 10.0)
-    bind_core(core, tmp_path / "claim")
-    core.startup.state = "moving"
-    core._startup_target(10)
-    assert core.machine.state.mode is MotionMode.TASK
-    assert core.machine.state.task_id == core.boot
-    core.startup.state = "completed"
-    core._startup_target(10)
-    assert core.machine.state.task_id is None
+
+def test_manual_prepared_before_first_output_is_terminal_on_same_run_reconstruction(rig):
+    assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.active and not rig.run.owner.record.action.consumed
+    assert rig.core.command(barrier("prepared"))
+    assert rig.run.owner.record.phase == "failed"
+    rig.core = rig.new_core()
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "interrupted"
+    assert not rig.run.owner.record.action.consumed
 
 
-def test_geometry_pending_does_not_interrupt_started_learning(core, tmp_path, monkeypatch):  # noqa: F811
+def test_consumed_running_action_survives_component_reconstruction_without_replay(rig):
+    start = rig.start()
+    action = rig.run.owner.record.action
+    assert action.consumed and action.first_submitted_steady_ns == round(start * 1e9)
+    rig.core._learning_client.close()  # Consumer loss, without an orderly phase rewrite.
+    rig.core = rig.new_core()
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.motion_withdrawn
+    assert not rig.core.startup.prepare_action()
+    assert rig.run.owner.record.action == action
 
-    bind_core(core, tmp_path / "pending-learning")
-    core.startup.state = "moving"
-    from test_unified_motion_runtime import point
 
-    from senior_control.motion.observations import Source
-
-    receiver = core.node._reception_test
-    receiver.sensors.ingest(point(Source.WHEEL, 10, 10, (0.0, 0.0)), 10, 10, 10)
-    receiver.sensors.ingest(point(Source.IMU, 10, 10, (0.0,)), 10, 10, 10)
-    receiver.publish(10, 10)
-    begin_action(core.startup, 9.9)
-    core._startup_target(10)
-
-    def pending(_now):
-        raise ValueError("scan_geometry_pending")
-
-    monkeypatch.setattr(core, "_observation", pending)
-    publish_inputs(core)
-    core.prefetch_scan()
-    core.tick()
-    assert core.startup.state == "moving"
-    assert core.startup.motion_started
-    assert core.target.source == "startup_learning"
-    assert core.target.velocity == Velocity(0.05, 0)
-    assert core.node.emitted[-1][0] == Velocity(0, 0)
+def test_explicit_estop_interrupts_action_and_replayed_close_does_not_reset_latch(rig):
+    rig.start()
+    close = barrier("estop", request="operator-stop")
+    assert rig.core.command(close)
+    revision = rig.core.machine.state.estop_revision
+    assert rig.core.command(close)
+    assert rig.core.machine.state.estop_revision == revision
+    for _ in range(8):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "interrupted"
+    assert rig.core.machine.state.mode is MotionMode.ESTOP
+    assert rig.core.node.runtime[-1]["confirmed_estop_status"] == "software_latched"
+    assert "acquire" not in rig.core.node.runtime[-1]["allowed_actions"]
