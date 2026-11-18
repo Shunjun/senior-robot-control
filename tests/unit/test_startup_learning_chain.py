@@ -316,6 +316,55 @@ def test_explicit_estop_interrupts_action_and_replayed_close_does_not_reset_latc
     assert "acquire" not in rig.core.node.runtime[-1]["allowed_actions"]
 
 
+def test_expired_candidate_after_first_submission_keeps_original_grant_and_window(rig, monkeypatch):
+    from senior_robot import motion_core_output
+
+    reserve = rig.run.owner.reserve_action
+    reservations = []
+
+    def reserve_once(session):
+        reservations.append(session)
+        return reserve(session)
+
+    monkeypatch.setattr(rig.run.owner, "reserve_action", reserve_once)
+    start = rig.start()
+    deadline = rig.core.startup.deadline
+    grant = rig.run.owner._reservation
+    assert rig.core.startup.action_permitted and len(reservations) == 1
+    original_limit = motion_core_output.limit_velocity
+    entered = rig.now + 0.05
+
+    def exhaust_current_frame(*args, **kwargs):
+        output = original_limit(*args, **kwargs)
+        rig.now += 0.151  # Exhaust this calculation's unchanged 150 ms output budget.
+        return output
+
+    with monkeypatch.context() as stalled:
+        stalled.setattr(motion_core_output, "limit_velocity", exhaust_current_frame)
+        assert rig.step(entered) == Velocity(0, 0)
+    expired = rig.core.node.emitted[-1]
+    assert expired[2] == "learning_output_expired"
+    assert expired[3] == entered + 0.15 < expired[0] < deadline
+    assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+    assert rig.core.startup.action_permitted and not rig.core.startup.motion_withdrawn
+    assert rig.run.owner._reservation == grant
+    assert len(reservations) == 1
+
+    assert rig.step(rig.now + 0.05).vx > 0
+    resumed = rig.core.node.emitted[-1]
+    assert expired[3] < resumed[3] <= deadline
+    assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+    while rig.now + 0.05 < deadline:
+        rig.step(rig.now + 0.05, wheel=0.05)
+    assert rig.step(deadline) == Velocity(0, 0)
+    assert rig.step(deadline + 0.05) == Velocity(0, 0)
+    action = rig.run.owner.record.action
+    assert action.stage == "window_finished"
+    assert action.first_submitted_steady_ns == round(start * 1e9)
+    assert action.deadline_steady_ns == round(deadline * 1e9)
+    assert rig.run.owner._reservation == grant and len(reservations) == 1
+
+
 def test_slow_compute_does_not_extend_motion_and_complete_capture_survives_takeover(rig):
     rig.run.service.compute.held = True
     start = rig.start()
