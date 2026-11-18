@@ -143,3 +143,197 @@ def test_scan_receipt_crash_recovers_new_identity_and_rejects_old_capture(isolat
         executor.shutdown()
         adapter.destroy_node()
         probe.destroy_node()
+
+
+def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manual(
+    isolated_ros, tmp_path, monkeypatch
+):
+    """Actual guard/receipt/output processes; isolated domain, no chassis or scan source."""
+    import json
+
+    from ament_index_python.packages import get_package_prefix
+    from geometry_msgs.msg import Twist
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.parameter import Parameter
+    from rclpy.qos import qos_profile_sensor_data
+    from senior_robot.command_node import CommandNode
+    from std_msgs.msg import String
+
+    from senior_control.protocol import SimpleEnvelope
+    from senior_control.settings.models import simulation_settings_profile
+
+    monkeypatch.delenv("SENIOR_STARTUP_LEARNING_CLAIM", raising=False)
+    # Learning run preservation is checked by the owner/client production-chain
+    # test. This live probe starts no learning service and has no physical inputs.
+    executable = Path(get_package_prefix("senior_robot")) / "lib/senior_robot/safety_node"
+    profile = Path(__file__).parents[1] / "fixtures/generic_motion_profile.json"
+    command = CommandNode(parameter_overrides=[Parameter("robot_id", value="launch-recovery")])
+    probe = isolated_ros.create_node("launch_recovery_output_probe")
+    observer = SingleThreadedExecutor()
+    observer.add_node(probe)
+    commands = SingleThreadedExecutor()
+    commands.add_node(command)
+    runtimes, velocities = deque(maxlen=256), deque(maxlen=256)
+    probe.create_subscription(
+        String,
+        "/motion/runtime",
+        lambda msg: runtimes.append(json.loads(msg.data)),
+        qos_profile_sensor_data,
+    )
+    probe.create_subscription(Twist, "/cmd_vel", velocities.append, 10)
+    logfile = tmp_path / "critical-recovery.log"
+    sequence = 0
+
+    def envelope(kind, payload=None):
+        nonlocal sequence
+        sequence += 1
+        value = {
+            "v": 1,
+            "robot_id": "launch-recovery",
+            "session_id": "operator",
+            "connection_epoch": 1,
+            "request_id": f"live-{sequence}",
+            "seq": sequence,
+            "expires_at": time.time() + 30,
+            "type": kind,
+            "payload": payload or {},
+        }
+        if not kind.startswith("safety."):
+            value["controller_generation"] = 1
+        return value
+
+    def manual(kind, payload=None):
+        now = time.monotonic()
+        return command.manual_request(
+            {
+                "envelope": json.dumps(envelope(kind, payload)),
+                "driving": simulation_settings_profile().driving_defaults.model_dump(),
+                "received_steady": now,
+                "deadline_steady": now + 0.3,
+            }
+        )
+
+    def until(predicate, wrapper, *, spin_command=True):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not predicate():
+            assert wrapper.poll() is None, logfile.read_text()
+            observer.spin_once(timeout_sec=0.01)
+            if spin_command:
+                commands.spin_once(timeout_sec=0.01)
+        assert predicate(), logfile.read_text()
+
+    try:
+        with prefixed_process(
+            [
+                str(executable),
+                "--ros-args",
+                "-p",
+                "robot_id:=launch-recovery",
+                "-p",
+                f"hardware_motion_profile:={profile}",
+                "-p",
+                "depth_policy:=laser_only",
+            ],
+            logfile,
+        ) as wrapper:
+            until(
+                lambda: (
+                    runtimes
+                    and command._output_incarnation is not None
+                    and command._output_handoff_boot is None
+                ),
+                wrapper,
+            )
+            authority = manual("control.acquire")["authority_id"]
+            old_prepared = command._barrier_frame
+            assert manual(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 1,
+                    "linear": 0.1,
+                    "turn": 0,
+                    "gear": "low",
+                },
+            )["ok"]
+            old_boot = runtimes[-1]["boot_id"]
+            os.kill(latest_node_pid(logfile), signal.SIGKILL)
+            until(
+                lambda: runtimes and runtimes[-1]["boot_id"] != old_boot,
+                wrapper,
+                spin_command=False,
+            )
+            new_boot = runtimes[-1]["boot_id"]
+            # Keep Command's runtime callback queued. Send the original cached
+            # zero and an actual newly received, still-valid old-authority intent.
+            command._final_publisher.publish(old_prepared)
+            assert manual(
+                "drive.intent",
+                {
+                    "authority_id": authority,
+                    "gesture": 1,
+                    "sequence": 2,
+                    "linear": 0.1,
+                    "turn": 0,
+                    "gear": "low",
+                },
+            )["ok"]
+            until(
+                lambda: sum(value["boot_id"] == new_boot for value in runtimes) >= 4,
+                wrapper,
+                spin_command=False,
+            )
+            assert all(
+                value["mode"] == "idle" for value in runtimes if value["boot_id"] == new_boot
+            )
+            until(
+                lambda: (
+                    command._output_incarnation is not None
+                    and command._output_incarnation[1] == new_boot
+                    and command._output_handoff_boot is None
+                ),
+                wrapper,
+            )
+            assert command._manual_target is None
+            for _ in range(3):
+                request = envelope("safety.estop")
+                expected = command._latched_estop_revision + 1
+                assert command.submit(SimpleEnvelope.model_validate(request)).accepted
+                until(
+                    lambda expected=expected: (
+                        runtimes[-1]["estop_revision"] == expected
+                        and command._pending_estop_request is None
+                    ),
+                    wrapper,
+                )
+            assert runtimes[-1]["estop_revision"] == 3
+            original = request["request_id"]
+            os.kill(latest_node_pid(logfile), signal.SIGKILL)
+            until(
+                lambda: (
+                    runtimes[-1]["boot_id"] != new_boot
+                    and runtimes[-1]["confirmed_estop_status"] == "software_latched"
+                    and runtimes[-1]["estop_revision"] == 3
+                    and command._output_handoff_boot is None
+                ),
+                wrapper,
+            )
+            assert command._latched_estop_request.request_id == original
+            assert manual("safety.estop.reset", {"revision": 3})["ok"]
+            until(
+                lambda: (
+                    runtimes[-1]["confirmed_estop_status"] == "clear"
+                    and command._latched_estop_request is None
+                ),
+                wrapper,
+            )
+            assert len(probe.get_publishers_info_by_topic("/cmd_vel")) == 1
+            assert velocities and all(
+                value.linear.x == value.angular.z == 0 for value in velocities
+            )
+    finally:
+        commands.shutdown()
+        observer.shutdown()
+        command.destroy_node()
+        probe.destroy_node()

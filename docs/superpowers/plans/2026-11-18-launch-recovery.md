@@ -154,6 +154,17 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - 定向 `pytest -q tests/ros/test_launch_recovery_live.py tests/ros/test_mapping.py tests/unit/test_rgbd_transport_config.py` → 30 passed、2 skipped（0.12 秒），新 live 场景因无 ROS 跳过，另一项 mapping ROS 检查跳过；五个 launch 与新 live 文件 ruff check、format/AST 通过。mapping 保持原 CRLF，差异空白使用 `git -c core.whitespace=cr-at-eol diff --check` 校验，无持久 Git 配置变更。
 - 未验证 SLAM capture 目录重开、厂家条件分支话题/TF、RGBD 真实 worker 清理或扫描端到端现场恢复；不将前缀配置存在说成语义恢复完成。既有 `test_rgbd_diagnostic_launch.py` 的父 PGID/直接子进程结构断言与新前缀结构冲突，当前严格保持三个获批测试文件范围，待负责人明确如何迁移该既有断言，未隐去或冒称其通过。
 
+### critical 代次交接接口阶段（尚未开放恢复开关）
+
+- 负责人已向用户预报并批准最小范围调整：产品 12 → **13**（增加修改既有 `src/senior_control/motion/state_machine.py`）；测试 3 → **4**（增加仅迁移既有 `tests/ros/test_rgbd_diagnostic_launch.py` 遍历/PGID/退出 PID 断言，不新增场景，独立提交 `cb1932f`）。完整累计范围 **18 文件**，配置/构建/工具仍为 0，文档仍仅本文。capture/verified `slam_graph_node` 前缀已由独立提交 `705bf53` 撤下，非空目录无覆盖重开仍未完成。
+- **明确的既有字段语义调整**：普通 manual/navigation 的 `source_epoch` 不变；仅 `idle` 零 barrier 以 `source_id == 当前 output boot` 精确回显已观察到的代次。无锁存时 prepared 的 request_id 为该 boot、source_epoch 为 0；有锁存时 estop 的 request_id 保持操作者原请求，source_epoch 表示原急停 revision，gesture 仍为 0。真实 v3 guard 要求普通 estop barrier 的 gesture 为 0，现有 C++ barrier/codec 已接受并原样编码上述 idle 字段，不修改 guard、消息字段、端点或协议版本；不能把 wire 布局未变说成完全没有语义调整。
+- `CommandNode` 在接受真实 runtime GID/boot 后使用既有 revoke 关闭旧 manual authority，保留连接 context 以允许新的 acquire；旧导航经既有 source 清理退休，不调用 RouteService.start 或发送 goal。输出代次提升后稳定重发因果零 barrier，直至对应 boot/generation/锁存 revision 确认；交接中沿既有 receiver.invalidate 撤销 current，不能将新 Core 的初始 clear 冒充锁存已清。急停请求在 ACK 后仍保留，只在明确 reset 的 clear/generation 确认后删除。
+- 只有带恢复标记的 Core 要求因果 boot echo 完成后才接 intent，时间新旧本身不够。旧 cached prepared、恢复后旧源新发的零屏障和旧 intent 均不完成交接；非匹配 estop 仍可先停车锁存。匹配 idle-estop 不将 boot 当新操作者事件，而调用 `restore_software_estop` 保留原 revision；该显式入口只接受正值及不回退已知 revision，退休源、保持软件锁存，不改变普通 SOFTWARE_ESTOP 递增或显式 reset 匹配。原 request_id 通过 C++ v3 编解码进入 Core barrier payload，不被 source_id 的 boot 回显替换。
+- 恢复 Core 的 LearningClient 使用现有 read_only 模式，StartupLearning 不绑定写会话且 `_startup_target` 不发起动作；继续消费只读完成 view。首次普通 Core 仍使用原学习客户端、原 idle prepared heartbeat 和一次学习规则；7b5a034 原始学习/派生避障隔离段未改。
+- 获批场景 7 的同一生产链回归复用现有 Command 生产方法提取、LearningRig、LearningClient 线程/真实 record owner 与既有 v3 C++ header；动态命令穿过实际 C++ barrier/codec → Python decoder → FinalCommandFence → MotionCore。覆盖未开始/已消费学习不发 Attach/Reserve、原启动学习不变、旧 manual/nav 退休、新 acquire 恢复、旧零/intent 拒绝、非匹配 estop 先锁不交接、原 request 与 revision=3 保持、普通 stop 不清锁、错误 revision reset 无效/正确 reset 有效。未将同一场景拆成参数矩阵或增加独立故障场景。
+- 定向新生产链加两项现有直接回归：`pytest -q tests/unit/test_launch_recovery.py tests/unit/test_manual_command_generation.py tests/unit/test_startup_learning_chain.py -k 'recovery_handoff or manual_intents_use_prepared or real_tick_collects_once'` → 3 passed、8 deselected（4.93 秒）；最后只针对核心接线调整重跑 `-k recovery_handoff` 通过。没有重跑已有 Mac/Linux 前缀三项。真实 installed Command → RMW guard → Core 的隔离域用例已写入既有获批 live 文件，本机无 ROS → 1 skipped、1 deselected，不冒充实际 RMW/单一 Twist owner 通过；ruff、格式、差异检查通过。
+- 目前 safety/仿真 command 恢复开关仍关闭，IPC 端点与 Nav2/Gazebo 组仍待实施。若 command 自身先重启而失去原 estop 请求身份，随后又发生 output 换代，不能捏造原身份；当前只保留停止且不发 clear 交接，需新的显式急停才能建立可确认原请求。这种复合故障的原身份延续尚未证明，不把局部生产链通过写成全部 critical 完成。
+
 仅沿已列真实恢复路径验证，不追加 benchmark、全量回归或宽泛异常矩阵：
 
 1. 已确认相机崩溃路径：新 PID/原始图像/发送帧恢复、崩溃日志保留、原 Agent 与学习 run 不变。
