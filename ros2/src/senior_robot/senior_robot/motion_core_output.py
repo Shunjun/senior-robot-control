@@ -5,20 +5,33 @@ The native transport remains the sole standard /cmd_vel Twist publisher.
 """
 
 import math
+import os
 import time
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionEvent, MotionMode, MotionTarget
 from senior_control.motion.contracts import MotionEventKind as K
+from senior_control.motion.learning_record import LearningGeometry
 from senior_control.motion.manual_target import ManualLinearTarget
+from senior_control.motion.startup_learning import StartupLearning
 from senior_control.motion.state_machine import MotionStateMachine
 from senior_control.protocol import MotionRuntimeState
 from senior_control.runtime.diagnostics import configure_diagnostics
+from senior_control.runtime.learning_client import LearningClient
+from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.safety.startup_visibility import startup_visibility
+from senior_control.sensors.policy import default_policy
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
-from senior_robot.motion_core_perception import directional_clearance, limit_velocity
+from senior_robot.motion_core_perception import (
+    avoidance_observation,
+    directional_clearance,
+    limit_velocity,
+    scan_observation,
+)
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
 
@@ -45,6 +58,8 @@ class MotionCoreOutput:
             self._barrier_key = self._barrier_payload = None
             self._barrier_complete = False
             self._closed = False
+            self._launch_recovered = os.environ.get("SENIOR_LAUNCH_RECOVERED") == "1"
+            self._recovery_pending = self._launch_recovered
             self._last_tick = None
             self._output = Velocity(0, 0)
             self._runtime = RuntimeReports(node)
@@ -52,6 +67,22 @@ class MotionCoreOutput:
             self._diagnostic_pump = DiagnosticPump(self.diagnostics)
             self._resources.callback(self._diagnostic_pump.close)
             self._runtime_type = String
+            claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+            self._learning_client = None
+            if claim:
+                if self._launch_recovered:
+                    self._learning_client = LearningClient(Path(claim), read_only=True)
+                else:
+                    self._learning_client = LearningClient(Path(claim))
+            if self._learning_client is not None:
+                self._resources.callback(self._learning_client.close)
+            self.startup = StartupLearning(
+                None if self._launch_recovered else self._learning_client
+            )
+            self.self_returns = None
+            self._learning_geometry = None
+            self._retired_learning_owner = False
+            self._old_learning_owner = None
         except BaseException:
             self._resources.close()
             raise
@@ -108,6 +139,19 @@ class MotionCoreOutput:
             manual_linear = metadata
         elif metadata != ManualLinearTarget(0, 0, 0):
             return False
+        handoff = (
+            msg.source_kind == "idle"
+            and msg.source_id == self.boot
+            and (
+                (reason == "prepared" and msg.request_id == self.boot and msg.source_epoch == 0)
+                or (reason == "estop" and bool(msg.request_id) and msg.source_epoch > 0)
+            )
+        )
+        # A fresh output cannot identify old intents from timestamps alone.
+        # Only this random boot's causal zero echo finishes recovery. An estop
+        # may always lock first, but an unrelated estop does not finish handoff.
+        if self._recovery_pending and not handoff and reason != "estop":
+            return False
         if msg.owner_boot_id == self._input_boot and msg.generation < self.output_generation:
             return False
         if msg.owner_boot_id != self._input_boot:
@@ -134,6 +178,8 @@ class MotionCoreOutput:
             if accepted:
                 self._barrier_complete = True
                 self._remember_task_retirement(msg)
+                if handoff:
+                    self._recovery_pending = False
             return accepted
         if (
             msg.generation <= self._input_floor
@@ -146,6 +192,7 @@ class MotionCoreOutput:
         velocity = Velocity(float(msg.vx), float(msg.wz))
         if not all(math.isfinite(x) for x in (velocity.vx, velocity.wz)):
             return False
+        self._interrupt_learning("control_takeover", now)
         source_id = f"{msg.source_id}:{msg.source_epoch}"
         if self.target.source_id != source_id:
             if msg.source_kind == "navigation" and self.machine.task_paused:
@@ -181,8 +228,23 @@ class MotionCoreOutput:
             or self.machine.state.task_id not in {None, msg.source_id}
         ):
             return False
+        if (
+            reason == "prepared"
+            and msg.source_kind == "idle"
+            and self.target.source == "startup_learning"
+        ):
+            # Initial owner heartbeat is not an operator takeover of automatic learning.
+            return True
+        if reason == "estop" or msg.source_kind in {"manual", "navigation"}:
+            self._interrupt_learning("estop" if reason == "estop" else "control_takeover", now)
         self.revoke(reason, now=now)
         if reason == "estop":
+            if msg.source_kind == "idle" and msg.source_id == self.boot and msg.source_epoch > 0:
+                # Private recovery meaning ONLY for this boot-matched idle
+                # estop: source_epoch preserves the original latch revision.
+                # request_id remains the operator's original request identity;
+                # gesture stays zero, as required by the native v3 guard.
+                return self.machine.restore_software_estop(int(msg.source_epoch), now_steady=now)
             self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
         elif reason in {"estop_reset", "fault_recover"}:
             # Only an explicit revision-matched operator request clears a latch.
@@ -316,8 +378,183 @@ class MotionCoreOutput:
         self._terminal_released.add(key)
         return True
 
+    def _interrupt_learning(self, reason, now):
+        self.startup._last_now = now
+        self.startup.interrupt(reason)
+        if self.machine.state.task_id == self.boot:
+            self._event(K.TASK_RETIRED, now, self.boot)
+        if self.target.source == "startup_learning":
+            self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
+            self._output = Velocity(0, 0)
+
+    def _learning_observation(self, now):
+        client = self._learning_client
+        if client is None:
+            return None
+        client.poll()
+        record = client.record
+        if self._launch_recovered:
+            if (
+                self._old_learning_owner is None
+                and record is not None
+                and record.expected_output_boot_id != self.boot
+            ):
+                # Pin the observed old assignment before reporting its loss. A
+                # later State reply/new manual attempt cannot retarget this fact.
+                self._old_learning_owner = record
+            if (
+                not self._recovery_pending
+                and not self._retired_learning_owner
+                and self._old_learning_owner is not None
+            ):
+                self._retired_learning_owner = client.retire_motion_owner(
+                    self._old_learning_owner, self.boot
+                )
+        if (
+            self._launch_recovered
+            and record is not None
+            and record.expected_output_boot_id != self.boot
+        ):
+            # Preserve launch history and initial read-only observation; never
+            # adopt a consumed predecessor or reopen automatic startup.
+            pass
+        elif record is not None and getattr(self, "_learning_attempt", None) != record.attempt_id:
+            needs_admission = (
+                record.trigger == "manual"
+                and not record.action.consumed
+                and record.phase not in {"completed", "failed", "unconfirmed"}
+                and record.capture_summary.state != "complete"
+            )
+            if needs_admission:
+                # An observed candidate is not an executable/adopted session.
+                self.startup = StartupLearning(None)
+                proposal = client.proposal
+                permitted = (
+                    not self._recovery_pending
+                    and proposal is not None
+                    and proposal.output_boot_id == self.boot
+                    and time.monotonic() < proposal.deadline_steady
+                    and proposal.owner_boot_id == self._input_boot
+                    and proposal.generation == self.output_generation
+                    and self.target.source == "idle"
+                    and self.sensors.stationary(now)
+                    and self.machine.state.mode
+                    not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+                )
+                if permitted:
+                    if not client.bind_attempt(
+                        record.attempt_id, self.boot, self.output_generation
+                    ):
+                        return None
+                    self._manual_learning_request = proposal
+                    client.accept_attempt(True, "accepted")
+                else:
+                    if not client.decline_attempt(record, self.boot, "control_source_changed"):
+                        return None
+                    self._learning_attempt = record.attempt_id
+                    return None
+            self.startup = StartupLearning(client)
+            self._learning_attempt = record.attempt_id
+        self.startup.advance(
+            self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
+        )
+        if not self.startup.active and client.view is None:
+            return None
+        if not self.node._scans:
+            self.startup.hold_motion("learning_scan_unavailable")
+            return None
+        raw = self.node._scans[-1]
+        age = default_policy().age(
+            measured_steady=raw.measurement_steady, received_steady=raw.received, now_steady=now
+        )
+        if age.band == "invalid":
+            self.startup.hold_motion("scan_temporarily_unavailable")
+            return None
+        observation = scan_observation(raw, self.node._body)
+        if client.view is not None:
+            return client.view.filter(observation)
+        m = raw.message
+        x, y = self.profile.length / 2, self.profile.width / 2
+        geometry = LearningGeometry(
+            body_frame=self.node._body,
+            sensor_frame=m.frame_id,
+            physical_polygon=((-x, -y), (x, -y), (x, y), (-x, y)),
+            sensor_to_body=(m.sensor_x, m.sensor_y, m.sensor_yaw),
+            angle_min=m.angle_min,
+            angle_increment=m.angle_increment,
+            count=len(m.ranges),
+            range_min=m.range_min,
+            range_max=m.range_max,
+        )
+        client.geometry(geometry)
+        if geometry != self._learning_geometry:
+            if self._learning_geometry is not None:
+                self.startup.hold_motion("scan_or_body_geometry_changed")
+            self._learning_geometry = geometry
+            self.self_returns = SelfReturnModel(geometry.physical_polygon)
+        return self.self_returns.filter(observation, provisional=self.startup.provisional)
+
+    def _startup_target(self, now, observation):
+        if self._launch_recovered and getattr(self, "_manual_learning_request", None) is None:
+            return
+        if self.target.source not in {"idle", "startup_learning"}:
+            return
+        if not self.startup.active or (
+            self.startup.deadline is not None and now >= self.startup.deadline
+        ):
+            if self.target.source == "startup_learning":
+                if self.machine.state.task_id == self.boot:
+                    self._event(K.TASK_RETIRED, now, self.boot)
+                self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
+                self._output = Velocity(0, 0)
+            return
+        if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
+            return
+        if not self.node._command_topology_ready():
+            if self.startup.motion_started:
+                self._interrupt_learning("command_topology_unqualified", now)
+            return
+        proposal = getattr(self, "_manual_learning_request", None)
+        if (
+            proposal is not None
+            and not self.startup.motion_started
+            and (
+                now >= proposal.deadline_steady
+                or proposal.output_boot_id != self.boot
+                or proposal.owner_boot_id != self._input_boot
+                or proposal.generation != self.output_generation
+            )
+        ):
+            self._interrupt_learning("control_source_changed", now)
+            return
+        velocity = self.startup.velocity
+        reason = self.startup.reason
+        if observation is None:
+            velocity, reason = 0.0, "learning_scan_unavailable"
+        elif velocity:
+            visibility = startup_visibility(
+                observation,
+                front_stop=self.profile.startup_learning_front_occlusion_stop,
+                rear_stop=self.profile.startup_learning_rear_occlusion_stop,
+            )
+            if visibility.blocked_reason is not None:
+                velocity, reason = 0.0, visibility.blocked_reason
+                self.startup.hold_motion(reason)
+                if not self.startup.active:
+                    self._interrupt_learning(self.startup.reason, now)
+                    return
+        if self.machine.state.task_id != self.boot:
+            self._event(K.TASK_START, now, self.boot)
+        if self.machine.state.task_id == self.boot:
+            self.target = MotionTarget(Velocity(velocity, 0), "startup_learning", self.boot, None)
+            self.startup.reason = reason
+
     def revoke(self, reason: str, *, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
+        if reason != "prepared" and not (
+            reason == "command_topology_unqualified" and not self.startup.motion_started
+        ):
+            self._interrupt_learning(reason, now)
         if reason not in {
             "prepared",
             "release",
@@ -345,12 +582,31 @@ class MotionCoreOutput:
         deadline = self.target.deadline_steady
         if deadline is not None and now >= deadline:
             self.revoke("expiry", now=now)
+        try:
+            filtered = self._learning_observation(now)
+        except (ValueError, TypeError, KeyError):
+            # Learning cannot withdraw manual/navigation or suppress raw scan handling.
+            self.startup.hold_motion("learning_scan_unavailable")
+            filtered = None
+        self._startup_target(now, filtered)
         state = self.machine.state
         output, reason, scan_deadline = Velocity(0, 0), state.reason, None
         if state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
             requested = self.target.velocity
             if requested != Velocity(0, 0):
-                clearance = directional_clearance(self.node._scans, self.profile, now)
+                control_filtered = filtered
+                if self.node._scans and self.node._scans[-1].predictions:
+                    control_filtered = avoidance_observation(self.node._scans[-1], self.node._body)
+                    view = None if self._learning_client is None else self._learning_client.view
+                    if view is not None:
+                        control_filtered = view.filter(control_filtered)
+                    elif self.self_returns is not None:
+                        control_filtered = self.self_returns.filter(
+                            control_filtered, provisional=self.startup.provisional
+                        )
+                clearance = directional_clearance(
+                    self.node._scans, self.profile, now, filtered=control_filtered
+                )
                 if clearance is None:
                     reason = "scan_temporarily_unavailable"
                 else:
@@ -361,15 +617,54 @@ class MotionCoreOutput:
                     scan_deadline = clearance.deadline
                     reason = "directional_limit" if output != requested else "target"
             else:
-                reason = "standby" if self.target.source == "idle" else "stick_stopped"
+                reason = (
+                    self.startup.reason
+                    if self.target.source == "startup_learning"
+                    else ("standby" if self.target.source == "idle" else "stick_stopped")
+                )
+        learning_output = self.target.source == "startup_learning"
+        if learning_output and output != Velocity(0, 0) and not self.startup.prepare_action():
+            output, reason = Velocity(0, 0), "learning_action_reservation_pending"
+        if (
+            learning_output
+            and self.startup.deadline is not None
+            and time.monotonic() >= self.startup.deadline
+        ):
+            output, reason = Velocity(0, 0), "learning_action_window_finished"
         self._output = output
         # A control-process stall stops the native owner even if a source TTL is longer.
         output_deadline = min(
             now + 0.15,
             self.target.deadline_steady or now + 0.15,
             scan_deadline or now + 0.15,
+            self.startup.deadline
+            if learning_output and self.startup.deadline is not None
+            else now + 0.15,
         )
-        self.node._emit_motion_core(output, reason, output_deadline, computed_steady=now)
+        if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
+            output = self._output = Velocity(0, 0)
+            reason = "learning_output_expired"
+            # Before this owner's first successful submission, discard only the
+            # expired frame. Keep its grant; the next tick must compute a new frame.
+            if self.startup.motion_started:
+                self.startup.hold_motion(reason)
+                if not self.startup.active:
+                    self._interrupt_learning(self.startup.reason, now)
+        submitted = self.node._emit_motion_core(
+            output, reason, output_deadline, computed_steady=now
+        )
+        if learning_output and output != Velocity(0, 0):
+            self.startup.motion_emitted(submitted, deadline=output_deadline)
+        else:
+            self.startup.output_stopped(submitted)
+        self.diagnostics.summary(
+            "startup_learning",
+            self.startup.summary(
+                learned_count=0
+                if self._learning_client is None or self._learning_client.view is None
+                else len(self._learning_client.view.catalog.anchors)
+            ),
+        )
         self._publish_runtime(now, reason)
         self.diagnostics.duration("control_compute", time.monotonic() - now)
 
@@ -391,6 +686,13 @@ class MotionCoreOutput:
                 "computed_steady": independent.stamp_steady,
                 "valid_until_steady": independent.deadline_steady,
             }
+        actions = list(state.allowed_actions)
+        if (
+            state.task_id == self.boot
+            and state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+            and "acquire" not in actions
+        ):
+            actions.append("acquire")
         runtime = MotionRuntimeState.model_validate(
             {
                 "schema": 1,
@@ -409,7 +711,7 @@ class MotionCoreOutput:
                 "confirmed_estop_status": "software_latched"
                 if state.mode is MotionMode.ESTOP
                 else "clear",
-                "allowed_actions": list(state.allowed_actions),
+                "allowed_actions": actions,
                 "task_id": state.task_id,
                 "output_generation": self.output_generation,
                 "body_reference": body,
@@ -425,4 +727,5 @@ class MotionCoreOutput:
 
     def close(self) -> None:
         self._closed = True
+        self._interrupt_learning("shutdown", time.monotonic())
         self._resources.close()

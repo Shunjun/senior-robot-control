@@ -3,6 +3,18 @@
 from dataclasses import dataclass
 from typing import Any
 
+from senior_control.vision.raw_capture import RawCaptureHeader
+
+
+@dataclass(frozen=True)
+class PredictedReturn:
+    """Current avoidance-only range and its unrenewed real acquisition seed."""
+
+    index: int
+    distance: float
+    missing_frames: int
+    seed_capture: RawCaptureHeader
+
 
 @dataclass(frozen=True)
 class RawSafetyObservation:
@@ -13,3 +25,4 @@ class RawSafetyObservation:
     received_ros: float
     stamp: float
     measurement_steady: float
+    predictions: tuple[PredictedReturn, ...] = ()

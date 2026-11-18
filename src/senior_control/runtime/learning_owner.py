@@ -10,26 +10,46 @@ from typing import Protocol
 from uuid import uuid4
 
 from senior_control.motion.learning_record import (
+    ActiveReference,
+    CaptureSummary,
     LearnedCatalog,
     LearningAction,
     LearningAnchor,
     LearningGeometry,
     LearningRecord,
     Phase,
+    ProgramManifest,
+    attempt_identity,
 )
 from senior_control.motion.process_resources import ProcessWorker
-from senior_control.runtime.learning_store import RecordWriterLock, read_record, write_record
+from senior_control.runtime.learning_store import (
+    RecordWriterLock,
+    attempt_path,
+    read_manifest,
+    read_record,
+    write_record,
+)
 
 _LOG = logging.getLogger(__name__)
 
 
+CommitResult = int | LearningRecord | None
+
+
 class CommitWorker(Protocol):
-    def submit(self, task: Callable[[], int]) -> Future[int]: ...
+    def submit(self, task: Callable[[], CommitResult]) -> Future[CommitResult]: ...
     def close(self) -> None: ...
 
 
 def _worker() -> CommitWorker:
-    return ProcessWorker[int](name="learning-record-io")
+    return ProcessWorker[CommitResult](name="learning-record-io")
+
+
+def _read_optional(path: Path) -> LearningRecord | None:
+    try:
+        return read_record(path)
+    except FileNotFoundError:
+        return None
 
 
 class LearningRecordOwner:
@@ -44,15 +64,29 @@ class LearningRecordOwner:
     ) -> None:
         self.path = path
         self.record = LearningRecord(
-            run_id=run_id, clock_domain=clock_domain, owner_epoch=uuid4().hex
+            run_id=run_id,
+            attempt_id=attempt_identity(run_id),
+            clock_domain=clock_domain,
+            owner_epoch=uuid4().hex,
+            motion_owner_id=uuid4().hex,
         )
+        self.manifest = ProgramManifest(
+            run_id=run_id,
+            owner_epoch=self.record.owner_epoch,
+            latest_attempt_id=self.record.attempt_id,
+        )
+        self.active_record: LearningRecord | None = None
+        self._published_manifest = self.manifest
+        self._manifest_durable = -1
         self.durable_revision = -1
         self._durable_model: str | None = None
         self.error: str | None = None
         self._lock: RecordWriterLock | None = None
         self._worker: CommitWorker | None = None
-        self._future: Future[int] | None = None
-        self._writing: LearningRecord | None = None
+        self._future: Future[CommitResult] | None = None
+        self._lookup_future: Future[CommitResult] | None = None
+        self._lookup_target: str | None = None
+        self._writing: LearningRecord | ProgramManifest | None = None
         self._session: str | None = None
         self._reservation: tuple[str, int] | None = None
         self._closed = False
@@ -63,7 +97,26 @@ class LearningRecordOwner:
                 raise ValueError("learning_record_path_identity")
             self._lock = RecordWriterLock(path)
             try:
-                previous = read_record(path)
+                manifest = read_manifest(path)
+                previous = read_record(attempt_path(path, manifest.latest_attempt_id))
+                self.manifest = manifest.model_copy(
+                    update={
+                        "owner_epoch": self.record.owner_epoch,
+                        "revision": manifest.revision + 1,
+                    }
+                )
+                if manifest.active_ref is not None:
+                    active = read_record(attempt_path(path, manifest.active_ref.attempt_id))
+                    reference = manifest.active_ref
+                    if (
+                        active.run_id != run_id
+                        or active.attempt_id != reference.attempt_id
+                        or active.revision != reference.record_revision
+                        or active.model is None
+                        or active.model.model_id != reference.model_id
+                    ):
+                        raise ValueError("learning_active_identity")
+                    self.active_record = active
             except FileNotFoundError:
                 if not new_run:
                     raise ValueError("learning_record_missing") from None
@@ -105,6 +158,7 @@ class LearningRecordOwner:
         return (
             self._worker is not None
             and self.durable_revision >= self._activation_revision
+            and self._manifest_durable >= 0
             and not self._closed
             and not self._closing
         )
@@ -115,12 +169,29 @@ class LearningRecordOwner:
         if self._future is not None and self._future.done():
             try:
                 revision = self._future.result()
-                if self._writing is None or revision != self._writing.revision:
+                if (
+                    type(revision) is not int
+                    or self._writing is None
+                    or revision != self._writing.revision
+                ):
                     raise ValueError("learning_commit_identity")
-                self.durable_revision = max(self.durable_revision, revision)
-                self._durable_model = (
-                    None if self._writing.model is None else self._writing.model.model_id
-                )
+                if isinstance(self._writing, ProgramManifest):
+                    self._manifest_durable = revision
+                    self._published_manifest = self._writing
+                    reference = self._writing.active_ref
+                    if (
+                        reference is not None
+                        and self.record.model is not None
+                        and reference.attempt_id == self.record.attempt_id
+                        and reference.model_id == self.record.model.model_id
+                        and reference.record_revision == self.record.revision
+                    ):
+                        self.active_record = self.record
+                else:
+                    self.durable_revision = max(self.durable_revision, revision)
+                    self._durable_model = (
+                        None if self._writing.model is None else self._writing.model.model_id
+                    )
             except (OSError, ValueError, RuntimeError) as exc:
                 self._io_failed = True
                 self._fault(str(exc))
@@ -128,12 +199,38 @@ class LearningRecordOwner:
         if (
             self._worker is not None
             and self._future is None
+            and self._lookup_future is None
             and not self._io_failed
-            and self.record.revision > self.durable_revision
+            and (
+                self.record.revision > self.durable_revision
+                or self.manifest.revision > self._manifest_durable
+                or (self.record.model is not None and self.active_record != self.record)
+            )
         ):
             try:
-                self._writing = self.record
-                self._future = self._worker.submit(partial(write_record, self.path, self.record))
+                if self.record.revision > self.durable_revision:
+                    self._writing = self.record
+                    destination = attempt_path(self.path, self.record.attempt_id)
+                else:
+                    if self.record.model is not None and self.active_record != self.record:
+                        reference = ActiveReference(
+                            attempt_id=self.record.attempt_id,
+                            model_id=self.record.model.model_id,
+                            record_revision=self.record.revision,
+                        )
+                        if self.manifest.active_ref != reference:
+                            self.manifest = self.manifest.model_copy(
+                                update={
+                                    "revision": self.manifest.revision + 1,
+                                    "active_revision": self.manifest.active_revision + 1,
+                                    "active_ref": reference,
+                                }
+                            )
+                    self._writing = self.manifest
+                    destination = self.path
+                self._future = self._worker.submit(
+                    partial(write_record, destination, self._writing)
+                )
             except (OSError, ValueError, RuntimeError) as exc:
                 self._writing = None
                 self._io_failed = True
@@ -142,16 +239,110 @@ class LearningRecordOwner:
     @property
     def public_record(self) -> LearningRecord:
         model = self.record.model
-        if model is not None and model.model_id != self._durable_model:
+        if model is not None and (
+            model.model_id != self._durable_model or self.active_record != self.record
+        ):
             return LearningRecord.model_validate(
                 {
                     **self.record.model_dump(),
                     "model": None,
-                    "phase": "validating",
-                    "reason": "learning_completion_pending_commit",
+                    "phase": "failed" if self._io_failed else "validating",
+                    "reason": "learning_completion_not_durable"
+                    if self._io_failed
+                    else "learning_completion_pending_commit",
                 }
             )
         return self.record
+
+    def lookup(self, attempt_id: str) -> tuple[bool, LearningRecord | None]:
+        if self.record.attempt_id == attempt_id:
+            return True, self.record
+        if self.active_record is not None and self.active_record.attempt_id == attempt_id:
+            return True, self.active_record
+        if self._lookup_future is not None:
+            if self._lookup_target != attempt_id or not self._lookup_future.done():
+                return False, None
+            future, self._lookup_future = self._lookup_future, None
+            self._lookup_target = None
+            result = future.result()
+            if result is not None and not isinstance(result, LearningRecord):
+                raise ValueError("learning_lookup_identity")
+            return True, result
+        self.poll()
+        if self._future is not None or self._worker is None:
+            return False, None
+        self._lookup_target = attempt_id
+        self._lookup_future = self._worker.submit(
+            partial(_read_optional, attempt_path(self.path, attempt_id))
+        )
+        return False, None
+
+    @property
+    def public_manifest(self) -> ProgramManifest:
+        return self._published_manifest
+
+    @property
+    def busy(self) -> bool:
+        return (
+            self.durable_revision < self.record.revision
+            or self._future is not None
+            or self.record.phase not in {"completed", "failed", "unconfirmed"}
+            or (self.record.model is not None and self.active_record != self.record)
+        )
+
+    def new_attempt(
+        self,
+        request_id: str,
+        fingerprint: str,
+        expected_revision: int,
+        admitted: bool = True,
+        *,
+        output_boot_id: str | None = None,
+    ) -> str:
+        identity = attempt_identity(self.record.run_id, request_id)
+        if self.record.attempt_id == identity:
+            if (
+                self.record.request_fingerprint != fingerprint
+                or self.record.start_request_id != request_id
+            ):
+                raise ValueError("learning_request_conflict")
+            return "accepted"
+        if self.busy:
+            return "busy"
+        if not admitted or self.manifest.active_revision != expected_revision or self._io_failed:
+            raise ValueError("learning_active_conflict")
+        self.record = LearningRecord(
+            run_id=self.record.run_id,
+            attempt_id=identity,
+            trigger="manual",
+            motion_owner_id=uuid4().hex,
+            motion_generation=self.manifest.revision + 1,
+            expected_output_boot_id=output_boot_id,
+            start_request_id=request_id,
+            request_fingerprint=fingerprint,
+            clock_domain=self.record.clock_domain,
+            owner_epoch=self.record.owner_epoch,
+        )
+        self.manifest = self.manifest.model_copy(
+            update={
+                "latest_attempt_id": identity,
+                "revision": self.manifest.revision + 1,
+            }
+        )
+        self.durable_revision = -1
+        self._activation_revision = 0
+        self._durable_model = None
+        self._session = None
+        self._reservation = None
+        self.poll()
+        return "accepted"
+
+    def capture(self, summary: CaptureSummary) -> None:
+        if self.record.capture_summary.state == "complete" and summary.state != "complete":
+            return
+        if self.record.capture_summary != summary:
+            self._revise(capture_summary=summary)
+            self.poll()
 
     def begin_consumer(self) -> tuple[str | None, LearningRecord]:
         """Completed results are read-only; the existing owner retains single writing."""
@@ -159,7 +350,10 @@ class LearningRecordOwner:
         if not self.ready:
             raise ValueError("learning_consumer_not_ready")
         if self.record.model is not None:
-            if self.record.model.model_id != self._durable_model:
+            if (
+                self.record.model.model_id != self._durable_model
+                or self.active_record != self.record
+            ):
                 raise ValueError("learning_model_not_durable")
             return None, self.record
         if self._session is None:
@@ -219,7 +413,7 @@ class LearningRecordOwner:
     def set_phase(
         self, session: str, phase: Phase, reason: str, segment_id: str | None = None
     ) -> None:
-        if self.record.phase == "completed":
+        if self.record.phase in {"completed", "failed", "unconfirmed"}:
             return
         self._check(session)
         if phase == "completed":
@@ -232,9 +426,23 @@ class LearningRecordOwner:
             self._revise(phase=phase, reason=reason, segment_id=segment_id)
             self.poll()
 
+    def fail_capture(self, reason: str, summary: CaptureSummary) -> None:
+        """The recording owner can close an orphan without minting a motion session."""
+        if self.record.phase in {"completed", "failed", "unconfirmed"}:
+            return
+        if self.record.capture_summary.state == "complete":
+            summary = self.record.capture_summary
+        self._revise(phase="failed", reason=reason, capture_summary=summary)
+        self.poll()
+
     def complete_model(self, session: str, points: tuple[tuple[float, float], ...]) -> int:
         self._check(session)
-        if self.record.geometry is None or self.record.model is not None or self._io_failed:
+        if (
+            self.record.geometry is None
+            or self.record.model is not None
+            or self._io_failed
+            or self.record.capture_summary.state != "complete"
+        ):
             raise ValueError("learning_model_not_admissible")
         unique = tuple(dict.fromkeys(points))
         model = LearnedCatalog(
@@ -250,7 +458,10 @@ class LearningRecordOwner:
         if self._io_failed:
             return False
         self._closing = True
-        return self.durable_revision >= self.record.revision
+        return (
+            self.durable_revision >= self.record.revision
+            and self._manifest_durable >= self.manifest.revision
+        )
 
     def close(self) -> None:
         if self._closed:

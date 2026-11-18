@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import fcntl
 import json
+import logging
 import os
 import signal
 import socket
@@ -47,7 +48,7 @@ def _record(path: Path, expected: list[int] | None = None, *, run_id: str | None
     os.replace(temporary, marker)
 
 
-async def _prepare_socket(path: Path) -> None:
+async def _prepare_socket(path: Path, *, expected_run_id: str | None = None) -> None:
     """Called under the instance lock; never replace a live or unrecognized socket."""
     if not os.path.lexists(path):
         return
@@ -60,6 +61,10 @@ async def _prepare_socket(path: Path) -> None:
         marker = path.with_suffix(".owner.json")
         try:
             owned = json.loads(marker.read_text())
+            if expected_run_id is not None and (
+                not isinstance(owned, dict) or owned.get("run_id") != expected_run_id
+            ):
+                owned = None
             # //Compatible: pre-isolation ownership records contain only the identity list.
             if isinstance(owned, dict):
                 owned = owned.get("identity")
@@ -163,6 +168,73 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     ]
 
 
+async def _video_environment(
+    profile: "VehicleProfile", environment: dict[str, str]
+) -> dict[str, str]:
+    """Prepare only the Agent's video imports; failure preserves its control environment."""
+    original = dict(environment)
+    original.pop("SENIOR_ROS_VIDEO_TOPIC", None)
+    process = None
+    try:
+        if profile.ros_setup is None:
+            raise ValueError("ROS workspace setup is missing")
+        keys = (
+            "AMENT_PREFIX_PATH",
+            "COLCON_PREFIX_PATH",
+            "CMAKE_PREFIX_PATH",
+            "PYTHONPATH",
+            "LD_LIBRARY_PATH",
+            "PATH",
+            "ROS_DISTRO",
+            "ROS_VERSION",
+            "ROS_PYTHON_VERSION",
+            "RMW_IMPLEMENTATION",
+            "ROS_DOMAIN_ID",
+            "ROS_LOCALHOST_ONLY",
+        )
+        probe = (
+            "import json, os; import rclpy; from sensor_msgs.msg import Image; "
+            f"print(json.dumps({{key: os.environ[key] for key in {keys!r} if key in os.environ}}))"
+        )
+        process = await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "-c",
+            'source "$1" || exit; source "$2" || exit; '
+            'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
+            'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$3" -c "$4"',
+            "senior-video-environment",
+            str(profile.vendor_ros_setup),
+            str(profile.ros_setup),
+            sys.executable,
+            probe,
+            env=original,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), 5.0)
+        if process.returncode != 0:
+            raise ValueError("ROS overlay or camera Python imports failed")
+        values = json.loads(stdout.decode().splitlines()[-1])
+        if not isinstance(values, dict) or any(
+            key not in keys or not isinstance(value, str) for key, value in values.items()
+        ):
+            raise ValueError("invalid ROS environment")
+        return {**original, **values, "SENIOR_ROS_VIDEO_TOPIC": "/camera/color/image_raw"}
+    except (OSError, ValueError, IndexError, asyncio.TimeoutError) as exc:
+        logging.getLogger(__name__).warning(
+            "ROS video unavailable; starting Agent with original control environment: %s", exc
+        )
+        return original
+    finally:
+        if process is not None and process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.communicate()
+
+
 def _motion_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     # Use the same sourced overlay/domain as the adapter; no second authority
     # owner or actuator publisher is introduced by the hardware launch.
@@ -198,6 +270,23 @@ def _ros_launch_command(
         filename,
         *arguments,
     ]
+
+
+def _camera_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+    from senior_control.runtime.launch_recovery import restart_prefix
+
+    prefix = restart_prefix()
+    # This is a separate launch process: the inherited prefix cannot reach
+    # motion/safety. Installed Humble matches the executable basename, not the
+    # ROS node name. Keep the vendor XML/OpaqueFunction and original argv.
+    return _ros_launch_command(
+        profile,
+        robot_id,
+        "turn_on_wheeltec_robot",
+        "wheeltec_camera.launch.py",
+        f"launch-prefix:={prefix}",
+        "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$",
+    )
 
 
 async def _verify_adapter_peer(path: Path, pid: int) -> list[int]:
@@ -275,9 +364,13 @@ async def _terminate(process: asyncio.subprocess.Process | None, timeout: float)
         await process.wait()
 
 
-async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) -> None:
+async def _terminate_motion_stack(
+    process: asyncio.subprocess.Process | None, *, group_grace: float = 2, budget: float = 12
+) -> None:
     if process is None:
         return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
     # ros2 launch owns multiple required children. Signal the owned process
     # group so timeout escalation cannot leave an orphan actuator publisher.
     try:
@@ -285,7 +378,7 @@ async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) ->
     except ProcessLookupError:
         return
     try:
-        await asyncio.wait_for(process.wait(), 10)
+        await asyncio.wait_for(process.wait(), min(10, budget))
     except asyncio.TimeoutError:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -294,7 +387,7 @@ async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) ->
         await process.wait()
     # A launcher can exit before its children. Its process group is still ours;
     # reap/stop survivors instead of leaving camera or actuator children behind.
-    deadline = asyncio.get_running_loop().time() + 2
+    deadline = min(deadline, loop.time() + group_grace)
     while True:
         try:
             os.killpg(process.pid, 0)
@@ -421,9 +514,7 @@ async def supervise(
             events.report("motion", "ready", "adapter verified; cloud status independent")
             try:
                 camera_stack = await asyncio.create_subprocess_exec(
-                    *_ros_launch_command(
-                        profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
-                    ),
+                    *_camera_command(profile, robot_id),
                     env=child_env,
                     start_new_session=True,
                     pass_fds=(events.writer,),
@@ -441,6 +532,8 @@ async def supervise(
                 loop.add_signal_handler(number, stopping.set)
             # //Compatible: profile=None still propagates a single arbitrary child's exit.
             agent_env = events.agent_environment(environment) if events else environment
+            if profile is not None:
+                agent_env = await _video_environment(profile, agent_env)
             process = await asyncio.create_subprocess_exec(
                 *command, env=agent_env, pass_fds=(events.reader,) if events else ()
             )
@@ -475,7 +568,9 @@ async def supervise(
                         await _terminate_motion_stack(adapter)
                         adapter = None
                     elif name == "camera":
-                        await _terminate_motion_stack(camera_stack)
+                        # Let leaf prefixes finish their bounded five-second
+                        # cleanup, including scheduling margin, before KILL.
+                        await _terminate_motion_stack(camera_stack, group_grace=6, budget=10)
                         camera_stack = None
         finally:
             if startup is not None and not startup.done():
@@ -490,7 +585,7 @@ async def supervise(
                     try:
                         await _terminate_motion_stack(motion_stack)
                     finally:
-                        await _terminate_motion_stack(camera_stack)
+                        await _terminate_motion_stack(camera_stack, group_grace=6, budget=10)
             for task in waiters:
                 if not task.done():
                     task.cancel()

@@ -170,3 +170,42 @@ async def test_fresh_generic_reference_can_set_home_without_environment_permissi
         assert saved is not None
         assert saved.waypoint.pose == Pose2D(1, 2, 0)
         assert saved.waypoint.map_ref == MapRef("yard", 1)
+
+
+async def test_learning_uses_regular_request_lane_with_original_deadline_and_typed_receipt():
+    from senior_control.agent.connection import IpcMotion
+    from senior_control.protocol import LearningStartEnvelope
+
+    calls = []
+
+    class Client:
+        async def request(self, kind, **fields):
+            calls.append((kind, fields))
+            if kind == "learning_capability":
+                return {"ok": True, "learning_protocol_version": 1}
+            return {
+                "ok": True,
+                "data": {"start_request_id": "start", "attempt_id": "a" * 32, "state": "accepted"},
+            }
+
+    client = Client()
+    motion = IpcMotion(client, intent_client=UnsupportedIpc())
+    assert await motion.learning_available()
+    assert await motion.learning_available()
+    envelope = LearningStartEnvelope(
+        v=1,
+        type="learning.start",
+        robot_id="robot",
+        session_id="operator",
+        connection_epoch=1,
+        controller_generation=2,
+        request_id="start",
+        seq=1,
+        expires_at=10.0,
+        payload={"expected_active_revision": 0, "expected_authority_id": None},
+    )
+    receipt = await motion.learning(envelope, received_steady=1.0, deadline_steady=1.2)
+    assert receipt["state"] == "accepted"
+    assert [kind for kind, _ in calls] == ["learning_capability", "learning"]
+    assert calls[-1][1]["deadline_steady"] == 1.2
+    assert '"controller_generation":2' in calls[-1][1]["envelope"]

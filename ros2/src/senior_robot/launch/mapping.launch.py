@@ -14,6 +14,8 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from senior_control.runtime.launch_recovery import restart_prefix
+
 
 def _mapping_nodes(context):
     share = FindPackageShare("senior_robot")
@@ -52,6 +54,7 @@ def _mapping_nodes(context):
                 Node(
                     package="senior_sensor_ingress",
                     executable="static_tf_receipt_node",
+                    prefix=restart_prefix(),
                     name=relay_name,
                     namespace="/",
                     output="screen",
@@ -93,6 +96,7 @@ def _mapping_nodes(context):
         Node(
             package="slam_toolbox",
             executable="async_slam_toolbox_node",
+            prefix=restart_prefix(),
             name="slam_toolbox",
             output="screen",
             parameters=[params, {"use_sim_time": use_sim_time}],
@@ -100,6 +104,7 @@ def _mapping_nodes(context):
         Node(
             package="senior_robot",
             executable="slam_adapter",
+            prefix=restart_prefix(),
             name="slam_adapter",
             output="screen",
             parameters=[{"use_sim_time": use_sim_time, "odom_frame": "odom"}],

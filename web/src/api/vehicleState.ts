@@ -1,6 +1,6 @@
 /** Versioned vehicle UI contract. New routes require an explicit car capability. */
 export type Mode = 'unknown' | 'idle' | 'manual' | 'task' | 'braking' | 'obstacle_hold' | 'feedback_stop' | 'execution_fault' | 'estop';
-export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1';
+export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1' | 'learning.v1';
 export type Action = 'acquire' | 'estop_reset' | 'fault_recover';
 export type TaskAction = 'pause' | 'resume' | 'cancel' | 'takeover';
 export type Level = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
@@ -181,6 +181,50 @@ export class IntentBackpressureError extends Error {
     super('motion socket is buffered');
   }
 }
+export interface LearningStart {
+  start_request_id: string;
+  attempt_id: string;
+  state: 'accepted' | 'busy';
+}
+export interface LearningStatus {
+  run_id: string;
+  active_revision: number;
+  active_model: { attempt_id: string; model_id: string; point_count: number } | null;
+  attempt_id: string;
+  phase: string;
+  reason: string;
+  motion_complete: boolean;
+  capture_complete: boolean;
+  compute_complete: boolean;
+  durable: boolean;
+  can_start: boolean;
+  cannot_start_reason: string | null;
+}
+function learningId(value: unknown): string {
+  const id = text(value, 32);
+  if (!/^[0-9a-f]{32}$/.test(id)) throw new VehicleDecodeError();
+  return id;
+}
+export function decodeLearningStart(value: unknown): LearningStart {
+  const r = record(value, ['start_request_id', 'attempt_id', 'state']);
+  const id = text(r.start_request_id);
+  if (!id) throw new VehicleDecodeError();
+  return { start_request_id: id, attempt_id: learningId(r.attempt_id), state: oneOf(r.state, ['accepted', 'busy']) };
+}
+export function decodeLearningStatus(value: unknown): LearningStatus {
+  const r = record(value, ['run_id', 'active_revision', 'active_model', 'attempt_id', 'phase', 'reason', 'motion_complete', 'capture_complete', 'compute_complete', 'durable', 'can_start', 'cannot_start_reason']);
+  return {
+    run_id: learningId(r.run_id), active_revision: count(r.active_revision),
+    active_model: nullable(r.active_model, value => {
+      const model = record(value, ['attempt_id', 'model_id', 'point_count']);
+      return { attempt_id: learningId(model.attempt_id), model_id: learningId(model.model_id), point_count: count(model.point_count, 2048) };
+    }),
+    attempt_id: learningId(r.attempt_id), phase: text(r.phase, 64), reason: text(r.reason, 256),
+    motion_complete: boolean(r.motion_complete), capture_complete: boolean(r.capture_complete),
+    compute_complete: boolean(r.compute_complete), durable: boolean(r.durable),
+    can_start: boolean(r.can_start), cannot_start_reason: nullable(r.cannot_start_reason, v => text(v, 256))
+  };
+}
 export interface VehiclePort {
   getSnapshot(): VehicleView;
   subscribe(listener: () => void): () => void;
@@ -193,6 +237,8 @@ export interface VehiclePort {
   intent(value: Intent): Promise<void>;
   recover(kind: 'estop_reset' | 'fault_recover'): Promise<void>;
   taskCommand(action: TaskAction): Promise<void>;
+  learningStart(requestId: string, activeRevision: number): Promise<LearningStart>;
+  learningStatus(query?: { attempt_id?: string; start_request_id?: string }): Promise<LearningStatus>;
   settingsRead(): Promise<SettingsData>;
   settingsApply(request: SettingsRequest): Promise<SettingsReceipt>;
   settingsResult(id: string): Promise<SettingsReceipt | null>;
@@ -207,7 +253,7 @@ export const EMPTY_VIEW: VehicleView = Object.freeze({
   rtt_ms: null
 });
 const MODES: readonly Mode[] = ['unknown', 'idle', 'manual', 'task', 'braking', 'obstacle_hold', 'feedback_stop', 'execution_fault', 'estop'];
-const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings.v1', 'task.execution.v1', 'logs.v1'];
+const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings.v1', 'task.execution.v1', 'logs.v1', 'learning.v1'];
 const LEVELS: readonly Level[] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 const ACTIONS: readonly Action[] = ['acquire', 'estop_reset', 'fault_recover'];
 const TASK_ACTIONS: readonly TaskAction[] = ['pause', 'resume', 'cancel', 'takeover'];
@@ -299,7 +345,7 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
     wheel_linear_mps: nullable(r.wheel_linear_mps, number),
     task: nullable(r.task, task),
     allowed_actions: array(r.allowed_actions, v => oneOf(v, ACTIONS), 3),
-    capabilities: array(r.capabilities, v => oneOf(v, CAPS), 5)
+    capabilities: array(r.capabilities, v => oneOf(v, CAPS), 6)
   };
   if ('observation' in r) {
     const o = record(r.observation, ['status', 'last_sampled_steady', 'age_seconds']);
@@ -421,8 +467,8 @@ export function decodeLogPage(value: unknown): LogPage {
   if (p.next_cursor > p.high_water || p.entries.some((e, i) => e.sequence > p.next_cursor || (i > 0 && e.sequence <= p.entries[i - 1]!.sequence))) throw new VehicleDecodeError();
   return p;
 }
-export type VehicleRequestType = 'control.acquire' | 'control.release' | 'drive.stop' | 'safety.estop.reset' | 'safety.fault.recover' | 'task.execution.command' | 'settings.get' | 'settings.apply' | 'settings.result';
-export const VEHICLE_REQUEST_TYPES: readonly string[] = ['safety.estop.reset', 'safety.fault.recover', 'task.execution.command', 'settings.get', 'settings.apply', 'settings.result'];
+export type VehicleRequestType = 'control.acquire' | 'control.release' | 'drive.stop' | 'safety.estop.reset' | 'safety.fault.recover' | 'task.execution.command' | 'settings.get' | 'settings.apply' | 'settings.result' | 'learning.start' | 'learning.status';
+export const VEHICLE_REQUEST_TYPES: readonly string[] = ['safety.estop.reset', 'safety.fault.recover', 'task.execution.command', 'settings.get', 'settings.apply', 'settings.result', 'learning.start', 'learning.status'];
 /** Validate locally before marking a request as possibly submitted. */
 export function validateSettingsRequest(request: SettingsRequest): void {
   if (!text(request.request_id)) throw new VehicleDecodeError();
@@ -443,7 +489,7 @@ export class VehicleTransport implements VehiclePort {
     this.manualListeners.add(listener);
     return () => this.manualListeners.delete(listener);
   }
-  constructor(private readonly send: (type: VehicleRequestType | 'drive.intent', payload: unknown) => Promise<unknown>, readonly logs: VehicleLogPort | null = null) {
+  constructor(private readonly send: (type: VehicleRequestType | 'drive.intent', payload: unknown, requestId?: string) => Promise<unknown>, readonly logs: VehicleLogPort | null = null) {
   }
   getSnapshot = (): VehicleView => this.view;
   subscribe = (listener: () => void): (() => void) => {
@@ -549,6 +595,24 @@ export class VehicleTransport implements VehiclePort {
     count(response.version);
     const accepted = boolean(response.accepted), reason = text(response.reason, 512);
     if (!accepted) throw new Error(`车端未受理：${reason}`);
+  }
+  async learningStart(requestId: string, activeRevision: number): Promise<LearningStart> {
+    const frame = this.require('learning.v1');
+    if (!text(requestId)) throw new VehicleDecodeError();
+    count(activeRevision);
+    const response = decodeLearningStart(await this.send('learning.start', {
+      expected_active_revision: activeRevision,
+      expected_authority_id: frame.manual_authority?.state === 'prepared' ? frame.manual_authority.authority_id : null
+    }, requestId));
+    if (response.start_request_id !== requestId) throw new VehicleDecodeError();
+    return response;
+  }
+  async learningStatus(query: { attempt_id?: string; start_request_id?: string } = {}): Promise<LearningStatus> {
+    this.require('learning.v1');
+    if (query.attempt_id !== undefined) learningId(query.attempt_id);
+    if (query.start_request_id !== undefined && !text(query.start_request_id)) throw new VehicleDecodeError();
+    if (query.attempt_id !== undefined && query.start_request_id !== undefined) throw new VehicleDecodeError();
+    return decodeLearningStatus(await this.send('learning.status', query));
   }
   async settingsRead(): Promise<SettingsData> {
     this.require('settings.v1');

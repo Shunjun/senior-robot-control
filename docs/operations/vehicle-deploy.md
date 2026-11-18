@@ -149,7 +149,7 @@ docker exec -it ros2 bash
 source /opt/ros/humble/setup.bash
 cd /home/wheeltec/ros2_shared_dir/senior-robot-control
 python3 -m venv --system-site-packages .ros-venv
-.ros-venv/bin/python -m pip install -e '.[agent,safety,ros]'
+.ros-venv/bin/python -m pip install -e '.[agent,safety,ros,video]'
 
 # 通过 rosdep 补齐这些实车 ROS 包缺少的依赖；不安装 Gazebo 仿真包：
 rosdep install --from-paths \

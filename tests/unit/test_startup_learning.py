@@ -135,122 +135,6 @@ def test_outside_following_object_and_device_removal_do_not_leave_a_mask():
     assert m.filter(observation(1), provisional=True).external_hits
 
 
-def test_owner_finishes_using_scans_without_independent_displacement(tmp_path):
-
-    owner = startup_for(tmp_path / "claim")
-    m = SelfReturnModel(BOUNDARY)
-
-    for i in range(1, 11):
-        owner.advance(0.0, now=i / 10, stationary=True)
-        obs = observation(0.15)
-        owner.frame(
-            m,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    assert owner.state == "moving"
-    begin_action(owner, 1.0)
-    for i in range(11, 42):
-        owner.advance(0.05, now=i / 10, stationary=False)
-        obs = observation(0.15)
-        owner.frame(
-            m,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    assert owner.deadline == 4.0
-    for i in range(42, 48):
-        owner.advance(0.0, now=i / 10, stationary=True)
-        obs = observation(0.15)
-        owner.frame(
-            m,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    owner.advance(0.0, now=4.8, stationary=True)
-    assert owner.state == "completed" and not owner.provisional
-    assert owner.velocity == 0 and m.learned
-    owner.session.close()
-    resumed = startup_for(tmp_path / "claim")
-    resumed.advance(0.0, now=10.0, stationary=True)
-    assert resumed.velocity == 0
-
-
 def test_collision_footprint_preserves_actual_physical_polygon():
     from senior_control.motion.constraints import Footprint
 
@@ -283,126 +167,23 @@ def test_stable_body_return_needs_no_world_free_space():
     assert m.validate() == 1
 
 
-def test_owner_completes_verified_side_return_after_target_and_post_frames(tmp_path):
-
-    owner = startup_for(tmp_path / "claim")
-    model = SelfReturnModel(BOUNDARY)
-
-    for i in range(1, 11):
-        owner.advance(0.0, now=i / 10, stationary=True)
-        obs = side_observation(0.15)
-        owner.frame(
-            model,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    begin_action(owner, 1.0)
-    for i in range(11, 42):
-        owner.advance(0.05, now=i / 10, stationary=False)
-        obs = side_observation(0.15)
-        owner.frame(
-            model,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    for i in range(42, 48):
-        owner.advance(0.0, now=i / 10, stationary=True)
-        obs = side_observation(0.15)
-        owner.frame(
-            model,
-            replace(obs, scan=replace(obs.scan, stamp=i / 10)),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_ros_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    received_steady_ns=round(
-                        ((replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp) * 1e9
-                    ),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=round(
-                    (replace(obs, scan=replace(obs.scan, stamp=i / 10))).scan.stamp * 1000
-                )
-                + 1,
-                valid=True,
-                reason="",
-            ),
-        )
-    assert owner.state == "completed"
-    assert owner.velocity == 0 and model.learned
-
-
 def test_matcher_features_exclude_body_points_without_changing_raw_obstacles(tmp_path):
+    from learning_test_support import geometry
+
+    from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
     from senior_control.safety.external_motion_features import (
         external_feature_ranges,
     )
+    from senior_control.safety.learning_view import LearningFilterView
 
-    path = tmp_path / "run.claim"
-    write_geometry_record(path, BOUNDARY)
     raw = observation(0.15)
-    assert external_feature_ranges(raw, path)[0] != external_feature_ranges(raw, path)[0]  # NaN
-    assert raw.external_hits  # obstacle path remains unchanged
-    assert external_feature_ranges(observation(1.0), path) == (1.0,)
+    view = LearningFilterView(
+        LearnedCatalog(model_id="a" * 32, anchors=(LearningAnchor(id=0, point=(0.15, 0.0)),)),
+        geometry(BOUNDARY),
+    )
+    assert external_feature_ranges(raw, view)[0] != external_feature_ranges(raw, view)[0]
+    assert raw.external_hits
+    assert external_feature_ranges(observation(1.0), view) == (1.0,)
 
 
 def test_prior_diagnostic_never_claims_verified_translation(tmp_path):

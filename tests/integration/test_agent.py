@@ -1442,3 +1442,42 @@ async def test_delayed_replies_preserve_send_cadence_and_connection(monkeypatch)
             assert hub.is_online(ROBOT) and not socket.closed
     finally:
         await link.close()
+
+
+async def test_learning_request_returns_only_original_start_receipt_without_journal_action(
+    rig, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from senior_control.protocol import LearningStartEnvelope
+
+    response = {"start_request_id": "calibration", "attempt_id": "a" * 32, "state": "accepted"}
+    callback = AsyncMock(return_value=response)
+    monkeypatch.setattr(rig.motion, "learning", callback, raising=False)
+    link = FakeLink(epoch=1)
+    task = await start(rig, link)
+    try:
+        command = LearningStartEnvelope(
+            v=1,
+            type="learning.start",
+            robot_id=ROBOT,
+            session_id="operator",
+            connection_epoch=1,
+            controller_generation=2,
+            request_id="calibration",
+            seq=1,
+            expires_at=time.time() + 5.0,
+            payload={"expected_active_revision": 0, "expected_authority_id": None},
+        )
+        link.inbox.put_nowait(command)
+        await until(lambda: bool(link.responses))
+        assert link.responses[-1].payload.data == response
+        assert link.responses[-1].request_id == "calibration"
+        callback.assert_awaited_once()
+        assert (
+            callback.call_args.kwargs["deadline_steady"]
+            > callback.call_args.kwargs["received_steady"]
+        )
+        assert await rig.journal.get("calibration") is None
+    finally:
+        await finish(task, rig)

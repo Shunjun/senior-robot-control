@@ -1,13 +1,15 @@
 """Front/rear obstacle distance and continuous braking speed limits.
 
 The only boundary is the configured physical rectangle enlarged 10% overall,
-plus sensor_error once. No pose, learning, sweep or geometry worker is involved.
+plus sensor_error once. Learned self returns are excluded without pose/sweep expansion.
 """
 
 import math
 from dataclasses import dataclass
 
-from senior_control.models import Velocity
+from senior_control.config import DeviceProfile
+from senior_control.models import Pose2D, Velocity
+from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.sensors.policy import default_policy
 
 
@@ -18,7 +20,41 @@ class DirectionalClearance:
     deadline: float
 
 
-def directional_clearance(scans, profile, now):
+def _scan_observation(raw, body_frame, ranges):
+    scan = raw.message
+    return filter_self(
+        ScanObservation(
+            tuple(ranges),
+            scan.angle_min,
+            scan.angle_increment,
+            scan.range_min,
+            scan.range_max,
+            raw.stamp,
+            "ros",
+            Pose2D(scan.sensor_x, scan.sensor_y, scan.sensor_yaw),
+            scan.transform_stamp,
+            body_frame,
+            raw.stamp,
+        ),
+        DeviceProfile(),
+    )
+
+
+def scan_observation(raw, body_frame):
+    """Decode only original endpoints for learning and its visibility policy."""
+    return _scan_observation(raw, body_frame, raw.message.ranges)
+
+
+def avoidance_observation(raw, body_frame):
+    """Compose the current sparse predictions without modifying the raw message."""
+    ranges = list(raw.message.ranges)
+    for prediction in raw.predictions:
+        if ranges[prediction.index] == math.inf:
+            ranges[prediction.index] = prediction.distance
+    return _scan_observation(raw, body_frame, ranges)
+
+
+def directional_clearance(scans, profile, now, *, filtered=None):
     if not scans:
         return None
     raw = scans[-1]
@@ -33,6 +69,7 @@ def directional_clearance(scans, profile, now):
     if age.band == "invalid":
         return None
     scan = raw.message
+    ranges = scan.ranges if filtered is None else filtered.scan.ranges
     geometry = (
         scan.angle_min,
         scan.angle_increment,
@@ -51,13 +88,15 @@ def directional_clearance(scans, profile, now):
     boundary_y = half_width * 1.10 + profile.sensor_error
     front = rear = math.inf
     observed = False
-    for index, distance in enumerate(scan.ranges):
+    for index, distance in enumerate(ranges):
         if distance == math.inf:
             observed = True
             continue
         if not math.isfinite(distance) or not scan.range_min <= distance <= scan.range_max:
             continue
         observed = True
+        if filtered is not None and filtered.rays[index].kind == "self":
+            continue
         angle = scan.sensor_yaw + scan.angle_min + index * scan.angle_increment
         x = scan.sensor_x + distance * math.cos(angle)
         y = scan.sensor_y + distance * math.sin(angle)
@@ -78,8 +117,19 @@ def _approach(current, target, rate, dt):
     return min(target, current + delta) if target > current else max(target, current - delta)
 
 
+def _braking_speed_limit(distance, decel, lag_s):
+    """Solve distance = speed*lag + speed²/(2*decel), without cancellation."""
+    if distance <= 0:
+        return 0.0
+    if math.isinf(distance):
+        return math.inf
+    braking_term = 2 * decel * distance
+    lag_speed = decel * lag_s
+    return braking_term / (math.sqrt(lag_speed**2 + braking_term) + lag_speed)
+
+
 def limit_velocity(requested, previous, measured_linear, clearance, profile, dt):
-    """v² <= 2*a*d: positive clearance always permits a positive speed.
+    """v*lag + v²/(2*a) <= d: positive clearance permits a positive speed.
 
     Ramp ordinary requests from the last output; wheel speed selects the braking
     rate when the vehicle is already faster than the requested/capped speed.
@@ -87,8 +137,9 @@ def limit_velocity(requested, previous, measured_linear, clearance, profile, dt)
     """
     linear = max(-profile.cap, min(profile.cap, requested.vx))
     yaw = max(-profile.yaw_cap, min(profile.yaw_cap, requested.wz))
+    lag_s = profile.lag_ms / 1000
     distance = clearance.front if linear >= 0 else clearance.rear
-    cap = math.sqrt(2 * profile.decel * distance)
+    cap = _braking_speed_limit(distance, profile.decel, lag_s)
     desired = math.copysign(min(abs(linear), cap), linear)
     measured = previous.vx if measured_linear is None else measured_linear
     reversing = previous.vx * desired < 0
@@ -97,7 +148,7 @@ def limit_velocity(requested, previous, measured_linear, clearance, profile, dt)
     vx = _approach(previous.vx, ramp_target, profile.decel if braking else profile.accel, dt)
     # Cap the direction actually commanded, also during a requested reversal.
     actual_distance = clearance.front if vx >= 0 else clearance.rear
-    actual_cap = math.sqrt(2 * profile.decel * actual_distance)
+    actual_cap = _braking_speed_limit(actual_distance, profile.decel, lag_s)
     vx = math.copysign(min(abs(vx), actual_cap), vx)
     if linear == 0:
         vx = 0.0

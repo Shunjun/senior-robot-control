@@ -108,3 +108,34 @@ async def test_limited_action_does_not_open_settings_or_navigation(tmp_path, mon
         motion_runtime_version=1,
     )
     assert state.for_tasks(True).admission_ready
+
+
+def test_learning_admission_keeps_active_manual_target_and_requires_current_prepared_authority(
+    node,
+):
+    prepared = call(node, envelope("control.acquire", {}))
+    payload = {"expected_active_revision": 0, "expected_authority_id": prepared["authority_id"]}
+    admitted = call(node, envelope("learning.start", payload, request="calibration"), 10.0)
+    assert admitted["ok"] and admitted["can_start"]
+    assert call(
+        node,
+        envelope(
+            "drive.intent",
+            dict(
+                authority_id=prepared["authority_id"],
+                gesture=1,
+                sequence=1,
+                linear=1.0,
+                turn=0.0,
+                gear="low",
+            ),
+            seq=2,
+        ),
+        10.0,
+    )["accepted"]
+    target = node.value._manual_target
+    rejected = call(
+        node, envelope("learning.start", payload, request="late-calibration", seq=3), 10.0
+    )
+    assert rejected["ok"] and not rejected["can_start"]
+    assert node.value._manual_target is target

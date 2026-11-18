@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { runtime, testPort } from '../../api/vehicleState.testUtils';
+import { VehicleTransport, type LearningStatus } from '../../api/vehicleState';
 import { VehicleStateView } from './VehicleStateView';
 afterEach(cleanup);
 it('keeps disconnected wheel speed and running task as last measurements', () => {
@@ -87,4 +88,47 @@ it('shows a measured zero wheel speed as zero instead of missing', () => {
   render(<VehicleStateView port={port} />);
   expect(screen.getByText('0.00', { selector: 'strong' })).toBeTruthy();
   expect(screen.getByText('轮速里程计')).toBeTruthy();
+});
+
+
+it('queries the original uncertain calibration and retains the old model through manual takeover', async () => {
+  let next: LearningStatus = {
+    run_id: 'b'.repeat(32), active_revision: 1,
+    active_model: { attempt_id: 'c'.repeat(32), model_id: 'd'.repeat(32), point_count: 72 },
+    attempt_id: 'c'.repeat(32), phase: 'completed', reason: 'classified_body_returns',
+    motion_complete: true, capture_complete: true, compute_complete: true, durable: true,
+    can_start: true, cannot_start_reason: null
+  };
+  let starts = 0, original = '';
+  const queries: unknown[] = [];
+  const port = new VehicleTransport(async (type, payload, requestId) => {
+    if (type === 'learning.start') {
+      starts++;
+      original = requestId!;
+      throw new Error('timeout');
+    }
+    queries.push(payload);
+    return next;
+  });
+  port.update(runtime({ capabilities: ['runtime.v1', 'learning.v1'] }), true);
+  render(<VehicleStateView port={port} />);
+  const button = screen.getByRole('button', { name: '重新校准' });
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  await act(async () => fireEvent.click(button));
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  next = { ...next, phase: 'validating', durable: false, compute_complete: false,
+    attempt_id: 'a'.repeat(32), can_start: false, cannot_start_reason: 'learning_busy' };
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '查询本次结果' })));
+  expect(queries.at(-1)).toEqual({ start_request_id: original });
+  expect(screen.getByText('已录齐 · 后台计算中')).toBeTruthy();
+  expect(screen.getByText('当前生效：72 个真实参考点')).toBeTruthy();
+  act(() => port.update(runtime({ sequence: 2, mode: 'manual', capabilities: ['runtime.v1', 'learning.v1'] }), true));
+  expect(screen.getByRole('heading', { name: '手动驾驶' })).toBeTruthy();
+  next = { ...next, phase: 'completed', compute_complete: true, durable: true,
+    active_revision: 2, active_model: { attempt_id: 'a'.repeat(32), model_id: 'e'.repeat(32), point_count: 96 },
+    can_start: true, cannot_start_reason: null };
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '刷新校准状态' })));
+  expect(screen.getByText('当前生效：96 个真实参考点')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: '手动驾驶' })).toBeTruthy();
+  expect(starts).toBe(1);
 });

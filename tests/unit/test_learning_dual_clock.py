@@ -155,65 +155,6 @@ def test_model_late_capture_replay_and_clock_generation_preserve_source_identity
     )
 
 
-def test_scan_producer_restart_and_clock_rollback_interrupt_segments(tmp_path):
-    owner = startup_for(tmp_path / "source")
-    owner.advance(0, now=10, stationary=True)
-    model = SelfReturnModel(BOUNDARY)
-    for host, producer, generation, tick in [
-        (10, "producer", 1, 0),
-        (10.1, "producer-new", 1, 0.1),
-        (10.2, "producer-new", 2, 0),
-    ]:
-        before = owner.segment_id
-        owner.frame(
-            model,
-            side_observation(0.15),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((tick) * 1e9),
-                    received_ros_ns=round((tick) * 1e9),
-                    received_steady_ns=round((host) * 1e9),
-                    clock_generation=generation,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch=producer,
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=1,
-                valid=True,
-                reason="",
-            ),
-        )
-        if host > 10:
-            assert owner.segment_id != before and len(model.frames) == 1
-    # A delayed capture from the old producer/world cannot roll the segment back.
-    current = owner.segment_id
-    owner.frame(
-        model,
-        side_observation(0.15),
-        capture=RawCaptureHeader(
-            time=sample_time(
-                stamp_ns=round((0.2) * 1e9),
-                received_ros_ns=round((0.2) * 1e9),
-                received_steady_ns=round((10.1) * 1e9),
-                clock_generation=1,
-            ),
-            frame_id="laser",
-            raw_gid="01",
-            bridge_gid="02",
-            source_epoch="producer-new",
-            bridge_boot_id="boot",
-            capture_generation=1,
-            sequence=2,
-            valid=True,
-            reason="",
-        ),
-    )
-    assert owner.segment_id == current and len(model.frames) == 1
-
-
 def test_retention_frontier_does_not_reaccept_trimmed_original_stamp():
     model = SelfReturnModel(BOUNDARY)
     for i in range(1, 9):

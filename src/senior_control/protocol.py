@@ -86,7 +86,10 @@ class SimpleEnvelope(EnvelopeBase):
     def validate_gesture(self) -> "SimpleEnvelope":
         if self.payload.gesture is not None and self.type != "drive.stop":
             raise ValueError("gesture is only supported for drive.stop")
-        if self.payload.authority_id is not None and self.type not in {"control.release", "drive.stop"}:
+        if self.payload.authority_id is not None and self.type not in {
+            "control.release",
+            "drive.stop",
+        }:
             raise ValueError("authority id is only supported for control.release and drive.stop")
         if (
             self.type == "drive.stop"
@@ -177,6 +180,59 @@ class SettingsResultEnvelope(SettingsEnvelopeBase):
 
 
 SettingsEnvelope = SettingsGetEnvelope | SettingsApplyEnvelope | SettingsResultEnvelope
+
+
+class LearningStartPayload(StrictModel):
+    expected_active_revision: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    expected_authority_id: str | None = Field(min_length=1, max_length=128)
+
+
+class LearningStatusPayload(StrictModel):
+    attempt_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    start_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def one_identity(self) -> "LearningStatusPayload":
+        if self.attempt_id is not None and self.start_request_id is not None:
+            raise ValueError("learning_query_identity")
+        return self
+
+
+class LearningStartEnvelope(SettingsEnvelopeBase):
+    type: Literal["learning.start"]
+    payload: LearningStartPayload
+
+
+class LearningStatusEnvelope(SettingsEnvelopeBase):
+    type: Literal["learning.status"]
+    payload: LearningStatusPayload
+
+
+class LearningStartReceipt(StrictModel):
+    start_request_id: str = Field(min_length=1, max_length=128)
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    state: Literal["accepted", "busy"]
+
+
+class LearningActiveModel(StrictModel):
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    model_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    point_count: int = Field(ge=0, le=2048)
+
+
+class LearningStatus(StrictModel):
+    run_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    active_revision: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    active_model: LearningActiveModel | None
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    phase: str = Field(min_length=1, max_length=64)
+    reason: str = Field(max_length=256)
+    motion_complete: bool
+    capture_complete: bool
+    compute_complete: bool
+    durable: bool
+    can_start: bool
+    cannot_start_reason: str | None = Field(max_length=256)
 
 
 class TaskExecutionCommandPayload(StrictModel):
@@ -470,6 +526,8 @@ class PreparedAuthorityPayload(StrictModel):
 
 class ResponsePayload(StrictModel):
     request_type: Literal[
+        "learning.start",
+        "learning.status",
         "safety.estop.reset",
         "safety.fault.recover",
         "task.execution.command",
@@ -514,6 +572,9 @@ class ResponsePayload(StrictModel):
         if self.ok == (self.error is not None):
             raise ValueError("response success and error conflict")
         settings = self.request_type.startswith("settings.")
+        learning = self.request_type.startswith("learning.")
+        if learning and (self.data is not None) != self.ok:
+            raise ValueError("learning_response_data")
         workspace = self.request_type in WORKSPACE_REQUEST_TYPES
         task = self.request_type == "task.execution.command"
         if (workspace or task) and (self.data is not None) != self.ok:
@@ -527,10 +588,17 @@ class ResponsePayload(StrictModel):
         }
         if self.data is not None:
             if not self.ok or not (
-                workspace or task or optional_task or optional_manual or settings
+                workspace or task or optional_task or optional_manual or settings or learning
             ):
                 raise ValueError("response data does not match its request")
-            if optional_task:
+            if learning:
+                dto = (
+                    LearningStartReceipt
+                    if self.request_type == "learning.start"
+                    else LearningStatus
+                )
+                dto.model_validate(self.data)
+            elif optional_task:
                 TaskNavigationState.model_validate(self.data)
             elif task:
                 TaskCommandReceiptPayload.model_validate(self.data)
@@ -598,6 +666,8 @@ VideoEnvelope = VideoSdpEnvelope | VideoCandidateEnvelope | VideoCloseEnvelope
 Envelope = Annotated[
     SimpleEnvelope
     | TaskExecutionEnvelope
+    | LearningStartEnvelope
+    | LearningStatusEnvelope
     | SettingsGetEnvelope
     | SettingsApplyEnvelope
     | SettingsResultEnvelope
@@ -612,6 +682,8 @@ Envelope = Annotated[
 Frame = Annotated[
     SimpleEnvelope
     | TaskExecutionEnvelope
+    | LearningStartEnvelope
+    | LearningStatusEnvelope
     | SettingsGetEnvelope
     | SettingsApplyEnvelope
     | SettingsResultEnvelope

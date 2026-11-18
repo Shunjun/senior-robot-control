@@ -10,9 +10,13 @@ keep their local execution lifetime. This adapter never writes an actuator veloc
 """
 
 import asyncio
+import fcntl
 import os
+import re
+import stat
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -98,6 +102,79 @@ class AdapterCore:
             "navigation.current",
         }:
             return await self._route_request(kind, message)
+        if kind == "learning_capability":
+            import os
+
+            return {
+                "ok": True,
+                "learning_protocol_version": 1
+                if (self._manual is not None and os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM"))
+                else 0,
+            }
+        if kind == "learning":
+            import asyncio
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
+            from senior_control.runtime.learning_client import request_once
+            from senior_control.runtime.learning_wire import BeginAttempt, QueryAttempt
+
+            if self._manual is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            try:
+                envelope = validate_envelope(message["envelope"].encode(), self._robot_id)
+                if not isinstance(envelope, (LearningStartEnvelope, LearningStatusEnvelope)):
+                    raise ValueError("learning_envelope")
+                if envelope.connection_epoch <= self._disabled_through_epoch:
+                    return {"ok": False, "accepted": False, "error": "offline"}
+                claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+                if not claim:
+                    return {"ok": False, "error": "unavailable"}
+                admission = self._manual(message)
+                if not admission.get("ok"):
+                    return admission
+                request = (
+                    QueryAttempt(payload=envelope.payload)
+                    if isinstance(envelope, LearningStatusEnvelope)
+                    else BeginAttempt(
+                        start_request_id=envelope.request_id,
+                        payload=envelope.payload,
+                        fingerprint=hashlib.sha256(
+                            json.dumps(
+                                [
+                                    envelope.robot_id,
+                                    envelope.session_id,
+                                    envelope.connection_epoch,
+                                    envelope.controller_generation,
+                                    envelope.payload.model_dump(),
+                                ],
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode()
+                        ).hexdigest(),
+                        owner_boot_id=admission["owner_boot_id"],
+                        output_boot_id=admission["output_boot_id"],
+                        generation=admission["generation"],
+                        admitted=admission["can_start"],
+                        deadline_steady=admission["deadline_steady"],
+                    )
+                )
+                reply = await asyncio.to_thread(
+                    request_once, Path(claim).name.removeprefix(".startup-learning-"), request
+                )
+                if not reply.ok or reply.data is None:
+                    return {"ok": False, "accepted": False, "error": "conflict"}
+                data = dict(reply.data)
+                if isinstance(envelope, LearningStatusEnvelope):
+                    data["can_start"] = bool(data["can_start"] and admission["can_start"])
+                    if not admission["can_start"]:
+                        data["cannot_start_reason"] = "control_source_conflict"
+                return {"ok": True, "data": data}
+            except (KeyError, TypeError, ValueError, OSError):
+                return {"ok": False, "error": "unavailable"}
         if kind in {"manual", "manual_intent"}:
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unsupported"}
@@ -445,6 +522,39 @@ class AdapterCore:
         return {"ok": True, "accepted": True}
 
 
+@asynccontextmanager
+async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
+    """Only this launch/run may reclaim its own definitely refused stale socket.
+
+    The existing helper's direct real adapter never sets this context and keeps
+    its PID/peer credential ownership unchanged. Hold the endpoint lock through
+    bind, recording and server close, including during recovered startup.
+    """
+    owner = os.environ.get("SENIOR_LAUNCH_SOCKET_OWNER")
+    if owner is None:
+        yield None
+        return
+    if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
+        raise ValueError("invalid launch endpoint ownership context")
+    from senior_control.docker_start_helper import _prepare_socket
+
+    descriptor = os.open(
+        path.with_suffix(".launch.lock"),
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError("foreign launch endpoint lock")
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.environ.get("SENIOR_LAUNCH_RECOVERED") == "1":
+            await _prepare_socket(path, expected_run_id=owner)
+        yield owner
+    finally:
+        os.close(descriptor)
+
+
 def main() -> None:
     import rclpy
 
@@ -614,6 +724,7 @@ def main() -> None:
             )
             started = False
             warmer = None
+            ownership = AsyncExitStack()
 
             async def warm_controller() -> None:
                 assert controller is not None
@@ -626,8 +737,15 @@ def main() -> None:
                     await asyncio.sleep(2)
 
             try:
+                owner = await ownership.enter_async_context(_launch_endpoint(path))
+                if owner is not None and node.get_parameter("ipc_replace_existing_socket").value:
+                    raise ValueError("launch endpoint requires replace_existing=false")
                 await server.start()
                 started = True
+                if owner is not None:
+                    from senior_control.docker_start_helper import _record
+
+                    _record(path, run_id=owner)
                 executor.add_node(node)
                 if controller is not None:
                     warmer = asyncio.create_task(warm_controller())
@@ -673,8 +791,11 @@ def main() -> None:
                     if started:
                         await server.close()
                 finally:
-                    # End any active lease through the arbiter before node destruction.
-                    core.release()
+                    try:
+                        await ownership.aclose()
+                    finally:
+                        # End any active lease before node destruction.
+                        core.release()
 
         asyncio.run(serve())
 

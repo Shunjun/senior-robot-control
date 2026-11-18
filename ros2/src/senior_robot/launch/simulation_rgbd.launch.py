@@ -17,6 +17,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from senior_robot.rgbd_transport import transport_environment
 
+from senior_control.runtime.launch_recovery import restart_prefix
+
 
 def _detect_rmw():
     from rclpy.utilities import get_rmw_implementation_identifier
@@ -68,16 +70,19 @@ def generate_launch_description():
                     Node(
                         package="senior_sensor_ingress",
                         executable="raw_receipt_node",
+                        prefix=restart_prefix(),
                         parameters=[profile, clock],
                     ),
                     Node(
                         package="senior_robot",
                         executable="depth_ingress",
+                        prefix=restart_prefix(),
                         parameters=[profile, clock],
                     ),
                     Node(
                         package="senior_robot",
                         executable="semantic_ingress",
+                        prefix=restart_prefix(),
                         parameters=[profile, clock],
                     ),
                 ],
