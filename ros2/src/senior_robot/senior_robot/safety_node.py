@@ -101,6 +101,18 @@ class SafetyGate(Node):
         from senior_robot.motion_profile import select_motion_profile
 
         candidate_profile = select_motion_profile(hardware_path=hardware_path)
+        from senior_robot.motion_profile import configure_startup_learning
+
+        for name in (
+            "startup_learning_front_occlusion_stop",
+            "startup_learning_rear_occlusion_stop",
+        ):
+            self.declare_parameter(name, getattr(candidate_profile, name))
+        candidate_profile = configure_startup_learning(
+            candidate_profile,
+            front_stop=self.get_parameter("startup_learning_front_occlusion_stop").value,
+            rear_stop=self.get_parameter("startup_learning_rear_occlusion_stop").value,
+        )
         self._final_fence = FinalCommandFence()
         self._guard_socket = None
         self._guard_process = None
@@ -689,9 +701,11 @@ class SafetyGate(Node):
 
     def _emit_motion_core(
         self, velocity: Velocity, reason: str, deadline: float = 0.0, *, computed_steady: float
-    ) -> None:
+    ) -> float:
         self._output_transport.publish(velocity, deadline, computed_steady=computed_steady)
+        submitted = time.monotonic()
         self._report(reason)
+        return submitted
 
     def _report(self, reason: str) -> None:
         """Publish bounded rate/counters; diagnostics never grant motion."""

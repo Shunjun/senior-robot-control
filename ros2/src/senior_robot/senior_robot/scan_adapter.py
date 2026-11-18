@@ -1,8 +1,10 @@
 """Self-filter a native bounded scan without changing original beam identities."""
 
 import math
+import os
 import time
 import uuid
+from pathlib import Path
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from rclpy.clock import Clock, ClockType
@@ -14,6 +16,8 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
+from senior_control.runtime.learning_client import LearningClient
+from senior_control.safety.external_motion_features import external_feature_ranges
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
@@ -34,6 +38,8 @@ class ScanAdapter(Node):
         # Self-return models belong to the motion output owner; transport never
         # trusts operator masks or labels all body-interior points as learned.
         self.profile = DeviceProfile()
+        claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+        self._learning_client = LearningClient(Path(claim), read_only=True) if claim else None
         self.no_return_clear = self.get_parameter("no_return_clear").value
         if (
             not self.body
@@ -91,6 +97,8 @@ class ScanAdapter(Node):
         self.publisher.publish(result)
 
     def _check_source(self):
+        if self._learning_client is not None:
+            self._learning_client.poll()
         endpoints = self.get_publishers_info_by_topic(self._raw_topic)
         gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
         ready = self._admission.observe_bridge(gid)
@@ -150,7 +158,8 @@ class ScanAdapter(Node):
                 no_return_clear=self.no_return_clear,
             )
             filtered = filter_self(observation, self.profile)
-            ranges = list(msg.ranges)
+            view = None if self._learning_client is None else self._learning_client.view
+            ranges = list(external_feature_ranges(filtered, view))
             for ray in filtered.rays:
                 if ray.kind in ("self", "invalid"):
                     ranges[ray.index] = float("nan")
@@ -173,6 +182,11 @@ class ScanAdapter(Node):
         except (ValueError, OverflowError, UnicodeError, TransformException) as exc:
             self._invalid(str(exc) or "scan_invalid", msg.capture)
             self.report(str(exc), False, msg.capture.stamp)
+
+    def destroy_node(self):
+        if self._learning_client is not None:
+            self._learning_client.close()
+        return super().destroy_node()
 
 
 def main():

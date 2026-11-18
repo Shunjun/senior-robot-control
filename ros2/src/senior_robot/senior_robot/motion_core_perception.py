@@ -1,13 +1,15 @@
 """Front/rear obstacle distance and continuous braking speed limits.
 
 The only boundary is the configured physical rectangle enlarged 10% overall,
-plus sensor_error once. No pose, learning, sweep or geometry worker is involved.
+plus sensor_error once. Learned self returns are excluded without pose/sweep expansion.
 """
 
 import math
 from dataclasses import dataclass
 
-from senior_control.models import Velocity
+from senior_control.config import DeviceProfile
+from senior_control.models import Pose2D, Velocity
+from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.sensors.policy import default_policy
 
 
@@ -18,7 +20,28 @@ class DirectionalClearance:
     deadline: float
 
 
-def directional_clearance(scans, profile, now):
+def scan_observation(raw, body_frame):
+    """Decode original endpoints for the existing learner and frozen filter."""
+    scan = raw.message
+    return filter_self(
+        ScanObservation(
+            tuple(scan.ranges),
+            scan.angle_min,
+            scan.angle_increment,
+            scan.range_min,
+            scan.range_max,
+            raw.stamp,
+            "ros",
+            Pose2D(scan.sensor_x, scan.sensor_y, scan.sensor_yaw),
+            scan.transform_stamp,
+            body_frame,
+            raw.stamp,
+        ),
+        DeviceProfile(),
+    )
+
+
+def directional_clearance(scans, profile, now, *, filtered=None):
     if not scans:
         return None
     raw = scans[-1]
@@ -58,6 +81,8 @@ def directional_clearance(scans, profile, now):
         if not math.isfinite(distance) or not scan.range_min <= distance <= scan.range_max:
             continue
         observed = True
+        if filtered is not None and filtered.rays[index].kind == "self":
+            continue
         angle = scan.sensor_yaw + scan.angle_min + index * scan.angle_increment
         x = scan.sensor_x + distance * math.cos(angle)
         y = scan.sensor_y + distance * math.sin(angle)

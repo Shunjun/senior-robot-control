@@ -43,8 +43,9 @@ def request_once(run_id: str, request: Request) -> Reply:
 
 
 class LearningClient:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path, self.run_id = path, path.name.removeprefix(".startup-learning-")
+        self.read_only = read_only
         self._commands: queue.Queue[Request] = queue.Queue(maxsize=16)
         self._replies: queue.Queue[tuple[Request, Reply]] = queue.Queue(maxsize=16)
         self._stop = threading.Event()
@@ -52,7 +53,7 @@ class LearningClient:
         self._record: LearningRecord | None = None
         self._revision: int | None = None
         self._action_ready = False
-        self._attaching = True
+        self._attaching = not read_only
         self.view: LearningFilterView | None = None
         self.error: str | None = None
         self._complete_wait = False
@@ -62,19 +63,30 @@ class LearningClient:
         self._last_geometry: LearningGeometry | None = None
         self._pending_geometry: LearningGeometry | None = None
         self._last_phase: tuple[Phase, str, str | None] | None = None
+        self._pending_phase: tuple[Phase, str, str | None] | None = None
         self._thread = threading.Thread(
             target=self._run, name="learning-record-client", daemon=True
         )
         self._thread.start()
 
     def _run(self) -> None:
-        pending: Request | None = Attach()
+        pending: Request | None = State() if self.read_only else Attach()
         while not self._stop.is_set():
             if pending is None:
                 try:
                     pending = self._commands.get(timeout=0.05)
                 except queue.Empty:
-                    continue
+                    if (
+                        self.read_only
+                        and self.view is None
+                        and (
+                            self._record is None
+                            or self._record.phase not in {"failed", "unconfirmed"}
+                        )
+                    ):
+                        pending = State()
+                    else:
+                        continue
             try:
                 reply = request_once(self.run_id, pending)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -109,9 +121,11 @@ class LearningClient:
                 self._enqueue(Attach())
                 continue
             if not reply.ok:
-                self.error = reply.error or "learning_record_unavailable"
+                error = reply.error or "learning_record_unavailable"
+                if error != self.error:
+                    _LOG.warning("Learning record client unavailable: %s", error)
+                self.error = error
                 self._attaching = False
-                _LOG.warning("Learning record client unavailable: %s", self.error)
                 continue
             self.error = reply.error
             if reply.record is not None:
@@ -119,6 +133,18 @@ class LearningClient:
                     self.error = "learning_reply_run_mismatch"
                     continue
                 self._record = reply.record
+            if self.read_only:
+                record = self._record
+                if (
+                    self.view is None
+                    and record is not None
+                    and record.phase == "completed"
+                    and record.model is not None
+                    and record.geometry is not None
+                    and reply.durable_revision >= record.revision
+                ):
+                    self.view = LearningFilterView(record.model, record.geometry)
+                continue
             if isinstance(request, Attach):
                 self._session, self._attaching = reply.session, False
                 record = self._record
@@ -126,6 +152,8 @@ class LearningClient:
                     self.view = LearningFilterView(record.model, record.geometry)
                 elif self._pending_geometry is not None and self._session is not None:
                     self.geometry(self._pending_geometry)
+                if self._pending_phase is not None:
+                    self.phase(*self._pending_phase)
             if reply.revision is not None:
                 self._revision = reply.revision
             if isinstance(request, ActionReady) and reply.ready:
@@ -184,6 +212,8 @@ class LearningClient:
 
     def reserve_action(self) -> bool:
         self.poll()
+        if self.read_only:
+            return False
         if self._action_ready:
             return True
         if self._session is not None and self._revision is None and not self._reserving:
@@ -191,6 +221,8 @@ class LearningClient:
         return False
 
     def geometry(self, geometry: LearningGeometry) -> None:
+        if self.read_only:
+            return
         self._pending_geometry = geometry
         if self.view is not None:
             return
@@ -199,7 +231,10 @@ class LearningClient:
                 self._last_geometry = geometry
 
     def phase(self, phase: Phase, reason: str, segment_id: str | None = None) -> None:
+        if self.read_only:
+            return
         key = phase, reason, segment_id
+        self._pending_phase = key
         if self._session is not None and self._last_phase != key:
             if self._enqueue(
                 PhaseReport(
@@ -209,7 +244,7 @@ class LearningClient:
                 self._last_phase = key
 
     def action(self, start_ns: int, interval_ns: int, *, finished: bool) -> None:
-        if self._session is not None:
+        if not self.read_only and self._session is not None:
             self._enqueue(
                 ActionReport(
                     session=self._session,
@@ -220,7 +255,7 @@ class LearningClient:
             )
 
     def complete(self, points: tuple[tuple[float, float], ...]) -> None:
-        if self._session is not None and not self._complete_wait:
+        if not self.read_only and self._session is not None and not self._complete_wait:
             self._revision = None
             self._complete_wait = self._enqueue(Complete(session=self._session, points=points))
 

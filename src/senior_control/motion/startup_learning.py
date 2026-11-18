@@ -131,6 +131,10 @@ class StartupLearning:
             self.state, self.reason = "completed", "restored_completed_record"
             self.motion_withdrawn = True
             self._completion_pending = False
+        elif not self._record_seen and record.phase in {"failed", "unconfirmed"}:
+            self.motion_withdrawn = True
+            self.state = "interrupted"
+            self.reason = "restored_terminal_attempt_no_replay"
         elif not self._record_seen and record.action.consumed:
             self.motion_withdrawn = True
             self.state, self.reason = "validating", "consumed_action_no_replay"
