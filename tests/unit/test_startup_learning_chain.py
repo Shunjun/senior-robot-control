@@ -763,3 +763,132 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
     assert action.deadline_steady_ns == round(deadline * 1e9)
     assert rig.step(deadline + 0.05) == Velocity(0, 0)
     assert rig.run.owner.record.action == action
+
+
+def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_original_facts(
+    rig, monkeypatch
+):
+    from senior_robot import motion_core_output
+
+    start = rig.start()
+    while rig.now + 0.05 < start + 3:
+        rig.step(rig.now + 0.05, wheel=0.05)
+    rig.step(start + 3)
+    for _ in range(8):
+        rig.step(rig.now + 0.05)
+    client = rig.core._learning_client
+    assert client.view is not None and rig.core.startup.state == "completed"
+    assert rig.core.target.source == "idle"
+    # The transport fixture lacks the real client's closed-capture observation guard.
+    from senior_control.runtime.learning_client import LearningClient
+
+    monkeypatch.setattr(
+        client,
+        "observed",
+        lambda **kwargs: LearningClient.observed(
+            SimpleNamespace(
+                read_only=client.read_only, _session=client.session, _record=client.record
+            ),
+            **kwargs,
+        ),
+    )
+    calls = dict(poll=0, advance=0, decode=0, filter=0)
+
+    def counted(name, function):
+        def call(*args, **kwargs):
+            calls[name] += 1
+            return function(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(client, "poll", counted("poll", client.poll))
+    monkeypatch.setattr(rig.core.startup, "advance", counted("advance", rig.core.startup.advance))
+    monkeypatch.setattr(
+        motion_core_output,
+        "scan_observation",
+        counted("decode", motion_core_output.scan_observation),
+    )
+    monkeypatch.setattr(client.view, "filter", counted("filter", client.view.filter))
+    for _ in range(3):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert calls["poll"] >= 3  # The in-process record property also pumps replies.
+    assert calls["advance"] == 3 and calls["decode"] == calls["filter"] == 0
+    assert rig.core.startup.state == "completed" and rig.core.machine.state.task_id is None
+
+    assert rig.core.command(barrier("prepared"))
+    intent = barrier("intent")
+    intent.received_steady, intent.steady_deadline = rig.now, rig.now + 5
+    intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = 1, 0.05, 0.05
+    intent.vx = 0.05
+    assert rig.core.command(intent)
+    limit = motion_core_output.limit_velocity
+    monkeypatch.setattr(
+        motion_core_output,
+        "limit_velocity",
+        lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
+    )
+    assert rig.step(rig.now + 0.05).vx > 0
+    assert calls["decode"] == calls["filter"] == 1
+    raw = rig.core.node._scans[-1]
+    filtered = rig.core._scan_results[0][3]
+    clearance = assert_original_scan_result(rig.core, raw, filtered, rig.now)
+    assert rig.core.node.emitted[-1][3] == min(
+        rig.now + 0.15, intent.steady_deadline, clearance.deadline
+    )
+    assert rig.step(clearance.deadline + 1e-6, new_scan=False) == Velocity(0, 0)
+    assert rig.core.target.source == "manual" and rig.core.startup.state == "completed"
+
+
+def test_started_filter_failure_is_sticky_in_status_without_changing_hold(rig, monkeypatch):
+    from senior_control.vision.raw_capture import capture_from_message
+
+    start = rig.start()
+    deadline, reason = rig.core.startup.deadline, rig.core.startup.reason
+    now = rig.now + 0.05
+
+    def fail_filter(*_args, **_kwargs):
+        raise ValueError("deliberate filter boundary failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(rig.core.self_returns, "filter", fail_filter)
+        assert rig.step(now) == Velocity(0, 0)
+    assert rig.core.startup.state == "braking" and rig.core.startup.motion_withdrawn
+    assert rig.core.startup.reason == "learning_scan_unavailable"
+    assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+    selected = rig.core.node._scans[-1]
+    statuses = []
+    monkeypatch.setattr(rig.core._runtime, "status", statuses.append)
+    value = dict(
+        body="base_link",
+        reason="learning_scan_unavailable",
+        values={"timing.sampled_steady": str(now - 0.05), "timing.tick_ms": "1.2"},
+    )
+    rig.core.report_status(value)
+    assert "learning_failure" not in value["values"]
+    fact = json.loads(statuses[-1]["values"]["learning_failure"])
+    assert fact["boot"] == rig.core.boot and fact["sequence"] == rig.core.sequence
+    assert fact["now"] == now and fact["stage"] == "filter"
+    assert fact["exception"] == dict(
+        type="ValueError", message="deliberate filter boundary failure"
+    )
+    assert fact["selected_count"] == len(rig.core.node._scans)
+    assert fact["scan_generation"] is None
+    assert fact["selected"]["capture"] == json.loads(
+        json.dumps(asdict(capture_from_message(selected.message.raw_capture)))
+    )
+    assert fact["selected"]["bounded_sequence"] == selected.message.sequence
+    assert fact["selected"]["bounded_source"] == selected.message.source_epoch
+    assert fact["selected"]["measurement"] == selected.measurement_steady
+    assert fact["selected"]["receipt"] == selected.received
+    assert fact["startup"] == dict(state="moving", reason=reason, start=start, deadline=deadline)
+    assert fact["age"] == dict(band="normal", seconds=0.0)
+    assert fact["client_error"] is None and fact["record_phase"] == "moving"
+    assert len(statuses[-1]["values"]["learning_failure"].encode()) < 4096
+    original = statuses[-1]["values"]["learning_failure"]
+    assert rig.step(now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "validating" and rig.core.target.source == "idle"
+    rig.core.report_status(
+        dict(body="base_link", reason="standby", values={"timing.sampled_steady": str(now + 0.05)})
+    )
+    assert statuses[-1]["values"]["learning_failure"] == original
+    assert statuses[-1]["values"]["timing.sampled_steady"] == str(now + 0.05)

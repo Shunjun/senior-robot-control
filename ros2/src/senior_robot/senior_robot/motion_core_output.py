@@ -4,10 +4,12 @@ Wheel/independent observations remain reports, never admission certificates.
 The native transport remains the sole standard /cmd_vel Twist publisher.
 """
 
+import json
 import math
 import os
 import time
 from contextlib import ExitStack
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -86,6 +88,10 @@ class MotionCoreOutput:
             self._scan_results = [None, None]
             self._retired_learning_owner = False
             self._old_learning_owner = None
+            self._learning_stage = "poll"
+            self._learning_age = None
+            self._learning_record_phase = None
+            self._learning_failure = None
         except BaseException:
             self._resources.close()
             raise
@@ -391,11 +397,14 @@ class MotionCoreOutput:
             self._output = Velocity(0, 0)
 
     def _learning_observation(self, now):
+        self._learning_stage, self._learning_age = "poll", None
         client = self._learning_client
         if client is None:
             return None
         client.poll()
+        self._learning_stage = "record-adoption"
         record = client.record
+        self._learning_record_phase = None if record is None else record.phase
         if self._launch_recovered:
             if (
                 self._old_learning_owner is None
@@ -458,22 +467,95 @@ class MotionCoreOutput:
                     return None
             self.startup = StartupLearning(client)
             self._learning_attempt = record.attempt_id
+        self._learning_stage = "advance"
         self.startup.advance(
             self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
         )
-        if not self.startup.active and client.view is None:
+        if not self.startup.active and (
+            client.view is None or self.target.velocity == Velocity(0, 0)
+        ):
             return None
+        self._learning_stage = "selection"
         if not self.node._scans:
+            self._remember_learning_failure(now)
             self.startup.hold_motion("learning_scan_unavailable")
             return None
         raw = self.node._scans[-1]
-        age = default_policy().age(
+        self._learning_stage = "age"
+        age = self._learning_age = default_policy().age(
             measured_steady=raw.measurement_steady, received_steady=raw.received, now_steady=now
         )
         if age.band == "invalid":
+            self._remember_learning_failure(now)
             self.startup.hold_motion("scan_temporarily_unavailable")
             return None
+        self._learning_stage = "filter"
         return self._filtered_scan(raw)
+
+    def _remember_learning_failure(self, now, error=None):
+        """Keep the first motion failure until close, independently of status cadence."""
+        if not self.startup.motion_started or self._learning_failure is not None:
+            return
+        try:
+            client = self._learning_client
+            age = self._learning_age
+            fact = dict(
+                boot=self.boot,
+                sequence=self.sequence,
+                now=now,
+                stage=self._learning_stage,
+                selected_count=len(self.node._scans),
+                scan_generation=getattr(self.node, "_scan_generation", None),
+                age=None if age is None else dict(band=age.band, seconds=age.seconds),
+                exception=None
+                if error is None
+                else dict(type=type(error).__name__, message=str(error)[:256]),
+                client_error=None if client is None else client.error,
+                record_phase=self._learning_record_phase,
+                startup=dict(
+                    state=self.startup.state,
+                    reason=self.startup.reason,
+                    start=self.startup.started,
+                    deadline=self.startup.deadline,
+                ),
+            )
+            if self.node._scans:
+                raw = self.node._scans[-1]
+                m = raw.message
+                fact["selected"] = dict(
+                    bounded_source=m.source_epoch,
+                    bounded_sequence=m.sequence,
+                    raw_source=m.raw_source,
+                    measurement=raw.measurement_steady,
+                    receipt=raw.received,
+                    received_ros=raw.received_ros,
+                    stamp=raw.stamp,
+                    frame=m.frame_id,
+                    body_frame=self.node._body,
+                    sensor_to_body=(m.sensor_x, m.sensor_y, m.sensor_yaw),
+                    transform_stamp=m.transform_stamp,
+                    angle_min=m.angle_min,
+                    angle_increment=m.angle_increment,
+                    count=len(m.ranges),
+                    range_min=m.range_min,
+                    range_max=m.range_max,
+                )
+                try:
+                    fact["selected"]["capture"] = asdict(capture_from_message(m.raw_capture))
+                except Exception as exc:
+                    fact["selected"]["capture_error"] = str(exc)[:256]
+            self._learning_failure = json.dumps(fact, allow_nan=False, separators=(",", ":"))
+        except Exception as exc:
+            # Preserve the first boundary even if malformed evidence cannot be serialized.
+            self._learning_failure = json.dumps(
+                dict(
+                    boot=self.boot,
+                    sequence=self.sequence,
+                    now=now,
+                    stage=self._learning_stage,
+                    observation_error=type(exc).__name__ + ": " + str(exc)[:256],
+                )
+            )
 
     def _scan_key(self, raw):
         """Value identity survives snapshot unpickling; missing metadata only skips reuse."""
@@ -640,8 +722,9 @@ class MotionCoreOutput:
             self.revoke("expiry", now=now)
         try:
             filtered = self._learning_observation(now)
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError) as exc:
             # Learning cannot withdraw manual/navigation or suppress raw scan handling.
+            self._remember_learning_failure(now, exc)
             self.startup.hold_motion("learning_scan_unavailable")
             filtered = None
         self._startup_target(now, filtered)
@@ -768,6 +851,11 @@ class MotionCoreOutput:
         self._runtime.publish(msg)
 
     def report_status(self, value):
+        if self._learning_failure is not None:
+            value = {
+                **value,
+                "values": {**value["values"], "learning_failure": self._learning_failure},
+            }
         self._runtime.status(value)
 
     def close(self) -> None:
