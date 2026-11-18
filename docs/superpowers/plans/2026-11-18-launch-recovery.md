@@ -146,6 +146,14 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - 模块复用父生存保障后，两个相关文件定向测试 `pytest -q tests/unit/test_docker_start_helper.py tests/unit/test_launch_recovery.py` 为 12 passed、1 skipped（14.06 秒）；随后 helper 清理余量调整的文件回归为 9 passed、1 skipped（5.19 秒）。skip 为本机无 Linux SO_PEERCRED，不冒充 Linux/ROS 通过；ruff/AST/import、模块 mypy 通过，无整套回归或实机操作。
 - 最后补齐 USB 过滤器后，仅重跑 `pytest -q tests/unit/test_docker_start_helper.py -k camera_leaf` → 1 passed、9 deselected（4.86 秒）；三项改动 Python 文件的 ruff check/format 通过。提交前已亲查全部产品 diff，motion_core_output 与补点范围未改。
 
+### 设备源与非 critical 分支接线阶段
+
+- `safety_motion` 仅在 scoped GroupAction 内给厂家底盘/IMU/EKF/状态/静态 TF/超声波/雷达 include 设置精确 basename 前缀；项目四个扫描节点显式接同一前缀。已核对当前 installed 为 stm32、N10Plus，不以 LifecycleNode 类名推断设备需要生命周期激活；H30/LD/RPLidar 以补充 installed 可执行名接入。lscx 的转换 include 实际安装文本未在两份证据内，未将该条件分支视为实测覆盖。
+- mapping 的默认 SLAM/adapter 与 capture/verified 图/receipt、RGBD diagnostic 三节点、simulation_rgbd 三节点、simulation_motion 的相机及四个扫描节点分别接一次显式前缀。嵌套 include 未继承一层额外循环；safety、command、Nav2、Gazebo 环境恢复此时仍关闭。
+- 新增 live 文件中的获批 scan 场景复用 `test_scan_epoch_live._room_scan` 与既有 native receipt 可执行定位方式：隔离 ROS 域内真实 receipt SIGKILL 后接纳新 GID/boot/epoch、健康 adapter 继续产生真实 fenced 帧，并向该 adapter 回调旧 capture 确认不改变当前接纳。Linux `/proc` 残留（含 zombie）不算恢复；本机无 ROS，尚未运行该真实链。
+- 定向 `pytest -q tests/ros/test_launch_recovery_live.py tests/ros/test_mapping.py tests/unit/test_rgbd_transport_config.py` → 30 passed、2 skipped（0.12 秒），新 live 场景因无 ROS 跳过，另一项 mapping ROS 检查跳过；五个 launch 与新 live 文件 ruff check、format/AST 通过。mapping 保持原 CRLF，差异空白使用 `git -c core.whitespace=cr-at-eol diff --check` 校验，无持久 Git 配置变更。
+- 未验证 SLAM capture 目录重开、厂家条件分支话题/TF、RGBD 真实 worker 清理或扫描端到端现场恢复；不将前缀配置存在说成语义恢复完成。既有 `test_rgbd_diagnostic_launch.py` 的父 PGID/直接子进程结构断言与新前缀结构冲突，当前严格保持三个获批测试文件范围，待负责人明确如何迁移该既有断言，未隐去或冒称其通过。
+
 仅沿已列真实恢复路径验证，不追加 benchmark、全量回归或宽泛异常矩阵：
 
 1. 已确认相机崩溃路径：新 PID/原始图像/发送帧恢复、崩溃日志保留、原 Agent 与学习 run 不变。

@@ -24,6 +24,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from senior_control.runtime.launch_recovery import restart_prefix
 from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
 
@@ -163,6 +164,7 @@ def generate_launch_description():
             Node(
                 package="senior_sim",
                 executable="simulation_camera",
+                prefix=restart_prefix(),
                 condition=IfCondition(LaunchConfiguration("video_enabled")),
                 parameters=[
                     common,
@@ -177,6 +179,7 @@ def generate_launch_description():
                 Node(
                     package=package,
                     executable=executable,
+                    prefix=restart_prefix(),
                     parameters=[params, ros_sensor_parameters(), common],
                 )
                 for package, executable in (
