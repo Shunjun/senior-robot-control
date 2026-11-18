@@ -32,6 +32,16 @@ def isolated_ros():
         pytest.skip("installed recovery checks require Linux process semantics")
     rclpy.init()
     try:
+        probe = rclpy.create_node(f"launch_recovery_domain_check_{os.getpid()}")
+        try:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                rclpy.spin_once(probe, timeout_sec=0.1)
+            assert set(probe.get_node_names_and_namespaces()) == {(probe.get_name(), "/")}, (
+                "recovery tests require an otherwise empty ROS domain"
+            )
+        finally:
+            probe.destroy_node()
         yield rclpy
     finally:
         if rclpy.ok():
@@ -158,6 +168,7 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
     from senior_robot.command_node import CommandNode
+    from senior_robot.motion_lifecycle import MotionExecutor
     from std_msgs.msg import String
 
     from senior_control.protocol import SimpleEnvelope
@@ -172,7 +183,7 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     probe = isolated_ros.create_node("launch_recovery_output_probe")
     observer = SingleThreadedExecutor()
     observer.add_node(probe)
-    commands = SingleThreadedExecutor()
+    commands = MotionExecutor()
     commands.add_node(command)
     runtimes, velocities = deque(maxlen=256), deque(maxlen=256)
     probe.create_subscription(
@@ -181,7 +192,8 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
         lambda msg: runtimes.append(json.loads(msg.data)),
         qos_profile_sensor_data,
     )
-    probe.create_subscription(Twist, "/cmd_vel", velocities.append, 10)
+    output_topic = "/launch_recovery/cmd_vel"
+    probe.create_subscription(Twist, output_topic, velocities.append, 10)
     logfile = tmp_path / "critical-recovery.log"
     sequence = 0
 
@@ -234,6 +246,8 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
                 f"hardware_motion_profile:={profile}",
                 "-p",
                 "depth_policy:=laser_only",
+                "-p",
+                f"output_topic:={output_topic}",
             ],
             logfile,
         ) as wrapper:
@@ -329,7 +343,9 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
                 ),
                 wrapper,
             )
-            assert len(probe.get_publishers_info_by_topic("/cmd_vel")) == 1
+            assert len(probe.get_publishers_info_by_topic(output_topic)) == 1
+            assert not probe.get_publishers_info_by_topic("/cmd_vel")
+            assert not probe.get_subscriptions_info_by_topic("/cmd_vel")
             assert velocities and all(
                 value.linear.x == value.angular.z == 0 for value in velocities
             )
@@ -347,8 +363,8 @@ def native_navigation(isolated_ros, tmp_path):
     from lifecycle_msgs.msg import State
     from lifecycle_msgs.srv import GetState
     from nav_msgs.msg import OccupancyGrid, Odometry
-    from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+    from senior_robot.motion_lifecycle import MotionExecutor
     from sensor_msgs.msg import LaserScan
     from std_srvs.srv import Trigger
     from test_rgbd_diagnostic_launch import _child_with_argument, _group_exists
@@ -356,7 +372,7 @@ def native_navigation(isolated_ros, tmp_path):
     from tf2_ros import StaticTransformBroadcaster
 
     probe = isolated_ros.create_node("launch_recovery_nav_probe")
-    executor = SingleThreadedExecutor()
+    executor = MotionExecutor()
     executor.add_node(probe)
     map_pub = probe.create_publisher(
         OccupancyGrid,
@@ -532,12 +548,14 @@ def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(nat
     from nav2_msgs.action import NavigateToPose
     from rclpy.action import ActionClient
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from senior_robot.motion_lifecycle import with_dds_info
 
     nav = native_navigation
     statuses = deque(maxlen=128)
 
+    @with_dds_info
     def status(message, info):
-        statuses.append((bytes(info.publisher_gid), message))
+        statuses.append((bytes(info["publisher_gid"]), message))
 
     nav.probe.create_subscription(
         GoalStatusArray,

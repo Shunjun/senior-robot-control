@@ -201,3 +201,112 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - 负责人确认按用户“仿真环境人工处理”方向，取消 `ros2/src/senior_sim/launch/simulation.launch.py` 内 server/world/GUI、robot_state_publisher 和 senior_sim_bridge 的专用恢复；文件未修改，相关新产品代码与测试均未写入，无回退或撤销提交。
 - 产品 13 → **12**，总数 18 → **17**（产品 12、测试 4、文档 1）；Gazebo 候选 10 取消，新增故障场景减少一项。create/spawner 保留原单次启动退出，实车状态发布恢复、simulation_motion 的 Nav2/定位与 command IPC 成果保留。
 - Nav2 代码阶段提交为 `87b63d1ab0aae3c6d30e0fbab55f0b668a574cfc`，负责人正在亲审；真实 ROS Nav2/定位 ACTIVE 验收未完成，safety/command 恢复开关继续关闭。本次仅更新同一计划，不新增或重复测试，不自行部署/启动服务。
+
+### 续接：真实 Linux 隔离验收入口与待开放差异
+
+此处是负责人串行执行的最小入口，worker 不 SSH、不运行 ROS 节点或服务。待验收源码须另行放在 Linux 独立目录 `RECOVERY_SRC`，内容为本 worker 待验收提交；不得用车端正在运行的 editable 源目录，也不将本隔离版本混入现车 61555f8。沿用现有 Humble、厂家 underlay、项目原生消息/guard/receipt 和 `.ros-venv`；不安装任何新依赖。Nav2 包/插件缺失是验收阻塞，不能以 skip 或自行安装代替通过。
+
+在新的 bash 中设置 `RECOVERY_SRC` 为该独立源码的绝对路径；确认 87 为负责人选定的空闲 ROS 域（若占用，先改为另一空闲域），执行以下准备。临时构建只写新目录，不触碰生产 build/install 或服务：
+
+```bash
+set -e
+: "${RECOVERY_SRC:?set an independent Linux source directory first}"
+export RECOVERY_PY=/home/wheeltec/ros2_shared_dir/senior-robot-control/.ros-venv/bin/python
+export RECOVERY_PRODUCTION=/home/wheeltec/ros2_shared_dir/senior-robot-control
+source /opt/ros/humble/setup.bash
+source /home/wheeltec/wheeltec_ros2/install/setup.bash
+source "$RECOVERY_PRODUCTION/ros2/install/setup.bash"
+test "$(realpath "$RECOVERY_SRC")" != "$(realpath "$RECOVERY_PRODUCTION")"
+export RECOVERY_BUILD="$(mktemp -d /tmp/senior-launch-recovery.XXXXXX)"
+export PYTHONDONTWRITEBYTECODE=1
+export ROS_DOMAIN_ID=87
+export ROS_LOCALHOST_ONLY=1
+export SENIOR_LAUNCH_RECOVERY_LIVE=1
+unset SENIOR_STARTUP_LEARNING_CLAIM SENIOR_LAUNCH_RECOVERED SENIOR_AGENT_SOCKET SENIOR_LAUNCH_SOCKET_OWNER
+cd "$RECOVERY_SRC"
+"$RECOVERY_PY" -m colcon --log-base "$RECOVERY_BUILD/log" build \
+  --base-paths "$RECOVERY_SRC/ros2/src" --packages-select senior_robot \
+  --build-base "$RECOVERY_BUILD/build" --install-base "$RECOVERY_BUILD/install"
+source "$RECOVERY_BUILD/install/setup.bash"
+export PYTHONPATH="$RECOVERY_SRC/src:$RECOVERY_SRC/ros2/src/senior_robot${PYTHONPATH:+:$PYTHONPATH}"
+```
+
+该构建方式复用项目既有 `python -m colcon`，使入口解释器与 `.ros-venv` 一致；仅 overlay 新 senior_robot，原生包继续由现有项目 underlay 提供。本任务未修改 C++/消息/guard，不能混用不兼容的既有原生包。先只读核对依赖与源码/launch 版本，不启动任何节点：
+
+```bash
+"$RECOVERY_PY" - <<'PY'
+import importlib
+import os
+from pathlib import Path
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from rosidl_generator_py import import_type_support
+import senior_control.runtime.launch_recovery as recovery
+import senior_robot.command_node as command
+root = Path(os.environ['RECOVERY_SRC']).resolve()
+assert Path(recovery.__file__).resolve().is_relative_to(root)
+assert Path(command.__file__).resolve().is_relative_to(root)
+for module in ('pytest', 'rclpy', 'launch', 'launch_ros', 'nav2_common',
+               'lifecycle_msgs.srv', 'std_srvs.srv', 'nav2_msgs.action',
+               'action_msgs.msg', 'tf2_ros'):
+    importlib.import_module(module)
+import_type_support('senior_motion_msgs')
+for package in ('nav2_controller', 'nav2_planner', 'nav2_bt_navigator',
+                'nav2_lifecycle_manager', 'nav2_costmap_2d', 'nav2_smac_planner',
+                'nav2_mppi_controller', 'nav2_behavior_tree'):
+    print(package, get_package_prefix(package))
+for package, executable in (('senior_motion_msgs', 'final_command_guard'),
+                            ('senior_motion_msgs', 'motion_output_guard'),
+                            ('senior_motion_msgs', 'native_receipt'),
+                            ('senior_sensor_ingress', 'scan_receipt_node'),
+                            ('senior_robot', 'safety_node')):
+    path = Path(get_package_prefix(package)) / 'lib' / package / executable
+    assert os.access(path, os.X_OK), path
+share = Path(get_package_share_directory('senior_robot'))
+for name in ('navigation.launch.py', 'simulation_motion.launch.py'):
+    assert (share / 'launch' / name).read_bytes() == (
+        root / 'ros2/src/senior_robot/launch' / name).read_bytes(), name
+print('imports, native executables and candidate launch files verified')
+PY
+```
+
+先执行现有已批准 critical 真实链一项，再执行 Nav2 两项；都必须实际 passed，skip 不通过。现有 live fixture 在创建被测节点前验证 ROS 域内仅有自己的探测节点，发现其它节点立即失败。critical 使用现有 `output_topic` 参数将原生输出放在 `/launch_recovery/cmd_vel`，断言该测试话题唯一输出且全零，物理 `/cmd_vel` 无发布者/订阅者；没有 scan 供给、没有学习 claim/service。Nav2 合成 map/TF/scan，仅私有输出，无物理 `/cmd_vel` owner，目标只是已批准的旧 goal 不重发检验。
+
+```bash
+"$RECOVERY_PY" -m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py \
+  -k installed_command_guard_core_recovery
+"$RECOVERY_PY" -m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py \
+  -k native_nav2
+```
+
+获批 scan receipt 新 GID/epoch 用例若尚未在 Linux 验收，单独串行执行 `"$RECOVERY_PY" -m pytest -q -p no:cacheprovider tests/ros/test_launch_recovery_live.py -k scan_receipt_crash`；不在此重跑已有充分的三项前缀、critical 非 ROS 生产链与 socket 检查。以上命令不启动 helper/Agent/LearningService、厂家底盘或 Gazebo，不调用项目 start/stop，不改变当前服务。
+
+**尚未应用的准确接线补丁**：只在两份已批准 launch 中给三个现有 Node 加下列三行，无新配置/参数/公开 CLI。每处 `prefix=restart_prefix()` 只拥有该节点一次异常重试，正常 0/取消不复活；六秒 launch 余量允许叶五秒清理完成。safety_motion 的 helper 直接 command 不套前缀、不破坏 SO_PEERCRED。
+
+```diff
+--- ros2/src/senior_robot/launch/safety_motion.launch.py
++++ ros2/src/senior_robot/launch/safety_motion.launch.py
+@@
+             executable="safety_node",
++            prefix=restart_prefix(),
++            sigterm_timeout="6.0",
++            sigkill_timeout="1.0",
+             parameters=[runtime["safety_gate"], selected, {"robot_id": robot_id}],
+--- ros2/src/senior_robot/launch/simulation_motion.launch.py
++++ ros2/src/senior_robot/launch/simulation_motion.launch.py
+@@
+             executable="safety_node",
++            prefix=restart_prefix(),
++            sigterm_timeout="6.0",
++            sigkill_timeout="1.0",
+             parameters=[
+@@
+             executable="agent_adapter",
++            prefix=restart_prefix(),
++            sigterm_timeout="6.0",
++            sigkill_timeout="1.0",
+             name="command_node",
+```
+
+这不是验收命令一通过就无条件开放的承诺：真实 ROS 交接/清组未证实前上述补丁不落产品；复合 command/output 故障的原 estop identity 丢失仍是未完成项，不能以新显式 estop 建立新身份冒称原身份延续。另只读发现 DedicatedController 以 `start_new_session=True` 启动其私有 controller/BT，现有异常父死路径未见 parent-death 绑定；这两组不在 command 的叶 PGID 内。虽然对子进程独立监督明确不在范围，command 真退出后的既有私有 owner 清理仍须先证明。不能仅凭 launch IPC stale 清理通过就开放带导航的 command 恢复，也不能为通过验收私自把 DedicatedController 纳入新监督层或扩大文件。
+
+本轮仅修正已批准 live 场景的真实接线与隔离：Command 与 Nav2 状态探测复用生产 MotionExecutor/with_dds_info，按 Humble 现有 MessageInfo dict 取真实 publisher_gid，避免普通 executor 丢失 metadata。未新增测试场景或产品文件。本机定向这三项为 3 skipped、1 deselected（无 ROS），不表示 Linux 行为通过；本轮剩余工作明确依赖负责人运行上述隔离用例并返回实际结果，以及收口上述 command 私有退出资源/复合急停身份缺口。
