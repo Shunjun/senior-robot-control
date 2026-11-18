@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import type { TaskAction, VehiclePort } from '../../api/vehicleState';
+import type { TaskAction, VehicleFrame, VehiclePort } from '../../api/vehicleState';
 import { useVehicleView } from './useVehicleView';
+import { CalibrationPreview, CALIBRATION_PREVIEW_FRAME } from './CalibrationPreview';
 import styles from './VehicleStateView.module.css';
 export interface VehicleStateViewProps {
   port?: VehiclePort;
@@ -38,7 +39,12 @@ const ACTIONS: Record<TaskAction, string> = {
   takeover: '请求手动接管'
 };
 export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement {
-  const view = useVehicleView(port), frame = view.frame;
+  const view = useVehicleView(port);
+  // Temporary preview is only available in the disconnected demo, never with a real port.
+  const preview = import.meta.env.VITE_DEMO_DATA === '1'
+    && import.meta.env.VITE_LEARNING_PREVIEW === '1' && port === undefined;
+  const [previewFrame, setPreviewFrame] = useState<VehicleFrame>(CALIBRATION_PREVIEW_FRAME);
+  const frame = preview ? previewFrame : view.frame;
   const [now, setNow] = useState(() => performance.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(performance.now()), 1000);
@@ -53,8 +59,8 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
   const body = frame.body_reference, wheel = frame.wheel_linear_mps, task = frame.task;
   const speedBody = body && (!body.stale || wheel === null) ? body : null;
   const speed = speedBody ? speedBody.average.vx : wheel;
-  const lastMeasurement = !view.connected || !view.available || speedBody?.stale;
-  const source = speedBody
+  const lastMeasurement = !preview && (!view.connected || !view.available || speedBody?.stale);
+  const source = preview ? '本地模拟速度 · 非车辆测量' : speedBody
     ? `${speedBody.source} · ${(speedBody.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`
     : wheel !== null ? '轮速里程计' : '实际速度测量不可用';
   async function command(action: TaskAction): Promise<void> {
@@ -80,10 +86,10 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
   return <section className={styles.card} aria-label="车辆运行状态">
     <header className={styles.head}>
       <h3>{MODES[frame.mode]}</h3>
-      <span>{view.connected && view.available ? (frame.mode === 'unknown' ? '上报在线 · 状态未知' : '车端确认状态') : '最后已知 · 非实时'}</span>
+      <span>{preview ? '本地模拟 · 未连接车辆' : view.connected && view.available ? (frame.mode === 'unknown' ? '上报在线 · 状态未知' : '车端确认状态') : '最后已知 · 非实时'}</span>
     </header>
-    {!view.connected && <p className={styles.warning}>连接中断，任务可能继续；重连后查询原任务，不重新下发。</p>}
-    {view.connected && !view.available && <p className={styles.warning}>运行状态通道未更新，显示最后确认状态；连接 RTT 不代表车端已允许操作。</p>}
+    {!preview && !view.connected && <p className={styles.warning}>连接中断，任务可能继续；重连后查询原任务，不重新下发。</p>}
+    {!preview && view.connected && !view.available && <p className={styles.warning}>运行状态通道未更新，显示最后确认状态；连接 RTT 不代表车端已允许操作。</p>}
     <p>{frame.observation && frame.mode === 'unknown' ? AVAILABILITY[frame.observation.status] : frame.reason}</p>
     {frame.observation && <p>最后有效观测：{frame.observation.age_seconds === null ? '尚无' : `${(frame.observation.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`} · 急停状态{frame.confirmed_estop_status === 'unknown' ? '未知' : '已报告'}</p>}
     <div className={styles.speed}>
@@ -92,6 +98,7 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     </div>
     <p className={styles.source}>{source}{speed !== null && lastMeasurement ? ' · 已过期 / 最后测量' : ''}</p>
     <p className={styles.connection}>连接 RTT：{view.rtt_ms === null ? '—' : `${Math.round(view.rtt_ms)} ms`} · 仅作连接诊断</p>
+    {preview && <CalibrationPreview onFrameChange={setPreviewFrame} />}
     {task && <div className={styles.task}>
       <h4>当前任务 {task.task_id} · {TASKS[task.phase]}</h4>
       <p>已完成动作 {task.completed} / {task.total}{task.stopped_for ? ` · ${task.stopped_for}` : ''}</p>
