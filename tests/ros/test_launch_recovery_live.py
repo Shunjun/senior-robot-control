@@ -15,6 +15,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -337,3 +338,252 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
         observer.shutdown()
         command.destroy_node()
         probe.destroy_node()
+
+
+@pytest.fixture
+def native_navigation(isolated_ros, tmp_path):
+    """Reuse the existing synthetic map/TF/GetState bringup facility, with no simulator."""
+    from geometry_msgs.msg import TransformStamped
+    from lifecycle_msgs.msg import State
+    from lifecycle_msgs.srv import GetState
+    from nav_msgs.msg import OccupancyGrid, Odometry
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+    from sensor_msgs.msg import LaserScan
+    from std_srvs.srv import Trigger
+    from test_rgbd_diagnostic_launch import _child_with_argument, _group_exists
+    from test_scan_epoch_live import _room_scan
+    from tf2_ros import StaticTransformBroadcaster
+
+    probe = isolated_ros.create_node("launch_recovery_nav_probe")
+    executor = SingleThreadedExecutor()
+    executor.add_node(probe)
+    map_pub = probe.create_publisher(
+        OccupancyGrid,
+        "/map",
+        QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        ),
+    )
+    odom_pub = probe.create_publisher(Odometry, "/wheel/odom", 10)
+    scan_pub = probe.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
+    transforms = []
+    for parent, child in (("map", "odom"), ("odom", "base_link"), ("base_link", "laser_link")):
+        value = TransformStamped()
+        value.header.frame_id, value.child_frame_id = parent, child
+        value.transform.rotation.w = 1.0
+        transforms.append(value)
+    broadcaster = StaticTransformBroadcaster(probe)
+    broadcaster.sendTransform(transforms)
+    occupancy = OccupancyGrid()
+    occupancy.header.frame_id = "map"
+    occupancy.info.resolution = 0.05
+    occupancy.info.width = occupancy.info.height = 80
+    occupancy.info.origin.position.x = occupancy.info.origin.position.y = -2.0
+    occupancy.info.origin.orientation.w = 1.0
+    occupancy.data = [0] * (80 * 80)
+    occupancy.data[60 * 80 + 60] = 100
+    scan = _room_scan()
+    odom = Odometry()
+    odom.header.frame_id, odom.child_frame_id = "odom", "base_link"
+    odom.pose.pose.orientation.w = 1.0
+    managed = ("controller_server", "planner_server", "bt_navigator")
+    clients = {name: probe.create_client(GetState, f"/{name}/get_state") for name in managed}
+    clients["manager"] = probe.create_client(Trigger, "/lifecycle_manager_navigation/is_active")
+    states, pending = {}, {}
+    log_path = tmp_path / "nav-group.log"
+    log = log_path.open("w")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from ros2cli.cli import main; raise SystemExit(main())",
+            "launch",
+            "senior_robot",
+            "navigation.launch.py",
+            "use_sim_time:=false",
+        ],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    def tick():
+        assert process.poll() is None, log_path.read_text()
+        stamp = probe.get_clock().now().to_msg()
+        occupancy.header.stamp = odom.header.stamp = scan.header.stamp = stamp
+        map_pub.publish(occupancy)
+        odom_pub.publish(odom)
+        scan_pub.publish(scan)
+        executor.spin_once(timeout_sec=0.05)
+        assert not probe.get_publishers_info_by_topic("/cmd_vel"), log_path.read_text()
+
+    def until(predicate):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not predicate():
+            tick()
+        assert predicate(), log_path.read_text()
+
+    def reset_states():
+        for future, _ in pending.values():
+            future.cancel()
+        pending.clear()
+        states.clear()
+
+    def active():
+        for name, client in clients.items():
+            item = pending.get(name)
+            if item is not None:
+                future, sent = item
+                if future.done():
+                    result = future.result() if future.exception() is None else None
+                    states[name] = (
+                        (
+                            result.success
+                            if name == "manager"
+                            else result.current_state.id == State.PRIMARY_STATE_ACTIVE
+                        )
+                        if result
+                        else False
+                    )
+                    del pending[name]
+                elif time.monotonic() - sent > 1:
+                    future.cancel()
+                    del pending[name]
+                    states[name] = False
+            if name not in pending and client.service_is_ready():
+                request = Trigger.Request() if name == "manager" else GetState.Request()
+                pending[name] = client.call_async(request), time.monotonic()
+        return len(states) == 4 and all(states.values())
+
+    tracked = {}
+
+    def birth(pid):
+        try:
+            # Match the lifetime before any failure-path signal, not a reused PID.
+            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        except FileNotFoundError:
+            return None
+
+    def pids():
+        values = {
+            name: _child_with_argument(process.pid, ("/" + name).encode())
+            for name in (*managed, "lifecycle_manager")
+        }
+        for pid in values.values():
+            if pid is not None and (identity := birth(pid)) is not None:
+                tracked[pid] = identity
+        return values
+
+    try:
+        until(active)
+        until(lambda: all(pids().values()))
+        yield SimpleNamespace(
+            probe=probe,
+            tick=tick,
+            until=until,
+            active=active,
+            reset=reset_states,
+            pids=pids,
+            log=log_path,
+        )
+    finally:
+        reset_states()
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        try:
+            assert process.wait(timeout=15) == 0, log_path.read_text()
+            assert not _group_exists(process.pid), log_path.read_text()
+            assert "replacement refused" not in log_path.read_text()
+            assert all(birth(pid) != identity for pid, identity in tracked.items()), (
+                log_path.read_text()
+            )
+        finally:
+            for pid, identity in tracked.items():
+                if birth(pid) == identity:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+            log.close()
+            executor.shutdown()
+            probe.destroy_node()
+
+
+def test_native_nav2_server_crash_reconnects_active_without_rebuilding_manager(native_navigation):
+    nav = native_navigation
+    before = nav.pids()
+    os.kill(before["planner_server"], signal.SIGKILL)
+    nav.until(lambda: nav.pids()["planner_server"] not in (None, before["planner_server"]))
+    nav.reset()
+    nav.until(nav.active)
+    assert nav.pids()["lifecycle_manager"] == before["lifecycle_manager"]
+    assert nav.pids()["controller_server"] == before["controller_server"]
+    assert not Path(f"/proc/{before['planner_server']}").exists()
+
+
+def test_native_nav2_manager_crash_cleans_old_group_and_does_not_replay_goal(native_navigation):
+    from action_msgs.msg import GoalStatusArray
+    from nav2_msgs.action import NavigateToPose
+    from rclpy.action import ActionClient
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+    nav = native_navigation
+    statuses = deque(maxlen=128)
+
+    def status(message, info):
+        statuses.append((bytes(info.publisher_gid), message))
+
+    nav.probe.create_subscription(
+        GoalStatusArray,
+        "/navigate_to_pose/_action/status",
+        status,
+        QoSProfile(
+            depth=10,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        ),
+    )
+    action = ActionClient(nav.probe, NavigateToPose, "/navigate_to_pose")
+    nav.until(action.server_is_ready)
+    goal = NavigateToPose.Goal()
+    goal.pose.header.frame_id = "map"
+    goal.pose.pose.position.x, goal.pose.pose.orientation.w = 0.4, 1.0
+    sending = action.send_goal_async(goal)
+    nav.until(sending.done)
+    accepted = sending.result()
+    assert accepted.accepted
+    goal_id = bytes(accepted.goal_id.uuid)
+    nav.until(
+        lambda: any(
+            bytes(item.goal_info.goal_id.uuid) == goal_id
+            for _, message in statuses
+            for item in message.status_list
+        )
+    )
+    before = nav.pids()
+    os.kill(before["lifecycle_manager"], signal.SIGKILL)
+    nav.until(lambda: nav.pids()["lifecycle_manager"] not in (None, before["lifecycle_manager"]))
+    assert all(not Path(f"/proc/{pid}").exists() for pid in before.values())
+    nav.reset()
+    nav.until(nav.active)
+    nav.until(
+        lambda: len(nav.probe.get_publishers_info_by_topic("/navigate_to_pose/_action/status")) == 1
+    )
+    publisher = bytes(
+        nav.probe.get_publishers_info_by_topic("/navigate_to_pose/_action/status")[0].endpoint_gid
+    )
+    for _ in range(20):
+        nav.tick()
+    assert not any(
+        bytes(item.goal_info.goal_id.uuid) == goal_id
+        for gid, message in statuses
+        if gid == publisher
+        for item in message.status_list
+    )
+    action.destroy()

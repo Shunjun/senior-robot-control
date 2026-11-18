@@ -4,7 +4,7 @@
 
 **Goal:** 项目入口启动的所有长驻 launch 节点异常退出后自动恢复；正常完成、主动关闭和已取消的导航执行不被重新启动。
 
-**Architecture:** 保持现有 launch、厂家 include 和模块 owner，优先使用 ROS launch 的进程、退出事件、停机与延迟机制；仅以一个小型进程前缀适配模块补足厂家 include 内部的异常退出筛选。Nav2 生命周期组和 Gazebo 环境组按各自 owner 恢复，控制侧仅补启动代次交接，不扩展到内部子进程监督。
+**Architecture:** 保持现有 launch、厂家 include 和模块 owner，优先使用 ROS launch 的进程、退出事件、停机与延迟机制；仅以一个小型进程前缀适配模块补足厂家 include 内部的异常退出筛选。Nav2 生命周期组按现有 manager owner 恢复；Gazebo server/world/GUI 热恢复已由用户取消，控制侧仅补启动代次交接，不扩展到内部子进程监督。
 
 **Tech Stack:** Python 3.10+、ROS 2 Humble launch/launch_ros、现有 Nav2 lifecycle manager、Fortress/ros_gz_sim；不新增依赖、公开 CLI 或平台。
 
@@ -32,7 +32,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 - `restart_prefix() -> str`：使用当前 launch 解释器的绝对 `sys.executable`，经 `shlex.join` 生成 `python -m senior_control.runtime.launch_recovery -- <原节点命令>` 前缀；不调用 PATH 中不确定的 `python` 或 `ros2`。
 - `run_node(command: list[str]) -> int`：只接管传入的一个长驻进程及其退出清理；子进程异常非零时记录实际 PID/返回码/尝试次数，回收旧子进程组后固定等待 2 秒再启动；返回 0 则结束，不再复活。stderr/stdout 继承 ROS 日志，不能吞掉原崩溃信息。
-- 私有组运行入口仅供下述两个 launch 自身调用：使用 `LaunchService`、`IncludeLaunchDescription`、`OnProcessExit`、`Shutdown` 管理既有组，并把指定 owner 的异常退出转换成组异常结果；无通用服务注册、持久调度器或配置平台。
+- 私有组运行入口仅供 navigation 与 simulation_motion 定位分支自身调用：使用 `LaunchService`、`IncludeLaunchDescription`、`OnProcessExit`、`Shutdown` 管理既有组，并把指定 owner 的异常退出转换成组异常结果；无通用服务注册、持久调度器或配置平台。
 - 包含停止标志和单一重试等待：收到父 launch 的 SIGINT/SIGTERM 先取消等待，再转发/回收，停止标志置位后不启动替代进程；组恢复同样先停止、等待旧组完全退出，再延迟启动新组。取消发生在延迟结束/创建进程之间时，再检查停止标志，并回收已创建但尚未交付的进程。
 - 私有子进程组的退出上限须短于现有 helper 的 10 秒清理期限；不能只等 leader 退出就认为旧组已消失。此处清理是 launch 节点替换所必需的资源释放，不是对子进程另加故障监督。
 - 只有该节点的第二次及以后启动带内部环境标记 `SENIOR_LAUNCH_RECOVERED=1`，初次启动不带；不更换 `SENIOR_STARTUP_LEARNING_CLAIM`。
@@ -60,15 +60,15 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 | simulation_rgbd | 原 simulation_motion + `raw_receipt_node`、`depth_ingress`、`semantic_ingress` | 各自长驻前缀；嵌套入口不重复叠前缀 |
 | simulation_motion | `scan_adapter`、`scan_motion_node`、`scan_receipt_node`、`safety_scan_ingress`；可选 `simulation_camera`；`agent_adapter`（名 command_node） | 长驻前缀；command 重启不保留旧 lease/RouteService，不重建旧 goal；safety 和 command 不作为一个组重启 |
 | simulation_motion 可选定位 | `map_server`、`amcl`、`lifecycle_manager_localization` | 与 navigation 同样的本定位生命周期组，恢复到 ACTIVE 才算完成 |
-| senior_sim/simulation | ros_gz_sim 的 server/可选 GUI、`robot_state_publisher`、`senior_sim_bridge` | server 属环境组；桥、状态发布者独立恢复；GUI 独立退出不复制 server |
-| senior_sim/simulation 单次工具 | `create`、`joint_state_broadcaster` spawner、`drive` spawner；xacro/world_reference 生成 | 正常成功不复活；仅在新环境组初始化时各执行一次，异常恢复限于仍有效的该次初始化，关闭/取消后不重试 |
+| senior_sim/simulation | ros_gz_sim server/可选 GUI | 用户取消热恢复；原启动退出逻辑保持 |
+| senior_sim/simulation | `robot_state_publisher`、`senior_sim_bridge` | 原计划独立长驻前缀；与取消的 Gazebo world/GUI 分离，最终文件数量待该非 Gazebo 分支收口 |
+| senior_sim/simulation 单次工具 | `create`、`joint_state_broadcaster` spawner、`drive` spawner；xacro/world_reference 生成 | 保留原单次启动与退出；不新增循环或环境重建 |
 
-### Nav2 与 Gazebo 的组边界
+### Nav2 的组边界与 Gazebo 范围取消
 
 1. Nav2 server 异常：前缀恢复真实 server，使用现有 manager 的 `attempt_respawn_reconnection=true`、bond reset/startup 完成 configure/activate；采用上游已有窗口（本地源码默认 10 秒），不能据进程起来就宣称恢复。超出窗口时由同一 navigation/定位组进行一次有序重建，不另造 lifecycle 协调器。
 2. Nav2 manager 自身异常：在所属 launch 建立的独立组运行边界内结束该组，等待所有旧 server/adapter 退出，再创建全新的 manager 与成员；仍活跃的 ACTIVE server 不可直接配一个新 manager。组运行调用同一项目 launch 的内部成员分支，成员分支不再创建组运行入口，避免递归；只传原参数、不复制节点定义。正常组关闭不触发恢复。外层保留 Agent、safety、其他 launch。
-3. Gazebo server 异常：同一方式重建仅 senior_sim 环境组，等待旧 world/插件 controller_manager/drive 退出，重开 server，再按创建成功顺序执行 create → joint_state_broadcaster → drive；原来的三个单次工具无常驻重试前缀。bridge/状态发布者继续各自拥有恢复，不把健康控制链并入环境组。
-4. 实机 ros_gz_sim 安装 launch 的 server/GUI 实际进程及退出行为尚未现场核对；实施前由负责人一次性只读确定精确的 owner 匹配，不能以“任意子进程退出”重开 world。Nav2 重连超时判定复用既有 lifecycle state/service，不增加运动许可接口。
+3. **用户取消 Gazebo server/world/GUI 自动恢复**：保留原有 Gazebo include、server/GUI 启动退出及 create/spawner 单次初始化逻辑；不实现环境组、不新增对应故障场景。此前仅只读研究上游，尚未写入任何 Gazebo 专属产品或测试改动，没有需要回退的代码或提交。Nav2 重连判定仍使用既有 lifecycle state/service，不增加运动许可接口。
 
 ## critical 交接与端点清理：仅保留三个必要产品文件
 
@@ -125,7 +125,7 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 - [ ] 先完成三个 critical/端点文件的交接并验证，再开放 safety_node 与仿真 command_node 恢复；内部子进程监督保持范围外。
 - [ ] 接齐表中 mapping、RGBD、simulation_motion 所有条件分支；相同策略只接一次，单次工具无前缀。
 - [ ] 接齐 navigation/定位组：真实 server 崩溃后 native manager 恢复 ACTIVE；manager 崩溃/重连窗口耗尽时仅本组有序恢复，确认旧 goal 不重发；复用 `tests/ros/test_navigation.py` 的真实 Nav2 启动设施。
-- [ ] 接齐 Gazebo 环境组，验证 server 崩溃后只生成一个 world/实体与唯一 drive，create/spawner 各正常结束一次，不循环；GUI/桥独立恢复不复制 world。
+- [x] 用户取消 Gazebo server/world/GUI 热恢复及候选 10：未实现该恢复与新测试，保留原启动退出逻辑。
 - [ ] 负责人亲阅实际 diff 与版本对应证据后合回；本任务不执行这些步骤或自动部署。
 
 ## 最少验证候选与 Review Focus
@@ -183,3 +183,14 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 5. Gazebo server 真实崩溃：环境组恢复与初始化单次工具不循环；正常停止和退避窗口中的取消均不新启进程。
 
 这些是待负责人筛选的候选场景，不代表本次运行过或通过；不同独立输入需按实际场景计数。重点人工复核前缀解释器/日志、停止与重试竞态、Nav2 ACTIVE、estop/旧目标交接、world/单次工具 owner 五处；任何未通过处报告具体缺口，不能用局部 mock 替代实际链路，也不能以缺口为理由扩成内部子进程监督。
+
+
+### Nav2 navigation / localization 组阶段
+
+- navigation 与 simulation_motion 定位分支通过当前解释器的私有入口，使用公开 LaunchService/IncludeLaunchDescription/Shutdown 重入同一项目 launch；成员定义只保留一份，仍仅传入原参数，不新增 launch 参数、ROS 端点或依赖。原 Node 参数/条件/remapping 已按 AST 逐项比对，差异仅为恢复前缀、退出预算和显式原生重连默认值。
+- server/adapter 使用原叶前缀；manager 仅通过 exec 引导建立自身清理 PGID，不设叶重试循环。真实 manager 非零退出触发公开 Shutdown，LaunchService 等待所有旧叶退出和 manager 组清理完成，再固定退避两秒；任何叶清理失败、旧 manager PGID 残留均拒绝替代。正常零退出、外层停止、退避取消不重开；组运行复用已有 Linux 父死 SIGTERM 保障。叶清理五秒，launch 给六秒余量；外层九秒，保持 helper 十秒预算。
+- 只读标准 GetState 与 manager is_active 同时确认 ACTIVE。只有原叶模块明确记录真实非零退出后才关注 native manager 的重连窗口；窗口复用原 10 秒及原生时钟，另留原生首轮一秒。仅 pause/reset 或服务探测不确定不触发重建。崩溃前发出的查询结果不能确认本次恢复；不解析厂家警告、不接管 configure/activate。
+- 公开 API 与时钟核对来源：[Humble LifecycleManager](https://raw.githubusercontent.com/ros-navigation/navigation2/humble/nav2_lifecycle_manager/src/lifecycle_manager.cpp)、[Humble LaunchService](https://raw.githubusercontent.com/ros2/launch/humble/launch/launch/launch_service.py)、[Humble LaunchContext](https://raw.githubusercontent.com/ros2/launch/humble/launch/launch/launch_context.py)。SIGTERM 转正常 Shutdown，退出清理以公开 add_completion_future 等待；没有跨厂家私有字段或 monkeypatch。
+- 获批候选 8/9 写入同一 live 文件：复用既有 navigation 的合成 map/TF/scan 和 RGBD 进程遍历，真实 planner SIGKILL 后新 PID + ACTIVE 且 manager/健康 controller 不换；真实 manager SIGKILL 后旧节点全部消失、新组 ACTIVE，旧 goal UUID 不由新 BT writer 重发。无 /cmd_vel owner、无实车设备；Linux /proc 中 zombie 不算退出。未增加重连超时故障场景。
+- 本机没有 ROS，真实 Nav2 与定位 ACTIVE、Linux manager/叶组清理仍未验证，不能把本地收集/语法检查或进程存在当作恢复成功。此前定向 pytest navigation 配置三项通过，两项真实 Nav2 用例明确 skip；不重跑已充分的叶前缀 Mac/Linux、critical/IPC 检查。
+- Gazebo 候选 10 从本轮删除，新增故障场景减少一项；Gazebo 专属产品和测试均未写入，`senior_sim/simulation.launch.py` 目前未改。Nav2 定位与 command IPC 不属于 Gazebo world 恢复，保留。
