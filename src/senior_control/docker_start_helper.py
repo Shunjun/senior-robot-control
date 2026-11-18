@@ -268,6 +268,23 @@ def _ros_launch_command(
     ]
 
 
+def _camera_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+    from senior_control.runtime.launch_recovery import restart_prefix
+
+    prefix = restart_prefix()
+    # This is a separate launch process: the inherited prefix cannot reach
+    # motion/safety. Installed Humble matches the executable basename, not the
+    # ROS node name. Keep the vendor XML/OpaqueFunction and original argv.
+    return _ros_launch_command(
+        profile,
+        robot_id,
+        "turn_on_wheeltec_robot",
+        "wheeltec_camera.launch.py",
+        f"launch-prefix:={prefix}",
+        "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$",
+    )
+
+
 async def _verify_adapter_peer(path: Path, pid: int) -> list[int]:
     """A matching robot ID alone cannot establish ownership of a racing listener."""
     identity = _identity(path)
@@ -343,9 +360,13 @@ async def _terminate(process: asyncio.subprocess.Process | None, timeout: float)
         await process.wait()
 
 
-async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) -> None:
+async def _terminate_motion_stack(
+    process: asyncio.subprocess.Process | None, *, group_grace: float = 2, budget: float = 12
+) -> None:
     if process is None:
         return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
     # ros2 launch owns multiple required children. Signal the owned process
     # group so timeout escalation cannot leave an orphan actuator publisher.
     try:
@@ -353,7 +374,7 @@ async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) ->
     except ProcessLookupError:
         return
     try:
-        await asyncio.wait_for(process.wait(), 10)
+        await asyncio.wait_for(process.wait(), min(10, budget))
     except asyncio.TimeoutError:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -362,7 +383,7 @@ async def _terminate_motion_stack(process: asyncio.subprocess.Process | None) ->
         await process.wait()
     # A launcher can exit before its children. Its process group is still ours;
     # reap/stop survivors instead of leaving camera or actuator children behind.
-    deadline = asyncio.get_running_loop().time() + 2
+    deadline = min(deadline, loop.time() + group_grace)
     while True:
         try:
             os.killpg(process.pid, 0)
@@ -489,9 +510,7 @@ async def supervise(
             events.report("motion", "ready", "adapter verified; cloud status independent")
             try:
                 camera_stack = await asyncio.create_subprocess_exec(
-                    *_ros_launch_command(
-                        profile, robot_id, "turn_on_wheeltec_robot", "wheeltec_camera.launch.py"
-                    ),
+                    *_camera_command(profile, robot_id),
                     env=child_env,
                     start_new_session=True,
                     pass_fds=(events.writer,),
@@ -545,7 +564,9 @@ async def supervise(
                         await _terminate_motion_stack(adapter)
                         adapter = None
                     elif name == "camera":
-                        await _terminate_motion_stack(camera_stack)
+                        # Let leaf prefixes finish their bounded five-second
+                        # cleanup, including scheduling margin, before KILL.
+                        await _terminate_motion_stack(camera_stack, group_grace=6, budget=10)
                         camera_stack = None
         finally:
             if startup is not None and not startup.done():
@@ -560,7 +581,7 @@ async def supervise(
                     try:
                         await _terminate_motion_stack(motion_stack)
                     finally:
-                        await _terminate_motion_stack(camera_stack)
+                        await _terminate_motion_stack(camera_stack, group_grace=6, budget=10)
             for task in waiters:
                 if not task.done():
                     task.cancel()

@@ -130,6 +130,22 @@ Humble `ExecuteLocal` 的重启判断不检查返回码是否为 0，因此不�
 
 ## 最少验证候选与 Review Focus
 
+### 实施记录（2026-11-18）
+
+- 视频隔离工作区从 `d670323` 正常 fast-forward merge 到冻结基线 `cdbeeea`，无独有提交或冲突，保留视频三项提交及 `7b5a034` 补点。负责人已批准按本计划实施与选定直接测试；本文件前述“等待审阅”是计划创建时的状态。
+- 首个阶段仅新增独立 `launch_recovery` 前缀模块和获批的三个真实子进程测试：SIGSEGV 后固定 2 秒恢复/第二轮正常退出不复活、退避取消、旧进程组完整清理及停止回收。模块不导入 ROS、不改学习 claim，不开放任何产品 launch 恢复开关；相机接线等待负责人提供 installed prefix/递归 include 证据。
+- 本地 macOS Python 3.12 的独立非运动子进程验证不代表 Humble installed launch 或相机现场通过；Nav2 ACTIVE、critical 交接、Gazebo 组及实机图像恢复均尚未实现/验收。
+- 阶段命令使用现有仓库 `.venv/bin/python` 并设置 `PYTHONPATH=src`：`-m pytest -q tests/unit/test_launch_recovery.py` → 3 passed（9.37 秒）；两个新文件 `ruff check`、`ruff format --check`、AST/import 检查通过，产品模块 `mypy --follow-imports=skip` 通过。只运行获批的三个新增场景，无实机/ROS/服务操作；尚无需迁移现有回归。
+
+### 相机接线阶段
+
+- 负责人提供的实际 installed 证据已核对：Humble `Executable` 通过公开 `launch-prefix` 与 `launch-prefix-filter` 对可执行文件 basename 做 `re.match`，显式 prefix 会覆盖继承；实际相机选择 astra，厂家 XML 的 `astra_camera_node`、两个 `republish` 和 USB `usb_cam_node_exe` 均未另设 prefix/respawn。helper 仍调用原 `wheeltec_camera.launch.py`，只给该独立 launch 传入上述三个 basename 的锚定过滤器；单次工具和 motion/safety 不受该配置影响。
+- 经负责人认可，暂不开放 camera 外层重开：父 PGID 消失不能证明叶 prefix 的独立 session 均已清理，也不能把叶清理失败误作成功。本阶段仅修复实际相机叶进程异常恢复；Nav2/Gazebo 后续使用公开 LaunchService 正常 Shutdown 管理各自组，不重复套叶节点循环。
+- 叶 prefix 复用 `child_lifetime` 的 Linux 父退出 SIGTERM 保障；这不是所有后代已退出的完成凭证，亦尚无 Linux 现场验证。helper 相机清理为叶节点五秒上限留六秒调度余量，总预算仍为十秒；未修改 helper 直接 adapter 的身份验证或启停策略。
+- 新增一个 helper 真实非运动进程场景，使用本机替代 launch/ROS readiness，验证叶进程 SIGSEGV 后新 PID、至少两秒退避、正常结束不复活、父 camera launch/Agent/motion/adapter 不重建、学习 claim 不变。它不证明 installed XML 实际启动或 Linux peer credentials；原相机外层异常恢复场景随上述范围暂缓，不能算通过。实际相机图像和发送帧恢复由负责人在获批窗口验收。
+- 模块复用父生存保障后，两个相关文件定向测试 `pytest -q tests/unit/test_docker_start_helper.py tests/unit/test_launch_recovery.py` 为 12 passed、1 skipped（14.06 秒）；随后 helper 清理余量调整的文件回归为 9 passed、1 skipped（5.19 秒）。skip 为本机无 Linux SO_PEERCRED，不冒充 Linux/ROS 通过；ruff/AST/import、模块 mypy 通过，无整套回归或实机操作。
+- 最后补齐 USB 过滤器后，仅重跑 `pytest -q tests/unit/test_docker_start_helper.py -k camera_leaf` → 1 passed、9 deselected（4.86 秒）；三项改动 Python 文件的 ruff check/format 通过。提交前已亲查全部产品 diff，motion_core_output 与补点范围未改。
+
 仅沿已列真实恢复路径验证，不追加 benchmark、全量回归或宽泛异常矩阵：
 
 1. 已确认相机崩溃路径：新 PID/原始图像/发送帧恢复、崩溃日志保留、原 Agent 与学习 run 不变。
