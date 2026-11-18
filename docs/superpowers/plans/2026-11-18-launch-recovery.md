@@ -356,3 +356,9 @@ PY
 - 仅在既有 native_navigation live fixture 中读取生产参数副本，明确命名临时 `test-only-nav2-mppi-1.1.9.yaml` 并带“仅隔离恢复测试”注释，经既有 parameters 入口使用。只将不支持的 CostCritic 选择/参数块替换为已安装 ObstaclesCritic 的上述真实评分默认；不映射 CostCritic 权重。保留项目原有 consider_footprint=true 的碰撞模式，inflation 从同一原参数 local_costmap 读取为 .35/3；其余速度、footprint、TF、传感话题、controller/planner/BT 及 launch 参数不变。
 - 0.10 来自厂家旧 critic 评分默认，仅用于无底盘合成场景；不是新安全框、停车资格或产品避障修改。正式 nav2.yaml 未改、未升级依赖，当前默认生产导航仍因缺少 CostCritic 不可启动；此配置未来通过也只验证该临时参数下两个既有恢复场景，不表示算法等价或生产导航通过。
 - 本机仅对两项受影响 live 场景收集为 2 skipped / 2 deselected（无 ROS，0.03 秒）。另外直接执行同一 fixture 的参数生成代码，YAML roundtrip 成功；恢复原 CostCritic 选择/参数后整个结构与生产原 YAML 完全一致，确认只有该 critic 区域不同。ruff/格式/差异检查通过；不重复已通过 critical 或原前缀/IPC 检查，不新增用例或跟踪配置文件，范围仍 18 文件。负责人亲审后仅运行此前两项 Nav2 初始化失败场景。
+
+### Linux 定向退出回收当前结果
+
+- 负责人亲阅 `a0b8309` 的实际诊断 diff 后，在独立 Linux 源码、各自 TemporaryDirectory 中直接调用现有同步父死函数及 asyncio.run 现有 async 取消函数：**DIRECT_RESULTS passed2 / failed[]，exit=0**。没有安装 pytest async 插件、没有改现场测试或生产服务；两台替身进程已回收，本次严格 exit=0 与 SIGTERM 标记、启动取消/parent 不匹配检查通过。
+- 保留 `819f2ec` 那次未知非正常 wait 状态失败：后续一次通过没有解释此前原因，诊断修正也不是产品信号策略修复，不据此宣称产品退出路径稳定或所有真实 Nav2 native 退出已验收。不会为该未知失败重复跑循环或扩大矩阵。
+- 临时 MPPI 1.1.9 fixture 代码提交 `6b9340468847f26bca5f24cb851b78adf1fb3ad7` 已交负责人，待仅重跑原 Nav2 两项；上述退出回收与 `8da12b9` critical 已有充分结果，不因文档记录或临时参数变更重复跑。safety/仿真 command 前缀仍未开放，复合急停 identity 延续缺口保持。
