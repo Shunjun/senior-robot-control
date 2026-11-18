@@ -25,7 +25,6 @@ from senior_control.runtime.learning_client import LearningClient
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.startup_visibility import startup_visibility
 from senior_control.sensors.policy import default_policy
-from senior_control.vision.raw_capture import capture_from_message
 from senior_robot.final_command_frame import PAYLOAD_FIELDS
 from senior_robot.motion_core_perception import (
     avoidance_observation,
@@ -81,7 +80,9 @@ class MotionCoreOutput:
                 None if self._launch_recovered else self._learning_client
             )
             self.self_returns = None
-            self._learning_geometry = self._learning_scan_key = None
+            self._learning_geometry = None
+            self._retired_learning_owner = False
+            self._old_learning_owner = None
         except BaseException:
             self._resources.close()
             raise
@@ -378,6 +379,7 @@ class MotionCoreOutput:
         return True
 
     def _interrupt_learning(self, reason, now):
+        self.startup._last_now = now
         self.startup.interrupt(reason)
         if self.machine.state.task_id == self.boot:
             self._event(K.TASK_RETIRED, now, self.boot)
@@ -390,6 +392,69 @@ class MotionCoreOutput:
         if client is None:
             return None
         client.poll()
+        record = client.record
+        if self._launch_recovered:
+            if (
+                self._old_learning_owner is None
+                and record is not None
+                and record.expected_output_boot_id != self.boot
+            ):
+                # Pin the observed old assignment before reporting its loss. A
+                # later State reply/new manual attempt cannot retarget this fact.
+                self._old_learning_owner = record
+            if (
+                not self._recovery_pending
+                and not self._retired_learning_owner
+                and self._old_learning_owner is not None
+            ):
+                self._retired_learning_owner = client.retire_motion_owner(
+                    self._old_learning_owner, self.boot
+                )
+        if (
+            self._launch_recovered
+            and record is not None
+            and record.expected_output_boot_id != self.boot
+        ):
+            # Preserve launch history and initial read-only observation; never
+            # adopt a consumed predecessor or reopen automatic startup.
+            pass
+        elif record is not None and getattr(self, "_learning_attempt", None) != record.attempt_id:
+            needs_admission = (
+                record.trigger == "manual"
+                and not record.action.consumed
+                and record.phase not in {"completed", "failed", "unconfirmed"}
+                and record.capture_summary.state != "complete"
+            )
+            if needs_admission:
+                # An observed candidate is not an executable/adopted session.
+                self.startup = StartupLearning(None)
+                proposal = client.proposal
+                permitted = (
+                    not self._recovery_pending
+                    and proposal is not None
+                    and proposal.output_boot_id == self.boot
+                    and time.monotonic() < proposal.deadline_steady
+                    and proposal.owner_boot_id == self._input_boot
+                    and proposal.generation == self.output_generation
+                    and self.target.source == "idle"
+                    and self.sensors.stationary(now)
+                    and self.machine.state.mode
+                    not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+                )
+                if permitted:
+                    if not client.bind_attempt(
+                        record.attempt_id, self.boot, self.output_generation
+                    ):
+                        return None
+                    self._manual_learning_request = proposal
+                    client.accept_attempt(True, "accepted")
+                else:
+                    if not client.decline_attempt(record, self.boot, "control_source_changed"):
+                        return None
+                    self._learning_attempt = record.attempt_id
+                    return None
+            self.startup = StartupLearning(client)
+            self._learning_attempt = record.attempt_id
         self.startup.advance(
             self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
         )
@@ -425,30 +490,42 @@ class MotionCoreOutput:
         if geometry != self._learning_geometry:
             if self._learning_geometry is not None:
                 self.startup.hold_motion("scan_or_body_geometry_changed")
-                self.startup.evidence_gap("scan_or_body_geometry_changed")
             self._learning_geometry = geometry
             self.self_returns = SelfReturnModel(geometry.physical_polygon)
-        capture = capture_from_message(m.raw_capture)
-        key = (capture.bridge_boot_id, capture.source_epoch, capture.sequence)
-        if key != self._learning_scan_key:
-            self._learning_scan_key = key
-            self.startup.frame(self.self_returns, observation, capture=capture)
         return self.self_returns.filter(observation, provisional=self.startup.provisional)
 
     def _startup_target(self, now, observation):
-        if self._launch_recovered:
+        if self._launch_recovered and getattr(self, "_manual_learning_request", None) is None:
             return
         if self.target.source not in {"idle", "startup_learning"}:
             return
-        if not self.startup.active:
+        if not self.startup.active or (
+            self.startup.deadline is not None and now >= self.startup.deadline
+        ):
             if self.target.source == "startup_learning":
-                self._interrupt_learning(self.startup.reason, now)
+                if self.machine.state.task_id == self.boot:
+                    self._event(K.TASK_RETIRED, now, self.boot)
+                self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
+                self._output = Velocity(0, 0)
             return
         if self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
             return
         if not self.node._command_topology_ready():
             if self.startup.motion_started:
                 self._interrupt_learning("command_topology_unqualified", now)
+            return
+        proposal = getattr(self, "_manual_learning_request", None)
+        if (
+            proposal is not None
+            and not self.startup.motion_started
+            and (
+                now >= proposal.deadline_steady
+                or proposal.output_boot_id != self.boot
+                or proposal.owner_boot_id != self._input_boot
+                or proposal.generation != self.output_generation
+            )
+        ):
+            self._interrupt_learning("control_source_changed", now)
             return
         velocity = self.startup.velocity
         reason = self.startup.reason
@@ -567,9 +644,12 @@ class MotionCoreOutput:
         if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
             output = self._output = Velocity(0, 0)
             reason = "learning_output_expired"
-            self.startup.hold_motion(reason)
-            if not self.startup.active:
-                self._interrupt_learning(self.startup.reason, now)
+            # Before this owner's first successful submission, discard only the
+            # expired frame. Keep its grant; the next tick must compute a new frame.
+            if self.startup.motion_started:
+                self.startup.hold_motion(reason)
+                if not self.startup.active:
+                    self._interrupt_learning(self.startup.reason, now)
         submitted = self.node._emit_motion_core(
             output, reason, output_deadline, computed_steady=now
         )

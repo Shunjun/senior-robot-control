@@ -5,7 +5,13 @@ import os
 import stat
 from pathlib import Path
 
-from senior_control.motion.learning_record import MAX_RECORD_BYTES, LearningRecord, parse_record
+from senior_control.motion.learning_record import (
+    MAX_RECORD_BYTES,
+    LearningRecord,
+    ProgramManifest,
+    parse_manifest,
+    parse_record,
+)
 
 
 def read_record(path: Path) -> LearningRecord:
@@ -16,7 +22,7 @@ def read_record(path: Path) -> LearningRecord:
         return parse_record(file.read(MAX_RECORD_BYTES + 1))
 
 
-def write_record(path: Path, record: LearningRecord) -> int:
+def write_record(path: Path, record: LearningRecord | ProgramManifest) -> int:
     """Commit complete data and its directory entry before acknowledging revision."""
     payload = record.to_bytes()
     directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -62,3 +68,19 @@ class RecordWriterLock:
         if self.fd >= 0:
             os.close(self.fd)
             self.fd = -1
+
+
+def read_manifest(path: Path) -> ProgramManifest:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ValueError("learning_manifest_not_regular")
+        return parse_manifest(file.read(MAX_RECORD_BYTES + 1))
+
+
+def attempt_path(path: Path, attempt_id: str) -> Path:
+    import re
+
+    if re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None:
+        raise ValueError("learning_attempt_identity")
+    return path.with_name(path.name + ".attempt-" + attempt_id)

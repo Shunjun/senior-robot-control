@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import time
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -112,8 +113,52 @@ class LearnedCatalog(FrozenFact):
         return tuple(anchor.point for anchor in self.anchors)
 
 
+class CaptureSummary(FrozenFact):
+    state: Literal["open", "complete", "incomplete"] = "open"
+    stream_id: RunId | None = None
+    through_index: Nonnegative = 0
+    validation_after_steady_ns: Nonnegative | None = None
+    closed_steady_ns: Nonnegative | None = None
+    accepted_frames: Nonnegative = 0
+    compute_complete: bool = False
+
+
+class ActiveReference(FrozenFact):
+    attempt_id: RunId
+    model_id: RunId
+    record_revision: Nonnegative
+
+
+class ProgramManifest(FrozenFact):
+    schema_version: Literal[2] = 2
+    run_id: RunId
+    owner_epoch: RunId
+    revision: Nonnegative = 0
+    latest_attempt_id: RunId
+    active_revision: Nonnegative = 0
+    active_ref: ActiveReference | None = None
+
+    def to_bytes(self) -> bytes:
+        return self.model_dump_json().encode()
+
+
+def attempt_identity(run_id: str, request_id: str | None = None) -> str:
+    trigger = "startup" if request_id is None else "manual:" + request_id
+    return hashlib.sha256((run_id + ":" + trigger).encode()).hexdigest()[:32]
+
+
 class LearningRecord(FrozenFact):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
+    attempt_id: RunId
+    # Immutable motion assignment; distinct from the disk owner and successor Core boot.
+    motion_owner_id: RunId
+    motion_generation: Nonnegative = 0
+    expected_output_boot_id: RunId | None = None
+    created_steady_ns: Nonnegative = Field(default_factory=time.monotonic_ns)
+    trigger: Literal["startup", "manual"] = "startup"
+    start_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    request_fingerprint: str | None = Field(default=None, max_length=64)
+    capture_summary: CaptureSummary = CaptureSummary()
     run_id: RunId
     clock_domain: str = Field(min_length=1, max_length=256)
     owner_epoch: RunId
@@ -163,3 +208,10 @@ def parse_record(data: bytes) -> LearningRecord:
     # JSON decoding keeps strict primitive types while accepting JSON arrays for
     # immutable tuple fields; the first pass rejects duplicate keys explicitly.
     return LearningRecord.model_validate_json(data)
+
+
+def parse_manifest(data: bytes) -> ProgramManifest:
+    if len(data) > MAX_RECORD_BYTES:
+        raise ValueError("learning_manifest_size")
+    json.loads(data, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+    return ProgramManifest.model_validate_json(data)

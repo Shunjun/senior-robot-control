@@ -1,4 +1,4 @@
-import { decodeVehicleFrame, VEHICLE_REQUEST_TYPES, type VehicleFrame, type VehicleRequestType } from "./vehicleState";
+import { decodeLearningStart, decodeLearningStatus, decodeVehicleFrame, VEHICLE_REQUEST_TYPES, type VehicleFrame, type VehicleRequestType } from "./vehicleState";
 // Mirror of src/senior_control/protocol.py and src/senior_control/errors.py (wire format v1).
 // The lists below are hand-mirrored; devices.test.tsx parses the Python sources and fails when
 // a request type, error code, envelope field or snapshot field drifts apart.
@@ -453,8 +453,14 @@ function parseResponsePayload(value: unknown): ResponsePayload | null {
   if (operationId !== null && typeof operationId !== "string") return null;
   const data = value["data"];
   if (typeof requestType !== "string") return null;
+  if (value["ok"] && requestType.startsWith("learning.")) {
+    try {
+      if (requestType === "learning.start") decodeLearningStart(value["data"]);
+      else decodeLearningStatus(value["data"]);
+    } catch { return null; }
+  }
   const typed = VEHICLE_REQUEST_TYPES.includes(requestType) || requestType === "control.acquire" || requestType === "control.release";
-  const expectsData = (isWorkspaceRequestType(requestType) || requestType.startsWith("settings.") || requestType === "control.acquire") && value["ok"];
+  const expectsData = (isWorkspaceRequestType(requestType) || (requestType.startsWith("settings.") || requestType.startsWith("learning.")) || requestType === "control.acquire") && value["ok"];
   //Compatible: older navigation and non-task operation.query replies omit lifecycle data.
   const optionalTask = requestType === "navigation.goal" || requestType === "navigation.return_home" || requestType === "operation.query";
   if (optionalTask) {

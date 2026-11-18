@@ -342,3 +342,19 @@ it('sends scoped stop over the authenticated socket without retiring ownership',
     client.disconnect();
   }
 });
+
+it('puts the calibration request id in the real envelope and validates its private reply', async () => {
+  const { client, socket } = await connected();
+  try {
+    const next = snapshot();
+    next.payload.vehicle_ui = runtime({ sequence: 2, capabilities: ['runtime.v1', 'learning.v1'] });
+    socket.receive(next);
+    const result = client.vehicle.learningStart('original-calibration', 0);
+    const sent = socket.sent.at(-1)!;
+    expect(sent).toMatchObject({ type: 'learning.start', request_id: 'original-calibration',
+      payload: { expected_active_revision: 0, expected_authority_id: null } });
+    respond(socket, sent, { start_request_id: 'original-calibration', attempt_id: 'a'.repeat(32), state: 'accepted' });
+    expect((await result).state).toBe('accepted');
+    expect(socket.sent.filter(frame => frame.type === 'learning.start')).toHaveLength(1);
+  } finally { client.disconnect(); }
+});

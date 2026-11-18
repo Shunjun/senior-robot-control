@@ -10,51 +10,49 @@ from typing import Literal
 
 _LOG = logging.getLogger(__name__)
 _CLAIM = r"\.startup-learning-[0-9a-f]{32}"
-_SUFFIXES = ("", ".pending", ".features.json", ".features.json.pending", ".owner.lock")
 _GENERATED_FILE = re.compile(
-    rf"(?P<claim>{_CLAIM})(?:\.pending|\.owner\.lock|\.features\.json(?:\.pending)?)?"
+    rf"(?P<claim>{_CLAIM})"
+    r"(?:\.attempt-[0-9a-f]{32}(?:\.pending)?|\.pending|\.owner\.lock|\.features\.json(?:\.pending)?)?"
 )
 
 
 def _remove_old_files(directory: int, root: Path, current_name: str) -> None:
+    groups: dict[str, list[str]] = {}
     with os.scandir(directory) as entries:
         for entry in entries:
             match = _GENERATED_FILE.fullmatch(entry.name)
-            if match is None or match["claim"] == current_name:
-                continue
-            name = match["claim"]
-            lock_fd = -1
+            if match is not None and match["claim"] != current_name:
+                groups.setdefault(match["claim"], []).append(entry.name)
+    for name, generated in groups.items():
+        lock_fd = -1
+        try:
             try:
+                lock_fd = os.open(
+                    name + ".owner.lock",
+                    os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=directory,
+                )
+            except FileNotFoundError:
+                pass
+            if lock_fd >= 0:
+                if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                    raise ValueError("old learning owner lock is not regular")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # All old attempt files share this one owner lock; remove that inode last.
+            for candidate in sorted(generated, key=lambda value: value.endswith(".owner.lock")):
                 try:
-                    lock_fd = os.open(
-                        name + ".owner.lock",
-                        os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
-                        dir_fd=directory,
-                    )
+                    info = os.stat(candidate, dir_fd=directory, follow_symlinks=False)
+                    if stat.S_ISREG(info.st_mode):
+                        os.unlink(candidate, dir_fd=directory)
                 except FileNotFoundError:
-                    pass  # Old fixed-marker runs had no writer lock.
-                if lock_fd >= 0:
-                    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
-                        raise ValueError("old learning owner lock is not regular")
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # Lock inode is removed last, after all record/temporary files.
-                for suffix in _SUFFIXES:
-                    candidate = name + suffix
-                    try:
-                        info = os.stat(candidate, dir_fd=directory, follow_symlinks=False)
-                        if stat.S_ISREG(info.st_mode):
-                            os.unlink(candidate, dir_fd=directory)
-                    except FileNotFoundError:
-                        continue
-                    except OSError as exc:
-                        _LOG.warning(
-                            "Learning cleanup cannot remove %s/%s: %s", root, candidate, exc
-                        )
-            except (OSError, ValueError) as exc:
-                _LOG.warning("Learning cleanup preserving %s/%s: %s", root, name, exc)
-            finally:
-                if lock_fd >= 0:
-                    os.close(lock_fd)
+                    continue
+                except OSError as exc:
+                    _LOG.warning("Learning cleanup cannot remove %s/%s: %s", root, candidate, exc)
+        except (OSError, ValueError) as exc:
+            _LOG.warning("Learning cleanup preserving %s/%s: %s", root, name, exc)
+        finally:
+            if lock_fd >= 0:
+                os.close(lock_fd)
 
 
 def cleanup_old_learning_files(

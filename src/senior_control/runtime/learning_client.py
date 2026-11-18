@@ -1,41 +1,52 @@
-"""Dedicated bounded record IPC thread. Control reads snapshots without waiting."""
+"""Bounded control RPC and independent raw FIFO; neither performs learning CPU work."""
 
-import logging
+import math
 import queue
 import socket
 import threading
+import time
+from collections import deque
 from pathlib import Path
+from uuid import uuid4
 
 from senior_control.motion.learning_record import (
     MAX_RECORD_BYTES,
     LearningGeometry,
     LearningRecord,
     Phase,
+    attempt_identity,
 )
 from senior_control.runtime.learning_service import address
 from senior_control.runtime.learning_wire import (
+    AcceptAttempt,
     ActionReady,
     ActionReport,
     Attach,
-    Complete,
+    DeclineAttempt,
+    FrameBatch,
     GeometryReport,
+    MotionObservedThrough,
     PhaseReport,
+    RecordedFrame,
     Reply,
     Request,
     Reserve,
+    RetireMotionOwner,
     SessionRequest,
     State,
 )
 from senior_control.safety.learning_view import LearningFilterView
-
-_LOG = logging.getLogger(__name__)
+from senior_control.vision.raw_capture import capture_from_message
 
 
 def request_once(run_id: str, request: Request) -> Reply:
+    payload = request.model_dump_json().encode()
+    if len(payload) > MAX_RECORD_BYTES:
+        raise ValueError("learning_request_size")
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as channel:
         channel.settimeout(2)
         channel.connect(address(run_id))
-        channel.sendall(request.model_dump_json().encode())
+        channel.sendall(payload)
         raw = channel.recv(MAX_RECORD_BYTES + 1)
         if len(raw) > MAX_RECORD_BYTES:
             raise ValueError("learning_reply_truncated")
@@ -53,20 +64,22 @@ class LearningClient:
         self._record: LearningRecord | None = None
         self._revision: int | None = None
         self._action_ready = False
-        self._attaching = not read_only
-        self.view: LearningFilterView | None = None
-        self.error: str | None = None
-        self._complete_wait = False
         self._reserving = False
         self._checking_action = False
-        self._state_pending = False
-        self._last_geometry: LearningGeometry | None = None
-        self._pending_geometry: LearningGeometry | None = None
-        self._last_phase: tuple[Phase, str, str | None] | None = None
-        self._pending_phase: tuple[Phase, str, str | None] | None = None
-        self._thread = threading.Thread(
-            target=self._run, name="learning-record-client", daemon=True
-        )
+        self._attaching = not read_only
+        self.view: LearningFilterView | None = None
+        self.active_revision = 0
+        self.proposal = None
+        self.accepted_frames = 0
+        self.error: str | None = None
+        self._last_phase = None
+        self._last_geometry = None
+        self._observed: MotionObservedThrough | None = None
+        self._observed_lock = threading.Lock()
+        self._takeover_sent = False
+        self._last_stationary: bool | None = None
+        self._observed_gap = False
+        self._thread = threading.Thread(target=self._run, name="learning-control", daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
@@ -76,17 +89,28 @@ class LearningClient:
                 try:
                     pending = self._commands.get(timeout=0.05)
                 except queue.Empty:
-                    if (
-                        self.read_only
-                        and self.view is None
-                        and (
-                            self._record is None
-                            or self._record.phase not in {"failed", "unconfirmed"}
-                        )
-                    ):
+                    with self._observed_lock:
+                        pending, self._observed = self._observed, None
+                    if pending is None:
                         pending = State()
-                    else:
-                        continue
+            if isinstance(pending, State):
+                pending = State(
+                    record_attempt_id=None if self._record is None else self._record.attempt_id,
+                    record_revision=-1 if self._record is None else self._record.revision,
+                    active_revision=self.active_revision,
+                )
+            elif isinstance(pending, Attach):
+                pending = pending.model_copy(update={"active_revision": self.active_revision})
+            elif isinstance(pending, SessionRequest):
+                pending = pending.model_copy(
+                    update={
+                        "record_attempt_id": None
+                        if self._record is None
+                        else self._record.attempt_id,
+                        "record_revision": -1 if self._record is None else self._record.revision,
+                        "active_revision": self.active_revision,
+                    }
+                )
             try:
                 reply = request_once(self.run_id, pending)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -96,10 +120,8 @@ class LearningClient:
                     self._replies.put((pending, reply), timeout=0.05)
                     break
                 except queue.Full:
-                    continue
-            # A single request/reply is in flight; no command echo/retry can
-            # replay an action after an ambiguous transport failure.
-            pending = None
+                    pass
+            pending = State() if isinstance(pending, SessionRequest) and not reply.ok else None
 
     def poll(self) -> None:
         for _ in range(16):
@@ -111,79 +133,69 @@ class LearningClient:
                 continue
             if isinstance(request, ActionReady):
                 self._checking_action = False
-            elif isinstance(request, State):
-                self._state_pending = False
-            if (
-                not reply.ok
-                and isinstance(request, Attach)
-                and reply.error in {"learning_consumer_not_ready", "learning_model_not_durable"}
-            ):
-                self._enqueue(Attach())
-                continue
             if not reply.ok:
-                error = reply.error or "learning_record_unavailable"
-                if error != self.error:
-                    _LOG.warning("Learning record client unavailable: %s", error)
-                self.error = error
-                self._attaching = False
+                if isinstance(request, Attach) and reply.error in {
+                    "learning_consumer_not_ready",
+                    "learning_model_not_durable",
+                }:
+                    self._enqueue(request)
+                    continue
+                if isinstance(request, Attach):
+                    self._attaching = False
+                self.error = reply.error or "learning_record_unavailable"
                 continue
             self.error = reply.error
-            if reply.record is not None:
-                if reply.record.run_id != self.run_id:
+            incoming = reply.record
+            if (
+                incoming is None
+                and reply.active_record is not None
+                and reply.active_record.attempt_id == reply.attempt_id
+            ):
+                incoming = reply.active_record
+            if incoming is not None:
+                record = incoming
+                if record.run_id != self.run_id:
                     self.error = "learning_reply_run_mismatch"
                     continue
-                self._record = reply.record
+                changed = self._record is not None and self._record.attempt_id != record.attempt_id
+                self._record = record
+                if changed:
+                    self._takeover_sent = False
+                    self._last_stationary = None
+                    self._observed_gap = False
+                    with self._observed_lock:
+                        self._observed = None
+                    self._session = None
+                    self._revision = None
+                    self._action_ready = self._reserving = self._checking_action = False
+                    self._last_geometry = self._last_phase = None
+                    self._attaching = False
+            self.accepted_frames = reply.accepted_frames
+            self.proposal = reply.proposal
+            if reply.manifest is not None and reply.manifest.active_revision > self.active_revision:
+                active = reply.active_record
+                if active is not None and active.model is not None and active.geometry is not None:
+                    self.view = LearningFilterView(active.model, active.geometry)
+                    self.active_revision = reply.manifest.active_revision
             if self.read_only:
-                record = self._record
-                if (
-                    self.view is None
-                    and record is not None
-                    and record.phase == "completed"
-                    and record.model is not None
-                    and record.geometry is not None
-                    and reply.durable_revision >= record.revision
-                ):
-                    self.view = LearningFilterView(record.model, record.geometry)
                 continue
-            if isinstance(request, Attach):
+            if isinstance(request, Attach) and (
+                request.attempt_id is None or request.attempt_id == reply.attempt_id
+            ):
                 self._session, self._attaching = reply.session, False
-                record = self._record
-                if record is not None and record.model is not None and record.geometry is not None:
-                    self.view = LearningFilterView(record.model, record.geometry)
-                elif self._pending_geometry is not None and self._session is not None:
-                    self.geometry(self._pending_geometry)
-                if self._pending_phase is not None:
-                    self.phase(*self._pending_phase)
-            if reply.revision is not None:
+            if isinstance(request, Reserve):
                 self._revision = reply.revision
             if isinstance(request, ActionReady) and reply.ready:
                 self._action_ready = True
             if (
                 self._revision is not None
-                and not self._complete_wait
                 and not self._action_ready
-                and self._session is not None
                 and not self._checking_action
+                and self._session
             ):
                 self._checking_action = self._enqueue(
                     ActionReady(session=self._session, revision=self._revision)
                 )
-            if (
-                self._complete_wait
-                and self._record is not None
-                and self._record.model is not None
-                and reply.durable_revision >= self._revision_or_max()
-            ):
-                self._complete_wait = False
-                self.view, self._session = None, None
-                self._attaching = True
-                self._revision, self._action_ready, self._reserving = None, False, False
-                self._enqueue(Attach())
-            elif self._complete_wait and not self._state_pending:
-                self._state_pending = self._enqueue(State())
-
-    def _revision_or_max(self) -> int:
-        return self._revision if self._revision is not None else (1 << 63)
 
     def _enqueue(self, request: Request) -> bool:
         if self._stop.is_set():
@@ -192,7 +204,7 @@ class LearningClient:
             self._commands.put_nowait(request)
             return True
         except queue.Full:
-            self.error = "learning_record_client_busy"
+            self.error = "learning_control_queue_full"
             return False
 
     @property
@@ -203,39 +215,76 @@ class LearningClient:
     @property
     def ready(self) -> bool:
         self.poll()
-        return (
-            (self._session is not None or self.view is not None)
-            and not self._attaching
-            and not self._complete_wait
-            and self.error is None
-        )
+        return self._session is not None and not self._attaching and self.error is None
 
     def reserve_action(self) -> bool:
         self.poll()
-        if self.read_only:
+        if self.read_only or (
+            self._record is not None
+            and (self._record.model is not None or self._record.action.stage == "window_finished")
+        ):
             return False
         if self._action_ready:
             return True
-        if self._session is not None and self._revision is None and not self._reserving:
+        if self._session is not None and not self._reserving:
             self._reserving = self._enqueue(Reserve(session=self._session))
         return False
 
+    def bind_attempt(self, attempt_id: str, output_boot_id: str, generation: int) -> bool:
+        """Only Core's final explicit-request admission may turn observation into writing."""
+        self.poll()
+        if self._record is None or self._record.attempt_id != attempt_id:
+            return False
+        if self._session is not None:
+            return self.ready
+        if not self._attaching:
+            request = Attach(
+                attempt_id=attempt_id, output_boot_id=output_boot_id, generation=generation
+            )
+            if self._enqueue(request):
+                self.read_only = False
+                self._attaching = True
+        return False
+
+    def retire_motion_owner(self, record: LearningRecord, output_boot_id: str) -> bool:
+        return self._enqueue(
+            RetireMotionOwner(
+                attempt_id=record.attempt_id,
+                owner_epoch=record.owner_epoch,
+                motion_owner_id=record.motion_owner_id,
+                motion_generation=record.motion_generation,
+                replacement_output_boot_id=output_boot_id,
+            )
+        )
+
+    def decline_attempt(self, record: LearningRecord, output_boot_id: str, reason: str) -> bool:
+        return self._enqueue(
+            DeclineAttempt(
+                attempt_id=record.attempt_id, output_boot_id=output_boot_id, reason=reason
+            )
+        )
+
+    def accept_attempt(self, accepted: bool, reason: str) -> None:
+        if self._session and self._record:
+            self._enqueue(
+                AcceptAttempt(
+                    session=self._session,
+                    attempt_id=self._record.attempt_id,
+                    accepted=accepted,
+                    reason=reason,
+                )
+            )
+
     def geometry(self, geometry: LearningGeometry) -> None:
-        if self.read_only:
-            return
-        self._pending_geometry = geometry
         if self.view is not None:
             return
-        if self._session is not None and self._last_geometry != geometry:
+        if not self.read_only and self._session and self._last_geometry != geometry:
             if self._enqueue(GeometryReport(session=self._session, geometry=geometry)):
                 self._last_geometry = geometry
 
     def phase(self, phase: Phase, reason: str, segment_id: str | None = None) -> None:
-        if self.read_only:
-            return
         key = phase, reason, segment_id
-        self._pending_phase = key
-        if self._session is not None and self._last_phase != key:
+        if not self.read_only and self._session and self._last_phase != key:
             if self._enqueue(
                 PhaseReport(
                     session=self._session, phase=phase, reason=reason, segment_id=segment_id
@@ -244,7 +293,7 @@ class LearningClient:
                 self._last_phase = key
 
     def action(self, start_ns: int, interval_ns: int, *, finished: bool) -> None:
-        if not self.read_only and self._session is not None:
+        if not self.read_only and self._session:
             self._enqueue(
                 ActionReport(
                     session=self._session,
@@ -254,10 +303,157 @@ class LearningClient:
                 )
             )
 
-    def complete(self, points: tuple[tuple[float, float], ...]) -> None:
-        if not self.read_only and self._session is not None and not self._complete_wait:
-            self._revision = None
-            self._complete_wait = self._enqueue(Complete(session=self._session, points=points))
+    def observed(
+        self,
+        *,
+        segment_id: str,
+        now_ns: int,
+        validation_after_ns: int | None,
+        first_takeover_ns: int | None,
+        stationary: bool,
+        reason: str | None = None,
+    ) -> None:
+        if (
+            self.read_only
+            or self._session is None
+            or self._record is None
+            or self._record.capture_summary.state != "open"
+        ):
+            return
+        # Latest observation contains the immutable FIRST takeover fact, so coalescing
+        # observations cannot erase a cancellation or reorder control commands.
+        value = MotionObservedThrough(
+            session=self._session,
+            attempt_id=self._record.attempt_id,
+            segment_id=segment_id,
+            through_steady_ns=now_ns,
+            validation_after_steady_ns=validation_after_ns,
+            first_takeover_ns=first_takeover_ns,
+            reason=reason,
+            stationary=stationary,
+            gap=self._observed_gap,
+        )
+        first_takeover = first_takeover_ns is not None and not self._takeover_sent
+        if first_takeover or stationary != self._last_stationary:
+            with self._observed_lock:
+                previous, self._observed = self._observed, None
+            if previous is not None:
+                self._offer_fact(previous)
+            value = value.model_copy(update={"gap": self._observed_gap})
+            if self._offer_fact(value):
+                self._last_stationary = stationary
+                self._takeover_sent |= first_takeover
+        else:
+            with self._observed_lock:
+                self._observed = value
+
+    def _offer_fact(self, value: MotionObservedThrough) -> bool:
+        # Recording loss prevents a model, never an already-granted motion window.
+        # Keep the existing single ordered 16-entry control FIFO. Four entries
+        # remain available for reserve/action/phase records when observation facts burst.
+        if self._commands.qsize() >= 12:
+            self._observed_gap = True
+            return False
+        try:
+            self._commands.put_nowait(value)
+            return True
+        except queue.Full:
+            self._observed_gap = True
+            return False
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2.1)
+
+
+class LearningFrames:
+    """Reception-side finite original-frame recorder with one ordered sender."""
+
+    def __init__(self, path: Path, profile, body_frame: str) -> None:
+        self.run_id = path.name.removeprefix(".startup-learning-")
+        self.profile, self.body_frame = profile, body_frame
+        self._attempt = attempt_identity(self.run_id)
+        self._stream = uuid4().hex
+        self._index = 0
+        self._frames: deque[RecordedFrame] = deque()
+        self._gap = False
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="learning-raw-frames", daemon=True)
+        self._thread.start()
+
+    def mark_gap(self) -> None:
+        with self._lock:
+            self._gap = True
+
+    def offer(self, raw) -> None:
+        m = raw.message
+        capture = capture_from_message(m.raw_capture)
+        x, y = self.profile.length / 2, self.profile.width / 2
+        geometry = LearningGeometry(
+            body_frame=self.body_frame,
+            sensor_frame=m.frame_id,
+            physical_polygon=((-x, -y), (x, -y), (x, y), (-x, y)),
+            sensor_to_body=(m.sensor_x, m.sensor_y, m.sensor_yaw),
+            angle_min=m.angle_min,
+            angle_increment=m.angle_increment,
+            count=len(m.ranges),
+            range_min=m.range_min,
+            range_max=m.range_max,
+        )
+        ranges = tuple(
+            v if math.isfinite(v) else "nan" if math.isnan(v) else "inf" if v > 0 else "-inf"
+            for v in m.ranges
+        )
+        with self._lock:
+            self._index += 1
+            if len(self._frames) >= 16:
+                self._gap = True
+                return
+            self._frames.append(
+                RecordedFrame(
+                    capture=capture,
+                    recorded_steady_ns=time.monotonic_ns(),
+                    index=self._index,
+                    geometry=geometry,
+                    ranges=ranges,
+                    transform_stamp=m.transform_stamp,
+                )
+            )
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                frames = tuple(self._frames.popleft() for _ in range(min(4, len(self._frames))))
+                through = (
+                    self._frames[0].recorded_steady_ns - 1 if self._frames else time.monotonic_ns()
+                )
+                request = FrameBatch(
+                    after_index=frames[0].index - 1 if frames else self._index,
+                    attempt_id=self._attempt,
+                    stream_id=self._stream,
+                    frames=frames,
+                    gap=self._gap,
+                    through_steady_ns=through,
+                )
+            try:
+                reply = request_once(self.run_id, request)
+                if not reply.ok:
+                    raise ValueError(reply.error)
+                if (
+                    frames
+                    and reply.attempt_id == request.attempt_id
+                    and reply.through_index < frames[-1].index
+                ):
+                    raise ValueError("learning_frame_ack_incomplete")
+                if reply.attempt_id is not None and reply.attempt_id != self._attempt:
+                    with self._lock:
+                        self._attempt = reply.attempt_id
+                        self._gap = False
+            except (OSError, ValueError, RuntimeError):
+                if frames:
+                    self.mark_gap()
+            self._stop.wait(0.01 if frames else 0.05)
 
     def close(self) -> None:
         self._stop.set()

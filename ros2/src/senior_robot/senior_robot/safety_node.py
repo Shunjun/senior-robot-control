@@ -10,6 +10,7 @@ wheel transform to relabel a scan into the body frame.
 """
 
 import math
+import os
 import socket
 import subprocess
 import time
@@ -185,6 +186,16 @@ class SafetyGate(Node):
             from senior_robot.scan_gap_compensation import ScanGapCompensator
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
+            from pathlib import Path
+
+            from senior_control.runtime.learning_client import LearningFrames
+
+            claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+            self._learning_frames = (
+                self._own(LearningFrames(Path(claim), candidate_profile, self._body))
+                if claim
+                else None
+            )
             self._input_sensors = MotionSensorRuntime(
                 candidate_profile, configure_diagnostics(candidate_profile.diagnostics)
             )
@@ -533,6 +544,11 @@ class SafetyGate(Node):
                 stamp,
                 capture.measurement_steady,
             )
+            if self._learning_frames is not None:
+                try:
+                    self._learning_frames.offer(raw)
+                except (ValueError, TypeError, OverflowError):
+                    self._learning_frames.mark_gap()
             self._scans.append(
                 self._scan_compensator.update(raw, self._input_bridge.core.poses, now=steady)
             )

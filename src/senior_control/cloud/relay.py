@@ -26,6 +26,8 @@ from senior_control.protocol import (
     EmptyPayload,
     Envelope,
     HeartbeatRequest,
+    LearningStartEnvelope,
+    LearningStatusEnvelope,
     ManualIntentEnvelope,
     ResponseEnvelope,
     ResponsePayload,
@@ -554,7 +556,7 @@ class Hub:
         if not isinstance(envelope, ResponseEnvelope):
             connection.outbox.close(CLOSE_POLICY)
             return
-        if envelope.payload.request_type.startswith("settings."):
+        if envelope.payload.request_type.startswith(("settings.", "learning.")):
             self._route_settings_reply(link, envelope)
             return
         if envelope.payload.request_type in WORKSPACE_REQUEST_TYPES:
@@ -570,7 +572,8 @@ class Hub:
                     pending.controller.outbox.put(raw, WORKSPACE)
             return
         if envelope.payload.request_type in {"control.acquire", "control.release"} or (
-            envelope.payload.request_type == "drive.stop" and envelope.controller_generation is not None
+            envelope.payload.request_type == "drive.stop"
+            and envelope.controller_generation is not None
         ):
             if self._route_manual_reply(link, envelope):
                 return
@@ -608,10 +611,17 @@ class Hub:
         return False
 
     def _settle_discarded_command(self, link: _Link, kind: str, raw: bytes, robot_id: str) -> None:
-        if kind.startswith("settings."):
+        if kind.startswith(("settings.", "learning.")):
             request = validate_frame(raw, robot_id)
             assert isinstance(
-                request, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+                request,
+                (
+                    SettingsGetEnvelope,
+                    SettingsApplyEnvelope,
+                    SettingsResultEnvelope,
+                    LearningStartEnvelope,
+                    LearningStatusEnvelope,
+                ),
             )
             # Only queued, never-transmitted work is rejected here. In-flight
             # settings still require the vehicle's durable receipt or result query.
@@ -762,7 +772,14 @@ class Hub:
             envelope = envelope.model_copy(update={"connection_epoch": agent.epoch})
             raw = serialize_envelope(envelope)
         if isinstance(
-            envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+            envelope,
+            (
+                SettingsGetEnvelope,
+                SettingsApplyEnvelope,
+                SettingsResultEnvelope,
+                LearningStartEnvelope,
+                LearningStatusEnvelope,
+            ),
         ):
             if envelope.connection_epoch != agent.epoch or len(connection.settings_requests) >= 8:
                 self._reject(connection, envelope, ErrorCode.CONFLICT)
@@ -780,7 +797,14 @@ class Hub:
         if not agent.outbox.put(raw, kind):
             self._reject(connection, envelope, ErrorCode.CONFLICT)
         elif isinstance(
-            envelope, (SettingsGetEnvelope, SettingsApplyEnvelope, SettingsResultEnvelope)
+            envelope,
+            (
+                SettingsGetEnvelope,
+                SettingsApplyEnvelope,
+                SettingsResultEnvelope,
+                LearningStartEnvelope,
+                LearningStatusEnvelope,
+            ),
         ):
             connection.settings_requests[envelope.request_id] = (
                 envelope.session_id,
