@@ -341,9 +341,9 @@ export class RobotClient implements RobotLink {
     this.staleAfterMs = options.staleAfterMs ?? 5000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000;
     this.browserLogs = new BrowserVehicleLogs(() => this.robotId, this.socketFactory);
-    this.vehicle = new VehicleTransport(async (type, payload) => {
+    this.vehicle = new VehicleTransport(async (type, payload, requestId) => {
       if (type === "drive.intent") return this.sendIntent(payload);
-      const response = await this.request(type, payload);
+      const response = await this.request(type, payload, requestId);
       return response.data ?? null;
     }, options.logs ?? this.browserLogs);
   }
@@ -407,7 +407,7 @@ export class RobotClient implements RobotLink {
   }
 
 
-  request<T = ResponsePayload>(type: string, payload: unknown): Promise<T> {
+  request<T = ResponsePayload>(type: string, payload: unknown, requestId: string = crypto.randomUUID()): Promise<T> {
     if (!isRequestType(type) && !VEHICLE_REQUEST_TYPES.includes(type)) return Promise.reject(new CommandError("validation", "unsupported request type"));
     if (type === "drive.intent") return Promise.reject(new CommandError("validation", "intent uses the send-only stream"));
     const manual = type === "control.acquire" || type === "control.release";
@@ -416,10 +416,9 @@ export class RobotClient implements RobotLink {
     const socket = this.socket, robotId = this.robotId;
     if (socket === null || robotId === null || socket.readyState !== SOCKET_OPEN) return Promise.reject(new CommandError("offline", "control socket is not open"));
     if (!urgent && (this.epoch < 1 || (!manual && (this.latest === null || (!safety && (this.latest.stale || !this.latest.connected)))))) return Promise.reject(new CommandError("offline", "no live vehicle snapshot"));
-    const required = type.startsWith("settings.") ? "settings.v1" : type === "task.execution.command" ? "task.execution.v1" : type === "safety.estop.reset" || type === "safety.fault.recover" ? "runtime.v1" : null;
+    const required = type.startsWith("learning.") ? "learning.v1" : type.startsWith("settings.") ? "settings.v1" : type === "task.execution.command" ? "task.execution.v1" : type === "safety.estop.reset" || type === "safety.fault.recover" ? "runtime.v1" : null;
     const vehicle = this.vehicle.getSnapshot();
     if (required && (!vehicle.connected || !vehicle.available || !vehicle.frame?.capabilities.includes(required))) return Promise.reject(new CommandError("unavailable", "vehicle capability is not connected"));
-    const requestId = crypto.randomUUID();
     const envelope = {
       v: PROTOCOL_VERSION,
       robot_id: robotId,
