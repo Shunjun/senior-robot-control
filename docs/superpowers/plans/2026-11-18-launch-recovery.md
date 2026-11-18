@@ -310,3 +310,10 @@ PY
 这不是验收命令一通过就无条件开放的承诺：真实 ROS 交接/清组未证实前上述补丁不落产品；复合 command/output 故障的原 estop identity 丢失仍是未完成项，不能以新显式 estop 建立新身份冒称原身份延续。另只读发现 DedicatedController 以 `start_new_session=True` 启动其私有 controller/BT，现有异常父死路径未见 parent-death 绑定；这两组不在 command 的叶 PGID 内。虽然对子进程独立监督明确不在范围，command 真退出后的既有私有 owner 清理仍须先证明。不能仅凭 launch IPC stale 清理通过就开放带导航的 command 恢复，也不能为通过验收私自把 DedicatedController 纳入新监督层或扩大文件。
 
 本轮仅修正已批准 live 场景的真实接线与隔离：Command 与 Nav2 状态探测复用生产 MotionExecutor/with_dds_info，按 Humble 现有 MessageInfo dict 取真实 publisher_gid，避免普通 executor 丢失 metadata。未新增测试场景或产品文件。本机定向这三项为 3 skipped、1 deselected（无 ROS），不表示 Linux 行为通过；本轮剩余工作明确依赖负责人运行上述隔离用例并返回实际结果，以及收口上述 command 私有退出资源/复合急停身份缺口。
+
+### 真实 Linux 首轮反馈：修正同一 critical 用例前提
+
+- 负责人已从 `837a0c2` 的独立源码完成临时 senior_robot 构建（7.55 秒）及全部 Nav2 包、原生 exe/import、候选 launch 一致性核对。critical 首轮实际 1 failed / 3 deselected（22.85 秒），停在旧 authority 的第二个 drive.intent 返回 ok=False，尚未到后续急停断言；不能记录为交接/急停通过。Nav2 两项由负责人独立执行中。
+- 具体原因链：`CommandNode.manual_request` 的 ingress bind/view 调用 `ManualAuthorityManager._observe` → `ManualSession.expire/_live`；300ms active 断流 TTL 在固定两秒重启退避中已到期，authority 变 CLOSED/expired。随后 `ManualAuthorityManager.accept` 拒绝 CLOSED，`ManualIngress.accept` 返回 None，manual_request 返回 `error=conflict`。本地直接调用同一生产 ManualIngress 验证：active 两秒后 closed/expired 且拒收，prepared 两秒后仍 prepared 且首次新鲜 intent 可接受；没有更改 TTL、clock 或资格。
+- 经负责人确认，仅修正同一个真实场景：故障前 acquire 后保留真实 prepared authority 与生产 cached barrier，不先激活再断流；新 Core 已起、Command runtime 回调仍排队时，由真实 manual_request 首次生成该旧 authority 的合法 intent。通过实际 DDS 订阅取得生产 FinalCommand，再以原身份、原 received_steady、原 deadline 原样重发；不镜像协议、不复活 CLOSED authority。要求重发时仍在原期限内，并观察随后四个不同新 Core sequence 的 idle，再继续已批准的 boot 交接退休与 revision=3/request/reset 断言。
+- 本机仅对这一受影响用例收集：1 skipped / 3 deselected（无 ROS）；ruff/格式通过。实际 Linux 是否通过待负责人只重跑这一此前失败项，已有前缀/critical 单元/IPC 与运行中的 Nav2 不重复跑。产品代码、恢复开关均未因此修改。

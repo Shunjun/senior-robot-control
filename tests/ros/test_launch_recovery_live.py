@@ -167,6 +167,7 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
+    from senior_motion_msgs.msg import FinalCommand
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import MotionExecutor
     from std_msgs.msg import String
@@ -185,7 +186,7 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     observer.add_node(probe)
     commands = MotionExecutor()
     commands.add_node(command)
-    runtimes, velocities = deque(maxlen=256), deque(maxlen=256)
+    runtimes, velocities, final_frames = (deque(maxlen=256) for _ in range(3))
     probe.create_subscription(
         String,
         "/motion/runtime",
@@ -194,6 +195,9 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     )
     output_topic = "/launch_recovery/cmd_vel"
     probe.create_subscription(Twist, output_topic, velocities.append, 10)
+    probe.create_subscription(
+        FinalCommand, "/safety/final_command", final_frames.append, qos_profile_sensor_data
+    )
     logfile = tmp_path / "critical-recovery.log"
     sequence = 0
 
@@ -260,8 +264,24 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
                 wrapper,
             )
             authority = manual("control.acquire")["authority_id"]
-            old_prepared = command._barrier_frame
-            assert manual(
+            old_prepared = copy.deepcopy(command._barrier_frame)
+            # Prepared ownership has no movement TTL. An active stream left
+            # silent through the two-second backoff would correctly expire at
+            # 300 ms and could not generate the fresh old-source input below.
+            assert command._manual_ingress.view(time.monotonic()).state.value == "prepared"
+            old_boot = runtimes[-1]["boot_id"]
+            os.kill(latest_node_pid(logfile), signal.SIGKILL)
+            until(
+                lambda: runtimes and runtimes[-1]["boot_id"] != old_boot,
+                wrapper,
+                spin_command=False,
+            )
+            new_boot = runtimes[-1]["boot_id"]
+            # Keep Command's runtime callback queued. This first actual intent
+            # uses the pre-crash prepared authority, without reviving an expired
+            # stream or changing any ingress/output deadline.
+            command._final_publisher.publish(old_prepared)
+            accepted = manual(
                 "drive.intent",
                 {
                     "authority_id": authority,
@@ -271,31 +291,38 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
                     "turn": 0,
                     "gear": "low",
                 },
-            )["ok"]
-            old_boot = runtimes[-1]["boot_id"]
-            os.kill(latest_node_pid(logfile), signal.SIGKILL)
+            )
+            assert accepted["ok"], accepted
             until(
-                lambda: runtimes and runtimes[-1]["boot_id"] != old_boot,
+                lambda: any(
+                    frame.source_id == authority and frame.close_reason == "intent"
+                    for frame in final_frames
+                ),
                 wrapper,
                 spin_command=False,
             )
-            new_boot = runtimes[-1]["boot_id"]
-            # Keep Command's runtime callback queued. Send the original cached
-            # zero and an actual newly received, still-valid old-authority intent.
-            command._final_publisher.publish(old_prepared)
-            assert manual(
-                "drive.intent",
-                {
-                    "authority_id": authority,
-                    "gesture": 1,
-                    "sequence": 2,
-                    "linear": 0.1,
-                    "turn": 0,
-                    "gear": "low",
-                },
-            )["ok"]
+            old_intent = next(
+                frame
+                for frame in reversed(final_frames)
+                if frame.source_id == authority and frame.close_reason == "intent"
+            )
+            assert old_intent.received_steady <= time.monotonic() < old_intent.steady_deadline
+            observed_sequence = runtimes[-1]["sequence"]
+            # Replay the real production frame verbatim: identity, receipt and
+            # deadline stay frozen. The actual native guard/Core must refuse it.
+            command._final_publisher.publish(old_intent)
             until(
-                lambda: sum(value["boot_id"] == new_boot for value in runtimes) >= 4,
+                lambda: (
+                    len(
+                        {
+                            value["sequence"]
+                            for value in runtimes
+                            if value["boot_id"] == new_boot
+                            and value["sequence"] > observed_sequence
+                        }
+                    )
+                    >= 4
+                ),
                 wrapper,
                 spin_command=False,
             )
