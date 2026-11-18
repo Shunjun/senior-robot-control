@@ -58,6 +58,8 @@ class MotionCoreOutput:
             self._barrier_key = self._barrier_payload = None
             self._barrier_complete = False
             self._closed = False
+            self._launch_recovered = os.environ.get("SENIOR_LAUNCH_RECOVERED") == "1"
+            self._recovery_pending = self._launch_recovered
             self._last_tick = None
             self._output = Velocity(0, 0)
             self._runtime = RuntimeReports(node)
@@ -66,10 +68,17 @@ class MotionCoreOutput:
             self._resources.callback(self._diagnostic_pump.close)
             self._runtime_type = String
             claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
-            self._learning_client = LearningClient(Path(claim)) if claim else None
+            self._learning_client = None
+            if claim:
+                if self._launch_recovered:
+                    self._learning_client = LearningClient(Path(claim), read_only=True)
+                else:
+                    self._learning_client = LearningClient(Path(claim))
             if self._learning_client is not None:
                 self._resources.callback(self._learning_client.close)
-            self.startup = StartupLearning(self._learning_client)
+            self.startup = StartupLearning(
+                None if self._launch_recovered else self._learning_client
+            )
             self.self_returns = None
             self._learning_geometry = None
         except BaseException:
@@ -128,6 +137,19 @@ class MotionCoreOutput:
             manual_linear = metadata
         elif metadata != ManualLinearTarget(0, 0, 0):
             return False
+        handoff = (
+            msg.source_kind == "idle"
+            and msg.source_id == self.boot
+            and (
+                (reason == "prepared" and msg.request_id == self.boot and msg.source_epoch == 0)
+                or (reason == "estop" and bool(msg.request_id) and msg.source_epoch > 0)
+            )
+        )
+        # A fresh output cannot identify old intents from timestamps alone.
+        # Only this random boot's causal zero echo finishes recovery. An estop
+        # may always lock first, but an unrelated estop does not finish handoff.
+        if self._recovery_pending and not handoff and reason != "estop":
+            return False
         if msg.owner_boot_id == self._input_boot and msg.generation < self.output_generation:
             return False
         if msg.owner_boot_id != self._input_boot:
@@ -154,6 +176,8 @@ class MotionCoreOutput:
             if accepted:
                 self._barrier_complete = True
                 self._remember_task_retirement(msg)
+                if handoff:
+                    self._recovery_pending = False
             return accepted
         if (
             msg.generation <= self._input_floor
@@ -213,6 +237,12 @@ class MotionCoreOutput:
             self._interrupt_learning("estop" if reason == "estop" else "control_takeover", now)
         self.revoke(reason, now=now)
         if reason == "estop":
+            if msg.source_kind == "idle" and msg.source_id == self.boot and msg.source_epoch > 0:
+                # Private recovery meaning ONLY for this boot-matched idle
+                # estop: source_epoch preserves the original latch revision.
+                # request_id remains the operator's original request identity;
+                # gesture stays zero, as required by the native v3 guard.
+                return self.machine.restore_software_estop(int(msg.source_epoch), now_steady=now)
             self._event(K.SOFTWARE_ESTOP, now, msg.source_id)
         elif reason in {"estop_reset", "fault_recover"}:
             # Only an explicit revision-matched operator request clears a latch.
@@ -431,6 +461,8 @@ class MotionCoreOutput:
         return self.self_returns.filter(observation, provisional=self.startup.provisional)
 
     def _startup_target(self, now, observation):
+        if self._launch_recovered:
+            return
         if self.target.source not in {"idle", "startup_learning"}:
             return
         if not self.startup.active or (

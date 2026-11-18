@@ -37,6 +37,23 @@ class MotionStateMachine:
         self._evidence: RecoveryObservation | None = None
         self.state = MotionState(M.IDLE, "standby", None, 0, 0, False, ("acquire",))
 
+    def restore_software_estop(self, revision: int, *, now_steady: float) -> bool:
+        """Restore a boot-matched output handoff; this never clears a known latch.
+
+        The output owner must verify its boot echo before calling. Ordinary
+        emergency events still increment in reduce; explicit reset still has
+        to match this exact restored revision.
+        """
+        if type(revision) is not int or revision < 1 or revision < self._estop_revision:
+            return False
+        if not self._advance_clock(now_steady):
+            return False
+        self._software = True
+        self._estop_revision = revision
+        self._pause_sources()
+        self._project(now_steady, K.SOFTWARE_ESTOP.value)
+        return True
+
     def observe(self, evidence: RecoveryObservation, now: float) -> None:
         if not self._advance_clock(now):
             return
