@@ -37,6 +37,8 @@ from senior_robot.motion_core_perception import (
 )
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
+_OUTPUT_BUDGET_S = 0.25
+
 
 class MotionCoreOutput:
     def __init__(self, node: Any, profile: Any):
@@ -777,7 +779,7 @@ class MotionCoreOutput:
         if trace is None or not trace.trace_active():
             return
         try:
-            budget = now + 0.15
+            budget = now + _OUTPUT_BUDGET_S
             effective = dict(
                 budget=budget,
                 target=bounds["target"] or budget,
@@ -988,7 +990,7 @@ class MotionCoreOutput:
         candidate = output
         bounds = (
             dict(
-                budget=now + 0.15,
+                budget=now + _OUTPUT_BUDGET_S,
                 target=self.target.deadline_steady,
                 scan=scan_deadline,
                 startup=self.startup.deadline,
@@ -998,12 +1000,12 @@ class MotionCoreOutput:
         )
         # A control-process stall stops the native owner even if a source TTL is longer.
         output_deadline = min(
-            now + 0.15,
-            self.target.deadline_steady or now + 0.15,
-            scan_deadline or now + 0.15,
+            now + _OUTPUT_BUDGET_S,
+            self.target.deadline_steady or now + _OUTPUT_BUDGET_S,
+            scan_deadline or now + _OUTPUT_BUDGET_S,
             self.startup.deadline
             if learning_output and self.startup.deadline is not None
-            else now + 0.15,
+            else now + _OUTPUT_BUDGET_S,
         )
         if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
             output = self._output = Velocity(0, 0)

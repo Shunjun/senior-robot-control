@@ -340,7 +340,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
 
     def exhaust_current_frame(*args, **kwargs):
         output = original_limit(*args, **kwargs)
-        rig.now += 0.151  # Exhaust this calculation's unchanged 150 ms output budget.
+        rig.now += 0.251  # Exhaust this calculation's 250 ms output budget.
         return output
 
     with monkeypatch.context() as stalled:
@@ -348,7 +348,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
         assert rig.step(entered) == Velocity(0, 0)
     expired = rig.core.node.emitted[-1]
     assert expired[2] == "learning_output_expired"
-    assert expired[3] == entered + 0.15 < expired[0] < deadline
+    assert expired[3] == entered + 0.25 < expired[0] < deadline
     assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
     assert rig.core.startup.action_permitted and not rig.core.startup.motion_withdrawn
     assert rig.run.owner._reservation == grant
@@ -562,7 +562,7 @@ def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(
         rig.core.node._scans.append(rebuilt)
         velocities.append(rig.step(rig.now + 0.05, new_scan=False))
         deadlines.append(rig.core.node.emitted[-1][3])
-        assert deadlines[-1] == rig.now + 0.15
+        assert deadlines[-1] == rig.now + 0.25
         actual = rig.core._scan_results[0][3]
         assert_original_scan_result(rig.core, rebuilt, actual, rig.now)
     assert calls == ["decode", "filter"]
@@ -834,7 +834,7 @@ def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_origina
     filtered = rig.core._scan_results[0][3]
     clearance = assert_original_scan_result(rig.core, raw, filtered, rig.now)
     assert rig.core.node.emitted[-1][3] == min(
-        rig.now + 0.15, intent.steady_deadline, clearance.deadline
+        rig.now + 0.25, intent.steady_deadline, clearance.deadline
     )
     assert rig.step(clearance.deadline + 1e-6, new_scan=False) == Velocity(0, 0)
     assert rig.core.target.source == "manual" and rig.core.startup.state == "completed"
@@ -988,7 +988,7 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
             intent.owner_boot_id = "f4aba0660bc8419ebc36d1c94eb38c13"
             intent.session_id = "679a993742619426ac726741b8239be6"
             intent.request_id = "0ebbf0f147719304bccce28a8e43078c"
-            intent.received_steady, intent.steady_deadline = r.now, 10.05 + 0.15
+            intent.received_steady, intent.steady_deadline = r.now, 10.05 + 0.25
             intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = (
                 1,
                 0.05,
@@ -1008,12 +1008,12 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
             intent.received_steady, intent.steady_deadline = r.now, 15.0
             intent.sequence += 1
             assert r.core.command(intent)
-            r.step(10.25)
+            r.step(10.35)
             packets.append(peer.recv(64))
             emissions.append(r.core.node.emitted[-1][1:4])
             if enabled:
                 traced_rows.extend(json.loads(line) for line in os.read(reader, 65536).splitlines())
-            r.step(11.250001, new_scan=False)
+            r.step(11.350001, new_scan=False)
             packets.append(peer.recv(64))
             emissions.append(r.core.node.emitted[-1][1:4])
             if enabled:
@@ -1048,7 +1048,7 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
         assert float(tick["decision"]["clearance"]["rear"]) == math.inf
     first = ticks[0]
     assert first["argmin"] == ["budget", "target", "startup"]
-    assert first["deadline"] == 10.05 + 0.15 and first["bounds"]["startup"] is None
+    assert first["deadline"] == 10.05 + 0.25 and first["bounds"]["startup"] is None
     assert first["selected"]["capture"]["time"]["sample_steady_ns"] == 10_050_000_000
     assert first["selected"]["capture"]["raw_gid"] == (
         "010fb8ff7d38fc2201000000000013030000000000000000"
