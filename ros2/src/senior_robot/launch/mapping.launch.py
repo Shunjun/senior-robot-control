@@ -1,7 +1,7 @@
 """Pose-graph mapping. This launch does not start a simulator and publishes no velocity.
 
 The default uses stock slam_toolbox and its adapter. A nonempty
-capture_directory instead selects the optional senior_slam_bridge package
+capture_directory instead selects the native senior_mapping runtime
 and exposes native pose-graph capture. The verified static lidar mode
 requires the matching bridge consumer and an existing scan receipt process.
 """
@@ -84,7 +84,7 @@ def _mapping_nodes(context):
             )
         nodes.append(
             Node(
-                package="senior_slam_bridge",
+                package="senior_mapping",
                 executable="slam_graph_node",
                 name="slam_toolbox",
                 output="screen",
@@ -121,7 +121,7 @@ def generate_launch_description():
                 default_value="",
                 description=(
                     "Enable native graph capture with an empty absolute canonical directory "
-                    "owned by the node user and mode 0700. Requires senior_slam_bridge."
+                    "owned by the node user and mode 0700. Requires native senior_mapping."
                 ),
             ),
             DeclareLaunchArgument(

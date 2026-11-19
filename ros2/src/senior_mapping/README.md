@@ -1,5 +1,10 @@
 # senior_mapping
 
+当前已交付 B5.1–B5.3 的既有实现迁移；最新原生目录和验证见本文 B5.3 记录。下面保留 B5.2 批次记录，
+其中“未迁原生”描述的是当时边界，现已由 B5.3 接续；新地图/Home/定位和后置导航功能仍未提前实现。
+
+## B5.2 批次历史记录
+
 B5.2 基线 `a34f485`：现有地图证据/参考、持久化、归档、事务和读取实现已迁入。
 本片保留原数据库及外部行为；不是新地图操作、每图 Home、写入 IPC 或原生 SLAM 功能交付。
 
@@ -102,3 +107,86 @@ Pydantic 2.14.1，uv 0.12.23，ruff 0.17.3；pytest 使用原主仓库 .venv/bin
 未验证：缺 colcon、CMake、rclpy、ament_index_python；真实 ROS/ament 构建安装、DDS/TF、SLAM/AMCL、
 native capture/receipt、Linux及实车/仿真运行仍待对应环境。SDK/AST/合成 Graph 不替代这些实测。
 未运行全仓或全仓 mypy，不宣称解决 B4 旧控制夹具失败；没有启动开发/实车服务、部署或推送。
+
+
+## B5.3 原生 SLAM 迁移
+
+基线 `4ec3d12`，本片将原运行代码归本功能包，原 bridge 只保留 ROS 类型。
+不修改16份实现、CLI和18份测试/探针内容；35个迁移文件与基线逐字节一致。
+
+### 当前增量目录与安装
+
+```text
+senior_mapping/
+  src/slam/
+    slam_graph_node.cpp, acquire_scan_receipt.cpp
+    native_capture.cpp/.hpp, staged_graph.cpp/.hpp
+    bounded_scan_ingress.cpp/.hpp, static_lidar_tf_ingress.cpp/.hpp
+    snapshot.hpp, graph_commit_history.hpp, laser_geometry.hpp
+    static_lidar_tf.hpp, scan_receipt_admission.hpp, candidate_stationary_match.hpp
+  scripts/candidate_preflight.py
+  test/native/
+    test_{snapshot,graph_commit_history,laser_geometry,static_lidar_tf}.cpp
+    test_{stationary_match_quality,native_capture,staged_graph}.cpp
+    test_candidate_preflight.py
+  test/probes/
+    probe_{read_graph,native_capture,bounded_scan_ingress,graph_commit_delivery}.py
+    probe_{static_lidar_tf,candidate_live_scan,candidate_stationary_match}.py
+    probe_{acquire_scan_receipt,candidate_match_ambiguity,candidate_load}.py
+```
+
+两个 native 程序与 candidate_preflight 共同安装 `lib/senior_mapping/`，原安装 basename 不变。
+CLI用自己的绝对调用路径找两个兄弟程序，因此不能只搬脚本、只留一个旧路径symlink或依赖merge-install。
+新命令统一为 `ros2 run senior_mapping {slam_graph_node,acquire_scan_receipt,candidate_preflight}`；
+旧包三个运行命令取消，无 shim 或反向依赖。原消息/服务仍为 senior_slam_bridge，六份定义一字未改。
+
+生产 mapping.launch 的 capture/verified 分支只改 native 节点 package 为 senior_mapping；默认stock+原Python adapter、
+node名slam_toolbox、原扫描/TF/frame/receipt、参数文件、进程数及restart差异不变。
+单live图owner保留，隔离candidate仍只诊断，不得应用位姿、抢live图或授予定位/写图/导航/运动权限。
+原capture、graph cut/history、0.5秒接收准入、私有文件、单次匹配quota、两seed、取消/超时/确切子进程回收均不改。
+原消息对历史receipt和authority的限制说明不变，不能把字段valid重新解释成当前上游或地图资格。
+内部C++ namespace/header guards保留原名，以便本次只归包、不夹带ABI或序列化重命名；私有头不新增公共安装API。
+
+### 构建与注册
+
+默认完整构建所有原生目标，不加可选自动探测、静默漏目标或缺依赖fallback。
+CMake显式要求slam_toolbox 2.6.10 EXACT，沿用其私有async_slam_toolbox/toolbox_common/kartoSlamToolbox
+库定位与Boost serialization/thread、OpenSSL::Crypto、TBB::tbb、Threads、rclcpp/tf2/sensor_msgs/motion_msgs依赖。
+bridge只rosidl生成接口，mapping通过标准ament导出消费它，不猜外部imported target名称或复制同项目graph_typesupport变量。
+真实Humble类型导出/私有符号链接仍须实际编译验证，源码核对不能替代。
+
+全部原native CTest名称、target、探针模式参数、30–120秒timeout和配置文件COPY注册保留，只改源路径与运行包prefix。
+原mapping_algorithms用pytest ENV明确忽略新增native子目录，preflight仍由原专用CTest执行，避免CTest重复收集；
+根Python CI仍通过mapping/test收集该原unittest一次，pyproject提供迁入scripts导入路径。
+ENV参数的源码依据为 [Humble ament_add_pytest_test](https://github.com/ament/ament_cmake/blob/humble/ament_cmake_pytest/cmake/ament_add_pytest_test.cmake)，本机未实测该CMake注册。
+
+### 实际范围
+
+46个逻辑文件：产品17、测试19、配置构建6、工具文档4；新增1、修改10、迁移35，无额外逻辑删除。
+产品是16份C++与实际runtime CLI；测试是18份原用例/探针迁移与现有launch断言改owner。
+两包CMake/manifest、mapping.launch与根pytest路径同步，现有安装工具只读检查新prefix/原类型，无新场景。
+写入IPC、B5.2事务/Home、原控制守卫、仿真总组合、导航算法与新地图/定位功能未动。
+
+### 命令、版本与结果
+
+环境：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、uv 0.12.23、ruff 0.17.3、
+Apple clang 21.0.0、pkg-config提供libcrypto/OpenSSL 3.6.2；无colcon、CMake、rclcpp/rclpy、Karto/Humble安装。
+pytest使用原主仓库.venv/bin/python；以下原生输出与数据均在/tmp。
+
+- RED：先修改原launch断言为canonical运行包，原装配尚未修改时失败；补实际package接线后通过。
+- `python -m pytest ros2/src/senior_mapping/test/native/test_candidate_preflight.py ros2/tests/test_mapping.py -q`：17 passed、1 skipped。
+- `python -m pytest ros2/src/senior_mapping/test ros2/tests/test_mapping.py -q`：**72 passed、1 skipped**，包括原地图算法、preflight确切子进程关停与原stock/native参数分支；一项实际ROS节点检查缺rclpy跳过，没有启动ROS节点或服务。
+- 对snapshot、graph_commit_history、laser_geometry、static_lidar_tf分别执行 `c++ -std=c++17 -Wall -Wextra -pedantic -I ros2/src/senior_mapping/src/slam ros2/src/senior_mapping/test/native/test_NAME.cpp -o /tmp/b53-native/NAME` 并运行产物：四个原C++程序通过。
+- 对native_capture、staged_graph分别按同旗标增加对应src/slam/NAME.cpp与 `pkg-config --cflags --libs libcrypto`，运行时传入/tmp/b53-native/NAME-data私有目录：两个原C++程序通过；这是host POSIX验证，原test_native_capture的Linux条件分支未执行，不称为Linux捕获验证。
+- `c++ -std=c++17 -fsyntax-only -I ros2/src/senior_mapping/src/slam ros2/src/senior_mapping/test/native/test_stationary_match_quality.cpp`：因缺karto_sdk/Mapper.h失败，未验证Karto质量计算或私有库链接。
+- 对slam_graph_node用同语法检查并增加 `-I ros2/src/senior_motion_msgs/include`：因缺rclcpp/rclcpp.hpp失败，未验证ROS节点编译、typesupport或私有SLAM链接；不以纯单元代替。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build ros2/src/senior_mapping --offline --out-dir /tmp/b53-wheels` 与根uv build：sdist/wheel通过；wheel仍只有原Python SDK，不能代替native/CLI安装；`uv lock --check --offline`仍67包。
+- 用uv pip向/tmp/vehicle-batch-one-venv安装上述两个wheel后，从/tmp运行现有tools/verify_batch_one_install.py：SDK兼容与共享边界通过，16个依赖包兼容，原guard与新SLAM安装/types检查都明确UNVERIFIED（无ament_index/ROS prefix）。工具首次误用未安装SDK的pytest解释器缺senior_contracts，改到实际wheel环境后通过，未把前置环境缺失算产品通过。
+- 35个移动文件和6个接口逐字节核对，完整原生target/探针参数/timeout注册核对、包依赖无环、无bridge反向运行依赖、launch仅owner/说明变化：通过；只证明源码和声明。
+- 定向ruff check/format、按原CRLF的 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`：通过；作者已审diff，仍待负责人亲审。
+
+未验证：真实Humble隔离prefix的colcon构建/安装、旧类型生成与typesupport导出、私有2.6.10链接、
+Karto单元、10个DDS探针及其全部模式、native receipt/capture/TF/子进程链、Linux和实车/仿真运行。
+推荐对应环境用全新独立prefix构建bridge→mapping，再执行原CMake/CTest及安装工具，不自动清理已有安装树，
+以免旧lib/senior_slam_bridge残留程序被误判为兼容入口。
+没有启动开发/实车或ROS服务，没有部署、推送或提前实现其他功能；未跑全仓，也不宣称解决旧控制夹具失败。

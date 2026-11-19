@@ -71,7 +71,7 @@ def test_default_mapping_keeps_stock_graph_and_adapter(mapping_launch):
 def test_mapping_capture_selects_single_native_graph_owner(mapping_launch, tmp_path):
     select, defaults = mapping_launch
     (node,) = select({**defaults, "capture_directory": str(tmp_path), "use_sim_time": "true"})
-    assert node.kwargs["package"] == "senior_slam_bridge"
+    assert node.kwargs["package"] == "senior_mapping"
     assert node.kwargs["executable"] == "slam_graph_node"
     assert node.kwargs["name"] == "slam_toolbox"  # Match the existing slam.yaml section.
     config, overrides = node.kwargs["parameters"]
@@ -108,7 +108,7 @@ def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
     assert relay_params["camera_frame"] == "laser_link"
     assert relay_params["expected_node_name"] == "robot_state_publisher"
     assert relay_params["expected_namespace"] == "/"
-    assert graph.kwargs["package"] == "senior_slam_bridge"
+    assert graph.kwargs["package"] == "senior_mapping"
     assert graph.kwargs["executable"] == "slam_graph_node"
     _, bridge = graph.kwargs["parameters"]
     assert bridge["capture_directory"] == capture_directory

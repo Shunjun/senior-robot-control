@@ -118,6 +118,33 @@ def main() -> None:
             raise
         print("native installation: UNVERIFIED (ament_index_python / ROS prefix absent)")
 
+    try:
+        from ament_index_python.packages import get_package_prefix
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"ament_index_python", "ament_index_python.packages"}:
+            raise
+        print("SLAM installation/types: UNVERIFIED (ament_index_python / ROS prefix absent)")
+    else:
+        runtime = Path(get_package_prefix("senior_mapping")) / "lib" / "senior_mapping"
+        interfaces = Path(get_package_prefix("senior_slam_bridge"))
+        for name in ("slam_graph_node", "acquire_scan_receipt", "candidate_preflight"):
+            executable = runtime / name
+            assert executable.is_file() and executable.stat().st_mode & 0o111, executable
+            assert not (interfaces / "lib" / "senior_slam_bridge" / name).exists()
+            print(f"SLAM installed: {executable}")
+        message = importlib.import_module("senior_slam_bridge.msg")
+        services = importlib.import_module("senior_slam_bridge.srv")
+        assert message.Keyframe.__module__.startswith("senior_slam_bridge.msg.")
+        for name in (
+            "CaptureGraph",
+            "ReadGraph",
+            "ReadGraphCommit",
+            "ReadLoadedGraph",
+            "MatchStationaryScan",
+        ):
+            assert getattr(services, name).__module__.startswith("senior_slam_bridge.srv.")
+        print("SLAM runtime prefix and original interface package: PASS (not a DDS probe)")
+
 
 if __name__ == "__main__":
     main()

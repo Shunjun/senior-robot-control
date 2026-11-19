@@ -2,15 +2,28 @@
 <package format="3">
   <name>senior_mapping</name>
   <version>0.1.0</version>
-  <description>Map persistence, transactions and existing stock SLAM Python adapter</description>
+  <description>Map persistence, native SLAM runtime and isolated graph diagnostics</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>slam_toolbox</exec_depend>
+  <depend version_eq="2.6.10">slam_toolbox</depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <depend>boost</depend>
+  <depend>libtbb-dev</depend>
+  <depend>libssl-dev</depend>
+  <depend>rclcpp</depend>
+  <depend>senior_slam_bridge</depend>
+  <depend>senior_motion_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_cmake_test</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
+  <test_depend>senior_sensor_ingress</test_depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>
