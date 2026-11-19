@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留，当前任务存储边界与验证见末尾S1记录。
+下文各片记录按当时范围保留，当前任务生命周期持久/服务边界与验证见末尾S2记录。
 
 ## 实际目录与调用
 
@@ -39,6 +39,8 @@ senior_control/
       ports.py                        # 只读MapReference和每实例Store构造端口，无值实现
       store.py                        # 唯一TaskStore SQL/事务/boot/claim/scan实现
       codec.py                        # 原13个解析/序列化函数，逐实例值/错误构造
+      lifecycle_store.py              # 原同连接生命周期/receipt/effect事务
+      lifecycle_service.py            # 原提交后效果协调/未知查询，外部IO不持DB锁
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
@@ -46,6 +48,8 @@ senior_control/
     test_task_lifecycle.py            # 原纯状态机用例，随实现迁入
     test_schedule.py                  # 原schedule/runner混合纯决策用例
     test_task_runner.py               # 原真实SQLite/任务驱动回归，输入断言不变
+    test_task_lifecycle_store.py      # 原事务/CAS/取消/硬退出WAL恢复用例
+    test_task_lifecycle_service.py    # 原锁外dispatch/未知/接管迟到ack用例
     README.md
 ```
 
@@ -552,3 +556,76 @@ receipt/effect/journal同事务以及外部dispatch不持锁；VersionConflict/R
 输入原SQLite冲突/取消、旧request/epoch、阻塞或未知导航→原回执与效果边界，不自动恢复运动。
 仍需下一次负责人精核/预报后实施；Executor/Runtime/NavigationEffects的错误继承/catch、RouteRejected及真实导航效果端口
 留后片，不提前搬DomainError/MapRef/Pose2D、不做全局工厂或新算法，既有地图/Home/导航保持。
+
+## S2 生命周期持久与服务
+
+基线`4371027`；仅将原lifecycle_store/service归已有manager/tasks，
+两份完整实现/SQL AST除导入和Pose注解外相同。旧模块显式Compatible转发，
+**LifecycleStore、LifecycleService、原异常/值/常量和辅助函数均为canonical同一对象**，没有构造子类或第二份方法。
+SCHEMA仍唯一tuple，AGENT_JOURNAL_STATEMENTS直接取已迁agent_schema，不再为取SQL导入agent实现。
+LifecycleStore保存原TaskStore与其database对象，使用原connection/write_lock；不另造Store/DB/锁或装配执行程序。
+
+`PoseReading`只声明x/y/yaw只读属性，不构造、复制、转换或校验Pose值；
+原Pose2D仍由原调用者创建，按原tuple传递和序列化，原类不搬。
+Admission→write_lock→事务、锁内最新context采样、CAS、取消后等待真实settle、
+receipt/effect/journal同事务、未知结果仅查询、外部dispatch不持DB锁，以及接管/迟到ack边界全部沿用。
+原boot/epoch/版本、预算、原错误继承关系和已有导航/IPC行为保持。
+
+实际12逻辑文件：产品6、测试迁移2、配置0、工具文档4，即新增2/修改8/迁移2/删除0。
+产品为canonical两份、旧转发两份、既有ports与公开入口；
+两份原test_task_lifecycle_store/service随实现迁入manager/tests，发现/跨测试导入沿用既有pytest路径与CI配置。
+原硬退出子进程的源码导入改指canonical，并显式继承父测试的真实sys.path；
+原os._exit阶段23/24/25、WAL恢复断言、超时和其他输入/保护不变，没有加假属性或新情景。
+Executor/Runtime/NavigationEffects、值/错误公共模块、地图/ROS/IPC及依赖配置均不改。
+
+### 命令、版本和结果
+
+macOS26.4 arm64；CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23。
+python/mypy/ruff使用原主仓库`.venv/bin/`，Pydantic2.14.1/aiosqlite0.22.1未变。
+
+- RED：先迁测试并改canonical import，`python -m pytest senior_control/tests/test_task_lifecycle_store.py --collect-only -q`
+  因新模块尚不存在报ModuleNotFoundError，随后迁实现。
+- `python -m pytest senior_control/tests/test_task_lifecycle_store.py senior_control/tests/test_task_lifecycle_service.py -q`：
+  首轮52 passed/3 failed，三个硬退出子进程没有新manager源码路径，报ModuleNotFoundError；
+  只补`env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}`，确保子进程实际测当前源而非解释器旧安装，
+  原断言/15秒上界/退出阶段不改，复跑**55 passed，1.41s**。
+- `python -m pytest senior_control/tests/test_task_lifecycle_store.py senior_control/tests/test_task_lifecycle_service.py senior_control/tests/test_task_runner.py senior_control/tests/test_task_lifecycle.py tests/integration/test_task_ownership.py tests/integration/test_terminal_release_outbox.py -q`：
+  **221 passed，3.32s**（含55项，不相加）。包含逐步接受写入失败/同连接取消settle、双连接CAS、
+  真子进程退出WAL恢复、旧request/epoch、锁后采样、锁外dispatch、unknown仅查询、接管迟到ack及终端outbox保护。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：27份源码中保留**2项既有错误**，
+  lifecycle:318及新迁入lifecycle_store:647的nullable-row索引；原全链命令检查219份仍38项，
+  只归一化迁移文件路径后与S1的38项诊断逐条相同，不加ignore或假属性，不称类型检查全通过。
+- 两份完整实现/SQL、所有原测试body/断言的AST核对通过，差异仅已列明的导入、Pose类型与真实子进程环境；
+  十五份相关Python的ruff check/format --check和按原CRLF的git diff检查通过，无反向实现导入。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/s2-wheels`及根同out-dir构建：sdist/wheel成功。
+  `/tmp/s2-manager-venv`离线安装本轮manager及原contracts wheel/约束，8包pip check通过；
+  从`/tmp`执行`python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only`通过，
+  原纯核心不加载数据库保护保持，之后单独导入Store/生命周期接口，确认无Root/cloud/ROS/地图依赖。
+- `/tmp/vehicle-batch-one-venv`重装本轮Root/manager wheel，24包pip check及原安装工具默认模式通过；
+  核对旧新Store/Service、VersionConflict/RequestConflict/StaleEffect及SCHEMA同一身份，
+  真实Root TaskStore/DB实例传入LifecycleStore不替换，原Pose输入经service.submit原样序列化、receipt及效果已持久，
+  实际NavigationEffects/IpcNavigation已装配但未reconcile或连接IPC；同工具原设置/日志/地图/SQLite保护全部保留。
+
+本轮所选回归最终无失败，原manager2项/全链38项类型错误仍登记。
+未跑全仓或真实Linux/ROS/ament/DDS/SLAM/车辆/仿真服务，Python3.10本轮未重验；
+原工具继续将ROS native/SLAM安装标UNVERIFIED，宿主SQL/安装/合成端口不替代实际ROS。
+没有启动开发或实车服务、部署或推送；提交后等待负责人亲审，不继续下一片。
+
+### S3下一片依赖：仅只读建议
+
+候选源仍为原`tasks/executor.py`、`runtime.py`、`navigation_port.py`，目标为manager/tasks同名模块，
+旧构造/错误边界保留Compatible；先精核错误与真实端口，再预报，不能直接按整文件搬完宣称独立。
+已可直接复用canonical TaskStore、生命周期Store/Service、纯模型/Runner/Schedule、同DB和Admission；
+RouteProgress/RouteStatus仅取已有共享DTO，不把RoutePlan/QualifiedRoute算法或ROS实现拉入manager。
+实际最小接口还包括：现有qualified_reference或map_ref/map_generation/review_required只读参考；
+TaskNavigation的task_poses/task_effect/status及原有限IO时限；原Pose实例只读坐标，不迁值或重建目标；
+原DomainError的构造/catch/code、QualificationUnavailable的原继承与身份、RouteRejected必须按真实owner逐实例装配或另审更小归属，
+不能用TYPE_CHECKING掩盖运行依赖、改错误类或建立全局注册工厂。
+原手动T2通知/权限、terminal_release/settled与单cmd_vel继续由原实际IPC/控制边界执行，管理只提出效果与观察确认。
+
+条件预算仍为16–21逻辑文件：产品9–12、测试3–5、配置0、工具文档4；
+包含三份canonical/旧入口、实际最小ports/公开入口及必要原装配接线，具体错误工厂/类身份尚待精核，不能据此直接实施。
+复用原TaskRunner/ownership的失联/重启/未知发送只查询、同ref新代次/缺定位不导航、skip失败仍优先取消、
+接管后旧ack不复活/不撤新手动，以及terminal_release_outbox/旧真实IPC用例；
+输入原SQLite恢复状态、旧epoch/迟到结果和受阻导航→原持久义务/撤销确认，输出字段和控制隔离不变。
+宿主SQLite/内存端口可测，真实ROS/DDS/原生安装与车辆运行仍须对应环境；不前置新导航算法或其他新功能。

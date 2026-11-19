@@ -15,6 +15,19 @@ class MapReference(Protocol):
     def reference_revision(self) -> int: ...
 
 
+class PoseReading(Protocol):
+    """Only the original pose coordinates serialized by lifecycle acceptance."""
+
+    @property
+    def x(self) -> float: ...
+
+    @property
+    def y(self) -> float: ...
+
+    @property
+    def yaw(self) -> float: ...
+
+
 @dataclass(frozen=True)
 class TaskStorePorts:
     """Original schema preparation and value/error constructors, scoped to one store."""

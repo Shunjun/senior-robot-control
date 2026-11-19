@@ -8,18 +8,18 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from vehicle_manager.tasks.lifecycle_store import (
+    LifecycleStore,
+    RequestConflict,
+    StaleEffect,
+    VersionConflict,
+)
 from vehicle_manager.tasks.models import TaskDefinition
 
 from senior_control.errors import DomainError
 from senior_control.models import MapRef
 from senior_control.storage.database import Database
 from senior_control.tasks.lifecycle import Command, Context, Event, EventKind
-from senior_control.tasks.lifecycle_store import (
-    LifecycleStore,
-    RequestConflict,
-    StaleEffect,
-    VersionConflict,
-)
 from senior_control.tasks.schedule import Schedule
 from senior_control.tasks.store import TaskStore
 
@@ -408,6 +408,7 @@ async def test_abrupt_process_exit_has_only_committed_acceptance(
     phase: str,
     code: int,
 ) -> None:
+    import os
     import subprocess
     import sys
 
@@ -425,7 +426,7 @@ from pathlib import Path
 from senior_control.storage.database import Database
 from senior_control.tasks.store import TaskStore
 from senior_control.tasks.lifecycle import Command, Context
-from senior_control.tasks.lifecycle_store import LifecycleStore
+from vehicle_manager.tasks.lifecycle_store import LifecycleStore
 async def main():
     async with Database(Path(sys.argv[1])) as database:
         tasks = TaskStore(database, robot_id="robot")
@@ -449,7 +450,11 @@ async def main():
 asyncio.run(main())
 """
     completed = subprocess.run(
-        [sys.executable, "-c", child, str(path), phase], capture_output=True, text=True, timeout=15
+        [sys.executable, "-c", child, str(path), phase],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
     )
     assert completed.returncode == code, completed.stderr
     async with Database(path) as database:
@@ -517,7 +522,7 @@ async def test_active_limits_and_keyset_audit_do_not_scan_history(tmp_path: Path
 
 
 async def test_store_admission_rejects_context_value_instead_of_provider(tmp_path: Path) -> None:
-    from senior_control.tasks.lifecycle_store import ContextProvider
+    from vehicle_manager.tasks.lifecycle_store import ContextProvider
 
     async with Database(tmp_path / "task.db") as database:
         store, task = await setup_store(database)

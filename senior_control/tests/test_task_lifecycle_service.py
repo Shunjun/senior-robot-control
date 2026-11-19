@@ -8,10 +8,10 @@ from typing import Literal
 
 import pytest
 from test_task_lifecycle_store import CONTEXT, NOW, SUBMIT, setup_store
+from vehicle_manager.tasks.lifecycle_service import LifecycleService
 
 from senior_control.storage.database import Database
 from senior_control.tasks.lifecycle import Action, Command, Context, Effect, Event, Lifecycle
-from senior_control.tasks.lifecycle_service import LifecycleService
 
 
 class Port:

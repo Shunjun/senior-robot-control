@@ -96,6 +96,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2c 标准库纯任务核心已迁 | 原tasks/schedule、lifecycle → `vehicle_manager/tasks/` | 旧对象显式Compatible同一身份，旧公开包名字不变且按需加载；模型/驱动、MapRef/Pose2D/错误及ROS边界不迁；复用原时间/状态机和服务层锁外dispatch及离仓库安装验证 |
 | B6.M2d 纯任务模型/Runner已迁 | 原tasks/models、runner → `vehicle_manager/tasks/`及只读MapReference形状 | 原运行时MapRef及比较保留，旧类/常量/函数同一身份；仅经确认扩两个旧具体MapRef调用点的Compatible静态cast，不作运行时校验或改准入；Store/Runtime/地图/ROS/IPC实现不迁 |
 | B6.S1 TaskStore已迁 | 原tasks/store → `vehicle_manager/tasks/store.py`及原行解析codec | 原DB/同连接锁、domain→core准备和原MapRef/DomainError逐实例注入；旧Compatible构造薄子类非同类，SQL/事务业务唯一、原tuple同一身份；不迁生命周期持久/执行/导航 |
+| B6.S2 生命周期持久/服务已迁 | 原tasks/lifecycle_store、lifecycle_service → `vehicle_manager/tasks/` | 旧类/异常/值/SCHEMA同一对象，复用原TaskStore/DB及agent_schema；Pose只读形状不搬值，Admission/CAS/锁内采样/取消settle与锁外dispatch原样；执行/Runtime/导航效果仍原位 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -447,3 +448,21 @@ Pose只读形状及同TaskStore/DB的Admission/写锁/事务/取消settle与锁�
 （产品6/测试迁移2/配置0/工具文档4），须负责人精核预报后实施；旧具体类型调用若需额外接线先报。
 复用原接受写失败/双连接CAS/取消/旧epoch/重开和锁外IO/未知查询/接管迟到ack用例，输入预期见manager记录。
 后续执行/Runtime/导航效果及错误继承边界仍后置，不先搬值/新算法，既有地图/Home/导航和IPC保持。
+
+### B6.S2 生命周期持久与服务迁移
+
+基线4371027；两份实现/SQL除导入及Pose注解外AST相同，canonical复用TaskStore/原同DB连接写锁和纯agent_schema，
+旧模块Compatible显式转发，LifecycleStore/Service及原异常/值/常量/辅助函数同一对象；没有新构造层或执行实现。
+只读PoseReading仅x/y/yaw接口，原Pose实例不复制/转换，原Admission/CAS/锁后采样/取消settle/同事务receipt/effect/锁外IO保持。
+实际12逻辑文件：产品6/测试迁移2/配置0/工具文档4，即新增2/修改8/迁移2/删除0。
+原子进程硬退出夹具修正源码导入和父测试真实路径，原退出码/超时/断言不变；核心55通过，完整原选择221通过（3.32s）。
+manager27份源码保留原2项，完整219份源码仍原38项，归一迁移路径后与S1逐条相同，不弱化保护或加ignore。
+manager/根wheel及仓库外manager8包/旧SDK24包安装、原类/异常/SCHEMA和同Store/DB、真实接受/效果持久验证通过，
+未发RPC；十五份相关Python格式/静态与AST检查通过，完整命令/版本/目录见[manager S2](../../../senior_control/README.md#s2-生命周期持久与服务)。
+真实ROS/Linux/车辆及Python3.10本轮未验，原工具保留UNVERIFIED；不开服务、不部署、不推送。
+
+下一片S3仅只读建议先精核原executor/runtime/navigation_port的DomainError构造/catch/code、QualificationUnavailable继承、
+RouteRejected和真实TaskNavigation/qualified_reference端口；复用已迁Store/Service，不把RoutePlan/ROS实现或值打入manager。
+条件16–21文件（产品9–12/测试3–5/配置0/工具文档4），须另审预报，不默认新增全局工厂或改变错误身份。
+原失联/未知查询/重启、同ref新代次/缺定位、skip失败取消优先、接管旧ack/终端退场与新手动隔离等输入预期见manager记录；
+现有地图/Home/导航、IPC/控制边界继续原实现，导航新算法和其他功能不前置。

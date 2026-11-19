@@ -95,16 +95,34 @@ def verify_manager_task_store() -> None:
     print("installed manager TaskStore interface without Root/ROS owners: PASS")
 
 
+def verify_manager_lifecycle() -> None:
+    from vehicle_manager import tasks
+    from vehicle_manager.tasks.lifecycle_service import LifecycleService
+    from vehicle_manager.tasks.lifecycle_store import LifecycleStore
+
+    assert tasks.LifecycleStore is LifecycleStore
+    assert tasks.LifecycleService is LifecycleService
+    assert LifecycleStore.__module__ == "vehicle_manager.tasks.lifecycle_store"
+    assert LifecycleService.__module__ == "vehicle_manager.tasks.lifecycle_service"
+    print("installed manager lifecycle interfaces without Root/ROS owners: PASS")
+
+
 def verify_legacy_task_store() -> None:
     """Reuse the original real SQLite create/reopen/conflict path in the installed SDK."""
     import asyncio
     import tempfile
     from datetime import datetime, timezone
 
+    from senior_control.agent.ports import IpcNavigation
     from senior_control.errors import DomainError, ErrorCode
-    from senior_control.models import MapRef
+    from senior_control.models import MapRef, Pose2D
+    from senior_control.runtime.ipc import IpcClient
     from senior_control.storage.database import Database
     from senior_control.tasks import Schedule, TaskDefinition
+    from senior_control.tasks.lifecycle import Command, Context
+    from senior_control.tasks.lifecycle_service import LifecycleService
+    from senior_control.tasks.lifecycle_store import LifecycleStore
+    from senior_control.tasks.navigation_port import NavigationEffects
     from senior_control.tasks.store import TaskStore
 
     async def verify(directory: Path) -> None:
@@ -137,6 +155,23 @@ def verify_legacy_task_store() -> None:
                 assert type(exc) is DomainError and exc.code is ErrorCode.CONFLICT
             else:
                 raise AssertionError("stale revision must preserve the original DomainError")
+            durable = LifecycleStore(store, boot_id="installed-boot")
+            assert durable.tasks is store and durable.database is database
+            client = IpcClient(directory / "unused.sock", robot_id="robot")
+            effects = NavigationEffects(durable, IpcNavigation(client, tasks=store))
+            context = Context(True, True, "pose", "map")
+            service = LifecycleService(durable, effects, context=lambda: context)
+            pose = Pose2D(1.0, 2.0, 0.0)
+            transition = await service.submit(
+                Command("request", "submit", "execution", ("point",)),
+                saved,
+                created,
+                execution_poses=(pose,),
+            )
+            assert transition.receipt is not None and transition.receipt.accepted
+            assert await store.execution_route("execution") == ((pose.x, pose.y, pose.yaw),)
+            assert len(await durable.effects("execution")) == 1
+            assert client._writer is None
         async with Database(path) as database:
             store = TaskStore(database, robot_id="robot")
             await store.prepare()
@@ -175,6 +210,22 @@ def main() -> None:
     from vehicle_manager.storage import CORE_MIGRATIONS, Migration, migrate, migrate_core
     from vehicle_manager.storage.agent_schema import AGENT_JOURNAL_STATEMENTS
     from vehicle_manager.storage.database import Database as ManagerDatabase
+    from vehicle_manager.tasks.lifecycle_service import LifecycleService as ManagerLifecycleService
+    from vehicle_manager.tasks.lifecycle_store import (
+        SCHEMA as ManagerLifecycleSchema,
+    )
+    from vehicle_manager.tasks.lifecycle_store import (
+        LifecycleStore as ManagerLifecycleStore,
+    )
+    from vehicle_manager.tasks.lifecycle_store import (
+        RequestConflict as ManagerRequestConflict,
+    )
+    from vehicle_manager.tasks.lifecycle_store import (
+        StaleEffect as ManagerStaleEffect,
+    )
+    from vehicle_manager.tasks.lifecycle_store import (
+        VersionConflict as ManagerVersionConflict,
+    )
     from vehicle_manager.tasks.store import TASK_STATEMENTS
     from vehicle_manager.tasks.store import TaskStore as ManagerTaskStore
     from vehicle_manager.vehicle_logs.models import LogQuery
@@ -211,6 +262,22 @@ def main() -> None:
     from senior_control.storage.migrations import Migration as LegacyMigration
     from senior_control.storage.migrations import migrate as old_migrate
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
+    from senior_control.tasks.lifecycle_service import LifecycleService as LegacyLifecycleService
+    from senior_control.tasks.lifecycle_store import (
+        SCHEMA as LegacyLifecycleSchema,
+    )
+    from senior_control.tasks.lifecycle_store import (
+        LifecycleStore as LegacyLifecycleStore,
+    )
+    from senior_control.tasks.lifecycle_store import (
+        RequestConflict as LegacyRequestConflict,
+    )
+    from senior_control.tasks.lifecycle_store import (
+        StaleEffect as LegacyStaleEffect,
+    )
+    from senior_control.tasks.lifecycle_store import (
+        VersionConflict as LegacyVersionConflict,
+    )
     from senior_control.tasks.store import TaskStore as LegacyTaskStore
     from senior_control.vehicle_logs.models import LogQuery as LegacyLogQuery
     from senior_control.vehicle_logs.service import LogSubscription as LegacyLogSubscription
@@ -232,6 +299,12 @@ def main() -> None:
     assert issubclass(LegacyTaskStore, ManagerTaskStore)
     for name in ("prepare", "create", "get", "claim", "claim_in_transaction", "update"):
         assert getattr(LegacyTaskStore, name) is getattr(ManagerTaskStore, name)
+    assert LegacyLifecycleStore is ManagerLifecycleStore
+    assert LegacyLifecycleService is ManagerLifecycleService
+    assert LegacyRequestConflict is ManagerRequestConflict
+    assert LegacyStaleEffect is ManagerStaleEffect
+    assert LegacyVersionConflict is ManagerVersionConflict
+    assert LegacyLifecycleSchema is ManagerLifecycleSchema
 
     assert LegacyGeoAlignment is GeoAlignment
     assert LegacyHeadingObserver is HeadingObserver
@@ -337,6 +410,7 @@ def main() -> None:
     )
     verify_manager_tasks()
     verify_manager_task_store()
+    verify_manager_lifecycle()
     verify_legacy_task_store()
     # The local caller still supplies its real MapRef; the manager never wraps it.
     from datetime import datetime, timezone
@@ -489,5 +563,6 @@ if __name__ == "__main__":
             verify_manager_tasks()
             assert "aiosqlite" not in sys.modules and "pydantic" not in sys.modules
             verify_manager_task_store()
+            verify_manager_lifecycle()
     else:
         main()

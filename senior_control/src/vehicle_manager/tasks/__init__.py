@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from vehicle_manager.tasks import lifecycle
+    from vehicle_manager.tasks.lifecycle_service import LifecycleService
+    from vehicle_manager.tasks.lifecycle_store import LifecycleStore
     from vehicle_manager.tasks.models import (
         ExecutionContext,
         ExecutionRecord,
@@ -23,6 +25,8 @@ __all__ = [
     "ExecutionRecord",
     "ExecutionStatus",
     "IntentAction",
+    "LifecycleService",
+    "LifecycleStore",
     "Schedule",
     "SkipRecord",
     "TaskDefinition",
@@ -34,6 +38,14 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
+    if name == "LifecycleService":
+        from vehicle_manager.tasks.lifecycle_service import LifecycleService
+
+        return LifecycleService
+    if name == "LifecycleStore":
+        from vehicle_manager.tasks.lifecycle_store import LifecycleStore
+
+        return LifecycleStore
     if name == "Schedule":
         from vehicle_manager.tasks.schedule import Schedule
 

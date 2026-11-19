@@ -59,3 +59,10 @@ S1将原test_task_runner原样迁入本目录，继续通过生产旧TaskStore�
 实际命令和13个解析函数/45处异常构造的同义审计见[manager S1](../README.md#s1-taskstore持久化)。
 安装工具核对旧构造非同类但业务方法同一实现、TASK_STATEMENTS/原MapRef/DomainError身份，并真实开库create/get/CAS/重开。
 不新增pytest场景或假数据库/错误类型；原1/38项类型错误及真实ROS未验保持。
+
+S2两份原test_task_lifecycle_store/service已迁入本目录，canonical实现/旧入口使用同一类与异常对象。
+原硬退出WAL用例只改子进程导入路径及继承父进程真实sys.path，避免落到旧安装或找不到manager，
+os._exit的23/24/25阶段、15秒上界、原断言与其他输入不变，仍是实际子进程退出而非mock。
+首轮缺manager路径的3项失败修正后原核心55通过，含原Store/runner/ownership/terminal outbox的完整221项通过。
+安装工具验证真实TaskStore/DB对象、Pose序列化与receipt/effect持久化及旧类/异常/SCHEMA身份，不执行RPC。
+manager原2项、全链原38项和实际ROS未验见[manager S2记录](../README.md#s2-生命周期持久与服务)。
