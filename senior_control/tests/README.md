@@ -82,3 +82,11 @@ M2e将原test_waypoint_store迁入本目录；所有原用例体与断言保持�
 没有迁Home业务、补假属性或新设场景；原地图同连接事务与foreign Home保护继续使用真实SQLite和已有回调。
 独立manager只验证存储接口无root/ROS依赖；旧SDK实际验证原值/构造器、保存读取重开及IpcNavigation任务目标读取。
 命令、SQL/AST审计、原2/39项类型错误和真实ROS未验见[manager M2e记录](../README.md#m2e-waypointstore存储迁移)。
+
+M2f将原test_direct_navigation逐字节迁入本目录，仍通过生产旧Compatible构造，
+原goal/free-map/代次/cancel及pending/confirmed Home输入和断言不变。
+混合test_agent_ports留原位，继续验证Home捕获的原定位、代次及不额外添加安全权限语义；
+0.5秒表达式和采样顺序另以原方法AST核对，未新增时限边界情景。
+首组选定24通过；含原workspace、真实任务装配及终端义务的完整选择51通过，不重复累加。
+旧HomeService用例/业务与协调未迁或启用；没有新情景、假属性或断言弱化。
+独立安装与实际Root接线、AST/类型对照及真实ROS缺口见[manager M2f记录](../README.md#m2f-生产home捕获与管理目标准入)。

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
+from vehicle_manager.waypoints.home_capture import HomeCapture as _HomeCapture
+from vehicle_manager.waypoints.ports import WaypointValuePorts
+
 from senior_control.agent.connection import IpcMotion
 from senior_control.protocol import (
     Envelope,
@@ -376,48 +379,20 @@ class PoseReply(BaseModel):
     map_generation: str | None = None
 
 
-class IpcHomePort:
+class IpcHomePort(_HomeCapture[MapRef, Pose2D]):
+    """//Compatible: original constructor, state/parser and concrete local values."""
+
     def __init__(self, client: Requester, store: WaypointStore, *, robot_id: str) -> None:
         self._client = client
-        self._store = store
-        self._robot_id = robot_id
-        self._state = IpcState(client)
-
-    async def home_revision(self) -> int:
-        return await self._store.home_revision()
-
-    async def set_current(self, expected_revision: int) -> int:
-        try:
-            pose = PoseReply.model_validate(await self._client.request("pose.get"))
-            map_ref = MapRef(pose.map_id, pose.reference_revision)
-            state = await self._state.read()
-        except (IpcError, OSError, ValueError, ValidationError) as exc:
-            raise DomainError(
-                ErrorCode.UNAVAILABLE, "qualified ROS localization unavailable"
-            ) from exc
-        if (
-            not 0 <= time.monotonic() - pose.sampled_at <= 0.5
-            or not state.localized
-            or state.map_ref != map_ref
-            or not pose.map_generation
-            or pose.map_generation != state.map_generation
-            or pose.map_generation != state.localization_generation
-        ):
-            raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "qualified pose unavailable")
-        await self._store.save_home(
-            waypoint_id=None,
-            pose=Pose2D(pose.x, pose.y, pose.yaw),
-            map_ref=map_ref,
-            anchor_id=pose.anchor_id,
-            anchor_pose=Pose2D(pose.anchor_x, pose.anchor_y, pose.anchor_yaw),
-            source_robot_id=self._robot_id,
-            status="confirmed",
-            adopted=True,
-            latitude=None,
-            longitude=None,
-            expected_revision=expected_revision,
+        super().__init__(
+            lambda: client.request("pose.get"),
+            store,
+            robot_id=robot_id,
+            state=IpcState(client),
+            parse_pose=PoseReply.model_validate,
+            values=WaypointValuePorts(map_reference=MapRef, pose=Pose2D, error=DomainError),
+            transport_errors=(IpcError, OSError, ValueError, ValidationError),
         )
-        return expected_revision + 1
 
 
 class TaskAwareMotion(IpcMotion):

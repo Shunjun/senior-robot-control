@@ -133,9 +133,13 @@ def verify_manager_execution() -> None:
 
 def verify_manager_waypoints() -> None:
     from vehicle_manager import waypoints
+    from vehicle_manager.waypoints.direct_navigation import DirectNavigation
+    from vehicle_manager.waypoints.home_capture import HomeCapture
     from vehicle_manager.waypoints.ports import WaypointStorePorts
     from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS, WaypointStore
 
+    assert waypoints.HomeCapture is HomeCapture
+    assert waypoints.DirectNavigation is DirectNavigation
     assert waypoints.WaypointStore is WaypointStore
     assert waypoints.WaypointStorePorts is WaypointStorePorts
     assert len(WAYPOINT_STATEMENTS) == 2
@@ -152,20 +156,28 @@ def verify_legacy_task_store() -> None:
     import tempfile
     from datetime import datetime, timezone
 
+    from pydantic import ValidationError
     from vehicle_manager.tasks.executor import NavigationFailure as ManagerNavigationFailure
     from vehicle_manager.tasks.executor import ProcessCrash as ManagerProcessCrash
     from vehicle_manager.tasks.executor import TaskExecutor as ManagerExecutor
     from vehicle_manager.tasks.navigation_port import NavigationEffects as ManagerEffects
     from vehicle_manager.tasks.runtime import TaskRuntime as ManagerRuntime
+    from vehicle_manager.waypoints.direct_navigation import (
+        DirectNavigation as ManagerDirectNavigation,
+    )
+    from vehicle_manager.waypoints.home_capture import HomeCapture
     from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS as ManagerWaypointStatements
     from vehicle_manager.waypoints.store import WaypointStore as ManagerWaypointStore
 
     from senior_control.agent.composition import build_task_runtime
-    from senior_control.agent.ports import IpcNavigation
+    from senior_control.agent.direct_navigation import DirectNavigation
+    from senior_control.agent.dispatcher import LifecycleNavigationOperations, _TaskRouteReceiver
+    from senior_control.agent.ports import IpcHomePort, IpcNavigation, IpcState, PoseReply
+    from senior_control.agent.workspace import WorkspaceReader
     from senior_control.errors import DomainError, ErrorCode
     from senior_control.models import MapRef, Pose2D
     from senior_control.navigation import RouteRejected
-    from senior_control.runtime.ipc import IpcClient
+    from senior_control.runtime.ipc import IpcClient, IpcError
     from senior_control.storage.database import Database
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.tasks import Schedule, TaskDefinition
@@ -277,6 +289,31 @@ def verify_legacy_task_store() -> None:
             assert executor.lifecycle.store.database is database
             assert isinstance(executor.lifecycle.port, ManagerEffects)
             assert executor.lifecycle.port.navigation is navigation
+            capture = IpcHomePort(client, points, robot_id="robot")
+            assert IpcHomePort is not HomeCapture and isinstance(capture, HomeCapture)
+            assert IpcHomePort.set_current is HomeCapture.set_current
+            assert IpcHomePort.home_revision is HomeCapture.home_revision
+            assert capture._client is client and capture._store is points
+            assert type(capture._state) is IpcState and capture._state._client is client
+            assert capture._parse_pose == PoseReply.model_validate
+            assert capture._transport_errors == (IpcError, OSError, ValueError, ValidationError)
+            assert capture._values.map_reference is MapRef
+            assert capture._values.pose is Pose2D and capture._values.error is DomainError
+            state = IpcState(client)
+            assert state is not capture._state and state._client is capture._state._client
+            workspace = WorkspaceReader("robot", store, points, client)
+            actions = LifecycleNavigationOperations(executor, state, workspace, points)
+            receiver = _TaskRouteReceiver(executor, "installed-fingerprint", state)
+            target = DirectNavigation(state, workspace, points, receiver)
+            assert DirectNavigation is not ManagerDirectNavigation
+            assert isinstance(target, ManagerDirectNavigation)
+            assert DirectNavigation.__call__ is ManagerDirectNavigation.__call__
+            assert target._state is actions.state is state
+            assert target._workspace is actions.workspace is workspace
+            assert target._waypoints is actions.waypoints is points
+            assert target._navigation is receiver and receiver.executor is executor
+            assert target._values.map_reference is MapRef and target._values.pose is Pose2D
+            assert target._values.error is DomainError
             assert executor.errors.domain is DomainError
             assert executor.errors.route_rejected is RouteRejected
             assert executor.errors.qualification_unavailable is QualificationUnavailable

@@ -832,3 +832,88 @@ HomeService现有构造在原unit/存储/地图回归与StoreHomePort可注入�
 可复用本片agent_ports的缺/旧pose保护、workspace/direct_navigation原Home准入，
 以及test_home的同DB多service guard、未知接受/旧terminal/迟到callback、锁竞争与断链义务，
 原地图same_ref_import/Home保留用例；输入与预期继续沿用原fixture，不先新增能力或测试情景。
+
+## M2f 生产Home捕获与管理目标准入
+
+基线 `7a1e265`，按顺序先归Home捕获，再归DirectNavigation管理侧请求/准入。
+只移动已装配业务，不启用旧HomeService。
+
+```text
+senior_control/src/vehicle_manager/waypoints/
+├── home_capture.py       HomeCapture：原pose/state/时间/代次检查及revision CAS请求
+├── direct_navigation.py  DirectNavigation：原目标解析、Home选择与workspace/live准入
+├── ports.py              原对象的只读消费接口与逐实例WaypointValuePorts
+└── __init__.py           按需公开两个owner；既有store/codec不变
+src/senior_control/agent/
+├── ports.py              IpcHomePort Compatible薄构造；IpcState/PoseReply/其他IPC实现仍原位
+└── direct_navigation.py  DirectNavigation Compatible薄构造；原私有validator转发同一类
+```
+
+旧IpcHomePort与HomeCapture、旧DirectNavigation与canonical类均**不是同一类**，
+旧构造签名保留，业务方法直接继承同一实现。
+WaypointValuePorts只携带每实例原MapRef/Pose2D/DomainError构造器；
+MapRef/Pose/异常、RuntimeState/PoseReply、StoredWaypoint/Home对象都不迁、不复制或转换。
+Home捕获只读取实际pose字段和四个state字段；目标校验另读navigation_ready/manual/safety，
+不会把返航权限附加到设Home。接口中的类型参数保留原具体输入/输出，避免消费者改值或做运行时转换。
+manager无root/ROS/地图实现反向导入，没有新项目或依赖配置。
+
+IpcHomePort继续原同client的`pose.get → PoseReply.model_validate → MapRef → IpcState.read(state.get)`，
+原PoseReply严格healthy/finite/extra规则和IpcState状态时效/完整ref校验都保留。
+HomeCapture随后按原顺序检查0≤pose age≤0.5、localized、ref与代次，
+使用同WaypointStore.save_home的原write_lock/CAS，返回expected_revision+1。
+没有新加safety_clear/navigation_ready/环境许可、target/execution锁或提交后采样。
+catch仍只有原IpcError/OSError/ValueError/ValidationError；
+原IpcState.read的DomainError直接透出，不被新包泛化包装。原错误码/文本/原因链保持。
+
+DirectNavigation私有_Reference/_Goal保留原定义，直接使用原protocol本来已转发的
+senior_contracts.wire.MapRefPayload/ShortText，不扩WS或改变字段/接受规则。
+返航仍要求adopted/confirmed且ref吻合，保留原Home pose对象；
+先workspace.verify_free_target，再state.read与原地图/定位/导航/手动安全检查。
+生产LifecycleNavigationOperations/_TaskRouteReceiver仍原位，外层原3秒预算、receiver二次state采样、
+原Admission与同DB持久任务接受、已接受目标和取消语义不变。
+运动仍只由原NavigationEffects→IpcNavigation.task_effect→ROS接收者执行，管理校验不接第二路运动。
+旧HomeService、StoreHomePort、同DB/robot Home协调/guard、每图Home及导航算法均未迁或启用。
+
+### 实际范围与验证
+
+实际11逻辑文件：产品6、测试迁移1、配置0、工具文档4；新增2/修改8/迁移1/删除0。
+产品为上述两份新增canonical、既有ports/__init__与原两个agent文件；
+原 `tests/unit/test_direct_navigation.py` → 本项目tests，同字节迁移。
+混合test_agent_ports保持原位，通过生产旧构造验证；工具文档仍为原安装验证器、此README、tests/README和原plan。
+
+版本：macOS26.4 arm64、Python3.12.15/pytest8.4.2/mypy2.4.0/ruff0.17.3、uv0.12.23。
+python/ruff/mypy使用原主仓库`.venv/bin/`；Pydantic2.14.1与aiosqlite0.22.1未变。
+
+- RED：先更新原安装验证器，从`/tmp`运行旧独立manager环境的
+  `python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only`，
+  因旧wheel没有vehicle_manager.waypoints.home_capture报ModuleNotFoundError；本轮安装后同检查通过。
+- `python -m pytest tests/unit/test_agent_ports.py senior_control/tests/test_direct_navigation.py senior_control/tests/test_waypoint_store.py -q`：
+  **24 passed，0.56s**；包括缺真实定位/旧代次不可设Home、合格generic ref可设且不需safety_clear、
+  原revision冲突、pending/confirmed返航与原free-map/代次准入。
+- `python -m pytest tests/unit/test_agent_ports.py senior_control/tests/test_direct_navigation.py senior_control/tests/test_waypoint_store.py tests/integration/test_workspace_data.py tests/integration/test_task_ownership.py senior_control/tests/test_terminal_release_outbox.py -q`：
+  **51 passed，1.27s**（含24项，不相加），涵盖原同DB任务接受/重放/查询、未知不重发、已接受目标不改、
+  原取消/接管与终端义务；没有新增pytest场景或改写断言。
+- AST核对原Home两方法及DirectNavigation.__call__：除显式注入的值/异常/parse/request接缝外相同，
+  原catch tuple、请求/构造/await/资格顺序、取消分支保持；两个原私有Pydantic类定义一致。
+  原agent/ports中其他IpcMapPort/IpcNavigation/RuntimeState/StateReply/IpcState/PoseReply/TaskAwareMotion等
+  类体AST全部一致；迁移测试逐字节相同。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：36份源码仍原2项，
+  lifecycle:318及lifecycle_store:647；全链同M2e的pytest源码MYPYPATH运行
+  `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：228份仍39项，诊断逐条一致。
+  历史38与本环境launch namespace差异及旧short_admission夹具失败继续按S3登记，没有ignore或假属性。
+- 八份相关Python的ruff check/format --check及按原CRLF的git diff检查通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2f-wheels`及根同命令：
+  sdist/wheel成功；`/tmp/m2f-manager-venv`离线安装本轮manager及原contracts wheel，共8包，
+  从`/tmp`运行安装工具`--manager-tasks-only`通过，两个公开owner可导入且无root/ROS/地图实现。
+  安装命令为 `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv pip install --python /tmp/m2f-manager-venv/bin/python --offline /tmp/m2f-wheels/vehicle_manager-0.1.0-py3-none-any.whl /tmp/contract-convergence-wheels/senior_contracts-0.1.0-py3-none-any.whl`。
+- 原`/tmp/vehicle-batch-one-venv`离线 `uv pip install --reinstall --no-deps` 重装本轮root/manager，
+  从`/tmp`运行原安装工具默认模式通过；8/24包的`uv pip check --python <对应Python>`均通过。
+  工具沿用实际SQLite/TaskStore/WaypointStore/IpcNavigation/build_task_runtime，
+  另装配原IpcHomePort/IpcState/WorkspaceReader/LifecycleNavigationOperations/_TaskRouteReceiver及旧DirectNavigation，
+  核对同Store/原状态client/原parse与catch tuple、原值/异常构造、继承同一方法与真实receiver/executor引用，
+  没有连接IPC或发运动；独立环境Pydantic2.14.3、旧SDK仍2.14.1，aiosqlite均0.22.1。
+
+本片选定回归通过，不代表全仓或真实ROS通过。
+未跑真实Linux/ROS/ament/DDS/原生安装、车辆/仿真服务及Python3.10；
+原安装工具继续输出native/SLAM UNVERIFIED，宿主SQLite/受控原IPC与wheel不替代这些实测。
+没有启开发或实车服务、部署或推送；等待负责人亲审，不继续旧HomeService迁移。

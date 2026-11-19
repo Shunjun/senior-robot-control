@@ -99,6 +99,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.S2 生命周期持久/服务已迁 | 原tasks/lifecycle_store、lifecycle_service → `vehicle_manager/tasks/` | 旧类/异常/值/SCHEMA同一对象，复用原TaskStore/DB及agent_schema；Pose只读形状不搬值，Admission/CAS/锁内采样/取消settle与锁外dispatch原样；执行/Runtime/导航效果仍原位 |
 | B6.S3 执行/调度与导航效果已迁 | 原tasks/navigation_port、executor、runtime → `vehicle_manager/tasks/` | 原构造薄适配逐实例注入原具体异常，Runtime同对象；同DB/实时准入/名义端口/真实IPC与终端隔离保留；14文件，验证与旧失败见S3记录 |
 | B6.M2e 航点存储已迁 | 原waypoints/store的SQL/解析 → `vehicle_manager/waypoints/` | 原值/构造与同DB domain准备注入、薄Compatible构造；地图Home回调沿原事务无二次锁/提交；Home业务/协调后置，11文件与验证见M2e记录 |
+| B6.M2f1/2 生产Home捕获/目标准入已迁 | 原IpcHomePort设定及DirectNavigation管理请求 → `vehicle_manager/waypoints/{home_capture,direct_navigation}.py` | 旧薄构造注入原对象；原时效/代次/CAS与任务接收/唯一运动链保持；旧HomeService不启用，11文件验证见M2f记录 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -509,3 +510,22 @@ manager34份仍原2项类型错误，全链226份仍S3同39项；安装/原值�
 下一片先只读核对生产IpcHomePort/DirectNavigation和旧HomeService两条链：后者当前未由生产composition构造，
 依赖原地图读写、Pose/错误/结果构造与同DB Home协调，不能直接打入manager闭包或顺便启用；
 须另行收窄端口、预报后迁已有行为，不实现每图Home或新地图/导航算法。
+
+### B6.M2f1/2 生产Home捕获和管理目标校验已迁
+
+基线7a1e265，按顺序先HomeCapture、再DirectNavigation归已有vehicle_manager/waypoints，
+旧IpcHomePort/DirectNavigation显式Compatible薄构造、非同类但业务方法唯一继承。
+原值/异常逐实例注入，原PoseReply/IpcState与同DB/Store仍由生产装配提供，manager无root/ROS反向依赖。
+Home原pose/state/ref/0.5秒与revision CAS顺序/catch保持，不新增safety_clear或导航资格；
+管理返航仍经原LifecycleNavigationOperations/_TaskRouteReceiver、3秒预算、二次状态采样、Admission与持久任务，
+原IpcNavigation/ROS和取消保持唯一执行链，已接受目标不改变。
+原私有目标validator直接使用既有共享父类约束，无WS扩张；旧HomeService/StoreHomePort/协调/guard、每图Home或新导航不迁。
+实际11逻辑文件：产品6/测试迁移1/配置0/工具文档4，即新增2/修改8/迁移1/删除0。
+原test_direct_navigation同字节迁移，混合agent_ports留原位；原选择24通过、完整51通过（不累加）。
+两份业务方法/私有validator及其他原IPC类AST核对一致（只归一明确注入接缝），
+manager36份仍原2项类型诊断，全链228份仍M2e同39项，不弱化保护。
+两wheel构建、仓库外独立8包与旧SDK24包依赖/导入/旧身份及真实原装配引用核对通过，未连接IPC或发运动。
+完整实际目录、文件清单、命令版本及未验项见[manager M2f](../../../senior_control/README.md#m2f-生产home捕获与管理目标准入)。
+真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM仍UNVERIFIED；不开服务/部署/推送。
+旧HomeService后续先另审局部map读写/值与异常构造/同DB同robot协调端口，
+保留原锁顺序、guard token/未知取消/旧terminal和地图owner，仍不可顺便启用或实现每图Home。
