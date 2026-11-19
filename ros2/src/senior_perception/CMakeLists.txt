@@ -4,4 +4,8 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 # Executable composition stays in senior_robot/senior_sim; no duplicate ROS loop.
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(scan_geometry test)
+endif()
 ament_package()

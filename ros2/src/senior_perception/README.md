@@ -46,6 +46,7 @@ vehicle_sensor_decode，scan_access 原名 vehicle_sensor_access），以及原
 这两个模块现在只组装 `run(功能包节点类, cli=True)`，沿用原有界生命周期、信号与关闭顺序。
 ROS 功能包不反向导入 senior_robot，不复制 executor，也不启动第二套 ROS 循环。
 节点类通过本包的 ament Python 安装，senior_robot 清单新增本包运行依赖。
+包内原几何用例通过 ament_cmake_pytest 的 scan_geometry 目标注册到 colcon test。
 实车 safety_motion 和仿真 simulation_motion 的 launch、参数、重启监管和扫描重映射保持原值；
 既有 `/scan` 建图/导航链继续沿用原候选/接入程序，原生 scan_receipt 仍归 senior_sensor_ingress。
 
@@ -91,4 +92,4 @@ CI 保留已迁同名非 ROS 用例的收集；root pytest 的测试 helper 路�
 本机无 colcon、CMake、rclpy/ament，未执行真实 ROS 构建、节点导入/安装定位、DDS/TF、
 实车/仿真/建图导航运行；静态/无 ROS SDK 验证不代替它们。ROS Humble 环境需
 `colcon build --base-paths ros2/src --packages-up-to senior_robot senior_perception` 后，
-执行已迁 ROS 回归及原建图/导航入口回归，单独登记实测。没有新增测试场景、部署或推送。
+先执行 `colcon test --packages-select senior_perception`，再执行已迁 ROS 回归及原建图/导航入口回归，单独登记实测。没有新增测试场景、部署或推送。
