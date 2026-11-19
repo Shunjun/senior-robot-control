@@ -12,7 +12,27 @@ from pathlib import Path
 
 def verify_manager_agent(*, network: bool = False) -> None:
     from vehicle_manager import agent
+    from vehicle_manager.agent.dispatcher import Dispatcher
+    from vehicle_manager.agent.frame_projection import vehicle_frame
     from vehicle_manager.agent.journal import AgentJournal
+    from vehicle_manager.agent.logs_wire import AgentLogConnection
+    from vehicle_manager.agent.settings_wire import SettingsRuntime
+    from vehicle_manager.agent.snapshot_state import SnapshotState
+    from vehicle_manager.agent.snapshots import snapshot_envelope
+    from vehicle_manager.agent.workspace import WorkspaceReader
+
+    assert all(
+        callable(value)
+        for value in (
+            SnapshotState,
+            WorkspaceReader,
+            Dispatcher,
+            snapshot_envelope,
+            vehicle_frame,
+            SettingsRuntime,
+            AgentLogConnection,
+        )
+    )
     from vehicle_manager.agent.pairing import Credentials
     from vehicle_manager.agent.supervisor import AuthRejected, Supervisor
     from vehicle_manager.agent.websocket import ProtocolRejected, WebSocketConnector, WebSocketLink
@@ -251,6 +271,44 @@ def verify_legacy_task_store() -> None:
     for method in ("home", "waypoint", "route_poses", "save_home", "save_waypoint", "sync_poses"):
         assert getattr(WaypointStore, method) is getattr(ManagerWaypointStore, method)
 
+    from vehicle_manager.agent import dispatcher as manager_dispatcher
+    from vehicle_manager.agent import snapshots as manager_snapshots
+    from vehicle_manager.agent.logs_wire import AgentLogConnection as ManagerLogConnection
+    from vehicle_manager.agent.settings_wire import SettingsRuntime as ManagerSettingsRuntime
+    from vehicle_manager.agent.snapshot_state import SnapshotState as ManagerSnapshotState
+    from vehicle_manager.agent.workspace import WorkspaceReader as ManagerWorkspace
+
+    from senior_control.agent.composition import SnapshotState
+    from senior_control.agent.dispatcher import (
+        Dispatcher,
+        OperationNotCommitted,
+        TaskOperationResult,
+    )
+    from senior_control.agent.logs_wire import AgentLogConnection
+    from senior_control.agent.settings_wire import SettingsRuntime
+    from senior_control.agent.snapshots import HomeSummary, LiveState, RobotSnapshot, TaskSummary
+
+    for old, canonical in (
+        (SnapshotState, ManagerSnapshotState),
+        (WorkspaceReader, ManagerWorkspace),
+        (Dispatcher, manager_dispatcher.Dispatcher),
+        (LifecycleNavigationOperations, manager_dispatcher.LifecycleNavigationOperations),
+        (SettingsRuntime, ManagerSettingsRuntime),
+        (AgentLogConnection, ManagerLogConnection),
+    ):
+        assert old is not canonical and issubclass(old, canonical)
+    assert SnapshotState.collect is ManagerSnapshotState.collect
+    assert WorkspaceReader.read is ManagerWorkspace.read
+    assert Dispatcher.run is manager_dispatcher.Dispatcher.run
+    assert manager_dispatcher.logger.name == "senior_control.agent"
+    for name, value in (
+        ("RobotSnapshot", RobotSnapshot),
+        ("LiveState", LiveState),
+        ("HomeSummary", HomeSummary),
+        ("TaskSummary", TaskSummary),
+    ):
+        assert getattr(manager_snapshots, name) is value
+
     assert Credentials is ManagerCredentials and pair_device is manager_pair_device
     assert Supervisor is ManagerSupervisor and AuthRejected is ManagerAuthRejected
     assert manager_supervisor_logger.name == "senior_control.runtime.supervisor"
@@ -371,6 +429,17 @@ def verify_legacy_task_store() -> None:
             assert state is not capture._state and state._client is capture._state._client
             workspace = WorkspaceReader("robot", store, points, client)
             actions = LifecycleNavigationOperations(executor, state, workspace, points)
+            assert workspace._ports.map_reference is MapRef and workspace._ports.pose is Pose2D
+            assert workspace._ports.error is DomainError and workspace._ports.ipc_error is IpcError
+            assert actions._values.result.__module__ == "senior_control.models"
+            assert actions._values.not_committed is OperationNotCommitted
+            assert actions._values.task_result is TaskOperationResult
+            assert actions._values.direct_navigation is DirectNavigation
+            snapshots = SnapshotState(state, store, points, workspace, navigation=actions)
+            assert snapshots._state is state and snapshots._tasks is store
+            assert snapshots._waypoints is points and snapshots._navigation is actions
+            assert snapshots._ports.error is DomainError
+
             receiver = _TaskRouteReceiver(executor, "installed-fingerprint", state)
             target = DirectNavigation(state, workspace, points, receiver)
             assert DirectNavigation is not ManagerDirectNavigation

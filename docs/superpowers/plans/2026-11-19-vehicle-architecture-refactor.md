@@ -102,6 +102,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2f1/2 生产Home捕获/目标准入已迁 | 原IpcHomePort设定及DirectNavigation管理请求 → `vehicle_manager/waypoints/{home_capture,direct_navigation}.py` | 旧薄构造注入原对象；原时效/代次/CAS与任务接收/唯一运动链保持；旧HomeService不启用，11文件验证见M2f记录 |
 | B6.M2f3 旧Home业务已迁但未启用 | 原waypoints/home → `vehicle_manager/waypoints/{home_service,home_ports}.py` | 原值/薄构造及同DB/robot锁和地图效果注入，guard/token/未知取消与原地图/控制owner保持；9文件验证见M2f3记录 |
 | B6.M3A 管理连接基础已迁 | 原agent/websocket、pairing、journal与runtime/supervisor → `vehicle_manager/agent/` | 原快照/heartbeat、诊断和journal值逐实例注入；旧构造Compatible薄子类或同对象别名，原DB/锁、WS身份/超时/撤销和离线任务语义保持；21文件及安装/验证见M3A记录，快照/请求处理后片另核 |
+| B6.M3B 管理投影/读取/分发已迁 | 原snapshots、vehicle_state、vehicle_frame、SnapshotState、settings/logs wire、workspace、dispatcher → `vehicle_manager/agent/` | 原值/异常/诊断与地图效果逐实例沿用；同DB/原任务/IPC/手动端保持，WS不带内部DTO；26文件，原失败及ROS缺口见M3B记录，Agent/main和真实启动接线后片另核 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -572,3 +573,28 @@ manager44源码仍原2项类型诊断，全链236源码仍原39项、同M2f3集�
 原快照投影和heartbeat纯值与IpcMotion/异常分开，保留单一owner、原同DB/任务journal、
 手动隔离/明确撤销与非手动已接受任务离线继续，再按真实依赖预报同一合理批次迁移。
 本片未迁这些实现；既有地图/Home/定位与导航保持可用，ROS导航行为迁移后再做新算法。
+
+
+### B6.M3B 管理快照、工作区及请求编排已迁
+
+基线8b59521；八份既有管理职责唯一实现和两个实际消费端口归vehicle_manager/agent，
+原SnapshotState安全前沿/序列与dispatcher lane/journal/预算等状态仅有同一个owner实例。
+旧入口显式Compatible，公开管理值同对象别名，构造薄子类非同类但业务方法唯一；
+原MapRef/Pose/运动IPC运行对象、OperationStatus、具体异常和结果类不复制，逐实例注入。
+原workspace本地validator/限额和地图导出回退保留原owner，manager不导入root/ROS/地图实现或扩WS。
+原显示安全修订/几何失效与省略、证据/日志队列、目标资格/任务事务与未知结果/取消顺序保持。
+Agent/main、IpcMotion与run_agent整体函数体不迁，ManualIngress/Receiver/ROS执行边界保持。
+
+实际26逻辑文件：产品19/测试迁移3/配置0/工具文档4，即新增10/修改13/迁移3/删除0。
+三份原测试逐字节迁移，核心最终108通过；扩展原选择允许测试socket后152通过/9失败，
+8b59521只读归档同环境复现完全相同9个失败ID：旧manual夹具缺_output_incarnation，
+旧进程夹具缺ros_setup/关闭签名不接受group_grace，旧日志IPC替身拒绝learning_capability。
+保护/断言不改，不以这些失败宣称真实执行整链通过；原S3旧失败继续登记。
+52个原业务方法/函数按明确接缝AST核对一致，其余原组装/执行及异常/validator类体保持。
+manager54源码仍原2项、全链246源码仍原39项，同M3A诊断集合一致，无新增cast/ignore。
+两wheel构建与仓库外base8包/agent-extra15包/旧SDK29包导入依赖和同DB/原构造检查通过；
+这是原兼容闭包叠加安装，不是完整根frozen重装，配置/锁/CI未改。
+实际目录/文件类别、完整命令版本/结果/未验项见[manager M3B](../../../senior_control/README.md#m3b-管理快照显示工作区与请求分发)。
+真实Linux/ROS/ament/DDS/native/车辆仿真、Python3.10和CI未验，native/SLAM仍UNVERIFIED，不启服务/部署/推送。
+下一片先精核Agent/main、纯Link/Heartbeat与IpcMotion混合边界、实际run_agent同DB/clock/metrics/关闭及视频装配，
+能沿同一组真实端口交付的合并预报，不能引入根runtime或将IPC混为WS、提前迁ROS导航；导航算法仍最后。

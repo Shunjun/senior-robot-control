@@ -105,3 +105,13 @@ M3A将原test_websocket_link、test_runtime和test_agent_pairing逐字节迁入�
 设置日志wire和任务离线隔离复用原用例，不因迁移改变原网络或控制保护。
 原安装工具在独立base/agent-extra与旧SDK环境从/tmp运行，实际核对原构造/值身份及临时SQLite journal提交；
 未启生产连接或发运动，真实Linux/ROS与历史类型/夹具缺口见[manager M3A记录](../README.md#m3a-管理连接监管配对与journal基础)。
+
+
+M3B将原test_vehicle_state、test_runtime_reporting、test_workspace_data逐字节迁入本目录，
+共享integration夹具仍用原pytest pythonpath，不改输入/断言或新造场景。
+原快照/显示/工作区、agent/设置日志wire与任务装配核心最终108通过；
+追加原手动/故障隔离/日志review/配置用例后152通过、9失败（包含核心，不累加）。
+8b59521只读归档同环境重跑复现完全相同9个失败ID，缺_output_incarnation/ros_setup、
+group_grace签名和拒绝learning_capability的旧夹具保持，不能据此宣称真实手动/子进程整链通过。
+原安全修订/快照失效/目标资格/未知只查询保护不改；52个业务方法/函数及其余组装/执行类体审计保持。
+安装和同DB/类型/效果身份、完整命令/环境/已知失败见[manager M3B记录](../README.md#m3b-管理快照显示工作区与请求分发)。

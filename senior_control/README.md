@@ -1107,3 +1107,113 @@ uv0.12.23；主环境Pydantic2.14.1/aiosqlite0.22.1。
 安装工具原native/SLAM仍UNVERIFIED，既有S3夹具失败与原2/39项类型诊断仍登记。
 选定116项通过不代表全仓全绿；无开发/实车服务、部署或推送。
 下一片先精核快照/连接与请求处理依赖，保留原IPC/控制和唯一状态owner，再预报迁移；本片未提前实施。
+
+
+## M3B 管理快照、显示、工作区与请求分发
+
+基线8b59521；原管理行为迁至既有vehicle_manager/agent，真实run_agent仍从旧公开入口装配。
+
+```text
+senior_control/src/vehicle_manager/agent/
+├── snapshots.py        # LiveState/RobotSnapshot及原云车快照投影
+├── vehicle_state.py    # 原只读显示投影与安全修订前沿
+├── frame_projection.py # 原vehicle_frame；不授予控制权限
+├── snapshot_state.py   # 原SnapshotState唯一序列/安全token/采集状态
+├── settings_wire.py    # 原实时证据刷新与设置wire，设置服务仍唯一策略owner
+├── logs_wire.py        # 原独立日志连接/授权/有界pending与Python日志源
+├── workspace.py        # 原地图读取/身份围栏与目标、任务编辑检查
+├── dispatcher.py       # 原分发lane/时间预算/journal与持久任务准入
+├── state_ports.py      # 实际只读消费形状、原显示构造器
+├── request_ports.py    # 每实例原值/异常/诊断及地图效果
+└── __init__.py         # 既有按需公开入口更新
+senior_control/tests/
+├── test_vehicle_state.py     # 原tests/unit，逐字节迁移
+├── test_runtime_reporting.py # 原tests/integration，逐字节迁移
+└── test_workspace_data.py    # 原tests/integration，逐字节迁移
+```
+
+公开显示/快照值由旧路径显式Compatible同对象转发到canonical，
+原MapRef/Pose2D、运动/IPC运行时对象、Waypoint、OperationStatus和具体DomainError不搬、不复制。
+旧SnapshotState、WorkspaceReader、SettingsRuntime、AgentLogConnection、Dispatcher/Store*Port及
+LifecycleNavigationOperations为Compatible薄构造子类，非同一类，但继承唯一业务方法；
+旧_TaskRouteReceiver构造也保留，生产准入使用canonical接收器和原executor/state。
+原OperationNotCommitted仍在旧入口继承原DomainError，TaskOperationResult仍继承原OperationResult，
+构造/catch/code/链与原result/status类逐实例注入；无全局工厂或注册。
+
+原地图本地响应validator类及限制仍在旧workspace接口，逐实例传给canonical读取编排；
+导出回退仍调用原WorkspaceMap和原exported_grid，不将栅格/地图算法打入manager闭包或WS contracts。
+MapRef/Pose工厂继续生成原对象；同ref、grid身份、free-space和二次读取检查的顺序保持。
+显示只读消费原运动对象，MotionMode.ESTOP身份比较和MotionState/RuntimeObservation构造由旧入口提供；
+只读协议不是新DTO或运行时验证，不刷新观测时刻、不复制控制状态。
+SnapshotState继续拥有同一组序列/安全token/恢复前沿，原TaskExecutor上下文采样/任务事务与IPC对象沿用。
+
+原PendingCounter/DiagnosticLock通过构造注入，复用现有日志QueueCounter技术端口而非复制诊断；
+日志send锁/32 pending/5秒send及独立网络循环、设置锁与实时证据采样顺序保持。
+原dispatcher logger显式senior_control.agent；原map/edit锁、journal、超时/取消未知、
+已接受目标/未知只查询和导航准入、手动执行与ROS唯一运动链不变。
+原Agent/main、connection/IpcMotion与run_agent函数体保留；本片只迁组合中的SnapshotState。
+
+### 实际文件范围
+
+26逻辑文件：产品19、测试迁移3、配置0、工具文档4；新增10/修改13/迁移3/删除0。
+产品为上述10份新文件（不含既有__init__）、__init__更新及原agent下八份：
+snapshots/vehicle_state/manual_control/composition/settings_wire/logs_wire/workspace/dispatcher。
+工具文档仅原安装工具、本README、tests/README与原plan；pyproject/锁/CI/云镜像无改动，未新增项目或WS字段。
+既有CI已发现manager源码和项目内测试，无需新增配置。
+
+### 验证命令、结果与环境
+
+macOS26.4 arm64；使用原主仓库.venv/bin的Python3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0，
+uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1、HTTPX0.28.1/WebSockets15.0.1。
+以下python/ruff/mypy为该主环境绝对路径；工作区命令如下，仓库外项单列。
+
+- RED：在未装本片的原独立manager环境执行原工具`--manager-tasks-only`，
+  缺vehicle_manager.agent.snapshot_state报ModuleNotFoundError；本片wheel安装后通过。
+- `python -m pytest senior_control/tests/test_vehicle_state.py senior_control/tests/test_runtime_reporting.py senior_control/tests/test_workspace_data.py tests/integration/test_agent.py tests/integration/test_settings_logs_wire.py tests/integration/test_task_ownership.py -q`：
+  首轮及最终均108通过，最终8.58s；复用原快照旧代次/几何失效/省略、显示安全修订、
+  设置证据/日志wire、工作区身份/目标、journal重放与持久任务准入保护。
+- 在上述命令追加`tests/integration/test_manual_wire.py tests/integration/test_runtime_fault_isolation.py tests/integration/test_settings_logs_review.py tests/unit/test_agent_config.py`：
+  沙箱151通过/10失败，包含原Unix socket bind EPERM；允许原测试socket与隔离子进程后152通过/9失败，14.85s。
+  这152项包含核心108项，不累加，也不将完整选择宣称全绿。
+- 将8b59521用git archive只读导出/tmp/m3b-baseline，在同环境允许socket执行
+  `python -m pytest tests/integration/test_manual_wire.py tests/integration/test_runtime_fault_isolation.py tests/integration/test_settings_logs_review.py -q`：
+  37通过/9失败，6.85s，失败test ID集合与本轮完全相同。
+  原3个manual_wire夹具缺CommandNode._output_incarnation；
+  原5个runtime_fault_isolation real-*夹具缺ros_setup，关闭替身不接受group_grace；
+  原settings_logs_review目录日志场景的IPC替身拒绝learning_capability，导致快照不产生。
+  原夹具/断言不改，不补假属性或跳过；这些失败不作为本片已验证的真实手动/子进程保护。
+- 按明确的构造/异常/效果接缝归一，52个原业务方法/函数AST一致；
+  其余AgentConfig/run_agent/build_task_runtime/pause_failed_tasks及ManualIngress/Receiver类体AST一致，
+  原异常/结果与workspace本地validator类体一致，三份测试逐字节一致，无新增pytest场景。
+- 对agent目录、八份原入口、工具及三份迁移测试执行`ruff check`和`ruff format --check`，
+  并以`git -c core.whitespace=cr-at-eol diff --check`核对差异。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：54源码仍原2项
+  lifecycle:318/lifecycle_store:647；MYPYPATH取根pytest原pythonpath后执行
+  `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：246源码仍原39项，
+  与M3A同环境诊断集合逐条相同，无新增ignore/cast，原类型错误不算通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m3b-wheels`及
+  根`uv build --offline --out-dir /tmp/m3b-wheels`成功，最终生成两份sdist/wheel。
+  对原/tmp/m3a-base-venv、/tmp/m3a-agent-venv用`uv pip install --offline --reinstall --no-deps`安装本片manager wheel，
+  原/tmp/vehicle-batch-one-venv同命令安装root/manager wheel；均使用原已验证第三方兼容闭包，无锁或依赖更新。
+  从/tmp分别运行原安装工具`--manager-tasks-only`、`--manager-agent-only`及默认模式均通过；
+  `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv pip check --python <对应环境python>`分别8/15/29包通过。
+  最终重装后的检查首轮漏设cache导致默认用户cache沙箱拒绝，补回上述任务cache后全部通过。
+  独立base/extra导入所有新模块且无root/cloud/ROS/地图包；旧SDK真实构造原SQLite/TaskStore/WorkspaceReader/
+  SnapshotState/LifecycleNavigationOperations及原IPC客户端引用，验证同对象/异常/工厂与唯一业务方法，未连接IPC或发运动。
+  此为本片wheel叠加兼容闭包验证，非完整根frozen重装；上片根离线缓存缺口与旧类型/夹具失败仍登记。
+
+真实Linux/ROS/ament/DDS/native/车辆仿真运行、Python3.10与GitHub runner未验；
+安装工具原native/SLAM仍UNVERIFIED，不用静态/宿主检查替代ROS实测。
+无开发/实车服务、部署或推送，等待负责人亲审。
+
+### M3C 接线建议（只读，尚未实施）
+
+下一片建议合并精核原Agent/main与connection的纯Link/Heartbeat边界、
+_snapshot_change_key和实际run_agent闭包，避免再拆无依赖障碍的小文件批次。
+main仍负责WS会话准入、手动/恢复与安全lane、快照采集/发送预算和断链；
+connection同时含纯Link/MotionPort/HeartbeatFrame与IpcMotion/MotionRejected，不能整包导入manager。
+优先逐实例注入原clock/metrics/诊断、同DB/journal、原具体结果/异常、真实motion/IPC和监督回调，
+复用本片canonical Dispatcher/SnapshotState/wire；run_agent的存储/任务/地图/视频owner装配须继续可独立核对。
+本地IPC客户端是管理到执行的适配，WS身份/epoch不得变成运动执行代次；
+ManualIngress/运行时接收与ROS执行owner仍原位，旧CLI/环境/关闭顺序和离线已接受任务继续保持。
+先逐调用核对以上构造/异常/实际patch owner，再预报下一片文件范围；本片不实施M3C或导航算法。

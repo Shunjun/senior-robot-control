@@ -8,8 +8,16 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from vehicle_manager.agent.frame_projection import vehicle_frame as _vehicle_frame
+from vehicle_manager.agent.state_ports import ProjectionPorts
+
 from senior_control.models import Velocity
-from senior_control.motion.contracts import AcceptedManualIntent, ManualIntent
+from senior_control.motion.contracts import (
+    AcceptedManualIntent,
+    ManualIntent,
+    MotionMode,
+    MotionState,
+)
 from senior_control.motion.manual_authority import (
     ManualAuthorityContext,
     ManualAuthorityManager,
@@ -169,6 +177,9 @@ class MotionRuntimeReceiver:
         )
 
 
+# //Compatible: pure display projection with the original motion/IPC constructors.
+
+
 def vehicle_frame(
     runtime: MotionRuntimeState | None,
     *,
@@ -183,98 +194,17 @@ def vehicle_frame(
     now: float,
     observation: RuntimeObservation | None = None,
 ) -> dict[str, object]:
-    """Use T7's motion projection; wire body averages retain their actual times."""
-    from senior_control.agent.vehicle_state import (
-        ConnectionState,
-        RuntimeSnapshot,
-        project_vehicle_state,
+    return _vehicle_frame(
+        runtime,
+        ports=ProjectionPorts(RuntimeObservation, MotionState, MotionMode, MotionMode.ESTOP),
+        sequence=sequence,
+        connected=connected,
+        task=task,
+        manual=manual,
+        manual_enabled=manual_enabled,
+        tasks_enabled=tasks_enabled,
+        runtime_enabled=runtime_enabled,
+        safety_revisions=safety_revisions,
+        now=now,
+        observation=observation,
     )
-    from senior_control.motion.contracts import MotionMode, MotionState
-
-    capabilities = ["runtime.v1"] if runtime_enabled else []
-    if tasks_enabled:
-        capabilities.append("task.execution.v1")
-    if manual_enabled:
-        capabilities.append("motion.intent.v1")
-    # //Compatible: older IPC producers omit reporting metadata.
-    if observation is None:
-        observation = RuntimeObservation(
-            status="missing" if runtime is None else "current",
-            last_sampled_steady=None if runtime is None else runtime.sampled_steady,
-        )
-    reporting = observation.model_dump()
-    reporting["age_seconds"] = (
-        None
-        if observation.last_sampled_steady is None
-        else max(0.0, now - observation.last_sampled_steady)
-    )
-    if runtime is None or observation.status != "current":
-        return {
-            "schema": 1,
-            "sequence": sequence,
-            "mode": "unknown",
-            "reason": observation.status,
-            "estop_revision": safety_revisions[0],
-            "fault_revision": safety_revisions[1],
-            "confirmed_estop_status": "unknown",
-            "body_reference": None,
-            "wheel_linear_mps": None,
-            "task": task,
-            "allowed_actions": [],
-            "capabilities": capabilities,
-            "manual_authority": None,
-            "observation": reporting,
-        }
-
-    motion = MotionState(
-        MotionMode(runtime.mode),
-        runtime.reason,
-        runtime.task_id,
-        safety_revisions[0],
-        safety_revisions[1],
-        runtime.stationary,
-        tuple(runtime.allowed_actions),
-    )
-    view = project_vehicle_state(
-        RuntimeSnapshot(sequence, motion),
-        ConnectionState(connected),
-        now_steady=now,
-    )
-    reference = runtime.body_reference
-    body = (
-        None
-        if reference is None
-        else {
-            "kind": "independent_body",
-            "average": reference.average,
-            "source": reference.source,
-            "age_seconds": max(0.0, now - reference.computed_steady),
-            "stale": not reference.computed_steady <= now < reference.valid_until_steady,
-        }
-    )
-    return {
-        "schema": 1,
-        "observation": reporting,
-        "sequence": view.sequence,
-        "mode": view.mode.value,
-        "reason": view.detail_reason,
-        "estop_revision": view.estop_revision,
-        "fault_revision": view.fault_revision,
-        "confirmed_estop_status": runtime.confirmed_estop_status,
-        "body_reference": body,
-        "wheel_linear_mps": runtime.wheel_linear_mps,
-        "task": task,
-        "allowed_actions": [
-            action
-            for action in view.allowed_actions
-            if action in {"acquire", "estop_reset", "fault_recover"}
-            and (action != "acquire" or manual_enabled)
-        ],
-        "capabilities": capabilities,
-        "manual_authority": None
-        if manual is None
-        else {
-            "authority_id": manual["authority_id"],
-            "state": manual["state"],
-        },
-    }
