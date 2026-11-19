@@ -90,3 +90,11 @@ NumPy 2.5.4、Shapely 2.2.0、uv 0.12.23、ruff 0.17.3；使用原主仓库 .ven
 实际接收子进程不是普通 spawn 单元测试可替代，两个旧激光组合用例的 retired 控制夹具另待所属批次处理。
 ROS Humble 环境需安装原根 safety/ROS 依赖后 colcon build/test 本功能包及 senior_robot，
 再执行保留的入口/扫描/恢复原回归。没有启动开发/实车服务、部署或推送。
+
+
+## B4 接入组合补归
+
+既有 `senior_robot.optional_motion_inputs` 适配随控制节点迁移补归本包同名模块；旧入口只作 Compatible 转发。
+只替换原生接入/观测公开导入，原 opt-in 配置、GPS/RGB-D 算法与保护不变；无设备/无显式配置不启用。
+ROS 依赖仍由本包声明，SDK 默认导入不加载该 ROS 接入实现；不反向依赖控制或实车组合包。
+B4 的实际目录、安装/运行入口与完整验证限制见 [控制包记录](../senior_motion_control/README.md)。

@@ -96,7 +96,7 @@ def _nodes(context):
             parameters=[runtime["scan_motion_node"], shared],
         ),
         Node(
-            package="senior_robot",
+            package="senior_motion_control",
             executable="safety_node",
             prefix=restart_prefix(),
             sigterm_timeout="6.0",

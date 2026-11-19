@@ -412,6 +412,11 @@ class LearningRuntime:
         self._learning_record_phase = None
         self._learning_failure = None
 
+    @property
+    def failure_report(self) -> str | None:
+        """Read-only failure fact for the control report owner."""
+        return self._learning_failure
+
     def summary(self):
         client = self._learning_client
         return self.startup.summary(

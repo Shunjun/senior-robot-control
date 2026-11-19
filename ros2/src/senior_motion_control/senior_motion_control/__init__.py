@@ -1,1 +1,1 @@
-"""Motion execution and native output owner; batch-one migration."""
+"""Motion control, command authority and sole native actuator output."""

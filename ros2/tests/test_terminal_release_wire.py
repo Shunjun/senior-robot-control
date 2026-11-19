@@ -241,7 +241,9 @@ def test_missing_local_receipt_handshake_learns_original_core_epoch(wire, monkey
         node._retirement_core = (b"runtime", core_rig.core.boot)
         node._monotonic_clock = N(monotonic=lambda: core_rig.clock.steady)
         node.get_parameter = lambda _: N(value="route-sim")
-        tree = ast.parse(Path("ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+        tree = ast.parse(
+            Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+        )
         cls = next(x for x in tree.body if isinstance(x, ast.ClassDef) and x.name == "SafetyGate")
         methods = [
             x

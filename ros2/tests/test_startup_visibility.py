@@ -180,7 +180,9 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
     assert profiles[0].startup_learning_rear_occlusion_stop is rear_stop
     assert profiles[1].startup_learning_front_occlusion_stop is True
     assert profiles[1].startup_learning_rear_occlusion_stop is True
-    module = ast.parse(Path("ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+    module = ast.parse(
+        Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+    )
     initialize = next(
         n for n in ast.walk(module) if isinstance(n, ast.FunctionDef) and n.name == "_initialize"
     )

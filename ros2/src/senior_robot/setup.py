@@ -42,9 +42,10 @@ setup(
             "depth_ingress = senior_robot.depth_ingress:main",
             "rgbd_candidate_producer = senior_robot.rgbd_candidate_producer:main",
             "semantic_ingress = senior_robot.semantic_ingress:main",
-            "safety_node = senior_robot.safety_node:main",
+            # //Compatible: retain historical executable names as direct functional aliases.
+            "safety_node = senior_motion_control.safety_node:main",
             "motion_fusion = senior_robot.motion_fusion:main",
-            "command_node = senior_robot.command_node:main",
+            "command_node = senior_motion_control.command_node:main",
             "navigation_adapter = senior_robot.navigation_adapter:main",
             "slam_adapter = senior_robot.slam_adapter:main",
             "localization_node = senior_robot.localization_node:main",

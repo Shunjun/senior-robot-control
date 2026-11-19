@@ -20,7 +20,7 @@ from senior_control.settings.models import DrivingSettings, simulation_settings_
 
 def command_class():
     """Extract production methods without importing ROS; optional ref proves the regression."""
-    path = "ros2/src/senior_robot/senior_robot/command_node.py"
+    path = "ros2/src/senior_motion_control/senior_motion_control/command_node.py"
     ref = os.environ.get("SENIOR_TEST_COMMAND_REF")
     source = (
         subprocess.check_output(["git", "show", f"{ref}:{path}"], text=True)

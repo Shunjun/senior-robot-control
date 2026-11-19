@@ -88,7 +88,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B1 已迁实现，ROS 实测待补：原生接收 | `senior_motion_msgs/src/native_receipt.cpp`、`senior_robot/senior_robot/native_receipt.py` → `senior_sensor_ingress/src/` 与其 Python 客户端 | 依赖 B0；从 51b25e6 单独交付，程序逐字节迁移，Python 旧入口转发同一客户端；SampleTime/帧龄策略、进程与诊断继续使用原 owner 公开接口；原接收/关停用例移入 ros2/tests，35 项非 ROS 定向通过、10 项 ROS 跳过，真实 typesupport/安装/接收/关停验证尚缺，详见 ros2 README |
 | B2 首片已迁，完整职责待续：感知 | `senior_robot` 的 sensor decode、collision、learning、`motion_core_perception.py`，及 `src/senior_control/safety/`、`vision/` 中对应执行实现 → `senior_perception` 内部模块 | 依赖 B1；首片从 eb4a147 迁雷达节点、解码、原始/补点观测、帧缓存与自身几何到 senior_perception；原组合入口只组装同一节点，38 项通过、14 项 ROS 跳过；第二片继续迁学习 owner/服务/存储/计算与原矩形净距，并以只读控制输入和返回请求隔离仲裁；速度及其他感知职责待后批；详见功能包 README |
 | B3 已迁既有行为，ROS 待验：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖 B1/B2 的既有接口；从 155e2b9 迁入观测适配、准入/时序/融合、运动与连续位姿 owner，ControlInputs 经 frozen 决策快照替代字典写入；127 项通过、2 项 ROS 跳过，两个 retired 激光组合用例已登记；GPS/新算法仍留实现阶段 |
-| B4 待迁：控制完整职责与组合 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
+| B4 已迁既有控制职责，ROS 实测待补 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5 待迁并实现：定位与建图 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
 | B6 待迁：管理与云独立安装 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
@@ -208,3 +208,18 @@ StartupLearning 和原矩形净距；实际来源/目录与公开契约见 [功�
 没有 runtime.__dict__ 写入、时间重造或新估计步骤。原元数据标记函数由既有接入包公开，避免反向依赖组合包。
 实车/仿真、scan_matcher、建图/导航接线和隔离/关闭保持；旧夹具按真实当前接口修正或如实登记，未添假属性/弱化断言。
 实际 ROS/Linux 接收全链与两个退役控制组合用例未验证，不以 SDK/静态检查替代。后续控制、导航及新 GPS/算法另批处理。
+
+
+### B4 控制职责与组合迁移记录
+
+基线 `ebb8c6c`；原控制节点、仲裁、速度、调度、报告及隔离接收组合迁入已有 senior_motion_control。
+原本地 arbiter/state_machine/cadence 归该功能包，已有 opt-in 观测适配补归运动估计，不启用新 GPS。
+控制包安装真实 CLI；实车/仿真 launch 选择同一 SafetyGate，原 agent 的 IPC/peer 组合和 Compatible 命令入口保留。
+仲裁通过明确 effects/只读 ports 代替可写 MotionCore context；调度内部显式使用 owner，移除 OwnedState 透传。
+学习仍消费 B2 只读输入并返回请求，B3 公开有界快照保持；失败报告补只读公开入口。
+原 40 字节、截止、停止屏障、sole cmd_vel、手动/现有导航退场以及建图/导航链不变。
+实际 62 逻辑文件与目录、公开契约、完整命令/版本/结果见 [功能包 README](../../../ros2/src/senior_motion_control/README.md)。
+78 项主定向通过，六项 Linux 运行跳过；十项实际 ROS 用例缺环境跳过；旧终端/组装夹具和旧恢复规则失败
+在完整 ebb8c6c 归档对照登记，不补假 controller/_inputs/传输属性，不弱化断言。
+ROS/Linux/实车/仿真运行待补；B5 地图定位建图、管理子项目/独立云及 B7 后置既有导航依赖顺序不变，
+不提前交新守卫、GPS 或导航算法，不新建顶层项目；负责人亲审后再推进下一批。

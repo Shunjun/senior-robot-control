@@ -42,7 +42,7 @@ class LearningRig:
             lambda _: SimpleNamespace(close=lambda: None),
         )
         monkeypatch.setattr(
-            "senior_robot.runtime_reports.RuntimeReports",
+            "senior_motion_control.runtime_reports.RuntimeReports",
             lambda node: SimpleNamespace(
                 publish=lambda message: node.runtime.append(json.loads(message.data)),
                 status=lambda _: None,
@@ -331,7 +331,7 @@ def test_explicit_estop_interrupts_action_and_replayed_close_does_not_reset_latc
 
 
 def test_expired_candidate_after_first_submission_keeps_original_grant_and_window(rig, monkeypatch):
-    from senior_robot import vehicle_speed
+    from senior_motion_control import vehicle_speed
 
     reserve = rig.run.owner.reserve_action
     reservations = []
@@ -541,8 +541,8 @@ def checked_current_velocity(core, now, function, *arguments):
 
 
 def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(rig, monkeypatch):
+    from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
-    from senior_robot import vehicle_speed
 
     rig.start()
     calls = []
@@ -668,8 +668,8 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
 def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning_raw(
     rig, monkeypatch
 ):
+    from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
-    from senior_robot import vehicle_speed
     from senior_robot.raw_safety_observation import PredictedReturn
 
     from senior_control.vision.raw_capture import capture_from_message
@@ -783,8 +783,8 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
 def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_original_facts(
     rig, monkeypatch
 ):
+    from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
-    from senior_robot import vehicle_speed
 
     start = rig.start()
     while rig.now + 0.05 < start + 3:
@@ -917,8 +917,8 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     import os
     import socket
 
+    from senior_motion_control import vehicle_speed
     from senior_perception.startup_learning import StartupLearning
-    from senior_robot import vehicle_speed
     from senior_robot.motion_core_perception import scan_observation
 
     gc_settings = gc.isenabled(), gc.get_threshold()
@@ -985,8 +985,8 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
         output.channel, output.sequence = parent, 0
         output.process = SimpleNamespace(poll=lambda: None)
         r.core.node._output_transport = output
-        r.core.startup = StartupLearning(None)
-        r.core._learning_attempt = r.run.owner.record.attempt_id
+        r.core.learning.startup = StartupLearning(None)
+        r.core.learning._learning_attempt = r.run.owner.record.attempt_id
         packets, emissions, rays = [], [], []
 
         def emit(velocity, reason, deadline, *, computed_steady, r=r, output=output):

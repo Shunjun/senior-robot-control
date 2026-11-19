@@ -413,7 +413,7 @@ def production_command_owner(clock):
     scope["FinalCommand"] = lambda: N(
         manual_linear=0.0, manual_linear_limit=0.0, degraded_linear_limit=0.0
     )
-    path = Path("ros2/src/senior_robot/senior_robot/command_node.py")
+    path = Path("ros2/src/senior_motion_control/senior_motion_control/command_node.py")
     tree = ast.parse(path.read_text())
     source = next(
         item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == "CommandNode"

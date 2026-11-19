@@ -7,5 +7,13 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>rclcpp</depend><depend>geometry_msgs</depend><depend>senior_motion_msgs</depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>senior_perception</exec_depend>
+  <exec_depend>senior_motion_estimation</exec_depend>
+  <exec_depend>senior_sensor_ingress</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

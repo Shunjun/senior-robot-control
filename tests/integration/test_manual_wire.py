@@ -102,7 +102,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         stub = ModuleType(name)
         stub.__dict__.update(attributes)
         monkeypatch.setitem(sys.modules, name, stub)
-    path = Path("ros2/src/senior_robot/senior_robot/command_node.py")
+    path = Path("ros2/src/senior_motion_control/senior_motion_control/command_node.py")
     spec = importlib.util.spec_from_file_location("manual_command_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

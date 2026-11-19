@@ -26,7 +26,9 @@ def wire(monkeypatch):
 
 
 def gate_for(rig, wire):
-    tree = ast.parse(Path("ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+    tree = ast.parse(
+        Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+    )
     cls = next(x for x in tree.body if isinstance(x, ast.ClassDef) and x.name == "SafetyGate")
     methods = [
         x

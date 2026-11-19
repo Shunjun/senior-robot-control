@@ -70,7 +70,9 @@ def test_native_identity_channel_preserves_newer_manual_generation(rig):  # noqa
         epoch=7,
     )
     before = (fence._generation, fence._sequence, fence._authority, core.output_generation)
-    tree = ast.parse(Path("ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+    tree = ast.parse(
+        Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+    )
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SafetyGate")
     methods = [
         n

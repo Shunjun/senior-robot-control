@@ -30,7 +30,7 @@ def navigation(monkeypatch):
         stub = ModuleType(name)
         stub.__dict__.update(attributes)
         monkeypatch.setitem(sys.modules, name, stub)
-    path = Path("ros2/src/senior_robot/senior_robot/command_node.py")
+    path = Path("ros2/src/senior_motion_control/senior_motion_control/command_node.py")
     spec = importlib.util.spec_from_file_location("command_clock_under_test", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
@@ -197,7 +197,9 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff, close_r
 
     # Execute the actual callback without importing/starting rclpy. Its ROS
     # transport objects are controlled below; no gate algorithm is substituted.
-    tree = ast.parse(Path("ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+    tree = ast.parse(
+        Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+    )
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SafetyGate")
     callback = next(
         n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_on_command"

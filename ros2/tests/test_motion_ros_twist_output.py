@@ -22,7 +22,10 @@ class Twist:
 
 @pytest.mark.parametrize("velocity", [Velocity(0, 0), Velocity(0.2, -0.3)])
 def test_actual_core_emitter_serializes_zero_and_tracking_as_ros_floats(velocity):
-    p = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/senior_robot/safety_node.py"
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "ros2/src/senior_motion_control/senior_motion_control/safety_node.py"
+    )
     node = next(
         x
         for x in ast.parse(p.read_text()).body

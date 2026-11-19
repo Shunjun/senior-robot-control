@@ -30,7 +30,9 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
     native.NativeRoundtrip.setUpClass()
-    tree = ast.parse((ROOT / "ros2/src/senior_robot/senior_robot/safety_node.py").read_text())
+    tree = ast.parse(
+        (ROOT / "ros2/src/senior_motion_control/senior_motion_control/safety_node.py").read_text()
+    )
     source = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SafetyGate")
     methods = [
         n

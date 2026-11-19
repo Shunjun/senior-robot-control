@@ -252,7 +252,10 @@ async def test_slow_encoder_does_not_delay_stop(tmp_path: Path) -> None:
 
 
 ADAPTER = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/agent_adapter.py"
-COMMAND_NODE = Path(__file__).parents[2] / "ros2/src/senior_robot/senior_robot/command_node.py"
+COMMAND_NODE = (
+    Path(__file__).parents[2]
+    / "ros2/src/senior_motion_control/senior_motion_control/command_node.py"
+)
 
 
 def _load_adapter() -> Any:

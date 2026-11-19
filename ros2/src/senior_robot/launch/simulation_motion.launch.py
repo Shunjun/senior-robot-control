@@ -145,7 +145,7 @@ def _simulation_nodes(context):
             )
         ],
         Node(
-            package="senior_robot",
+            package="senior_motion_control",
             executable="safety_node",
             prefix=restart_prefix(),
             sigterm_timeout="6.0",

@@ -66,7 +66,7 @@ class RecordingReports:
 
 
 def local_resources(monkeypatch):
-    import senior_robot.runtime_reports as reports
+    import senior_motion_control.runtime_reports as reports
 
     monkeypatch.setattr(reports, "RuntimeReports", RecordingReports)
 

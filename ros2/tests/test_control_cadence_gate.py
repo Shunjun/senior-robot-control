@@ -12,7 +12,7 @@ from senior_control.motion.cadence import ControlCadence
 
 @pytest.mark.parametrize("work", ["input", "prefetch", "tick"])
 def test_gate_observes_work_time_and_never_catches_up_missed_slot(work):
-    path = Path("ros2/src/senior_robot/senior_robot/safety_node.py")
+    path = Path("ros2/src/senior_motion_control/senior_motion_control/safety_node.py")
     cls = next(
         n
         for n in ast.parse(path.read_text()).body
