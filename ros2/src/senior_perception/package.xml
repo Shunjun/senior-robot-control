@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>senior_perception</name>
+  <version>0.1.0</version>
+  <description>感知 architecture skeleton; implementation pending migration</description>
+  <maintainer email="maintainer@example.com">Senior Robot</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
