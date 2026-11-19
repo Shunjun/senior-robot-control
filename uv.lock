@@ -1448,6 +1448,7 @@ dependencies = [
     { name = "senior-motion-control" },
     { name = "senior-motion-estimation" },
     { name = "senior-perception" },
+    { name = "vehicle-cloud" },
 ]
 
 [package.optional-dependencies]
@@ -1499,6 +1500,7 @@ requires-dist = [
     { name = "senior-motion-estimation", editable = "ros2/src/senior_motion_estimation" },
     { name = "senior-perception", editable = "ros2/src/senior_perception" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
+    { name = "vehicle-cloud", editable = "cloud" },
     { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
 ]
 provides-extras = ["safety", "ros", "agent", "cloud", "video"]
@@ -1843,6 +1845,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
+]
+
+[[package]]
+name = "vehicle-cloud"
+version = "0.1.0"
+source = { editable = "cloud" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "senior-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20,<1" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "senior-contracts", editable = "contracts" },
 ]
 
 [[package]]

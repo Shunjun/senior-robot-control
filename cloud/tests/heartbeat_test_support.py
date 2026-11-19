@@ -4,8 +4,9 @@ import asyncio
 import json
 from typing import Any
 
+from cloud.limits import CloudLimits
+
 from senior_control.agent.websocket import WebSocketLink
-from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
 
 
@@ -69,7 +70,7 @@ def relay_hub(monkeypatch: Any, clock: HeartbeatClock) -> Hub:
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "senior_control.cloud.relay.time",
+        "cloud.relay.time",
         SimpleNamespace(monotonic=clock.monotonic, time=time.time),
     )
     return Hub(CloudLimits())

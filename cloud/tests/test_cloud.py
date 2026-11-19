@@ -28,11 +28,11 @@ from typing import Any
 
 import httpx
 import pytest
+from cloud.auth import hash_password
 from fastapi import FastAPI
 from pydantic import SecretStr
 
 from senior_control.cloud.app import create_app
-from senior_control.cloud.auth import hash_password
 from senior_control.config import CloudSettings
 from senior_control.errors import ErrorCode
 from senior_control.protocol import (

@@ -1,7 +1,8 @@
 import json
 import time
 
-from senior_control.cloud.limits import CloudLimits
+from cloud.limits import CloudLimits
+
 from senior_control.cloud.relay import Hub
 from senior_control.protocol import validate_frame
 

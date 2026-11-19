@@ -1,1 +1,1 @@
-"""独立云端架构骨架；尚无迁入的生产实现或可执行入口。"""
+"""Cloud business owners; technical facilities are injected by the bootstrap."""

@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from senior_control.cloud.auth import TokenDigest
-from senior_control.cloud.registry import RobotRegistry
+from cloud.auth import TokenDigest
+from cloud.registry import RobotRegistry
+
 from senior_control.storage.database import Database
 
 

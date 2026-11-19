@@ -203,7 +203,8 @@ async def test_unselected_robot_stream_denied() -> None:
 
 async def test_hub_controller_selection_gates_video() -> None:
     pytest.importorskip("fastapi")
-    from senior_control.cloud.limits import CloudLimits
+    from cloud.limits import CloudLimits
+
     from senior_control.cloud.relay import Hub
 
     hub = Hub(CloudLimits())
@@ -747,7 +748,7 @@ def stop_frame() -> bytes:
 
 
 def drain_outbox(connection: object) -> list[bytes]:
-    from senior_control.cloud.relay import Outbox
+    from cloud.relay import Outbox
 
     outbox = connection.outbox  # type: ignore[attr-defined]
     assert isinstance(outbox, Outbox)
@@ -764,7 +765,8 @@ async def settle(condition: object) -> None:
 
 class WireRig:
     def __init__(self, outbox_frames: int = 32) -> None:
-        from senior_control.cloud.limits import CloudLimits
+        from cloud.limits import CloudLimits
+
         from senior_control.cloud.relay import Hub
 
         self.hub = Hub(CloudLimits(outbox_frames=outbox_frames))

@@ -1,1 +1,1 @@
-"""Cloud relay package (Task 13 stub)."""
+"""//Compatible: production bootstrap and historical cloud import paths."""

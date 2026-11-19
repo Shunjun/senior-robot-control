@@ -5,8 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "vehicle-cloud"
 version = "0.1.0"
-description = "Architecture skeleton; production implementation has not migrated"
+description = "Cloud service business with explicitly injected production facilities"
+dependencies = ["senior-contracts==0.1.0", "fastapi>=0.115,<1", "pydantic>=2.8,<3", "aiosqlite>=0.20,<1"]
 requires-python = ">=3.10"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cloud"]
+
+[tool.uv.sources]
+senior-contracts = { path = "../contracts", editable = true }

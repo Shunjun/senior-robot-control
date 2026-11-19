@@ -90,7 +90,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B3 已迁既有行为，ROS 待验：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖 B1/B2 的既有接口；从 155e2b9 迁入观测适配、准入/时序/融合、运动与连续位姿 owner，ControlInputs 经 frozen 决策快照替代字典写入；127 项通过、2 项 ROS 跳过，两个 retired 激光组合用例已登记；GPS/新算法仍留实现阶段 |
 | B4 已迁既有控制职责，ROS 实测待补 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5.1–B5.3 已迁既有Python/原生与持久事务，缺失功能待续 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
-| B6 待迁：管理与云独立安装 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
+| B6.C1 云业务已迁，C2/C3与管理独立安装待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -270,3 +270,23 @@ stock、单live owner、原扫描/TF/receipt/capture及候选诊断隔离和关�
 [接口包职责](../../../ros2/src/senior_slam_bridge/README.md)。6个host C++单元程序通过，Python72通过/1缺ROS跳过；
 真实Karto/rclcpp编译缺头已登记，SDK构建安装不替代ROS typesupport、隔离安装/私有库及DDS验证。
 未做地图写入IPC、新地图/Home/定位协作、仿真总装配或导航；这些后批仍须各自核定验收。
+
+### B6.C1 云业务归包记录
+
+基线859c954；九份原云业务归已确认cloud/src/cloud，唯一业务实现不依赖车端/ROS实现。
+原senior_control.cloud.app保留生产bootstrap签名，通过局部回调注入同连接/锁、原schema版本1–5、
+原设置与诊断owner；不注册全局provider，诊断帧龄与DB/Home/任务owner仍原位。
+Hub/Outbox/LogPeer/LogRelay旧构造是显式Compatible薄子类（非同一类），值和缓存保持同一身份。
+原生产镜像CMD仍走旧装配，Docker只补云源码COPY，现有.dockerignore排除本地依赖及旧uv锁兼容缺口仍待C3。
+实际42逻辑文件：产品22、测试12、配置5、文档3；完整实际树、源目标、接口和验证见
+[云包记录](../../../cloud/README.md) 与 [迁入用例/共享夹具](../../../cloud/tests/README.md)。
+原定向三组144项通过；四项原控制夹具失败在859c954独立归档复现；云源码11份类型检查通过，
+全链38项类型错误与基线逐条相同；云/根/契约wheel构建和仓库外纯云/旧bootstrap安装检查通过。
+未启动服务、部署或推送，不宣称云独立生产部署已完成，B5原生ROS缺口仍保留。
+
+后续依赖仍须逐片审阅/预报：C2确认通用诊断复用边界及云独立DB/schema/config设施，
+保留原SQL历史和外部格式；C3再验证真实Docker上下文、uv/锁、独立镜像与生产入口闭包。
+管理子项目按settings/logs→storage/task/Home→agent连接/分发→CLI/监管的真实引用分片，
+先处理公开本地接口和ROS反向引用，不能盲搬原config/models/diagnostics或让ROS执行依赖管理实现。
+只用既有senior_control/src/vehicle_manager、cloud/src/cloud及ROS功能包，不增加根runtime。
+已可用地图/定位/导航链保持；缺失地图/Home/定位功能留对应模块实现，B7先迁既有导航再做新算法。

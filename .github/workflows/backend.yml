@@ -15,9 +15,10 @@ jobs:
       - run: uv sync --frozen --group dev --extra safety --extra cloud --extra agent --extra video --extra ros
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
-      - run: uv run --no-sync mypy src/senior_control
-      - run: uv run --no-sync pytest tests/unit tests/integration ros2/src/senior_mapping/test ros2/tests/test_map_operations.py ros2/src/senior_localization/test ros2/tests/test_navigation_reference.py ros2/tests/test_mapping.py ros2/tests/test_relocalization.py ros2/tests/test_motion_ros_twist_output.py ros2/tests/test_startup_visibility.py ros2/tests/test_terminal_release_wire.py ros2/tests/test_motion_guard_to_owner.py ros2/tests/test_motion_cli_lifecycle.py ros2/tests/test_control_cadence_gate.py ros2/tests/test_terminal_native_channel.py ros2/tests/test_launch_recovery.py ros2/tests/test_navigation_command_clock.py ros2/tests/test_manual_command_generation.py ros2/tests/test_terminal_release_collection.py ros2/src/senior_motion_estimation/test ros2/tests/test_native_motion_observation_adapter.py ros2/tests/test_control_process_resources.py ros2/tests/test_laser_reference_publication.py ros2/src/senior_perception/test ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py ros2/tests/test_startup_learning_chain.py
+      - run: uv run --no-sync mypy src/senior_control cloud/src/cloud
+      - run: uv run --no-sync pytest cloud/tests tests/unit tests/integration ros2/src/senior_mapping/test ros2/tests/test_map_operations.py ros2/src/senior_localization/test ros2/tests/test_navigation_reference.py ros2/tests/test_mapping.py ros2/tests/test_relocalization.py ros2/tests/test_motion_ros_twist_output.py ros2/tests/test_startup_visibility.py ros2/tests/test_terminal_release_wire.py ros2/tests/test_motion_guard_to_owner.py ros2/tests/test_motion_cli_lifecycle.py ros2/tests/test_control_cadence_gate.py ros2/tests/test_terminal_native_channel.py ros2/tests/test_launch_recovery.py ros2/tests/test_navigation_command_clock.py ros2/tests/test_manual_command_generation.py ros2/tests/test_terminal_release_collection.py ros2/src/senior_motion_estimation/test ros2/tests/test_native_motion_observation_adapter.py ros2/tests/test_control_process_resources.py ros2/tests/test_laser_reference_publication.py ros2/src/senior_perception/test ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py ros2/tests/test_startup_learning_chain.py
       - run: uv build --out-dir dist
+      - run: uv build cloud --out-dir dist
       - run: uv build contracts --out-dir dist
       - run: uv build ros2/src/senior_localization --out-dir dist
       - run: uv build ros2/src/senior_mapping --out-dir dist
@@ -29,4 +30,5 @@ jobs:
           /tmp/wheel-test/bin/pip install dist/*.whl
           cd /tmp
           /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
+          /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'
           /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"

@@ -37,6 +37,7 @@ from agent_fakes import (
     stop,
     until,
 )
+from cloud.snapshots import SnapshotCache
 from pydantic import ValidationError
 
 from senior_control.agent import Agent, RobotSnapshot
@@ -47,7 +48,6 @@ from senior_control.agent.snapshots import (
     snapshot_envelope,
     snapshot_from_envelope,
 )
-from senior_control.cloud.snapshots import SnapshotCache
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import SnapshotEnvelope

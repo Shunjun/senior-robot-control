@@ -2,6 +2,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from cloud.snapshots import SnapshotCache
 
 from senior_control.agent.ports import IpcState
 from senior_control.agent.snapshots import (
@@ -9,7 +10,6 @@ from senior_control.agent.snapshots import (
     snapshot_envelope,
     snapshot_from_envelope,
 )
-from senior_control.cloud.snapshots import SnapshotCache
 from senior_control.models import MapRef
 from senior_control.protocol import RobotPosePayload, ScanPointPayload, SnapshotPayload
 
