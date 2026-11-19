@@ -51,6 +51,19 @@
 
 控制库开发检查使用项目 [pyproject.toml](pyproject.toml) 和 `uv.lock`；网页构建入口见 [web/package.json](web/package.json)。ROS 传感器契约、独立 launch 与 watchdog 负对照见 [ROS 说明](ros2/README.md)，它们不代替当前部署指南。历史验收记录见 [Linux 仿真记录](docs/testing/2026-10-27-linux-simulation.md)，当前未通过项见[阶段索引](docs/testing/2026-11-14-vehicle-stage-index.md)。
 
+提交前的 Python 格式化使用开发依赖里的 Lefthook 2.2.2。钩子只对已暂存的 `.py` 执行 `uv run --no-sync ruff format`，排版标准仍是根目录 [pyproject.toml](pyproject.toml) 的 `[tool.ruff]`。`ruff check`、mypy 和 pytest 不在这个钩子里。
+
+Git hooks 由同一仓库的所有 worktree 共用，启用后也会作用于其他 worktree。当前 main 尚未包含此配置，先不要安装真实共用 hook；待本功能合并后，在实际开发 checkout 根目录一次性安装并启用：
+
+```sh
+uv sync --frozen --group dev
+uv run --no-sync lefthook install
+```
+
+`uv sync --frozen --group dev` 按锁文件准备带有 Lefthook 和 Ruff 的项目环境。`lefthook install` 把 `pre-commit` 写进该仓库共用的 Git hooks，同一个仓库的其他 worktree 提交时也会走到这个钩子。之后本地 `git commit` 会格式化本次暂存的根目录和子目录 Python，路径可以带空格，并把格式化结果纳入同一次提交。提交时 PATH 里需要有 `uv`；钩子执行 `uv run --no-sync`，不会在提交时重新同步依赖。没有暂存 Python 时这次格式化跳过，其他文件保持原样。暂存的 Python 有语法错误时提交失败，HEAD 不变，已暂存内容保留，终端留下 Ruff 的解析错误。文件只暂存了其中一部分时，Lefthook 先藏起未暂存改动，只格式化暂存版本，再恢复未暂存改动。
+
+只克隆、未执行 `lefthook install` 的仓库不会在提交时自动格式化。
+
 ## 任务路线图
 
 当前待办以 [2026-11-07 剩余工作清单](docs/testing/2026-11-07-remaining-work.md) 为准。网页配对单独跟踪为 [Task 22](docs/superpowers/plans/2026-11-07-web-device-pairing.md)。下表保留原计划的模块范围和历史状态。

@@ -1,0 +1,9 @@
+# 默认 gobwas：*.py 只匹配仓库根，**/*.py 只匹配子目录。
+pre-commit:
+  jobs:
+    - name: ruff-format
+      glob:
+        - "*.py"
+        - "**/*.py"
+      run: uv run --no-sync ruff format -- {staged_files}
+      stage_fixed: true
