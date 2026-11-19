@@ -100,6 +100,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.S3 执行/调度与导航效果已迁 | 原tasks/navigation_port、executor、runtime → `vehicle_manager/tasks/` | 原构造薄适配逐实例注入原具体异常，Runtime同对象；同DB/实时准入/名义端口/真实IPC与终端隔离保留；14文件，验证与旧失败见S3记录 |
 | B6.M2e 航点存储已迁 | 原waypoints/store的SQL/解析 → `vehicle_manager/waypoints/` | 原值/构造与同DB domain准备注入、薄Compatible构造；地图Home回调沿原事务无二次锁/提交；Home业务/协调后置，11文件与验证见M2e记录 |
 | B6.M2f1/2 生产Home捕获/目标准入已迁 | 原IpcHomePort设定及DirectNavigation管理请求 → `vehicle_manager/waypoints/{home_capture,direct_navigation}.py` | 旧薄构造注入原对象；原时效/代次/CAS与任务接收/唯一运动链保持；旧HomeService不启用，11文件验证见M2f记录 |
+| B6.M2f3 旧Home业务已迁但未启用 | 原waypoints/home → `vehicle_manager/waypoints/{home_service,home_ports}.py` | 原值/薄构造及同DB/robot锁和地图效果注入，guard/token/未知取消与原地图/控制owner保持；9文件验证见M2f3记录 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -529,3 +530,19 @@ manager36份仍原2项类型诊断，全链228份仍M2e同39项，不弱化保�
 真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM仍UNVERIFIED；不开服务/部署/推送。
 旧HomeService后续先另审局部map读写/值与异常构造/同DB同robot协调端口，
 保留原锁顺序、guard token/未知取消/旧terminal和地图owner，仍不可顺便启用或实现每图Home。
+
+### B6.M2f3 旧HomeService业务已迁，仍不启用
+
+基线639a8ac，唯一旧业务/guard与原恢复计算归vehicle_manager/waypoints/home_service，
+局部home_ports传原地图owner效果、同DB/Store/robot协调锁及具体值/异常/导航结果。
+旧home保留原公开值/协议与Compatible薄构造，非同类但业务方法唯一继承；无值/状态复制、root/ROS/地图反向依赖。
+原execution→target→write锁顺序、写锁外取消IO、guard SQL/token、unknown/迟到callback、同ref换代与断链保持。
+地图更新/快照/绑定的原顺序与算法仍由原地图owner执行，不迁生产Home捕获/DirectNavigation，不接入旧服务或实现每图Home。
+实际9文件：产品4/测试迁移1/配置0/工具文档4，即新增2/修改6/迁移1/删除0。
+原test_home同字节迁移，核心64通过、最终选择161通过；35方法/9辅助函数及4份SQL按明确接缝核对一致。
+只读lock协议修正后manager38份仍原2项，全链230份仍原39项，无ignore或替代锁。
+两wheel构建、仓库外manager8包/旧SDK24包导入依赖及实际原SQLite/旧服务/同robot协调锁身份检查通过，未initialize或导航。
+完整实际目录、命令版本/结果和未验项见[manager M2f3](../../../senior_control/README.md#m2f3-旧homeservice业务与guard)。
+真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM仍UNVERIFIED；不开服务、部署、推送。
+下一片先只读精核管理WebSocket连接/快照/请求与journal/dispatcher依赖，
+纯Link/Heartbeat与IpcMotion分开，保留同DB、原控制/IPC及既有任务离线规则，再预报实施；导航算法仍最后。

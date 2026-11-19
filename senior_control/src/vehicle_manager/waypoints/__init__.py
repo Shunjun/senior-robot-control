@@ -1,4 +1,4 @@
-"""Waypoint storage interfaces; Home execution and value owners remain outside."""
+"""Waypoint and Home request owners; original values and transport effects are injected."""
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
@@ -6,13 +6,16 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from vehicle_manager.waypoints.direct_navigation import DirectNavigation
     from vehicle_manager.waypoints.home_capture import HomeCapture
+    from vehicle_manager.waypoints.home_service import HomeService
     from vehicle_manager.waypoints.ports import WaypointStorePorts
     from vehicle_manager.waypoints.store import WaypointStore
 
-__all__ = ["HomeCapture", "DirectNavigation", "WaypointStore", "WaypointStorePorts"]
+__all__ = ["HomeService", "HomeCapture", "DirectNavigation", "WaypointStore", "WaypointStorePorts"]
 
 
 def __getattr__(name: str) -> Any:
+    if name == "HomeService":
+        return getattr(import_module("vehicle_manager.waypoints.home_service"), name)
     if name == "HomeCapture":
         return getattr(import_module("vehicle_manager.waypoints.home_capture"), name)
     if name == "DirectNavigation":

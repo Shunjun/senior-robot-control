@@ -135,9 +135,11 @@ def verify_manager_waypoints() -> None:
     from vehicle_manager import waypoints
     from vehicle_manager.waypoints.direct_navigation import DirectNavigation
     from vehicle_manager.waypoints.home_capture import HomeCapture
+    from vehicle_manager.waypoints.home_service import HomeService
     from vehicle_manager.waypoints.ports import WaypointStorePorts
     from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS, WaypointStore
 
+    assert waypoints.HomeService is HomeService
     assert waypoints.HomeCapture is HomeCapture
     assert waypoints.DirectNavigation is DirectNavigation
     assert waypoints.WaypointStore is WaypointStore
@@ -157,6 +159,8 @@ def verify_legacy_task_store() -> None:
     from datetime import datetime, timezone
 
     from pydantic import ValidationError
+    from senior_mapping.operations import HomeLink
+    from senior_mapping.store import MapReferenceStore
     from vehicle_manager.tasks.executor import NavigationFailure as ManagerNavigationFailure
     from vehicle_manager.tasks.executor import ProcessCrash as ManagerProcessCrash
     from vehicle_manager.tasks.executor import TaskExecutor as ManagerExecutor
@@ -166,6 +170,7 @@ def verify_legacy_task_store() -> None:
         DirectNavigation as ManagerDirectNavigation,
     )
     from vehicle_manager.waypoints.home_capture import HomeCapture
+    from vehicle_manager.waypoints.home_service import HomeService as ManagerHomeService
     from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS as ManagerWaypointStatements
     from vehicle_manager.waypoints.store import WaypointStore as ManagerWaypointStore
 
@@ -175,7 +180,7 @@ def verify_legacy_task_store() -> None:
     from senior_control.agent.ports import IpcHomePort, IpcNavigation, IpcState, PoseReply
     from senior_control.agent.workspace import WorkspaceReader
     from senior_control.errors import DomainError, ErrorCode
-    from senior_control.models import MapRef, Pose2D
+    from senior_control.models import MapRef, OperationStatus, Pose2D
     from senior_control.navigation import RouteRejected
     from senior_control.runtime.ipc import IpcClient, IpcError
     from senior_control.storage.database import Database
@@ -193,6 +198,8 @@ def verify_legacy_task_store() -> None:
     from senior_control.tasks.navigation_port import NavigationEffects
     from senior_control.tasks.runtime import TaskRuntime
     from senior_control.tasks.store import TaskStore
+    from senior_control.waypoints.home import HomeGoal, HomeResult
+    from senior_control.waypoints.home import HomeService as LegacyHomeService
     from senior_control.waypoints.store import (
         WAYPOINT_STATEMENTS,
         StoredWaypoint,
@@ -314,6 +321,36 @@ def verify_legacy_task_store() -> None:
             assert target._navigation is receiver and receiver.executor is executor
             assert target._values.map_reference is MapRef and target._values.pose is Pose2D
             assert target._values.error is DomainError
+            reference_owner = MapReferenceStore(reference, "odom", 0.5)
+            legacy_home = LegacyHomeService(database, reference_owner, robot_id="robot")
+            peer = LegacyHomeService(database, reference_owner, robot_id="robot")
+            assert LegacyHomeService is not ManagerHomeService
+            assert isinstance(legacy_home, ManagerHomeService)
+            for name in ("prepare", "initialize", "return_home", "note_terminal", "_write_guard"):
+                assert getattr(LegacyHomeService, name) is getattr(ManagerHomeService, name)
+            assert legacy_home._database is database and legacy_home._store._database is database
+            assert (
+                legacy_home._home_execution
+                is peer._home_execution
+                is database.home_execution("robot")
+            )
+            assert legacy_home._return_lock is peer._return_lock is legacy_home._home_execution.lock
+            assert (
+                legacy_home._home_target_lock
+                is peer._home_target_lock
+                is database.home_target_lock("robot")
+            )
+            assert legacy_home._reference is reference_owner
+            assert legacy_home._ports.reference is reference_owner
+            assert legacy_home._ports.place == reference_owner.place
+            assert legacy_home._ports.apply_anchor_update == reference_owner.apply_anchor_update
+            assert legacy_home._ports.pose is Pose2D and legacy_home._ports.error is DomainError
+            assert legacy_home._ports.result is HomeResult and legacy_home._ports.goal is HomeGoal
+            assert legacy_home._ports.link is HomeLink
+            assert legacy_home._ports.succeeded_status is OperationStatus.SUCCEEDED
+            assert HomeResult.__module__ == HomeGoal.__module__ == "senior_control.waypoints.home"
+            await legacy_home.prepare()
+            assert await legacy_home._read_guard() is None
             assert executor.errors.domain is DomainError
             assert executor.errors.route_rejected is RouteRejected
             assert executor.errors.qualification_unavailable is QualificationUnavailable

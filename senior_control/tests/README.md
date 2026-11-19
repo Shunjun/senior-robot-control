@@ -90,3 +90,9 @@ M2f将原test_direct_navigation逐字节迁入本目录，仍通过生产旧Comp
 首组选定24通过；含原workspace、真实任务装配及终端义务的完整选择51通过，不重复累加。
 旧HomeService用例/业务与协调未迁或启用；没有新情景、假属性或断言弱化。
 独立安装与实际Root接线、AST/类型对照及真实ROS缺口见[manager M2f记录](../README.md#m2f-生产home捕获与管理目标准入)。
+
+M2f3将原test_home逐字节（含CRLF）迁入本目录，原fixture、输入、ROOT定位与断言不变。
+原64项通过；含原地图/航点/生产Home捕获/管理返航和任务装配的最终选择161通过，不重复累加。
+没有启用旧服务、加新情景或弱化旧token/未知取消/迟到callback/断链和同ref换代保护。
+SQL/方法/原值类核对、同DB/robot协调锁和旧入口真实SQLite安装检查见[manager M2f3](../README.md#m2f3-旧homeservice业务与guard)。
+Root生产IpcHomePort/DirectNavigation保持原装配，真实ROS/物理退场及车辆运行仍未验证。

@@ -917,3 +917,105 @@ python/ruff/mypy使用原主仓库`.venv/bin/`；Pydantic2.14.1与aiosqlite0.22.
 未跑真实Linux/ROS/ament/DDS/原生安装、车辆/仿真服务及Python3.10；
 原安装工具继续输出native/SLAM UNVERIFIED，宿主SQLite/受控原IPC与wheel不替代这些实测。
 没有启开发或实车服务、部署或推送；等待负责人亲审，不继续旧HomeService迁移。
+
+## M2f3 旧HomeService业务与guard
+
+基线 `639a8ac`，仅搬既有旧服务，不接入生产组合。
+
+```text
+senior_control/src/vehicle_manager/waypoints/
+├── home_service.py   唯一旧Home业务/guard/取消义务和原恢复计算
+├── home_ports.py     原live地图效果、同DB协调及具体值/异常接口
+└── __init__.py       按需公开canonical HomeService
+src/senior_control/waypoints/home.py
+                     原值/导航协议；Compatible薄构造、原地图owner接线
+```
+
+旧HomeService与canonical类**不是同一类**，业务/guard方法直接继承唯一实现。
+StartupReference、LocalizedPose、HomeGoal、HomeResult与原导航协议仍是原模块中的原定义；
+MapRef/Pose2D/Waypoint/OperationResult/OperationStatus/DomainError及地图值没有迁或复制。
+原构造签名不变，创建原WaypointStore并传原Database；domain→core准备与原SQL路径不变。
+局部类型参数仅保持原返回值类型，没有引入替代业务DTO或全局工厂。
+
+HomeServicePorts逐实例提供原MapReferenceStore本身的live只读身份、原snapshot/place/apply_anchor_update效果、
+原AnchoredWaypoint构造/place_waypoint接线及原Pose/HomeResult/HomeGoal/HomeLink/异常构造。
+实际地图数据和几何/障碍/锚点/代次仍由原地图owner处理，不将地图实现导入manager。
+原apply_anchor_update在target锁外更新地图、随后锁内snapshot/sync_poses的顺序保持；
+snapshot仍以原Path("pose_graph")和空cells参数取得原对象，不缓存或另造状态。
+原恢复计算只把原Pose2D构造参数显式化，数学表达式、角度wrap及1e-9比较不变。
+
+传入的是原database.home_execution(robot_id)和home_target_lock(robot_id)返回的同一对象，
+同DB/同robot各服务继续共享原DiagnosticLock与cancel_owner等可写协调字段；无新协调实例或全局注册。
+return_home仍按execution→target→write_lock，编辑按target→write_lock，取消IO在write_lock外。
+原guard先持久未知execution_id/token、仅同token更新/删除、取消写入等待真实settle、
+逐次navigate_qualified能力检查、原OperationResult status与execution_id确认全部保持。
+DomainError的原具体catch/code/原因链由原类及读取接口注入，Compatible cast只读取已捕获原类的code。
+旧terminal/token、callback窗口、迟到/错intent、断链及同ref换代行为保留，不自动恢复或重发未知目标。
+
+生产IpcHomePort/HomeCapture、DirectNavigation、LifecycleNavigationOperations/_TaskRouteReceiver、
+原IPC/ROS/控制与云车协议均未改；旧HomeService仍没有生产composition构造。
+没有每图Home、新导航、新项目或WS扩张。
+
+### 实际范围与验证
+
+9逻辑文件：产品4、测试迁移1、配置0、工具文档4；新增2/修改6/迁移1/删除0。
+产品为canonical home_service/home_ports、旧home和现有公开入口；
+原tests/unit/test_home.py同字节（含CRLF）迁到本项目tests；
+工具文档为原安装验证器、此README、tests/README和原plan。
+
+版本：macOS26.4 arm64、原主仓库`.venv/bin/`的Python3.12.15/pytest8.4.2/mypy2.4.0/ruff0.17.3，uv0.12.23；
+主环境Pydantic2.14.1/aiosqlite0.22.1保持。
+
+- RED：先更新原安装验证器，从`/tmp`使用旧独立manager运行
+  `python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only`，
+  缺vehicle_manager.waypoints.home_service报ModuleNotFoundError；本轮wheel安装后通过。
+- `python -m pytest senior_control/tests/test_home.py -q`：**64 passed，2.22s**；
+  原持久/可信定位、同DB guard/旧token、取消/断链、迟到callback与同ref换代保护均保留。
+- `python -m pytest senior_control/tests/test_home.py senior_control/tests/test_waypoint_store.py ros2/tests/test_map_operations.py tests/unit/test_agent_ports.py senior_control/tests/test_direct_navigation.py tests/integration/test_task_ownership.py -q`：
+  接口只读性修正后最终 **161 passed，4.98s**（含64项，不相加），未新增pytest场景或改断言。
+  还覆盖原地图事务/Home绑定、生产设Home/管理返航和真实原任务装配，宿主回归不代表ROS运行。
+- AST核对35个原业务/guard方法与9个恢复/比较/取消settle辅助函数，除明确构造/效果/类型接缝外一致；
+  原公开值/协议类定义及迁移测试逐字节/AST一致；四份guard SQL逐字节相同，排序连接SHA256为
+  `f69e97a320034fca5e70a6fbdd4dfbbb089303096a798925b08967e10090c395`。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：38份源码仍原2项，
+  lifecycle:318与lifecycle_store:647。
+  全链同M2f源码MYPYPATH运行 `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  首轮40项中唯一新增来自协议把只读取的lock误声明为可替换字段，导致DiagnosticLock子类不满足不变字段；
+  按真实使用改为只读getter，仍传原锁对象，无cast/ignore，最终230份仍原39项、诊断逐条一致。
+- 六份相关Python的ruff check/format --check与原CRLF diff检查通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2f3-wheels`及根同命令：
+  两份sdist/wheel成功；`uv venv /tmp/m2f3-manager-venv --python <原主仓库Python>`后
+  `uv pip install --python /tmp/m2f3-manager-venv/bin/python --offline /tmp/m2f3-wheels/vehicle_manager-0.1.0-py3-none-any.whl /tmp/contract-convergence-wheels/senior_contracts-0.1.0-py3-none-any.whl`：8包，
+  从`/tmp`运行上述原安装工具`--manager-tasks-only`通过，canonical HomeService无root/ROS/地图反向依赖。
+- 原`/tmp/vehicle-batch-one-venv`离线`uv pip install --reinstall --no-deps`重装本轮root/manager wheel，
+  从`/tmp`运行原安装工具默认模式及两环境`uv pip check --python <对应Python>`均通过（8/24包）。
+  工具实际在临时SQLite上构造旧服务/同robot peer并prepare，核对原DB/Store、同协调/return/target锁、
+  原地图owner/绑定效果、原值和异常/结果工厂、继承同一业务方法与原guard读取；未initialize或导航。
+  这是旧入口安装检查，不是将服务启用到生产；独立manager的原构造/地图/协调仍须由真实owner注入。
+  独立环境Pydantic2.14.3、旧SDK2.14.1，aiosqlite均0.22.1。
+
+本片选定回归通过，原2/39项类型错误及历史S3夹具失败仍登记，不宣称全仓全绿。
+真实Linux/ROS/ament/DDS/原生安装、车辆/仿真服务和Python3.10未测；原native/SLAM安装仍UNVERIFIED。
+未启开发或实车服务、部署或推送，等待负责人亲审，不开始下一片。
+
+### 下一片管理连接/请求：仅只读范围建议
+
+建议先精核真实run_agent装配下的WebSocket会话与请求边界，再预报迁移，不直接整搬agent/main或connection。
+候选目标为既有vehicle_manager内部agent模块，Root CLI/composition与ROS IPC适配继续只组装原owner；
+具体内部目录/文件划分须以下一轮清单为准，不新增顶层项目或技术runtime包。
+
+只读源优先为agent/websocket.py、connection.py、snapshots.py、vehicle_state.py、main.py、
+dispatcher.py、journal.py、pairing.py、composition.py，按实际入边补manual_control/settings_wire/logs_wire。
+connection同时有纯HeartbeatFrame/Link和实际IpcMotion/MotionRejected，不能为迁Link把运动IPC或Root异常实现拉进manager。
+WebSocketLink/Connector仍依赖原快照序列化、DiagnosticLock/QueueSnapshot/process_diagnostics及Supervisor.AuthRejected；
+须逐项保留真实异常身份、时钟、heartbeat nonce/窗口、close/revoke、send timeout/队列上界、epoch与旧响应处理，
+明确原日志/诊断注入与owner，不用WS contracts承载技术实现或移动车端截止/帧龄策略。
+
+请求处理需分别核对AgentJournal与同DB原事务/去重/tombstone、Dispatcher edit/map lanes/超时/取消未知，
+LifecycleNavigationOperations及已迁manager任务/设置/日志/Home接口，
+以及ManualIngress/恢复/ESTOP和断链的真实控制请求，不把WS连接代次改成执行代次，
+不让非手动已接受任务因目录迁移被断链取消。
+原测试候选位置包括test_websocket_link、test_agent_pairing、test_agent、test_manual_wire、
+test_settings_logs_wire及现有任务ownership/终端用例；
+先列各真实入口→字段/异常/队列/时钟/事务依赖，再按独立连接、快照投影、journal、dispatcher/Agent顺序切片。
+此处仅给盘点范围，不表示上述模块已获批搬迁或估算可直接复用。
