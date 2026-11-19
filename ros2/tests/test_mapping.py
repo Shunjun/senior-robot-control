@@ -64,7 +64,7 @@ def test_default_mapping_keeps_stock_graph_and_adapter(mapping_launch):
     actions = select(defaults)
     assert [(node.kwargs["package"], node.kwargs["executable"]) for node in actions] == [
         ("slam_toolbox", "async_slam_toolbox_node"),
-        ("senior_robot", "slam_adapter"),
+        ("senior_mapping", "slam_adapter"),
     ]
 
 
@@ -131,7 +131,7 @@ def test_verified_static_lidar_rejects_unqualified_inputs(mapping_launch, argume
 
 def test_mapping_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
-    from senior_robot.slam_adapter import create_mapping_node
+    from senior_mapping.slam_adapter import create_mapping_node
 
     rclpy.init()
     node = None

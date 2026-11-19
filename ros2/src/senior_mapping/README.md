@@ -1,41 +1,43 @@
-# 建图与地图管理功能包
+# senior_mapping
 
-状态：仅可被 ROS 包工具发现的 `ament_cmake` 架构骨架；没有节点、算法或运行能力。
-本批不提供假可执行入口，不接生产 launch，不从 `senior_robot` 导入业务实现。
+B5.1 从 `7f1d603` 迁入既有 SLAM Python adapter，并接原默认 mapping launch。
+原 native SLAM 后端、地图事务/存储与每图 Home 实现不在本片；不能把 adapter 迁移称为完整建图功能交付。
 
-## 职责和公开边界
+```text
+ros2/src/senior_mapping/
+  CMakeLists.txt, package.xml, pyproject.toml
+  scripts/slam_adapter
+  senior_mapping/
+    __init__.py, py.typed
+    slam_adapter.py
+ros2/tests/test_mapping.py
+ros2/tests/test_relocalization.py
+```
 
-- 输入：观测、可信定位、地图操作及多帧变化证据。
-- 输出：地图版本、活动地图、每图 Home 与持久更新结果。
-- 业务归属：已有实时建图链先迁移；随后在模块实现新建/保存/切换/删除、Home 与重定位协作；不把动态障碍直接持久化。
-- 实际迁移源：`src/senior_control/mapping/、ros2/src/senior_slam_bridge/ 与现有建图/地图管理入口`。当前实现继续留原位置，保持既有实车/仿真链可用。
+源为 `senior_robot/senior_robot/slam_adapter.py`，旧文件明确 Compatible 转发同一实现。
+公开 PoseGraphBackend、SlamAdapter.serialize/load/anchors、finished_deserialize_response 与原常量保持。
+原 graph/snapshot/anchor/store 类型继续复用根 mapping 公开库，单一状态 owner 与类型身份不变。
 
-公开接口要写明单位、坐标系、测量时间、来源/帧身份及缺失语义。
-ROS 消息留 ROS transport；管理程序复用现有 Unix IPC；云车消息才归 `contracts/`。
-具体话题、服务、动作或进程内接口以及直接包依赖在对应迁移批次确认，
-本批不臆造协议或互相依赖。缺失功能留模块实现阶段，不能伪造可用结果或运动指令。
+生产 `senior_robot/launch/mapping.launch.py` 默认仍启动 stock slam_toolbox/async_slam_toolbox_node，
+但原 slam_adapter 的安装包改为本包；node 名、参数、restart、进程数、scan_topic=/scan 不变。
+非空绝对 capture_directory 或 verified_static_lidar 仍选择原 senior_slam_bridge/slam_graph_node，
+原 relay/receipt 和真实原始扫描来源保持；不把补点或避障派生几何写进持久地图。
+定位壳未添加到任何 launch，仿真总组合尚在 senior_robot 的收尾另批处理。
 
-## 源码、入口、接口和测试布局
+SlamAdapter 保留 SerializePoseGraph 成功码、DeserializePoseGraph 空响应对象成功/None失败、
+单图 odom owner、map_ref/格尺寸/空 store 前置条件和图 marker 无可信 yaw 则不可用的规则。
+main 仍是原服务客户端/graph marker 订阅适配，并不新建 MapOperations/store 或完整地图操作服务。
+未接通能力明确保留，不伪造 ready、归档成功或运动输出；最终 cmd_vel 仍仅归原生控制守卫。
 
-当前实际文件只有 `CMakeLists.txt`、`package.xml` 和本 README。
-以下是迁入实现时的职责落点，尚未创建空源码或测试文件：
+ament_cmake_python 安装模块和实际 slam_adapter CLI；manifest 声明 rclpy、slam_toolbox、geometry_msgs、
+visualization_msgs，未复制 bridge 的 ROS 消息或链接原生私有库。无 ROS SDK 默认导入不加载 ROS。
+旧 senior_robot CLI 名称仍直接指向 canonical main；root 锁、Docker 和 CI 安装闭包同步。
 
-| 位置 | 后续职责 |
-|---|---|
-| `src/` | 功能节点适配及 C++ 内部算法；复杂逻辑按业务模块分开 |
-| `senior_mapping/` | 需要 Python 实现时的包；节点入口、内部算法和状态按职责分模块 |
-| `include/senior_mapping/` | 需要跨包复用的 C++ 公开只读接口 |
-| `launch/`、`config/` | 本功能确有需要的启动/参数；组合选择仍归实车和仿真入口 |
-| `test/` | 迁入原同名算法、接口及生命周期用例；不复制无关场景 |
+地图 evidence/occupancy/reference/store/archive/operations/workspace 继续原位，事务与数据库/管理 Home
+端口在后片单独处理；native SLAM、typesupport/服务原类型名及候选工具迁移单独核定。
+新建/保存/切换/删除、每图可编辑 Home、可信定位协作与新算法均不借本片提前实现。
 
-这些目录在迁入真实文件时加入构建/安装声明，不为骨架添加假入口。
-测试复用方向：原地图存储、操作、归档与实时建图回归；Home 等缺失能力待实现批次再验收。
-当前没有故障处理或运行参数；迁入后由本模块明确不可用、停止/撤销及质量降级行为，
-迁移阶段先保持原行为，算法改造另行验收。
-
-## 最低验证与完成条件
-
-`colcon list --base-paths ros2/src` 应发现 `senior_mapping`；
-ROS/ament 环境可执行 `colcon build --base-paths ros2/src --packages-select senior_mapping`。
-仅静态 XML/CMake 检查不代表 ROS 构建成功。完整完成条件是节点、算法、公开接口、
-状态和原回归一同迁入，实际生产与仿真组合共用该包，安装后定位与关闭路径验证通过。
+原 map_references 用例保留并读取真实 adapter 源，四份相关用例迁入所属 ROS 位置，不复制测试。
+[定位包 B5.1 记录](../senior_localization/README.md#b51-范围与验证记录) 提供实际 45 文件范围、
+完整目录、命令/版本/结果、77 passed/2 ROS skipped 和三项目 SDK 安装验证。
+真实 Linux/ROS/ament、SLAM、DDS/TF、AMCL和车辆运行未验证，静态/SDK 不替代实测；没有启动服务或部署。

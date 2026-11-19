@@ -47,8 +47,8 @@ setup(
             "motion_fusion = senior_robot.motion_fusion:main",
             "command_node = senior_motion_control.command_node:main",
             "navigation_adapter = senior_robot.navigation_adapter:main",
-            "slam_adapter = senior_robot.slam_adapter:main",
-            "localization_node = senior_robot.localization_node:main",
+            "slam_adapter = senior_mapping.slam_adapter:main",
+            "localization_node = senior_localization.localization_node:main",
             "agent_adapter = senior_robot.agent_adapter:main",
         ]
     },

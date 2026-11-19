@@ -570,7 +570,7 @@ def main() -> None:
         hardware_reference = str(node.get_parameter("hardware_navigation_reference").value)
         reference = None
         if hardware_reference:
-            from senior_robot.hardware_reference import HardwareReference
+            from senior_localization.hardware_reference import HardwareReference
 
             reference = HardwareReference(node, Path(hardware_reference))
         exiting = False

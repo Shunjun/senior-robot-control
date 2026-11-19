@@ -52,7 +52,7 @@ def assert_no_velocity(value: object) -> None:
 
 
 def slam_adapter_module():
-    path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "slam_adapter.py"
+    path = ROOT / "ros2" / "src" / "senior_mapping" / "senior_mapping" / "slam_adapter.py"
     spec = importlib.util.spec_from_file_location("slam_adapter_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_localization)
 find_package(ament_cmake REQUIRED)
-# Architecture skeleton only: no executable, launch wiring or algorithm target.
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(${PROJECT_NAME})
+install(PROGRAMS scripts/localization_node DESTINATION lib/${PROJECT_NAME})
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(localization_algorithms ${CMAKE_CURRENT_SOURCE_DIR}/test)
+endif()
 ament_package()

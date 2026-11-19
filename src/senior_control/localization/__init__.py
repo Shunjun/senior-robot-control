@@ -1,13 +1,13 @@
-"""Geographic alignment, relocalization, and passive heading observations."""
+"""//Compatible: public localization imports retain canonical type identity."""
 
-from senior_control.localization.geo import (
+from senior_localization.geo import (
     GeoAlignment,
     NavigationPosture,
     PositionEstimate,
     QualifiedFix,
 )
-from senior_control.localization.heading import HeadingObservation, HeadingObserver, MotionSample
-from senior_control.localization.relocalization import PoseHint, Relocalizer
+from senior_localization.heading import HeadingObservation, HeadingObserver, MotionSample
+from senior_localization.relocalization import PoseHint, Relocalizer
 
 __all__ = [
     "GeoAlignment",

@@ -25,7 +25,7 @@ def reference(monkeypatch):
     # Recording boundary for B's mandatory metadata accessor; no time remapping.
     receipt.received_sample = lambda info: info["sample_time"]
     monkeypatch.setitem(sys.modules, receipt.__name__, receipt)
-    path = Path("ros2/src/senior_robot/senior_robot/hardware_reference.py")
+    path = Path("ros2/src/senior_localization/senior_localization/hardware_reference.py")
     spec = importlib.util.spec_from_file_location("standard_reference_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

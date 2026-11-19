@@ -8,7 +8,7 @@ import pytest
 
 def test_relocalization_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
-    from senior_robot.localization_node import create_localization_node
+    from senior_localization.localization_node import create_localization_node
 
     rclpy.init()
     node = None

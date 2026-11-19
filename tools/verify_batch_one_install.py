@@ -16,6 +16,11 @@ def main() -> None:
     from senior_contracts.logs import LogRequest
     from senior_contracts.navigation import RouteProgress
     from senior_contracts.wire import serialize_envelope, validate_envelope
+    from senior_localization.geo import GeoAlignment
+    from senior_localization.heading import HeadingObserver
+    from senior_localization.navigation_reference import NavigationReferenceConfig
+    from senior_localization.relocalization import Relocalizer
+    from senior_mapping.slam_adapter import SlamAdapter
     from senior_motion_control.motion_output import MotionOutput
     from senior_motion_control.native import native_executable
     from senior_perception.raw_safety_observation import RawSafetyObservation
@@ -23,6 +28,12 @@ def main() -> None:
 
     from senior_control.errors import DomainError
     from senior_control.errors import ErrorCode as LocalErrorCode
+    from senior_control.hardware_navigation import (
+        NavigationReferenceConfig as LegacyReferenceConfig,
+    )
+    from senior_control.localization import GeoAlignment as LegacyGeoAlignment
+    from senior_control.localization.heading import HeadingObserver as LegacyHeadingObserver
+    from senior_control.localization.relocalization import Relocalizer as LegacyRelocalizer
     from senior_control.models import Velocity
     from senior_control.navigation import RoutePlan
     from senior_control.navigation import RouteProgress as LocalRouteProgress
@@ -32,6 +43,16 @@ def main() -> None:
     from senior_control.settings.models import DrivingSettings
     from senior_control.vehicle_logs.models import LogQuery
     from senior_control.vehicle_logs.wire import LogRequest as LocalLogRequest
+
+    assert LegacyGeoAlignment is GeoAlignment
+    assert LegacyHeadingObserver is HeadingObserver
+    assert LegacyRelocalizer is Relocalizer
+    assert LegacyReferenceConfig is NavigationReferenceConfig
+    for package in ("senior_localization", "senior_mapping"):
+        module = importlib.import_module(package)
+        assert (Path(module.__file__).parent / "py.typed").is_file()
+    assert SlamAdapter.__module__ == "senior_mapping.slam_adapter"
+    assert callable(SlamAdapter.load)
 
     assert LocalRouteProgress is RouteProgress and LocalErrorCode is ErrorCode
     assert LocalLogRequest is LogRequest
@@ -45,6 +66,8 @@ def main() -> None:
     assert callable(MotionOutput.publish)
     assert "rclpy" not in sys.modules, "installed imports must not load rclpy"
     for name in (
+        "senior-localization",
+        "senior-mapping",
         "senior-contracts",
         "senior-motion-control",
         "senior-perception",

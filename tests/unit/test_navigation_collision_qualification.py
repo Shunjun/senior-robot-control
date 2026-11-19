@@ -204,7 +204,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
 
     fake_module("rclpy", ok=lambda: False)
     fake_module("senior_robot.command_node", CommandNode=lambda **_: node)
-    fake_module("senior_robot.hardware_reference", HardwareReference=lambda *a: runtime.ref)
+    fake_module("senior_localization.hardware_reference", HardwareReference=lambda *a: runtime.ref)
     fake_module("senior_robot.dedicated_controller", DedicatedController=Controller)
     fake_module(
         "senior_robot.navigation_adapter",

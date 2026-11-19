@@ -102,7 +102,7 @@ def _mapping_nodes(context):
             parameters=[params, {"use_sim_time": use_sim_time}],
         ),
         Node(
-            package="senior_robot",
+            package="senior_mapping",
             executable="slam_adapter",
             prefix=restart_prefix(),
             name="slam_adapter",

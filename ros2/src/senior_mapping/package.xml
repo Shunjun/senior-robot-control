@@ -2,9 +2,14 @@
 <package format="3">
   <name>senior_mapping</name>
   <version>0.1.0</version>
-  <description>建图与地图管理 architecture skeleton; implementation pending migration</description>
+  <description>Existing stock SLAM Python service adapter; map lifecycle migration pending</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -10,6 +10,8 @@ COPY --from=uv /uv /bin/uv
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY contracts ./contracts
+COPY ros2/src/senior_localization ./ros2/src/senior_localization
+COPY ros2/src/senior_mapping ./ros2/src/senior_mapping
 COPY ros2/src/senior_motion_control ./ros2/src/senior_motion_control
 COPY ros2/src/senior_perception ./ros2/src/senior_perception
 COPY ros2/src/senior_motion_estimation ./ros2/src/senior_motion_estimation

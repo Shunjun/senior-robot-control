@@ -7,16 +7,16 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from senior_localization.geo import GeoAlignment, NavigationPosture, QualifiedFix
+from senior_localization.heading import HeadingObserver, MotionSample
+from senior_localization.relocalization import PoseHint, Relocalizer
 
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.localization.geo import GeoAlignment, NavigationPosture, QualifiedFix
-from senior_control.localization.heading import HeadingObserver, MotionSample
-from senior_control.localization.relocalization import PoseHint, Relocalizer
 from senior_control.mapping.archive import Georeference
 from senior_control.models import MapRef, OperationStatus, Pose2D, Velocity
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 MAP = MapRef("yard", 3)
 ORIGIN = (31.0, 121.0, 4.0)
 FIX_LLA = (31.00018, 121.00005, 6.0)
@@ -127,7 +127,14 @@ def relocator(
 
 
 def localization_module() -> object:
-    path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "localization_node.py"
+    path = (
+        ROOT
+        / "ros2"
+        / "src"
+        / "senior_localization"
+        / "senior_localization"
+        / "localization_node.py"
+    )
     spec = importlib.util.spec_from_file_location("localization_node_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -511,7 +518,7 @@ def test_bad_gps_does_not_kill_healthy_local_navigation() -> None:
 
 def test_localization_console_script_is_registered() -> None:
     text = (ROOT / "ros2" / "src" / "senior_robot" / "setup.py").read_text()
-    assert "localization_node = senior_robot.localization_node:main" in text
+    assert "localization_node = senior_localization.localization_node:main" in text
 
 
 async def test_scan_match_failure_clears_previous_localization() -> None:
