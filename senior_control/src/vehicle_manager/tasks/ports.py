@@ -35,3 +35,26 @@ class TaskStorePorts:
     prepare_schema: Callable[[], Awaitable[None]]
     map_reference: Callable[[str, int], MapReference]
     error: Callable[[ErrorCode, str], Exception]
+
+
+class LiveMapReference(Protocol):
+    """The original live admission owner; no copied or cached qualification."""
+
+    @property
+    def map_ref(self) -> MapReference: ...
+
+    @property
+    def map_generation(self) -> str: ...
+
+    @property
+    def review_required(self) -> bool: ...
+
+
+@dataclass(frozen=True)
+class TaskExecutionErrors:
+    """Concrete local exception identities, supplied once for each executor."""
+
+    domain: type[Exception]
+    qualification_unavailable: type[Exception]
+    route_rejected: type[Exception]
+    code: Callable[[Exception], ErrorCode]

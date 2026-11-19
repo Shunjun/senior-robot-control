@@ -97,6 +97,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2d 纯任务模型/Runner已迁 | 原tasks/models、runner → `vehicle_manager/tasks/`及只读MapReference形状 | 原运行时MapRef及比较保留，旧类/常量/函数同一身份；仅经确认扩两个旧具体MapRef调用点的Compatible静态cast，不作运行时校验或改准入；Store/Runtime/地图/ROS/IPC实现不迁 |
 | B6.S1 TaskStore已迁 | 原tasks/store → `vehicle_manager/tasks/store.py`及原行解析codec | 原DB/同连接锁、domain→core准备和原MapRef/DomainError逐实例注入；旧Compatible构造薄子类非同类，SQL/事务业务唯一、原tuple同一身份；不迁生命周期持久/执行/导航 |
 | B6.S2 生命周期持久/服务已迁 | 原tasks/lifecycle_store、lifecycle_service → `vehicle_manager/tasks/` | 旧类/异常/值/SCHEMA同一对象，复用原TaskStore/DB及agent_schema；Pose只读形状不搬值，Admission/CAS/锁内采样/取消settle与锁外dispatch原样；执行/Runtime/导航效果仍原位 |
+| B6.S3 执行/调度与导航效果已迁 | 原tasks/navigation_port、executor、runtime → `vehicle_manager/tasks/` | 原构造薄适配逐实例注入原具体异常，Runtime同对象；同DB/实时准入/名义端口/真实IPC与终端隔离保留；14文件，验证与旧失败见S3记录 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -466,3 +467,26 @@ RouteRejected和真实TaskNavigation/qualified_reference端口；复用已迁Sto
 条件16–21文件（产品9–12/测试3–5/配置0/工具文档4），须另审预报，不默认新增全局工厂或改变错误身份。
 原失联/未知查询/重启、同ref新代次/缺定位、skip失败取消优先、接管旧ack/终端退场与新手动隔离等输入预期见manager记录；
 现有地图/Home/导航、IPC/控制边界继续原实现，导航新算法和其他功能不前置。
+
+### B6.S3 导航效果端口、Executor与Runtime已迁
+
+基线22741b5，经只读精核与预报，取代前节16–21的条件估算，本片去重14文件：
+产品8/测试2/配置0/工具文档4，即新增3/修改10/迁移1/删除0。
+先navigation_port，再executor/runtime归既有vehicle_manager/tasks；旧端口/Executor为显式Compatible薄构造，
+非同一类但业务方法唯一继承，Runtime/协议/普通失败与ProcessCrash同一对象。
+QualificationUnavailable仍唯一原定义并继承原DomainError，RouteRejected仍原navigation owner，
+具体异常构造/catch/code/链逐实例注入；不建立全局工厂、不搬值或扩WS contracts。
+只读LiveMapReference/Pose/MapRef消费原运行时对象，默认执行代次和名义NavigationEffects门槛保留。
+原build_task_runtime、同Database/TaskStore/connection/write_lock、IpcNavigation/真实IPC与手动/终端边界不替换。
+
+原端口34通过，执行装配96通过；完整选择252通过/11失败（非累加），
+11项short_admission旧IPC夹具未接受learning_capability，在22741b5只读导出基线同样11失败；保护不改弱。
+manager30份源码仍原2项，全链当前222份/基线219份同环境均39项诊断一致，
+历史38与此路径namespace launch识别差异另记，不把旧类型错误宣称通过。
+两份原测试body/断言和三份原方法AST（明确接缝归一后）一致。
+manager/根wheel构建、离仓库manager8包与旧SDK24包安装/依赖检查通过；
+真实生产构造核对同DB/Store/原IPC适配、名义端口、异常身份和默认0代次，无RPC。
+实际目录、14文件清单、完整命令/版本/失败及未验项见[manager S3记录](../../../senior_control/README.md#s3-导航效果任务执行与调度)。
+真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM安装仍UNVERIFIED；不开服务、不部署、不推送。
+后续管理剩余owner与旧入口收尾、既有导航行为归senior_navigation需另行只读精核、预报、迁移，
+新导航算法仍最后，当前地图/Home/导航链保持原实现。

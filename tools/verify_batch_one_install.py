@@ -107,22 +107,61 @@ def verify_manager_lifecycle() -> None:
     print("installed manager lifecycle interfaces without Root/ROS owners: PASS")
 
 
+def verify_manager_execution() -> None:
+    """Import the canonical drivers without any local exception or ROS implementation."""
+    from vehicle_manager import tasks
+    from vehicle_manager.tasks.executor import NavigationFailure, ProcessCrash, TaskExecutor
+    from vehicle_manager.tasks.navigation_port import NavigationEffects, TaskNavigation
+    from vehicle_manager.tasks.runtime import TaskRuntime
+
+    for name, value in (
+        ("TaskExecutor", TaskExecutor),
+        ("TaskRuntime", TaskRuntime),
+        ("NavigationEffects", NavigationEffects),
+        ("TaskNavigation", TaskNavigation),
+        ("NavigationFailure", NavigationFailure),
+        ("ProcessCrash", ProcessCrash),
+    ):
+        assert getattr(tasks, name) is value
+    assert issubclass(ProcessCrash, BaseException) and not issubclass(ProcessCrash, Exception)
+    assert not any(
+        name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
+        for name in sys.modules
+    )
+    print("installed canonical task drivers without Root/ROS: PASS")
+
+
 def verify_legacy_task_store() -> None:
     """Reuse the original real SQLite create/reopen/conflict path in the installed SDK."""
     import asyncio
     import tempfile
     from datetime import datetime, timezone
 
+    from vehicle_manager.tasks.executor import NavigationFailure as ManagerNavigationFailure
+    from vehicle_manager.tasks.executor import ProcessCrash as ManagerProcessCrash
+    from vehicle_manager.tasks.executor import TaskExecutor as ManagerExecutor
+    from vehicle_manager.tasks.navigation_port import NavigationEffects as ManagerEffects
+    from vehicle_manager.tasks.runtime import TaskRuntime as ManagerRuntime
+
+    from senior_control.agent.composition import build_task_runtime
     from senior_control.agent.ports import IpcNavigation
     from senior_control.errors import DomainError, ErrorCode
     from senior_control.models import MapRef, Pose2D
+    from senior_control.navigation import RouteRejected
     from senior_control.runtime.ipc import IpcClient
     from senior_control.storage.database import Database
     from senior_control.tasks import Schedule, TaskDefinition
+    from senior_control.tasks.executor import (
+        NavigationFailure,
+        ProcessCrash,
+        QualificationUnavailable,
+        TaskExecutor,
+    )
     from senior_control.tasks.lifecycle import Command, Context
     from senior_control.tasks.lifecycle_service import LifecycleService
     from senior_control.tasks.lifecycle_store import LifecycleStore
     from senior_control.tasks.navigation_port import NavigationEffects
+    from senior_control.tasks.runtime import TaskRuntime
     from senior_control.tasks.store import TaskStore
 
     async def verify(directory: Path) -> None:
@@ -158,7 +197,40 @@ def verify_legacy_task_store() -> None:
             durable = LifecycleStore(store, boot_id="installed-boot")
             assert durable.tasks is store and durable.database is database
             client = IpcClient(directory / "unused.sock", robot_id="robot")
-            effects = NavigationEffects(durable, IpcNavigation(client, tasks=store))
+            navigation = IpcNavigation(client, tasks=store)
+            effects = NavigationEffects(durable, navigation)
+            assert NavigationEffects is not ManagerEffects
+            assert issubclass(NavigationEffects, ManagerEffects)
+            assert NavigationEffects.execute is ManagerEffects.execute
+            assert effects._rejection_type is RouteRejected
+            runtime, executor = build_task_runtime(database, store, navigation, boot_id="installed")
+            assert type(executor) is TaskExecutor and isinstance(executor, ManagerExecutor)
+            assert TaskExecutor is not ManagerExecutor
+            assert TaskExecutor.control is ManagerExecutor.control
+            assert TaskRuntime is ManagerRuntime and type(runtime) is ManagerRuntime
+            assert (
+                NavigationFailure is ManagerNavigationFailure
+                and ProcessCrash is ManagerProcessCrash
+            )
+            assert not issubclass(ProcessCrash, Exception)
+            assert runtime._store is store and executor._store is store
+            assert executor._database is database
+            assert runtime._executor is executor
+            assert runtime._generation() == executor._generation() == 0
+            assert executor.lifecycle.store.tasks is store
+            assert executor.lifecycle.store.database is database
+            assert isinstance(executor.lifecycle.port, ManagerEffects)
+            assert executor.lifecycle.port.navigation is navigation
+            assert executor.errors.domain is DomainError
+            assert executor.errors.route_rejected is RouteRejected
+            assert executor.errors.qualification_unavailable is QualificationUnavailable
+            unavailable = executor.errors.qualification_unavailable()
+            assert type(unavailable) is QualificationUnavailable and isinstance(
+                unavailable, DomainError
+            )
+            assert executor.errors.code(unavailable) is ErrorCode.UNAVAILABLE
+            assert str(unavailable) == "qualified task navigation is unavailable"
+            assert issubclass(RouteRejected, DomainError)
             context = Context(True, True, "pose", "map")
             service = LifecycleService(durable, effects, context=lambda: context)
             pose = Pose2D(1.0, 2.0, 0.0)
@@ -564,5 +636,6 @@ if __name__ == "__main__":
             assert "aiosqlite" not in sys.modules and "pydantic" not in sys.modules
             verify_manager_task_store()
             verify_manager_lifecycle()
+            verify_manager_execution()
     else:
         main()

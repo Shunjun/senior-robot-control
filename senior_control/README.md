@@ -629,3 +629,102 @@ TaskNavigation的task_poses/task_effect/status及原有限IO时限；原Pose实�
 接管后旧ack不复活/不撤新手动，以及terminal_release_outbox/旧真实IPC用例；
 输入原SQLite恢复状态、旧epoch/迟到结果和受阻导航→原持久义务/撤销确认，输出字段和控制隔离不变。
 宿主SQLite/内存端口可测，真实ROS/DDS/原生安装与车辆运行仍须对应环境；不前置新导航算法或其他新功能。
+
+## S3 导航效果、任务执行与调度
+
+基线 `22741b5`，先迁导航效果端口再迁执行/调度，同一批提交。
+唯一实现现在为：
+
+```text
+senior_control/src/vehicle_manager/tasks/
+├── navigation_port.py   TaskNavigation、NavigationEffects；原效果/查询/进度/通知
+├── executor.py          TaskExecutor；原资格、生命周期驱动、隔离的旧记录适配
+├── runtime.py           TaskRuntime；原时钟扫描、取消优先、skip与恢复状态
+├── ports.py             原只读值接口；LiveMapReference、逐实例TaskExecutionErrors
+└── __init__.py          按名字延迟公开以上接口
+src/senior_control/tasks/
+├── navigation_port.py   Compatible薄构造：原RouteRejected
+├── executor.py          Compatible薄构造：原DomainError/QualificationUnavailable/RouteRejected
+└── runtime.py           Compatible：同一canonical TaskRuntime
+```
+
+业务方法没有第二份实现。旧NavigationEffects/TaskExecutor类与canonical类**不是同一对象**，
+旧类继承同一方法并保留原生产构造签名；TaskNavigation、TaskRuntime、NavigationFailure、ProcessCrash为同一对象。
+QualificationUnavailable仍只在旧executor定义、继承原DomainError；RouteRejected仍由原navigation定义，
+两者的原错误码、文本、具体catch和异常链保持。TaskExecutionErrors只保存逐实例具体异常类及原code读取接口，
+不注册全局工厂，不把车内错误或值放WS contracts；读取code的Compatible cast仅在已捕获原DomainError后使用。
+ProcessCrash仍继承BaseException，不是Exception。
+
+canonical仅消费已有PoseReading/MapReference及LiveMapReference只读接口，
+原MapRef/Pose2D/实时准入owner不复制、不转换、不搬家；RouteProgress直接取既有共享DTO。
+原qualified_reference调用仍拿到原MapRef对象，实时map_ref/map_generation/review_required每次从同owner读取。
+`build_task_runtime`仍在原agent/composition，保留原Database/TaskStore/connection/write_lock，
+LifecycleStore/Service、IpcNavigation和真实IPC都不替换；默认执行代次仍0，不等同WS连接epoch。
+canonical Executor继续以`isinstance(port, NavigationEffects)`作名义门槛，旧端口子类通过，
+不改成宽泛协议、hasattr或任意可调用对象。
+
+原资格/截止/同ref新代次、未确认只查询、取消优先、同tick忙碌、boot/claim/CAS、
+锁内采样/锁外dispatch和原UUID幂等行为保持。
+terminal_release/settled/revoke低层字段及确认规则仍在原IpcNavigation，
+旧终端不能凭accepted或迟到ack撤销新权限；手动T2仍待真实退场且同gate核对后发出。
+ROS导航、地图/Home、控制和IPC算法不迁，不添加新守卫或功能。
+
+### 实际文件清单与分类
+
+14逻辑文件，产品8、测试2、配置0、工具文档4；新增3/修改10/迁移1/删除0（迁移只计一次）。
+
+| 类别 | 操作 | 文件 |
+|---|---|---|
+| 产品 | 新增3 | `src/vehicle_manager/tasks/{navigation_port,executor,runtime}.py`（本项目目录内） |
+| 产品 | 修改2 | `src/vehicle_manager/tasks/{ports,__init__}.py`（本项目目录内） |
+| 产品 | 修改3 | 根 `src/senior_control/tasks/{navigation_port,executor,runtime}.py` |
+| 测试 | 迁移1 | 根 `tests/integration/test_terminal_release_outbox.py` → 本项目 `tests/` |
+| 测试 | 修改1 | 根 `tests/integration/test_task_ownership.py`，仅改两个canonical导入 |
+| 工具文档 | 修改4 | 根 `tools/verify_batch_one_install.py`、本README、`tests/README.md`、原实施计划 |
+
+ownership的夹具仍被manual_wire/runtime_fault_isolation/terminal_metadata_runtime导入，故保留原位。
+未新建项目或修改依赖/锁/CI/安装配置；原CLI和real/sim组合入口继续组装唯一实现。
+
+### 命令、版本、结果和限制
+
+macOS 26.4 arm64；主仓库 `.venv/bin/` 的Python3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3，uv0.12.23。
+下文 `python/mypy/ruff` 均使用该主仓库解释器/工具，未使用系统Python跑产品回归。
+
+- RED：先改ownership测试导入并运行 `python -m pytest tests/integration/test_task_ownership.py --collect-only -q`，
+  因canonical executor尚不存在报ModuleNotFoundError；没有新增场景。
+- 端口步骤：`python -m pytest senior_control/tests/test_terminal_release_outbox.py senior_control/tests/test_task_lifecycle_service.py -q`：
+  **34 passed，0.71s**；原终端义务、False/unknown ack、换boot、锁外发送/未知只查询保护保持。
+- 两步装配：`python -m pytest senior_control/tests/test_terminal_release_outbox.py tests/integration/test_task_ownership.py senior_control/tests/test_task_runner.py -q`：
+  **96 passed，1.70s**（包含前项部分用例，不相加）。
+- 完整选集：`python -m pytest senior_control/tests/test_task_runner.py senior_control/tests/test_task_lifecycle.py senior_control/tests/test_schedule.py senior_control/tests/test_task_lifecycle_store.py senior_control/tests/test_task_lifecycle_service.py senior_control/tests/test_terminal_release_outbox.py tests/integration/test_task_ownership.py tests/integration/test_short_admission.py tests/integration/test_terminal_metadata_runtime.py -q`：
+  **252 passed / 11 failed，25.42s**；11项均为short_admission参数化旧夹具：
+  IPC替身只接受identity/disable_motion/exit，拒绝当前生产调用learning_capability。
+  用 `git archive 22741b5` 在 `/tmp/s3-baseline` 导出只读基线副本，
+  `python -m pytest /tmp/s3-baseline/tests/integration/test_short_admission.py -q -c /tmp/s3-baseline/pyproject.toml`
+  同样**11 failed，22.82s**、同一原因；不改夹具、不补假属性、不弱化断言，也不宣称手动隔离该组通过。
+  其他原SQLite恢复、资格/切图/迟到、真实任务IPC、未知查询/取消优先及终端metadata用例通过。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：30份源码，
+  原lifecycle:318及lifecycle_store:647两项错误，无本片新增。
+  全链命令 `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud` 采用pytest声明的完整源码路径作为MYPYPATH，
+  当前222份与同路径基线219份均**39项**，归一基线绝对路径后诊断逐条相同。
+  相比历史38项，此路径含原ROS launch目录，被识别为namespace，原launch缺库诊断拆为两个缺属性，
+  不是本片新错误；最初遗漏源码路径的110项输出不作为对照。
+- 方法AST核对：导航端口11、executor15、runtime6个非构造方法，
+  除明确列出的import/只读注解/异常逐实例接缝外与基线相同；两份原测试body及断言AST相同。
+  构造逐项检查原DB身份、实时引用/回调、默认代次、异常类和原timeout赋值；无业务重写。
+  11份相关Python的ruff check和format --check通过；按原CRLF检查diff通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/s3-wheels` 及根同命令：
+  两项目sdist/wheel构建成功。
+  `uv venv /tmp/s3-manager-venv --python <主仓库Python>`，
+  `uv pip install --python /tmp/s3-manager-venv/bin/python --offline /tmp/s3-wheels/vehicle_manager-0.1.0-py3-none-any.whl /tmp/contract-convergence-wheels/senior_contracts-0.1.0-py3-none-any.whl`：
+  8包；从 `/tmp` 用该解释器执行原安装工具 `--manager-tasks-only`通过，canonical驱动可导入而无root/ROS，
+  原纯核心导入不拉数据库保护仍保留；此新环境Pydantic2.14.3/aiosqlite0.22.1。
+- 原 `/tmp/vehicle-batch-one-venv` 离线 `uv pip install --reinstall --no-deps` 重装本轮root/manager wheel，
+  从 `/tmp` 执行安装工具默认模式通过，原SDK保留Pydantic2.14.1；两环境 `uv pip check --python <对应Python>` 均通过（8/24包）。
+  工具复用原SQLite create/get/CAS/重开及生命周期接受链，额外核对实际build_task_runtime的原DB/Store/IpcNavigation，
+  原构造子类/同业务方法、异常继承/身份/文本/code、TaskRuntime同一类和默认0代次；未reconcile或连接IPC。
+
+本片无新用例、无已知新增回归；选集中的11项旧夹具失败及2/39项类型错误如上登记，不能称全绿。
+真实Linux/ROS/ament/DDS/原生安装、车辆/仿真运行和Python3.10未验证；原工具继续输出native/SLAM UNVERIFIED。
+宿主SQLite/受控IPC与离仓库wheel检查不替代这些实测。
+没有启动开发或实车服务、部署或推送；等待负责人亲审，后续管理边界与既有导航迁移另行精核预报。

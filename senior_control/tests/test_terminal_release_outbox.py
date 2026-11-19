@@ -3,10 +3,10 @@
 from pathlib import Path
 
 from test_task_lifecycle_store import CONTEXT, NOW, SUBMIT, setup_store
+from vehicle_manager.tasks.lifecycle import Command
+from vehicle_manager.tasks.lifecycle_service import LifecycleService
 
 from senior_control.storage.database import Database
-from senior_control.tasks.lifecycle import Command
-from senior_control.tasks.lifecycle_service import LifecycleService
 
 
 async def test_identity_obligation_is_committed_and_false_ack_remains_queryable(tmp_path: Path):

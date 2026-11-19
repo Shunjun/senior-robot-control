@@ -66,3 +66,12 @@ os._exit的23/24/25阶段、15秒上界、原断言与其他输入不变，仍�
 首轮缺manager路径的3项失败修正后原核心55通过，含原Store/runner/ownership/terminal outbox的完整221项通过。
 安装工具验证真实TaskStore/DB对象、Pose序列化与receipt/effect持久化及旧类/异常/SCHEMA身份，不执行RPC。
 manager原2项、全链原38项和实际ROS未验见[manager S2记录](../README.md#s2-生命周期持久与服务)。
+
+S3迁入原test_terminal_release_outbox，仅改生命周期canonical imports，原用例体/断言AST保持。
+原test_task_ownership因其他集成测试直接复用其夹具保留原位，仅将Executor/Runtime类型导入指向canonical；
+仍通过真实build_task_runtime/原IpcNavigation装配，没有假属性、假DB或新增场景。
+原端口步骤34通过、装配96通过，完整选集252通过/11失败，不重复累加。
+11项short_admission失败在22741b5基线副本同样复现：旧IPC替身未接受learning_capability；
+本片不修改其断言或静默跳过，不将该组算作手动隔离通过。
+恢复/CAS/未知只查询、缺资格/切图、迟到及终端义务保护继续复用原用例。
+命令、同环境基线、独立manager/旧SDK安装身份和真实ROS缺口见[manager S3记录](../README.md#s3-导航效果任务执行与调度)。
