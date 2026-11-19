@@ -810,6 +810,18 @@ class MotionCoreOutput:
                     age=age_fact,
                     scan_deadline=raw.measurement_steady + default_policy().hard_age_s,
                 )
+            decision = facts
+            if facts.get("clearance") is not None:
+                # Unobstructed distances may be infinite; encode only their diagnostic copy.
+                decision = {
+                    **facts,
+                    "clearance": {
+                        name: value
+                        if math.isfinite(value)
+                        else ("NaN" if math.isnan(value) else "Inf" if value > 0 else "-Inf")
+                        for name, value in facts["clearance"].items()
+                    },
+                }
             trace.trace_record(
                 "core_tick",
                 boot=self.boot,
@@ -842,7 +854,7 @@ class MotionCoreOutput:
                 candidate=(candidate.vx, candidate.wz),
                 submitted=(output.vx, output.wz),
                 reason=reason,
-                decision=facts,
+                decision=decision,
                 selected=selected,
             )
             trace.trace_record(

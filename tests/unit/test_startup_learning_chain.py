@@ -898,19 +898,46 @@ def test_started_filter_failure_is_sticky_in_status_without_changing_hold(rig, m
 def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     monkeypatch, tmp_path, request
 ):
+    import gc
     import os
     import socket
 
+    from senior_robot import motion_core_output
     from senior_robot.motion_core_perception import scan_observation
 
     from senior_control.motion.startup_learning import StartupLearning
 
+    gc_settings = gc.isenabled(), gc.get_threshold()
     module = request.getfixturevalue("output_module")
     results, traced_rows = [], []
+    limit = motion_core_output.limit_velocity
+
+    def limit_with_real_clearance(*args):
+        # Infinity is a valid unobstructed direction, never a diagnostic string in control.
+        assert isinstance(args[3].rear, float) and args[3].rear == math.inf
+        return limit(*args)
+
+    monkeypatch.setattr(motion_core_output, "limit_velocity", limit_with_real_clearance)
     for enabled in (False, True):
         label = tmp_path / str(enabled)
         label.mkdir()
         r = LearningRig(monkeypatch, label)
+        offer = r.run.offer
+
+        def production_identity(raw, offer=offer):
+            # Original identity values from deadline-trace-1795060825; clocks stay controlled.
+            m, capture = raw.message, raw.message.raw_capture
+            m.source_epoch = "a27af8563d13499fa332b41651a1bc0a"
+            capture.raw_gid = "010fb8ff7d38fc2201000000000013030000000000000000"
+            capture.bridge_gid = "010fb8ff43387b4d01000000000012030000000000000000"
+            capture.source_epoch = "0ebbf0f147719304bccce28a8e43078c-3"
+            capture.bridge_boot_id = "679a993742619426ac726741b8239be6-1"
+            m.frame_id = capture.frame_id = "laser"
+            m.raw_source = capture.raw_gid
+            m.ranges[19:54] = [math.inf] * 35
+            return offer(raw)
+
+        monkeypatch.setattr(r.run, "offer", production_identity)
         reader, writer = os.pipe()
         parent, peer = socket.socketpair()
         os.set_blocking(reader, False)
@@ -958,6 +985,9 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
         try:
             assert r.core.command(barrier("prepared"))
             intent = barrier("intent")
+            intent.owner_boot_id = "f4aba0660bc8419ebc36d1c94eb38c13"
+            intent.session_id = "679a993742619426ac726741b8239be6"
+            intent.request_id = "0ebbf0f147719304bccce28a8e43078c"
             intent.received_steady, intent.steady_deadline = r.now, 10.05 + 0.15
             intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = (
                 1,
@@ -1000,13 +1030,29 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
             os.close(writer)
             r.close()
     assert results[0] == results[1]
+    assert (gc.isenabled(), gc.get_threshold()) == gc_settings
     ticks = [row for row in traced_rows if row["event"] == "core_tick"]
     assert len(ticks) == 5
     assert all(row["lost"] == 0 for row in traced_rows)
+    assert all(
+        len((json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n").encode()) <= 4096
+        for row in traced_rows
+    )
+    sends = [row for row in traced_rows if row["event"] == "transport_send"]
+    moving = [row for row in sends if row["vx"] != 0]
+    assert moving
+    for submitted in moving:
+        tick = next(row for row in ticks if row["transport_sequence"] == submitted["sequence"])
+        assert tick["computed_ns"] == submitted["computed_ns"]
+        assert tick["decision"]["clearance"]["rear"] == "Inf"
+        assert float(tick["decision"]["clearance"]["rear"]) == math.inf
     first = ticks[0]
     assert first["argmin"] == ["budget", "target", "startup"]
     assert first["deadline"] == 10.05 + 0.15 and first["bounds"]["startup"] is None
     assert first["selected"]["capture"]["time"]["sample_steady_ns"] == 10_050_000_000
+    assert first["selected"]["capture"]["raw_gid"] == (
+        "010fb8ff7d38fc2201000000000013030000000000000000"
+    )
     assert first["computed_ns"] == 10_050_000_000 and first["transport_sequence"] == 1
     stages = [row for row in traced_rows if row["event"] == "core_stages"]
     assert len(stages) == 5 and stages[0]["computed_ns"] == first["computed_ns"]
