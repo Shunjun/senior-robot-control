@@ -728,3 +728,107 @@ macOS 26.4 arm64；主仓库 `.venv/bin/` 的Python3.12.15、pytest8.4.2、mypy2
 真实Linux/ROS/ament/DDS/原生安装、车辆/仿真运行和Python3.10未验证；原工具继续输出native/SLAM UNVERIFIED。
 宿主SQLite/受控IPC与离仓库wheel检查不替代这些实测。
 没有启动开发或实车服务、部署或推送；等待负责人亲审，后续管理边界与既有导航迁移另行精核预报。
+
+## M2e WaypointStore存储迁移
+
+基线 `494b794`。只迁现有SQL存储与行解析，Home业务及同DB协调仍原位。
+实际目录与公开边界：
+
+```text
+senior_control/src/vehicle_manager/waypoints/
+├── __init__.py    按需公开WaypointStore、WaypointStorePorts
+├── store.py       唯一SQL/事务实现、WAYPOINT_STATEMENTS和原地图Home写入辅助函数
+├── codec.py       原SQLite行解析与原验证错误构造
+└── ports.py       每实例schema/值/异常构造及只读BindingReading
+src/senior_control/waypoints/
+├── __init__.py    Compatible，原公开名字按需加载
+├── store.py       原Waypoint/StoredWaypoint值；Compatible薄构造与地图导入回调接线
+└── home.py        未修改，现有Home业务/保护
+```
+
+旧WaypointStore与canonical类**不是同一对象**，薄子类仅保留原构造签名并注入原对象，
+原SQL/事务方法直接继承唯一实现。原Waypoint、StoredWaypoint、MapRef、Pose2D、DomainError仍在原模块，
+没有复制、重定义或迁这些值/异常；返回类型通过构造器的类型参数保留，避免迫使现有消费者转换对象或改签名。
+WaypointStorePorts只持有本实例的prepare_schema、MapRef/Pose2D/Waypoint/StoredWaypoint/DomainError构造器，
+没有全局工厂或默认Root实现。写入返回原pose/map_ref实例，读取仍按原构造顺序产生原值类型。
+原11处DomainError、3处Pose2D及1处MapRef构造逐项对应，原KeyError原因链与sqlite错误分支不变。
+
+canonical重用已有只读MapReference/PoseReading公开形状；BindingReading只要求实际读取的
+waypoint.waypoint_id、waypoint.pose与anchor_pose，没有导入地图实现或复制绑定对象。
+MAX_ROUTE_WAYPOINTS直接使用原navigation已转发的同一共享常量，不扩WS契约。
+manager不反向导入root/ROS/地图，不新建项目或增加依赖配置。
+
+原生产 `run_agent → 原Database → 旧WaypointStore` 继续持有同database/connection/write_lock。
+原Store.prepare只调用原domain migrations；HomeService.prepare仍在其后调用原core迁移，
+map_persistence原domain→core顺序、任务/settings及地图使用同连接的装配均不改。
+路径、SQL版本/顺序、原单车Home唯一索引、revision冲突、绑定、分页与路由筛选、BEGIN/回滚/提交保持。
+WAYPOINT_STATEMENTS旧入口与canonical及DOMAIN_MIGRATIONS[1]仍同一tuple。
+地图导入的replace_imported_home转发同一canonical函数；adopted_home_blocks_foreign薄函数只传原DomainError，
+两者继续使用地图事务传入connection，不获取第二把锁、不打开连接、不rollback/commit。
+HomeExecutionCoordination/target lock、guard、每图Home、生产IPC与ROS/导航执行均未迁或改行为。
+
+### 实际范围与验证
+
+实际11逻辑文件：产品6、测试迁移1、配置0、工具文档4；新增4/修改6/迁移1/删除0。
+产品为上树四份canonical文件及原store/__init__；
+原 `tests/integration/test_waypoint_store.py` → 本项目 `tests/test_waypoint_store.py`；
+工具文档为原verify_batch_one_install、此README、tests/README和原plan。
+
+版本：macOS26.4 arm64、主仓库Python3.12.15/pytest8.4.2/mypy2.4.0/ruff0.17.3、uv0.12.23，
+主仓库Pydantic2.14.1/aiosqlite0.22.1未变；下列python/ruff/mypy使用原主仓库`.venv/bin/`。
+
+- RED：先在原安装验证器加入本片公开接口核对，从`/tmp`运行旧独立manager环境的
+  `python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only`，
+  因旧wheel尚无vehicle_manager.waypoints报ImportError；本轮构建安装后同命令通过。
+- `python -m pytest senior_control/tests/test_waypoint_store.py -q`：**15 passed，0.41s**。
+  唯一夹具变化是_operation_helpers指向现有 `ros2/tests/test_map_operations.py`；
+  原同目录tests/integration/test_map_operations.py早已不存在。
+  在`git archive 494b794`导出的`/tmp/m2e-baseline`运行
+  `python -m pytest /tmp/m2e-baseline/tests/integration/test_waypoint_store.py -q -c /tmp/m2e-baseline/pyproject.toml`：
+  **13 passed / 2 failed，0.40s**，两项均在旧helper路径FileNotFoundError；未删用例、改断言或加假属性。
+- `python -m pytest senior_control/tests/test_waypoint_store.py tests/unit/test_home.py tests/integration/test_workspace_data.py ros2/tests/test_map_operations.py tests/unit/test_direct_navigation.py tests/unit/test_agent_ports.py -q`：
+  **148 passed，4.60s**（含15项，不相加），覆盖原单车Home/修订冲突/foreign pending与保护、
+  同连接地图Home导入/保留、同ref新代次旧位姿失效、工作区读写、生产IpcHomePort与任务/导航读取。
+- AST核对13个非构造/prepare存储方法及10个原辅助函数，除显式构造器/错误注入及注解外一致；
+  原Waypoint/StoredWaypoint类定义和全部测试body/断言一致，测试仅改变真实helper文件位置。
+  19份SQL字符串逐字节相同，排序连接后的SHA256为
+  `c1cd2a24ba4d5841fa955dcc9612fe3a4655ec6760718ca293930344356d6ed2`。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：34份源码仍原2项，
+  lifecycle:318与lifecycle_store:647；全链同S3源码MYPYPATH运行
+  `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：226份仍39项，与S3诊断逐条相同。
+  历史38/本环境launch namespace差异及其他旧夹具失败仍按S3记录，不宣称全仓全绿。
+- 八份相关Python的ruff check/format --check及按原CRLF的git diff检查通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2e-wheels`及根同命令：
+  sdist/wheel成功；新`/tmp/m2e-manager-venv`离线安装本轮manager及既有contracts wheel，共8包，
+  从`/tmp`运行上述安装工具`--manager-tasks-only`通过，canonical存储可导入且无root/ROS/地图实现。
+  独立安装只验证公开存储接口与依赖隔离，domain SQL准备和值/异常构造仍须由实际owner注入，未宣称独立车辆装配。
+- 原`/tmp/vehicle-batch-one-venv`离线 `uv pip install --reinstall --no-deps` 重装本轮root/manager wheel，
+  从`/tmp`运行安装工具默认模式通过；8/24包 `uv pip check --python <对应环境Python>` 均通过。
+  工具真实开SQLite并经旧构造保存、读取、重开航点，再经原IpcNavigation.task_poses读取任务目标；
+  核对原DB/构造器、同业务方法、值身份与SQL tuple身份，没有连接IPC或新增服务。
+  子进程核对旧公开Waypoint与原值同一对象且不提前加载HomeService，按需取HomeService仍原类。
+  独立manager新环境Pydantic2.14.3，旧SDK保留2.14.1；aiosqlite均0.22.1。
+
+本片选集通过，无新增场景或断言弱化。
+未跑全仓、真实Linux/ROS/ament/DDS/原生安装、车辆/仿真运行或Python3.10；
+工具原native/SLAM输出仍UNVERIFIED，宿主SQLite/安装不替代真实ROS。
+未启动开发/实车服务、部署或推送，等待负责人亲审。
+
+### Home下一片：只读依赖建议
+
+本片未动 `waypoints/home.py` 和Database上的HomeExecutionCoordination/target锁。
+不能直接将该模块整体导入manager：它仍引用地图BundleWaypoint/CellEvidence/HomeLink/AnchoredWaypoint/
+AnchorSnapshot/MapReferenceStore，既读代次又调用place/place_waypoint/apply_anchor_update，
+还有原Pose2D计算构造、DomainError catch/code及OperationStatus比较。
+下一片须先逐调用收窄地图读写端口、原构造与取消结果读取，保留同DB的home_execution/home_target_lock对象及
+return_home原execution→target→write_lock及编辑原target→write_lock顺序、guard token、取消settle和旧terminal隔离，不能把地图实现带进安装闭包。
+
+当前生产并未构造这个HomeService：实际链为composition的IpcHomePort(state_client, waypoints)写Home，
+DirectNavigation读取confirmed/adopted Home后经WorkspaceReader/原IpcState资格及IpcNavigation进入既有导航。
+IpcHomePort保持pose.get/原采样时间0.5秒/状态与代次复核、原revision CAS；
+HomeService现有构造在原unit/存储/地图回归与StoreHomePort可注入入口，不可迁移时顺便启用或替换生产链。
+建议先独立只读盘点生产IpcHomePort/StoreHomePort及旧HomeService两条入口，
+再分别预报生产管理接入与旧Home业务迁移，不按“一个home文件”混入地图算法/新每图Home。
+可复用本片agent_ports的缺/旧pose保护、workspace/direct_navigation原Home准入，
+以及test_home的同DB多service guard、未知接受/旧terminal/迟到callback、锁竞争与断链义务，
+原地图same_ref_import/Home保留用例；输入与预期继续沿用原fixture，不先新增能力或测试情景。

@@ -396,7 +396,7 @@ async def test_review_required_reference_rejects_return(tmp_path: Path) -> None:
 
 
 def _operation_helpers() -> object:
-    path = Path(__file__).resolve().parent / "test_map_operations.py"
+    path = Path(__file__).resolve().parents[2] / "ros2" / "tests" / "test_map_operations.py"
     spec = importlib.util.spec_from_file_location("map_operation_fixtures", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -75,3 +75,10 @@ S3迁入原test_terminal_release_outbox，仅改生命周期canonical imports，
 本片不修改其断言或静默跳过，不将该组算作手动隔离通过。
 恢复/CAS/未知只查询、缺资格/切图、迟到及终端义务保护继续复用原用例。
 命令、同环境基线、独立manager/旧SDK安装身份和真实ROS缺口见[manager S3记录](../README.md#s3-导航效果任务执行与调度)。
+
+M2e将原test_waypoint_store迁入本目录；所有原用例体与断言保持，
+仅把_operation_helpers从已不存在的同目录test_map_operations改指现有ros2/tests同名文件。
+原494b794基线13通过/2项旧路径失败，本片15通过；包含原Home/地图事务/工作区/导航入口的选择148通过。
+没有迁Home业务、补假属性或新设场景；原地图同连接事务与foreign Home保护继续使用真实SQLite和已有回调。
+独立manager只验证存储接口无root/ROS依赖；旧SDK实际验证原值/构造器、保存读取重开及IpcNavigation任务目标读取。
+命令、SQL/AST审计、原2/39项类型错误和真实ROS未验见[manager M2e记录](../README.md#m2e-waypointstore存储迁移)。

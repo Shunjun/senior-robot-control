@@ -98,6 +98,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.S1 TaskStore已迁 | 原tasks/store → `vehicle_manager/tasks/store.py`及原行解析codec | 原DB/同连接锁、domain→core准备和原MapRef/DomainError逐实例注入；旧Compatible构造薄子类非同类，SQL/事务业务唯一、原tuple同一身份；不迁生命周期持久/执行/导航 |
 | B6.S2 生命周期持久/服务已迁 | 原tasks/lifecycle_store、lifecycle_service → `vehicle_manager/tasks/` | 旧类/异常/值/SCHEMA同一对象，复用原TaskStore/DB及agent_schema；Pose只读形状不搬值，Admission/CAS/锁内采样/取消settle与锁外dispatch原样；执行/Runtime/导航效果仍原位 |
 | B6.S3 执行/调度与导航效果已迁 | 原tasks/navigation_port、executor、runtime → `vehicle_manager/tasks/` | 原构造薄适配逐实例注入原具体异常，Runtime同对象；同DB/实时准入/名义端口/真实IPC与终端隔离保留；14文件，验证与旧失败见S3记录 |
+| B6.M2e 航点存储已迁 | 原waypoints/store的SQL/解析 → `vehicle_manager/waypoints/` | 原值/构造与同DB domain准备注入、薄Compatible构造；地图Home回调沿原事务无二次锁/提交；Home业务/协调后置，11文件与验证见M2e记录 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -490,3 +491,21 @@ manager/根wheel构建、离仓库manager8包与旧SDK24包安装/依赖检查�
 真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM安装仍UNVERIFIED；不开服务、不部署、不推送。
 后续管理剩余owner与旧入口收尾、既有导航行为归senior_navigation需另行只读精核、预报、迁移，
 新导航算法仍最后，当前地图/Home/导航链保持原实现。
+
+### B6.M2e WaypointStore已迁，Home业务后置
+
+基线494b794，实际11逻辑文件：产品6/测试迁移1/配置0/工具文档4，即新增4/修改6/迁移1/删除0。
+原waypoints/store的SQL/事务与行解析归既有vehicle_manager/waypoints/{store,codec,ports,__init__}，
+旧store保留原Waypoint/StoredWaypoint值与Compatible薄构造，非同类但继承唯一业务方法；
+MapRef/Pose2D/DomainError及原值/运行对象不搬不复制，原构造与domain准备逐实例注入。
+manager无root/ROS/地图实现反向依赖；原DB/连接写锁、Store.prepare(domain)→Home owner core顺序不变。
+19份SQL逐字节、13个存储方法/10个辅助函数经明确接缝归一后一致，SQL tuple旧入口同一身份；
+地图Home导入回调只沿用传入connection，不另锁/连接/提交，Home协调/生产IPC与导航保持。
+原单车Home/修订/foreign pending保护、同连接地图导入、工作区与原导航/agent入口选择148通过；
+原测试helper旧路径在494b794基线2项失败，本片只改为现有ros2/tests路径，原15项全通过、断言不变。
+manager34份仍原2项类型错误，全链226份仍S3同39项；安装/原值与方法身份、真实SQLite读写重开/原任务目标读取通过。
+完整目录、文件清单、命令版本/结果与未验项见[manager M2e](../../../senior_control/README.md#m2e-waypointstore存储迁移)。
+真实ROS/Linux/车辆/仿真及Python3.10仍未验，不启服务/部署/推送。
+下一片先只读核对生产IpcHomePort/DirectNavigation和旧HomeService两条链：后者当前未由生产composition构造，
+依赖原地图读写、Pose/错误/结果构造与同DB Home协调，不能直接打入manager闭包或顺便启用；
+须另行收窄端口、预报后迁已有行为，不实现每图Home或新地图/导航算法。

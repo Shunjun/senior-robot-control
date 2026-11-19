@@ -131,6 +131,21 @@ def verify_manager_execution() -> None:
     print("installed canonical task drivers without Root/ROS: PASS")
 
 
+def verify_manager_waypoints() -> None:
+    from vehicle_manager import waypoints
+    from vehicle_manager.waypoints.ports import WaypointStorePorts
+    from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS, WaypointStore
+
+    assert waypoints.WaypointStore is WaypointStore
+    assert waypoints.WaypointStorePorts is WaypointStorePorts
+    assert len(WAYPOINT_STATEMENTS) == 2
+    assert not any(
+        name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
+        for name in sys.modules
+    )
+    print("installed canonical waypoint storage without Root/ROS: PASS")
+
+
 def verify_legacy_task_store() -> None:
     """Reuse the original real SQLite create/reopen/conflict path in the installed SDK."""
     import asyncio
@@ -142,6 +157,8 @@ def verify_legacy_task_store() -> None:
     from vehicle_manager.tasks.executor import TaskExecutor as ManagerExecutor
     from vehicle_manager.tasks.navigation_port import NavigationEffects as ManagerEffects
     from vehicle_manager.tasks.runtime import TaskRuntime as ManagerRuntime
+    from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS as ManagerWaypointStatements
+    from vehicle_manager.waypoints.store import WaypointStore as ManagerWaypointStore
 
     from senior_control.agent.composition import build_task_runtime
     from senior_control.agent.ports import IpcNavigation
@@ -150,6 +167,7 @@ def verify_legacy_task_store() -> None:
     from senior_control.navigation import RouteRejected
     from senior_control.runtime.ipc import IpcClient
     from senior_control.storage.database import Database
+    from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.tasks import Schedule, TaskDefinition
     from senior_control.tasks.executor import (
         NavigationFailure,
@@ -163,6 +181,19 @@ def verify_legacy_task_store() -> None:
     from senior_control.tasks.navigation_port import NavigationEffects
     from senior_control.tasks.runtime import TaskRuntime
     from senior_control.tasks.store import TaskStore
+    from senior_control.waypoints.store import (
+        WAYPOINT_STATEMENTS,
+        StoredWaypoint,
+        Waypoint,
+        WaypointStore,
+    )
+
+    assert WaypointStore is not ManagerWaypointStore
+    assert issubclass(WaypointStore, ManagerWaypointStore)
+    assert Waypoint.__module__ == StoredWaypoint.__module__ == "senior_control.waypoints.store"
+    assert DOMAIN_MIGRATIONS[1].statements is WAYPOINT_STATEMENTS is ManagerWaypointStatements
+    for method in ("home", "waypoint", "route_poses", "save_home", "save_waypoint", "sync_poses"):
+        assert getattr(WaypointStore, method) is getattr(ManagerWaypointStore, method)
 
     async def verify(directory: Path) -> None:
         reference = MapRef("yard", 1)
@@ -197,7 +228,32 @@ def verify_legacy_task_store() -> None:
             durable = LifecycleStore(store, boot_id="installed-boot")
             assert durable.tasks is store and durable.database is database
             client = IpcClient(directory / "unused.sock", robot_id="robot")
-            navigation = IpcNavigation(client, tasks=store)
+            points = WaypointStore(database, robot_id="robot")
+            assert points._database is database and points._ports.map_reference is MapRef
+            assert points._ports.pose is Pose2D and points._ports.error is DomainError
+            assert points._ports.waypoint is Waypoint and points._ports.stored is StoredWaypoint
+            await points.prepare()
+            point_pose = Pose2D(1.0, 2.0, 0.0)
+            point = await points.save_waypoint(
+                waypoint_id="point",
+                pose=point_pose,
+                map_ref=reference,
+                anchor_id="anchor",
+                anchor_pose=point_pose,
+                source_robot_id="robot",
+                status="confirmed",
+                latitude=None,
+                longitude=None,
+            )
+            assert (
+                type(point) is Waypoint and point.pose is point_pose and point.map_ref is reference
+            )
+            read = await points.waypoint("point")
+            assert type(read) is StoredWaypoint and type(read.waypoint) is Waypoint
+            assert type(read.waypoint.pose) is Pose2D and type(read.waypoint.map_ref) is MapRef
+            assert read.waypoint == point
+            navigation = IpcNavigation(client, points, tasks=store)
+            assert await navigation.task_poses(saved) == (point_pose,)
             effects = NavigationEffects(durable, navigation)
             assert NavigationEffects is not ManagerEffects
             assert issubclass(NavigationEffects, ManagerEffects)
@@ -248,10 +304,14 @@ def verify_legacy_task_store() -> None:
             store = TaskStore(database, robot_id="robot")
             await store.prepare()
             assert await store.get("task") == saved
+            reopened = WaypointStore(database, robot_id="robot")
+            assert (await reopened.waypoint("point")).waypoint == point
 
     with tempfile.TemporaryDirectory() as directory:
         asyncio.run(verify(Path(directory)))
-    print("installed original TaskStore DB/constructors, create/reopen/CAS/error identity: PASS")
+    print(
+        "installed original task/waypoint DB, constructors, reads/reopen/CAS/error identity: PASS"
+    )
 
 
 def main() -> None:
@@ -484,6 +544,20 @@ def main() -> None:
     verify_manager_task_store()
     verify_manager_lifecycle()
     verify_legacy_task_store()
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from senior_control.waypoints import Waypoint; "
+            "from senior_control.waypoints.store import Waypoint as Original; "
+            "assert Waypoint is Original; "
+            "assert 'senior_control.waypoints.home' not in sys.modules; "
+            "from senior_control.waypoints import HomeService; "
+            "from senior_control.waypoints.home import HomeService as Owner; "
+            "assert HomeService is Owner",
+        ],
+        check=True,
+    )
     # The local caller still supplies its real MapRef; the manager never wraps it.
     from datetime import datetime, timezone
 
@@ -637,5 +711,6 @@ if __name__ == "__main__":
             verify_manager_task_store()
             verify_manager_lifecycle()
             verify_manager_execution()
+            verify_manager_waypoints()
     else:
         main()
