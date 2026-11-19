@@ -5,6 +5,11 @@ from typing import Any
 
 __all__ = [
     "AgentJournal",
+    "Agent",
+    "HeartbeatFrame",
+    "Link",
+    "MotionPort",
+    "run_agent",
     "RobotSnapshot",
     "LiveState",
     "SnapshotState",
@@ -33,6 +38,11 @@ def __getattr__(name: str) -> Any:
     if name == "AgentJournal":
         return getattr(import_module("vehicle_manager.agent.journal"), name)
     modules = {
+        "Agent": "main",
+        "HeartbeatFrame": "connection",
+        "Link": "connection",
+        "MotionPort": "connection",
+        "run_agent": "composition",
         "RobotSnapshot": "snapshots",
         "LiveState": "snapshots",
         "SnapshotState": "snapshot_state",

@@ -1206,7 +1206,7 @@ uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1、HTTPX0.28.1/WebSockets15.0.1。
 安装工具原native/SLAM仍UNVERIFIED，不用静态/宿主检查替代ROS实测。
 无开发/实车服务、部署或推送，等待负责人亲审。
 
-### M3C 接线建议（只读，尚未实施）
+### M3C前置只读清单（以下实施已完成）
 
 下一片建议合并精核原Agent/main与connection的纯Link/Heartbeat边界、
 _snapshot_change_key和实际run_agent闭包，避免再拆无依赖障碍的小文件批次。
@@ -1216,4 +1216,106 @@ connection同时含纯Link/MotionPort/HeartbeatFrame与IpcMotion/MotionRejected�
 复用本片canonical Dispatcher/SnapshotState/wire；run_agent的存储/任务/地图/视频owner装配须继续可独立核对。
 本地IPC客户端是管理到执行的适配，WS身份/epoch不得变成运动执行代次；
 ManualIngress/运行时接收与ROS执行owner仍原位，旧CLI/环境/关闭顺序和离线已接受任务继续保持。
-先逐调用核对以上构造/异常/实际patch owner，再预报下一片文件范围；本片不实施M3C或导航算法。
+上述清单是下节M3C实施的依据；导航算法仍后置。
+
+
+## M3C Agent会话与生产管理编排
+
+基线94bc1d9；实际唯一Agent主循环和管理run_agent已归manager，
+旧python -m senior_control.agent.main、CLI/环境/私密凭据入口及实车/仿真启动调用保持。
+
+```text
+senior_control/src/vehicle_manager/agent/
+├── main.py            # 原Agent/session、分发/快照/安全停机与_snapshot_change_key
+├── connection.py      # 原纯HeartbeatFrame、Link、MotionPort
+├── runtime_ports.py   # 每Agent原值/异常/诊断/clock/metrics/媒体效果
+├── composition.py     # 原run_agent管理编排、准入/任务loop/关闭及pause_failed_tasks
+├── bootstrap_ports.py # 真实生产工厂和本地客户端消费接口、MediaBinding
+└── __init__.py        # 既有按需公开入口更新，无伪可执行入口
+src/senior_control/agent/
+├── main.py            # Compatible薄Agent构造、原ManualOperationResult与CLI
+├── connection.py      # Compatible同对象纯协议；原MotionRejected/IpcMotion
+└── composition.py     # 原Config/build_task_runtime/媒体owner和逐调用显式绑定
+senior_control/tests/
+├── test_agent.py        # 原integration用例，只有真实方法patch owner调整
+└── test_agent_config.py # 原unit逐字节迁移
+```
+
+旧Agent是Compatible薄子类，非同一类，仅覆盖构造绑定；其余48个原方法继承canonical实现，
+其中诊断报告方法转发原owner效果；
+HeartbeatFrame/Link/MotionPort及pause_failed_tasks旧入口同一对象。
+原ManualOperationResult、OperationResult/Status、DomainError、OperationNotCommitted/TaskOperationResult、
+MotionRejected继承IpcError及其code/catch/链和名义LifecycleNavigationOperations检查保留。
+manual_result构造和manual_result_type名义检查显式指向同一原类，无代理值或复制状态。
+Runtime端口只描述真实消费字段，原Clock/SystemClock、Metrics、PendingCounter/DiagnosticPending与
+队列report效果每Agent绑定；生产bootstrap逐调用明示实际工厂，不导入整个Root容器、注册全局工厂或复制诊断。
+诊断仍由原owner执行，logger前缀显式senior_control.agent。
+
+生产链仍为docker_start_helper/simulation_cli→原模块CLI→原Config/run_agent薄入口→
+canonical管理编排→原Database/TaskStore/WaypointStore/AgentJournal/IPC与媒体工厂。
+configure_diagnostics、同DB/连接写锁、prepare与未知恢复顺序保持；原4个motion客户端和
+state/map/navigation/workspace/display共9个独立客户端不合并，普通1秒/navigation3秒及domain/owner_record不变。
+原task_commit gate外采样、generation重查、gate→写锁、事务内过期provider与
+TaskAwareMotion原持久接管/真实handoff不搬不改；原任务导航及非手动已接受任务离线继续保持。
+
+原300ms手动截止、2秒快照/250ms采集与变化合并，64 ordinary/64 safety/1 latest intent/1 workspace、
+32模块报告与stragglers观测、旧epoch/revoke/过时结果隔离保持。
+request_shutdown先撤权，disable/settle安全、等待其他inflight、关link、cleanup、motion.exit/close、
+撤signal顺序与原各阶段预算保持，不把WS掉线等同任务取消，不产生第二路运动。
+
+媒体选择与AiortcPeerFactory/RosCameraSource/LatestFrameFile/VideoSession仍在原owner；
+原video_session闭包体原样保留，MediaBinding只传同一工厂与关闭效果。
+ROS摄像头内部自己的rclpy Context/executor和实际媒体线程未迁，manager不导入ROS/aiortc/av或内部执行DTO。
+settings/logs真实canonical owner复用，Root日志handler附着、level恢复及独立SQLite、DEBUG恢复和关闭顺序保持。
+
+### 实际范围与验证
+
+15逻辑文件：产品9（上述五份新增、旧三入口和manager公开入口修改），测试迁移2，配置0，工具文档4；
+新增5/修改8/迁移2/删除0，迁移单计。
+工具文档仅原安装工具、本README、tests/README和原plan；无pyproject/锁/CI/服务或启动命令修改。
+既有manager agent extra和CI测试发现已覆盖本批，独立manager构造须明确提供实际端口，
+不宣称已有不需要生产适配器的独立管理CLI或整项B6已完成。
+
+macOS26.4 arm64；原主仓库.venv/bin的Python3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0，
+uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1、HTTPX0.28.1/WebSockets15.0.1。
+以下python/ruff/mypy均该主环境绝对路径，工作区命令如下；仓库外另注。
+
+- RED：旧独立manager运行原安装工具--manager-tasks-only，缺vehicle_manager.agent.main失败，装本片wheel后通过。
+- `python -m pytest senior_control/tests/test_agent.py senior_control/tests/test_agent_config.py tests/integration/test_task_ownership.py tests/integration/test_settings_logs_wire.py -q`：
+  首轮92通过/1失败8.68s，原Unix socket bind被沙箱EPERM拒绝；原用例未改，后续允许socket的完整选集覆盖该组。
+- `python -m pytest senior_control/tests/test_agent.py senior_control/tests/test_agent_config.py tests/integration/test_task_ownership.py tests/integration/test_settings_logs_wire.py tests/integration/test_shutdown.py tests/integration/test_runtime_fault_isolation.py tests/integration/test_manual_wire.py tests/integration/test_settings_logs_review.py -q`：
+  允许原临时socket/隔离子进程后158通过/9失败，15.27s；含原Agent容量/快照/旧命令、任务离线/未知查询、
+  关停/故障隔离与真实设置/生产装配，不能将完整选集称为全绿。
+- 94bc1d9经git archive只读导出/tmp/m3c-baseline，同环境允许socket运行
+  `python -m pytest tests/integration/test_runtime_fault_isolation.py tests/integration/test_manual_wire.py tests/integration/test_settings_logs_review.py -q`：
+  37通过/9失败6.93s，失败ID集合与本轮完全相同。
+  仍原5个real-*进程夹具缺ros_setup/关闭替身不接受group_grace，
+  3个manual夹具缺_output_incarnation，1个日志目录夹具拒绝learning_capability；不补假属性、不改断言或跳过。
+- `python -m pytest tests/integration/test_video.py -k 'vehicle_signaling or video_frame_leaves_the_pending_drive_sample_alone or close_frame_survives_a_stop_and_a_video_flood' -q`：
+  5通过/35未选0.22s，复用原peer替身，覆盖原会话关闭/无摄像头/单viewer、原控制pending与stop/洪泛隔离；
+  这不是实际相机/aiortc编解码或全媒体回归通过。
+- 48个Agent方法含构造按明确端口接缝归一后AST一致，_snapshot_change_key精确一致；
+  原队列报告效果、CLI/Config/IPC/MotionRejected/ManualOperationResult、任务组合与pure Link/Heartbeat协议体一致。
+  run_agent的准入/loop/关闭顺序按原工厂/媒体效果接缝归一后AST一致，video_session闭包体原样。
+  test_agent_config逐字节迁移；test_agent仅将ControlledAsyncio patch导入从旧main改到真实canonical方法owner，
+  其余字节/输入/断言不变，未新增pytest情景。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：59源码4项；
+  其中原lifecycle:318/lifecycle_store:647两项未变，原Root Agent的可选gesture比较和_answer_learning未注解两项随迁移到main:612/799。
+  MYPYPATH取根pytest原pythonpath后`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  251源码仍39项；将两项Agent诊断归回原路径并忽略迁移行号后与M3B逐项一致，无新增ignore/cast，旧错误不算通过。
+- 对agent目录、三份旧入口、工具及两份迁移测试执行ruff check/format --check，
+  并用`git -c core.whitespace=cr-at-eol diff --check`核对差异。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m3c-wheels`及根
+  `uv build --offline --out-dir /tmp/m3c-wheels`成功构建两份sdist/wheel。
+  以同cache对原/tmp/m3a-base-venv和/tmp/m3a-agent-venv执行`uv pip install --offline --reinstall --no-deps`安装manager wheel，
+  原/tmp/vehicle-batch-one-venv同命令安装root/manager wheel，使用既有第三方兼容闭包。
+  从/tmp运行原工具--manager-tasks-only、--manager-agent-only、默认模式均通过，
+  `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv pip check --python <对应Python>`分别8/15/29包通过。
+  独立manager全部新公开模块无Root/ROS/媒体执行依赖；旧SDK真实SQLite同DB/Store及实际IPC构造引用保持，
+  实例化旧Agent核对原值/异常/名义类/诊断/clock与4个独立motion客户端，没有run/connect或发运动。
+  工具还从/tmp用SDK解释器执行`python -m senior_control.agent.main --help`，返回0且保留凭据/配对选项；没有读凭据或启动服务。
+  这是已有兼容依赖上的本片wheel验证，不是完整根frozen重装，原缓存缺口仍登记。
+
+真实Linux/ROS/ament/DDS/native/车辆仿真、相机与aiortc实媒体、Python3.10及GitHub runner未验；
+安装工具native/SLAM仍UNVERIFIED，旧S3夹具失败继续登记，不以宿主检查代替ROS实测。
+无开发/实车服务、部署或推送；剩余Root IPC/媒体/诊断设施的职责与真实安装收尾需另审范围，导航算法仍最后。

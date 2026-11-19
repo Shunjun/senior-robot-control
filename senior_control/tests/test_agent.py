@@ -1183,7 +1183,7 @@ async def snapshot_polls(tmp_path, monkeypatch, request):
 
     from senior_control.protocol import RobotPosePayload, ScanPointPayload
 
-    main = importlib.import_module("senior_control.agent.main")
+    main = importlib.import_module("vehicle_manager.agent.main")
     actual_asyncio = asyncio
     now = [0.0]
     sleeps = asyncio.Queue()

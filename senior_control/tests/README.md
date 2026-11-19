@@ -115,3 +115,12 @@ M3B将原test_vehicle_state、test_runtime_reporting、test_workspace_data逐字
 group_grace签名和拒绝learning_capability的旧夹具保持，不能据此宣称真实手动/子进程整链通过。
 原安全修订/快照失效/目标资格/未知只查询保护不改；52个业务方法/函数及其余组装/执行类体审计保持。
 安装和同DB/类型/效果身份、完整命令/环境/已知失败见[manager M3B记录](../README.md#m3b-管理快照显示工作区与请求分发)。
+
+
+M3C将原test_agent与test_agent_config迁入本目录；Config原字节不变，
+Agent仅改原ControlledAsyncio的patch模块为vehicle_manager.agent.main，实际方法已迁，其他输入/断言不变。
+原Root CLI/装配的class/Connector patch仍由每次调用显式构造的真实bindings保留，不补假属性。
+核心首次92通过/1项原socket沙箱限制；允许测试socket的完整选择158通过/9失败，
+94bc1d9只读基线相同9个失败ID；旧夹具问题和未验执行链不算通过。
+媒体原选集5通过（其他35未选），无新测试情景、假owner或保护弱化。
+48方法/组装/媒体/值身份审计、离仓库manager/SDK和原CLI help检查及完整命令见[manager M3C](../README.md#m3c-agent会话与生产管理编排)。

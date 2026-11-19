@@ -12,6 +12,13 @@ from pathlib import Path
 
 def verify_manager_agent(*, network: bool = False) -> None:
     from vehicle_manager import agent
+    from vehicle_manager.agent.composition import run_agent
+    from vehicle_manager.agent.connection import HeartbeatFrame, Link, MotionPort
+    from vehicle_manager.agent.main import Agent
+
+    assert agent.Agent is Agent and agent.HeartbeatFrame is HeartbeatFrame
+    assert agent.run_agent is run_agent
+    assert all(callable(value) for value in (run_agent, Link, MotionPort))
     from vehicle_manager.agent.dispatcher import Dispatcher
     from vehicle_manager.agent.frame_projection import vehicle_frame
     from vehicle_manager.agent.journal import AgentJournal
@@ -41,6 +48,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
     assert agent.AuthRejected is AuthRejected and agent.Supervisor is Supervisor
     assert agent.WebSocketLink is WebSocketLink and agent.WebSocketConnector is WebSocketConnector
     assert issubclass(ProtocolRejected, ConnectionError)
+    assert not any(name in sys.modules for name in ("aiortc", "av", "rclpy"))
     assert not any(
         name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
         for name in sys.modules
@@ -309,6 +317,43 @@ def verify_legacy_task_store() -> None:
     ):
         assert getattr(manager_snapshots, name) is value
 
+    from vehicle_manager.agent.composition import pause_failed_tasks as manager_pause_tasks
+    from vehicle_manager.agent.connection import HeartbeatFrame as ManagerHeartbeat
+    from vehicle_manager.agent.connection import Link as ManagerLinkProtocol
+    from vehicle_manager.agent.connection import MotionPort as ManagerMotionProtocol
+    from vehicle_manager.agent.main import Agent as ManagerAgent
+
+    from senior_control.agent.composition import pause_failed_tasks
+    from senior_control.agent.connection import HeartbeatFrame, Link, MotionPort, MotionRejected
+    from senior_control.agent.dispatcher import StoreTaskPort
+    from senior_control.agent.main import Agent as LegacyAgent
+    from senior_control.agent.main import ManualOperationResult
+    from senior_control.agent.ports import IpcMapPort, TaskAwareMotion
+    from senior_control.clock import SystemClock
+    from senior_control.models import OperationResult
+    from senior_control.runtime.diagnostics import DiagnosticPending, PendingCounter
+
+    assert HeartbeatFrame is ManagerHeartbeat and Link is ManagerLinkProtocol
+    assert MotionPort is ManagerMotionProtocol and pause_failed_tasks is manager_pause_tasks
+    assert LegacyAgent is not ManagerAgent and issubclass(LegacyAgent, ManagerAgent)
+    for name in ("run", "_session", "dispatch", "_collect", "request_shutdown", "_release"):
+        assert getattr(LegacyAgent, name) is getattr(ManagerAgent, name)
+    assert issubclass(MotionRejected, IpcError)
+    assert ManualOperationResult.__bases__ == (OperationResult,)
+
+    import subprocess
+
+    help_result = subprocess.run(
+        [sys.executable, "-m", "senior_control.agent.main", "--help"],
+        cwd="/tmp",
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    assert "--credentials-file" in help_result.stdout and "--pair" in help_result.stdout
+    print("installed original Agent constructor and legacy CLI help: PASS")
+
     assert Credentials is ManagerCredentials and pair_device is manager_pair_device
     assert Supervisor is ManagerSupervisor and AuthRejected is ManagerAuthRejected
     assert manager_supervisor_logger.name == "senior_control.runtime.supervisor"
@@ -439,6 +484,48 @@ def verify_legacy_task_store() -> None:
             assert snapshots._state is state and snapshots._tasks is store
             assert snapshots._waypoints is points and snapshots._navigation is actions
             assert snapshots._ports.error is DomainError
+
+            motion = TaskAwareMotion(
+                client,
+                intent_client=IpcClient(directory / "unused.sock", robot_id="robot"),
+                disable_client=IpcClient(directory / "unused.sock", robot_id="robot"),
+                safety_client=IpcClient(directory / "unused.sock", robot_id="robot"),
+            )
+            installed_agent = LegacyAgent(
+                "robot",
+                connector=connector,
+                journal=journal,
+                tasks=StoreTaskPort(store, robot_id="robot"),
+                home=capture,
+                maps=IpcMapPort(client),
+                state=snapshots,
+                motion=motion,
+                navigation=actions,
+            )
+            assert installed_agent._journal is journal and journal._database is database
+            assert installed_agent._state is snapshots and installed_agent._motion is motion
+            assert installed_agent._navigation is actions
+            assert installed_agent._ports.error is DomainError
+            assert installed_agent._ports.result is OperationResult
+            assert installed_agent._ports.manual_result is ManualOperationResult
+            assert installed_agent._ports.manual_result_type is ManualOperationResult
+            assert installed_agent._ports.motion_rejected is MotionRejected
+            assert installed_agent._ports.ipc_error is IpcError
+            assert installed_agent._ports.counter is PendingCounter
+            assert installed_agent._ports.safety_pending is DiagnosticPending
+            assert installed_agent._ports.clock is SystemClock
+            assert motion._manual_clock == installed_agent._clock.monotonic
+            assert (
+                len(
+                    {
+                        motion._client,
+                        motion._intent_client,
+                        motion._disable_client,
+                        motion._safety_client,
+                    }
+                )
+                == 4
+            )
 
             receiver = _TaskRouteReceiver(executor, "installed-fingerprint", state)
             target = DirectNavigation(state, workspace, points, receiver)

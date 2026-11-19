@@ -103,6 +103,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2f3 旧Home业务已迁但未启用 | 原waypoints/home → `vehicle_manager/waypoints/{home_service,home_ports}.py` | 原值/薄构造及同DB/robot锁和地图效果注入，guard/token/未知取消与原地图/控制owner保持；9文件验证见M2f3记录 |
 | B6.M3A 管理连接基础已迁 | 原agent/websocket、pairing、journal与runtime/supervisor → `vehicle_manager/agent/` | 原快照/heartbeat、诊断和journal值逐实例注入；旧构造Compatible薄子类或同对象别名，原DB/锁、WS身份/超时/撤销和离线任务语义保持；21文件及安装/验证见M3A记录，快照/请求处理后片另核 |
 | B6.M3B 管理投影/读取/分发已迁 | 原snapshots、vehicle_state、vehicle_frame、SnapshotState、settings/logs wire、workspace、dispatcher → `vehicle_manager/agent/` | 原值/异常/诊断与地图效果逐实例沿用；同DB/原任务/IPC/手动端保持，WS不带内部DTO；26文件，原失败及ROS缺口见M3B记录，Agent/main和真实启动接线后片另核 |
+| B6.M3C 管理主循环与编排已迁 | 原Agent/session、纯Link/Heartbeat和run_agent管理编排 → `vehicle_manager/agent/` | 原CLI/Config、同DB/9客户端、名义异常/结果/诊断/clock/metrics及媒体effects明示绑定；IPC/ROS执行与媒体后端原位，15文件及旧失败/安装缺口见M3C记录 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -598,3 +599,24 @@ manager54源码仍原2项、全链246源码仍原39项，同M3A诊断集合一�
 真实Linux/ROS/ament/DDS/native/车辆仿真、Python3.10和CI未验，native/SLAM仍UNVERIFIED，不启服务/部署/推送。
 下一片先精核Agent/main、纯Link/Heartbeat与IpcMotion混合边界、实际run_agent同DB/clock/metrics/关闭及视频装配，
 能沿同一组真实端口交付的合并预报，不能引入根runtime或将IPC混为WS、提前迁ROS导航；导航算法仍最后。
+
+
+### B6.M3C Agent会话与原生产启动管理已迁
+
+基线94bc1d9；唯一Agent/session与管理run_agent归vehicle_manager/agent/main、composition，
+connection仅迁纯HeartbeatFrame/Link/MotionPort并同对象转发，旧main为Compatible薄Agent构造和原CLI，非同类但业务方法唯一。
+原Config/环境/凭据、ManualOperationResult继承/原错误/名义检查、MotionRejected与IpcMotion、TaskAwareMotion/ROS执行原位。
+每Agent runtime_ports与每次run_agent bootstrap_ports明示原工厂/效果，不把Root整个容器、内部DTO或技术设施塞入manager/WS。
+同DB/锁、9个独立IPC客户端、原gate和task_commit事务/代次、已接受任务离线继续、手动退场和下发时序保持。
+原TTL/队列/epoch/revoke/safety停机及快照节奏不改；摄像头与媒体后端仍原owner，MediaBinding仅传原单一工厂/close。
+CLI和真实实车/仿真模块启动命令、pyproject/锁/CI未改，不宣称无原生产适配器的独立管理CLI或B6全部完成。
+
+实际15逻辑文件：产品9/测试迁移2/配置0/工具文档4，即新增5/修改8/迁移2/删除0。
+48个Agent方法/构造、快照key/原诊断效果、CLI/Config/IPC/值与名义类型及bootstrap准入/loop/cleanup、媒体闭包按明确接缝审计一致。
+原Config测试字节不变，Agent只调整原ControlledAsyncio patch owner，原断言不弱化，无新pytest情景。
+完整选集允许测试socket后158通过/9失败，94bc1d9只读基线复现完全相同9个旧夹具失败ID；媒体选定5通过。
+manager59源码4项包括两项从Root Agent搬入的旧诊断，全链251源码仍39项，归回原位置后诊断集合一致，不算类型全绿。
+两wheel构建和仓库外基础8包/agent-extra15包/旧SDK29包导入依赖、实际SQLite/原Agent装配及原模块CLI help通过。
+实际目录、命令/版本/失败与未验项见[manager M3C](../../../senior_control/README.md#m3c-agent会话与生产管理编排)。
+真实Linux/ROS/ament/DDS/native/车辆仿真、实际媒体/Python3.10/CI未验，native/SLAM仍UNVERIFIED，原frozen缓存与旧S3夹具失败继续登记。
+不开服务/部署/推送；剩余Root IPC/媒体/诊断设施和实际安装收尾后续只读精核再预报，不提前迁ROS导航算法。
