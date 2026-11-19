@@ -63,6 +63,12 @@ class SnapshotCache:
 
     def store(self, envelope: SnapshotEnvelope) -> CloudSnapshot:
         robot_id = envelope.robot_id
+        payload = envelope.payload
+        # //Compatible: the former vehicle projection rejected blank map identities.
+        references = (payload.map_ref, None if payload.home is None else payload.home.map_ref)
+        for reference in references:
+            if reference is not None and not reference.map_id.strip():
+                raise ValueError("invalid map reference")
         self._entries[robot_id] = (envelope.payload.model_copy(deep=True), self._clock())
         self._offline.discard(robot_id)
         view = self._view(robot_id)

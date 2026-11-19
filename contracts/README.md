@@ -74,7 +74,7 @@ Ruling：本次先把不属于云车共享的现有声明交还原车内入口�
 "$PY" -m pytest -q tests/unit/test_protocol.py tests/unit/test_websocket_link.py tests/unit/test_live_map_geometry.py tests/integration/test_agent_snapshots.py tests/integration/test_cloud.py tests/integration/test_agent.py tests/integration/test_settings_logs_wire.py tests/integration/test_settings_logs_review.py tests/integration/test_vehicle_logs.py tests/integration/test_task_ownership.py -k 'not test_directory_log_database_does_not_abort_composed_control' --disable-warnings --maxfail=1
 ```
 
-结果 **195 passed, 1 deselected**（12.31s）：覆盖实际 cloud relay/Agent 的编解码、快照过期、RouteProgress/任务嵌套响应、authenticated settings/logs wire、筛选/脱敏及原 WS owner 行为。WebSocket 测试夹具需要临时 loopback socket，沙箱原先 EPERM，获测试权限后运行；没有启动开发/车辆服务。
+结果 **196 passed, 1 deselected**（12.48s）：覆盖实际 cloud relay/Agent 的编解码、快照过期、RouteProgress/任务嵌套响应、authenticated settings/logs wire、筛选/脱敏及原 WS owner 行为。WebSocket 测试夹具需要临时 loopback socket，沙箱原先 EPERM，获测试权限后运行；没有启动开发/车辆服务。
 
 ```sh
 "$PY" -m pytest -q tests/unit/test_settings.py tests/unit/test_startup_learning_chain.py tests/unit/test_native_output_protocol.py tests/unit/test_unified_motion_runtime.py --disable-warnings --maxfail=1
@@ -109,3 +109,9 @@ cd /tmp
 对本批 Python 做 ruff check/format --check，`uv lock --check --offline` 与 `git diff --check`；锁和依赖未变化。无 ROS、ament_index_python 或 colcon，安装工具明确 native installation UNVERIFIED；本次 native/ROS/IPC 实现未修改，未做实车/真实ROS/部署或全量套件验收。
 
 兼容补充证据：在基线完整归档与当前源码的隔离 Python 子进程（分别设置 CHECKOUT_ROOT/PYTHONPATH，并断言实际 wire.__file__ 位于对应目录）计算 `TypeAdapter(Frame).json_schema()`、`HeartbeatRequest.model_json_schema()`、`LogRequest.model_json_schema()`，排序 JSON 后逐项比较完全相同；结合上述实际编解码/relay原回归，保留原字段和约束，不把schema比较当作运行链替代。
+
+### 兼容复核中的实际 bug 回归
+
+移走车端快照转换后发现原 `snapshot_from_envelope` 构造 `MapRef` 的隐式校验不能丢：`map_id=" "` 的共享快照虽能通过原 WS 字段模型，原云路径在缓存前会抛 `ValueError("invalid map reference")`。已在完整 `3dfd1e0` 归档的原转换函数复现拒绝，并在迁移实现上以 `test_cloud_cache_preserves_original_map_identity_validation` 看到 RED（DID NOT RAISE）后补回同一缓存入口校验，覆盖主地图和 Home 地图引用；没有把这条校验扩到其他 WS 消息或让共享包导入车内 MapRef。
+
+这是本次迁移引入并在交付前修正的实际兼容 bug，新增1项定向回归，文件总数仍30；不是新增驾驶功能或无关故障矩阵。修正后快照/缓存定向组79通过，完整已选组196通过、1项已证明基线旧失败明确排除；重新构建并安装 manager wheel 后，同一离仓库安装/依赖闭包检查通过。首次收敛提交为 `6f4a235`，该兼容修正作为后续小提交交付，审阅范围应以 `3dfd1e0..最终HEAD` 为准。

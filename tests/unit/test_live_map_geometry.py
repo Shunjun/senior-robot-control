@@ -111,3 +111,31 @@ def test_snapshot_geometry_rejects_nonfinite_and_oversized_input():
     assert (
         json.loads(SnapshotPayload.model_validate(base).model_dump_json()).get("robot_pose") is None
     )
+
+
+def test_cloud_cache_preserves_original_map_identity_validation():
+    from senior_control.protocol import SnapshotEnvelope
+
+    frame = SnapshotEnvelope(
+        v=1,
+        robot_id="sim",
+        session_id="agent",
+        connection_epoch=1,
+        request_id="snapshot",
+        seq=1,
+        expires_at=20.0,
+        type="snapshot",
+        payload=SnapshotPayload(
+            connected=True,
+            localized=True,
+            map_ref={"map_id": " ", "reference_revision": 0},
+            home=None,
+            task_revision=0,
+            runnable_task_ids=[],
+            execution_status="idle",
+            collected_at=10.0,
+        ),
+    )
+    # Previously snapshot_from_envelope constructed MapRef before storing the copy.
+    with pytest.raises(ValueError, match="invalid map reference"):
+        SnapshotCache().store(frame)
