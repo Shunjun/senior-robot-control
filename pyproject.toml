@@ -40,6 +40,7 @@ dev = [
     "mypy>=1.13",
     "types-PyYAML",
     "types-shapely>=2.1.0.20260728",
+    "lefthook==2.2.2",
 ]
 
 [tool.ruff]
