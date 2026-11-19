@@ -14,3 +14,8 @@ packages = ["src/cloud"]
 
 [tool.uv.sources]
 senior-contracts = { path = "../contracts", editable = true }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

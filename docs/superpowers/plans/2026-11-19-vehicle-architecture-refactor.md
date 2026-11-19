@@ -90,7 +90,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B3 已迁既有行为，ROS 待验：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖 B1/B2 的既有接口；从 155e2b9 迁入观测适配、准入/时序/融合、运动与连续位姿 owner，ControlInputs 经 frozen 决策快照替代字典写入；127 项通过、2 项 ROS 跳过，两个 retired 激光组合用例已登记；GPS/新算法仍留实现阶段 |
 | B4 已迁既有控制职责，ROS 实测待补 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5.1–B5.3 已迁既有Python/原生与持久事务，缺失功能待续 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
-| B6.C1 云业务已迁，C2/C3与管理独立安装待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
+| B6.C1/C2 云业务与独立设施已迁，C3与管理安装待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -290,3 +290,19 @@ Hub/Outbox/LogPeer/LogRelay旧构造是显式Compatible薄子类（非同一类�
 先处理公开本地接口和ROS反向引用，不能盲搬原config/models/diagnostics或让ROS执行依赖管理实现。
 只用既有senior_control/src/vehicle_manager、cloud/src/cloud及ROS功能包，不增加根runtime。
 已可用地图/定位/导航链保持；缺失地图/Home/定位功能留对应模块实现，B7先迁既有导航再做新算法。
+
+
+### B6.C2 独立云设施记录
+
+基线ee735b0；cloud.application提供真实独立factory/lifespan，CloudSettings、同连接SQLite、
+原备份/取消/回滚迁移和云实际使用的队列/锁诊断由云进程持有；原注入兼容入口保持不变。
+全部原v1–v5 SQL按运行值UTF-8字节保留为安装资源快照，14语句逐条SHA256核对，
+不复制任务/Home执行代码，不改路径/格式/版本，不迁车端Age或ROS执行职责。
+实际19文件：产品8、测试6、配置2、文档3，无删除或其他项目迁移；详见
+[云包C2记录](../../../cloud/README.md#c2-独立云设施与应用装配)。
+设施/设置原回归114项通过、跨端既选集160项通过（有重复不相加），四项旧控制夹具失败本轮仍复现；
+17份云源码类型检查、云wheel构建、无车端/ROS依赖的纯云安装与两次真实SQLite lifespan通过。
+原旧bootstrap/诊断队列兼容检查继续通过；不启动开发/实车服务，不部署或推送。
+C2已确定采用云内最小队列/等待诊断，不建立根runtime、不放入WS契约，车端通用诊断最终迁移边界仍待后续管理片。
+C3下一步须审阅预报后再接生产镜像、原环境/数据卷/反代及锁/上下文，不能以C2独立factory通过替代镜像或部署验证。
+既有地图/定位/导航链不变，管理独立安装按前列真实引用切片，导航算法仍后置。

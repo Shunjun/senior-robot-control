@@ -6,8 +6,20 @@ from senior_control.storage.database import Database
 from senior_control.storage.migrations import Migration, migrate
 
 
+@pytest.fixture(params=["vehicle", "cloud"])
+def storage_api(request):
+    if request.param == "vehicle":
+        return Database, Migration, migrate
+    from cloud.migrations import Migration as CloudMigration
+    from cloud.migrations import migrate as cloud_migrate
+    from cloud.storage import Database as CloudDatabase
+
+    return CloudDatabase, CloudMigration, cloud_migrate
+
+
 @pytest.mark.asyncio
-async def test_schema_migration_rollback(tmp_path):
+async def test_schema_migration_rollback(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     path = tmp_path / "test.db"
     async with Database(path) as db:
         await migrate(db, [Migration(1, ("CREATE TABLE item (value TEXT)",))])
@@ -26,7 +38,8 @@ async def test_schema_migration_rollback(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_busy_is_bounded(tmp_path):
+async def test_sqlite_busy_is_bounded(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     import asyncio
 
     path = tmp_path / "busy.db"
@@ -41,7 +54,8 @@ async def test_sqlite_busy_is_bounded(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unknown_schema_refuses_migration(tmp_path):
+async def test_unknown_schema_refuses_migration(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     async with Database(tmp_path / "future.db") as db:
         await db.connection.execute("PRAGMA user_version = 10")
         with pytest.raises(ValueError):
@@ -49,7 +63,8 @@ async def test_unknown_schema_refuses_migration(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_disk_full_has_no_success_ack(tmp_path):
+async def test_disk_full_has_no_success_ack(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     async with Database(tmp_path / "full.db") as db:
         await db.connection.execute("CREATE TABLE item (value BLOB)")
         await db.connection.commit()
@@ -65,13 +80,15 @@ async def test_disk_full_has_no_success_ack(tmp_path):
 
 
 @pytest.mark.parametrize("timeout", [-1, 0, 60001])
-def test_busy_timeout_must_be_bounded(tmp_path, timeout):
+def test_busy_timeout_must_be_bounded(tmp_path, timeout, storage_api):
+    Database, Migration, migrate = storage_api
     with pytest.raises(ValueError):
         Database(tmp_path / "x.db", busy_timeout_ms=timeout)
 
 
 @pytest.mark.asyncio
-async def test_database_pragmas_and_backup_snapshot(tmp_path):
+async def test_database_pragmas_and_backup_snapshot(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     path = tmp_path / "snapshot.db"
     async with Database(path) as db:
         for name, expected in (("foreign_keys", 1), ("synchronous", 2), ("journal_mode", "wal")):
@@ -92,7 +109,8 @@ async def test_database_pragmas_and_backup_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_locked_wal_initialization_uses_requested_busy_timeout(tmp_path):
+async def test_locked_wal_initialization_uses_requested_busy_timeout(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     import asyncio
 
     path = tmp_path / "locked.db"
@@ -105,7 +123,8 @@ async def test_locked_wal_initialization_uses_requested_busy_timeout(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_initialization_releases_connection(tmp_path):
+async def test_cancelled_initialization_releases_connection(tmp_path, storage_api):
+    Database, Migration, migrate = storage_api
     import asyncio
 
     path = tmp_path / "cancel.db"

@@ -105,14 +105,24 @@ def test_mounted_secrets_and_nested_env_precedence(tmp_path):
     assert result.device.topics == {"cmd": "/env", "scan": "/cli"}
 
 
-def test_cloud_settings_rejects_device_and_empty_secret():
-    from senior_control.config import CloudSettings
+@pytest.mark.parametrize("cloud_config", ["legacy", "independent"])
+def test_cloud_settings_rejects_device_and_empty_secret(cloud_config):
+    if cloud_config == "legacy":
+        from senior_control.config import CloudSettings
 
-    result = load_settings(SettingsSource(cli={"role": "cloud", "secret": "abc"}, environment={}))
+        def load(values):
+            return load_settings(SettingsSource(cli=values, environment={}))
+    else:
+        from cloud.config import CloudSettings
+
+        def load(values):
+            return CloudSettings.model_validate(values)
+
+    result = load({"role": "cloud", "secret": "abc"})
     assert isinstance(result, CloudSettings)
     for values in ({"role": "cloud", "secret": "abc", "device": {}}, {"secret": ""}):
         with pytest.raises(ValueError):
-            load_settings(SettingsSource(cli=values, environment={}))
+            load(values)
 
 
 def test_hardware_profile_requires_geometry_and_ros_mapping():

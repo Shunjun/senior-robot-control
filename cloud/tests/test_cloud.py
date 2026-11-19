@@ -28,14 +28,14 @@ from typing import Any
 
 import httpx
 import pytest
+from cloud.application import create_app
 from cloud.auth import hash_password
+from cloud.config import CloudSettings
+from cloud.storage import Database
 from fastapi import FastAPI
 from pydantic import SecretStr
-
-from senior_control.cloud.app import create_app
-from senior_control.config import CloudSettings
-from senior_control.errors import ErrorCode
-from senior_control.protocol import (
+from senior_contracts.errors import ErrorCode
+from senior_contracts.wire import (
     EmptyPayload,
     ResponseEnvelope,
     ResponsePayload,
@@ -43,7 +43,6 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_envelope,
 )
-from senior_control.storage.database import Database
 
 ORIGIN = "https://cloud.test"
 PASSWORD = "correct horse battery staple"
@@ -460,7 +459,7 @@ async def test_agent_epoch_increases_across_cloud_app_restart(tmp_path: Path) ->
 
 
 async def test_learning_reply_is_private_and_controller_generation_is_relay_owned(cloud):
-    from senior_control.protocol import LearningStartEnvelope
+    from senior_contracts.wire import LearningStartEnvelope
 
     csrf = await cloud.login()
     robot, token = await cloud.pair(csrf)

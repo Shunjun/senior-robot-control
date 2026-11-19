@@ -1,4 +1,4 @@
-"""Technical inputs supplied explicitly by the existing production bootstrap.
+"""Technical inputs supplied by the cloud or explicit legacy bootstrap.
 
 These interfaces carry no implementation, process state or vehicle policy.
 """

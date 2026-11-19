@@ -32,3 +32,36 @@ jobs:
           /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
           /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'
           /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"
+      - name: Verify independent cloud wheel and lifespan
+        run: |
+          python -m venv /tmp/cloud-wheel-test
+          /tmp/cloud-wheel-test/bin/pip install dist/vehicle_cloud-*.whl dist/senior_contracts-*.whl
+          cd /tmp
+          /tmp/cloud-wheel-test/bin/python - <<'PY'
+          import asyncio
+          import importlib.util
+          import tempfile
+          from pathlib import Path
+          from cloud.application import create_app
+          from cloud.auth import hash_password
+          from cloud.config import CloudSettings
+          from cloud.storage import Database
+
+          async def verify():
+              for name in ("senior_control", "vehicle_manager", "rclpy"):
+                  assert importlib.util.find_spec(name) is None
+              with tempfile.TemporaryDirectory() as directory:
+                  database = Database(Path(directory) / "cloud.db")
+                  app = create_app(
+                      CloudSettings(secret="s" * 32), database=database,
+                      admin_password_hash=hash_password("password"),
+                      allowed_origins=("https://cloud.test",),
+                  )
+                  assert not database.is_open
+                  for _ in range(2):
+                      async with app.router.lifespan_context(app):
+                          async with database.connection.execute("PRAGMA user_version") as cursor:
+                              assert await cursor.fetchone() == (5,)
+                      assert not database.is_open
+          asyncio.run(verify())
+          PY

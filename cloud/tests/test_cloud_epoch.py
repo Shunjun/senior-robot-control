@@ -2,8 +2,7 @@ from pathlib import Path
 
 from cloud.auth import TokenDigest
 from cloud.registry import RobotRegistry
-
-from senior_control.storage.database import Database
+from cloud.storage import Database
 
 
 async def test_epoch_survives_cloud_database_reopen(tmp_path: Path) -> None:

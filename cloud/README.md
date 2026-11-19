@@ -1,6 +1,9 @@
 # 独立云端
 
-## C1 已迁业务，独立生产部署尚未完成
+当前 C2 已提供独立设置、SQLite、队列诊断和可执行 lifespan 的真实应用装配；生产镜像仍待 C3。
+详见下方 [C2 记录](#c2-独立云设施与应用装配)。
+
+## C1 业务迁移历史记录（ee735b0）
 
 基线 `859c954`，九份既有云业务归 `cloud/src/cloud`，发行名 `vehicle-cloud`。
 云包只依赖 `senior-contracts`、FastAPI、Pydantic、aiosqlite；不导入车端管理、ROS 或其执行实现。
@@ -115,3 +118,116 @@ SDK安装检查只构造 factory、不进入 lifespan，不是独立云服务或
 未给旧夹具补假属性、未弱化断言、未迁后续控制职责。
 未验证Docker镜像/uv0.5.11锁兼容、真实Uvicorn网络/TLS/反代、Linux/systemd、ROS/ament/DDS与实车仿真；
 B5原生ROS实测缺口继续保留，未跑全仓测试，未部署/推送，C2/C3须另批审阅预报。
+
+
+## C2 独立云设施与应用装配
+
+基线 `ee735b0`，当前云端可以只安装 vehicle-cloud、senior-contracts 和第三方依赖，
+构造真实 ASGI app 并运行 lifespan；这不代表生产 Docker 已切换或已部署。
+新增/修改的实际位置如下，其余 C1 业务、旧兼容入口与车端/ROS实现不变：
+
+```text
+cloud/src/cloud/
+  application.py             # 独立装配；只注入本云进程的设施
+  config.py                  # CloudSettings；secret/role/diagnostics原约束
+  storage.py                 # 同一SQLite连接、DiagnosticLock及原取消/关闭规则
+  migrations.py              # 原备份、连续版本、BEGIN IMMEDIATE、rollback算法
+  historical_schema.json     # v1–v5全部原SQL值和逐语句SHA256；数据，不是Store实现
+  schema.py                  # 从安装资源读取上述历史数据
+  diagnostics.py             # 原有界队列/等待诊断；云自己的进程owner
+  ports.py                   # 接入说明同时覆盖云装配和旧显式注入
+cloud/tests/
+  test_cloud.py              # 原认证/配对/epoch/lifespan改走独立装配
+  test_cloud_epoch.py        # 原重开epoch使用云Database
+  test_schema.py             # 已选历史格式验收：0–5起点重开、凭据/epoch不变
+```
+
+实际19文件：产品8（新增7、改ports1）、测试6（新增schema1、修改5）、
+配置2（cloud pyproject、Backend CI）、文档3（本页、tests README、实施计划）。
+无删除/目录迁移；没有新顶层项目或修改WS contracts。
+
+### 所有权与公开用法
+
+```python
+from pathlib import Path
+from cloud.application import create_app
+from cloud.config import CloudSettings
+from cloud.storage import Database
+
+# admin_password_hash沿用原scrypt格式，由调用方提供；这里不读取环境或启动服务。
+app = create_app(
+    CloudSettings(secret="explicit-secret"),
+    database=Database(Path("/var/lib/senior/cloud.db")),
+    admin_password_hash=admin_password_hash,
+    allowed_origins=("https://cloud.example",),
+)
+```
+
+app 构造不开库；原 cloud.app lifespan 按 is_open 判定连接所有权，打开/迁移/关闭行为不变。
+传入已打开连接仍不被 lifespan 关闭；CLI/HTTP/WS业务仍是 C1 同一实现。
+CloudSettings 保持 extra=forbid、非空secret、隐藏错误输入、有限数值、cloud角色和原诊断设置约束，
+只接受显式数据，不新增隐式环境读取或把设备配置/车端通用加载器复制过来。
+`senior_control.cloud.app.create_app` 继续原设置/DB/迁移/诊断注入路径，没有被偷偷换成新设施。
+旧实例与新独立云设施分别归各进程owner，不要求跨项目类身份相同，也不互相导入。
+
+### SQLite与历史格式
+
+storage保留原 timeout=1..60000ms、PRAGMA busy_timeout/foreign_keys/WAL/synchronous FULL，
+asyncio.shield初始化、取消等待连接后关闭、失败复位entered标记及原关闭算法。
+写锁仍为原技术DiagnosticLock语义，连接/写锁唯一；不带HomeExecutionCoordination、Home锁或任务执行状态。
+migrations保留备份到同路径`.backup`、原deadline/pages/progress、备份取消等待，
+以及同锁下连续版本检查、未知版本拒绝、BEGIN IMMEDIATE与BaseException rollback。
+
+historical_schema.json冻结的是原SQL**运行值UTF-8字节**（包括原首尾空白），不是重新排版SQL：
+v1来自senior_mapping.schema的4条map journal声明，v2来自waypoints.store的2条声明，
+v3来自tasks.store的4条声明，v4来自云认证/配对/设备的3条声明，v5为原epoch ALTER。
+每条SQL附SHA256并与原源声明静态提取逐字节核对；全部5个版本和14条原语句保留。
+历史数据包含旧表不代表云端运行Home/任务/导航，未复制那些Store或执行算法；后续变更只能追加新迁移，
+不得编辑既有快照或重编号。数据库路径由原调用方显式提供，生产路径/格式不改。
+
+### 最小云队列诊断
+
+诊断文件提取QueueSnapshot/QueueWarningPolicy、有限统计、RuntimeDiagnostics的queue/wait/pump、
+PendingCounter（锁等待所需）、DiagnosticDeque、DiagnosticAsyncQueue、DiagnosticLock及进程配置owner。
+保留128流/owner上界、等待元数据4096上界、饱和计数、weakref退休、同名最严重owner、
+队列容量/丢弃/覆写/等待字段、瞬时越线、抑制/恢复、递归日志隔离、100ms泵和原5s DEBUG周期。
+真实cloud.app的控制出箱及日志32/4队列、数据库锁全部使用这个owner，绝非普通deque/Queue替代。
+queue变更只记状态，pump在队列锁外输出并吞掉诊断sink故障；cloud拥有自己的logger命名空间。
+
+没有复制Age、传感器时钟/帧龄阈值、age/sensor_attempt/raw去重、传感器summary状态、
+DiagnosticPending业务字典、车端环境加载或ROS执行器；DEBUG仍保留原字段名，
+summaries/sensor_results为空，等待/duration统计与告警原样。
+云周期默认5.0s是原默认值的独立云配置值，不再读取车端传感器资源。
+
+### 定向命令、版本与结果
+
+环境同C1：macOS26.4 arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23；
+测试FastAPI0.162.0/Starlette1.10.0/Pydantic2.14.1/aiosqlite0.22.1。
+所有 SQLite 与 ASGI 内存回归均未启动开发/实车/网络服务。
+
+- RED：原test_cloud改导入cloud.application，迁移前collect报ModuleNotFoundError；独立装配完成后14项认证/epoch原回归通过。
+- `python -m pytest cloud/tests tests/integration/test_storage.py tests/unit/test_runtime_diagnostics.py tests/unit/test_settings.py -q`：**114 passed**（4.42s）。
+  原8组SQLite用例在vehicle/cloud真实后端上复用原断言，覆盖未知版本、失败回滚、disk full、锁等待、PRAGMA/备份、取消初始化；
+  原队列告警/等待/突发/多owner/递归隔离用例也在两个真实诊断后端上复用原断言，车端Age/环境用例仍只针对原owner。
+  原cloud设置拒绝用例对旧加载器和新CloudSettings参数化，未改车端配置行为。
+- C1同一选定跨端集（含新增6个历史起点与队列后端参数）复跑：**160 passed、3原基线失败deselected**（6.62s）；
+  选择仍为C1列出的认证、快照/字段省略、设置/日志wire、队列、安全消息和私有视频relay，不增加无关算法情景。
+  两组存在重复，不能相加宣称274项唯一通过。
+- 四项C1既有控制夹具失败本轮单独复跑仍4 failed：settings_logs_review的learning_capability集合断言，
+  manual_wire原三项缺_output_incarnation；未补假属性或弱化断言，名称和原证据见上方C1记录。
+- `MYPYPATH=cloud/src:contracts/src mypy cloud/src/cloud`：17份源码通过；未跑全仓类型检查，C1的38项旧错误未宣称修复。
+- 23份相关Python的ruff check/format --check通过，git CRLF差异检查通过。
+  静态核对原SQLite生命周期/迁移/备份和原队列/锁/计数/聚合AST保留、全部SQL字节与14条SHA256匹配；
+  原src/senior_control、ROS、contracts、deploy均无diff，云无反向执行实现导入。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv lock --check --offline`：68包不变；
+  `uv build cloud --offline --out-dir /tmp/c2-wheels`：sdist/wheel成功，JSON与py.typed随wheel安装。
+- `/tmp/c2-cloud-venv`从wheel仅安装云、契约与第三方14包，pip check通过；
+  从`/tmp`实际执行CI新增的Python验证块：无senior_control/vehicle_manager/rclpy包，
+  构造独立factory确认未开库，两次实际lifespan均查询PRAGMA user_version=5并在退出后关闭连接，exit=0。
+  该环境Pydantic2.14.3，属于原声明范围，和测试环境2.14.1差异保留，不称frozen安装。
+- 原SDK环境仅重装新云wheel，仓库外原bootstrap factory/原诊断队列及兼容身份检查继续通过；
+  安装后不进入旧lifespan、不启动服务，旧入口实现本轮没有修改。
+
+CI新增真实纯云wheel/lifespan检查，cloud pyproject补独立测试路径与asyncio配置；没有修改Docker接线。
+本轮自审后交负责人亲审，未做全仓测试或部署；C3仍须处理既有.dockerignore、生产bootstrap切换、
+旧uv0.5.11与锁revision5、真实Docker/Uvicorn/TLS/反代；Linux/ROS/实车仿真及B5原生实测缺口均未覆盖。

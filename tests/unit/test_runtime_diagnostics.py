@@ -2,11 +2,25 @@ import logging
 
 import pytest
 
-from senior_control.runtime.diagnostics import QueueSnapshot, RuntimeDiagnostics
+from senior_control.runtime.diagnostics import RuntimeDiagnostics
 from senior_control.sensors.policy import default_policy
 
 
-def test_queue_warning_immediate_limited_and_recovers_without_control_side_effects():
+@pytest.fixture(params=["vehicle", "cloud"])
+def diagnostics_backend(request):
+    from importlib import import_module
+
+    module = (
+        "senior_control.runtime.diagnostics" if request.param == "vehicle" else "cloud.diagnostics"
+    )
+    return import_module(module)
+
+
+def test_queue_warning_immediate_limited_and_recovers_without_control_side_effects(
+    diagnostics_backend,
+):
+    QueueSnapshot = diagnostics_backend.QueueSnapshot
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
     emitted = []
     d = RuntimeDiagnostics(lambda level, data: emitted.append((level, data)))
     d.queue(QueueSnapshot("native", 13, 16, oldest_wait_ms=1), 0.0)
@@ -23,7 +37,9 @@ def test_queue_warning_immediate_limited_and_recovers_without_control_side_effec
     assert any(data["event"] == "queue_recovered" for _, data in emitted)
 
 
-def test_single_slot_unknown_depth_and_exact_drop_fields():
+def test_single_slot_unknown_depth_and_exact_drop_fields(diagnostics_backend):
+    QueueSnapshot = diagnostics_backend.QueueSnapshot
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append(data))
     d.queue(QueueSnapshot("latest", 1, 1, oldest_wait_ms=10, overwritten_total=2), 0)
@@ -54,8 +70,9 @@ def test_age_raw_dedup_separate_compute_and_five_second_debug():
     assert payload["streams"]["duration.compute"]["max"] == 0.002
 
 
-def test_pending_counter_waits_overwrites_and_running_are_distinct():
-    from senior_control.runtime.diagnostics import PendingCounter
+def test_pending_counter_waits_overwrites_and_running_are_distinct(diagnostics_backend):
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
+    PendingCounter = diagnostics_backend.PendingCounter
 
     d = RuntimeDiagnostics(lambda *_: None)
     p = PendingCounter("ipc", 4, diagnostics=d)
@@ -71,7 +88,9 @@ def test_pending_counter_waits_overwrites_and_running_are_distinct():
     assert p.snapshot(0.5).overwritten_total == 1
 
 
-def test_transient_crossing_is_not_lost_when_queue_drains_before_reporter():
+def test_transient_crossing_is_not_lost_when_queue_drains_before_reporter(diagnostics_backend):
+    QueueSnapshot = diagnostics_backend.QueueSnapshot
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append((level, data)))
     d.queue(QueueSnapshot("burst", 4, 4, oldest_wait_ms=1), 0)
@@ -86,8 +105,10 @@ def test_transient_crossing_is_not_lost_when_queue_drains_before_reporter():
 
 
 @pytest.mark.parametrize("capacity,threshold", [(4, 3), (16, 12), (64, 32), (1024, 32)])
-def test_queue_count_thresholds_are_diagnostic_only(capacity, threshold):
-    from senior_control.runtime.diagnostics import QueueWarningPolicy
+def test_queue_count_thresholds_are_diagnostic_only(capacity, threshold, diagnostics_backend):
+    QueueSnapshot = diagnostics_backend.QueueSnapshot
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
+    QueueWarningPolicy = diagnostics_backend.QueueWarningPolicy
 
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append((level, data)))
@@ -100,7 +121,9 @@ def test_queue_count_thresholds_are_diagnostic_only(capacity, threshold):
     assert out[-1][0] == logging.WARNING
 
 
-def test_single_slot_wait_grows_without_new_enqueues_and_logger_cannot_recurse():
+def test_single_slot_wait_grows_without_new_enqueues_and_logger_cannot_recurse(diagnostics_backend):
+    QueueSnapshot = diagnostics_backend.QueueSnapshot
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
     out = []
 
     def sink(level, data):
@@ -115,10 +138,11 @@ def test_single_slot_wait_grows_without_new_enqueues_and_logger_cannot_recurse()
     assert out[0]["oldest_wait_ms"] == 400
 
 
-def test_multiple_owners_use_worst_queue_and_released_owner_is_unknown():
+def test_multiple_owners_use_worst_queue_and_released_owner_is_unknown(diagnostics_backend):
+    RuntimeDiagnostics = diagnostics_backend.RuntimeDiagnostics
     import gc
 
-    from senior_control.runtime.diagnostics import PendingCounter
+    PendingCounter = diagnostics_backend.PendingCounter
 
     out = []
     d = RuntimeDiagnostics(lambda level, data: out.append((level, data)))
