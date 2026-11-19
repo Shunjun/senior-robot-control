@@ -34,7 +34,7 @@ class LearningRig:
         monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
         monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
         monkeypatch.setattr(
-            "senior_robot.motion_core_output.LearningClient",
+            "senior_robot.vehicle_learning.LearningClient",
             lambda _, **kwargs: self.run.client(**kwargs),
         )
         monkeypatch.setattr(
@@ -321,7 +321,7 @@ def test_explicit_estop_interrupts_action_and_replayed_close_does_not_reset_latc
 
 
 def test_expired_candidate_after_first_submission_keeps_original_grant_and_window(rig, monkeypatch):
-    from senior_robot import motion_core_output
+    from senior_robot import vehicle_speed
 
     reserve = rig.run.owner.reserve_action
     reservations = []
@@ -335,7 +335,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
     deadline = rig.core.startup.deadline
     grant = rig.run.owner._reservation
     assert rig.core.startup.action_permitted and len(reservations) == 1
-    original_limit = motion_core_output.limit_velocity
+    original_limit = vehicle_speed.limit_velocity
     entered = rig.now + 0.05
 
     def exhaust_current_frame(*args, **kwargs):
@@ -344,7 +344,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
         return output
 
     with monkeypatch.context() as stalled:
-        stalled.setattr(motion_core_output, "limit_velocity", exhaust_current_frame)
+        stalled.setattr(vehicle_speed, "limit_velocity", exhaust_current_frame)
         assert rig.step(entered) == Velocity(0, 0)
     expired = rig.core.node.emitted[-1]
     assert expired[2] == "learning_output_expired"
@@ -530,7 +530,8 @@ def checked_current_velocity(core, now, function, *arguments):
 
 
 def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(rig, monkeypatch):
-    from senior_robot import motion_core_output
+    from senior_robot import vehicle_learning as motion_core_output
+    from senior_robot import vehicle_speed
 
     rig.start()
     calls = []
@@ -547,9 +548,9 @@ def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(
 
     monkeypatch.setattr(motion_core_output, "scan_observation", decoded)
     monkeypatch.setattr(rig.core.self_returns, "filter", filtered)
-    limit = motion_core_output.limit_velocity
+    limit = vehicle_speed.limit_velocity
     monkeypatch.setattr(
-        motion_core_output,
+        vehicle_speed,
         "limit_velocity",
         lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
     )
@@ -655,7 +656,8 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
 def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning_raw(
     rig, monkeypatch
 ):
-    from senior_robot import motion_core_output
+    from senior_robot import vehicle_learning as motion_core_output
+    from senior_robot import vehicle_speed
     from senior_robot.raw_safety_observation import PredictedReturn
 
     from senior_control.vision.raw_capture import capture_from_message
@@ -685,9 +687,9 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
     monkeypatch.setattr(rig.run, "offer", original_frame)
     monkeypatch.setattr(motion_core_output, "scan_observation", decoded)
     monkeypatch.setattr(motion_core_output, "avoidance_observation", avoided)
-    limit = motion_core_output.limit_velocity
+    limit = vehicle_speed.limit_velocity
     monkeypatch.setattr(
-        motion_core_output,
+        vehicle_speed,
         "limit_velocity",
         lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
     )
@@ -769,7 +771,8 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
 def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_original_facts(
     rig, monkeypatch
 ):
-    from senior_robot import motion_core_output
+    from senior_robot import vehicle_learning as motion_core_output
+    from senior_robot import vehicle_speed
 
     start = rig.start()
     while rig.now + 0.05 < start + 3:
@@ -822,9 +825,9 @@ def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_origina
     intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = 1, 0.05, 0.05
     intent.vx = 0.05
     assert rig.core.command(intent)
-    limit = motion_core_output.limit_velocity
+    limit = vehicle_speed.limit_velocity
     monkeypatch.setattr(
-        motion_core_output,
+        vehicle_speed,
         "limit_velocity",
         lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
     )
@@ -902,7 +905,7 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     import os
     import socket
 
-    from senior_robot import motion_core_output
+    from senior_robot import vehicle_speed
     from senior_robot.motion_core_perception import scan_observation
 
     from senior_control.motion.startup_learning import StartupLearning
@@ -910,14 +913,14 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     gc_settings = gc.isenabled(), gc.get_threshold()
     module = request.getfixturevalue("output_module")
     results, traced_rows = [], []
-    limit = motion_core_output.limit_velocity
+    limit = vehicle_speed.limit_velocity
 
     def limit_with_real_clearance(*args):
         # Infinity is a valid unobstructed direction, never a diagnostic string in control.
         assert isinstance(args[3].rear, float) and args[3].rear == math.inf
         return limit(*args)
 
-    monkeypatch.setattr(motion_core_output, "limit_velocity", limit_with_real_clearance)
+    monkeypatch.setattr(vehicle_speed, "limit_velocity", limit_with_real_clearance)
     for enabled in (False, True):
         label = tmp_path / str(enabled)
         label.mkdir()

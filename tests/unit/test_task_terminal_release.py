@@ -6,6 +6,7 @@ import pytest
 from test_motion_core_exit_deadline import rig as core_fixture
 from test_motion_core_exit_deadline import start
 from test_navigation_completion_handoff import barrier
+from test_startup_learning_chain import rig as learning_rig  # noqa: F401
 
 from senior_control.motion.contracts import MotionMode
 from senior_control.tasks import lifecycle as task
@@ -118,26 +119,27 @@ def test_unconsumed_old_epoch_rejected_and_duplicate_consumed_ack_cannot_clear_s
     assert rig.core.machine.state.task_id == successor and rig.core.target.source == "navigation"
 
 
-def test_terminal_identity_does_not_revoke_current_manual_or_touch_output_frontiers(rig):
-    start(rig, 0.5)
+def test_terminal_identity_does_not_revoke_current_manual_or_touch_output_frontiers(learning_rig):  # noqa: F811
+    rig = N(core=learning_rig.core, clock=N(steady=learning_rig.now))
+    assert rig.core.command(intent(rig, "route", generation=2))
     assert rig.core.command(barrier(rig, "task_revoke"))
     assert rig.core.command(intent(rig, "manual-authority", epoch=7, generation=4, kind="manual"))
     before = (
         rig.core.target,
         rig.core.output_generation,
         rig.core._input_floor,
-        rig.core.controller.trajectory,
-        rig.core.scheduler._flight,
-        len(rig.node.output),
+        rig.core._output,
+        rig.core.sequence,
+        len(rig.core.node.emitted),
     )
     assert rig.core.release_terminal(terminal(rig))
     after = (
         rig.core.target,
         rig.core.output_generation,
         rig.core._input_floor,
-        rig.core.controller.trajectory,
-        rig.core.scheduler._flight,
-        len(rig.node.output),
+        rig.core._output,
+        rig.core.sequence,
+        len(rig.core.node.emitted),
     )
     assert after == before and rig.core.target is before[0]
     assert rig.core.machine.state.mode is MotionMode.MANUAL
