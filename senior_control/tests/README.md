@@ -38,3 +38,10 @@ M2b只归档journal SQL数据，没有迁测试或改原fixture。
 完整命令、SQL字节hash及只读后续清单见[manager M2b记录](../README.md#m2b-journal-schema数据)。
 下一片候选仅schedule/lifecycle；test_task_lifecycle可随实现迁入，混合TaskRunner的test_schedule先留原位置改必要导入，
 仍须负责人预报后实施，不为纯核心迁移提前搬共享值或放宽原保护。
+
+M2c已按预报迁入原纯`test_task_lifecycle.py`，只改canonical import；
+原`tests/unit/test_schedule.py`混合TaskRunner/models仍在原位，Schedule类及稀疏cron的模块patch改指向真实canonical实现。
+首轮旧patch路径失败后只修import，原断言、3000次上界和输入保持；最终原schedule/lifecycle/服务层选择集129通过。
+服务层用例仍在原位置，覆盖已提交后dispatch、锁外IO、未知查询和迟到ack，不复制测试或增设业务情景。
+纯manager与旧SDK安装分别复用原工具的`--manager-tasks-only`和默认模式，确认按需导入隔离与公开身份。
+迁入lifecycle带来的1项旧类型错误、全链38项及真实ROS未验记录见[实际命令与限制](../README.md#m2c-纯schedule与lifecycle)。

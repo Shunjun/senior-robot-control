@@ -1,8 +1,8 @@
 # 车端管理
 
-M1a 设置、M1b 车辆日志、M2a SQLite引擎已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
+设置、车辆日志、SQLite技术设施和纯任务核心已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留，当前SQLite边界与验证以末尾M2a记录为准。
+下文各片记录按当时范围保留，当前纯任务核心边界与验证见末尾M2c记录。
 
 ## 实际目录与调用
 
@@ -30,10 +30,15 @@ senior_control/
       migrations.py                   # 原顺序迁移、备份、取消与回滚
       core_schema.py                  # 原core v1–v4 SQL及迁移实现
       agent_schema.py                 # 原journal两条SQL tuple，无任何实现导入
+    tasks/
+      __init__.py                     # 仅Schedule/lifecycle按需公开
+      schedule.py                     # 原interval/cron/DST计算，标准库实现
+      lifecycle.py                    # 原纯任务状态机及公开值/函数
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
     test_database_ownership.py        # 原2项连接所有权/重入用例
+    test_task_lifecycle.py            # 原纯状态机用例，随实现迁入
     README.md
 ```
 
@@ -323,3 +328,63 @@ Store/Executor/runtime的DomainError需要真实的错误构造/捕获/码读取
 原RouteRejected和参考准入也仍属待精核边界，不引入全局错误工厂，不在本轮替换错误语义。
 MapPersistence/MapDatabase虽已有公开接口，但位于ROS功能包，不能让manager为取类型反向依赖它的发行包。
 完整任务持久/驱动片待上述边界收敛再重估，不沿用原23–29范围直接实施；原导航/IPC/地图/Home链保持，导航算法最后。
+
+## M2c 纯schedule与lifecycle
+
+基线`301fd53`；只迁现有`tasks/schedule.py`和`tasks/lifecycle.py`到已有manager项目。
+两份canonical源码除CRLF转LF外文本一致，算法、状态、常量、数据类和函数不改；
+旧模块逐名显式`//Compatible`转发同一对象，包括原已定义的辅助函数，不复制实现。
+旧模块对象与canonical模块是不同模块，公开类/值/函数身份相同；不承诺在旧模块上monkeypatch后会改写canonical函数全局变量。
+
+canonical `vehicle_manager.tasks`只按需公开Schedule和lifecycle模块；
+旧`senior_control.tasks`的`__all__`名字与顺序保持原样，按明确名字加载同一对象：
+Schedule归canonical，未迁models/runner/store/executor仍按需从原模块提供。
+单独导入旧包、Schedule或lifecycle不加载这些未迁owner、Database、mapping或ROS；
+实际请求TaskStore/TaskExecutor/TaskRunner仍得到原类，生产装配和持久驱动不切换。
+没有改MapRef/Pose2D/OperationResult/DomainError、任务models/runner/持久层、导航/IPC或ROS实现及安装配置。
+
+实际12逻辑文件：产品6、测试2、配置0、工具文档4，即新增3/修改8/测试迁移1/删除0。
+产品为canonical tasks三文件、旧tasks三文件；原test_task_lifecycle迁入manager/tests，
+混合test_schedule保留原位置，仅把Schedule和稀疏cron的monkeypatch模块导入改到真实计算owner。
+原3000次搜索上界、断言、DST/时间/接管/迟到/重启/断链保护均保留，没有新增业务场景。
+
+### 命令、版本及结果
+
+macOS26.4 arm64；CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23。
+python/mypy/ruff均使用原主仓库`.venv/bin/`。
+
+- RED：先将纯状态机测试导入改为canonical，`python -m pytest senior_control/tests/test_task_lifecycle.py --collect-only -q`
+  因vehicle_manager.tasks尚不存在报ModuleNotFoundError。
+- `python -m pytest tests/unit/test_schedule.py senior_control/tests/test_task_lifecycle.py tests/integration/test_task_lifecycle_service.py -q`：
+  首轮128 passed/1 failed，原稀疏cron夹具仍patch旧转发模块的datetime；只改该模块import指向canonical后，
+  **129 passed，0.75s**。复用原interval/cron/DST/时钟跳变、重复request/接管/迟到ack/重启/断链，
+  以及服务层已提交后dispatch、锁外IO/unknown仅查询/原接管隔离用例，没有补假属性或放宽上界。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：20份源码中**1项既有错误**，
+  原tasks/lifecycle.py:318的phase变量可能为None与先前Phase注解冲突，随原实现迁入canonical同一行；未修算法或加ignore。
+  原全Root/manager/cloud及ROS依赖路径命令：检查212份源码仍38项错误，只有该项路径迁移，
+  将此路径归一化后与M2a基线诊断逐条相同，不称manager或全链类型检查全通过。
+- 九份变化Python的ruff check/format --check通过；原test_schedule保留CRLF，
+  `git -c core.whitespace=cr-at-eol diff --check`通过（默认检查把两条新增CRLF import的CR报告为尾空白，未忽略其他空白）。
+  canonical文本/AST、旧包__all__、原测试体核对相同，只有必要导入/排序/fixture归属变化。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2c-wheels`及根同out-dir构建：sdist/wheel成功。
+  新`/tmp/m2c-manager-venv`离线安装本轮manager及原contracts wheel、原Pydantic2.14.1/typing-inspection0.4.4约束，8包pip check通过；
+  从`/tmp`运行`python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only`通过，
+  Root/cloud/ROS/mapping未安装，纯task导入也不加载aiosqlite/Pydantic，不启动业务owner。
+- 旧完整SDK环境`/tmp/vehicle-batch-one-venv`离线重装本轮Root/manager wheel，24包pip check通过；
+  从`/tmp`执行同安装工具默认模式通过，新进程核对旧/新Schedule与lifecycle公开值/函数同一身份、
+  旧包按需加载隔离及未迁TaskStore/Executor/Runner原身份，原SQLite/设置/日志/地图/native定位检查均保留。
+
+实际Linux/ROS/ament/DDS/SLAM、车辆/仿真服务及Python3.10本轮未验证，原安装工具继续标ROS UNVERIFIED。
+本轮不跑全仓，不清除历史退役控制夹具或其他类型失败，不启动服务、部署或推送，提交后等待亲审。
+
+### 下一片只读建议
+
+先精核`tasks/models.py`与`runner.py`的只读MapRef需求，候选仅把这两份纯管理决策模块归manager/tasks，
+消费侧最小只读协议声明map_id/reference_revision，仍传入原MapRef实例并保留原相等性；不迁MapRef类、不造第二份值。
+原models构造不创建MapRef，runner只做比较/决策，较先迁Store/Executor的错误与导航边界更小。
+若该接口经核对可行，候选12文件：产品7（canonical models/runner/只读端口新增3、旧models/runner及两包入口修改4）、
+测试1（原混合test_schedule随这些实现迁入）、配置0、工具文档4；下一次仍需负责人审核预报后实施。
+实际集成入边为TaskStore/TaskExecutor/TaskRuntime及agent的原上下文和任务定义，必须保留其原构造/类型身份，
+复用test_schedule原时钟/DST/准入决策及test_task_runner、test_task_ownership中的真实旧装配。
+完整持久任务片仍受TaskStore._task重建原MapRef、DomainError真实构造/catch/码、RouteRejected和地图参考准入约束；
+Pose2D经现有端口只读、OperationResult非纯核心前置，不能借纯核心迁移提前搬这些值或重写驱动。

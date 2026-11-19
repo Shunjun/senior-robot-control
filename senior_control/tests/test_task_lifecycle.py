@@ -3,8 +3,7 @@
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-
-from senior_control.tasks.lifecycle import (
+from vehicle_manager.tasks.lifecycle import (
     Action,
     Command,
     Context,

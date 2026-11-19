@@ -65,6 +65,20 @@ def verify_manager_storage() -> None:
     print("installed manager SQLite migrations, rollback, backup, core schema and reopen: PASS")
 
 
+def verify_manager_tasks() -> None:
+    """Verify the installed pure task interfaces without starting any owner."""
+    from vehicle_manager import tasks
+    from vehicle_manager.tasks import lifecycle
+    from vehicle_manager.tasks.schedule import Schedule
+
+    assert tasks.Schedule is Schedule
+    assert tasks.lifecycle is lifecycle
+    assert Schedule.__module__ == "vehicle_manager.tasks.schedule"
+    assert lifecycle.Lifecycle.__module__ == "vehicle_manager.tasks.lifecycle"
+    assert callable(lifecycle.command) and callable(lifecycle.acknowledge)
+    print("installed pure task schedule/lifecycle interfaces: PASS")
+
+
 def main() -> None:
     from senior_contracts.errors import ErrorCode
     from senior_contracts.logs import LogQuery as QueryDTO
@@ -203,6 +217,34 @@ def main() -> None:
         ],
         check=True,
     )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import senior_control.tasks as old; "
+                "import vehicle_manager.tasks as new; "
+                "assert old.Schedule is new.Schedule; "
+                "from senior_control.tasks import lifecycle as before; "
+                "from vehicle_manager.tasks import lifecycle as after; "
+                "names = ('Action', 'Phase', 'StopReason', 'EventKind', 'TERMINAL', "
+                "'STOP_PRIORITY', 'Context', 'Command', 'Receipt', 'Effect', 'Lifecycle', "
+                "'Event', 'Transition', 'query', 'command', 'acknowledge', 'event'); "
+                "assert all(getattr(before, name) is getattr(after, name) for name in names); "
+                "assert not any(name in sys.modules for name in "
+                "('senior_control.tasks.models', 'senior_control.tasks.runner', "
+                "'senior_control.tasks.store', 'senior_control.tasks.executor', "
+                "'senior_control.storage.database', 'senior_mapping', 'rclpy')); "
+                "from senior_control.tasks import TaskStore, TaskExecutor, TaskRunner; "
+                "from senior_control.tasks.store import TaskStore as Store; "
+                "from senior_control.tasks.executor import TaskExecutor as Executor; "
+                "from senior_control.tasks.runner import TaskRunner as Runner; "
+                "assert TaskStore is Store and TaskExecutor is Executor and TaskRunner is Runner"
+            ),
+        ],
+        check=True,
+    )
+    verify_manager_tasks()
     assert LegacyLogQuery is LogQuery and LegacyLogStore is VehicleLogStore
     assert LegacyLogSubscription is LogSubscription
     assert LegacyLogService is not ManagerLogService
@@ -318,11 +360,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--manager-storage-only"]:
+    if sys.argv[1:] in (["--manager-storage-only"], ["--manager-tasks-only"]):
         import importlib.util
 
         for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
             assert importlib.util.find_spec(package) is None, package
-        verify_manager_storage()
+        if sys.argv[1:] == ["--manager-storage-only"]:
+            verify_manager_storage()
+        else:
+            verify_manager_tasks()
+            assert "aiosqlite" not in sys.modules and "pydantic" not in sys.modules
     else:
         main()

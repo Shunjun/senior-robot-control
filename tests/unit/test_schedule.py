@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from vehicle_manager.tasks.schedule import Schedule
 
 from senior_control.models import MapRef
 from senior_control.tasks.models import (
@@ -15,7 +16,6 @@ from senior_control.tasks.models import (
     TaskIntent,
 )
 from senior_control.tasks.runner import TaskRunner
-from senior_control.tasks.schedule import Schedule
 
 MAP = MapRef("yard", 1)
 
@@ -110,7 +110,7 @@ def test_dst_gap_skips_and_fold_runs_once() -> None:
 
 
 def test_sparse_cron_skips_nonmatching_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from senior_control.tasks import schedule as schedule_module
+    from vehicle_manager.tasks import schedule as schedule_module
 
     schedule = Schedule.cron("17 4 29 2 *", timezone="UTC")
     calls = 0

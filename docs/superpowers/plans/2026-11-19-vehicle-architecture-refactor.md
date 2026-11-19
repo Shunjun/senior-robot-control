@@ -93,6 +93,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.C1–C3 云与M1a设置/M1b日志已迁，镜像实测与管理余项待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
 | B6.M2a SQLite引擎已迁，domain及Home协调仍原位 | 原 `storage/database.py` 连接引擎、`migrations.py`、`core_schema.py` → `vehicle_manager/storage/` | 旧Database Compatible子类只装配原DiagnosticLock/Home协调，连接实现唯一；Migration/core入口同一对象，原生产同连接/写锁、SQL/备份/取消不变；domain schema/map_persistence仍在原边界，不把地图/任务执行打入manager安装闭包 |
 | B6.M2b journal SQL数据已迁，值归属仅盘点 | 原agent/journal的AGENT_JOURNAL_STATEMENTS → `vehicle_manager/storage/agent_schema.py` | 旧入口同一tuple，journal执行owner仍原位；无import的新数据模块不拉起agent/ROS，不搬MapRef/Pose2D/OperationResult/DomainError；下一片候选先迁标准库纯schedule/lifecycle，完整任务驱动依赖另核 |
+| B6.M2c 标准库纯任务核心已迁 | 原tasks/schedule、lifecycle → `vehicle_manager/tasks/` | 旧对象显式Compatible同一身份，旧公开包名字不变且按需加载；模型/驱动、MapRef/Pose2D/错误及ROS边界不迁；复用原时间/状态机和服务层锁外dispatch及离仓库安装验证 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -387,3 +388,19 @@ DomainError真实参与管理和ROS的构造/捕获/码分支；不把这些值�
 此前先迁local_values/errors的建议不再作为执行安排；后续TaskStore重建MapRef需原构造注入、Pose2D经本地端口只读，
 错误构造/catch及RouteRejected、地图参考准入尚需精核，完整任务驱动片再重估，不沿用旧预算直接扩大。
 不让ROS反向依赖管理实现，不新建顶层项目/全局工厂；既有地图/Home/导航与IPC保持，导航算法最后。
+
+### B6.M2c 标准库schedule/lifecycle迁移记录
+
+基线301fd53；canonical两份源码除换行规范外文本一致，旧模块显式Compatible转发同一类/值/函数，
+旧tasks包保留原__all__并按明确名字公开，未迁models/runner/store/executor仍使用原实现。
+纯导入不加载这些owner、Database/mapping/ROS，实际请求原Store/Executor/Runner仍同一类，不改生产装配。
+实际12逻辑文件：产品6、测试2、配置0、工具文档4，即新增3/修改8/测试迁移1/删除0。
+原纯状态机测试随实现迁入manager/tests，混合test_schedule留原位；只修canonical导入和旧模块patch归属，原保护不变。
+原时间/DST/时钟跳变、重复request/接管/迟到/重启/断链与服务层锁外dispatch选择集129通过（0.75s）。
+manager/根wheel与仓库外独立manager8包/旧SDK24包安装、按需隔离及公开对象身份检查通过，九份Python格式/静态检查通过。
+原lifecycle:318类型错误随实现迁入，manager20份源码检查仍有该1项旧错误；全链212份源码38项，归一迁移路径后与基线逐条相同。
+完整命令/版本、首轮夹具修正及CRLF检查方式见[manager M2c记录](../../../senior_control/README.md#m2c-纯schedule与lifecycle)。
+没有真实ROS/Linux/车辆验证，原缺口保留；未启服务、部署或推送，不移动共享值或提前实现导航。
+下一片先只读精核models/runner的消费侧只读MapRef接口、原实例/相等性及生产入边；候选范围12文件
+（产品7/测试1/配置0/工具文档4），待负责人审阅预报后才实施，不沿用旧完整任务持久/驱动预算。
+Store._task重建、DomainError构造/catch/码、RouteRejected和参考准入仍后续精核；原地图/Home/导航保持，导航算法最后。
