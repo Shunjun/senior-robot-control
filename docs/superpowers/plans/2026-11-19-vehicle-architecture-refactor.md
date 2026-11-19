@@ -60,7 +60,7 @@ cloud/                                     # 本批骨架：独立云项目，�
   tests/README.md
 ros2/src/
   senior_motion_control/                   # 已实现：两个 guard、帧、MotionOutput
-  senior_sensor_ingress/                   # 已有功能；native_receipt 迁移仍为未提交草稿
+  senior_sensor_ingress/                   # B1：native_receipt 程序与客户端已归此包，ROS 实测待补
   senior_motion_estimation/                # 本批骨架，下同
   senior_perception/
   senior_localization/
@@ -68,7 +68,7 @@ ros2/src/
   senior_navigation/
   senior_robot/                            # 既有实车组合，生产入口保持
   senior_sim/                              # 既有仿真组合，生产入口保持
-ros2/tests/                               # 本批测试归属说明，后续迁入 ROS 工作区级回归
+ros2/tests/                               # B1 已迁入两份原 ROS 接收/关停用例
 src/senior_control/                        # 尚未迁完的现有生产实现，继续工作
 ```
 
@@ -85,7 +85,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | C0 已落地：共享契约收敛 | 原协议消息 → `contracts/src/senior_contracts/`；云缓存 → 现有 `src/senior_control/cloud/snapshots.py`；车内配置/状态 → 原所属本地模块 | `3dfd1e0` 后在 `6f4a235`、`c438948` 收敛；核对实际云车 WS 校验/序列化、嵌套 RouteProgress、日志 DTO 与原线上省略/接受规则；详见 contracts README |
 | C1 已落地：控制输出归包 | 原消息包两个 guard 与旧 Python 输出实现 → `ros2/src/senior_motion_control/` | `3dfd1e0`；保留原 40 字节 ABI、截止/停止屏障与实车/仿真唯一输出调用，安装与环境限制见原验证记录；不代表新 250 ms 协议已实现 |
 | B0 当前：整体骨架 | 无实现搬迁 → 本节实际布局中的两个 Python 项目和五个 ROS 功能包 | 本批只验构建声明、仓库外导入、ROS 包元数据与包发现；骨架提交先由负责人审阅，再继续 B1；ROS/ament 缺失必须登记，不能静态冒充实测 |
-| B1 待续：原生接收 | `senior_motion_msgs/src/native_receipt.cpp`、`senior_robot/senior_robot/native_receipt.py` → `senior_sensor_ingress/src/` 与其 Python 客户端 | 依赖 B0；已有未提交成果与骨架分开，尚未验收；保留 SDR2/source/GID、接收时序、有界队列、关停、typesupport 和真实安装查找；SampleTime/帧龄策略优先保留现 owner，经现接口/注入接线；复用原 native 接收与关停回归 |
+| B1 已迁实现，ROS 实测待补：原生接收 | `senior_motion_msgs/src/native_receipt.cpp`、`senior_robot/senior_robot/native_receipt.py` → `senior_sensor_ingress/src/` 与其 Python 客户端 | 依赖 B0；从 51b25e6 单独交付，程序逐字节迁移，Python 旧入口转发同一客户端；SampleTime/帧龄策略、进程与诊断继续使用原 owner 公开接口；原接收/关停用例移入 ros2/tests，35 项非 ROS 定向通过、10 项 ROS 跳过，真实 typesupport/安装/接收/关停验证尚缺，详见 ros2 README |
 | B2 待迁：感知完整职责 | `senior_robot` 的 sensor decode、collision、learning、`motion_core_perception.py`，及 `src/senior_control/safety/`、`vision/` 中对应执行实现 → `senior_perception` 内部模块 | 依赖 B1；按完整生产链迁移节点/内部算法/状态/接口/原同名用例；原始帧与补点分离，保持旧净距/学习行为；不把管理接收端混入感知 |
 | B3 待迁：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖接入/感知观测接口稳定；保留既有时间/来源和运动历史行为，运行原观测适配、纳秒边界与融合回归；GPS 缺失融合留该模块实现阶段 |
 | B4 待迁：控制完整职责与组合 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
@@ -102,14 +102,14 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 
 管理、云端与 ROS 工作区分别拥有 `senior_control/tests/`、`cloud/tests/`、`ros2/tests/`。
 功能包自身 C++/算法单元测试留所属包 `test/`；ROS 工作区级接口、实车/仿真组装和跨功能链回归归 `ros2/tests/`。
-本批这些新目录只有职责 README，测试代码仍在原位置；后续随实现迁入原同名用例并更新发现/安装路径，
+B0 骨架阶段这些新目录只有职责 README；B1 已随接收实现迁入两份原 ROS 用例，其余后续随实现迁入并更新发现/安装路径，
 不复制测试或先撤掉现有生产链覆盖。根目录 `tests/` 中现有用例也需逐项明确所属项目，不能作为各项目长期混放目录。
 
 ### B0 骨架验证记录
 
 基线 `c438948`，本批 25 文件：产品标识 2、测试代码/数据 0、配置构建 12、工具文档 11。
 其中 `ros2/tests/README.md` 按用户追加的测试归属要求补齐；没有算法、运行入口或测试场景变化。
-新增 24 文件，修改本计划 1 文件，没有删除/重命名文件。接收迁移仍为未提交草稿，不属于此提交。
+新增 24 文件，修改本计划 1 文件，没有删除/重命名文件。B0 提交当时接收迁移仅为未提交草稿，不属于骨架提交；后续进度见 B1。
 
 环境：macOS 26.4 arm64、CPython 3.12.15、uv 0.12.23、ruff 0.17.3。
 
@@ -122,7 +122,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 
 本批仅对骨架作上述验证，没有将此前接收迁移草稿的测试证据计为骨架生产能力验证。
 所有本轮自建根 runtime 草稿及其依赖、安装/锁、进程、executor、诊断变更已按文件精准撤回；
-原 owner 与已有实现保持，未提交接收迁移另外保留，等待负责人审阅后续批次范围。
+原 owner 与已有实现保持，B0 提交当时接收迁移另外保留；B1 随后按收窄范围继续。
 
 ### 决定、待定与禁止绕行
 
@@ -160,3 +160,14 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 ### 共享契约收敛实施记录
 
 功能分支以 `3dfd1e0` 为基线按上述云车实际消息范围收敛；逐类型生产调用、车内归属、实际文件范围和定向验证见 [contracts README](../../../contracts/README.md)。云缓存由 cloud 私有模块拥有，车内接口未升级为云车消息；后续运动功能包迁移尚未开始。本记录不代表整车或全部旧测试已验收。
+
+
+### B1 原生接收迁移记录
+
+基线 `51b25e6`，固定功能分支直接提交。本批仅原生接收与客户端，
+不包含此前撤回的根 runtime 或后续感知迁移。
+实际目录、生产调用、公开入口身份、依赖与完整验证证据见
+[ROS 接收迁移记录](../../../ros2/README.md#b1原生接收归传感器接入包)。
+现有时间/帧龄、进程/诊断 owner 保留原位；实际 ROS/ament 安装和原生接收仍需对应环境续验。
+已迁入两份原 ROS 接收用例到 `ros2/tests/`，无新增场景；受影响的激光发布原夹具失败在基线复现并单独登记。
+负责人亲审本批后才继续后续职责迁移。

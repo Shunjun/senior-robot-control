@@ -18,6 +18,6 @@ senior_motion_control/
 - `native.native_executable` 通过安装后的 ament 包索引找程序；生产 `SafetyGate` 和 `MotionOutput` 共用这一路径。不存在消息包内的第二份 guard，也不查找旧程序兜底。
 - 实车 `senior_robot/launch/safety_motion.launch.py` 与仿真 `simulation_motion.launch.py` 仍组装 SafetyGate，它现在直接使用本包；不新增 launch/进程，不改变原监管、peer identity、环境和继承FD。
 
-启动/停止仍由现有监管入口创建/关闭，不能单独把第二个 guard 接到同一底盘；本批不改变机器人参数或引入新 250ms 接收规则。native_receipt 暂留消息包，后批迁移。
+启动/停止仍由现有监管入口创建/关闭，不能单独把第二个 guard 接到同一底盘；本批不改变机器人参数或引入新 250ms 接收规则。native_receipt 已在 B1 迁入同级 senior_sensor_ingress；本包两个 guard 与原输出行为不变。
 
 验证：`colcon build --packages-up-to senior_motion_control senior_robot`；`colcon test --packages-select senior_motion_control`；无 ROS 主机可运行 `tests/unit/test_native_output_protocol.py` 的原生确定时钟 harness 和包内 frame roundtrip。Linux SOCK_SEQPACKET 场景在 macOS 跳过时须列为未验证。

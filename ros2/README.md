@@ -97,4 +97,73 @@ Keep the same sourced ROS environments and isolated domain described above in bo
 
 ## 原生控制输出包迁移（批次 1）
 
-两个 guard 和 FinalCommand 帧实现已归 [senior_motion_control](src/senior_motion_control/README.md)。senior_robot 的 SafetyGate 实际使用新包索引路径，实车/仿真仍共用该入口；先构建新包再启动现有组合。senior_motion_msgs 暂只保留 native_receipt 运行程序及消息/时序契约，不能声称已完成全部执行拆分。ABI、原截止和停止语义不变。
+两个 guard 和 FinalCommand 帧实现已归 [senior_motion_control](src/senior_motion_control/README.md)。senior_robot 的 SafetyGate 实际使用新包索引路径，实车/仿真仍共用该入口；先构建新包再启动现有组合。native_receipt 已在 B1 迁入 senior_sensor_ingress；senior_motion_msgs 仅保留消息与 C++ 时序契约，其余功能迁移仍按实施计划推进。ABI、原截止和停止语义不变。
+
+
+## B1：原生接收归传感器接入包
+
+基线 `51b25e6`。本批共 16 个逻辑文件（迁移单计）：产品 4、测试 3、配置构建 5、文档 4；
+新增 2、修改 11、迁移 3、单独删除 0。文档包含同步更新已迁测试目录的职责说明。
+本批仅迁已有接收程序与 Python 客户端，保留生产与仿真原入口，
+不迁感知算法、进程监管、executor、诊断设施或时间类型，不新增顶层项目。
+
+```text
+ros2/src/senior_sensor_ingress/
+  CMakeLists.txt, package.xml           # 接收目标及 ament Python 安装
+  src/native_receipt.cpp               # 原消息包程序，逐字节迁移
+  senior_sensor_ingress/
+    __init__.py
+    native_receipt.py                  # 唯一客户端实现、公开入口、安装查找
+ros2/src/senior_motion_msgs/
+  CMakeLists.txt, package.xml           # 消息及 C++ typesupport/时序导出
+  include/, msg/, test/                # 既有接口与 installed_header_consumer 保留
+ros2/src/senior_robot/senior_robot/
+  native_receipt.py                    # //Compatible：四个公开入口转发同一实现
+ros2/tests/
+  test_native_motion_executor.py       # 从 tests/ros 迁入，原实车/仿真入口 DDS 用例
+  test_receipt_process_shutdown.py     # 从 tests/ros 迁入，原生接收原关停用例
+```
+
+生产调用：`motion_observation_adapter`、`hardware_reference`、`optional_motion_inputs`
+及 `command_node` 仍通过原 `senior_robot.native_receipt` 公开入口，显式转发
+`senior_sensor_ingress.native_receipt` 的同一 `NativeReceiptGroup`、`subscribe`、
+`received_sample`、`received_steady`。没有第二套接收逻辑、旧可执行路径兜底或额外 relay。
+客户端通过 `ament_index_python` 找到
+`<senior_sensor_ingress-prefix>/lib/senior_sensor_ingress/native_receipt`。
+`senior_robot/package.xml` 原本已依赖 `senior_sensor_ingress`，本批保持该真实装配依赖。
+
+客户端的 ROS 类型反序列化与稳态时钟仍按原位置延迟导入；Python 安装由功能包的
+`ament_cmake_python` / `ament_python_install_package` 承担，不新增 SDK 发行包。
+客户端继续使用现有 `senior_control.sensors.sample_time.SampleTime`、
+`sensors.policy.default_policy` 与 `runtime.diagnostics` 的公开接口，
+因此仍需既有根 Python 项目安装；这些 owner 和原安装/锁不迁移，后续管理项目迁移须重新核对边界。
+本批根 pyproject 只补 pytest 的接入包源码发现路径，不改变生产依赖。
+
+C++ 目标以 C++17 构建，直接依赖 rclcpp、nav_msgs、sensor_msgs、geometry_msgs、std_msgs
+与 `senior_motion_msgs` 的公开安装导出。
+消息包仍先生成并导出 rosidl C++ typesupport，再导出链接该 target 的手写 `sensor_timing`；
+保留原 installed_header_consumer 对两个安装 target 的检查。
+移走接收可执行目标后消息包不再依赖/导出 rclcpp，原消费者在各自功能包声明 rclcpp。
+本机未执行该 ROS 构建，以上是实际 CMake/清单核对，不能作为安装验证通过的证据。
+
+保持行为：SDR2 包布局、source/GID、顺序/代次和撤销屏障、整数 SampleTime、
+原接收时钟/原帧龄阈值、初始 5 秒等待、20 MiB 单帧、64 样本/32 MiB 待处理上限、
+原诊断观测、有界关闭和父死亡行为不变。控制 guard、40 字节 ABI、停止/截止协议无改动。
+C++ 接收程序 SHA256 为 `c3339adb292735c7aa0ab0349358af16b37dbd78cd9d55f9f97a64aa6071e203`，
+与 `51b25e6` 旧路径内容完全相同。Python 客户端只提取并更换 native 安装定位，其余实现沿用原代码。
+
+### B1 验证与限制
+
+环境：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、Pydantic 2.14.1、
+uv 0.12.23、ruff 0.17.3。命令中的 Python 使用原主仓库 `.venv/bin/python`。
+
+- `python -m pytest ros2/tests/test_native_motion_executor.py ros2/tests/test_receipt_process_shutdown.py tests/unit/test_native_motion_observation_adapter.py tests/unit/test_runtime_diagnostics.py tests/unit/test_control_process_resources.py tests/unit/test_motion_launch_profile.py tests/unit/test_sim_contract.py -q`：35 passed、10 skipped；通过部分包含原来源/GID拒绝、诊断有界、真实 spawn 快照/关闭及装配静态契约，10 个 ROS 接收/关停用例因 rclpy 缺失跳过。
+- 以 `PYTHONPATH=src:contracts/src:ros2/src/senior_robot:ros2/src/senior_sensor_ingress` 导入两端公开入口，断言四个入口对象身份及 SampleTime 身份相同、未加载 rclpy：通过；这是源码导入验证，不是 ROS 安装验证。
+- 实际调用 `native_executable()`：因 `ament_index_python` 缺失无法执行安装查找。colcon、CMake、rclpy 本机均不存在，原生接收编译、C++ typesupport 安装消费、实际 ROS 包安装查找、DDS 时序与子进程关停均未验证；没有以假 prefix 或模拟可执行文件替代。
+- `python -m pytest tests/unit/test_laser_reference_publication.py -q`：6 个夹具错误，`control_process_test_support.py:74` 仍尝试替换不存在的 `motion_core_output.ProcessWorker`。在完整 `51b25e6` archive 的 `/tmp/receipt-narrow-baseline` 用同命令复现相同 6 错误，未改无关产品逻辑或旧夹具。本批只将该原用例的时间补丁路径改到唯一客户端实现。
+- 定向 `ruff check`、`ruff format --check`、`git diff --check` 及 C++ 字节比对通过；它们不替代 ROS 实测。
+
+需在 ROS 2 Humble 环境续验：`colcon build --base-paths ros2/src --packages-up-to senior_sensor_ingress senior_robot`，
+`colcon test --packages-select senior_motion_msgs senior_sensor_ingress`，先确认安装前缀中接收程序及 Python 模块，
+再以 `ROS_DOMAIN_ID=173 ROS_LOCALHOST_ONLY=1` 执行已迁入的 native executor 用例；关停原用例还需
+`SENIOR_RECEIPT_BINARY_DIR=<prefix>/lib/senior_sensor_ingress`。未启动开发服务、部署或推送。

@@ -4,6 +4,9 @@
   <description>Bounded raw sensor receipt with per-message ROS publisher identity</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer><license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>ament_index_python</exec_depend>
+  <depend>nav_msgs</depend>
   <depend>rclcpp</depend><depend>sensor_msgs</depend><depend>std_msgs</depend>
   <depend>tf2_msgs</depend><depend>geometry_msgs</depend>
   <test_depend>rosgraph_msgs</test_depend>

@@ -27,7 +27,7 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
         NativeObservations,
     )
     from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-    from senior_robot.native_receipt import subscribe
+    from senior_sensor_ingress.native_receipt import subscribe
     from std_msgs.msg import String
 
     from senior_control.motion.hardware_profile import load_hardware_profile

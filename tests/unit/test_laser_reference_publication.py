@@ -148,7 +148,7 @@ def phase(monkeypatch):
     test_time = N(monotonic=lambda: clock.steady, monotonic_ns=lambda: round(clock.steady * 1e9))
     monkeypatch.setitem(sys.modules, "time", test_time)
     monkeypatch.setattr(motion_core_output, "time", test_time)
-    monkeypatch.setattr("senior_robot.native_receipt.time", test_time)
+    monkeypatch.setattr("senior_sensor_ingress.native_receipt.time", test_time)
     monkeypatch.setattr("senior_robot.motion_observation_adapter.time", test_time)
 
     # Replace only ROS I/O; handlers still receive full native receipt metadata.
