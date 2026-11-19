@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     )
     from vehicle_manager.tasks.runner import TaskRunner
     from vehicle_manager.tasks.schedule import Schedule
+    from vehicle_manager.tasks.store import TaskStore
 
 __all__ = [
     "ExecutionContext",
@@ -27,6 +28,7 @@ __all__ = [
     "TaskDefinition",
     "TaskIntent",
     "TaskRunner",
+    "TaskStore",
     "lifecycle",
 ]
 
@@ -52,4 +54,8 @@ def __getattr__(name: str) -> Any:
         from vehicle_manager.tasks.runner import TaskRunner
 
         return TaskRunner
+    if name == "TaskStore":
+        from vehicle_manager.tasks.store import TaskStore
+
+        return TaskStore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

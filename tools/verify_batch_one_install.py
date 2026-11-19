@@ -86,6 +86,67 @@ def verify_manager_tasks() -> None:
     print("installed pure task schedule/model/runner/lifecycle interfaces: PASS")
 
 
+def verify_manager_task_store() -> None:
+    from vehicle_manager import tasks
+    from vehicle_manager.tasks.store import TaskStore
+
+    assert tasks.TaskStore is TaskStore
+    assert TaskStore.__module__ == "vehicle_manager.tasks.store"
+    print("installed manager TaskStore interface without Root/ROS owners: PASS")
+
+
+def verify_legacy_task_store() -> None:
+    """Reuse the original real SQLite create/reopen/conflict path in the installed SDK."""
+    import asyncio
+    import tempfile
+    from datetime import datetime, timezone
+
+    from senior_control.errors import DomainError, ErrorCode
+    from senior_control.models import MapRef
+    from senior_control.storage.database import Database
+    from senior_control.tasks import Schedule, TaskDefinition
+    from senior_control.tasks.store import TaskStore
+
+    async def verify(directory: Path) -> None:
+        reference = MapRef("yard", 1)
+        created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        definition = TaskDefinition(
+            "task",
+            "robot",
+            reference,
+            ("point",),
+            Schedule.interval(created, 60),
+            "Asia/Shanghai",
+            True,
+            0,
+            created,
+        )
+        path = directory / "tasks.db"
+        async with Database(path) as database:
+            store = TaskStore(database, robot_id="robot")
+            assert store._database is database
+            assert store._ports.map_reference is MapRef and store._ports.error is DomainError
+            assert store._codec._map_reference is MapRef and store._codec._error is DomainError
+            await store.prepare()
+            saved = await store.create(definition)
+            assert type(saved.map_ref) is MapRef and saved.map_ref == reference
+            assert await store.get("task") == saved
+            try:
+                await store.update(saved, 0)
+            except DomainError as exc:
+                assert type(exc) is DomainError and exc.code is ErrorCode.CONFLICT
+            else:
+                raise AssertionError("stale revision must preserve the original DomainError")
+        async with Database(path) as database:
+            store = TaskStore(database, robot_id="robot")
+            await store.prepare()
+            assert await store.get("task") == saved
+
+    with tempfile.TemporaryDirectory() as directory:
+        asyncio.run(verify(Path(directory)))
+    print("installed original TaskStore DB/constructors, create/reopen/CAS/error identity: PASS")
+
+
 def main() -> None:
     from senior_contracts.errors import ErrorCode
     from senior_contracts.logs import LogQuery as QueryDTO
@@ -114,6 +175,8 @@ def main() -> None:
     from vehicle_manager.storage import CORE_MIGRATIONS, Migration, migrate, migrate_core
     from vehicle_manager.storage.agent_schema import AGENT_JOURNAL_STATEMENTS
     from vehicle_manager.storage.database import Database as ManagerDatabase
+    from vehicle_manager.tasks.store import TASK_STATEMENTS
+    from vehicle_manager.tasks.store import TaskStore as ManagerTaskStore
     from vehicle_manager.vehicle_logs.models import LogQuery
     from vehicle_manager.vehicle_logs.service import LogSubscription
     from vehicle_manager.vehicle_logs.service import VehicleLogService as ManagerLogService
@@ -148,6 +211,7 @@ def main() -> None:
     from senior_control.storage.migrations import Migration as LegacyMigration
     from senior_control.storage.migrations import migrate as old_migrate
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
+    from senior_control.tasks.store import TaskStore as LegacyTaskStore
     from senior_control.vehicle_logs.models import LogQuery as LegacyLogQuery
     from senior_control.vehicle_logs.service import LogSubscription as LegacyLogSubscription
     from senior_control.vehicle_logs.service import VehicleLogService as LegacyLogService
@@ -163,6 +227,11 @@ def main() -> None:
     assert LegacyMapOperations.reconcile is MapOperations.reconcile
     assert DOMAIN_MIGRATIONS[0].statements is OPERATION_JOURNAL_STATEMENTS
     assert LegacyJournalStatements is AGENT_JOURNAL_STATEMENTS
+    assert DOMAIN_MIGRATIONS[2].statements is TASK_STATEMENTS
+    assert LegacyTaskStore is not ManagerTaskStore
+    assert issubclass(LegacyTaskStore, ManagerTaskStore)
+    for name in ("prepare", "create", "get", "claim", "claim_in_transaction", "update"):
+        assert getattr(LegacyTaskStore, name) is getattr(ManagerTaskStore, name)
 
     assert LegacyGeoAlignment is GeoAlignment
     assert LegacyHeadingObserver is HeadingObserver
@@ -267,6 +336,8 @@ def main() -> None:
         check=True,
     )
     verify_manager_tasks()
+    verify_manager_task_store()
+    verify_legacy_task_store()
     # The local caller still supplies its real MapRef; the manager never wraps it.
     from datetime import datetime, timezone
 
@@ -417,5 +488,6 @@ if __name__ == "__main__":
         else:
             verify_manager_tasks()
             assert "aiosqlite" not in sys.modules and "pydantic" not in sys.modules
+            verify_manager_task_store()
     else:
         main()

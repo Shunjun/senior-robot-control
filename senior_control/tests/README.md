@@ -52,3 +52,10 @@ M2d将原test_schedule随models/runner迁入本目录；原Root MapRef仍是实�
 原集成/任务存储/ownership用例仍原位，安装工具确认原对象、旧公开身份和无反向依赖；最终SDK另核对真实TaskStore解码、
 IpcNavigation航点读取和qualified_reference原MapRef对象，不连接IPC、不增pytest场景。
 局部cast不是运行时校验；manager原1项、全链原38项及ROS未验记录见[manager M2d](../README.md#m2d-纯任务models与runner)。
+
+S1将原test_task_runner原样迁入本目录，继续通过生产旧TaskStore构造测试canonical唯一SQL/事务实现，
+原执行/Runtime合成夹具和保护不改；test_task_lifecycle_store留原位，只改已迁TaskDefinition类型导入。
+原Store/消费入口首组117通过；包含纯决策、同连接接受/并发/CAS/取消、服务层与agent持久回滚的248项通过。
+实际命令和13个解析函数/45处异常构造的同义审计见[manager S1](../README.md#s1-taskstore持久化)。
+安装工具核对旧构造非同类但业务方法同一实现、TASK_STATEMENTS/原MapRef/DomainError身份，并真实开库create/get/CAS/重开。
+不新增pytest场景或假数据库/错误类型；原1/38项类型错误及真实ROS未验保持。

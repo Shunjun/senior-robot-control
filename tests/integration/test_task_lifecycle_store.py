@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from vehicle_manager.tasks.models import TaskDefinition
 
 from senior_control.errors import DomainError
 from senior_control.models import MapRef
@@ -19,7 +20,6 @@ from senior_control.tasks.lifecycle_store import (
     StaleEffect,
     VersionConflict,
 )
-from senior_control.tasks.models import TaskDefinition
 from senior_control.tasks.schedule import Schedule
 from senior_control.tasks.store import TaskStore
 

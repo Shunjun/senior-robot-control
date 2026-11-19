@@ -95,6 +95,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2b journal SQL数据已迁，值归属仅盘点 | 原agent/journal的AGENT_JOURNAL_STATEMENTS → `vehicle_manager/storage/agent_schema.py` | 旧入口同一tuple，journal执行owner仍原位；无import的新数据模块不拉起agent/ROS，不搬MapRef/Pose2D/OperationResult/DomainError；下一片候选先迁标准库纯schedule/lifecycle，完整任务驱动依赖另核 |
 | B6.M2c 标准库纯任务核心已迁 | 原tasks/schedule、lifecycle → `vehicle_manager/tasks/` | 旧对象显式Compatible同一身份，旧公开包名字不变且按需加载；模型/驱动、MapRef/Pose2D/错误及ROS边界不迁；复用原时间/状态机和服务层锁外dispatch及离仓库安装验证 |
 | B6.M2d 纯任务模型/Runner已迁 | 原tasks/models、runner → `vehicle_manager/tasks/`及只读MapReference形状 | 原运行时MapRef及比较保留，旧类/常量/函数同一身份；仅经确认扩两个旧具体MapRef调用点的Compatible静态cast，不作运行时校验或改准入；Store/Runtime/地图/ROS/IPC实现不迁 |
+| B6.S1 TaskStore已迁 | 原tasks/store → `vehicle_manager/tasks/store.py`及原行解析codec | 原DB/同连接锁、domain→core准备和原MapRef/DomainError逐实例注入；旧Compatible构造薄子类非同类，SQL/事务业务唯一、原tuple同一身份；不迁生命周期持久/执行/导航 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -426,3 +427,23 @@ S2再lifecycle_store/service，同事务Admission/receipt/effect/取消settle与
 参考准入/真实导航效果端口先精核，条件16–21（产品9–12/测试3–5/配置0/工具文档4），均须负责人审阅预报后实施。
 候选原SQLite失败/未知/回滚/恢复、双连接CAS/旧epoch、未知仅查询、接管迟到与新手动隔离的输入/预期见manager记录；
 不使用全局工厂、不提前搬值或导航算法，现有地图/Home/导航及IPC继续保留。
+
+### B6.S1 TaskStore与逐实例构造
+
+基线fec2f9a；唯一TaskStore SQL/事务实现与原13个解析函数归manager/tasks/store及codec，
+TaskStorePorts仅提供每实例的prepare_schema/MapRef/DomainError构造；原DB实例/connection/write_lock不替换。
+旧TaskStore Compatible薄构造非同一类，业务方法直接继承，原异常/模型/SQL常量身份及domain→core顺序保留，
+无全局工厂、不搬值或增加项目/契约，原boot/claim/CAS/scan/索引、取消/回滚及恢复不改。
+实际11逻辑文件：产品5/测试2/配置0/工具文档4，即新增2/修改8/测试迁移1/删除0；
+test_task_runner原样迁入manager/tests，生命周期混合测试只改类型入口，未迁其实现。
+原SQL/常量、42方法/13函数、45处异常构造/65处解析辅助调用与原MapRef构造点逐项审计，只有已列明的实例接线。
+原定向117通过，完整选择248通过（3.37s）；manager25份源码仍原1项、全链217份仍原38项类型诊断逐条相同。
+manager/根wheel及仓库外纯manager8包/旧SDK24包安装、旧入口/原构造身份及真实SQLite create/get/CAS/重开通过。
+命令版本、实际目录、独立包schema依赖及未验项见[manager S1](../../../senior_control/README.md#s1-taskstore持久化)。
+无真实ROS/Linux/车辆实测，原安装工具保持UNVERIFIED；不开服务、不部署、不推送。
+
+下一片候选S2只读核对lifecycle_store/service→manager/tasks、原错误与记录同一身份、agent_schema直接复用、
+Pose只读形状及同TaskStore/DB的Admission/写锁/事务/取消settle与锁外dispatch，候选12文件
+（产品6/测试迁移2/配置0/工具文档4），须负责人精核预报后实施；旧具体类型调用若需额外接线先报。
+复用原接受写失败/双连接CAS/取消/旧epoch/重开和锁外IO/未知查询/接管迟到ack用例，输入预期见manager记录。
+后续执行/Runtime/导航效果及错误继承边界仍后置，不先搬值/新算法，既有地图/Home/导航和IPC保持。

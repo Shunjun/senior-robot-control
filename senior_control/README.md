@@ -1,8 +1,8 @@
 # 车端管理
 
-设置、车辆日志、SQLite技术设施和纯任务核心已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
+设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留，当前纯任务模型/决策边界与验证见末尾M2d记录。
+下文各片记录按当时范围保留，当前任务存储边界与验证见末尾S1记录。
 
 ## 实际目录与调用
 
@@ -31,18 +31,21 @@ senior_control/
       core_schema.py                  # 原core v1–v4 SQL及迁移实现
       agent_schema.py                 # 原journal两条SQL tuple，无任何实现导入
     tasks/
-      __init__.py                     # 纯模型/Runner/Schedule/lifecycle按需公开
+      __init__.py                     # 纯核心与TaskStore按需公开
       schedule.py                     # 原interval/cron/DST计算，标准库实现
       lifecycle.py                    # 原纯任务状态机及公开值/函数
       models.py                       # 原冻结任务模型，直接保存传入的原MapRef对象
       runner.py                       # 原纯调度/准入决策，无持久或导航执行
-      ports.py                        # map_id/reference_revision只读形状，无值实现
+      ports.py                        # 只读MapReference和每实例Store构造端口，无值实现
+      store.py                        # 唯一TaskStore SQL/事务/boot/claim/scan实现
+      codec.py                        # 原13个解析/序列化函数，逐实例值/错误构造
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
     test_database_ownership.py        # 原2项连接所有权/重入用例
     test_task_lifecycle.py            # 原纯状态机用例，随实现迁入
     test_schedule.py                  # 原schedule/runner混合纯决策用例
+    test_task_runner.py               # 原真实SQLite/任务驱动回归，输入断言不变
     README.md
 ```
 
@@ -464,3 +467,88 @@ test_task_lifecycle_service的锁外IO、未知仅查询、接管不等pending�
 S3复用test_task_runner/ownership及原terminal_release相关场景，输入失联/未知发送/切图同ref新代次、原接管/手动新权限→
 取消优先、旧结果不复活、不撤新手动、原航点读取与既有IPC/wire字段不变。
 所有候选先复用原用例/真实夹具；宿主SQLite可测，真实ROS/DDS/原生安装和车辆运行仍依赖对应环境，导航算法后置。
+
+## S1 TaskStore持久化
+
+基线`fec2f9a`；现有TaskStore唯一SQL/事务实现归`vehicle_manager/tasks/store.py`，
+原13个行解析/校验/序列化函数归`TaskCodec`，逻辑不复制，参数/调用顺序保持。
+实际11逻辑文件：产品5、测试2、配置0、工具文档4，即新增2/修改8/测试迁移1/删除0。
+产品为canonical store/codec、既有ports/公开入口和旧store；
+原test_task_runner原样迁入manager/tests，test_task_lifecycle_store仅改已迁TaskDefinition导入及排序，
+原执行器/Runtime夹具及全部输入/断言/patch保留，没有迁生命周期持久、执行或导航实现。
+
+### 构造、异常与解析边界
+
+canonical `TaskStore(database, *, robot_id, ports)`接收已有manager SQLite Database接口，
+直接保存传入的原实例，不创建连接或锁。
+`TaskStorePorts`是每实例的冻结回调集合：prepare_schema、map_reference、error；
+旧`senior_control.tasks.store.TaskStore(database, *, robot_id)`标明Compatible，
+**是canonical的薄构造子类而非同一类**，所有SQL/事务方法直接继承唯一实现。
+原包公开TaskStore继续提供这个保留签名的旧构造；manager包按需公开必须显式注入端口的canonical类。
+
+旧构造注入原MapRef/DomainError类，并延迟装配原domain→core准备回调；
+回调捕获的database就是该Store保存的同一个对象，仍先准备domain/core，再进入原写锁和本地表/索引/boot事务。
+codec只保存这两个原构造的引用，不拥有DB/任务状态，不建全局工厂或另一份值/异常实现。
+45处原DomainError构造均改为每实例调用原构造；原sqlite/JSON/Enum/ValueError及cause传播不改。
+SQL读取仍调用原MapRef构造，返回原类型，TaskDefinition/记录/枚举/公开SQL常量保持同一对象。
+TASK_STATEMENTS仅一份，旧模块转发，domain v3仍取同一个tuple。
+
+逐项源码审计覆盖42个Store方法和13个解析辅助函数；全部SQL/常量AST相同，
+方法除constructor/prepare端口及解析调用位置外AST相同，所有解析函数除self与构造注入外AST相同。
+原65处解析/序列化辅助调用的分布如下，不增加校验或吞掉原异常：
+
+| 调用 | 次数 | 调用 | 次数 |
+|---|---:|---|---:|
+| task / execution / skip | 4 / 7 / 2 | points / waypoint_ids | 2 / 1 |
+| text / optional_text | 20 / 1 | whole / optional_whole / flag | 3 / 1 / 4 |
+| moment / stamp / utc | 5 / 9 / 6 | 原MapRef构造点 | 1 |
+
+原DB路径、SQL版本/表格式、boot恢复、单owner/claim/CAS、scan界限4096、索引、取消/幂等/回滚保持；
+claim_in_transaction仍要求同一connection且不自commit，`_transaction`仍原BEGIN/rollback/commit及锁序。
+原Database/诊断、schema/map_persistence、模型值、地图、导航、ROS、IPC、配置和依赖锁均不迁改。
+
+### 命令、版本及结果
+
+macOS26.4 arm64；CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23，
+Pydantic2.14.1/aiosqlite0.22.1；python/mypy/ruff使用原主仓库`.venv/bin/`。
+
+- `python -m pytest senior_control/tests/test_task_runner.py tests/integration/test_task_lifecycle_store.py tests/integration/test_task_ownership.py -q`：
+  **117 passed，2.75s**，原真实SQLite任务Store/驱动与消费者定向。
+- `python -m pytest senior_control/tests/test_task_runner.py senior_control/tests/test_schedule.py senior_control/tests/test_task_lifecycle.py tests/integration/test_task_lifecycle_store.py tests/integration/test_task_lifecycle_service.py tests/integration/test_task_ownership.py tests/integration/test_agent.py::test_task_delete_rolls_back_if_the_tombstone_fails tests/integration/test_agent.py::test_task_edit_commits_in_robot_database -q`：
+  **248 passed，3.37s**（含前述117项，不相加）；覆盖原schema/core迁移、恢复/并发/CAS/取消、存储失败、
+  同连接生命周期接受与锁外dispatch、旧epoch/接管、任务wire及实际agent提交/删除回滚。
+- 原测试body与输入AST核对相同；test_task_runner除位置外原文本一致，混合生命周期测试只改canonical模型导入。
+  现有pytest路径/CI已发现manager/tests，原目录文件删除而非复制，没有改配置。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：25份源码仍原lifecycle:318的1项错误；
+  原全链命令检查217份源码仍38项，错误诊断与M2d逐条相同，不宣称类型检查全通过。
+  `/tmp/s1-audit.py`临时审计脚本逆归一化逐实例接线，复核42方法/13函数、SQL及调用计数；
+  另核对旧prepare的五步与捕获同DB的回调相同，无全局provider或反向实现导入。
+- 相关Python的ruff check/format --check与按原CRLF的`git -c core.whitespace=cr-at-eol diff --check`通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/s1-wheels`及根同out-dir构建：sdist/wheel成功。
+  补齐旧模块公开类型转发后同命令以`/tmp/s1-final-wheels`重建，以下两种环境均重装最终wheel复核。
+  仓库外`/tmp/s1-manager-venv`离线安装本轮manager与原contracts wheel及原约束，8包pip check通过；
+  从`/tmp`运行原安装工具`--manager-tasks-only`通过，纯模型原隔离保护保持，之后单独核对TaskStore公开接口且无Root/ROS。
+  独立manager没有内置domain地图/航点装配；schema准备必须由真实调用者提供，不能用空回调冒充独立生产迁移。
+- `/tmp/vehicle-batch-one-venv`重装本轮Root/manager wheel后24包pip check及原工具默认模式通过；
+  核对旧Store非同类但继承同一方法、原TASK_STATEMENTS身份、原DB/MapRef/DomainError构造引用，
+  实际SQLite prepare/create/get、CAS冲突仍为原DomainError、退出重开恢复及原类型相等性，未启动服务。
+
+本轮所选回归无失败；原manager1项/全链38项类型错误及历史退役夹具记录保持。
+真实Linux/ROS/ament/DDS/SLAM、车辆/仿真运行及Python3.10本轮未验证，安装工具仍明确ROS缺口。
+没有启动开发或实车服务、部署或推送；提交后等待负责人亲审。
+
+### 下一片S2只读建议
+
+源`tasks/lifecycle_store.py`、`lifecycle_service.py`→manager/tasks同名模块，候选12文件：
+产品6（canonical两份、旧转发两份、ports与公开入口）、原测试迁移2、配置0、工具文档4。
+S1已稳定的TaskStore/DB、模型与纯lifecycle可直接复用；AGENT_JOURNAL_STATEMENTS应直接取已迁agent_schema，
+不再为取SQL导入agent执行owner。
+两份实现中的Pose2D只用于注解与x/y/yaw序列化，可在消费侧声明只读形状，原对象不搬或重建。
+必须保留tasks/database对象身份、Admission→write_lock→transaction顺序、锁后最新context采样、取消后settle、
+receipt/effect/journal同事务以及外部dispatch不持锁；VersionConflict/RequestConflict/StaleEffect和记录值同一对象。
+原Root生产调用的Store仍是本片薄子类，需要核对canonical类型与旧调用签名是否还需局部静态接线，超范围先报。
+复用原lifecycle_store的每处写入失败回滚、双连接CAS、取消后唯一可查询结果、旧epoch/重开与进程退出持久边界，
+以及lifecycle_service的已提交锁外dispatch、未知仅查询、接管不等pending发送/迟到ack和手动通知同事务；
+输入原SQLite冲突/取消、旧request/epoch、阻塞或未知导航→原回执与效果边界，不自动恢复运动。
+仍需下一次负责人精核/预报后实施；Executor/Runtime/NavigationEffects的错误继承/catch、RouteRejected及真实导航效果端口
+留后片，不提前搬DomainError/MapRef/Pose2D、不做全局工厂或新算法，既有地图/Home/导航保持。
