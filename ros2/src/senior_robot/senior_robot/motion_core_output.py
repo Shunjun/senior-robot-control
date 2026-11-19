@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from senior_perception.collision import CollisionPrediction
 from senior_perception.learning_runtime import LearningControlInput, LearningPorts, LearningRuntime
 from senior_perception.scan_access import SensorAccess
@@ -14,7 +15,6 @@ from senior_perception.scan_access import SensorAccess
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionMode
 from senior_control.runtime.diagnostics import configure_diagnostics
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.vehicle_arbitration import CommandArbitration
 from senior_robot.vehicle_capabilities import VehicleCapabilities
 from senior_robot.vehicle_compat import OwnedState

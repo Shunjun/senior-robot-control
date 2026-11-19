@@ -2,19 +2,14 @@
 
 import signal
 from collections.abc import Callable
-from typing import TypeVar
 
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError  # //Compatible: Humble exposes it here.
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor, await_or_execute
 from rclpy.node import Node
 
-_MetadataCallback = TypeVar("_MetadataCallback", bound=Callable)
-
-
-def with_dds_info(callback: _MetadataCallback) -> _MetadataCallback:
-    callback._senior_dds_info = True
-    return callback
+# //Compatible: same public callback marker, now owned by sensor ingress.
+from senior_sensor_ingress.native_receipt import with_dds_info as with_dds_info
 
 
 class MotionExecutor(SingleThreadedExecutor):

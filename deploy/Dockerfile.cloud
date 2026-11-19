@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY contracts ./contracts
 COPY ros2/src/senior_perception ./ros2/src/senior_perception
+COPY ros2/src/senior_motion_estimation ./ros2/src/senior_motion_estimation
 RUN uv sync --frozen --no-dev --extra cloud --no-editable \
     && uv pip install --no-cache "uvicorn==0.32.1" "websockets==15.0.1" \
     && python -c "import uvicorn.protocols.websockets.websockets_impl"

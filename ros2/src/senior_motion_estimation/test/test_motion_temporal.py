@@ -4,17 +4,16 @@ import math
 from dataclasses import replace
 
 import pytest
-from sensor_time_test_support import sample_time
-from test_motion_sources import config
-
-from senior_control.motion.observations import (
+from senior_motion_estimation.observations import (
     Frame,
     Source,
     SourceStatus,
 )
-from senior_control.motion.sample_types import PointObservation
-from senior_control.motion.source_admission import AdmissionOwner
-from senior_control.motion.temporal import TemporalConfig, TemporalResolver
+from senior_motion_estimation.sample_types import PointObservation
+from senior_motion_estimation.source_admission import AdmissionOwner
+from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
+from sensor_time_test_support import sample_time
+from test_motion_sources import config
 
 
 def point(source, t, seq, values, epoch="p", covariance=None, model=None):
@@ -112,8 +111,9 @@ def test_gap_epoch_interruption_and_cursor_overrun_are_explicit():
 
 @pytest.mark.parametrize("yaw,enu", [(0, (0.3, 0)), (math.pi / 2, (0, 0.3))])
 def test_raw_gps_uses_each_causal_heading_not_only_window_start(yaw, enu):
+    from senior_motion_estimation.observations import Heading
+
     from senior_control.models import Pose2D
-    from senior_control.motion.observations import Heading
 
     o, r = owner(), resolver()
     events = [point(Source.IMU, i * 0.02, i + 1, (0.0,)) for i in range(6)]
@@ -171,10 +171,11 @@ def test_invalid_new_epoch_interrupts_resolver_and_retires_old_packets():
 
 
 def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
+    from senior_motion_estimation.observations import Covariance, CovarianceKind
+    from senior_motion_estimation.sample_types import DeltaObservation
+
     from senior_control.models import Pose2D
     from senior_control.motion.kinematics import compose, exponential, inverse
-    from senior_control.motion.observations import Covariance, CovarianceKind
-    from senior_control.motion.sample_types import DeltaObservation
 
     o, r = owner(), resolver()
     extrinsic = Pose2D(0.7, -0.2, 0.4)
@@ -216,8 +217,9 @@ def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
 
 
 def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change():
+    from senior_motion_estimation.observations import Heading
+
     from senior_control.models import Pose2D
-    from senior_control.motion.observations import Heading
 
     o = owner()
     h = Heading(
@@ -277,7 +279,7 @@ def test_repeated_snapshot_and_clock_rollback_do_not_keep_gyro_history():
 
 
 def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
-    from senior_control.motion.temporal import TemporalConfig, TemporalResolver
+    from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
 
     o = owner()
     feed(o, [point(Source.IMU, i * 0.02, i + 1, (0.5,)) for i in range(6)])
@@ -290,8 +292,9 @@ def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
 
 
 def test_interval_rotation_alias_is_explicit_not_a_crash_or_wrapped_prediction():
+    from senior_motion_estimation.sample_types import DeltaObservation
+
     from senior_control.models import Pose2D
-    from senior_control.motion.sample_types import DeltaObservation
 
     o, r = owner(), resolver()
     p = DeltaObservation(
@@ -342,8 +345,9 @@ def test_wheel_without_declared_lateral_motion_assumption_is_not_se2_mean():
 
 
 def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
+    from senior_motion_estimation.observations import Heading
+
     from senior_control.models import Pose2D
-    from senior_control.motion.observations import Heading
 
     o = AdmissionOwner(config(), event_capacity=128)
     r = resolver()
@@ -410,7 +414,7 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
     "max_gap,max_hold,reason", [(0.04, 0.2, "sample_gap"), (0.2, 0.04, "hold_expired")]
 )
 def test_single_left_tail_and_held_use_same_coverage_ceiling(max_gap, max_hold, reason):
-    from senior_control.motion.temporal import CoverageError
+    from senior_motion_estimation.temporal import CoverageError
 
     o = owner()
     feed(o, [point(Source.IMU, 0, 1, (0.1,))])

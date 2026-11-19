@@ -1,12 +1,12 @@
 import math
 
 import pytest
+from senior_motion_estimation.estimator import MotionEstimation
+from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
 from shapely.geometry import Point, box
 from test_unified_estimator import observation
 
 from senior_control.models import Pose2D
-from senior_control.motion.estimator import MotionEstimation
-from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
 from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 
 

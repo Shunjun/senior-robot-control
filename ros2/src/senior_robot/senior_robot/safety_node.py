@@ -17,7 +17,6 @@ import subprocess
 import time
 from collections import deque
 from contextlib import ExitStack
-from dataclasses import replace
 
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
@@ -178,12 +177,14 @@ class SafetyGate(Node):
         self._last_control_tick: float | None = None
         self._command_topic = str(self.get_parameter("final_command_topic").value)
         if input_channel is not None:
+            from senior_motion_estimation.motion_observation_adapter import (
+                NativeObservationRosBridge,
+            )
+            from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
             from senior_perception.scan_gap_compensation import ScanGapCompensator
             from tf2_ros import Buffer, TransformListener
 
             from senior_control.runtime.diagnostics import configure_diagnostics
-            from senior_robot.motion_observation_adapter import NativeObservationRosBridge
-            from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path
@@ -269,12 +270,7 @@ class SafetyGate(Node):
             )
         # The decision owner reads current values, not estimator/pose histories.
         # raw_feedback/wheel_linear only need these roots and the local age policy.
-        state = {
-            "latest": None if sensors.latest is None else replace(sensors.latest, path=None),
-            "independent": sensors.independent,
-            "raw_wheel": sensors.raw_wheel,
-            "raw_imu": sensors.raw_imu,
-        }
+        state = sensors.decision_snapshot()
         if reference is not None:
             # Only the reporting average/mode is consumed; tracking stays with its owner.
             reference = ({key: reference[0][key] for key in ("average", "mode")}, None, None)

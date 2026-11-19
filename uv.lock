@@ -1443,6 +1443,7 @@ dependencies = [
     { name = "pydantic-settings", version = "2.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
     { name = "senior-contracts" },
+    { name = "senior-motion-estimation" },
     { name = "senior-perception" },
 ]
 
@@ -1489,6 +1490,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "senior-contracts", editable = "contracts" },
+    { name = "senior-motion-estimation", editable = "ros2/src/senior_motion_estimation" },
     { name = "senior-perception", editable = "ros2/src/senior_perception" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
     { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
@@ -1505,6 +1507,11 @@ dev = [
     { name = "types-pyyaml" },
     { name = "types-shapely", specifier = ">=2.1.0.20260728" },
 ]
+
+[[package]]
+name = "senior-motion-estimation"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_motion_estimation" }
 
 [[package]]
 name = "senior-perception"

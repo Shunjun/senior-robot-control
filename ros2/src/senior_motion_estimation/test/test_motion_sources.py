@@ -4,9 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
-from sensor_time_test_support import sample_time
-
-from senior_control.motion.observations import (
+from senior_motion_estimation.observations import (
     AdmissionConfig,
     Covariance,
     CovarianceKind,
@@ -17,7 +15,8 @@ from senior_control.motion.observations import (
     SourceRule,
     SourceStatus,
 )
-from senior_control.motion.source_admission import AdmissionOwner
+from senior_motion_estimation.source_admission import AdmissionOwner
+from sensor_time_test_support import sample_time
 
 
 def config():

@@ -3,10 +3,12 @@
 from types import SimpleNamespace as N
 
 from control_process_test_support import generic_motion_profile
-from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from senior_motion_estimation.motion_observation_adapter import (
+    NativeObservations,
+    strict_reference_json,
+)
+from senior_motion_estimation.observations import Source
 from sensor_time_test_support import sample_time
-
-from senior_control.motion.observations import Source
 
 
 def adapter():
@@ -82,7 +84,7 @@ def test_source_identity_contains_both_producer_and_dds_and_replays_cannot_refre
 
 
 def test_missing_gid_never_uses_topology_as_sample_identity():
-    from senior_robot.motion_observation_adapter import observation_origin
+    from senior_motion_estimation.motion_observation_adapter import observation_origin
 
     endpoints = [N(node_name="drive", node_namespace="/", endpoint_gid=b"wheel")]
     assert observation_origin({}, endpoints, "drive") is None

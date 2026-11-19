@@ -2,13 +2,8 @@ import math
 from dataclasses import replace
 
 import pytest
-from sensor_time_test_support import sample_time
-from test_motion_sources import config, sample
-from test_motion_temporal import feed, owner, point, resolver
-
-from senior_control.models import Pose2D
-from senior_control.motion.fusion import FusionConfig, NumericalFusion, covariance_intersection
-from senior_control.motion.observations import (
+from senior_motion_estimation.fusion import FusionConfig, NumericalFusion, covariance_intersection
+from senior_motion_estimation.observations import (
     Covariance,
     CovarianceKind,
     Frame,
@@ -16,7 +11,12 @@ from senior_control.motion.observations import (
     Source,
     SourceStatus,
 )
-from senior_control.motion.source_admission import AdmissionOwner
+from senior_motion_estimation.source_admission import AdmissionOwner
+from sensor_time_test_support import sample_time
+from test_motion_sources import config, sample
+from test_motion_temporal import feed, owner, point, resolver
+
+from senior_control.models import Pose2D
 from senior_control.motion.source_modes import SourceMode
 
 
@@ -347,8 +347,9 @@ def test_wheel_fallback_after_x_conflict_does_not_regain_normal_cap_from_healthy
 
 
 def test_delta_log_translation_does_not_claim_independence_from_disputed_laser_yaw():
+    from senior_motion_estimation.sample_types import DeltaObservation
+
     from senior_control.motion.kinematics import exponential
-    from senior_control.motion.sample_types import DeltaObservation
 
     _, _, original, _ = synthetic_window()
     o, r = owner(), resolver()

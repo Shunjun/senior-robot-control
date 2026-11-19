@@ -15,11 +15,19 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from senior_control.runtime.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
 from senior_control.sensors.policy import default_policy
 from senior_control.sensors.sample_time import SampleTime
+
+_MetadataCallback = TypeVar("_MetadataCallback", bound=Callable)
+
+
+def with_dds_info(callback: _MetadataCallback) -> _MetadataCallback:
+    callback._senior_dds_info = True
+    return callback
+
 
 _HEADER = struct.Struct("!4sBBQQQqq24sBqqQQQI")
 _MAX_PAYLOAD = 20 * 1024 * 1024

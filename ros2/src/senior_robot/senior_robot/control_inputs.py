@@ -72,12 +72,11 @@ class ControlInputs:
             return
         self.version, snapshot = row
         state, scans, scan_ready, scan_generation, reference = snapshot
-        sensors.__dict__.update(state)
+        sensors.apply_decision_snapshot(state, reference)
         node._scans.clear()
         node._scans.extend(scans)
         node._input_scan_ready = scan_ready
         node._scan_generation = scan_generation
-        sensors.input_reference = reference
 
     def close(self):
         if self._closed:

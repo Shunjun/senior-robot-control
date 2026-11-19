@@ -1,7 +1,6 @@
 import pytest
+from senior_motion_estimation.estimator import MotionEstimation, MotionObservation, Origin
 from sensor_time_test_support import sample_time
-
-from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
 
 
 def observation(source, values, stamp=9.9, quality=1.0, root=None, sequence=1):

@@ -15,8 +15,8 @@ from control_process_test_support import (
     publish_inputs,
 )
 from motion_reference_test_support import ReadySubscription
+from senior_motion_estimation.motion_observation_adapter import NativeObservationRosBridge
 from senior_robot import motion_core_output
-from senior_robot.motion_observation_adapter import NativeObservationRosBridge
 from sensor_time_test_support import capture_fields, sample_time
 
 from senior_control.sensors.sample_time import SampleTime
@@ -149,13 +149,13 @@ def phase(monkeypatch):
     monkeypatch.setitem(sys.modules, "time", test_time)
     monkeypatch.setattr(motion_core_output, "time", test_time)
     monkeypatch.setattr("senior_sensor_ingress.native_receipt.time", test_time)
-    monkeypatch.setattr("senior_robot.motion_observation_adapter.time", test_time)
+    monkeypatch.setattr("senior_motion_estimation.motion_observation_adapter.time", test_time)
 
     # Replace only ROS I/O; handlers still receive full native receipt metadata.
     def subscribe(node, message_type, topic, callback, **_kwargs):
         return node.create_subscription(message_type, topic, callback, 10)
 
-    monkeypatch.setattr("senior_robot.native_receipt.subscribe", subscribe)
+    monkeypatch.setattr("senior_sensor_ingress.native_receipt.subscribe", subscribe)
     node = Node(clock)
     bridge = NativeObservationRosBridge(node, generic_motion_profile())
 

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "senior-control"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["senior-perception==0.1.0", "senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
+dependencies = ["senior-motion-estimation==0.1.0", "senior-perception==0.1.0", "senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
 
 [project.scripts]
 senior-robot = "senior_control.cli:main"
@@ -55,10 +55,11 @@ python_version = "3.10"
 strict = true
 
 [tool.pytest.ini_options]
-pythonpath = ["ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "src", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_motion_control"]
+pythonpath = ["ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "src", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_motion_control"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.uv.sources]
+senior-motion-estimation = { path = "ros2/src/senior_motion_estimation", editable = true }
 senior-perception = { path = "ros2/src/senior_perception", editable = true }
 senior-contracts = { path = "contracts", editable = true }

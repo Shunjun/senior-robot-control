@@ -140,14 +140,21 @@ def test_process_death_fails_pending_future_and_close_reaps_it():
 
 def test_real_spawn_carries_geometry_and_complete_sensor_snapshot():
     from control_process_test_support import generic_motion_profile
-    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+    from learning_test_support import learning_point
+    from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.observations import Source
     from test_directional_constraints import engine, snapshot
 
     from senior_control.runtime.diagnostics import RuntimeDiagnostics
 
     sensors = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
-    reference = sensors.estimate(10, 10)
-    state = {k: v for k, v in vars(sensors).items() if k not in {"profile", "diagnostics"}}
+    sample = learning_point(
+        Source.WHEEL, 10_000_000_000, 10_000_000_000, 10_000_000_000, (0.2, 0.0), sequence=1
+    )
+    assert sensors.ingest(sample, 10, 10)
+    estimate = sensors.estimate(10, 10)
+    reference = ({key: estimate[0][key] for key in ("average", "mode")}, None, None)
+    state = sensors.decision_snapshot()
     worker = ProcessWorker(name="batch-test-real-geometry")
     try:
         result = wait_done(worker.submit(partial(engine().refine, snapshot(), 0))).result()
@@ -157,7 +164,21 @@ def test_real_spawn_carries_geometry_and_complete_sensor_snapshot():
             worker.submit(partial(compute_pid, (state, (), False, 1, reference)))
         ).result()
         assert pid != os.getpid()
-        assert transferred[0]["latest"] == state["latest"]
+        assert transferred[0].latest == state.latest
+        reader = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
+        reader.apply_decision_snapshot(transferred[0], transferred[4])
+        original = reader.latest
+        reader.apply_decision_snapshot(transferred[0], transferred[4])
+        assert reader.latest == original
+        assert reader.latest.computed_steady == state.latest.computed_steady
+        assert reader.latest.generation == state.latest.generation
+        assert reader.latest.healthy and not reader.latest.vy.observed
+        assert reader.raw_wheel == state.raw_wheel and reader.raw_imu is None
+        assert reader.raw_wheel.roots[0].time == sample.time
+        assert reader.wheel_linear(10.5) == pytest.approx(0.2)
+        reader.apply_decision_snapshot(transferred[0], transferred[4])
+        assert reader.wheel_linear(11.0) is None  # Replaying the snapshot cannot renew the root.
+        assert reader.input_reference == reference
         assert transferred[1:] == ((), False, 1, reference)
     finally:
         worker.close()

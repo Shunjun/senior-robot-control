@@ -1,8 +1,8 @@
 """Offline adapters must preserve raw support and never use truth as admission."""
 
 import pytest
+from senior_motion_estimation.observations import Source
 
-from senior_control.motion.observations import Source
 from tools.motion_fusion_replay import ReplayChain, replay_policy
 from tools.motion_replay_records import NativeAdapter, TruthIndex
 
