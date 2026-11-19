@@ -1,1 +1,1 @@
-"""Vehicle management owners; settings are implemented, other modules await migration."""
+"""Vehicle management owners; settings and logs are implemented, other modules await migration."""

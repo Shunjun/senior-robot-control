@@ -1,4 +1,4 @@
-"""//Compatible: historical log socket imports share the same query wire contract."""
+"""//Compatible: explicit aliases of the sole manager log implementation."""
 
-from senior_contracts.logs import LOG_WIRE_BYTES as LOG_WIRE_BYTES
-from senior_contracts.logs import LogRequest as LogRequest
+from vehicle_manager.vehicle_logs.wire import LOG_WIRE_BYTES as LOG_WIRE_BYTES
+from vehicle_manager.vehicle_logs.wire import LogRequest as LogRequest

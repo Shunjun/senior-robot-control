@@ -28,9 +28,17 @@ def main() -> None:
     from senior_motion_control.native import native_executable
     from senior_perception.raw_safety_observation import RawSafetyObservation
     from senior_perception.scan_access import SensorAccess
-    from vehicle_manager.settings.models import DrivingSettings
+    from vehicle_manager.settings.models import (
+        DrivingSettings,
+        SettingsSnapshot,
+        vehicle_settings_profile,
+    )
     from vehicle_manager.settings.service import RuntimeGate, SettingsService
     from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.vehicle_logs.models import LogQuery
+    from vehicle_manager.vehicle_logs.service import LogSubscription
+    from vehicle_manager.vehicle_logs.service import VehicleLogService as ManagerLogService
+    from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
     from senior_control.errors import DomainError
     from senior_control.errors import ErrorCode as LocalErrorCode
@@ -55,7 +63,10 @@ def main() -> None:
     from senior_control.settings.service import SettingsService as LegacySettingsService
     from senior_control.settings.store import SettingsStore as LegacySettingsStore
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
-    from senior_control.vehicle_logs.models import LogQuery
+    from senior_control.vehicle_logs.models import LogQuery as LegacyLogQuery
+    from senior_control.vehicle_logs.service import LogSubscription as LegacyLogSubscription
+    from senior_control.vehicle_logs.service import VehicleLogService as LegacyLogService
+    from senior_control.vehicle_logs.store import VehicleLogStore as LegacyLogStore
     from senior_control.vehicle_logs.wire import LogRequest as LocalLogRequest
 
     assert LegacyCellEvidence is CellEvidence
@@ -127,6 +138,35 @@ def main() -> None:
         ],
         check=True,
     )
+    assert LegacyLogQuery is LogQuery and LegacyLogStore is VehicleLogStore
+    assert LegacyLogSubscription is LogSubscription
+    assert LegacyLogService is not ManagerLogService
+    assert issubclass(LegacyLogService, ManagerLogService)
+    for name in ("enqueue", "start", "query", "follow", "download", "close"):
+        assert getattr(LegacyLogService, name) is getattr(ManagerLogService, name)
+    # Production constructor binds the same diagnostic classes and process owner.
+    from senior_control.agent.logs_wire import CloudLogGrants
+    from senior_control.runtime.diagnostics import (
+        DiagnosticAsyncQueue,
+        DiagnosticLock,
+        PendingCounter,
+        process_diagnostics,
+    )
+
+    profile = vehicle_settings_profile()
+    policy = SettingsSnapshot(driving=profile.driving_defaults, logging=profile.logging_defaults)
+    service = LegacyLogService(
+        VehicleLogStore(Path("/tmp/installed-log-owner-not-opened")),
+        "robot",
+        CloudLogGrants(),
+        lambda: policy,
+    )
+    assert service._diagnostics.counter is PendingCounter
+    assert service._diagnostics.lock is DiagnosticLock
+    assert service._diagnostics.outbox is DiagnosticAsyncQueue
+    assert isinstance(service._queue_diagnostic, PendingCounter)
+    assert service._queue_diagnostic.diagnostics is process_diagnostics()
+    assert isinstance(service._publication_lock, DiagnosticLock)
     assert issubclass(LogQuery, QueryDTO)
     assert hasattr(LogQuery, "matches") and not hasattr(QueryDTO, "matches")
     assert RawSafetyObservation.__module__ == "senior_perception.raw_safety_observation"

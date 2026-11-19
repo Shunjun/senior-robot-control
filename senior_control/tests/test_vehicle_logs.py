@@ -3,11 +3,11 @@ import json
 from dataclasses import replace
 
 import pytest
+from vehicle_manager.vehicle_logs.models import LogInput, LogQuery
+from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
 from senior_control.settings.models import DrivingSettings, LoggingSettings, SettingsSnapshot
-from senior_control.vehicle_logs.models import LogInput, LogQuery
 from senior_control.vehicle_logs.service import VehicleLogService
-from senior_control.vehicle_logs.store import VehicleLogStore
 
 
 class Authorizer:
@@ -636,7 +636,7 @@ async def test_short_live_batch_is_one_page_without_false_slow_consumer_gap(tmp_
 async def test_existing_damaged_store_is_unavailable_without_recreation(tmp_path, damage):
     import sqlite3
 
-    from senior_control.vehicle_logs.models import prepare_entry
+    from vehicle_manager.vehicle_logs.models import prepare_entry
 
     directory = tmp_path / "logs"
     async with VehicleLogStore(directory) as store:
@@ -731,7 +731,7 @@ async def test_slow_follower_gap_covers_discarded_pages_not_delivered_batch(tmp_
 
 
 async def test_existing_valid_empty_and_fully_pruned_store_keep_metadata(tmp_path):
-    from senior_control.vehicle_logs.models import prepare_entry
+    from vehicle_manager.vehicle_logs.models import prepare_entry
 
     directory = tmp_path / "logs"
     async with VehicleLogStore(directory):

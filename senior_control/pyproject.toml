@@ -5,9 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "vehicle-manager"
 version = "0.1.0"
-description = "Vehicle management settings with explicit database ownership"
-dependencies = ["pydantic>=2.8,<3", "aiosqlite>=0.20,<1"]
+description = "Vehicle settings and logs with explicit technical ownership"
+dependencies = ["senior-contracts==0.1.0", "pydantic>=2.8,<3", "aiosqlite>=0.20,<1"]
 requires-python = ">=3.10"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vehicle_manager"]
+
+[tool.uv.sources]
+senior-contracts = { path = "../contracts", editable = true }

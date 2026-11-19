@@ -90,7 +90,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B3 已迁既有行为，ROS 待验：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖 B1/B2 的既有接口；从 155e2b9 迁入观测适配、准入/时序/融合、运动与连续位姿 owner，ControlInputs 经 frozen 决策快照替代字典写入；127 项通过、2 项 ROS 跳过，两个 retired 激光组合用例已登记；GPS/新算法仍留实现阶段 |
 | B4 已迁既有控制职责，ROS 实测待补 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5.1–B5.3 已迁既有Python/原生与持久事务，缺失功能待续 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
-| B6.C1–C3 云与M1a设置已迁，镜像实测与管理余项待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
+| B6.C1–C3 云与M1a设置/M1b日志已迁，镜像实测与管理余项待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -334,3 +334,18 @@ SettingsDatabase仅为原connection/write_lock只读接口，未迁DB/诊断/日
 manager6份源码类型检查和wheel/完整旧SDK安装检查通过，独立7包与原SDK24包pip check通过；
 没有真实Linux/ROS/DDS/实车仿真验证，没有启动开发服务、部署或推送。
 后续M1b先核对真实日志诊断端口并保留原owner，按已盘点切片另行审阅预报；不提前搬日志、通用runtime或导航。
+
+### B6.M1b 车辆日志owner迁移记录
+
+基线ec7c031；原日志models/store/service/wire归已有vehicle_manager/vehicle_logs，旧公开入口显式Compatible。
+值、Store、订阅与辅助函数同一对象；旧Service为保留原签名的薄构造子类，非同一类，所有业务方法继承canonical实现。
+只声明实际使用的LogDiagnostics端口并由根装配注入原计数/锁/队列/bind_async，诊断状态仍由原owner持有；
+原独立SQLite/MEMORY journal、锁、授权/撤销、过滤/游标/脱敏、队列界限/overflow及只读设置策略保留。
+根→manager→原WS contracts与第三方；无manager反向实现导入、无新顶层项目或诊断复制，云镜像/contracts不改。
+实际19逻辑文件（产品12，其中1仅更新包说明；测试1迁移、配置2、工具文档4），在预报总18–20范围内；
+实际目录、公开端口、命令版本、早期超时/基线对照及最终结果见[manager M1b记录](../../../senior_control/README.md#m1b-车辆日志owner迁移)。
+最终原完整定向72通过（3.76s），未改时限/断言；manager12份源码类型通过，原全链38错误与ec7c031归档逐条相同。
+manager/根wheel构建、仓库外纯manager8包与旧完整SDK24包安装及真实兼容/诊断owner检查通过，根69包版本不变。
+真实Linux/ROS/ament/车辆运行未验证，原native/SLAM/Docker及旧控制夹具缺口仍登记；不开服务、不部署、不推送。
+后片仍按真实依赖核对DB/任务/Home→agent连接/分发→CLI/监管与技术设施最终边界，不能借日志端口搬整套runtime。
+既有地图/定位/导航保持；缺失模块功能留所属模块实现，导航算法最后。
