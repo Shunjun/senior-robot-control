@@ -9,6 +9,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -63,5 +65,57 @@ jobs:
                           async with database.connection.execute("PRAGMA user_version") as cursor:
                               assert await cursor.fetchone() == (5,)
                       assert not database.is_open
+          asyncio.run(verify())
+          PY
+      - name: Verify frozen production cloud closure without starting a server
+        run: |
+          mkdir -p /tmp/frozen-cloud/cloud /tmp/frozen-cloud/contracts
+          cp cloud/pyproject.toml cloud/uv.lock /tmp/frozen-cloud/cloud/
+          cp -R cloud/src /tmp/frozen-cloud/cloud/src
+          cp contracts/pyproject.toml /tmp/frozen-cloud/contracts/
+          cp -R contracts/src /tmp/frozen-cloud/contracts/src
+          uv sync --project /tmp/frozen-cloud/cloud --frozen --no-dev --extra server --no-editable
+          cd /tmp
+          /tmp/frozen-cloud/cloud/.venv/bin/python - <<'PY'
+          import asyncio
+          import importlib.metadata
+          import importlib.util
+          import os
+          import sqlite3
+          import cloud
+          import tempfile
+          from pathlib import Path
+          from unittest.mock import patch
+          from cloud.auth import hash_password
+          from cloud.bootstrap import create_app_from_environment, main
+          import uvicorn.protocols.websockets.websockets_impl
+
+          async def verify():
+              assert "site-packages" in cloud.__file__
+              for name in ("senior_control", "vehicle_manager", "rclpy"):
+                  assert importlib.util.find_spec(name) is None
+              assert importlib.metadata.version("uvicorn") == "0.32.1"
+              assert importlib.metadata.version("websockets") == "15.0.1"
+              with tempfile.TemporaryDirectory() as directory:
+                  environment = {
+                      "SENIOR_SECRET": "s" * 32,
+                      "DATABASE_PATH": str(Path(directory) / "cloud.db"),
+                      "ADMIN_PASSWORD_HASH": hash_password("password"),
+                      "ALLOWED_ORIGIN": "https://cloud.test",
+                      "TRUSTED_PROXY": "caddy",
+                  }
+                  app = create_app_from_environment(environment)
+                  assert not Path(environment["DATABASE_PATH"]).exists()
+                  for _ in range(2):
+                      async with app.router.lifespan_context(app):
+                          assert Path(environment["DATABASE_PATH"]).is_file()
+                          with sqlite3.connect(environment["DATABASE_PATH"]) as connection:
+                              assert connection.execute("PRAGMA user_version").fetchone() == (5,)
+                  with patch.dict(os.environ, environment, clear=True), patch("uvicorn.run") as run:
+                      main()
+                      assert run.call_args.kwargs == {
+                          "host": "0.0.0.0", "port": 8000,
+                          "proxy_headers": True, "forwarded_allow_ips": "caddy",
+                      }
           asyncio.run(verify())
           PY

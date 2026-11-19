@@ -1,7 +1,7 @@
 # 独立云端
 
-当前 C2 已提供独立设置、SQLite、队列诊断和可执行 lifespan 的真实应用装配；生产镜像仍待 C3。
-详见下方 [C2 记录](#c2-独立云设施与应用装配)。
+当前 C3 已接独立生产bootstrap、Docker上下文和frozen锁；本机无可连接Docker daemon，镜像构建实测仍有缺口。
+详见下方 [C3 记录](#c3-生产镜像与独立锁接线)；C1/C2段保留各批历史证据。
 
 ## C1 业务迁移历史记录（ee735b0）
 
@@ -231,3 +231,84 @@ summaries/sensor_results为空，等待/duration统计与告警原样。
 CI新增真实纯云wheel/lifespan检查，cloud pyproject补独立测试路径与asyncio配置；没有修改Docker接线。
 本轮自审后交负责人亲审，未做全仓测试或部署；C3仍须处理既有.dockerignore、生产bootstrap切换、
 旧uv0.5.11与锁revision5、真实Docker/Uvicorn/TLS/反代；Linux/ROS/实车仿真及B5原生实测缺口均未覆盖。
+
+
+## C3 生产镜像与独立锁接线
+
+基线 `05a2d8b`，实际14文件：产品1、测试4、配置构建6、工具文档3；新增2、修改12，无迁移/删除。
+唯一产品新增为 `cloud/src/cloud/bootstrap.py`，其余C1/C2业务、WS契约及SQLite/诊断实现不改。
+
+```text
+cloud/src/cloud/bootstrap.py         # python -m cloud.bootstrap；显式环境factory与main
+cloud/pyproject.toml                 # server extra及required uv==0.12.23
+cloud/uv.lock                        # 独立20包跨平台闭包，server版本/轮子hash固定
+uv.lock                              # 根68包不变，仅记录云server extra元数据
+.dockerignore                        # 默认拒绝，仅cloud/contracts必要源码/声明与Dockerfile
+deploy/Dockerfile.cloud              # uv0.12.23 + Python3.10.15，两个项目frozen安装
+.github/workflows/backend.yml        # 同uv版本，离仓库frozen生产入口检查
+cloud/tests/test_cloud.py            # 原epoch跨app重开用例改走生产bootstrap
+tests/deploy/test_jenkins_config.py   # 原镜像依赖/保护断言随实际安装归属更新
+tests/deploy/test_jenkins_deploy.sh   # 原保护改用私有构建输入，不要求现成web/dist
+tests/integration/test_deployment_config.py # 原部署保护及bootstrap不打开DB检查
+docs/operations/deploy.md            # 使用独立云环境生成原scrypt hash
+docs/superpowers/plans/2026-11-19-vehicle-architecture-refactor.md
+```
+
+### 构建与运行图
+
+Jenkins/Compose路径不改：`docker build -f deploy/Dockerfile.cloud ... .`仍从仓库根构建。
+Docker只COPY cloud、contracts；上下文白名单只包含这两包pyproject/锁/src和原Dockerfile，
+不引入根管理项目、根src、ROS、开发venv、测试、网页产物或密钥。
+Hatch仅需这两包的声明与源码，历史SQL JSON/py.typed仍随wheel进入安装。
+
+Docker执行 `uv sync --project cloud --frozen --no-dev --extra server --no-editable`，
+环境路径为 `/app/cloud/.venv`，不再同步根项目或用第二条未锁pip命令装server。
+固定uv0.12.23与本机/CI一致，Python基础镜像仍3.10.15-slim-bookworm。
+Uvicorn0.32.1和WebSockets15.0.1固定在server extra与cloud锁；WebSocket实现导入检查保留。
+初始化锁曾解析出较新的公共库版本，最终重新选回根锁已验证的FastAPI0.162.0、Pydantic2.14.1、
+AnyIO4.15.1、annotated-doc0.0.5、typing-inspection0.4.4；公共包版本集合与根锁一致。
+根锁只新增云extra的元数据，不升级原68包；云独立锁20包包含平台/解释器条件分支。
+
+镜像CMD改为 `python -m cloud.bootstrap` → 独立 `cloud.application.create_app`。
+factory只在调用时读取SENIOR_SECRET、DATABASE_PATH、ADMIN_PASSWORD_HASH、ALLOWED_ORIGIN，
+main沿用TRUSTED_PROXY；无额外环境读入规则、端口/路径回退或全局app构造。
+main才按server extra加载Uvicorn并保留 `host=0.0.0.0, port=8000, proxy_headers=True` 与原forwarded_allow_ips。
+旧兼容bootstrap仍可显式调用，但生产镜像没有安装它或车端/ROS包。
+
+原UID/GID10001、/var/lib/senior目录创建/chown、EXPOSE8000、
+Compose中/var/lib/senior/cloud.db卷和环境、只读/no-new-privileges、
+Caddy地址/TRUSTED_PROXY、DDS隔离、Jenkins本地daemon/发布锁/健康和current保护均保持。
+Jenkins脚本和Compose本身未改，生产env字段、凭据格式、SQL与线上消息没有变化。
+
+### 验证证据与缺口
+
+环境：macOS26.4 arm64，宿主CPython3.12.15与已安装3.10.22；pytest8.4.2、ruff0.17.3、mypy2.4.0、
+uv0.12.23；Docker CLI29.5.2、Compose v5.1.3。
+
+- RED：先把原test_cloud_image_installs_websocket_protocol更新为真实独立安装断言，迁移前因缺server pin失败；改实际接线后通过。
+- `python -m pytest tests/deploy/test_jenkins_config.py tests/integration/test_deployment_config.py cloud/tests/test_cloud.py cloud/tests/test_cloud_epoch.py cloud/tests/test_schema.py -q`：**35 passed**（5.85s）。
+  复用原哈希/CSRF/Origin/epoch、真实SQLite重开、Compose凭据/代理/DDS与部署保护，新增bootstrap显式环境及不打开DB检查属于本批入口验收。
+- `bash tests/deploy/test_jenkins_deploy.sh`：exit=0，原远程daemon拒绝、成功健康才切current、错误API响应不切current均保留。
+  首次原夹具因仓库没有web/dist退出1；只将现有替身场景的脚本/发布输入搬到/tmp私有fixture并放最小静态输入后通过，没有生成生产网页、改部署脚本或删断言。
+- `uv lock --check --offline`：根68包；`uv lock --project cloud --check --offline`：独立20包。
+  初次离线因缓存无固定Uvicorn元数据失败，补实际包元数据/轮子后完成，未用静默降级或可选缺失代替。
+- 将两包的pyproject、cloud锁和src复制到 `/tmp/c3-frozen/{cloud,contracts}`，
+  执行 `uv sync --project /tmp/c3-frozen/cloud --frozen --no-dev --extra server --no-editable`：
+  Python3.12.15真实构建/安装18包、pip check通过；最新源码重装后offline同命令再检查通过。
+- 同一声明/锁复制到 `/tmp/c3-frozen310`，加 `--python 3.10`：Python3.10.22真实frozen安装19包、pip check通过。
+  两个环境共同版本与根锁一致；Starlette按原Python条件分别为1.10.0/1.7.0，3.10还含exceptiongroup。
+- 从 `/tmp`在上述两个解释器执行CI新增的同一个验证块：模块实际来自site-packages，
+  senior_control/vehicle_manager/rclpy均不存在，Uvicorn/WebSockets版本和原websockets_impl可导入，
+  生产bootstrap实际构造app且未建DB，随后两次真实lifespan完成SQLite v5迁移并重开；
+  Uvicorn.run仅在测试中拦截，断言原host/port/proxy/forwarded参数，**没有监听或启动服务**。
+  此为冻结安装与进程内入口验证，不称完整网络服务/镜像验证。
+- `MYPYPATH=cloud/src:contracts/src mypy cloud/src/cloud`：18份源码通过；四份相关Python lint/format通过，
+  CI YAML/Python块解析和CRLF差异检查通过；公共锁版本核对、旧业务/Compose/Jenkins生产脚本无改动。
+- 实际执行 `docker build --progress=plain -f deploy/Dockerfile.cloud -t senior-cloud-c3:local .`：**exit=1**，
+  原因是 `Cannot connect to the Docker daemon at unix:///Users/zhangshunjun/.docker/run/docker.sock`。
+  首次受限socket读报permission denied，随后授权构建仍确认daemon不可连接；没有启动Docker或重配daemon。
+  未产出本批镜像，因此没有运行镜像内一次性导入，也未验证镜像tag拉取、Linux Python3.10.15构建/安装或镜像UID行为。
+
+所有测试只用ASGI内存客户端、SQLite或原Jenkins替身；没有启动开发、生产、ROS或实车服务，没有部署/推送。
+未跑全仓或修复C2已登记的四项控制夹具失败/原38项全链类型错误；本片未触及那些实现。
+Docker可用后仍须完成同一真实构建与不启服务的镜像一次性导入/入口检查；HTTPS/WS/TLS/反代和现场网络验收仍保留。

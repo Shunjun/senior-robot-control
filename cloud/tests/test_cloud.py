@@ -30,6 +30,7 @@ import httpx
 import pytest
 from cloud.application import create_app
 from cloud.auth import hash_password
+from cloud.bootstrap import create_app_from_environment
 from cloud.config import CloudSettings
 from cloud.storage import Database
 from fastapi import FastAPI
@@ -414,15 +415,16 @@ async def test_owned_database_reopens_for_repeated_app_lifespan(tmp_path: Path) 
 
 async def test_agent_epoch_increases_across_cloud_app_restart(tmp_path: Path) -> None:
     path = tmp_path / "cloud.db"
-    settings = CloudSettings(secret=SecretStr("s" * 32))
+    environment = {
+        "SENIOR_SECRET": "s" * 32,
+        "DATABASE_PATH": str(path),
+        "ADMIN_PASSWORD_HASH": hash_password(PASSWORD),
+        "ALLOWED_ORIGIN": ORIGIN,
+        "TRUSTED_PROXY": "caddy",
+    }
 
     def app() -> FastAPI:
-        return create_app(
-            settings,
-            database=Database(path),
-            admin_password_hash=hash_password(PASSWORD),
-            allowed_origins=(ORIGIN,),
-        )
+        return create_app_from_environment(environment)
 
     first = app()
     async with first.router.lifespan_context(first):
