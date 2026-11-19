@@ -10,6 +10,58 @@ import sys
 from pathlib import Path
 
 
+def verify_manager_storage() -> None:
+    """Exercise the installed SQLite owner with the original migration cases."""
+    import asyncio
+    import sqlite3
+    import tempfile
+
+    from vehicle_manager.storage import CORE_MIGRATIONS, Database, Migration, migrate, migrate_core
+
+    async def verify(directory: Path) -> None:
+        database = Database(directory / "vehicle.db", lock_factory=lambda _: asyncio.Lock())
+        migrations = [
+            Migration(1, ("CREATE TABLE item (value TEXT)", "INSERT INTO item VALUES ('before')")),
+            Migration(2, ("INSERT INTO item VALUES ('after')",)),
+        ]
+        async with database as opened:
+            assert opened is database
+            await migrate(database, migrations[:1])
+            await migrate(database, migrations)
+            try:
+                await migrate(
+                    database,
+                    [
+                        *migrations,
+                        Migration(3, ("INSERT INTO item VALUES ('failed')", "INVALID SQL")),
+                    ],
+                )
+            except sqlite3.OperationalError:
+                pass
+            else:
+                raise AssertionError("invalid migration must roll back")
+            await migrate_core(database)
+            async with database.connection.execute("PRAGMA user_version") as cursor:
+                assert await cursor.fetchone() == (2,)
+            async with database.connection.execute("SELECT value FROM item") as cursor:
+                assert await cursor.fetchall() == [("before",), ("after",)]
+            async with database.connection.execute("SELECT version FROM core_schema_version") as c:
+                assert await c.fetchone() == (len(CORE_MIGRATIONS),)
+        assert not database.is_open
+        with sqlite3.connect(str(database.path) + ".backup") as backup:
+            # The failed v3 attempt backs up the committed v2 image before BEGIN.
+            assert backup.execute("PRAGMA user_version").fetchone() == (2,)
+            assert backup.execute("SELECT value FROM item").fetchall() == [("before",), ("after",)]
+        async with database:
+            await migrate(database, migrations)
+            await migrate_core(database)
+        assert not database.is_open
+
+    with tempfile.TemporaryDirectory() as directory:
+        asyncio.run(verify(Path(directory)))
+    print("installed manager SQLite migrations, rollback, backup, core schema and reopen: PASS")
+
+
 def main() -> None:
     from senior_contracts.errors import ErrorCode
     from senior_contracts.logs import LogQuery as QueryDTO
@@ -35,6 +87,8 @@ def main() -> None:
     )
     from vehicle_manager.settings.service import RuntimeGate, SettingsService
     from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage import CORE_MIGRATIONS, Migration, migrate, migrate_core
+    from vehicle_manager.storage.database import Database as ManagerDatabase
     from vehicle_manager.vehicle_logs.models import LogQuery
     from vehicle_manager.vehicle_logs.service import LogSubscription
     from vehicle_manager.vehicle_logs.service import VehicleLogService as ManagerLogService
@@ -62,6 +116,11 @@ def main() -> None:
     from senior_control.settings.service import RuntimeGate as LegacyRuntimeGate
     from senior_control.settings.service import SettingsService as LegacySettingsService
     from senior_control.settings.store import SettingsStore as LegacySettingsStore
+    from senior_control.storage.core_schema import CORE_MIGRATIONS as LegacyCoreMigrations
+    from senior_control.storage.core_schema import migrate_core as old_migrate_core
+    from senior_control.storage.database import Database as LegacyDatabase
+    from senior_control.storage.migrations import Migration as LegacyMigration
+    from senior_control.storage.migrations import migrate as old_migrate
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.vehicle_logs.models import LogQuery as LegacyLogQuery
     from senior_control.vehicle_logs.service import LogSubscription as LegacyLogSubscription
@@ -153,6 +212,20 @@ def main() -> None:
         process_diagnostics,
     )
 
+    assert LegacyDatabase is not ManagerDatabase
+    assert issubclass(LegacyDatabase, ManagerDatabase)
+    for name in ("__aenter__", "_open", "__aexit__"):
+        assert getattr(LegacyDatabase, name) is getattr(ManagerDatabase, name)
+    assert LegacyMigration is Migration and old_migrate is migrate
+    assert LegacyCoreMigrations is CORE_MIGRATIONS and old_migrate_core is migrate_core
+    database = LegacyDatabase(Path("/tmp/installed-vehicle-owner-not-opened"))
+    assert isinstance(database.write_lock, DiagnosticLock)
+    assert database.write_lock._diagnostic.diagnostics is process_diagnostics()
+    assert database.home_target_lock("robot") is database.home_target_lock("robot")
+    assert database.home_execution("robot") is database.home_execution("robot")
+    assert not hasattr(ManagerDatabase, "home_execution")
+    verify_manager_storage()
+
     profile = vehicle_settings_profile()
     policy = SettingsSnapshot(driving=profile.driving_defaults, logging=profile.logging_defaults)
     service = LegacyLogService(
@@ -239,4 +312,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--manager-storage-only"]:
+        import importlib.util
+
+        for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
+            assert importlib.util.find_spec(package) is None, package
+        verify_manager_storage()
+    else:
+        main()

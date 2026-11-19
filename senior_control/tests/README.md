@@ -22,3 +22,12 @@ models/store（含测试内局部prepare_entry）改从canonical导入；service
 本轮完整选择集72项通过（3.76s），包含38项日志及原wire/review/诊断用例，不与子集相加。
 之前的慢速执行出现flush/接收/恢复时限失败，原断言保留；基线对照和复跑详情见
 [M1b记录](../README.md#m1b-车辆日志owner迁移)。独立manager与旧SDK安装检查通过，真实Linux/ROS未验证。
+
+M2a将原`tests/unit/test_database_ownership.py`原样迁入本目录，继续用生产旧Database构造入口，
+两项原断言确认重入拒绝不丢原连接、退出确实关闭以及同对象可重开。
+跨车云`tests/integration/test_storage.py`仍在原位置，车辆fixture改为canonical Database并显式注入原DiagnosticLock；
+云fixture、所有用例体与时限不变，未增加场景或复制SQLite用例。
+SQLite/所有权22项、包含设置和地图原事务139项、原Home协调/guard迁移6项通过；子集不重复累加。
+仓库外安装复用原安装工具新增的`--manager-storage-only`模式，实际开库/迁移/失败回滚/备份/core迁移/重开，
+默认模式继续验证旧入口及诊断owner；详见[实际命令与限制](../README.md#m2a-sqlite引擎与core-schema)。
+这些检查不代表Linux/ROS/真实SLAM或车辆运行通过。

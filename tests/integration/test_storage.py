@@ -1,15 +1,17 @@
 import sqlite3
+from functools import partial
 
 import pytest
+from vehicle_manager.storage.database import Database
+from vehicle_manager.storage.migrations import Migration, migrate
 
-from senior_control.storage.database import Database
-from senior_control.storage.migrations import Migration, migrate
+from senior_control.runtime.diagnostics import DiagnosticLock
 
 
 @pytest.fixture(params=["vehicle", "cloud"])
 def storage_api(request):
     if request.param == "vehicle":
-        return Database, Migration, migrate
+        return partial(Database, lock_factory=DiagnosticLock), Migration, migrate
     from cloud.migrations import Migration as CloudMigration
     from cloud.migrations import migrate as cloud_migrate
     from cloud.storage import Database as CloudDatabase

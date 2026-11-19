@@ -1,8 +1,8 @@
 # 车端管理
 
-M1a 设置、M1b 车辆日志已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
+M1a 设置、M1b 车辆日志、M2a SQLite引擎已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文M1a记录按当时范围保留，当前日志装配、依赖与验证以末尾M1b记录为准。
+下文各片记录按当时范围保留，当前SQLite边界与验证以末尾M2a记录为准。
 
 ## 实际目录与调用
 
@@ -24,9 +24,15 @@ senior_control/
       service.py                      # 唯一日志业务实现，授权/队列/订阅/持久化
       diagnostics.py                  # 原诊断owner的显式技术端口，无诊断实现
       wire.py                         # 同一共享LogRequest/LOG_WIRE_BYTES
+    storage/
+      __init__.py                     # 只公开技术入口，不导入domain装配
+      database.py                     # 唯一连接引擎，显式注入原写锁构造端口
+      migrations.py                   # 原顺序迁移、备份、取消与回滚
+      core_schema.py                  # 原core v1–v4 SQL及迁移实现
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
+    test_database_ownership.py        # 原2项连接所有权/重入用例
     README.md
 ```
 
@@ -169,3 +175,72 @@ Pydantic2.14.1、aiosqlite0.22.1。以下python/mypy/ruff使用原主仓库`.ven
 原安装工具仍明确native/SLAM实际ROS安装UNVERIFIED，历史ROS编译、Docker镜像及退役控制夹具缺口未消除。
 数据库/任务/Home、agent连接/分发、监管/CLI及诊断最终归属留后片；现有地图/导航保留，导航算法后置。
 没有启动开发/实车服务、部署或推送；提交后等待负责人亲审。
+
+## M2a SQLite引擎与core schema
+
+基线`d06f18c`；实际13逻辑文件：产品7、测试2、配置0、工具文档4，
+即新增4、修改8、测试迁移1、删除0。新增为canonical storage四文件，旧database/migrations/core_schema三文件修改；
+原test_database_ownership迁入manager/tests，跨车云test_storage保留原位置，只接canonical车辆fixture；
+工具文档为原安装检查、本页、tests README及实施计划。没有修改pyproject、锁、CI或添加依赖。
+
+### 单一连接实现与原装配
+
+`vehicle_manager.storage.Database(path, busy_timeout_ms=1000, *, lock_factory=...)`拥有连接引擎；
+组合者必须显式提供写锁构造端口，原数值校验后才创建`storage.write_wait`锁。
+旧`senior_control.storage.database.Database`是标明`//Compatible`的薄构造子类，原签名不变，
+注入原DiagnosticLock，仍拥有原Home协调字典/方法及HomeExecutionCoordination。
+**两个Database类不是同一对象**，`__aenter__/_open/__aexit__`与is_open直接继承唯一实现；
+泛型self返回注解保留旧子类进入上下文后仍是原实例的类型契约。
+Home的目标锁、执行锁、连接代次、cancel owner和原按robot共享的状态没有迁移或复制。
+
+旧Migration、migrate、_backup、CORE_MIGRATIONS、migrate_core是canonical同一对象的显式转发。
+原`storage/schema.py`仍组合地图v1、航点v2、任务v3，不进入manager安装闭包；
+`storage/map_persistence.py`仍在原边界延迟准备schema及注入同事务Home效果，不提前执行或迁入地图实现。
+core_schema原v1–v4是既有SQL与迁移历史，未引入任务/Home/地图算法或新schema。
+
+生产仍走原agent.run_agent→旧Database→TaskStore/WaypointStore/AgentJournal/SettingsStore，
+设置与地图使用同一个原实例的connection/write_lock；不会为了manager再开数据库或另建锁。
+原map_persistence回调、domain/core顺序、初始停机再等DB、Home导入同事务且不另加锁/commit均保持。
+原独立cloud仍使用云自己的设施；旧cloud bootstrap继续经根兼容入口。
+manager依赖仍仅contracts/Pydantic/aiosqlite，无Root、ROS、senior_mapping或任务执行实现导入。
+
+原路径、busy_timeout 1–60000ms、foreign_keys/WAL/FULL PRAGMA、重入拒绝、关闭/重开和初始化取消保持；
+迁移仍同写锁、连续版本、SQLite `.backup`/128页/有界progress与shield等待、BEGIN IMMEDIATE及BaseException回滚。
+user_version与core_schema_version仍各自独立，SQL内容/顺序未变，domain第一份statements仍与地图原tuple同一身份。
+
+### 命令、版本与实测
+
+macOS26.4 arm64；CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23，
+Pydantic2.14.1/aiosqlite0.22.1；以下python/mypy/ruff使用原主仓库`.venv/bin/`。
+
+- RED：先改原test_storage车辆fixture至canonical入口，`python -m pytest tests/integration/test_storage.py --collect-only -q`
+  因缺vehicle_manager.storage报ModuleNotFoundError，随后迁移实现。
+- `python -m pytest tests/integration/test_storage.py senior_control/tests/test_database_ownership.py -q`：**22 passed，0.72s**，
+  包含原车/云SQLite失败回滚、未知版本、真实备份、busy/WAL锁、初始化取消、disk full和两项旧连接所有权用例。
+  车辆fixture仅显式注入原DiagnosticLock，原用例输入/断言/时限不变。
+- `python -m pytest tests/integration/test_storage.py senior_control/tests/test_database_ownership.py senior_control/tests/test_vehicle_settings.py ros2/tests/test_map_operations.py -q`：
+  **139 passed，3.59s**（含前述22项，不相加）；实际运行原SQLite设置事务与地图事务/取消/恢复、
+  同ref新代次/旧Home位姿失效和同事务Home保护，地图后端为原合成夹具，不代表真实SLAM运行。
+- `python -m pytest tests/unit/test_home.py::test_shared_home_guard_serializes_claim_and_ignores_old_terminal tests/unit/test_home.py::test_old_home_guard_owner_cannot_update_or_delete_new_claim tests/unit/test_home.py::test_legacy_home_guard_migration_preserves_safety_and_unknowns -q`：
+  **6 passed，0.29s**，确认原共享协调、旧token隔离及历史guard迁移未被引擎拆分改变。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：16份源码通过；
+  原全Root/manager/cloud及ROS依赖路径命令仍38项错误、检查208份源码，与M1b的d06f18c源码记录中38项诊断逐条相同，
+  不称全仓类型通过。本轮没有重跑与该片无关的历史退役控制夹具。
+- 22份相关Python的ruff check/format --check和git diff --check通过；
+  连接开关方法业务AST、Home类/方法、原迁移器/core SQL及全部原测试体核对一致，差异仅锁注入、self类型与必要导入/fixture。
+  原schema/map_persistence、设置、任务、Home、诊断、agent、ROS、云、contracts、依赖配置和锁无diff。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2a-wheels`及根同out-dir构建：
+  manager/根sdist和wheel成功；从仓库外安装实际wheel并运行现有安装工具，没有启动服务。
+- 新`/tmp/m2a-manager-venv`：`uv pip install --offline --python /tmp/m2a-manager-venv/bin/python --constraint /tmp/m1a-constraints.txt /tmp/m2a-wheels/vehicle_manager-0.1.0-py3-none-any.whl /tmp/c1-wheels/senior_contracts-0.1.0-py3-none-any.whl`：
+  8包及`uv pip check`通过；从`/tmp`执行`python <checkout>/tools/verify_batch_one_install.py --manager-storage-only`通过，
+  确认Root/cloud/ROS/mapping未安装，实际SQLite升级、非法SQL回滚、升级前备份、core迁移、退出和重开成功；
+  独立装配显式使用asyncio.Lock，不伪装成生产诊断实现。
+- 旧完整SDK环境`/tmp/vehicle-batch-one-venv`离线重装本轮Root/manager wheel后24包pip check通过，
+  从`/tmp`执行同安装工具默认模式通过：旧Database非同类但继承同一连接方法、Migration/core对象同一身份、
+  实际原DiagnosticLock及进程owner、Home锁/协调对象共享、原地图SQL身份、其他既有安装保护均保留。
+
+本轮所选回归无失败；历史全链类型错误和native/SLAM真实ROS安装缺口仍登记。
+未运行全仓、Python3.10重验、真实Linux/ROS/ament/DDS、SLAM编译或车辆/仿真服务；
+安装工具仍将native/SLAM明确标UNVERIFIED，宿主SQLite/合成地图不能替代这些检查。
+domain装配、map_persistence、任务/Home owner及新功能不在本片迁移；后续继续先精核依赖与预报，导航算法最后。
+没有启动开发或实车服务、部署或推送；提交后交负责人亲审。

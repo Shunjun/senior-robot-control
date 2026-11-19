@@ -91,6 +91,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B4 已迁既有控制职责，ROS 实测待补 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5.1–B5.3 已迁既有Python/原生与持久事务，缺失功能待续 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
 | B6.C1–C3 云与M1a设置/M1b日志已迁，镜像实测与管理余项待续 | 现有 `src/senior_control/agent/`、`runtime/` 中管理职责、settings、vehicle_logs、CLI/监管 → `senior_control/src/vehicle_manager/`；现有 `src/senior_control/cloud/` 及云专用依赖 → `cloud/src/cloud/` | 公开 IPC 和业务 owner 稳定后按生产链迁移；云端只依赖共享 WS 契约，不导入车端快照实现；逐项复用编解码/relay、日志设置 wire、快照过期、监管/隔离回归，核对锁、CI wheel、安装与现有启动入口；完成前原根项目继续承载生产实现 |
+| B6.M2a SQLite引擎已迁，domain及Home协调仍原位 | 原 `storage/database.py` 连接引擎、`migrations.py`、`core_schema.py` → `vehicle_manager/storage/` | 旧Database Compatible子类只装配原DiagnosticLock/Home协调，连接实现唯一；Migration/core入口同一对象，原生产同连接/写锁、SQL/备份/取消不变；domain schema/map_persistence仍在原边界，不把地图/任务执行打入manager安装闭包 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -349,3 +350,19 @@ manager/根wheel构建、仓库外纯manager8包与旧完整SDK24包安装及真
 真实Linux/ROS/ament/车辆运行未验证，原native/SLAM/Docker及旧控制夹具缺口仍登记；不开服务、不部署、不推送。
 后片仍按真实依赖核对DB/任务/Home→agent连接/分发→CLI/监管与技术设施最终边界，不能借日志端口搬整套runtime。
 既有地图/定位/导航保持；缺失模块功能留所属模块实现，导航算法最后。
+
+### B6.M2a SQLite引擎与core schema迁移记录
+
+基线d06f18c；三份SQLite技术实现归已有vehicle_manager/storage，旧Database标Compatible且保留签名，
+薄构造注入原诊断锁并保留原Home协调状态，旧类与canonical非同一类，连接方法直接继承唯一实现。
+Migration/migrate/CORE_MIGRATIONS/migrate_core同一对象转发；原同连接写锁、版本顺序、PRAGMA、路径、
+SQLite备份及失败/取消回滚保留，core SQL原样，domain schema与map_persistence/任务/Home/ROS均不迁。
+实际13逻辑文件：产品7、测试2、配置0、工具文档4，即新增4/修改8/迁移1/删除0，未改依赖配置或锁。
+原SQLite/连接所有权22通过；含原设置与地图事务的139通过；原共享Home guard/历史迁移6通过，子集不相加。
+manager16份源码类型通过，原全链38项类型诊断与M1b记录逐条相同；22份相关Python格式/静态检查通过。
+manager/根wheel构建及仓库外纯manager8包/旧完整SDK24包安装、真实SQLite迁移/备份/失败回滚/core与重开通过。
+实际目录、公开边界、完整命令版本及限制见[manager M2a记录](../../../senior_control/README.md#m2a-sqlite引擎与core-schema)。
+真实Linux/ROS/ament/DDS/SLAM及车辆运行未验证，原安装工具继续标UNVERIFIED，未启服务/部署/推送。
+后续按只读清单先核对必要的车内纯值/异常/agent SQL数据与包入口，再迁纯任务决策、持久任务驱动、航点和Home；
+具体纯值模块名与地图端口尚须各片审阅，不把待定落点写成已实现，manager不反向导入Root/ROS或地图执行。
+原IpcHomePort生产链与未装配HomeService区别保留，不借目录迁移开启新Home或地图操作，导航算法仍最后。
