@@ -68,7 +68,20 @@ int main(int argc,char **argv) {
   assert(receiver.deadline_==10.5);
   auto initial=Publication::published.back();
   assert(initial.linear.x==-0.4 && initial.angular.z==0.7);
-  if(scenario=="expired_queue") {
+  if(scenario=="watchdog_inflight") {
+    clock_ns=10'500'000'000ULL;receiver.poll();
+    assert(Publication::published.size()==2 && !receiver.moving_);
+    assert(Publication::published[1].linear.x==0 && Publication::published[1].angular.z==0);
+    assert(receiver.last_produced_==clock_ns);
+    frame(0.8,0.1,11.0,10.49,2);receiver.poll();
+    assert(Publication::published.size()==2 && receiver.sequence_==2);
+    assert(receiver.last_produced_==10'500'000'000ULL);
+    clock_ns=10'510'000'000ULL;
+    frame(0.3,0.2,10.66,10.51,3);receiver.poll();
+    assert(Publication::published.size()==3 && receiver.moving_);
+    assert(Publication::published.back().linear.x==0.3 && Publication::published.back().angular.z==0.2);
+    assert(receiver.deadline_==10.66 && receiver.last_produced_==clock_ns);
+  } else if(scenario=="expired_queue") {
     frame(0.8,0.1,9.99,9.95,2);receiver.poll();
     assert(Publication::published.size()==1 && receiver.deadline_==10.5);
     clock_ns=10'500'000'000ULL;receiver.poll();

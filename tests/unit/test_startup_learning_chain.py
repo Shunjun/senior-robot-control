@@ -15,6 +15,7 @@ from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
+from test_native_output_protocol import output_module  # noqa: F401
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionMode
@@ -892,3 +893,128 @@ def test_started_filter_failure_is_sticky_in_status_without_changing_hold(rig, m
     )
     assert statuses[-1]["values"]["learning_failure"] == original
     assert statuses[-1]["values"]["timing.sampled_steady"] == str(now + 0.05)
+
+
+def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
+    monkeypatch, tmp_path, request
+):
+    import os
+    import socket
+
+    from senior_robot.motion_core_perception import scan_observation
+
+    from senior_control.motion.startup_learning import StartupLearning
+
+    module = request.getfixturevalue("output_module")
+    results, traced_rows = [], []
+    for enabled in (False, True):
+        label = tmp_path / str(enabled)
+        label.mkdir()
+        r = LearningRig(monkeypatch, label)
+        reader, writer = os.pipe()
+        parent, peer = socket.socketpair()
+        os.set_blocking(reader, False)
+        open_fd = os.open
+        if sys.platform != "linux":
+            os.set_blocking(writer, False)
+
+        def open_trace(path, flags, open_fd=open_fd, writer=writer):
+            if path == "/proc/self/fd/2":
+                return (
+                    open_fd(f"/proc/self/fd/{writer}", flags)
+                    if sys.platform == "linux"
+                    else os.dup(writer)
+                )
+            return open_fd(path, flags)
+
+        monkeypatch.setattr("time.monotonic_ns", lambda r=r: round(r.now * 1e9))
+        with monkeypatch.context() as mode:
+            if enabled:
+                mode.setenv("SENIOR_MOTION_TRACE_ID", "core-test")
+                mode.setenv("SENIOR_MOTION_TRACE_START_NS", "9000000000")
+                mode.setenv("SENIOR_MOTION_TRACE_END_NS", "20000000000")
+            else:
+                mode.delenv("SENIOR_MOTION_TRACE_ID", raising=False)
+            mode.setattr(os, "open", open_trace)
+            output = module.MotionOutput.__new__(module.MotionOutput)
+            output._init_trace()
+        if enabled and sys.platform != "linux":
+            # C1 models the target Linux 4096-byte atomic envelope; P1 uses the real host limit.
+            output._trace_size = 4096
+        output.channel, output.sequence = parent, 0
+        output.process = SimpleNamespace(poll=lambda: None)
+        r.core.node._output_transport = output
+        r.core.startup = StartupLearning(None)
+        r.core._learning_attempt = r.run.owner.record.attempt_id
+        packets, emissions, rays = [], [], []
+
+        def emit(velocity, reason, deadline, *, computed_steady, r=r, output=output):
+            output.publish(velocity, deadline, computed_steady=computed_steady)
+            r.core.node.emitted.append((r.now, velocity, reason, deadline, r.core.startup.started))
+            output.flush_send_trace()
+            return r.now
+
+        r.core.node._emit_motion_core = emit
+        try:
+            assert r.core.command(barrier("prepared"))
+            intent = barrier("intent")
+            intent.received_steady, intent.steady_deadline = r.now, 10.05 + 0.15
+            intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = (
+                1,
+                0.05,
+                0.05,
+            )
+            intent.vx = 0.05
+            assert r.core.command(intent)
+            for now in (10.05, 10.1, intent.steady_deadline):
+                r.step(now)
+                packets.append(peer.recv(64))
+                emissions.append(r.core.node.emitted[-1][1:4])
+                rays.append(asdict(scan_observation(r.core.node._scans[-1], "base_link")))
+                if enabled:
+                    traced_rows.extend(
+                        json.loads(line) for line in os.read(reader, 65536).splitlines()
+                    )
+            intent.received_steady, intent.steady_deadline = r.now, 15.0
+            intent.sequence += 1
+            assert r.core.command(intent)
+            r.step(10.25)
+            packets.append(peer.recv(64))
+            emissions.append(r.core.node.emitted[-1][1:4])
+            if enabled:
+                traced_rows.extend(json.loads(line) for line in os.read(reader, 65536).splitlines())
+            r.step(11.250001, new_scan=False)
+            packets.append(peer.recv(64))
+            emissions.append(r.core.node.emitted[-1][1:4])
+            if enabled:
+                traced_rows.extend(json.loads(line) for line in os.read(reader, 65536).splitlines())
+            assert r.core.node.emitted[-1][1] == Velocity(0, 0)
+            assert r.core.node.emitted[-1][2] == "scan_temporarily_unavailable"
+            assert r.core.target.source == "manual"
+            results.append((packets, emissions, rays))
+        finally:
+            output.finish_trace("test_end")
+            parent.close()
+            peer.close()
+            os.close(reader)
+            os.close(writer)
+            r.close()
+    assert results[0] == results[1]
+    ticks = [row for row in traced_rows if row["event"] == "core_tick"]
+    assert len(ticks) == 5
+    assert all(row["lost"] == 0 for row in traced_rows)
+    first = ticks[0]
+    assert first["argmin"] == ["budget", "target", "startup"]
+    assert first["deadline"] == 10.05 + 0.15 and first["bounds"]["startup"] is None
+    assert first["selected"]["capture"]["time"]["sample_steady_ns"] == 10_050_000_000
+    assert first["computed_ns"] == 10_050_000_000 and first["transport_sequence"] == 1
+    stages = [row for row in traced_rows if row["event"] == "core_stages"]
+    assert len(stages) == 5 and stages[0]["computed_ns"] == first["computed_ns"]
+    assert any(mark[0] == "clearance_begin" for mark in stages[0]["marks"])
+    assert ticks[2]["decision"]["target_expired"] and ticks[2]["submitted"] == [0, 0]
+    assert first["last_installed_command"]["sequence"] == 0
+    assert first["remaining_ms_at_send"] == first["remaining_ms_at_report"]
+    assert ticks[2]["decision"]["zero_stage"] == "target_zero"
+    assert ticks[-1]["decision"]["clearance"] is None
+    assert ticks[-1]["decision"]["zero_stage"] == "clearance"
+    assert ticks[-1]["selected"]["age"]["band"] == "invalid"

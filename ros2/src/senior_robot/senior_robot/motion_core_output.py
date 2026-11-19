@@ -105,6 +105,7 @@ class MotionCoreOutput:
     def command(self, msg: Any) -> bool:
         """Called only AFTER the existing authenticated FinalCommand generation fence."""
         now = time.monotonic()
+        self._trace_target("target_received", msg, now)
         if self._closed:
             return False
         reason = str(msg.close_reason)
@@ -185,6 +186,7 @@ class MotionCoreOutput:
                 self._barrier_complete = False
             accepted = self._apply_close(msg, reason, now)
             if accepted:
+                self._trace_target("target_closed", msg, now)
                 self._barrier_complete = True
                 self._remember_task_retirement(msg)
                 if handoff:
@@ -216,6 +218,7 @@ class MotionCoreOutput:
         self.target = MotionTarget(
             velocity, msg.source_kind, source_id, float(msg.steady_deadline), manual_linear
         )
+        self._trace_target("target_installed", msg, now)
         if msg.source_kind == "navigation":
             self._task_identity = (str(msg.source_id), int(msg.source_epoch))
             # An accepted higher epoch irreversibly supersedes old pause receipts.
@@ -401,7 +404,9 @@ class MotionCoreOutput:
         client = self._learning_client
         if client is None:
             return None
+        self._trace_mark("poll_begin")
         client.poll()
+        self._trace_mark("poll_end")
         self._learning_stage = "record-adoption"
         record = client.record
         self._learning_record_phase = None if record is None else record.phase
@@ -467,10 +472,12 @@ class MotionCoreOutput:
                     return None
             self.startup = StartupLearning(client)
             self._learning_attempt = record.attempt_id
+        self._trace_mark("adoption_end")
         self._learning_stage = "advance"
         self.startup.advance(
             self.sensors.wheel_linear(now), now=now, stationary=self.sensors.stationary(now)
         )
+        self._trace_mark("advance_end")
         if not self.startup.active and (
             client.view is None or self.target.velocity == Velocity(0, 0)
         ):
@@ -584,14 +591,25 @@ class MotionCoreOutput:
         composition = tuple(raw.predictions) if avoidance else ()
         entry = self._scan_results[slot]
         self._scan_results[slot] = None  # Never retain a partial result after an exception.
+        self._trace_mark(
+            "avoid_cache_hit"
+            if avoidance and entry is not None and entry[0] == composition
+            else "raw_cache_hit"
+            if entry is not None and entry[0] == composition
+            else "avoid_decode"
+            if avoidance
+            else "raw_decode"
+        )
         if entry is not None and entry[0] == composition:
             _, observation, previous_filter, result = entry
         else:
             decode = avoidance_observation if avoidance else scan_observation
             observation = decode(raw, self.node._body)
             previous_filter = result = None
+        self._trace_mark("decode_end")
         client = self._learning_client
         view = None if client is None else client.view
+        self._trace_mark("geometry_begin")
         if not avoidance and client is not None and view is None:
             # Preserve decoding before geometry reports/holds, even on a cold cache.
             m = raw.message
@@ -614,6 +632,7 @@ class MotionCoreOutput:
                     self.startup.hold_motion("scan_or_body_geometry_changed")
                 self.self_returns = SelfReturnModel(geometry.physical_polygon)
             self._learning_geometry = geometry
+        self._trace_mark("geometry_end")
         filter_key = (
             self.startup.provisional,
             self._learning_geometry,
@@ -621,6 +640,7 @@ class MotionCoreOutput:
             if view is None
             else (client.active_revision, view.catalog.model_id, view.geometry),
         )
+        self._trace_mark("filter_begin" if previous_filter != filter_key else "filter_cache_hit")
         if previous_filter != filter_key:
             if view is not None:
                 result = view.filter(observation)
@@ -628,6 +648,7 @@ class MotionCoreOutput:
                 result = self.self_returns.filter(observation, provisional=self.startup.provisional)
             else:
                 result = observation
+        self._trace_mark("filter_end")
         if key is not None:
             self._scan_results[slot] = (composition, observation, filter_key, result)
         return result
@@ -712,13 +733,165 @@ class MotionCoreOutput:
         self.target = MotionTarget(Velocity(0, 0), "idle", self.boot, None)
         self._output = Velocity(0, 0)
 
+    def _trace_mark(self, stage):
+        trace = getattr(self.node, "_output_transport", None)
+        if trace is not None:
+            trace.mark(stage)
+
+    def _trace_target(self, event, msg, now):
+        trace = getattr(self.node, "_output_transport", None)
+        if trace is None or not trace.trace_active():
+            return
+        try:
+            trace.target_fact(
+                event,
+                boot=self.boot,
+                core_sequence=self.sequence,
+                now=now,
+                command={
+                    name: getattr(msg, name)
+                    for name in (
+                        "owner_boot_id",
+                        "session_id",
+                        "request_id",
+                        "generation",
+                        "connection_epoch",
+                        "sequence",
+                        "gesture",
+                        "source_kind",
+                        "source_id",
+                        "source_epoch",
+                        "received_steady",
+                        "steady_deadline",
+                        "close_reason",
+                        "vx",
+                        "wz",
+                    )
+                },
+            )
+        except Exception:
+            pass  # Diagnostics never change target admission.
+
+    def _trace_tick(self, now, bounds, candidate, output, reason, facts):
+        trace = getattr(self.node, "_output_transport", None)
+        if trace is None or not trace.trace_active():
+            return
+        try:
+            budget = now + 0.15
+            effective = dict(
+                budget=budget,
+                target=bounds["target"] or budget,
+                scan=bounds["scan"] or budget,
+                startup=bounds["startup"]
+                if facts["learning_output"] and bounds["startup"] is not None
+                else budget,
+            )
+            deadline = min(effective.values())
+            sampled = trace.trace_clock()
+            raw = self.node._scans[-1] if self.node._scans else None
+            selected = None
+            if raw is not None:
+                try:
+                    age = default_policy().age(
+                        measured_steady=raw.measurement_steady,
+                        received_steady=raw.received,
+                        now_steady=now,
+                    )
+                    age_fact = dict(band=age.band, seconds=age.seconds)
+                except ValueError as exc:
+                    age_fact = dict(error=type(exc).__name__, message=str(exc)[:128])
+                m = raw.message
+                selected = dict(
+                    capture=asdict(capture_from_message(m.raw_capture)),
+                    source=m.source_epoch,
+                    sequence=m.sequence,
+                    measurement=raw.measurement_steady,
+                    receipt=raw.received,
+                    age=age_fact,
+                    scan_deadline=raw.measurement_steady + default_policy().hard_age_s,
+                )
+            trace.trace_record(
+                "core_tick",
+                boot=self.boot,
+                core_sequence=self.sequence,
+                computed=now,
+                computed_ns=round(now * 1e9),
+                transport_sequence=trace.sequence,
+                target=dict(
+                    source=self.target.source,
+                    id=self.target.source_id,
+                    deadline=self.target.deadline_steady,
+                    vx=self.target.velocity.vx,
+                    wz=self.target.velocity.wz,
+                ),
+                last_installed_command=trace._trace_last_target,
+                bounds=bounds,
+                effective=effective,
+                deadline=deadline,
+                argmin=[name for name, value in effective.items() if value == deadline],
+                report_clock=sampled,
+                remaining_ms_at_report={
+                    name: value * 1000 - sampled[0] / 1e6 for name, value in effective.items()
+                },
+                remaining_ms_at_send=None
+                if trace._trace_sent_clock is None
+                else {
+                    name: value * 1000 - trace._trace_sent_clock[0] / 1e6
+                    for name, value in effective.items()
+                },
+                candidate=(candidate.vx, candidate.wz),
+                submitted=(output.vx, output.wz),
+                reason=reason,
+                decision=facts,
+                selected=selected,
+            )
+            trace.trace_record(
+                "core_stages",
+                boot=self.boot,
+                core_sequence=self.sequence,
+                computed_ns=round(now * 1e9),
+                marks=tuple(trace._trace_marks),
+            )
+            if trace._trace_gc:
+                trace.trace_record(
+                    "gc", boot=self.boot, core_sequence=self.sequence, events=tuple(trace._trace_gc)
+                )
+        except Exception as exc:
+            trace.trace_record(
+                "core_trace_error",
+                boot=self.boot,
+                core_sequence=self.sequence,
+                error=type(exc).__name__ + ":" + str(exc)[:128],
+            )
+        finally:
+            trace._trace_marks.clear()
+            trace._trace_gc.clear()
+
     def tick(self) -> None:
         now = time.monotonic()
         self.sequence += 1
+        self._trace_mark("tick_entry")
+        trace = getattr(self.node, "_output_transport", None)
+        tracing = trace is not None and trace.trace_active()
+        facts = (
+            dict(
+                previous=(self._output.vx, self._output.wz),
+                state=self.machine.state.mode.value,
+                target_expired=False,
+            )
+            if tracing
+            else None
+        )
         dt = 0.0 if self._last_tick is None else max(0.0, min(now - self._last_tick, 0.1))
         self._last_tick = now
         deadline = self.target.deadline_steady
         if deadline is not None and now >= deadline:
+            if tracing:
+                facts.update(
+                    target_expired=True,
+                    expired_source=self.target.source_id,
+                    expired_deadline=deadline,
+                )
             self.revoke("expiry", now=now)
         try:
             filtered = self._learning_observation(now)
@@ -727,43 +900,90 @@ class MotionCoreOutput:
             self._remember_learning_failure(now, exc)
             self.startup.hold_motion("learning_scan_unavailable")
             filtered = None
+        self._trace_mark("learning_end")
         self._startup_target(now, filtered)
         state = self.machine.state
         output, reason, scan_deadline = Velocity(0, 0), state.reason, None
+        if tracing:
+            facts["state"] = state.mode.value
+            facts["zero_stage"] = (
+                "state" if state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT} else None
+            )
         if state.mode not in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}:
             requested = self.target.velocity
             if requested != Velocity(0, 0):
                 control_filtered = filtered
                 if self.node._scans and self.node._scans[-1].predictions:
                     control_filtered = self._filtered_scan(self.node._scans[-1], avoidance=True)
+                self._trace_mark("clearance_begin")
                 clearance = directional_clearance(
                     self.node._scans, self.profile, now, filtered=control_filtered
                 )
+                self._trace_mark("clearance_end")
+                if tracing:
+                    facts["clearance"] = None if clearance is None else asdict(clearance)
                 if clearance is None:
+                    if tracing:
+                        facts["zero_stage"] = "clearance"
                     reason = "scan_temporarily_unavailable"
                 else:
                     current = self.sensors.wheel_linear(now)
+                    self._trace_mark("limit_begin")
                     output = limit_velocity(
                         requested, self._output, current, clearance, self.profile, dt
                     )
+                    self._trace_mark("limit_end")
+                    if tracing:
+                        facts["zero_stage"] = "limit" if output == Velocity(0, 0) else None
+                        facts.update(
+                            requested=(requested.vx, requested.wz),
+                            measured=current,
+                            dt=dt,
+                            limited=(output.vx, output.wz),
+                        )
                     scan_deadline = clearance.deadline
                     reason = "directional_limit" if output != requested else "target"
             else:
+                if tracing:
+                    facts["zero_stage"] = "target_zero"
                 reason = (
                     self.startup.reason
                     if self.target.source == "startup_learning"
                     else ("standby" if self.target.source == "idle" else "stick_stopped")
                 )
         learning_output = self.target.source == "startup_learning"
-        if learning_output and output != Velocity(0, 0) and not self.startup.prepare_action():
-            output, reason = Velocity(0, 0), "learning_action_reservation_pending"
+        if tracing:
+            facts["learning_output"] = learning_output
+        if learning_output and output != Velocity(0, 0):
+            self._trace_mark("prepare_action_begin")
+            permitted = self.startup.prepare_action()
+            self._trace_mark("prepare_action_end")
+            if tracing:
+                facts["action_permitted"] = permitted
+            if not permitted:
+                if tracing:
+                    facts["zero_stage"] = "prepare_action"
+                output, reason = Velocity(0, 0), "learning_action_reservation_pending"
         if (
             learning_output
             and self.startup.deadline is not None
             and time.monotonic() >= self.startup.deadline
         ):
+            if tracing:
+                facts["zero_stage"] = "startup_deadline"
             output, reason = Velocity(0, 0), "learning_action_window_finished"
         self._output = output
+        candidate = output
+        bounds = (
+            dict(
+                budget=now + 0.15,
+                target=self.target.deadline_steady,
+                scan=scan_deadline,
+                startup=self.startup.deadline,
+            )
+            if tracing
+            else None
+        )
         # A control-process stall stops the native owner even if a source TTL is longer.
         output_deadline = min(
             now + 0.15,
@@ -775,12 +995,16 @@ class MotionCoreOutput:
         )
         if learning_output and output != Velocity(0, 0) and time.monotonic() >= output_deadline:
             output = self._output = Velocity(0, 0)
+            if tracing:
+                facts["zero_stage"] = "pre_submit_deadline"
             reason = "learning_output_expired"
             # Discard this candidate only. The same live owner keeps its grant
             # and original window; the next tick must compute a fresh output.
+        self._trace_mark("emit_begin")
         submitted = self.node._emit_motion_core(
             output, reason, output_deadline, computed_steady=now
         )
+        self._trace_mark("emit_end")
         if learning_output and output != Velocity(0, 0):
             self.startup.motion_emitted(submitted, deadline=output_deadline)
         else:
@@ -793,7 +1017,11 @@ class MotionCoreOutput:
                 else len(self._learning_client.view.catalog.anchors)
             ),
         )
+        self._trace_mark("runtime_begin")
         self._publish_runtime(now, reason)
+        self._trace_mark("runtime_end")
+        if tracing:
+            self._trace_tick(now, bounds, candidate, output, reason, facts)
         self.diagnostics.duration("control_compute", time.monotonic() - now)
 
     def _publish_runtime(self, now, reason):

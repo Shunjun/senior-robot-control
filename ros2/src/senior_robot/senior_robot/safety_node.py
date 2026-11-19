@@ -9,6 +9,7 @@ It does not read wheel odometry or /ground_truth/odom, and it does not use a
 wheel transform to relabel a scan into the body frame.
 """
 
+import json
 import math
 import os
 import socket
@@ -729,9 +730,18 @@ class SafetyGate(Node):
     def _emit_motion_core(
         self, velocity: Velocity, reason: str, deadline: float = 0.0, *, computed_steady: float
     ) -> float:
+        self._output_transport.mark("send_begin")
         self._output_transport.publish(velocity, deadline, computed_steady=computed_steady)
         submitted = time.monotonic()
+        self._output_transport.mark("send_end_report_begin")
         self._report(reason)
+        self._output_transport.mark("report_end")
+        self._output_transport.flush_send_trace(
+            boot=self._motion_core.boot,
+            core_sequence=self._motion_core.sequence,
+            reason=reason,
+            submitted=submitted,
+        )
         return submitted
 
     def _report(self, reason: str) -> None:
@@ -745,6 +755,7 @@ class SafetyGate(Node):
         self._last_status = steady
         values = {
             "buffered_scans": str(len(self._scans)),
+            "motion_trace": json.dumps(self._output_transport.trace_status()),
             **{f"count.{key}": str(value) for key, value in self._status_counts.items()},
             # Temporary stage timings describe the last completed control callback.
             **{f"timing.{key}": str(value) for key, value in self._control_timing.items()},
@@ -763,7 +774,9 @@ class SafetyGate(Node):
             if self._last_control_tick is not None:
                 timing["tick_gap_ms"] = (entered - self._last_control_tick) * 1000
             self._last_control_tick = entered
+            self._output_transport.mark("callback_input_begin")
             self._input_process.update(self, self._motion_core.sensors)
+            self._output_transport.mark("input_end_guard_begin")
             updated = time.monotonic()
             timing["input_update_ms"] = (updated - entered) * 1000
             self._poll_command_guard()
@@ -771,6 +784,7 @@ class SafetyGate(Node):
                 self._motion_core.revoke("command_topology_unqualified")
             guarded = time.monotonic()
             timing["command_guard_ms"] = (guarded - updated) * 1000
+            self._output_transport.mark("guard_end")
             # Sample control time after command ingress has been drained.
             self._motion_core.tick()
             timing["tick_ms"] = (time.monotonic() - guarded) * 1000
@@ -781,6 +795,16 @@ class SafetyGate(Node):
             if started:
                 self._control_timing = timing
                 self._cadence.finished(time.monotonic())
+                if self._output_transport.trace_active():
+                    self._output_transport.trace_record(
+                        "callback_end",
+                        boot=self._motion_core.boot,
+                        core_sequence=self._motion_core.sequence,
+                        clock=self._output_transport.trace_clock(),
+                        timing=timing,
+                        marks=tuple(self._output_transport._trace_marks),
+                    )
+                self._output_transport._trace_marks.clear()
 
     def _stop_guard(self):
         if self._guard_socket is not None:
