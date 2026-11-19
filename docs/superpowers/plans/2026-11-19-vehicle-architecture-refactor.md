@@ -62,7 +62,7 @@ ros2/src/
   senior_motion_control/                   # 已实现：两个 guard、帧、MotionOutput
   senior_sensor_ingress/                   # B1：native_receipt 程序与客户端已归此包，ROS 实测待补
   senior_motion_estimation/                # 本批骨架，下同
-  senior_perception/
+  senior_perception/                       # B2 首片：雷达/解码/补点/相关几何已迁，其他职责待续
   senior_localization/
   senior_mapping/
   senior_navigation/
@@ -86,7 +86,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | C1 已落地：控制输出归包 | 原消息包两个 guard 与旧 Python 输出实现 → `ros2/src/senior_motion_control/` | `3dfd1e0`；保留原 40 字节 ABI、截止/停止屏障与实车/仿真唯一输出调用，安装与环境限制见原验证记录；不代表新 250 ms 协议已实现 |
 | B0 当前：整体骨架 | 无实现搬迁 → 本节实际布局中的两个 Python 项目和五个 ROS 功能包 | 本批只验构建声明、仓库外导入、ROS 包元数据与包发现；骨架提交先由负责人审阅，再继续 B1；ROS/ament 缺失必须登记，不能静态冒充实测 |
 | B1 已迁实现，ROS 实测待补：原生接收 | `senior_motion_msgs/src/native_receipt.cpp`、`senior_robot/senior_robot/native_receipt.py` → `senior_sensor_ingress/src/` 与其 Python 客户端 | 依赖 B0；从 51b25e6 单独交付，程序逐字节迁移，Python 旧入口转发同一客户端；SampleTime/帧龄策略、进程与诊断继续使用原 owner 公开接口；原接收/关停用例移入 ros2/tests，35 项非 ROS 定向通过、10 项 ROS 跳过，真实 typesupport/安装/接收/关停验证尚缺，详见 ros2 README |
-| B2 待迁：感知完整职责 | `senior_robot` 的 sensor decode、collision、learning、`motion_core_perception.py`，及 `src/senior_control/safety/`、`vision/` 中对应执行实现 → `senior_perception` 内部模块 | 依赖 B1；按完整生产链迁移节点/内部算法/状态/接口/原同名用例；原始帧与补点分离，保持旧净距/学习行为；不把管理接收端混入感知 |
+| B2 首片已迁，完整职责待续：感知 | `senior_robot` 的 sensor decode、collision、learning、`motion_core_perception.py`，及 `src/senior_control/safety/`、`vision/` 中对应执行实现 → `senior_perception` 内部模块 | 依赖 B1；首片从 eb4a147 迁雷达节点、解码、原始/补点观测、帧缓存与自身几何到 senior_perception；原组合入口只组装同一节点，38 项通过、14 项 ROS 跳过；学习 owner、碰撞/速度与其他感知职责待后批；详见功能包 README |
 | B3 待迁：运动估计 | `motion_sensor_runtime.py`、`motion_observation_adapter.py` 与现有 `senior_scan_matcher` 调用 → `senior_motion_estimation` | 依赖接入/感知观测接口稳定；保留既有时间/来源和运动历史行为，运行原观测适配、纳秒边界与融合回归；GPS 缺失融合留该模块实现阶段 |
 | B4 待迁：控制完整职责与组合 | `vehicle_arbitration.py`、`vehicle_speed.py`、`motion_core_output.py`、`control_inputs.py` 及现有执行控制逻辑 → `senior_motion_control`；`senior_robot`/`senior_sim` 只选设备/参数/组装 | 依赖 B2/B3 公开结果；MotionCore 只编排，仲裁/速度/业务状态由所属 owner 持有；先迁旧行为并验手动/学习/导航权限退场、原停止屏障及实车/仿真实际装配；新截止/断流算法在该模块阶段另批实现 |
 | B5 待迁并实现：定位与建图 | `src/senior_control/localization/`、`mapping/`、`localization_node.py`、`senior_slam_bridge` 实际调用与 `senior_robot/launch/mapping.launch.py` 组合 → `senior_localization`/`senior_mapping` 及原组合入口 | 依赖接入和本地运动接口；先保留并迁移已有实时建图/地图管理/重定位，随后在本轮实现缺失地图操作、独立 Home、可信定位协作；复用原存储/地图/定位回归，新增功能测试先单独审定；切图未确认不导航或持久写图 |
@@ -171,3 +171,15 @@ B0 骨架阶段这些新目录只有职责 README；B1 已随接收实现迁入�
 现有时间/帧龄、进程/诊断 owner 保留原位；实际 ROS/ament 安装和原生接收仍需对应环境续验。
 已迁入两份原 ROS 接收用例到 `ros2/tests/`，无新增场景；受影响的激光发布原夹具失败在基线复现并单独登记。
 负责人亲审本批后才继续后续职责迁移。
+
+
+### B2 首片记录
+
+从 `eb4a147` 接续 B1，本片迁移雷达接入、解码、原始与补点观测、帧身份缓存和对应几何。
+[senior_perception README](../../../ros2/src/senior_perception/README.md) 列出实际源/目标、公开输入输出、
+节点/算法/接口/测试落点、真实组合与安装依赖及验证命令版本结果。
+原实车/仿真可执行入口只调用迁入节点，沿用既有生命周期；功能包不反向导入组合程序。
+旧 Python 接口显式 Compatible 转发同一实现；学习 owner 和原缓存/模型采用逻辑、净距/速度、
+地图/导航入口与扫描接线不改业务行为。新算法和剩余感知模块仍留各模块后续实施。
+测试按所属功能包/ROS 工作区迁入原用例，原始/补点与缓存消费者的原回归保持；
+真实 ROS 运行未验证，三个旧几何夹具错误已在完整基线复现，不能用 SDK/静态检查声称 ROS 验收。

@@ -16,9 +16,10 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src/senior_control
-      - run: uv run --no-sync pytest tests/unit tests/integration
+      - run: uv run --no-sync pytest tests/unit tests/integration ros2/src/senior_perception/test ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py
       - run: uv build --out-dir dist
       - run: uv build contracts --out-dir dist
+      - run: uv build ros2/src/senior_perception --out-dir dist
       - run: uv build ros2/src/senior_motion_control --out-dir dist
       - run: |
           python -m venv /tmp/wheel-test

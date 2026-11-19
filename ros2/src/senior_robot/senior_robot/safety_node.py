@@ -33,6 +33,7 @@ from senior_motion_msgs.msg import (
 from senior_motion_msgs.msg import (
     DriveExecutionFeedback as DriveFeedbackMessage,
 )
+from senior_perception.raw_safety_observation import RawSafetyObservation
 
 from senior_control.models import Velocity
 from senior_control.motion.source_fences import (
@@ -51,7 +52,6 @@ from senior_control.vision.egress_receipt import (
 from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_robot.motion_lifecycle import MotionExecutor, run
-from senior_robot.raw_safety_observation import RawSafetyObservation
 
 
 class SafetyGate(Node):
@@ -178,12 +178,12 @@ class SafetyGate(Node):
         self._last_control_tick: float | None = None
         self._command_topic = str(self.get_parameter("final_command_topic").value)
         if input_channel is not None:
+            from senior_perception.scan_gap_compensation import ScanGapCompensator
             from tf2_ros import Buffer, TransformListener
 
             from senior_control.runtime.diagnostics import configure_diagnostics
             from senior_robot.motion_observation_adapter import NativeObservationRosBridge
             from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-            from senior_robot.scan_gap_compensation import ScanGapCompensator
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path

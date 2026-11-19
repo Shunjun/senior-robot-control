@@ -18,6 +18,8 @@ def main() -> None:
     from senior_contracts.wire import serialize_envelope, validate_envelope
     from senior_motion_control.motion_output import MotionOutput
     from senior_motion_control.native import native_executable
+    from senior_perception.raw_safety_observation import RawSafetyObservation
+    from senior_perception.scan_access import SensorAccess
 
     from senior_control.errors import DomainError
     from senior_control.errors import ErrorCode as LocalErrorCode
@@ -38,9 +40,16 @@ def main() -> None:
         assert local.__module__.startswith("senior_control."), local
     assert issubclass(LogQuery, QueryDTO)
     assert hasattr(LogQuery, "matches") and not hasattr(QueryDTO, "matches")
+    assert RawSafetyObservation.__module__ == "senior_perception.raw_safety_observation"
+    assert SensorAccess.__module__ == "senior_perception.scan_access"
     assert callable(MotionOutput.publish)
     assert "rclpy" not in sys.modules, "installed imports must not load rclpy"
-    for name in ("senior-contracts", "senior-motion-control", "senior-control"):
+    for name in (
+        "senior-contracts",
+        "senior-motion-control",
+        "senior-perception",
+        "senior-control",
+    ):
         distribution = importlib.metadata.distribution(name)
         assert distribution.version == "0.1.0"
         print(f"installed: {name} {distribution.version}")

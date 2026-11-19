@@ -1,9 +1,13 @@
-
 """Learning client lifecycle, observation adoption and failure facts."""
 
 import json
 import time
 from dataclasses import asdict
+
+from senior_perception.scan_decode import (
+    avoidance_observation,
+    scan_observation,
+)
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionEventKind as K
@@ -15,10 +19,6 @@ from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.startup_visibility import startup_visibility
 from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import capture_from_message
-from senior_robot.motion_core_perception import (
-    avoidance_observation,
-    scan_observation,
-)
 
 
 class LearningRuntime:

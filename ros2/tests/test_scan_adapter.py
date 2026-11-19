@@ -33,7 +33,7 @@ def test_invalid_finite_values_do_not_prove_attachment():
 def test_explicitly_calibrated_empty_self_mask_is_accepted():
     rclpy = pytest.importorskip("rclpy")
     from rclpy.parameter import Parameter
-    from senior_robot.scan_adapter import ScanAdapter
+    from senior_perception.scan_adapter import ScanAdapter
 
     rclpy.init()
     node = ScanAdapter(parameter_overrides=[Parameter("self_mask_calibrated", value=True)])

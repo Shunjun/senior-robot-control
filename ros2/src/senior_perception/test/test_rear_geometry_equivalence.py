@@ -6,12 +6,13 @@ import random
 from pathlib import Path
 
 from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self
+from senior_perception import self_filter
+from senior_perception.self_filter import ScanObservation
 from shapely.geometry import Polygon
 
 from senior_control.config import DeviceProfile
 from senior_control.models import Pose2D
-from senior_control.safety import coverage, self_filter
-from senior_control.safety.self_filter import ScanObservation
+from senior_control.safety import coverage
 
 
 def _profile(masks):
@@ -31,7 +32,7 @@ def _profile(masks):
 
 def _captured_case():
     fixture = json.loads(
-        (Path(__file__).parents[1] / "fixtures/fortress_c12_rear.json").read_text()
+        (Path(__file__).parents[4] / "tests/fixtures/fortress_c12_rear.json").read_text()
     )
     assert fixture["source_capture_sha256"] == (
         "a8f69abee10a2e7aee318ae4bef8afdf56fa9442e8a573b200e88d5231b5795f"

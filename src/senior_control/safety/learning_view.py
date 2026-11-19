@@ -1,7 +1,8 @@
 """Read-only filtering over the completed, frozen reference positions."""
 
+from senior_perception.self_filter import FilteredObservation
+
 from senior_control.motion.learning_record import LearnedCatalog, LearningGeometry
-from senior_control.safety.self_filter import FilteredObservation
 from senior_control.safety.self_learning import SelfReturnModel
 
 

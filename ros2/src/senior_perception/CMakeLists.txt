@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_perception)
 find_package(ament_cmake REQUIRED)
-# Architecture skeleton only: no executable, launch wiring or algorithm target.
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(${PROJECT_NAME})
+# Executable composition stays in senior_robot/senior_sim; no duplicate ROS loop.
 ament_package()

@@ -20,7 +20,7 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
     from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion
-    from senior_robot.scan_adapter import ScanAdapter
+    from senior_perception.scan_adapter import ScanAdapter
     from sensor_msgs.msg import LaserScan
     from test_scan_epoch_live import _room_scan
     from tf2_ros import StaticTransformBroadcaster

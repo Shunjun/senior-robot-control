@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from math import atan2, cos, fsum, isfinite, pi
 from typing import cast
 
+from senior_perception.geometry_bounds import mask_bounds, strictly_disjoint, triangle_bounds
+from senior_perception.self_filter import FilteredObservation, Point2D, RayEvidence
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
-
-from senior_control.safety.geometry_bounds import mask_bounds, strictly_disjoint, triangle_bounds
-from senior_control.safety.self_filter import FilteredObservation, Point2D, RayEvidence
 
 
 @dataclass(frozen=True)

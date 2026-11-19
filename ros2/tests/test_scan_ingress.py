@@ -17,8 +17,8 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
     from senior_motion_msgs.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_perception.safety_scan_ingress import SafetyScanIngress
     from senior_robot.safety_node import SafetyGate
-    from senior_robot.safety_scan_ingress import SafetyScanIngress
     from sensor_msgs.msg import LaserScan
 
     rclpy.init()
@@ -293,9 +293,9 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
 def test_scan_consumers_require_fenced_and_original_bounded_sources():
     rclpy = pytest.importorskip("rclpy")
     from senior_motion_msgs.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_perception.safety_scan_ingress import SafetyScanIngress
+    from senior_perception.scan_adapter import ScanAdapter
     from senior_robot.safety_node import SafetyGate
-    from senior_robot.safety_scan_ingress import SafetyScanIngress
-    from senior_robot.scan_adapter import ScanAdapter
 
     rclpy.init()
     ingress = SafetyScanIngress()

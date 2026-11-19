@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_perception.raw_safety_observation import RawSafetyObservation
+from senior_perception.scan_gap_compensation import ScanGapCompensator
 from senior_robot.motion_core_perception import scan_observation
-from senior_robot.raw_safety_observation import RawSafetyObservation
-from senior_robot.scan_gap_compensation import ScanGapCompensator
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
 from test_startup_learning_chain import LearningRig

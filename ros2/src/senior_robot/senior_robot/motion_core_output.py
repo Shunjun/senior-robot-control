@@ -7,6 +7,8 @@ from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
+from senior_perception.scan_access import SensorAccess
+
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionMode
 from senior_control.runtime.diagnostics import configure_diagnostics
@@ -17,7 +19,6 @@ from senior_robot.vehicle_collision import CollisionPrediction
 from senior_robot.vehicle_compat import OwnedState
 from senior_robot.vehicle_diagnostics import CoreDiagnostics
 from senior_robot.vehicle_learning import LearningRuntime
-from senior_robot.vehicle_sensor_access import SensorAccess
 from senior_robot.vehicle_speed import SpeedCalculation
 
 _OUTPUT_BUDGET_S = 0.25

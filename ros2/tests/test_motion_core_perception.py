@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_perception.raw_safety_observation import RawSafetyObservation
 from senior_robot.motion_core_perception import directional_clearance, limit_velocity
-from senior_robot.raw_safety_observation import RawSafetyObservation
 
 from senior_control.models import Velocity
 
