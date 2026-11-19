@@ -10,12 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from senior_mapping.archive import BundleWaypoint
+from senior_mapping.evidence import CellEvidence
+from senior_mapping.operations import HomeLink
+from senior_mapping.references import AnchoredWaypoint, AnchorSnapshot
+from senior_mapping.store import MapReferenceStore
+
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.archive import BundleWaypoint
-from senior_control.mapping.evidence import CellEvidence
-from senior_control.mapping.operations import HomeLink
-from senior_control.mapping.references import AnchoredWaypoint, AnchorSnapshot
-from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_control.storage.database import Database
 from senior_control.waypoints.store import StoredWaypoint, Waypoint, WaypointStore

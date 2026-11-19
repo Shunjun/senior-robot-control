@@ -4,7 +4,8 @@ Later tasks append their own Migration after this one. They must not renumber
 these statements or add waypoint and schedule tables to version 1.
 """
 
-from senior_control.mapping.operations import OPERATION_JOURNAL_STATEMENTS
+from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS
+
 from senior_control.storage.migrations import Migration
 from senior_control.tasks.store import TASK_STATEMENTS
 from senior_control.waypoints.store import WAYPOINT_STATEMENTS

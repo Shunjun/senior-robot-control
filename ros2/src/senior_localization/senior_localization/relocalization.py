@@ -3,8 +3,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from senior_mapping.archive import Georeference
+
 from senior_control.errors import DomainError
-from senior_control.mapping.archive import Georeference
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_localization.geo import AlignedPose, GeoAlignment, QualifiedFix
 

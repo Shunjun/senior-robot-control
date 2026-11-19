@@ -4,8 +4,9 @@ motion_output_guard remains the only /cmd_vel publisher. Clock and samples are i
 into the adapter; this process does not read a GPS device and does not sleep.
 """
 
+from senior_mapping.archive import Georeference
+
 from senior_control.clock import Clock, SystemClock
-from senior_control.mapping.archive import Georeference
 from senior_control.models import MapRef
 from senior_localization.geo import GeoAlignment, PositionEstimate, QualifiedFix
 from senior_localization.heading import HeadingObservation, HeadingObserver, MotionSample

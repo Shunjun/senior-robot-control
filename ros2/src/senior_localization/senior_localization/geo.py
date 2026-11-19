@@ -8,9 +8,10 @@ This does not insert GPS into the SLAM pose graph.
 import math
 from dataclasses import dataclass
 
+from senior_mapping.archive import Georeference
+
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.archive import Georeference
 
 _WGS84_A = 6_378_137.0
 _WGS84_F = 1.0 / 298.257223563

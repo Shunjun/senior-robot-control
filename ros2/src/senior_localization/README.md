@@ -84,3 +84,12 @@ SLAM 2.6.10、native receipt/graph/capture、AMCL、Linux及实车/仿真建图�
 无 ROS wheel、源码身份、AST 与 launch 替身检查不代替这些实测；SDK 中也不包含 ROS CLI 安装文件。
 未运行全仓测试，不宣称解决 B4 已登记的旧控制夹具失败；原保护/断言保留。
 未启动开发或实车服务、部署或推送，等待负责人亲审后继续后片。
+
+
+## B5.2 地图值消费收尾
+
+geo/relocalization/localization_node/navigation_reference 的地图只读类型与 grid 导入现直接来自 senior_mapping，
+本包声明该实际运行依赖；原定位业务正文、时间/来源/地图代次/质量门、既有 hint/ready 与旧入口不变。
+地图状态和事务由 mapping 持有，schema/数据库/Home 管理仍在原 owner，不将这些业务倒灌定位。
+本片 55 文件、225 passed/2 ROS skipped、4 项合成地图持久回归及 SDK/实际 ROS 限制见
+[地图包 B5.2 记录](../senior_mapping/README.md#命令版本与结果)。

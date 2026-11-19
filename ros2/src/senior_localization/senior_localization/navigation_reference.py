@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+from senior_mapping.workspace import WorkspaceGrid
 
-from senior_control.mapping.workspace import WorkspaceGrid
 from senior_control.models import MapRef, Pose2D
 
 

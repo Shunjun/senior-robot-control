@@ -10,10 +10,10 @@ import pytest
 from senior_localization.geo import GeoAlignment, NavigationPosture, QualifiedFix
 from senior_localization.heading import HeadingObserver, MotionSample
 from senior_localization.relocalization import PoseHint, Relocalizer
+from senior_mapping.archive import Georeference
 
 from senior_control.clock import Clock
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.archive import Georeference
 from senior_control.models import MapRef, OperationStatus, Pose2D, Velocity
 
 ROOT = Path(__file__).resolve().parents[4]

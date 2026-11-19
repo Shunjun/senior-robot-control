@@ -20,8 +20,9 @@ if TYPE_CHECKING:
 from collections.abc import Callable
 from typing import Protocol, cast
 
+from senior_mapping.store import MapReferenceStore
+
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.store import MapReferenceStore
 from senior_control.models import MapRef
 from senior_control.navigation import RouteRejected
 from senior_control.storage.database import Database

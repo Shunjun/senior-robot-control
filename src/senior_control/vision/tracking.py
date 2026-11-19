@@ -9,7 +9,8 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from senior_control.mapping.evidence import HitKind
+from senior_mapping.evidence import HitKind
+
 from senior_control.vision.depth import GeometryObservation
 from senior_control.vision.detector import Detection
 

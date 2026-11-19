@@ -7,10 +7,8 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
-
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.evidence import CellEvidence
-from senior_control.mapping.references import (
+from senior_mapping.evidence import CellEvidence
+from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
@@ -20,10 +18,12 @@ from senior_control.mapping.references import (
     SlamSnapshot,
     anchor_from_graph_marker,
 )
-from senior_control.mapping.store import MapReferenceStore
+from senior_mapping.store import MapReferenceStore
+
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, OperationStatus, Pose2D
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 CELL = 0.5
 MAP = MapRef("home", 1)
 BOX = (1.25, 0.25)

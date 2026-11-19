@@ -20,7 +20,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from senior_control.mapping.workspace import WorkspaceMap
+from senior_mapping.workspace import WorkspaceMap
+
 from senior_control.navigation import RoutePlan
 from senior_control.protocol import (
     SimpleEnvelope,

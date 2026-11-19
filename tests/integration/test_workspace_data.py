@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senior_mapping.workspace import WorkspaceGrid, WorkspaceMap
 
 from senior_control.agent.dispatcher import StoreTaskPort
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.workspace import WorkspaceGrid, WorkspaceMap
 from senior_control.models import MapRef, Pose2D
 from senior_control.protocol import (
     MAX_MESSAGE_BYTES,

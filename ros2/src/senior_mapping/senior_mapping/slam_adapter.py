@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Protocol
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.references import (
+from senior_control.models import OperationResult, OperationStatus, Pose2D
+from senior_mapping.references import (
     AnchorPose,
     AnchorSnapshot,
     GraphNodeMarker,
@@ -17,8 +18,7 @@ from senior_control.mapping.references import (
     SlamSnapshot,
     anchor_from_graph_marker,
 )
-from senior_control.mapping.store import MapReferenceStore
-from senior_control.models import OperationResult, OperationStatus, Pose2D
+from senior_mapping.store import MapReferenceStore
 
 # slam_toolbox/srv/SerializePoseGraph.srv on the 2.6.10 tag.
 SERIALIZE_SERVICE = "/slam_toolbox/serialize_map"

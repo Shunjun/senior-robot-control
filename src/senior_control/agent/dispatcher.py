@@ -16,12 +16,13 @@ from senior_control.runtime.diagnostics import PendingCounter
 
 if TYPE_CHECKING:
     from senior_control.tasks.executor import TaskExecutor
+from senior_mapping.operations import MapOperations
+
 from senior_control.agent.direct_navigation import DirectNavigation
 from senior_control.agent.journal import AgentJournal, JournalEntry
 from senior_control.agent.ports import IpcState
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.operations import MapOperations
 from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_control.observability import Metrics
 from senior_control.protocol import OperationEnvelope, TaskExecutionEnvelope

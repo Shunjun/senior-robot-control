@@ -1523,6 +1523,12 @@ source = { editable = "ros2/src/senior_localization" }
 name = "senior-mapping"
 version = "0.1.0"
 source = { editable = "ros2/src/senior_mapping" }
+dependencies = [
+    { name = "aiosqlite" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "aiosqlite", specifier = ">=0.20,<1" }]
 
 [[package]]
 name = "senior-motion-control"

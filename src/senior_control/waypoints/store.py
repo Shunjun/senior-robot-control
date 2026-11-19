@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import aiosqlite
+from senior_mapping.references import WaypointBinding
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.references import WaypointBinding
 from senior_control.models import MapRef, Pose2D
 from senior_control.navigation import MAX_ROUTE_WAYPOINTS
 from senior_control.storage.database import Database

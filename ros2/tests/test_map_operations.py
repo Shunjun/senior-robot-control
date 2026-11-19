@@ -9,21 +9,22 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.archive import BundleManifest, MapArchive
-from senior_control.mapping.evidence import CellEvidence
-from senior_control.mapping.operations import MapOperations, ProcessCrash
-from senior_control.mapping.references import (
+from senior_mapping.archive import BundleManifest, MapArchive
+from senior_mapping.evidence import CellEvidence
+from senior_mapping.operations import MapOperations, ProcessCrash
+from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
     GridExtent,
     SlamSnapshot,
 )
-from senior_control.mapping.store import MapReferenceStore
+from senior_mapping.store import MapReferenceStore
+
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, OperationStatus, Pose2D
 from senior_control.storage.database import Database
+from senior_control.storage.map_persistence import map_persistence
 
 CELL = 0.5
 _HINT = Pose2D(1.0, 2.0, 0.25)
@@ -212,6 +213,7 @@ def operations_for(
         loader=loader,
         checkpoint=checkpoint,
         fault_after=fault_after,
+        persistence=map_persistence(database),
     )
 
 
@@ -247,7 +249,7 @@ def rewrite_waypoint_map(source: Path, destination: Path, map_id: str) -> None:
 async def test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy(
     tmp_path: Path,
 ) -> None:
-    from senior_control.mapping.workspace_export import load_exported_grid
+    from senior_mapping.workspace_export import load_exported_grid
 
     store = filled_store("building", 5, (0.5, 1.0))
     bundle = tmp_path / "workspace.zip"
@@ -617,6 +619,7 @@ def session_operations(
         loader=loader,
         checkpoint=None,
         fault_after=None,
+        persistence=map_persistence(database),
     )
 
 
@@ -838,6 +841,7 @@ def _operations(
             sensor_summary=(("lidar", "source-description-only"),),
         ),
         Gate(),
+        persistence=map_persistence(database),
         robot_id=robot_id,
         map_root=root / "maps",
         config_dir=root / "config",
@@ -1165,7 +1169,7 @@ async def test_prepare_recovers_active_generation_after_rename_crash(
 ) -> None:
     import os
 
-    from senior_control.mapping.references import durable_move_tree
+    from senior_mapping.references import durable_move_tree
 
     old = filled_store("old", 1, (1.0, 1.0))
     new = filled_store("new", 2, (4.0, 4.0))
@@ -1209,7 +1213,7 @@ async def test_prepare_recovers_active_generation_after_rename_crash(
 async def test_cancelled_graph_switch_waits_for_fence_before_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
-    import senior_control.mapping.operations as operations_module
+    import senior_mapping.operations as operations_module
 
     class AfterEffect(Session):
         def __init__(self, map_ref: MapRef) -> None:
@@ -1418,6 +1422,7 @@ async def test_startup_without_active_requires_verified_backend(tmp_path: Path) 
             robot_id="r",
             map_root=tmp_path / "maps",
             config_dir=tmp_path / "config",
+            persistence=map_persistence(database),
         )
         await ops.prepare()
         assert gate.blocked
@@ -1445,6 +1450,7 @@ async def test_verified_bootstrap_can_reconcile_initial_missing_snapshot(tmp_pat
             robot_id="r",
             map_root=tmp_path / "maps",
             config_dir=tmp_path / "config",
+            persistence=map_persistence(database),
         )
         await ops.prepare()
         with pytest.raises(DomainError) as error:
@@ -1472,6 +1478,7 @@ async def test_startup_blocks_motion_before_waiting_for_database(tmp_path: Path)
             robot_id="r",
             map_root=tmp_path / "maps",
             config_dir=tmp_path / "config",
+            persistence=map_persistence(database),
         )
         await database.write_lock.acquire()
         prepare = asyncio.create_task(ops.prepare())
@@ -1692,6 +1699,7 @@ async def test_startup_rejects_legacy_snapshot_without_same_generation_proof(
             robot_id="r",
             map_root=tmp_path / "maps",
             config_dir=tmp_path / "config",
+            persistence=map_persistence(database),
         )
         await ops.prepare()
         assert gate.blocked

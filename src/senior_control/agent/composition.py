@@ -14,6 +14,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from senior_mapping.workspace_export import load_exported_grid
+
 from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.logs_wire import AgentLogConnection, AgentLogHandler, CloudLogGrants
@@ -31,7 +33,6 @@ from senior_control.agent.snapshots import LiveState, TaskSummary
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.workspace_export import load_exported_grid
 from senior_control.protocol import MotionRuntimeState, RuntimeObservation
 from senior_control.runtime.diagnostics import (
     DiagnosticsSettings,

@@ -11,7 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_control.mapping.evidence import RangeRay
+from senior_mapping.evidence import RangeRay
+
 from senior_control.vision.synchronizer import AlignedRgbdFrame, DepthFrame
 
 ColumnStatus = Literal["hit", "no_obstacle", "invalid"]

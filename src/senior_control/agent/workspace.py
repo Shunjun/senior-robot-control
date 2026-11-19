@@ -5,16 +5,16 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, ValidationError
-
-from senior_control.agent.ports import Requester
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.workspace import (
+from senior_mapping.workspace import (
     MAX_GRID_CELLS,
     MAX_GRID_SIDE,
     TILE_SIZE,
     WorkspaceGrid,
     WorkspaceMap,
 )
+
+from senior_control.agent.ports import Requester
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, Pose2D
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel, WorkspaceEnvelope
 from senior_control.runtime.ipc import IpcError

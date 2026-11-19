@@ -1,6 +1,6 @@
-"""Long-term occupancy evidence, maintenance, and anchored map references."""
+"""//Compatible: historical map values forward the canonical public API."""
 
-from senior_control.mapping.evidence import (
+from senior_mapping.evidence import (
     CellEvidence,
     MapDelta,
     MappingObservation,
@@ -9,15 +9,15 @@ from senior_control.mapping.evidence import (
     RangeRay,
     SceneHit,
 )
-from senior_control.mapping.occupancy import OccupancyMaintainer
-from senior_control.mapping.references import (
+from senior_mapping.occupancy import OccupancyMaintainer
+from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
     ReferenceChange,
     SlamSnapshot,
 )
-from senior_control.mapping.store import MapReferenceStore
+from senior_mapping.store import MapReferenceStore
 
 __all__ = [
     "AnchorPose",

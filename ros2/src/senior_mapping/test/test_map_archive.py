@@ -11,19 +11,19 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping import archive as archive_module
-from senior_control.mapping.archive import MapArchive
-from senior_control.mapping.evidence import CellEvidence
-from senior_control.mapping.references import (
+from senior_mapping import archive as archive_module
+from senior_mapping.archive import MapArchive
+from senior_mapping.evidence import CellEvidence
+from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
     GridExtent,
     SlamSnapshot,
 )
-from senior_control.mapping.store import MapReferenceStore
+from senior_mapping.store import MapReferenceStore
+
+from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, Pose2D
 
 CELL = 0.5
@@ -281,7 +281,7 @@ async def test_waypoint_source_must_match_manifest(tmp_path: Path) -> None:
 
 def test_exported_grid_uses_one_frame_with_the_yaml_origin(tmp_path: Path) -> None:
     """Negative cell indexes stay inside the grid, and the image row is map_server order."""
-    from senior_control.mapping.archive import _write_grid
+    from senior_mapping.archive import _write_grid
 
     store = MapReferenceStore(MAP, "wheel_odom", CELL)
     origin = Pose2D(0.0, 0.0, 0.0)
@@ -317,9 +317,9 @@ def test_exported_grid_uses_one_frame_with_the_yaml_origin(tmp_path: Path) -> No
 
 
 def test_zero_grid_is_not_promoted_to_a_pixel(tmp_path: Path) -> None:
-    from senior_control.mapping.archive import _write_grid
-    from senior_control.mapping.evidence import OccupancySnapshot
-    from senior_control.mapping.references import SlamSnapshot
+    from senior_mapping.archive import _write_grid
+    from senior_mapping.evidence import OccupancySnapshot
+    from senior_mapping.references import SlamSnapshot
 
     snapshot = SlamSnapshot(
         MAP,

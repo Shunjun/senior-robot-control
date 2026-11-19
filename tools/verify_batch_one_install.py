@@ -20,6 +20,9 @@ def main() -> None:
     from senior_localization.heading import HeadingObserver
     from senior_localization.navigation_reference import NavigationReferenceConfig
     from senior_localization.relocalization import Relocalizer
+    from senior_mapping import CellEvidence, MapReferenceStore
+    from senior_mapping.operations import MapOperations, OperationRecord
+    from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS
     from senior_mapping.slam_adapter import SlamAdapter
     from senior_motion_control.motion_output import MotionOutput
     from senior_motion_control.native import native_executable
@@ -34,6 +37,10 @@ def main() -> None:
     from senior_control.localization import GeoAlignment as LegacyGeoAlignment
     from senior_control.localization.heading import HeadingObserver as LegacyHeadingObserver
     from senior_control.localization.relocalization import Relocalizer as LegacyRelocalizer
+    from senior_control.mapping import CellEvidence as LegacyCellEvidence
+    from senior_control.mapping import MapReferenceStore as LegacyMapReferenceStore
+    from senior_control.mapping.operations import MapOperations as LegacyMapOperations
+    from senior_control.mapping.operations import OperationRecord as LegacyOperationRecord
     from senior_control.models import Velocity
     from senior_control.navigation import RoutePlan
     from senior_control.navigation import RouteProgress as LocalRouteProgress
@@ -41,8 +48,18 @@ def main() -> None:
     from senior_control.protocol import serialize_envelope as old_serialize
     from senior_control.protocol import validate_envelope as old_validate
     from senior_control.settings.models import DrivingSettings
+    from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.vehicle_logs.models import LogQuery
     from senior_control.vehicle_logs.wire import LogRequest as LocalLogRequest
+
+    assert LegacyCellEvidence is CellEvidence
+    assert LegacyMapReferenceStore is MapReferenceStore
+    assert LegacyOperationRecord is OperationRecord
+    assert LegacyMapOperations is not MapOperations
+    assert issubclass(LegacyMapOperations, MapOperations)
+    assert LegacyMapOperations.import_bundle is MapOperations.import_bundle
+    assert LegacyMapOperations.reconcile is MapOperations.reconcile
+    assert DOMAIN_MIGRATIONS[0].statements is OPERATION_JOURNAL_STATEMENTS
 
     assert LegacyGeoAlignment is GeoAlignment
     assert LegacyHeadingObserver is HeadingObserver
