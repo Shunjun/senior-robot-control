@@ -4,17 +4,16 @@ from concurrent.futures import Future
 
 import pytest
 from learning_test_support import DOMAIN, ImmediateWorker, TestRun, geometry
-from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.motion.learning_record import (
+from senior_perception.learning_owner import LearningRecordOwner
+from senior_perception.learning_record import (
     MAX_RECORD_BYTES,
     CaptureSummary,
     LearningAction,
     LearningRecord,
     parse_record,
 )
-from senior_control.runtime.learning_owner import LearningRecordOwner
-from senior_control.runtime.learning_store import read_record, write_record
+from senior_perception.learning_store import read_record, write_record
+from test_startup_learning_feasibility import BOUNDARY
 
 
 class HeldWorker:
@@ -97,7 +96,7 @@ def test_corrupt_record_and_duplicate_writer_are_nonfatal_objects(tmp_path):
 
 
 def test_atomic_write_failure_keeps_previous_complete_snapshot(tmp_path, monkeypatch):
-    from senior_control.runtime import learning_store
+    from senior_perception import learning_store
 
     path = tmp_path / (".startup-learning-" + "e" * 32)
     original = LearningRecord(
@@ -200,7 +199,7 @@ def test_completed_catalog_is_published_only_after_commit_and_attach_is_read_onl
         finish_writes(owner, worker)
         readonly, record = owner.begin_consumer()
         assert readonly is None and record.model.points == ((0.0, 0.15), (0.1, 0.1), (0.4, 0.1))
-        from senior_control.runtime.learning_store import attempt_path
+        from senior_perception.learning_store import attempt_path
 
         assert read_record(attempt_path(path, record.attempt_id)).model == record.model
         with pytest.raises(ValueError, match="consumer_identity"):
@@ -215,7 +214,7 @@ def test_completed_catalog_is_published_only_after_commit_and_attach_is_read_onl
 
 
 def test_new_attempt_manifest_and_failed_replacement_preserve_durable_active_model(tmp_path):
-    from senior_control.runtime.learning_store import read_manifest
+    from senior_perception.learning_store import read_manifest
 
     run = TestRun(tmp_path / "keep-active")
     try:
@@ -289,9 +288,10 @@ def test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action(tmp
 
 
 def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(tmp_path):
+    from senior_perception.learning_store import attempt_path
+    from senior_perception.learning_wire import BeginAttempt
+
     from senior_control.protocol import LearningStartPayload
-    from senior_control.runtime.learning_store import attempt_path
-    from senior_control.runtime.learning_wire import BeginAttempt
 
     run = TestRun(tmp_path / "attempts")
     try:
@@ -330,8 +330,9 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
         assert busy.data["state"] == "busy" and busy.data["attempt_id"] == identity
         assert run.owner.record.attempt_id == identity and not run.owner.record.action.consumed
         assert read_record(attempt_path(run.path, old.attempt_id)).action == old.action
+        from senior_perception.learning_wire import QueryAttempt
+
         from senior_control.protocol import LearningStatusPayload
-        from senior_control.runtime.learning_wire import QueryAttempt
 
         queried = run.rpc(QueryAttempt(payload=LearningStatusPayload(attempt_id=old.attempt_id)))
         assert queried.data["phase"] == "failed" and queried.data["reason"] == "control_takeover"
@@ -343,7 +344,7 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
 def test_orphan_without_raw_or_session_finishes_and_late_retirement_cannot_kill_new_attempt(
     tmp_path,
 ):
-    from senior_control.runtime.learning_wire import RetireMotionOwner
+    from senior_perception.learning_wire import RetireMotionOwner
 
     run = TestRun(tmp_path / "orphan")
     try:
@@ -378,9 +379,8 @@ def test_orphan_without_raw_or_session_finishes_and_late_retirement_cannot_kill_
 def test_retirement_settles_earlier_raw_and_closing_fact_before_deciding_incomplete(tmp_path):
     import asyncio
 
+    from senior_perception.learning_wire import MotionObservedThrough, RetireMotionOwner
     from test_learning_compute import opened, recorded, send
-
-    from senior_control.runtime.learning_wire import MotionObservedThrough, RetireMotionOwner
 
     run = TestRun(tmp_path / "retire-in-flight")
     try:

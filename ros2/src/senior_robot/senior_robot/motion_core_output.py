@@ -7,6 +7,8 @@ from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
+from senior_perception.collision import CollisionPrediction
+from senior_perception.learning_runtime import LearningControlInput, LearningPorts, LearningRuntime
 from senior_perception.scan_access import SensorAccess
 
 from senior_control.models import Velocity
@@ -15,10 +17,8 @@ from senior_control.runtime.diagnostics import configure_diagnostics
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.vehicle_arbitration import CommandArbitration
 from senior_robot.vehicle_capabilities import VehicleCapabilities
-from senior_robot.vehicle_collision import CollisionPrediction
 from senior_robot.vehicle_compat import OwnedState
 from senior_robot.vehicle_diagnostics import CoreDiagnostics
-from senior_robot.vehicle_learning import LearningRuntime
 from senior_robot.vehicle_speed import SpeedCalculation
 
 _OUTPUT_BUDGET_S = 0.25
@@ -30,7 +30,6 @@ class MotionCoreOutput:
         self.collision = CollisionPrediction(profile)
         self.speed = SpeedCalculation(profile)
         self.arbitration = CommandArbitration(self)
-        self.learning = LearningRuntime(self)
         self.sensor_access = SensorAccess(self)
         self.diagnostics = None
         self.diagnostics_owner = CoreDiagnostics(self)
@@ -47,8 +46,22 @@ class MotionCoreOutput:
             self._recovery_pending = self._launch_recovered
             self._last_tick = None
             self._output = Velocity(0, 0)
+            self.learning = LearningRuntime(
+                LearningPorts(
+                    get_profile=lambda: self.profile,
+                    get_body_frame=lambda: self.node._body,
+                    scans=lambda: tuple(self.node._scans),
+                    scan_generation=lambda: getattr(self.node, "_scan_generation", None),
+                    wheel_linear=lambda now: self.sensors.wheel_linear(now),
+                    stationary=lambda now: self.sensors.stationary(now),
+                    command_topology_ready=lambda: self.node._command_topology_ready(),
+                    trace=lambda mark: self._trace_mark(mark),
+                    register_close=self._resources.callback,
+                    scan_access=self.sensor_access,
+                )
+            )
             self.diagnostics_owner.initialize()
-            self.learning.initialize()
+            self.learning.initialize(self._learning_control_input())
         except BaseException:
             self._resources.close()
             raise
@@ -85,17 +98,33 @@ class MotionCoreOutput:
         # //Compatible: legacy ROS entry points delegate to the business owner.
         return self.arbitration.release_terminal(*args, **kwargs)
 
-    def _interrupt_learning(self, *args, **kwargs):
-        # //Compatible: legacy ROS entry points delegate to the business owner.
-        return self.learning._interrupt_learning(*args, **kwargs)
+    def _learning_control_input(self):
+        return LearningControlInput(
+            output_boot_id=self.boot,
+            input_boot_id=self._input_boot,
+            generation=self.output_generation,
+            mode=self.machine.state.mode,
+            task_id=self.machine.state.task_id,
+            target_source=self.target.source,
+            target_velocity=self.target.velocity,
+            launch_recovered=self._launch_recovered,
+            recovery_pending=self._recovery_pending,
+            sequence=self.sequence,
+        )
 
-    def _learning_observation(self, *args, **kwargs):
-        # //Compatible: legacy ROS entry points delegate to the business owner.
-        return self.learning._learning_observation(*args, **kwargs)
+    def _apply_learning_request(self, request, now):
+        if self.arbitration.apply_learning_request(request, now):
+            self.learning.applied(request)
 
-    def _remember_learning_failure(self, *args, **kwargs):
-        # //Compatible: legacy ROS entry points delegate to the business owner.
-        return self.learning._remember_learning_failure(*args, **kwargs)
+    def _interrupt_learning(self, reason, now):
+        request = self.learning._interrupt_learning(reason, now, self._learning_control_input())
+        self._apply_learning_request(request, now)
+
+    def _learning_observation(self, now):
+        return self.learning._learning_observation(now, self._learning_control_input())
+
+    def _remember_learning_failure(self, now, error=None):
+        return self.learning._remember_learning_failure(now, self._learning_control_input(), error)
 
     def _scan_key(self, *args, **kwargs):
         # //Compatible: legacy ROS entry points delegate to the business owner.
@@ -105,9 +134,9 @@ class MotionCoreOutput:
         # //Compatible: legacy ROS entry points delegate to the business owner.
         return self.learning._filtered_scan(*args, **kwargs)
 
-    def _startup_target(self, *args, **kwargs):
-        # //Compatible: legacy ROS entry points delegate to the business owner.
-        return self.learning._startup_target(*args, **kwargs)
+    def _startup_target(self, now, observation):
+        request = self.learning._startup_target(now, observation, self._learning_control_input())
+        self._apply_learning_request(request, now)
 
     def revoke(self, *args, **kwargs):
         # //Compatible: legacy ROS entry points delegate to the business owner.

@@ -6,12 +6,11 @@ import time
 from uuid import uuid4
 
 import pytest
+from senior_perception.learning_client import LearningClient, request_once
+from senior_perception.learning_service import LearningService
+from senior_perception.learning_wire import FrameBatch, MotionObservedThrough
 from test_learning_compute import recorded
 from test_startup_learning import side_observation
-
-from senior_control.runtime.learning_client import LearningClient, request_once
-from senior_control.runtime.learning_service import LearningService
-from senior_control.runtime.learning_wire import FrameBatch, MotionObservedThrough
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="requires Linux abstract SEQPACKET and SO_PEERCRED"

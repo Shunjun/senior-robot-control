@@ -34,7 +34,7 @@ class LearningRig:
         monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
         monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
         monkeypatch.setattr(
-            "senior_robot.vehicle_learning.LearningClient",
+            "senior_perception.learning_runtime.LearningClient",
             lambda _, **kwargs: self.run.client(**kwargs),
         )
         monkeypatch.setattr(
@@ -130,8 +130,9 @@ class LearningRig:
         return core.node.emitted[-1][1]
 
     def manual_attempt(self):
+        from senior_perception.learning_wire import BeginAttempt
+
         from senior_control.protocol import LearningStartPayload
-        from senior_control.runtime.learning_wire import BeginAttempt
 
         self.step(self.now + 0.05)
         prepared = barrier("prepared")
@@ -262,7 +263,16 @@ def test_reserved_action_without_submission_is_terminal_when_rear_becomes_occlud
 
 def test_manual_prepared_stops_learning_and_same_run_does_not_resume(rig):
     rig.start()
+    # The learning owner returns a retirement request without changing arbitration.
+    snapshot = rig.core._learning_control_input()
+    previous_target = rig.core.target
+    retirement = rig.core.learning._interrupt_learning("control_takeover", rig.now, snapshot)
+    assert rig.core.target is previous_target
     assert rig.core.command(barrier("prepared"))
+    current_target, sequence = rig.core.target, rig.core.event_sequence
+    # A delayed predecessor cannot retire the newer prepared authority.
+    assert not rig.core.arbitration.apply_learning_request(retirement, rig.now)
+    assert rig.core.target is current_target and rig.core.event_sequence == sequence
     assert rig.core.startup.state == "interrupted"
     assert rig.core.target.velocity == Velocity(0, 0)
     for _ in range(8):
@@ -393,8 +403,9 @@ def test_slow_compute_does_not_extend_motion_and_complete_capture_survives_takeo
 
 
 def test_new_calibration_request_is_rejected_if_core_source_generation_changed(rig):
+    from senior_perception.learning_wire import BeginAttempt
+
     from senior_control.protocol import LearningStartPayload
-    from senior_control.runtime.learning_wire import BeginAttempt
 
     rig.step(rig.now + 0.05)
     prepared = barrier("prepared")
@@ -530,7 +541,7 @@ def checked_current_velocity(core, now, function, *arguments):
 
 
 def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(rig, monkeypatch):
-    from senior_robot import vehicle_learning as motion_core_output
+    from senior_perception import learning_runtime as motion_core_output
     from senior_robot import vehicle_speed
 
     rig.start()
@@ -582,7 +593,8 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
     rig, monkeypatch
 ):
 
-    from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
+    from senior_perception.learning_record import LearnedCatalog, LearningAnchor
+
     from senior_control.safety.learning_view import LearningFilterView
     from senior_control.safety.self_learning import SelfReturnModel
 
@@ -656,7 +668,7 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
 def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning_raw(
     rig, monkeypatch
 ):
-    from senior_robot import vehicle_learning as motion_core_output
+    from senior_perception import learning_runtime as motion_core_output
     from senior_robot import vehicle_speed
     from senior_robot.raw_safety_observation import PredictedReturn
 
@@ -771,7 +783,7 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
 def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_original_facts(
     rig, monkeypatch
 ):
-    from senior_robot import vehicle_learning as motion_core_output
+    from senior_perception import learning_runtime as motion_core_output
     from senior_robot import vehicle_speed
 
     start = rig.start()
@@ -784,7 +796,7 @@ def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_origina
     assert client.view is not None and rig.core.startup.state == "completed"
     assert rig.core.target.source == "idle"
     # The transport fixture lacks the real client's closed-capture observation guard.
-    from senior_control.runtime.learning_client import LearningClient
+    from senior_perception.learning_client import LearningClient
 
     monkeypatch.setattr(
         client,
@@ -905,10 +917,9 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     import os
     import socket
 
+    from senior_perception.startup_learning import StartupLearning
     from senior_robot import vehicle_speed
     from senior_robot.motion_core_perception import scan_observation
-
-    from senior_control.motion.startup_learning import StartupLearning
 
     gc_settings = gc.isenabled(), gc.get_threshold()
     module = request.getfixturevalue("output_module")

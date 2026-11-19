@@ -251,10 +251,10 @@ async def supervise(
     if not headless:
         _desktop_environment()
     root = profile.credentials.parent
-    from senior_control.motion.startup_learning import start_environment
+    from senior_perception.startup_learning import start_environment
 
     env = start_environment(dict(os.environ), root)
-    from senior_control.runtime.learning_service import LearningService
+    from senior_perception.learning_service import LearningService
 
     learning_service = LearningService(Path(env["SENIOR_STARTUP_LEARNING_CLAIM"]))
     env.pop("NOTIFY_SOCKET", None)
@@ -332,7 +332,7 @@ async def supervise(
         await asyncio.sleep(0)
         assert agent is not None
         if ros.returncode is None and agent.returncode is None and not stop.is_set():
-            from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
+            from senior_perception.learning_cleanup import cleanup_old_learning_files
 
             cleanup_old_learning_files(
                 root, env["SENIOR_STARTUP_LEARNING_CLAIM"], peer_lock_name=".agent-service.lock"

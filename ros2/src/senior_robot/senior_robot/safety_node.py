@@ -188,7 +188,7 @@ class SafetyGate(Node):
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path
 
-            from senior_control.runtime.learning_client import LearningFrames
+            from senior_perception.learning_client import LearningFrames
 
             claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
             self._learning_frames = (

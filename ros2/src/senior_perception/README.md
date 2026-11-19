@@ -1,8 +1,8 @@
 # 感知功能包
 
 B2 首片以 `eb4a147` 为基线迁移已有雷达接入、解码、原始/补点观测与相关几何。
-这部分已有实现；学习 owner、碰撞/速度算法、RGB-D 和完整感知职责仍待后批迁移。
-实际 48 个逻辑文件（迁移单计）：产品 25、测试/夹具 12、配置构建 8、工具文档 3。
+首片已迁雷达实现；下文 B2 第二片继续迁入学习 owner/服务与原矩形净距。速度、RGB-D 和其他完整感知职责仍待后批。
+首片实际 48 个逻辑文件（迁移单计）：产品 25、测试/夹具 12、配置构建 8、工具文档 3。
 其中 10 个原测试/辅助文件迁移，ROS conftest 保留旧入口转发同一实现，无新增场景。
 没有新增算法、顶层项目、控制输出或运行功能占位。
 
@@ -46,7 +46,7 @@ vehicle_sensor_decode，scan_access 原名 vehicle_sensor_access），以及原
 这两个模块现在只组装 `run(功能包节点类, cli=True)`，沿用原有界生命周期、信号与关闭顺序。
 ROS 功能包不反向导入 senior_robot，不复制 executor，也不启动第二套 ROS 循环。
 节点类通过本包的 ament Python 安装，senior_robot 清单新增本包运行依赖。
-包内原几何用例通过 ament_cmake_pytest 的 scan_geometry 目标注册到 colcon test。
+包内原几何与学习用例通过 ament_cmake_pytest 的 perception_algorithms 目标注册到 colcon test。
 实车 safety_motion 和仿真 simulation_motion 的 launch、参数、重启监管和扫描重映射保持原值；
 既有 `/scan` 建图/导航链继续沿用原候选/接入程序，原生 scan_receipt 仍归 senior_sensor_ingress。
 
@@ -93,3 +93,74 @@ CI 保留已迁同名非 ROS 用例的收集；root pytest 的测试 helper 路�
 实车/仿真/建图导航运行；静态/无 ROS SDK 验证不代替它们。ROS Humble 环境需
 `colcon build --base-paths ros2/src --packages-up-to senior_robot senior_perception` 后，
 先执行 `colcon test --packages-select senior_perception`，再执行已迁 ROS 回归及原建图/导航入口回归，单独登记实测。没有新增测试场景、部署或推送。
+
+
+## B2 第二片：学习与矩形净距
+
+基线 `3b61157`，只迁既有学习业务与旧矩形净距；不做单次解码、运动补偿、新守卫或其他包迁移。
+实际 40 个逻辑文件：产品 28、测试/辅助 8、配置构建 2、文档 2；迁移原用例，不新增无关场景。
+
+### 实际源、目标与状态 owner
+
+以下目标均在 `senior_perception/` Python 包内，旧路径是标注 Compatible 的同一实现重导出。
+
+| 目标 | 原生产源 | 业务/接口归属 |
+|---|---|---|
+| learning_record.py | src/senior_control/motion/learning_record.py | 原冻结记录、标识、几何与持久模型 DTO，字节上限和序列化约束不变 |
+| startup_learning.py | src/senior_control/motion/startup_learning.py | 原三秒窗口、动作首次提交、一次消耗、接管与阶段投影 |
+| learning_owner.py | src/senior_control/runtime/learning_owner.py | 本 run 持久记录、版本及恢复；沿用原提交 worker |
+| learning_store.py | 同目录 learning_store.py | 原原子落盘、锁、权限/常规文件检查与读取 |
+| learning_service.py | 同目录 learning_service.py | 原 Linux 私有 IPC、peer 身份、有界队列及 owner/计算生命周期 |
+| learning_compute.py | 同目录 learning_compute.py | 原独立 spawn 计算与只读批次、结果、原时间/来源和迟到处理 |
+| learning_wire.py | 同目录 learning_wire.py | 原车内类型与校验，Unix IPC 不转成云车 WS 契约 |
+| learning_client.py | 同目录 learning_client.py | 原只读/动作客户端、采集器、轮询与命令 FIFO |
+| learning_cleanup.py | 同目录 learning_cleanup.py | 原 run 文件清理与锁/目录边界 |
+| learning_runtime.py | senior_robot/vehicle_learning.py | 学习采用、过滤、缓存消费与失败事实；新只读控制输入/请求接口 |
+| collision.py | senior_robot/vehicle_collision.py | 原 DirectionalClearance/CollisionPrediction，旧矩形/时限结果 |
+
+服务、存储、计算、记录、startup、客户端、清理及净距这十份业务 AST 与基线一致（仅 imports 与兼容日志类别除外）。
+学习 Runtime 的边界调整见下节；原模型拟合/可见性函数继续复用现有公开实现，不在本片重写算法。
+实际生产 `docker_start_helper` / `simulation_cli` 仍在原启动、监管和退出时机创建/启动/关闭 LearningService，
+只改为直接引用本功能包；SafetyGate 的 LearningFrames、雷达只读客户端也引用同一 canonical 实现。
+没有新增服务入口、顶层发行项目或绕过原监管的后台服务。原控制 guard、40 字节协议及 ROS launch 保持。
+
+### 学习只读输入、控制应用请求
+
+`LearningControlInput` 是 frozen 值快照：输出 boot、输入 boot、generation、mode/task_id、
+目标来源/不可变 Velocity、恢复标记和轮次。它不携带 mutable target、machine 或 output。
+`LearningPorts` 只提供原观测/配置的只读 getter、所属扫描缓存及 trace/close 生命周期接口，
+不传控制 context。getter 保留原读取时机与动态配置/拓扑观察，不固化启动时的传感器状态。
+
+学习返回 frozen `LearningMotionRequest`（target 或 retire），携带输出/输入 boot 与 generation。
+速度仍为原前向 m/s、零角速度，期限由原 Startup/action 规则解释。
+控制的 CommandArbitration.apply_learning_request 同步核对当前身份，负责 TASK_START/TASK_RETIRED、
+目标和原输出清零；其现有命令/锁存规则保留，旧学习退场不能撤较新的权限。
+成功应用 target 后才通过学习 owner 的 applied 接口确认原 reason，不跨 owner 写学习状态。
+请求仅用于同一控制调用的同步返回/应用，不是排队权限、持久授权或新的运动线协议。
+
+LearningRuntime 不导入 senior_robot，也不读写 context.target/machine/_output 或发控制事件。
+MotionCore 组装 ports、采样输入并调用仲裁应用结果；学习不能直接改控制状态。
+原三秒期限、首次提交前后区别、动作消耗一次、手动接管及同 run 重建不复活、
+迟到计算可提交模型但不续运动，以及原始/补点缓存隔离均保留。
+
+### 测试位置、命令与结果
+
+迁入本包 test/：test_learning_{client,cleanup,record_owner,compute,dual_clock,service_linux}.py，
+以及唯一 learning_test_support.py；真实控制组装用例迁入 ros2/tests/test_startup_learning_chain.py。
+原手动接管用例扩展为先取只读快照/学习退场结果，再用真实 prepared 命令更新权限，
+证明学习返回时未改目标且迟到旧请求不能改新目标/事件序号。断言未删弱，未新增无关场景。
+包内 ament pytest 目标与 backend CI 同步收集这些原用例。
+
+环境：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、Pydantic 2.14.1、NumPy 2.5.4、Shapely 2.2.0、uv 0.12.23、ruff 0.17.3。
+使用原主仓库 .venv/bin/python；基线 archive 位于 /tmp/b22-baseline。
+
+- RED：扩展原接管用例先运行，因 MotionCore 没有只读学习输入接口失败；完成请求接线后通过。
+- `python -m pytest ros2/src/senior_perception/test/test_learning_client.py ros2/src/senior_perception/test/test_learning_cleanup.py ros2/src/senior_perception/test/test_learning_record_owner.py ros2/src/senior_perception/test/test_learning_compute.py ros2/src/senior_perception/test/test_learning_dual_clock.py ros2/src/senior_perception/test/test_learning_service_linux.py ros2/tests/test_startup_learning_chain.py ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py -q`：75 passed、1 skipped；跳过的是 Linux abstract SEQPACKET / SO_PEERCRED 实际服务/线程/spawn 集成，不是以静态检查代替它。
+- `python -m pytest tests/unit/test_task_terminal_release.py tests/unit/test_terminal_native_channel.py -q`：6 passed、27 errors；旧 helper 仍替换不存在的 MotionCoreOutput.ProcessWorker，错误在 setup 发生，完整 3b61157 基线同命令得到相同 6 passed、27 errors。这些原保护和断言均保留，未为通过旧夹具添假属性；旧权限保护还由前述接管用例的真实控制请求路径覆盖。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build ros2/src/senior_perception --offline --out-dir /tmp/b22-wheels` 和根 `uv build`：sdist/wheel 构建通过；`uv pip install --offline --python /tmp/vehicle-batch-one-venv/bin/python --reinstall --no-deps /tmp/b22-wheels/*.whl` 后从 /tmp 导入 canonical/旧路径的 LearningRecord、StartupLearning，身份一致且不加载 ROS。服务仍需原 safety 依赖与 Linux 运行环境。
+- 逐份 AST 核对十份未改业务实现、兼容入口身份与无反向 senior_robot 导入；定向 ruff check/format、git diff --check 通过。Root 运行保护、启动时机和持久文件名/格式/权限/锁未改。
+
+未验证：实际 ROS 构建/安装、实车或仿真运行；本机无 colcon/CMake/rclpy/ament。
+实际 Linux 私有 IPC/peer credential/计算子进程全链未运行；已有 Linux 用例保留待目标环境执行。
+原终端/原生身份通道用例被基线夹具阻断，不宣称该全链已通过。
+没有启动开发/实车服务、部署或推送。后续算法与其他功能包须另批实施。

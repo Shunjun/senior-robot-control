@@ -4,11 +4,11 @@ import math
 
 import pytest
 from learning_test_support import TestRun, geometry
+from senior_perception.learning_compute import ComputeBatch, LearningKernel
+from senior_perception.learning_wire import FrameBatch, MotionObservedThrough, RecordedFrame
 from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.runtime.learning_compute import ComputeBatch, LearningKernel
-from senior_control.runtime.learning_wire import FrameBatch, MotionObservedThrough, RecordedFrame
 from senior_control.vision.raw_capture import RawCaptureHeader
 
 

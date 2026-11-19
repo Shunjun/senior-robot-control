@@ -422,8 +422,8 @@ async def supervise(
         camera_stack: asyncio.subprocess.Process | None = None
         adapter_identity: list[int] | None = None
         robot_id = read_credentials(root / "device.json").robot_id if profile is not None else ""
-        from senior_control.motion.startup_learning import start_environment
-        from senior_control.runtime.learning_service import LearningService
+        from senior_perception.learning_service import LearningService
+        from senior_perception.startup_learning import start_environment
 
         environment = start_environment(environment, root)
         learning_service = LearningService(Path(environment["SENIOR_STARTUP_LEARNING_CLAIM"]))
@@ -504,7 +504,7 @@ async def supervise(
                 and all(child.returncode is None for child in (process, adapter, motion_stack))
                 and not stopping.is_set()
             ):
-                from senior_control.runtime.learning_cleanup import cleanup_old_learning_files
+                from senior_perception.learning_cleanup import cleanup_old_learning_files
 
                 cleanup_old_learning_files(
                     root,

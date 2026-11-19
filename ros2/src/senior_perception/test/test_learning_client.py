@@ -4,13 +4,12 @@ import threading
 import time
 
 from learning_test_support import TestRun, geometry
+from senior_perception import learning_client
+from senior_perception.learning_record import CaptureSummary
+from senior_perception.learning_wire import Reply, State
 from test_learning_record_owner import HeldWorker, finish_writes
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.motion.learning_record import CaptureSummary
-from senior_control.runtime import learning_client
-from senior_control.runtime.learning_wire import Reply, State
 
 
 def wire_owner(monkeypatch, run):
@@ -126,11 +125,11 @@ def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_pat
     from dataclasses import asdict
     from types import SimpleNamespace as N
 
+    from senior_perception.learning_wire import BeginAttempt
     from sensor_time_test_support import capture_fields
     from test_learning_compute import recorded
 
     from senior_control.protocol import LearningStartPayload
-    from senior_control.runtime.learning_wire import BeginAttempt
 
     run = TestRun(tmp_path / "sender-switch")
     _, lock = wire_owner(monkeypatch, run)
@@ -193,8 +192,9 @@ def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_pat
 def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durable(
     tmp_path, monkeypatch
 ):
+    from senior_perception.learning_wire import BeginAttempt
+
     from senior_control.protocol import LearningStartPayload
-    from senior_control.runtime.learning_wire import BeginAttempt
 
     run = TestRun(tmp_path / "live-client-next")
     requests, lock = wire_owner(monkeypatch, run)

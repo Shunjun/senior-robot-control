@@ -5,10 +5,10 @@ from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
+from senior_perception.learning_owner import LearningRecordOwner
+from senior_perception.startup_learning import StartupLearning
 from sensor_time_test_support import sample_time
 
-from senior_control.motion.startup_learning import StartupLearning
-from senior_control.runtime.learning_owner import LearningRecordOwner
 from senior_control.safety.learning_view import LearningFilterView
 
 DOMAIN = "00000000-0000-0000-0000-000000000001"
@@ -31,7 +31,7 @@ class InlineCompute:
     """Transport substitute only; actual stateful learning kernel stays unchanged."""
 
     def __init__(self):
-        from senior_control.runtime.learning_compute import LearningKernel
+        from senior_perception.learning_compute import LearningKernel
 
         self.kernel = LearningKernel()
         self.flight = None
@@ -52,7 +52,7 @@ class TestRun:
     __test__ = False
 
     def __init__(self, label):
-        from senior_control.runtime.learning_service import LearningService
+        from senior_perception.learning_service import LearningService
 
         identity = hashlib.sha256(str(label).encode()).hexdigest()[:32]
         self.path = Path(label).parent / (".startup-learning-" + identity)
@@ -86,15 +86,15 @@ class TestRun:
         from collections import deque
         from unittest.mock import patch
 
-        from senior_control.runtime.learning_client import LearningFrames
-        from senior_control.runtime.learning_wire import FrameBatch
+        from senior_perception.learning_client import LearningFrames
+        from senior_perception.learning_wire import FrameBatch
 
         recorder = object.__new__(LearningFrames)
         recorder.profile, recorder.body_frame = self.profile, "base_link"
         recorder._index, recorder._frames = self.index, deque()
         recorder._lock, recorder._gap = threading.Lock(), False
         with patch(
-            "senior_control.runtime.learning_client.time.monotonic_ns",
+            "senior_perception.learning_client.time.monotonic_ns",
             return_value=round(raw.received * 1e9),
         ):
             recorder.offer(raw)
@@ -111,7 +111,7 @@ class TestRun:
         return batch
 
     def heartbeat(self, now_ns):
-        from senior_control.runtime.learning_wire import FrameBatch
+        from senior_perception.learning_wire import FrameBatch
 
         if not self.hold_ingress:
             self.service._accept_frames(
@@ -209,7 +209,7 @@ class InProcessClient:
             self.poll()
 
     def phase(self, phase, reason, segment_id=None):
-        from senior_control.runtime.learning_wire import PhaseReport
+        from senior_perception.learning_wire import PhaseReport
 
         if self.session is not None:
             self.run.rpc(
@@ -224,7 +224,7 @@ class InProcessClient:
     def observed(
         self, *, segment_id, now_ns, validation_after_ns, first_takeover_ns, stationary, reason=None
     ):
-        from senior_control.runtime.learning_wire import MotionObservedThrough
+        from senior_perception.learning_wire import MotionObservedThrough
 
         if self.session is not None:
             self.run.rpc(
@@ -243,7 +243,7 @@ class InProcessClient:
         self.poll()
 
     def bind_attempt(self, attempt_id, output_boot_id, generation):
-        from senior_control.runtime.learning_wire import Attach
+        from senior_perception.learning_wire import Attach
 
         if self.session is None:
             reply = self.run.rpc(
@@ -253,7 +253,7 @@ class InProcessClient:
         return self.ready
 
     def retire_motion_owner(self, record, output_boot_id):
-        from senior_control.runtime.learning_wire import RetireMotionOwner
+        from senior_perception.learning_wire import RetireMotionOwner
 
         self.run.rpc(
             RetireMotionOwner(
@@ -267,7 +267,7 @@ class InProcessClient:
         return True
 
     def decline_attempt(self, record, output_boot_id, reason):
-        from senior_control.runtime.learning_wire import DeclineAttempt
+        from senior_perception.learning_wire import DeclineAttempt
 
         self.run.rpc(
             DeclineAttempt(
@@ -277,7 +277,7 @@ class InProcessClient:
         return True
 
     def accept_attempt(self, accepted, reason):
-        from senior_control.runtime.learning_wire import AcceptAttempt
+        from senior_perception.learning_wire import AcceptAttempt
 
         self.run.rpc(
             AcceptAttempt(
@@ -339,7 +339,7 @@ def geometry(
     range_min=0.05,
     range_max=5.0,
 ):
-    from senior_control.motion.learning_record import LearningGeometry
+    from senior_perception.learning_record import LearningGeometry
 
     return LearningGeometry(
         body_frame="base_link",
@@ -366,8 +366,8 @@ def begin_action(startup, now):
 
 
 def write_geometry_record(path, boundary):
-    from senior_control.motion.learning_record import LearningRecord
-    from senior_control.runtime.learning_store import write_record
+    from senior_perception.learning_record import LearningRecord
+    from senior_perception.learning_store import write_record
 
     record = LearningRecord(
         run_id="f" * 32,

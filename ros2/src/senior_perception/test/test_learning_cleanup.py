@@ -7,8 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 import pytest
-
-from senior_control.runtime import learning_cleanup as cleanup
+from senior_perception import learning_cleanup as cleanup
 
 CURRENT = ".startup-learning-" + "a" * 32
 OLD = ".startup-learning-" + "b" * 32
@@ -214,14 +213,14 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
         Path(claim).write_text("current claim retained")
 
     monkeypatch.setattr(helper, "IpcServer", Server)
-    monkeypatch.setattr("senior_control.runtime.learning_service.LearningService", Server)
+    monkeypatch.setattr("senior_perception.learning_service.LearningService", Server)
     monkeypatch.setattr(helper, "_prepare_socket", prepare)
     monkeypatch.setattr(helper, "_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(helper, "read_credentials", lambda *args: N(robot_id="robot"))
     monkeypatch.setattr(helper, "_adapter_command", lambda *args: ["adapter"])
     monkeypatch.setattr(helper, "_motion_command", lambda *args: ["motion"])
     monkeypatch.setattr(helper, "_ros_launch_command", lambda *args: ["camera"])
-    monkeypatch.setattr("senior_control.runtime.learning_service.LearningService", Server)
+    monkeypatch.setattr("senior_perception.learning_service.LearningService", Server)
     monkeypatch.setattr(helper, "_wait_for_adapter", ready)
     monkeypatch.setattr(helper, "_terminate_motion_stack", terminate)
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
@@ -285,7 +284,7 @@ async def test_simulation_boundary_preserves_failures_and_cleans_once(
         original(root, claim, **kwargs)
         stop.set()
 
-    monkeypatch.setattr("senior_control.runtime.learning_service.LearningService", Server)
+    monkeypatch.setattr("senior_perception.learning_service.LearningService", Server)
     monkeypatch.setattr(helper, "_wait_for_adapter", ready)
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(helper, "_stop", terminate)

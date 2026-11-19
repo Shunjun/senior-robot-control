@@ -2,7 +2,7 @@
 
 import math
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from senior_motion_control.final_command_frame import PAYLOAD_FIELDS
 
@@ -11,6 +11,9 @@ from senior_control.motion.contracts import MotionEvent, MotionMode, MotionTarge
 from senior_control.motion.contracts import MotionEventKind as K
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.state_machine import MotionStateMachine
+
+if TYPE_CHECKING:
+    from senior_perception.learning_runtime import LearningMotionRequest
 
 
 class CommandArbitration:
@@ -347,6 +350,36 @@ class CommandArbitration:
             )
         self.target = MotionTarget(Velocity(0, 0), "idle", self.context.boot, None)
         self.context._output = Velocity(0, 0)
+
+    def apply_learning_request(self, request: "LearningMotionRequest | None", now: float) -> bool:
+        """A learning result cannot transfer authority or retire a newer producer."""
+        if request is None or (
+            request.output_boot_id != self.context.boot
+            or request.input_boot_id != self._input_boot
+            or request.generation != self.output_generation
+        ):
+            return False
+        if request.kind == "retire":
+            if self.machine.state.task_id == self.context.boot:
+                self._event(K.TASK_RETIRED, now, self.context.boot)
+            if self.target.source == "startup_learning":
+                self.target = MotionTarget(Velocity(0, 0), "idle", self.context.boot, None)
+                self.context._output = Velocity(0, 0)
+            return True
+        if (
+            request.kind != "target"
+            or self.target.source not in {"idle", "startup_learning"}
+            or self.machine.state.mode in {MotionMode.ESTOP, MotionMode.EXECUTION_FAULT}
+        ):
+            return False
+        if self.machine.state.task_id != self.context.boot:
+            self._event(K.TASK_START, now, self.context.boot)
+        if self.machine.state.task_id != self.context.boot:
+            return False
+        self.target = MotionTarget(
+            Velocity(request.velocity, 0), "startup_learning", self.context.boot, None
+        )
+        return True
 
     def initialize(self):
         self.machine = MotionStateMachine()
