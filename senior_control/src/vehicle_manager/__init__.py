@@ -1,1 +1,1 @@
-"""车端管理架构骨架；尚无迁入的生产实现或可执行入口。"""
+"""Vehicle management owners; settings are implemented, other modules await migration."""

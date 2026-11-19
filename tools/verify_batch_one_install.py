@@ -28,6 +28,9 @@ def main() -> None:
     from senior_motion_control.native import native_executable
     from senior_perception.raw_safety_observation import RawSafetyObservation
     from senior_perception.scan_access import SensorAccess
+    from vehicle_manager.settings.models import DrivingSettings
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
 
     from senior_control.errors import DomainError
     from senior_control.errors import ErrorCode as LocalErrorCode
@@ -47,7 +50,10 @@ def main() -> None:
     from senior_control.protocol import MotionRuntimeState
     from senior_control.protocol import serialize_envelope as old_serialize
     from senior_control.protocol import validate_envelope as old_validate
-    from senior_control.settings.models import DrivingSettings
+    from senior_control.settings.models import DrivingSettings as LegacyDrivingSettings
+    from senior_control.settings.service import RuntimeGate as LegacyRuntimeGate
+    from senior_control.settings.service import SettingsService as LegacySettingsService
+    from senior_control.settings.store import SettingsStore as LegacySettingsStore
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.vehicle_logs.models import LogQuery
     from senior_control.vehicle_logs.wire import LogRequest as LocalLogRequest
@@ -74,8 +80,53 @@ def main() -> None:
     assert LocalRouteProgress is RouteProgress and LocalErrorCode is ErrorCode
     assert LocalLogRequest is LogRequest
     assert old_serialize is serialize_envelope and old_validate is validate_envelope
-    for local in (DomainError, Velocity, RoutePlan, MotionRuntimeState, DrivingSettings):
+    for local in (DomainError, Velocity, RoutePlan, MotionRuntimeState):
         assert local.__module__.startswith("senior_control."), local
+    assert DrivingSettings.__module__ == "vehicle_manager.settings.models"
+    assert LegacyDrivingSettings is DrivingSettings
+    assert LegacySettingsService is SettingsService
+    assert LegacyRuntimeGate is RuntimeGate
+    assert LegacySettingsStore is SettingsStore
+    manager = importlib.import_module("vehicle_manager")
+    assert (Path(manager.__file__).parent / "py.typed").is_file()
+    assert all(
+        not any(
+            name in dependency.lower()
+            for name in (
+                "senior-control",
+                "senior-robot",
+                "rclpy",
+                "vehicle-cloud",
+                "senior-motion",
+                "senior-perception",
+                "senior-localization",
+                "senior-mapping",
+            )
+        )
+        for dependency in importlib.metadata.requires("vehicle-manager") or []
+    )
+    # Import isolation must be checked before any other installed SDK code runs.
+    import subprocess
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from senior_control.settings.models import DrivingSettings; "
+                "from vehicle_manager.settings.models import DrivingSettings as New; "
+                "assert DrivingSettings is New; "
+                "assert 'vehicle_manager.settings.service' not in sys.modules; "
+                "assert 'vehicle_manager.settings.store' not in sys.modules; "
+                "assert 'senior_control.storage.database' not in sys.modules; "
+                "from senior_control import settings as old; "
+                "from vehicle_manager import settings as new; "
+                "assert old.RuntimeGate is new.RuntimeGate; "
+                "assert old.SettingsService is new.SettingsService"
+            ),
+        ],
+        check=True,
+    )
     assert issubclass(LogQuery, QueryDTO)
     assert hasattr(LogQuery, "matches") and not hasattr(QueryDTO, "matches")
     assert RawSafetyObservation.__module__ == "senior_perception.raw_safety_observation"
@@ -89,6 +140,7 @@ def main() -> None:
         "senior-motion-control",
         "senior-perception",
         "senior-control",
+        "vehicle-manager",
     ):
         distribution = importlib.metadata.distribution(name)
         assert distribution.version == "0.1.0"

@@ -2,15 +2,15 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-
-from senior_control.settings.models import (
+from vehicle_manager.settings.models import (
     DrivingSettings,
     LoggingSettings,
     SettingsProfile,
     SettingsRequest,
 )
-from senior_control.settings.service import RuntimeGate, SettingsService
-from senior_control.settings.store import SettingsStore
+from vehicle_manager.settings.service import RuntimeGate, SettingsService
+from vehicle_manager.settings.store import SettingsStore
+
 from senior_control.storage.database import Database
 
 
@@ -154,7 +154,7 @@ async def test_debug_deadline_original_level_and_restart(tmp_path):
 
 
 async def test_commit_excludes_runtime_transition_and_settles_cancellation(tmp_path):
-    from senior_control.settings.service import RuntimeCheck
+    from vehicle_manager.settings.service import RuntimeCheck
 
     class PausingStore(SettingsStore):
         async def write_snapshot(self, connection, snapshot):
@@ -410,7 +410,7 @@ async def test_second_writer_cannot_overwrite_published_owner(tmp_path):
 
 
 async def test_injected_runtime_observation_is_evaluated_under_guard_at_submit(tmp_path):
-    from senior_control.settings.service import RuntimeCheck
+    from vehicle_manager.settings.service import RuntimeCheck
 
     evidence = [RuntimeCheck(stationary=True, executing_motion_task=False)]
     gate = RuntimeGate(observe=lambda: evidence[0])
@@ -450,7 +450,7 @@ async def test_published_image_is_immutable_and_io_free_during_pending_commit(tm
 async def test_degraded_preference_migrates_saves_reads_and_survives_restart(tmp_path):
     import json
 
-    from senior_control.settings.models import vehicle_settings_profile
+    from vehicle_manager.settings.models import vehicle_settings_profile
 
     path = tmp_path / "old-settings.db"
     policy = vehicle_settings_profile()
@@ -498,7 +498,7 @@ async def test_degraded_preference_migrates_saves_reads_and_survives_restart(tmp
 
 @pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf"), True, "0.2", 2])
 async def test_degraded_preference_rejects_invalid_or_out_of_policy_values(tmp_path, value):
-    from senior_control.settings.models import vehicle_settings_profile
+    from vehicle_manager.settings.models import vehicle_settings_profile
 
     policy = vehicle_settings_profile()
     async with Database(tmp_path / "settings.db") as db:

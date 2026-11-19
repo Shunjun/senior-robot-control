@@ -1449,6 +1449,7 @@ dependencies = [
     { name = "senior-motion-estimation" },
     { name = "senior-perception" },
     { name = "vehicle-cloud" },
+    { name = "vehicle-manager" },
 ]
 
 [package.optional-dependencies]
@@ -1501,6 +1502,7 @@ requires-dist = [
     { name = "senior-perception", editable = "ros2/src/senior_perception" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
     { name = "vehicle-cloud", editable = "cloud" },
+    { name = "vehicle-manager", editable = "senior_control" },
     { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
 ]
 provides-extras = ["safety", "ros", "agent", "cloud", "video"]
@@ -1868,6 +1870,21 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'server'", specifier = "==15.0.1" },
 ]
 provides-extras = ["server"]
+
+[[package]]
+name = "vehicle-manager"
+version = "0.1.0"
+source = { editable = "senior_control" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20,<1" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
+]
 
 [[package]]
 name = "websockets"
