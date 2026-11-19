@@ -119,7 +119,7 @@ class LearningService:
             if record.geometry is None:
                 owner._revise(geometry=frame.geometry)
                 record = owner.record
-            elif record.geometry != frame.geometry:
+            elif not record.geometry.same_structure(frame.geometry):
                 self.gap = True
             if len(self.frames) >= 128:
                 self.gap = True

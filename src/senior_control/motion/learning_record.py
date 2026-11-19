@@ -47,6 +47,14 @@ class LearningGeometry(FrozenFact):
             raise ValueError("learning_geometry_range")
         return self
 
+    def same_structure(self, other: "LearningGeometry") -> bool:
+        """Compare scan layout; the actual sensor pose belongs to each capture."""
+        return all(
+            getattr(self, name) == getattr(other, name)
+            for name in type(self).model_fields
+            if name != "sensor_to_body"
+        )
+
     @property
     def digest(self) -> str:
         payload = json.dumps(

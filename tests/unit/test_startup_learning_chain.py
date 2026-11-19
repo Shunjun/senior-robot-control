@@ -15,6 +15,7 @@ from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
+from test_native_output_protocol import output_module  # noqa: F401
 
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionMode
@@ -339,7 +340,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
 
     def exhaust_current_frame(*args, **kwargs):
         output = original_limit(*args, **kwargs)
-        rig.now += 0.151  # Exhaust this calculation's unchanged 150 ms output budget.
+        rig.now += 0.251  # Exhaust this calculation's 250 ms output budget.
         return output
 
     with monkeypatch.context() as stalled:
@@ -347,7 +348,7 @@ def test_expired_candidate_after_first_submission_keeps_original_grant_and_windo
         assert rig.step(entered) == Velocity(0, 0)
     expired = rig.core.node.emitted[-1]
     assert expired[2] == "learning_output_expired"
-    assert expired[3] == entered + 0.15 < expired[0] < deadline
+    assert expired[3] == entered + 0.25 < expired[0] < deadline
     assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
     assert rig.core.startup.action_permitted and not rig.core.startup.motion_withdrawn
     assert rig.run.owner._reservation == grant
@@ -561,7 +562,7 @@ def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(
         rig.core.node._scans.append(rebuilt)
         velocities.append(rig.step(rig.now + 0.05, new_scan=False))
         deadlines.append(rig.core.node.emitted[-1][3])
-        assert deadlines[-1] == rig.now + 0.15
+        assert deadlines[-1] == rig.now + 0.25
         actual = rig.core._scan_results[0][3]
         assert_original_scan_result(rig.core, rebuilt, actual, rig.now)
     assert calls == ["decode", "filter"]
@@ -616,14 +617,21 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
     check(source)
     payload = pickle.loads(pickle.dumps(source))
     payload.message.ranges[0] += 0.1  # Same capture identity; the value snapshot still invalidates.
-    check(payload)
-    rig.core.startup.hold_motion("scan_temporarily_unavailable")
-    assert not rig.core.startup.provisional
-    check(payload)
+    before_transform = check(payload)
+    model = rig.core.self_returns
     transformed = pickle.loads(pickle.dumps(payload))
     transformed.message.sensor_x += 0.01
     transformed.message.transform_stamp += 0.01
+    after_transform = check(transformed)
+    assert after_transform.rays[0].endpoint != before_transform.rays[0].endpoint
+    assert rig.core.startup.provisional and rig.core.self_returns is model
+    assert rig.core._learning_geometry.sensor_to_body[0] == transformed.message.sensor_x
+    rig.core.startup.hold_motion("scan_temporarily_unavailable")
+    assert not rig.core.startup.provisional
     check(transformed)
+    layout = pickle.loads(pickle.dumps(transformed))
+    layout.message.angle_min += 0.01
+    check(layout)
     assert rig.core.startup.reason == "scan_or_body_geometry_changed"
 
     client = rig.core._learning_client
@@ -711,3 +719,348 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
     assert raw.message.ranges[0] == math.inf and original.scan.ranges[0] == math.inf
     assert batches[0].frames[0].ranges[0] == "inf"
     assert batches[0].frames[0].capture == capture_from_message(raw.message.raw_capture)
+
+
+def test_async_incomplete_before_submission_retires_target_without_consuming(rig, monkeypatch):
+    reservations = []
+    reserve = rig.run.owner.reserve_action
+    monkeypatch.setattr(
+        rig.run.owner,
+        "reserve_action",
+        lambda session: (reservations.append(session), reserve(session))[1],
+    )
+    rig.step(rig.now + 0.05)
+    assert rig.core.startup.state == "sampling"
+    action = rig.run.owner.record.action
+    rig.run.service.gap = True
+    rig.run.pump()
+    assert rig.run.owner.record.reason == "learning_stream_incomplete"
+    for _ in range(3):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+        assert not rig.core.startup.active
+        assert rig.core.startup.reason == "learning_stream_incomplete"
+        assert rig.core.target.source == "idle" and rig.core.machine.state.task_id is None
+    assert rig.run.owner.record.action == action and not action.consumed
+    assert reservations == []
+
+
+def test_async_failure_after_submission_preserves_window_then_projects_terminal(rig):
+    start = rig.start()
+    deadline = rig.core.startup.deadline
+    grant = rig.run.owner._reservation
+    rig.run.service.gap = True
+    rig.run.pump()
+    assert rig.run.owner.record.phase == "failed"
+    while rig.now + 0.05 < deadline:
+        assert rig.step(rig.now + 0.05, wheel=0.05).vx > 0
+        assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+        assert rig.run.owner._reservation == grant
+    assert rig.step(deadline) == Velocity(0, 0)
+    assert rig.core.startup.reason == "learning_stream_incomplete"
+    assert not rig.core.startup.active and rig.core.target.source == "idle"
+    action = rig.run.owner.record.action
+    assert action.stage == "window_finished"
+    assert action.first_submitted_steady_ns == round(start * 1e9)
+    assert action.deadline_steady_ns == round(deadline * 1e9)
+    assert rig.step(deadline + 0.05) == Velocity(0, 0)
+    assert rig.run.owner.record.action == action
+
+
+def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_original_facts(
+    rig, monkeypatch
+):
+    from senior_robot import motion_core_output
+
+    start = rig.start()
+    while rig.now + 0.05 < start + 3:
+        rig.step(rig.now + 0.05, wheel=0.05)
+    rig.step(start + 3)
+    for _ in range(8):
+        rig.step(rig.now + 0.05)
+    client = rig.core._learning_client
+    assert client.view is not None and rig.core.startup.state == "completed"
+    assert rig.core.target.source == "idle"
+    # The transport fixture lacks the real client's closed-capture observation guard.
+    from senior_control.runtime.learning_client import LearningClient
+
+    monkeypatch.setattr(
+        client,
+        "observed",
+        lambda **kwargs: LearningClient.observed(
+            SimpleNamespace(
+                read_only=client.read_only, _session=client.session, _record=client.record
+            ),
+            **kwargs,
+        ),
+    )
+    calls = dict(poll=0, advance=0, decode=0, filter=0)
+
+    def counted(name, function):
+        def call(*args, **kwargs):
+            calls[name] += 1
+            return function(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(client, "poll", counted("poll", client.poll))
+    monkeypatch.setattr(rig.core.startup, "advance", counted("advance", rig.core.startup.advance))
+    monkeypatch.setattr(
+        motion_core_output,
+        "scan_observation",
+        counted("decode", motion_core_output.scan_observation),
+    )
+    monkeypatch.setattr(client.view, "filter", counted("filter", client.view.filter))
+    for _ in range(3):
+        assert rig.step(rig.now + 0.05) == Velocity(0, 0)
+    assert calls["poll"] >= 3  # The in-process record property also pumps replies.
+    assert calls["advance"] == 3 and calls["decode"] == calls["filter"] == 0
+    assert rig.core.startup.state == "completed" and rig.core.machine.state.task_id is None
+
+    assert rig.core.command(barrier("prepared"))
+    intent = barrier("intent")
+    intent.received_steady, intent.steady_deadline = rig.now, rig.now + 5
+    intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = 1, 0.05, 0.05
+    intent.vx = 0.05
+    assert rig.core.command(intent)
+    limit = motion_core_output.limit_velocity
+    monkeypatch.setattr(
+        motion_core_output,
+        "limit_velocity",
+        lambda *args: checked_current_velocity(rig.core, rig.now, limit, *args),
+    )
+    assert rig.step(rig.now + 0.05).vx > 0
+    assert calls["decode"] == calls["filter"] == 1
+    raw = rig.core.node._scans[-1]
+    filtered = rig.core._scan_results[0][3]
+    clearance = assert_original_scan_result(rig.core, raw, filtered, rig.now)
+    assert rig.core.node.emitted[-1][3] == min(
+        rig.now + 0.25, intent.steady_deadline, clearance.deadline
+    )
+    assert rig.step(clearance.deadline + 1e-6, new_scan=False) == Velocity(0, 0)
+    assert rig.core.target.source == "manual" and rig.core.startup.state == "completed"
+
+
+def test_started_filter_failure_is_sticky_in_status_without_changing_hold(rig, monkeypatch):
+    from senior_control.vision.raw_capture import capture_from_message
+
+    start = rig.start()
+    deadline, reason = rig.core.startup.deadline, rig.core.startup.reason
+    now = rig.now + 0.05
+
+    def fail_filter(*_args, **_kwargs):
+        raise ValueError("deliberate filter boundary failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(rig.core.self_returns, "filter", fail_filter)
+        assert rig.step(now) == Velocity(0, 0)
+    assert rig.core.startup.state == "braking" and rig.core.startup.motion_withdrawn
+    assert rig.core.startup.reason == "learning_scan_unavailable"
+    assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
+    selected = rig.core.node._scans[-1]
+    statuses = []
+    monkeypatch.setattr(rig.core._runtime, "status", statuses.append)
+    value = dict(
+        body="base_link",
+        reason="learning_scan_unavailable",
+        values={"timing.sampled_steady": str(now - 0.05), "timing.tick_ms": "1.2"},
+    )
+    rig.core.report_status(value)
+    assert "learning_failure" not in value["values"]
+    fact = json.loads(statuses[-1]["values"]["learning_failure"])
+    assert fact["boot"] == rig.core.boot and fact["sequence"] == rig.core.sequence
+    assert fact["now"] == now and fact["stage"] == "filter"
+    assert fact["exception"] == dict(
+        type="ValueError", message="deliberate filter boundary failure"
+    )
+    assert fact["selected_count"] == len(rig.core.node._scans)
+    assert fact["scan_generation"] is None
+    assert fact["selected"]["capture"] == json.loads(
+        json.dumps(asdict(capture_from_message(selected.message.raw_capture)))
+    )
+    assert fact["selected"]["bounded_sequence"] == selected.message.sequence
+    assert fact["selected"]["bounded_source"] == selected.message.source_epoch
+    assert fact["selected"]["measurement"] == selected.measurement_steady
+    assert fact["selected"]["receipt"] == selected.received
+    assert fact["startup"] == dict(state="moving", reason=reason, start=start, deadline=deadline)
+    assert fact["age"] == dict(band="normal", seconds=0.0)
+    assert fact["client_error"] is None and fact["record_phase"] == "moving"
+    assert len(statuses[-1]["values"]["learning_failure"].encode()) < 4096
+    original = statuses[-1]["values"]["learning_failure"]
+    assert rig.step(now + 0.05) == Velocity(0, 0)
+    assert rig.core.startup.state == "validating" and rig.core.target.source == "idle"
+    rig.core.report_status(
+        dict(body="base_link", reason="standby", values={"timing.sampled_steady": str(now + 0.05)})
+    )
+    assert statuses[-1]["values"]["learning_failure"] == original
+    assert statuses[-1]["values"]["timing.sampled_steady"] == str(now + 0.05)
+
+
+def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
+    monkeypatch, tmp_path, request
+):
+    import gc
+    import os
+    import socket
+
+    from senior_robot import motion_core_output
+    from senior_robot.motion_core_perception import scan_observation
+
+    from senior_control.motion.startup_learning import StartupLearning
+
+    gc_settings = gc.isenabled(), gc.get_threshold()
+    module = request.getfixturevalue("output_module")
+    results, traced_rows = [], []
+    limit = motion_core_output.limit_velocity
+
+    def limit_with_real_clearance(*args):
+        # Infinity is a valid unobstructed direction, never a diagnostic string in control.
+        assert isinstance(args[3].rear, float) and args[3].rear == math.inf
+        return limit(*args)
+
+    monkeypatch.setattr(motion_core_output, "limit_velocity", limit_with_real_clearance)
+    for enabled in (False, True):
+        label = tmp_path / str(enabled)
+        label.mkdir()
+        r = LearningRig(monkeypatch, label)
+        offer = r.run.offer
+
+        def production_identity(raw, offer=offer):
+            # Original identity values from deadline-trace-1795060825; clocks stay controlled.
+            m, capture = raw.message, raw.message.raw_capture
+            m.source_epoch = "a27af8563d13499fa332b41651a1bc0a"
+            capture.raw_gid = "010fb8ff7d38fc2201000000000013030000000000000000"
+            capture.bridge_gid = "010fb8ff43387b4d01000000000012030000000000000000"
+            capture.source_epoch = "0ebbf0f147719304bccce28a8e43078c-3"
+            capture.bridge_boot_id = "679a993742619426ac726741b8239be6-1"
+            m.frame_id = capture.frame_id = "laser"
+            m.raw_source = capture.raw_gid
+            m.ranges[19:54] = [math.inf] * 35
+            return offer(raw)
+
+        monkeypatch.setattr(r.run, "offer", production_identity)
+        reader, writer = os.pipe()
+        parent, peer = socket.socketpair()
+        os.set_blocking(reader, False)
+        open_fd = os.open
+        if sys.platform != "linux":
+            os.set_blocking(writer, False)
+
+        def open_trace(path, flags, open_fd=open_fd, writer=writer):
+            if path == "/proc/self/fd/2":
+                return (
+                    open_fd(f"/proc/self/fd/{writer}", flags)
+                    if sys.platform == "linux"
+                    else os.dup(writer)
+                )
+            return open_fd(path, flags)
+
+        monkeypatch.setattr("time.monotonic_ns", lambda r=r: round(r.now * 1e9))
+        with monkeypatch.context() as mode:
+            if enabled:
+                mode.setenv("SENIOR_MOTION_TRACE_ID", "core-test")
+                mode.setenv("SENIOR_MOTION_TRACE_START_NS", "9000000000")
+                mode.setenv("SENIOR_MOTION_TRACE_END_NS", "20000000000")
+            else:
+                mode.delenv("SENIOR_MOTION_TRACE_ID", raising=False)
+            mode.setattr(os, "open", open_trace)
+            output = module.MotionOutput.__new__(module.MotionOutput)
+            output._init_trace()
+        if enabled and sys.platform != "linux":
+            # C1 models the target Linux 4096-byte atomic envelope; P1 uses the real host limit.
+            output._trace_size = 4096
+        output.channel, output.sequence = parent, 0
+        output.process = SimpleNamespace(poll=lambda: None)
+        r.core.node._output_transport = output
+        r.core.startup = StartupLearning(None)
+        r.core._learning_attempt = r.run.owner.record.attempt_id
+        packets, emissions, rays = [], [], []
+
+        def emit(velocity, reason, deadline, *, computed_steady, r=r, output=output):
+            output.publish(velocity, deadline, computed_steady=computed_steady)
+            r.core.node.emitted.append((r.now, velocity, reason, deadline, r.core.startup.started))
+            output.flush_send_trace()
+            return r.now
+
+        r.core.node._emit_motion_core = emit
+        try:
+            assert r.core.command(barrier("prepared"))
+            intent = barrier("intent")
+            intent.owner_boot_id = "f4aba0660bc8419ebc36d1c94eb38c13"
+            intent.session_id = "679a993742619426ac726741b8239be6"
+            intent.request_id = "0ebbf0f147719304bccce28a8e43078c"
+            intent.received_steady, intent.steady_deadline = r.now, 10.05 + 0.25
+            intent.manual_linear, intent.manual_linear_limit, intent.degraded_linear_limit = (
+                1,
+                0.05,
+                0.05,
+            )
+            intent.vx = 0.05
+            assert r.core.command(intent)
+            for now in (10.05, 10.1, intent.steady_deadline):
+                r.step(now)
+                packets.append(peer.recv(64))
+                emissions.append(r.core.node.emitted[-1][1:4])
+                rays.append(asdict(scan_observation(r.core.node._scans[-1], "base_link")))
+                if enabled:
+                    traced_rows.extend(
+                        json.loads(line) for line in os.read(reader, 65536).splitlines()
+                    )
+            intent.received_steady, intent.steady_deadline = r.now, 15.0
+            intent.sequence += 1
+            assert r.core.command(intent)
+            r.step(10.35)
+            packets.append(peer.recv(64))
+            emissions.append(r.core.node.emitted[-1][1:4])
+            if enabled:
+                traced_rows.extend(json.loads(line) for line in os.read(reader, 65536).splitlines())
+            r.step(11.350001, new_scan=False)
+            packets.append(peer.recv(64))
+            emissions.append(r.core.node.emitted[-1][1:4])
+            if enabled:
+                traced_rows.extend(json.loads(line) for line in os.read(reader, 65536).splitlines())
+            assert r.core.node.emitted[-1][1] == Velocity(0, 0)
+            assert r.core.node.emitted[-1][2] == "scan_temporarily_unavailable"
+            assert r.core.target.source == "manual"
+            results.append((packets, emissions, rays))
+        finally:
+            output.finish_trace("test_end")
+            parent.close()
+            peer.close()
+            os.close(reader)
+            os.close(writer)
+            r.close()
+    assert results[0] == results[1]
+    assert (gc.isenabled(), gc.get_threshold()) == gc_settings
+    ticks = [row for row in traced_rows if row["event"] == "core_tick"]
+    assert len(ticks) == 5
+    assert all(row["lost"] == 0 for row in traced_rows)
+    assert all(
+        len((json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n").encode()) <= 4096
+        for row in traced_rows
+    )
+    sends = [row for row in traced_rows if row["event"] == "transport_send"]
+    moving = [row for row in sends if row["vx"] != 0]
+    assert moving
+    for submitted in moving:
+        tick = next(row for row in ticks if row["transport_sequence"] == submitted["sequence"])
+        assert tick["computed_ns"] == submitted["computed_ns"]
+        assert tick["decision"]["clearance"]["rear"] == "Inf"
+        assert float(tick["decision"]["clearance"]["rear"]) == math.inf
+    first = ticks[0]
+    assert first["argmin"] == ["budget", "target", "startup"]
+    assert first["deadline"] == 10.05 + 0.25 and first["bounds"]["startup"] is None
+    assert first["selected"]["capture"]["time"]["sample_steady_ns"] == 10_050_000_000
+    assert first["selected"]["capture"]["raw_gid"] == (
+        "010fb8ff7d38fc2201000000000013030000000000000000"
+    )
+    assert first["computed_ns"] == 10_050_000_000 and first["transport_sequence"] == 1
+    stages = [row for row in traced_rows if row["event"] == "core_stages"]
+    assert len(stages) == 5 and stages[0]["computed_ns"] == first["computed_ns"]
+    assert any(mark[0] == "clearance_begin" for mark in stages[0]["marks"])
+    assert ticks[2]["decision"]["target_expired"] and ticks[2]["submitted"] == [0, 0]
+    assert first["last_installed_command"]["sequence"] == 0
+    assert first["remaining_ms_at_send"] == first["remaining_ms_at_report"]
+    assert ticks[2]["decision"]["zero_stage"] == "target_zero"
+    assert ticks[-1]["decision"]["clearance"] is None
+    assert ticks[-1]["decision"]["zero_stage"] == "clearance"
+    assert ticks[-1]["selected"]["age"]["band"] == "invalid"

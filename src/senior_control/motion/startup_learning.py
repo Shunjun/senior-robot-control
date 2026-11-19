@@ -128,20 +128,19 @@ class StartupLearning:
         if record.phase == "completed" and record.model is not None:
             self.state, self.reason = "completed", "restored_completed_record"
             self.motion_withdrawn = True
-        elif not self._record_seen and record.phase in {"failed", "unconfirmed"}:
+        elif record.phase in {"failed", "unconfirmed"} and (
+            not self.active or self.started is None or self._reported_finished
+        ):
+            # Background failure cannot shorten an already submitted action window.
+            self.state = "unconfirmed" if record.phase == "unconfirmed" else "interrupted"
+            self.reason = record.reason
             self.motion_withdrawn = True
-            self.state = "interrupted"
-            self.reason = "restored_terminal_attempt_no_replay"
         elif not self._record_seen and record.capture_summary.state == "complete":
             self.state, self.reason = "validating", "capture_complete_waiting_compute"
             self.motion_withdrawn = True
         elif not self._record_seen and record.action.consumed:
             # A new consumer has no local collection to validate or motion to replay.
             self.interrupt("consumed_action_no_replay")
-        if self._record_seen and not self.active and record.phase in {"failed", "unconfirmed"}:
-            self.state = "unconfirmed" if record.phase == "unconfirmed" else "interrupted"
-            self.reason = record.reason
-            self.motion_withdrawn = True
         self._record_seen = True
         if self.session.error is not None and self.active:
             self.motion_withdrawn = True
@@ -264,6 +263,7 @@ class StartupLearning:
             if self.state == "moving":
                 self.state, self.reason = "braking", "action_window_finished"
             self._finish_action()
+            self._restore()
         if (
             self._stationary
             and self.started is not None

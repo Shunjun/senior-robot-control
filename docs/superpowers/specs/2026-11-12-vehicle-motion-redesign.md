@@ -11,7 +11,7 @@
 - 直接将当前原始雷达测距按已有安装变换投到车体坐标。忽略物理车体内部的自身回波，在外框宽度加一次雷达误差的前后条带内取最近障碍。前后各自计算到外框加雷达误差的剩余净距 `d`，对应方向速度上限为 `sqrt(2 * decel * max(d, 0))`。正净距始终有正速度上限，只有边界处因障碍距离限速至零；远处障碍不锁故障。无有效/新鲜雷达时暂时发零，保留来源，后续有效数据直接恢复限速计算。
 - 目标受车辆已有速度上限约束，正常请求从上次输出按 accel/decel 渐变，当前可用轮速用于选择制动速率；独立车速、定位、学习完成度不构成手动前置。前后换向先经过零；距离限速优先于渐变。行进时按线速度缩放目标角速度，到边界同时停下；原地转向按既有 yaw 上限及角加减速度执行，不再做全姿态旋转扫掠或定位外扩。
 - 松杆/过期/断线/主动释放立即发零；松杆保留同一 authority，主动释放、身份和代次隔离继续由现有入口负责。操作者急停持续锁存，只能由明确且 revision 匹配的复位请求清除，复位不重放旧目标。故障复位也必须显式请求；感知缺失与障碍不生成故障锁存，不自动重置操作者急停。
-- 手动与 Nav2 私有 run 命令均进入同一 MotionCoreOutput 和原有唯一标准 `/cmd_vel` Twist owner；输出保留源命令原始 deadline，并限定控制进程停止更新后 150 ms 内的本地输出租期。Nav2 地图、任务、定位输入仍按真实数据处理。
+- 手动与 Nav2 私有 run 命令均进入同一 MotionCoreOutput 和原有唯一标准 `/cmd_vel` Twist owner；输出保留源命令原始 deadline，并限定控制进程停止更新后 250 ms 内的本地输出租期。Nav2 地图、任务、定位输入仍按真实数据处理。
 - 生产输出已移除 ConstraintEngine/ConstraintScheduler、停车扫掠/证书、几何工作队列、StartupLearning 执行动作、自回波学习模型、多源定位误差和侧漂多级膨胀。已有估计仍用于展示，不发起新的学习动作。
 
 本阶段按用户指令不改/不运行车端 pytest、不新增测试脚本；代码检查不能代表实车通过。车端确认后需迁移的旧断言主要位于 `tests/unit/test_motion_core_perception.py`、`test_scan_geometry_scope.py`、`test_motion_core_stop_fallback.py`、`test_motion_core_chain.py`、`test_limited_manual_rearm.py`、`test_stopping_fused_input.py`、`test_startup_learning_chain.py`、`test_continuous_scan_control.py`、`test_control_process_resources.py` 和 `test_motion_state_machine.py`；仅退役扫掠/工作队列/学习资格断言，仍有效的急停、来源、过期、任务退休身份断言继续保留并适配接口。网页松杆修复 2610fcc 保留，本轮没有网页改动，也没有重跑已有网页检查。
