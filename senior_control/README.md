@@ -29,6 +29,7 @@ senior_control/
       database.py                     # 唯一连接引擎，显式注入原写锁构造端口
       migrations.py                   # 原顺序迁移、备份、取消与回滚
       core_schema.py                  # 原core v1–v4 SQL及迁移实现
+      agent_schema.py                 # 原journal两条SQL tuple，无任何实现导入
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
@@ -244,3 +245,81 @@ Pydantic2.14.1/aiosqlite0.22.1；以下python/mypy/ruff使用原主仓库`.venv/
 安装工具仍将native/SLAM明确标UNVERIFIED，宿主SQLite/合成地图不能替代这些检查。
 domain装配、map_persistence、任务/Home owner及新功能不在本片迁移；后续继续先精核依赖与预报，导航算法最后。
 没有启动开发或实车服务、部署或推送；提交后交负责人亲审。
+
+## M2b journal schema数据
+
+基线`3ffeaf7`；只将`src/senior_control/agent/journal.py`的原
+`AGENT_JOURNAL_STATEMENTS`声明迁入`vehicle_manager/storage/agent_schema.py`。
+旧导入显式`//Compatible`转发同一tuple；AgentJournal、JournalEntry、事务/恢复/去重和执行owner仍在原模块，
+LifecycleStore仍经原入口得到同一对象。本轮不迁MapRef/Pose2D/OperationResult/DomainError，也不修改调用它们的代码。
+实际6文件：产品2、验证1（原安装工具）、文档3；新增1、修改5、删除/测试迁移0，配置和依赖0。
+
+两份原SQL声明源码逐字符相同，运行值UTF-8字节及顺序相同：
+
+| 语句 | 字节数 | SHA256 |
+|---|---:|---|
+| agent_operation | 241 | `825c40edab222711ed10683ed4b9cde8256cdec8f8a7a97ec52db30cabf79fe1` |
+| agent_deleted_task | 199 | `6e2f79cdb3732ae8145c664e542ae9f94b0eb29ff6ddae83558aef3786e4a2b1` |
+
+新模块没有任何import，manager安装不加载agent执行实现；没有改SQL版本、表格式、路径、备份、锁或事务顺序。
+业务AST除移除原tuple声明和增加显式导入外相同；原任务/地图/Home/设置/ROS/云/contracts及构建配置无diff。
+
+### 本轮命令与结果
+
+环境沿用macOS26.4 arm64、CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23。
+python/mypy/ruff使用原主仓库`.venv/bin/`；审计脚本也显式使用该Python（系统python3较旧，首次zip(strict=...)审计未执行完，改用3.12后完成）。
+
+- `python -m pytest tests/integration/test_task_lifecycle_store.py tests/integration/test_agent.py::test_edit_ack_only_after_device_commit tests/integration/test_agent.py::test_failed_commit_is_never_reported_as_success tests/integration/test_agent.py::test_operation_id_deduplicates tests/integration/test_agent.py::test_same_operation_id_with_different_content_conflicts tests/integration/test_agent.py::test_task_delete_rolls_back_if_the_tombstone_fails -q`：
+  **30 passed，1.37s**；复用原SQLite接受/receipt/rollback/并发/CAS/取消/重启及journal原去重/提交确认/删除回滚场景，不新增测试或改夹具。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：17份源码通过；
+  三份变化Python的ruff check/format --check及git diff --check通过；基线源码声明、SQL UTF-8/hash和journal执行AST核对通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2b-wheels`及根同out-dir构建：sdist/wheel成功。
+  新`/tmp/m2b-manager-venv`离线安装本轮manager和原contracts wheel，原约束Pydantic2.14.1/typing-inspection0.4.4，8包pip check通过；
+  从`/tmp`执行`python <checkout>/tools/verify_batch_one_install.py --manager-storage-only`通过，导入原SQL数据且无Root/cloud/ROS，保留M2a真实SQLite安装验证。
+  `/tmp/vehicle-batch-one-venv`离线重装本轮Root/manager wheel后24包pip check通过，同工具默认模式通过旧/新journal tuple身份及全部原保护。
+- 本轮没有重跑全仓/全链类型检查或实际Linux/ROS/ament/SLAM、Python3.10和车辆运行；历史38项类型错误及native/SLAM未验证记录仍保留。
+  未启动开发或实车服务、部署或推送，安装工具继续明确ROS缺口，不把纯wheel检查当ROS实测。
+
+### 四类值的只读消费者核对
+
+以下为当前实现直接导入及字段/构造/异常分支的静态源码核对，非运行时ROS追踪。
+`agent/`、`tasks/`、`waypoints/`、`storage/`均指原`src/senior_control/`下路径；
+ROS项按`ros2/src/<包>/<Python包>/`下相对模块列出，world_reference为senior_sim/scripts。
+canonical manager和cloud当前都没有直接消费这四种Root值，不能因此把跨执行域值默认归管理实现。
+
+| 值 | 真实管理/本地边界消费者 | ROS功能实现消费者 |
+|---|---|---|
+| MapRef | agent/{direct_navigation,dispatcher,ports,snapshots,workspace}；storage/map_persistence；tasks/{models,store,executor}；waypoints/{store,home}；原navigation | senior_localization/{localization_node,navigation_reference,relocalization}；senior_mapping/{archive,evidence,occupancy,operations,persistence,references,store,workspace}；senior_robot/navigation_adapter；senior_sim/scripts/world_reference |
+| Pose2D | agent/{direct_navigation,dispatcher,ports,workspace}；storage/map_persistence；tasks/{executor,lifecycle_store,lifecycle_service,navigation_port}；waypoints/{store,home}；原navigation | senior_localization/{hardware_reference,navigation_reference,relocalization}；senior_mapping/{archive,evidence,occupancy,persistence,references,slam_adapter,store,workspace,workspace_export}；senior_motion_estimation/{estimator,motion_observation_adapter,motion_sensor_runtime,observations,optional_motion_inputs,pose_estimator,sample_types,temporal}；senior_perception/{learning_compute,scan_adapter,scan_decode,self_filter}；senior_robot/navigation_adapter；senior_sim/scripts/world_reference |
+| OperationResult | agent/{dispatcher,main}操作确认/查询；storage/database的Home cancel回调；waypoints/home；当前tasks各文件没有直接消费 | senior_localization/relocalization；senior_mapping/{operations,slam_adapter}；senior_robot/navigation_adapter |
+| DomainError | agent/{composition,connection,direct_navigation,dispatcher,main,ports,settings_wire,workspace}；tasks/{store,executor,runtime}；waypoints/{store,home}；原navigation | senior_localization/{geo,relocalization}；senior_mapping/{archive,operations,references,slam_adapter,store,workspace_export} |
+
+另有仍在Root的motion/{constraints,kinematics}、safety/{space_estimator,startup_visibility}、vision/rgbd_body_motion消费Pose2D；
+不是把这些执行模块打入manager的理由。MapRef在TaskDefinition/ExecutionContext中保存/比较，TaskStore._task唯一直接重建MapRef；
+任务路径的Pose2D只作类型与x/y/yaw读取/序列化，未找到Pose2D构造调用。
+DomainError则真实参与构造、except以及runtime的exc.code分支，不能仅改为TYPE_CHECKING或协议就认为解耦。
+
+### 下一片建议及尚未决定的边界
+
+优先只迁**schedule与lifecycle纯核心**：原tasks/{schedule,lifecycle}.py→已有vehicle_manager/tasks/同名模块，
+新增有界公开tasks/__init__；旧两个模块显式同一对象转发，旧tasks/__init__按原名字按需加载以免导入纯核心拉起executor。
+两个源码模块只依赖标准库，既不需要上述四类值，也不需要ROS、地图、schema或导航owner。
+候选12逻辑文件：产品6（新增3、旧修改3）、测试2、配置0、工具文档4；新增3/修改8/测试迁移1/删除0。
+原test_task_lifecycle整份随实现迁入manager/tests；原test_schedule混有TaskRunner/models/MapRef，
+因此留原位置，只改Schedule导入，不把混合用例说成无Root的独立测试。
+这取代旧只读盘点中先搬local_values/errors的候选，尚待负责人审核预报，不在本次实施。
+
+下一片候选复用：test_task_lifecycle原重复命令/离线完成/接管与迟到ack/重启/终端结算，
+输入重复request、旧task epoch、未确认revoke和新参考→保持原receipt、未知只查询、不复活旧权限；
+test_schedule原interval/cron/DST/墙钟跳变与扫描窗口，输入UTC/时区重复或缺失墙钟段→原发生次数和skip决策；
+test_task_lifecycle_service原已提交后dispatch、锁外IO与迟到ack，输入阻塞或未知导航→仍先持久化、不重发；
+安装复用原工具核对旧新Schedule/core值及函数同一对象、无Root独立导入，不新造运动或业务场景。
+
+后续models/runner可在消费侧定义只读MapRef形状，沿用原实例和相等性，不复制值或把ROS模块导入manager；
+TaskStore读取重建需显式注入原MapRef构造入口，不能换个新dataclass导致跨边界相等性/身份改变。
+Pose2D可经现有TaskNavigation/NavigationEffects本地端口传递原对象并只读字段，避免为任务搬动执行几何值。
+OperationResult不构成当前任务核心的迁移前置条件。
+Store/Executor/runtime的DomainError需要真实的错误构造/捕获/码读取端口或另审更小归属；
+原RouteRejected和参考准入也仍属待精核边界，不引入全局错误工厂，不在本轮替换错误语义。
+MapPersistence/MapDatabase虽已有公开接口，但位于ROS功能包，不能让manager为取类型反向依赖它的发行包。
+完整任务持久/驱动片待上述边界收敛再重估，不沿用原23–29范围直接实施；原导航/IPC/地图/Home链保持，导航算法最后。

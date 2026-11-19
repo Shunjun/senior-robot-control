@@ -11,30 +11,14 @@ from dataclasses import dataclass
 
 import aiosqlite
 
+# //Compatible: old imports keep the same schema tuple; execution remains here.
+from vehicle_manager.storage.agent_schema import (
+    AGENT_JOURNAL_STATEMENTS as AGENT_JOURNAL_STATEMENTS,
+)
+
 from senior_control.errors import ErrorCode
 from senior_control.models import OperationStatus
 from senior_control.storage.database import Database
-
-AGENT_JOURNAL_STATEMENTS: tuple[str, ...] = (
-    """
-    CREATE TABLE IF NOT EXISTS agent_operation (
-        operation_id TEXT PRIMARY KEY,
-        robot_id TEXT NOT NULL,
-        fingerprint TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error TEXT,
-        revision INTEGER
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS agent_deleted_task (
-        task_id TEXT PRIMARY KEY,
-        robot_id TEXT NOT NULL,
-        operation_id TEXT NOT NULL,
-        revision INTEGER NOT NULL
-    )
-    """,
-)
 
 _OPEN = (
     OperationStatus.ACCEPTED,

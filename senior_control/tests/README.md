@@ -31,3 +31,10 @@ SQLite/所有权22项、包含设置和地图原事务139项、原Home协调/gua
 仓库外安装复用原安装工具新增的`--manager-storage-only`模式，实际开库/迁移/失败回滚/备份/core迁移/重开，
 默认模式继续验证旧入口及诊断owner；详见[实际命令与限制](../README.md#m2a-sqlite引擎与core-schema)。
 这些检查不代表Linux/ROS/真实SLAM或车辆运行通过。
+
+M2b只归档journal SQL数据，没有迁测试或改原fixture。
+原task_lifecycle_store与agent的提交确认、失败、去重、冲突和tombstone失败回滚定向30项通过；
+安装工具验证旧journal常量与canonical agent_schema是同一tuple，独立manager无Root时可导入该数据。
+完整命令、SQL字节hash及只读后续清单见[manager M2b记录](../README.md#m2b-journal-schema数据)。
+下一片候选仅schedule/lifecycle；test_task_lifecycle可随实现迁入，混合TaskRunner的test_schedule先留原位置改必要导入，
+仍须负责人预报后实施，不为纯核心迁移提前搬共享值或放宽原保护。

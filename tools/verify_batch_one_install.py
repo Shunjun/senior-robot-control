@@ -17,6 +17,9 @@ def verify_manager_storage() -> None:
     import tempfile
 
     from vehicle_manager.storage import CORE_MIGRATIONS, Database, Migration, migrate, migrate_core
+    from vehicle_manager.storage.agent_schema import AGENT_JOURNAL_STATEMENTS
+
+    assert len(AGENT_JOURNAL_STATEMENTS) == 2
 
     async def verify(directory: Path) -> None:
         database = Database(directory / "vehicle.db", lock_factory=lambda _: asyncio.Lock())
@@ -88,12 +91,14 @@ def main() -> None:
     from vehicle_manager.settings.service import RuntimeGate, SettingsService
     from vehicle_manager.settings.store import SettingsStore
     from vehicle_manager.storage import CORE_MIGRATIONS, Migration, migrate, migrate_core
+    from vehicle_manager.storage.agent_schema import AGENT_JOURNAL_STATEMENTS
     from vehicle_manager.storage.database import Database as ManagerDatabase
     from vehicle_manager.vehicle_logs.models import LogQuery
     from vehicle_manager.vehicle_logs.service import LogSubscription
     from vehicle_manager.vehicle_logs.service import VehicleLogService as ManagerLogService
     from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
+    from senior_control.agent.journal import AGENT_JOURNAL_STATEMENTS as LegacyJournalStatements
     from senior_control.errors import DomainError
     from senior_control.errors import ErrorCode as LocalErrorCode
     from senior_control.hardware_navigation import (
@@ -136,6 +141,7 @@ def main() -> None:
     assert LegacyMapOperations.import_bundle is MapOperations.import_bundle
     assert LegacyMapOperations.reconcile is MapOperations.reconcile
     assert DOMAIN_MIGRATIONS[0].statements is OPERATION_JOURNAL_STATEMENTS
+    assert LegacyJournalStatements is AGENT_JOURNAL_STATEMENTS
 
     assert LegacyGeoAlignment is GeoAlignment
     assert LegacyHeadingObserver is HeadingObserver
