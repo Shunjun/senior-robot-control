@@ -1,8 +1,6 @@
-"""Live robot state, and the cloud's cache of it. A cached snapshot is never live state."""
+"""Vehicle-owned live state and conversion to the shared snapshot envelope."""
 
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from senior_control.models import MapRef
@@ -209,52 +207,3 @@ def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
         manual_controller_generation=payload.manual_controller_generation,
         manual_agent_epoch=payload.manual_agent_epoch,
     )
-
-
-@dataclass(frozen=True)
-class CloudSnapshot:
-    snapshot: RobotSnapshot
-    last_synced_at: float
-    stale: bool
-
-
-class SnapshotCache:
-    """Read-only cloud copy. It goes stale when the robot is offline or has been quiet."""
-
-    def __init__(self, *, stale_after: float = 5.0, clock: Callable[[], float] = time.time) -> None:
-        if stale_after <= 0:
-            raise ValueError("stale_after must be positive")
-        self._stale_after = stale_after
-        self._clock = clock
-        self._entries: dict[str, tuple[RobotSnapshot, float]] = {}
-        self._offline: set[str] = set()
-
-    def store(self, snapshot: RobotSnapshot) -> CloudSnapshot:
-        self._entries[snapshot.robot_id] = (snapshot, self._clock())
-        self._offline.discard(snapshot.robot_id)
-        view = self._view(snapshot.robot_id)
-        assert view is not None
-        return view
-
-    def mark_offline(self, robot_id: str) -> None:
-        self._offline.add(robot_id)
-
-    def get(self, robot_id: str) -> CloudSnapshot | None:
-        return self._view(robot_id)
-
-    def _view(self, robot_id: str) -> CloudSnapshot | None:
-        entry = self._entries.get(robot_id)
-        if entry is None:
-            return None
-        snapshot, synced = entry
-        stale = robot_id in self._offline or self._clock() - synced > self._stale_after
-        # The cached copy never claims the robot is connected.
-        ready = snapshot.navigation_ready
-        shown = replace(
-            snapshot,
-            connected=snapshot.connected and not stale,
-            robot_pose=snapshot.robot_pose if not stale else None,
-            scan_points=snapshot.scan_points if not stale else (),
-            navigation_ready=ready and not stale if ready is not None else None,
-        )
-        return CloudSnapshot(shown, synced, stale)

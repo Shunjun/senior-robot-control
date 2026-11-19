@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+from senior_contracts.logs import LOG_WIRE_BYTES, LogRequest
 
 from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
-from senior_control.vehicle_logs.wire import LOG_WIRE_BYTES, LogRequest
 
 
 @dataclass(eq=False)

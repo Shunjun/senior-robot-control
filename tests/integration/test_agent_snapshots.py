@@ -11,11 +11,11 @@ from agent_fakes import MAP, ROBOT, simple
 from senior_control.agent.snapshots import (
     HomeSummary,
     RobotSnapshot,
-    SnapshotCache,
     snapshot_envelope,
 )
 from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY, Connection, Hub
+from senior_control.cloud.snapshots import SnapshotCache
 from senior_control.protocol import SnapshotEnvelope, serialize_envelope, validate_frame
 
 SNAPSHOT = RobotSnapshot(
@@ -60,7 +60,7 @@ async def test_snapshot_frame_is_cached_with_last_synced_at() -> None:
     assert not rig.agent.outbox.closed
     cached = rig.hub.snapshots.get(ROBOT)
     assert cached is not None
-    assert cached.snapshot == SNAPSHOT
+    assert cached.snapshot == validate_frame(rig.frame(), ROBOT).payload
     assert cached.last_synced_at == 5000.0 and cached.stale is False
 
 

@@ -7,7 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
+from senior_contracts.logs import LogQuery as WireLogQuery
 
 from senior_control.settings.models import Level
 
@@ -51,15 +52,8 @@ class FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
 
 
-class LogQuery(FrozenModel):
-    after: int = Field(default=0, ge=0, le=2**63 - 1)
-    limit: int = Field(default=200, ge=1, le=200)
-    levels: tuple[Level, ...] = Field(default=(), max_length=5)
-    module: str | None = Field(default=None, max_length=128)
-    request_id: str | None = Field(default=None, max_length=128)
-    task_id: str | None = Field(default=None, max_length=128)
-    since_utc: float | None = None
-    until_utc: float | None = None
+class LogQuery(WireLogQuery):
+    """Vehicle-local filtering behaviour over the shared immutable query fields."""
 
     def matches(self, entry: "LogEntry") -> bool:
         # Gaps are unconditional: filters must not hide lost records.

@@ -255,6 +255,11 @@ async def test_authenticated_real_agent_logs_query_follow_pause_download_and_rev
         handler.emit(record)
         await service.flush()
         query = LogQuery().model_dump(mode="json")
+        from senior_contracts.logs import LogRequest
+
+        request = LogRequest.model_validate_json(json.dumps({"action": "query", "query": query}))
+        assert request.query.model_dump(mode="json") == query
+        assert not hasattr(request.query, "matches")  # Filtering belongs to the vehicle service.
 
         async def operation(action: str, values: dict[str, Any]) -> tuple[WsClient, Any]:
             peer = await log_peer(cloud, "/ws/logs", robot)

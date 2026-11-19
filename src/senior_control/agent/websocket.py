@@ -8,9 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from senior_control.agent.connection import HeartbeatFrame
-from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
-from senior_control.protocol import (
+from senior_contracts.wire import (
     DEVICE_REVOKED_CLOSE_CODE,
     HEARTBEAT_WINDOW_SECONDS,
     MAX_MESSAGE_BYTES,
@@ -20,6 +18,9 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_frame,
 )
+
+from senior_control.agent.connection import HeartbeatFrame
+from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
 from senior_control.runtime.diagnostics import DiagnosticLock, QueueSnapshot, process_diagnostics
 from senior_control.runtime.supervisor import AuthRejected
 

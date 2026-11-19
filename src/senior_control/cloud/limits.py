@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from senior_control.protocol import MAX_MESSAGE_BYTES
+from senior_contracts.wire import MAX_MESSAGE_BYTES
 
 
 @dataclass(frozen=True)

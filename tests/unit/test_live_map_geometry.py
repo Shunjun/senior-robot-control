@@ -6,10 +6,10 @@ import pytest
 from senior_control.agent.ports import IpcState
 from senior_control.agent.snapshots import (
     RobotSnapshot,
-    SnapshotCache,
     snapshot_envelope,
     snapshot_from_envelope,
 )
+from senior_control.cloud.snapshots import SnapshotCache
 from senior_control.models import MapRef
 from senior_control.protocol import RobotPosePayload, ScanPointPayload, SnapshotPayload
 
@@ -54,12 +54,12 @@ def test_live_geometry_round_trips_and_stale_or_offline_copies_clear_it():
         assert copy.payload.scan_points == []
     now = [10.0]
     cache = SnapshotCache(clock=lambda: now[0])
-    cache.store(snapshot)
+    cache.store(envelope(snapshot))
     now[0] = 16.0
     stale = cache.get("sim")
     assert stale.stale
     assert stale.snapshot.robot_pose is None
-    assert stale.snapshot.scan_points == ()
+    assert stale.snapshot.scan_points == []
 
 
 async def test_ipc_geometry_is_hidden_on_reference_generation_mismatch():

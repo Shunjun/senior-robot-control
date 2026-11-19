@@ -43,11 +43,11 @@ from senior_control.agent import Agent, RobotSnapshot
 from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import (
-    SnapshotCache,
     TaskSummary,
     snapshot_envelope,
     snapshot_from_envelope,
 )
+from senior_control.cloud.snapshots import SnapshotCache
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import SnapshotEnvelope
@@ -378,6 +378,18 @@ async def test_publish_snapshot_checks_robot(rig: Rig) -> None:
     await finish(task, rig)
 
 
+def cache_frame(snapshot: RobotSnapshot):
+    return snapshot_envelope(
+        snapshot,
+        robot_id=snapshot.robot_id,
+        session_id="agent",
+        connection_epoch=1,
+        request_id="snapshot",
+        seq=0,
+        expires_at=time.time() + 60.0,
+    )
+
+
 def test_cloud_cache_marks_offline_snapshot_stale() -> None:
     now = [1000.0]
     cache = SnapshotCache(stale_after=5.0, clock=lambda: now[0])
@@ -392,7 +404,7 @@ def test_cloud_cache_marks_offline_snapshot_stale() -> None:
         execution_status="idle",
         collected_at=999.0,
     )
-    cache.store(snapshot)
+    cache.store(cache_frame(snapshot))
     live = cache.get(ROBOT)
     assert live is not None and live.stale is False and live.last_synced_at == 1000.0
 
@@ -403,7 +415,7 @@ def test_cloud_cache_marks_offline_snapshot_stale() -> None:
     assert cached.last_synced_at == 1000.0 and cached.snapshot.task_revision == 2
 
     now[0] = 1010.0
-    cache.store(snapshot)
+    cache.store(cache_frame(snapshot))
     refreshed = cache.get(ROBOT)
     assert refreshed is not None and refreshed.stale is False
     now[0] = 1100.0
@@ -723,7 +735,7 @@ class CachingLink(FakeLink):
 
     async def send_snapshot(self, snapshot: Any) -> None:
         await super().send_snapshot(snapshot)
-        self.cache.store(snapshot)
+        self.cache.store(cache_frame(snapshot))
 
 
 async def idle_agent(tmp_path: Path, link: FakeLink, state: FakeState, **extra: Any) -> Agent:

@@ -12,9 +12,3 @@ class ErrorCode(str, Enum):
     SAFETY_REJECTED = "safety_rejected"
     TIMEOUT = "timeout"
     OPERATION_UNKNOWN = "operation_unknown"
-
-
-class DomainError(Exception):
-    def __init__(self, code: ErrorCode, message: str) -> None:
-        super().__init__(message)
-        self.code = code

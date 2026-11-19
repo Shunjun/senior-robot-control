@@ -11,15 +11,8 @@ from typing import Any, Literal, cast
 
 from fastapi import WebSocket
 from pydantic import ValidationError
-
-from senior_control.agent.snapshots import (
-    SnapshotCache,
-    snapshot_envelope,
-    snapshot_from_envelope,
-)
-from senior_control.cloud.limits import CloudLimits
-from senior_control.errors import ErrorCode
-from senior_control.protocol import (
+from senior_contracts.errors import ErrorCode
+from senior_contracts.wire import (
     DEVICE_REVOKED_CLOSE_CODE,
     HEARTBEAT_WINDOW_SECONDS,
     WORKSPACE_REQUEST_TYPES,
@@ -44,6 +37,9 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_frame,
 )
+
+from senior_control.cloud.limits import CloudLimits
+from senior_control.cloud.snapshots import SnapshotCache, snapshot_envelope
 from senior_control.runtime.diagnostics import DiagnosticDeque
 
 logger = logging.getLogger(__name__)
@@ -536,7 +532,7 @@ class Hub:
         ):
             return
         if isinstance(envelope, SnapshotEnvelope):
-            self.snapshots.store(snapshot_from_envelope(envelope))
+            self.snapshots.store(envelope)
             self._push_snapshot(connection.robot_id)
             return
         if isinstance(envelope, (VideoSdpEnvelope, VideoCandidateEnvelope, VideoCloseEnvelope)):

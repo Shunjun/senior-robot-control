@@ -1,13 +1,4 @@
-"""Bounded log socket request shared by cloud and Agent."""
+"""//Compatible: historical log socket imports share the same query wire contract."""
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from senior_control.vehicle_logs.models import LogQuery
-
-LOG_WIRE_BYTES = 5 * 1024 * 1024
-
-
-class LogRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    action: str = Field(pattern="^(query|download|follow)$")
-    query: LogQuery
+from senior_contracts.logs import LOG_WIRE_BYTES as LOG_WIRE_BYTES
+from senior_contracts.logs import LogRequest as LogRequest

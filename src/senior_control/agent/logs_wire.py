@@ -11,11 +11,12 @@ import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from senior_contracts.logs import LOG_WIRE_BYTES, LogRequest
+
 from senior_control.runtime.diagnostics import DiagnosticLock, PendingCounter
 from senior_control.settings.models import Level
-from senior_control.vehicle_logs.models import LogInput
+from senior_control.vehicle_logs.models import LogInput, LogQuery
 from senior_control.vehicle_logs.service import Action, VehicleLogService
-from senior_control.vehicle_logs.wire import LOG_WIRE_BYTES, LogRequest
 
 
 def log_url(control_url: str) -> str:
@@ -85,6 +86,8 @@ class AgentLogConnection:
         async def run(client: str, request: LogRequest) -> None:
             subscription = None
 
+            query = LogQuery.model_validate(request.query.model_dump())
+
             async def send(data: dict[str, Any]) -> None:
                 async with send_lock:
                     raw = await asyncio.to_thread(
@@ -94,15 +97,11 @@ class AgentLogConnection:
 
             try:
                 if request.action == "follow":
-                    subscription = await self.service.follow(
-                        client, self.service.vehicle_id, request.query
-                    )
+                    subscription = await self.service.follow(client, self.service.vehicle_id, query)
                     while True:
                         await send((await subscription.next_page()).model_dump(mode="json"))
                 elif request.action == "download":
-                    page = await self.service.download(
-                        client, self.service.vehicle_id, request.query
-                    )
+                    page = await self.service.download(client, self.service.vehicle_id, query)
                     await send(
                         {
                             "data": page.data.decode("utf-8"),
@@ -112,9 +111,7 @@ class AgentLogConnection:
                         }
                     )
                 else:
-                    result = await self.service.query(
-                        client, self.service.vehicle_id, request.query
-                    )
+                    result = await self.service.query(client, self.service.vehicle_id, query)
                     await send(result.model_dump(mode="json"))
             except (ValueError, RuntimeError, PermissionError):
                 async with send_lock:
