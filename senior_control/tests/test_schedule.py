@@ -4,10 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from vehicle_manager.tasks.schedule import Schedule
-
-from senior_control.models import MapRef
-from senior_control.tasks.models import (
+from vehicle_manager.tasks.models import (
     ExecutionContext,
     ExecutionRecord,
     ExecutionStatus,
@@ -15,7 +12,10 @@ from senior_control.tasks.models import (
     TaskDefinition,
     TaskIntent,
 )
-from senior_control.tasks.runner import TaskRunner
+from vehicle_manager.tasks.runner import TaskRunner
+from vehicle_manager.tasks.schedule import Schedule
+
+from senior_control.models import MapRef
 
 MAP = MapRef("yard", 1)
 

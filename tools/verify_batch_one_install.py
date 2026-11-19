@@ -69,6 +69,8 @@ def verify_manager_tasks() -> None:
     """Verify the installed pure task interfaces without starting any owner."""
     from vehicle_manager import tasks
     from vehicle_manager.tasks import lifecycle
+    from vehicle_manager.tasks.models import ExecutionContext, TaskDefinition
+    from vehicle_manager.tasks.runner import TaskRunner
     from vehicle_manager.tasks.schedule import Schedule
 
     assert tasks.Schedule is Schedule
@@ -76,7 +78,12 @@ def verify_manager_tasks() -> None:
     assert Schedule.__module__ == "vehicle_manager.tasks.schedule"
     assert lifecycle.Lifecycle.__module__ == "vehicle_manager.tasks.lifecycle"
     assert callable(lifecycle.command) and callable(lifecycle.acknowledge)
-    print("installed pure task schedule/lifecycle interfaces: PASS")
+    assert tasks.TaskDefinition is TaskDefinition
+    assert tasks.ExecutionContext is ExecutionContext
+    assert tasks.TaskRunner is TaskRunner
+    assert TaskDefinition.__module__ == "vehicle_manager.tasks.models"
+    assert TaskRunner.__module__ == "vehicle_manager.tasks.runner"
+    print("installed pure task schedule/model/runner/lifecycle interfaces: PASS")
 
 
 def main() -> None:
@@ -235,6 +242,21 @@ def main() -> None:
                 "('senior_control.tasks.models', 'senior_control.tasks.runner', "
                 "'senior_control.tasks.store', 'senior_control.tasks.executor', "
                 "'senior_control.storage.database', 'senior_mapping', 'rclpy')); "
+                "from vehicle_manager.tasks import models as model, TaskRunner as NewRunner; "
+                "names = ('ExecutionContext', 'ExecutionRecord', 'ExecutionStatus', "
+                "'IntentAction', "
+                "'SkipRecord', 'TaskDefinition', 'TaskIntent'); "
+                "assert all(getattr(old, name) is getattr(model, name) for name in names); "
+                "assert old.TaskRunner is NewRunner; "
+                "assert not any(name in sys.modules for name in "
+                "('senior_control.tasks.models', 'senior_control.tasks.runner', "
+                "'senior_control.tasks.store', 'senior_control.tasks.executor', "
+                "'senior_mapping')); "
+                "from senior_control.tasks import models as legacy, runner as legacy_runner; "
+                "assert all(getattr(legacy, name) is getattr(model, name) for name in names); "
+                "from vehicle_manager.tasks import runner; "
+                "assert legacy_runner._ACTIVE is runner._ACTIVE; "
+                "assert legacy_runner._scan is runner._scan; "
                 "from senior_control.tasks import TaskStore, TaskExecutor, TaskRunner; "
                 "from senior_control.tasks.store import TaskStore as Store; "
                 "from senior_control.tasks.executor import TaskExecutor as Executor; "
@@ -245,6 +267,31 @@ def main() -> None:
         check=True,
     )
     verify_manager_tasks()
+    # The local caller still supplies its real MapRef; the manager never wraps it.
+    from datetime import datetime, timezone
+
+    from vehicle_manager.tasks import ExecutionContext, Schedule, TaskDefinition, TaskRunner
+
+    from senior_control.models import MapRef
+
+    reference = MapRef("yard", 1)
+    created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    definition = TaskDefinition(
+        "task",
+        "robot",
+        reference,
+        ("point",),
+        Schedule.interval(created, 60),
+        "Asia/Shanghai",
+        True,
+        0,
+        created,
+    )
+    context = ExecutionContext(True, True, True, False, reference)
+    runner = TaskRunner((definition,))
+    assert definition.map_ref is reference and context.active_map is reference
+    assert runner._tasks[0] is definition
+    assert definition.map_ref == MapRef("yard", 1)
     assert LegacyLogQuery is LogQuery and LegacyLogStore is VehicleLogStore
     assert LegacyLogSubscription is LogSubscription
     assert LegacyLogService is not ManagerLogService

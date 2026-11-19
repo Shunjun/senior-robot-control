@@ -94,6 +94,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2a SQLite引擎已迁，domain及Home协调仍原位 | 原 `storage/database.py` 连接引擎、`migrations.py`、`core_schema.py` → `vehicle_manager/storage/` | 旧Database Compatible子类只装配原DiagnosticLock/Home协调，连接实现唯一；Migration/core入口同一对象，原生产同连接/写锁、SQL/备份/取消不变；domain schema/map_persistence仍在原边界，不把地图/任务执行打入manager安装闭包 |
 | B6.M2b journal SQL数据已迁，值归属仅盘点 | 原agent/journal的AGENT_JOURNAL_STATEMENTS → `vehicle_manager/storage/agent_schema.py` | 旧入口同一tuple，journal执行owner仍原位；无import的新数据模块不拉起agent/ROS，不搬MapRef/Pose2D/OperationResult/DomainError；下一片候选先迁标准库纯schedule/lifecycle，完整任务驱动依赖另核 |
 | B6.M2c 标准库纯任务核心已迁 | 原tasks/schedule、lifecycle → `vehicle_manager/tasks/` | 旧对象显式Compatible同一身份，旧公开包名字不变且按需加载；模型/驱动、MapRef/Pose2D/错误及ROS边界不迁；复用原时间/状态机和服务层锁外dispatch及离仓库安装验证 |
+| B6.M2d 纯任务模型/Runner已迁 | 原tasks/models、runner → `vehicle_manager/tasks/`及只读MapReference形状 | 原运行时MapRef及比较保留，旧类/常量/函数同一身份；仅经确认扩两个旧具体MapRef调用点的Compatible静态cast，不作运行时校验或改准入；Store/Runtime/地图/ROS/IPC实现不迁 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -404,3 +405,24 @@ manager/根wheel与仓库外独立manager8包/旧SDK24包安装、按需隔离�
 下一片先只读精核models/runner的消费侧只读MapRef接口、原实例/相等性及生产入边；候选范围12文件
 （产品7/测试1/配置0/工具文档4），待负责人审阅预报后才实施，不沿用旧完整任务持久/驱动预算。
 Store._task重建、DomainError构造/catch/码、RouteRejected和参考准入仍后续精核；原地图/Home/导航保持，导航算法最后。
+
+### B6.M2d 纯任务models/runner与两处类型接线
+
+基线3f4b6bb；models/runner迁入manager，MapReference仅声明map_id/reference_revision只读属性，
+原MapRef值与SQL/dispatcher构造路径不动，原对象、冻结模型与比较/扫描/准入算法保留，旧公开入口同一对象。
+只读注解与旧具体MapRef签名冲突后，经确认从12扩至14逻辑文件：产品9/测试1/配置0/工具文档4，
+新增3/修改10/测试迁移1/删除0；额外两处为Executor回调和agent IpcNavigation航点读取的Compatible局部cast，
+仅静态视图，不是验证/转换；不继续改WaypointStore或整组回调签名，不扩大业务行为。
+原test_schedule迁入manager/tests，原断言/patch owner保持；初选216通过，批准接线后原扩选218通过（2.61s）。
+manager23份源码仍原lifecycle:318一项，初始全链40项中的两处新类型冲突已消除，最终215份源码38项与M2c逐条相同。
+manager/根wheel、纯manager8包/旧SDK24包安装、公开身份/原对象/无反向依赖和真实安装后两调用点核对通过；
+十三份Python格式/静态检查及按原CRLF diff检查通过；命令/版本与实际目录见[manager M2d](../../../senior_control/README.md#m2d-纯任务models与runner)。
+真实ROS/Linux/车辆及Python3.10本轮未验，原工具保留UNVERIFIED；不开服务、不部署、不推送。
+
+下一片只读候选：S1先TaskStore，复用manager SQLite同连接/写锁及原schema准备、MapRef构造、DomainError构造端口，
+不导入Root/地图执行，不改TASK_STATEMENTS/boot/claim/scan；候选10–12文件（产品4–5/测试2–3/配置0/工具文档4）。
+S2再lifecycle_store/service，同事务Admission/receipt/effect/取消settle与锁外dispatch、原agent_schema及只读Pose形状，
+候选12（产品6/测试2/配置0/工具文档4）；S3最后executor/runtime/navigation_port，错误继承/catch和RouteRejected、
+参考准入/真实导航效果端口先精核，条件16–21（产品9–12/测试3–5/配置0/工具文档4），均须负责人审阅预报后实施。
+候选原SQLite失败/未知/回滚/恢复、双连接CAS/旧epoch、未知仅查询、接管迟到与新手动隔离的输入/预期见manager记录；
+不使用全局工厂、不提前搬值或导航算法，现有地图/Home/导航及IPC继续保留。

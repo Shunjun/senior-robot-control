@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from senior_control.agent.connection import IpcMotion
 from senior_control.protocol import (
@@ -102,7 +102,8 @@ class IpcNavigation:
     async def task_poses(self, task: TaskDefinition) -> tuple[Pose2D, ...]:
         if self._waypoints is None:
             raise RouteRejected()
-        return await self._waypoints.route_poses(task.map_ref, task.waypoint_ids)
+        # //Compatible: this local task retains the original MapRef; cast is static only.
+        return await self._waypoints.route_poses(cast(MapRef, task.map_ref), task.waypoint_ids)
 
     async def task_effect(self, effect: Effect, task: TaskDefinition) -> bool | None:
         if effect.kind == "plan":

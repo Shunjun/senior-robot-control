@@ -218,7 +218,8 @@ class _UnmigratedExecutor:
         if not localized or map_generation is None or localization_generation != map_generation:
             return False
         if self._qualified_reference is not None:
-            return self._qualified_reference(task.map_ref, map_generation)
+            # //Compatible: the local store still supplies its original MapRef instance.
+            return self._qualified_reference(cast(MapRef, task.map_ref), map_generation)
         reference = self.map_reference
         return (
             reference is not None

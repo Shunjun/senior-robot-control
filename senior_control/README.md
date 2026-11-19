@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施和纯任务核心已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留，当前纯任务核心边界与验证见末尾M2c记录。
+下文各片记录按当时范围保留，当前纯任务模型/决策边界与验证见末尾M2d记录。
 
 ## 实际目录与调用
 
@@ -31,14 +31,18 @@ senior_control/
       core_schema.py                  # 原core v1–v4 SQL及迁移实现
       agent_schema.py                 # 原journal两条SQL tuple，无任何实现导入
     tasks/
-      __init__.py                     # 仅Schedule/lifecycle按需公开
+      __init__.py                     # 纯模型/Runner/Schedule/lifecycle按需公开
       schedule.py                     # 原interval/cron/DST计算，标准库实现
       lifecycle.py                    # 原纯任务状态机及公开值/函数
+      models.py                       # 原冻结任务模型，直接保存传入的原MapRef对象
+      runner.py                       # 原纯调度/准入决策，无持久或导航执行
+      ports.py                        # map_id/reference_revision只读形状，无值实现
   tests/
     test_vehicle_settings.py          # 原62项设置用例，无新增场景
     test_vehicle_logs.py              # 原38项日志用例，无新增场景
     test_database_ownership.py        # 原2项连接所有权/重入用例
     test_task_lifecycle.py            # 原纯状态机用例，随实现迁入
+    test_schedule.py                  # 原schedule/runner混合纯决策用例
     README.md
 ```
 
@@ -388,3 +392,75 @@ python/mypy/ruff均使用原主仓库`.venv/bin/`。
 复用test_schedule原时钟/DST/准入决策及test_task_runner、test_task_ownership中的真实旧装配。
 完整持久任务片仍受TaskStore._task重建原MapRef、DomainError真实构造/catch/码、RouteRejected和地图参考准入约束；
 Pose2D经现有端口只读、OperationResult非纯核心前置，不能借纯核心迁移提前搬这些值或重写驱动。
+
+## M2d 纯任务models与runner
+
+基线`3f4b6bb`；现有models/runner归`vehicle_manager/tasks/`，旧入口显式`//Compatible`转发同一类、常量和函数。
+canonical和旧包继续按明确名字公开，旧`__all__`保持；未迁Store/Executor/Runtime仍使用原实现。
+`MapReference`只声明map_id/reference_revision两个只读属性，没有第二份MapRef值、转换器或运行时检查。
+TaskDefinition.map_ref与ExecutionContext.active_map直接保留传入对象；冻结模型、相等比较、准入优先级和扫描窗口不改。
+MapRef、Pose2D、DomainError等值/错误仍原位，manager无Root/地图/ROS反向实现导入。
+
+原生产值来源仍是`agent/dispatcher._map_ref`、`agent/direct_navigation`的原MapRef构造，以及
+`tasks/store._task`从SQL重建的原MapRef；模型迁移不改变这些构造路径。
+初始只读接口使旧qualified_reference和WaypointStore.route_poses两个具体MapRef签名产生类型冲突，
+经范围确认只扩两个旧调用点，保留具体签名，标明Compatible的`cast(MapRef, task.map_ref)`只是静态视图，
+**不是运行时校验、转换或新准入条件**。回调、对象、锁、原分支及调用顺序不变；
+不为修改WaypointStore或整组导航回调签名继续扩大范围。
+
+实际已确认14逻辑文件：产品9、测试1、配置0、工具文档4，即新增3/修改10/测试迁移1/删除0。
+产品为canonical models/runner/ports三份、旧models/runner及两个包入口四份、Executor与agent ports两个局部类型调用点；
+原test_schedule随纯模型/Runner迁入manager/tests，只有canonical imports/排序变化，原输入、断言和patch owner不变。
+没有改持久Store、Runtime、地图、导航、ROS、IPC实现、构建声明或锁文件。
+
+### 命令、版本及结果
+
+macOS26.4 arm64；CPython3.12.15、pytest8.4.2、mypy2.4.0、ruff0.17.3、uv0.12.23，
+Pydantic2.14.1/aiosqlite0.22.1；python/mypy/ruff使用原主仓库`.venv/bin/`。
+
+- RED：迁入test_schedule并改models/runner import后，collect因vehicle_manager.tasks.models尚不存在失败；随后迁移实现。
+- 原选择集：`python -m pytest senior_control/tests/test_schedule.py senior_control/tests/test_task_lifecycle.py tests/integration/test_task_runner.py tests/integration/test_task_lifecycle_store.py tests/integration/test_task_ownership.py -q`：
+  **216 passed，2.66s**，覆盖原schedule/runner/lifecycle与真实SQLite任务模型/存储准入、取消、恢复、任务wire。
+- 批准两个类型调用点后，以上命令追加`tests/unit/test_direct_navigation.py`：**218 passed，2.61s**（包含前述216，不相加），
+  保留原具体MapRef准入、原任务绑定/手动接管/旧代次和导航读取保护，不新增pytest场景或夹具。
+- manager检查23份源码仍有lifecycle:318原1项类型错误；初始全链因两个旧具体MapRef签名为40项，
+  局部静态接线后同原Root/manager/cloud及ROS依赖路径mypy命令回到**38项**、检查215份源码，
+  与M2c的38项错误诊断逐条相同；未修旧状态机或增加ignore。
+- 十三份相关Python的ruff check/format --check及`git -c core.whitespace=cr-at-eol diff --check`通过；
+  原test_schedule/Executor保留CRLF。原models AST只变导入/只读类型注解，runner AST只变导入；
+  测试体与两个批准调用点除cast外的业务AST一致，原值/Store/Runtime/地图/导航/ROS/IPC等无diff。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m2d-approved-wheels`及根同out-dir构建成功。
+  初始同样构建/tmp/m2d-wheels；两处类型接线后重建并重装最终SDK，避免把旧wheel当最终安装验证。
+  新`/tmp/m2d-manager-venv`离线安装manager与原contracts wheel及原约束，8包pip check通过；
+  从`/tmp`运行原安装工具`--manager-tasks-only`通过，新增模型/Runner公开身份且无Root/ROS/地图依赖，不加载Pydantic/aiosqlite。
+- `/tmp/vehicle-batch-one-venv`重装最终Root/manager wheel后24包pip check和从`/tmp`执行原安装工具默认模式通过；
+  新进程验证旧新模型/枚举/Runner/常量/辅助函数同一对象，直接请求纯模型不加载旧执行owner，
+  模型及Runner保存原MapRef/TaskDefinition对象且与原MapRef比较行为一致，其余原安装保护保留。
+- 从`/tmp`使用该最终SDK Python进行一次性真实调用核对，复用原保存航点/任务输入：
+  真Database→TaskStore.prepare/create及WaypointStore.save_waypoint→IpcNavigation.task_poses读取原坐标，
+  原TaskExecutor的qualified_reference收到同一个stored.map_ref；SQL读取重建的类型仍是原MapRef，
+  原构造输入在模型中保持原对象，未连接IPC或启动服务。此项为安装/调用接线检查，没有增设pytest场景。
+
+本轮所选回归无失败，manager原1项/全链原38项类型错误仍登记。
+实际Linux/ROS/ament/DDS/SLAM、车辆/仿真运行与Python3.10本轮未验证，原工具继续明确ROS UNVERIFIED。
+没有启开发或实车服务、部署或推送，提交后等待负责人亲审；以下依赖只盘点，不提前实施。
+
+### 后续存储与执行依赖：只读候选
+
+**先任务Store，后生命周期持久服务，最后执行/导航效果适配**；预算均需下一次精核和负责人预报后执行。
+
+| 切片与源目标 | 最小真实依赖与保留点 | 条件预算（逻辑文件） |
+|---|---|---|
+| S1 原tasks/store→manager/tasks/store；旧入口保留构造适配 | 已有manager SQLite Database/同连接写锁、已迁模型/Schedule；注入原domain→core准备回调，不导入根schema及地图实现；逐实例注入原MapRef构造与原DomainError构造，所有SQL行解析/校验保留同类异常；TASK_STATEMENTS唯一且旧schema取同一tuple，原boot/claim/scan/取消事务不改；禁止全局工厂 | 候选10–12：产品4–5（store新增、旧store/ports/公开入口修改，若有必要才独立行解析模块）、测试2–3、配置0、工具文档4；准备/构造/解析调用点需先精核，不能据预算直接搬 |
+| S2 原lifecycle_store/lifecycle_service→manager/tasks同名模块 | 在S1端口稳定后使用同一TaskStore/DB事务和Admission，直接复用已迁agent_schema；Pose2D仅消费x/y/yaw只读形状，无构造或值搬迁；本地VersionConflict/RequestConflict/StaleEffect与receipt/effect单一实现、锁内采样/取消settle、锁外dispatch不变 | 候选12：产品6、原测试迁移2、配置0、工具文档4；源目标为两份实现/旧转发、ports与公开入口 |
+| S3 原executor/runtime/navigation_port→manager/tasks同名模块 | TaskStore与LifecycleService稳定后，现有TaskNavigation/NavigationEffects输入输出端口、RouteProgress共享DTO、原qualified_reference/read-only reference；DomainError实际构造/catch/code、QualificationUnavailable原继承关系、RouteRejected必须通过真实逐owner端口或再审更小归属，不能只写TYPE_CHECKING；原ROS/IPC/手动T2边界仍由原owner执行 | 条件16–21：产品9–12、测试3–5、配置0、工具文档4；错误/导航回调端口未定，须先只读核对，不作为已批准范围 |
+
+S1候选复用原test_task_runner的重启保留、版本3不动地图链接、禁用/删除/无效链接拒绝、并发claim、disk full不确认、
+skip/scan持久及失败重试，输入真实SQLite旧版本/锁冲突/损坏或失配MapRef→原返回、回滚与幂等；
+依赖验证须证明旧构造仍生成原MapRef/DomainError而非新值/错误，并保持同连接身份。
+S2复用原test_task_lifecycle_store的每处接受写入失败回滚、双连接CAS、取消后唯一可查询结果、重启旧epoch隔离；
+test_task_lifecycle_service的锁外IO、未知仅查询、接管不等pending发送及迟到ack、撤销确认/手动通知同事务，
+输入原旧request/epoch、取消/重开/阻塞导航→原持久结果与输出边界，不增加恢复运动。
+S3复用test_task_runner/ownership及原terminal_release相关场景，输入失联/未知发送/切图同ref新代次、原接管/手动新权限→
+取消优先、旧结果不复活、不撤新手动、原航点读取与既有IPC/wire字段不变。
+所有候选先复用原用例/真实夹具；宿主SQLite可测，真实ROS/DDS/原生安装和车辆运行仍依赖对应环境，导航算法后置。

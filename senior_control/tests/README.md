@@ -45,3 +45,10 @@ M2c已按预报迁入原纯`test_task_lifecycle.py`，只改canonical import；
 服务层用例仍在原位置，覆盖已提交后dispatch、锁外IO、未知查询和迟到ack，不复制测试或增设业务情景。
 纯manager与旧SDK安装分别复用原工具的`--manager-tasks-only`和默认模式，确认按需导入隔离与公开身份。
 迁入lifecycle带来的1项旧类型错误、全链38项及真实ROS未验记录见[实际命令与限制](../README.md#m2c-纯schedule与lifecycle)。
+
+M2d将原test_schedule随models/runner迁入本目录；原Root MapRef仍是实际输入，未造替代值，patch继续指向原canonical Schedule。
+仅改模型/Runner imports与排序，所有时间、准入、比较、3000次稀疏搜索上界和断言保持。
+原schedule/runner/lifecycle及任务模型/存储准入选择集216通过；两处已批准的静态类型接线后追加原direct_navigation回归218通过。
+原集成/任务存储/ownership用例仍原位，安装工具确认原对象、旧公开身份和无反向依赖；最终SDK另核对真实TaskStore解码、
+IpcNavigation航点读取和qualified_reference原MapRef对象，不连接IPC、不增pytest场景。
+局部cast不是运行时校验；manager原1项、全链原38项及ROS未验记录见[manager M2d](../README.md#m2d-纯任务models与runner)。

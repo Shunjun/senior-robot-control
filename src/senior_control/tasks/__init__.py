@@ -4,10 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from vehicle_manager.tasks.schedule import Schedule
-
-    from senior_control.tasks.executor import NavigationPort, ProcessCrash, TaskExecutor
-    from senior_control.tasks.models import (
+    from vehicle_manager.tasks.models import (
         ExecutionContext,
         ExecutionRecord,
         ExecutionStatus,
@@ -16,7 +13,10 @@ if TYPE_CHECKING:
         TaskDefinition,
         TaskIntent,
     )
-    from senior_control.tasks.runner import TaskRunner
+    from vehicle_manager.tasks.runner import TaskRunner
+    from vehicle_manager.tasks.schedule import Schedule
+
+    from senior_control.tasks.executor import NavigationPort, ProcessCrash, TaskExecutor
     from senior_control.tasks.store import TaskStore
 
 __all__ = [
@@ -52,9 +52,9 @@ def __getattr__(name: str) -> Any:
         "TaskDefinition",
         "TaskIntent",
     }:
-        return getattr(import_module("senior_control.tasks.models"), name)
+        return getattr(import_module("vehicle_manager.tasks.models"), name)
     if name == "TaskRunner":
-        from senior_control.tasks.runner import TaskRunner
+        from vehicle_manager.tasks.runner import TaskRunner
 
         return TaskRunner
     if name == "TaskStore":
