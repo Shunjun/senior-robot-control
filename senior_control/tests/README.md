@@ -96,3 +96,12 @@ M2f3将原test_home逐字节（含CRLF）迁入本目录，原fixture、输入�
 没有启用旧服务、加新情景或弱化旧token/未知取消/迟到callback/断链和同ref换代保护。
 SQL/方法/原值类核对、同DB/robot协调锁和旧入口真实SQLite安装检查见[manager M2f3](../README.md#m2f3-旧homeservice业务与guard)。
 Root生产IpcHomePort/DirectNavigation保持原装配，真实ROS/物理退场及车辆运行仍未验证。
+
+
+M3A将原test_websocket_link、test_runtime和test_agent_pairing逐字节迁入本目录，
+原fixture/导入/断言保持；pairing仍复用原test_cloud共享夹具，不新建替身业务或测试情景。
+核心20项、完整选定116项通过（包含核心，不累加）；初次沙箱原localhost bind被拒的一项，允许回环测试后通过。
+原WS nonce/epoch/revoke/超时与容量、监管阻塞/失败/关闭、配对文件权限/无覆盖、journal事务/失败重放、
+设置日志wire和任务离线隔离复用原用例，不因迁移改变原网络或控制保护。
+原安装工具在独立base/agent-extra与旧SDK环境从/tmp运行，实际核对原构造/值身份及临时SQLite journal提交；
+未启生产连接或发运动，真实Linux/ROS与历史类型/夹具缺口见[manager M3A记录](../README.md#m3a-管理连接监管配对与journal基础)。

@@ -35,6 +35,16 @@ jobs:
           /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
           /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'
           /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"
+      - name: Verify independent manager base and agent wheels without starting a service
+        run: |
+          uv export --frozen --extra agent --no-hashes --no-emit-local > /tmp/manager-agent-constraints.txt
+          python -m venv /tmp/manager-base-wheel-test
+          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_contracts-*.whl
+          python -m venv /tmp/manager-agent-wheel-test
+          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_contracts-*.whl
+          cd /tmp
+          /tmp/manager-base-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-tasks-only
+          /tmp/manager-agent-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-agent-only
       - name: Verify independent cloud wheel and lifespan
         run: |
           python -m venv /tmp/cloud-wheel-test

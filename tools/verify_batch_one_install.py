@@ -10,6 +10,31 @@ import sys
 from pathlib import Path
 
 
+def verify_manager_agent(*, network: bool = False) -> None:
+    from vehicle_manager import agent
+    from vehicle_manager.agent.journal import AgentJournal
+    from vehicle_manager.agent.pairing import Credentials
+    from vehicle_manager.agent.supervisor import AuthRejected, Supervisor
+    from vehicle_manager.agent.websocket import ProtocolRejected, WebSocketConnector, WebSocketLink
+
+    assert agent.AgentJournal is AgentJournal and agent.Credentials is Credentials
+    assert agent.AuthRejected is AuthRejected and agent.Supervisor is Supervisor
+    assert agent.WebSocketLink is WebSocketLink and agent.WebSocketConnector is WebSocketConnector
+    assert issubclass(ProtocolRejected, ConnectionError)
+    assert not any(
+        name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
+        for name in sys.modules
+    )
+    if network:
+        import httpx
+        import websockets
+        from websockets.asyncio.client import connect
+
+        assert callable(connect) and callable(httpx.AsyncClient)
+        print("installed manager agent network extra:", httpx.__version__, websockets.__version__)
+    print("installed manager agent foundations without Root/ROS: PASS")
+
+
 def verify_manager_storage() -> None:
     """Exercise the installed SQLite owner with the original migration cases."""
     import asyncio
@@ -161,6 +186,14 @@ def verify_legacy_task_store() -> None:
     from pydantic import ValidationError
     from senior_mapping.operations import HomeLink
     from senior_mapping.store import MapReferenceStore
+    from vehicle_manager.agent.journal import AgentJournal as ManagerJournal
+    from vehicle_manager.agent.pairing import Credentials as ManagerCredentials
+    from vehicle_manager.agent.pairing import pair_device as manager_pair_device
+    from vehicle_manager.agent.supervisor import AuthRejected as ManagerAuthRejected
+    from vehicle_manager.agent.supervisor import Supervisor as ManagerSupervisor
+    from vehicle_manager.agent.supervisor import logger as manager_supervisor_logger
+    from vehicle_manager.agent.websocket import WebSocketConnector as ManagerConnector
+    from vehicle_manager.agent.websocket import WebSocketLink as ManagerLink
     from vehicle_manager.tasks.executor import NavigationFailure as ManagerNavigationFailure
     from vehicle_manager.tasks.executor import ProcessCrash as ManagerProcessCrash
     from vehicle_manager.tasks.executor import TaskExecutor as ManagerExecutor
@@ -177,12 +210,16 @@ def verify_legacy_task_store() -> None:
     from senior_control.agent.composition import build_task_runtime
     from senior_control.agent.direct_navigation import DirectNavigation
     from senior_control.agent.dispatcher import LifecycleNavigationOperations, _TaskRouteReceiver
+    from senior_control.agent.journal import _OPEN, AgentJournal, JournalEntry
+    from senior_control.agent.pairing import Credentials, pair_device
     from senior_control.agent.ports import IpcHomePort, IpcNavigation, IpcState, PoseReply
+    from senior_control.agent.websocket import WebSocketConnector, WebSocketLink
     from senior_control.agent.workspace import WorkspaceReader
     from senior_control.errors import DomainError, ErrorCode
     from senior_control.models import MapRef, OperationStatus, Pose2D
     from senior_control.navigation import RouteRejected
     from senior_control.runtime.ipc import IpcClient, IpcError
+    from senior_control.runtime.supervisor import AuthRejected, Supervisor
     from senior_control.storage.database import Database
     from senior_control.storage.schema import DOMAIN_MIGRATIONS
     from senior_control.tasks import Schedule, TaskDefinition
@@ -214,6 +251,18 @@ def verify_legacy_task_store() -> None:
     for method in ("home", "waypoint", "route_poses", "save_home", "save_waypoint", "sync_poses"):
         assert getattr(WaypointStore, method) is getattr(ManagerWaypointStore, method)
 
+    assert Credentials is ManagerCredentials and pair_device is manager_pair_device
+    assert Supervisor is ManagerSupervisor and AuthRejected is ManagerAuthRejected
+    assert manager_supervisor_logger.name == "senior_control.runtime.supervisor"
+    assert AgentJournal is not ManagerJournal and issubclass(AgentJournal, ManagerJournal)
+    for name in ("prepare", "get", "begin", "finish", "deleted_task_ids"):
+        assert getattr(AgentJournal, name) is getattr(ManagerJournal, name)
+    assert WebSocketLink is not ManagerLink and issubclass(WebSocketLink, ManagerLink)
+    assert WebSocketLink.recv is ManagerLink.recv
+    assert WebSocketConnector is not ManagerConnector
+    connector = WebSocketConnector("wss://cloud.invalid/ws/agent", "unused", "robot")
+    assert connector._link_factory is WebSocketLink
+
     async def verify(directory: Path) -> None:
         reference = MapRef("yard", 1)
         created = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -235,6 +284,18 @@ def verify_legacy_task_store() -> None:
             assert store._ports.map_reference is MapRef and store._ports.error is DomainError
             assert store._codec._map_reference is MapRef and store._codec._error is DomainError
             await store.prepare()
+            journal = AgentJournal(database, robot_id="robot")
+            assert journal._database is database
+            assert journal._ports.entry is JournalEntry
+            assert journal._ports.status is OperationStatus
+            assert journal._ports.active is _OPEN
+            await journal.prepare()
+            assert await journal.begin("installed-edit", "fingerprint") is None
+            entry = await journal.get("installed-edit")
+            assert type(entry) is JournalEntry and entry.status is OperationStatus.RUNNING
+            assert not entry.closed
+            await journal.finish("installed-edit", OperationStatus.SUCCEEDED, revision=1)
+            assert (await journal.get("installed-edit")).closed
             saved = await store.create(definition)
             assert type(saved.map_ref) is MapRef and saved.map_ref == reference
             assert await store.get("task") == saved
@@ -772,7 +833,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] in (["--manager-storage-only"], ["--manager-tasks-only"]):
+    if sys.argv[1:] == ["--manager-agent-only"]:
+        import importlib.util
+
+        for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
+            assert importlib.util.find_spec(package) is None, package
+        verify_manager_agent(network=True)
+    elif sys.argv[1:] in (["--manager-storage-only"], ["--manager-tasks-only"]):
         import importlib.util
 
         for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
@@ -786,5 +853,6 @@ if __name__ == "__main__":
             verify_manager_lifecycle()
             verify_manager_execution()
             verify_manager_waypoints()
+            verify_manager_agent()
     else:
         main()

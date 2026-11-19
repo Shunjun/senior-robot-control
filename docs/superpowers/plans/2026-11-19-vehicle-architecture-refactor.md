@@ -101,6 +101,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M2e 航点存储已迁 | 原waypoints/store的SQL/解析 → `vehicle_manager/waypoints/` | 原值/构造与同DB domain准备注入、薄Compatible构造；地图Home回调沿原事务无二次锁/提交；Home业务/协调后置，11文件与验证见M2e记录 |
 | B6.M2f1/2 生产Home捕获/目标准入已迁 | 原IpcHomePort设定及DirectNavigation管理请求 → `vehicle_manager/waypoints/{home_capture,direct_navigation}.py` | 旧薄构造注入原对象；原时效/代次/CAS与任务接收/唯一运动链保持；旧HomeService不启用，11文件验证见M2f记录 |
 | B6.M2f3 旧Home业务已迁但未启用 | 原waypoints/home → `vehicle_manager/waypoints/{home_service,home_ports}.py` | 原值/薄构造及同DB/robot锁和地图效果注入，guard/token/未知取消与原地图/控制owner保持；9文件验证见M2f3记录 |
+| B6.M3A 管理连接基础已迁 | 原agent/websocket、pairing、journal与runtime/supervisor → `vehicle_manager/agent/` | 原快照/heartbeat、诊断和journal值逐实例注入；旧构造Compatible薄子类或同对象别名，原DB/锁、WS身份/超时/撤销和离线任务语义保持；21文件及安装/验证见M3A记录，快照/请求处理后片另核 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -546,3 +547,28 @@ manager36份仍原2项类型诊断，全链228份仍M2e同39项，不弱化保�
 真实ROS/Linux/车辆/仿真及Python3.10未验，原native/SLAM仍UNVERIFIED；不开服务、部署、推送。
 下一片先只读精核管理WebSocket连接/快照/请求与journal/dispatcher依赖，
 纯Link/Heartbeat与IpcMotion分开，保留同DB、原控制/IPC及既有任务离线规则，再预报实施；导航算法仍最后。
+
+
+### B6.M3A 管理网络、监管、配对及journal已迁
+
+基线a8ce5c7，四份唯一实现归既有vehicle_manager/agent，六份新增含公开按需入口及逐实例ports；
+原Link/Connector/Journal兼容薄构造类非同类但业务方法唯一，原值/枚举/异常/凭据及监管别名同一对象。
+快照/heartbeat构造、原诊断锁/队列/owner、同Database/连接写锁与journal值由旧生产装配提供，
+原nonce/epoch/revoke/网络超时、队列上界、配对文件权限/无覆盖、日志前缀和SQL恢复规则保持。
+管理WS不承载本地控制IPC；原run_agent/Agent/composition、ROS控制和已接受非手动任务断线规则不改。
+manager仅真实contracts/第三方依赖，网络库为agent extra，根兼容安装单向消费manager，无新顶层包或WS扩张。
+
+实际21逻辑文件：产品10/测试迁移3/配置构建4/工具文档4，即新增6/修改12/迁移3/删除0。
+三份原测试同字节迁移，核心20通过、完整原选集116通过；初次回环bind沙箱拒绝经允许执行原用例后通过。
+业务方法/事务/原值及pairing/监管类体审计一致，相关14份Python lint/format与CI新增步骤语法通过。
+manager44源码仍原2项类型诊断，全链236源码仍原39项、同M2f3集合一致；不宣称全仓全绿。
+两wheel构建、离仓库基础8包/agent-extra15包/旧SDK29包导入依赖及实际SQLite/旧Connector装配检查通过。
+网络extra离线缺缓存后下载原锁版本成功；根完整离线frozen重装仍有缓存缺口，实际为旧SDK兼容闭包验证，
+全extra frozen仅dry-run；锁包版本集合保持不变。
+实际目录、全部命令版本/结果及限制见[manager M3A](../../../senior_control/README.md#m3a-管理连接监管配对与journal基础)。
+真实Linux/ROS/ament/DDS/原生/车辆/仿真、Python3.10与GitHub runner未验，native/SLAM仍UNVERIFIED；不开服务/部署/推送。
+
+后续管理快照/state/connection与请求dispatcher/main仅先逐调用盘点，
+原快照投影和heartbeat纯值与IpcMotion/异常分开，保留单一owner、原同DB/任务journal、
+手动隔离/明确撤销与非手动已接受任务离线继续，再按真实依赖预报同一合理批次迁移。
+本片未迁这些实现；既有地图/Home/定位与导航保持可用，ROS导航行为迁移后再做新算法。

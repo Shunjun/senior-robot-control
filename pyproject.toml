@@ -21,8 +21,7 @@ ros = [
     "numpy>=1.24,<2; sys_platform == 'linux' and python_version == '3.10'",
 ]
 agent = [
-    "httpx>=0.27,<1",
-    "websockets>=14,<16",
+    "vehicle-manager[agent]==0.1.0",
 ]
 cloud = [
     "fastapi>=0.115,<1",

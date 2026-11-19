@@ -1019,3 +1019,91 @@ LifecycleNavigationOperations及已迁manager任务/设置/日志/Home接口，
 test_settings_logs_wire及现有任务ownership/终端用例；
 先列各真实入口→字段/异常/队列/时钟/事务依赖，再按独立连接、快照投影、journal、dispatcher/Agent顺序切片。
 此处仅给盘点范围，不表示上述模块已获批搬迁或估算可直接复用。
+
+
+## M3A 管理连接、监管、配对与journal基础
+
+基线a8ce5c7；本片仅迁四份既有实现，现有run_agent/Agent/composition继续通过旧入口装配。
+实际新增目录：
+
+```text
+senior_control/src/vehicle_manager/agent/
+├── __init__.py       # 按需公开，导入公开包不加载网络库
+├── ports.py          # 当前快照/heartbeat/诊断与journal值的逐实例接缝
+├── websocket.py      # 原Link/Connector、nonce/epoch/超时/撤销及队列配置
+├── supervisor.py     # 原异步监管、重试/故障隔离与关闭
+├── pairing.py        # 原凭据/配对、文件权限和禁止覆盖
+└── journal.py        # 原同DB/锁SQL、事务、去重/tombstone和未知恢复
+senior_control/tests/
+├── test_websocket_link.py # 原tests/unit同字节迁移
+├── test_runtime.py        # 原tests/integration同字节迁移
+└── test_agent_pairing.py  # 原tests/integration同字节迁移
+```
+
+唯一业务实现归manager；原agent/websocket和journal显式Compatible薄构造子类，
+因此新旧业务owner类不是同一对象，继承的业务方法仍是同一实现。
+原JournalEntry/OperationStatus/_OPEN、HeartbeatFrame/RobotSnapshot及snapshot_envelope继续由原owner提供，
+旧Connector逐实例选择旧Link构造；原ProtocolRejected/Socket/超时常量、Credentials/配对函数、
+AuthRejected/Supervisor及journal SQL tuple均同一对象。
+原DiagnosticLock/QueueSnapshot/process_diagnostics由旧装配注入，标签、容量/不可观测深度、时钟和owner不变；
+监管logger显式保留senior_control.runtime.supervisor前缀。没有另建状态/诊断owner。
+
+生产调用仍为run_agent→原Agent/Connector→Compatible Link→canonical网络状态；
+原Supervisor导入为canonical别名，原AgentJournal构造传入原Database/同连接写锁与值。
+Supervisor的call_ros只是原回调，WS连接并未迁入本地IPC或控制；
+connection/main/dispatcher/snapshots/composition及非手动已接受任务断线规则不改。
+公开技术接缝仅表达真实消费者使用的构造/效果，不扩WS contracts，manager无root/ROS反向导入。
+
+### 实际范围和安装闭包
+
+21逻辑文件：产品10（agent六份新增、上述四份旧入口修改），测试迁移3，配置构建4，工具文档4；
+新增6/修改12/迁移3/删除0，迁移单计。
+配置仅根与manager pyproject、根uv.lock、原backend CI；工具文档仅原安装工具、本README、tests/README和原plan。
+manager基础依赖不加网络库，agent extra声明httpx与websockets；根agent extra改消费vehicle-manager[agent]。
+锁中69个包的名称/版本集合不变，HTTPX0.28.1/WebSockets15.0.1，云镜像与云锁不改。
+CI新增基础及agent-extra仓库外wheel检查，仍固定uv0.12.23、Python3.10/3.12；本地仅语法核对，非CI实跑。
+
+### 命令、结果与限制
+
+版本：macOS26.4 arm64、原主仓库.venv的Python3.12.15/pytest8.4.2/ruff0.17.3/mypy2.4.0，
+uv0.12.23；主环境Pydantic2.14.1/aiosqlite0.22.1。
+下列python/ruff/mypy均使用原主仓库.venv/bin绝对路径，命令在本功能工作区执行，离仓库项另注。
+
+- RED：从/tmp以原旧manager环境运行原安装工具新增--manager-agent-only，缺vehicle_manager.agent失败；
+  本片wheel安装后同入口通过。
+- `python -m pytest senior_control/tests/test_websocket_link.py senior_control/tests/test_runtime.py senior_control/tests/test_agent_pairing.py -q`：
+  首次沙箱19通过/1失败，原因原localhost WS夹具bind被EPERM拒绝；允许原测试回环socket后20通过，1.74s。
+- `python -m pytest senior_control/tests/test_websocket_link.py senior_control/tests/test_runtime.py senior_control/tests/test_agent_pairing.py tests/integration/test_agent.py tests/integration/test_settings_logs_wire.py tests/integration/test_task_ownership.py tests/unit/test_logging_diagnostics.py tests/integration/test_backend_observability.py -q`：
+  最终116通过，9.90s（包含上述20项，不累加）。原WS身份/nonce/epoch/revoke/超时、监管阻塞/失败/关闭、
+  配对/权限、journal提交失败重放/去重、设置日志wire及任务离线隔离复用原用例；无新场景/弱化断言。
+- 原Link的12个非构造方法、Connector连接方法、journal7个业务方法按明确注入名归一后AST一致；
+  原JournalEntry和事务helper、Supervisor/AuthRejected类体一致，pairing及三份迁移测试逐字节一致。
+- 相关14份Python的`ruff check`及`ruff format --check`通过；CI YAML解析与新增步骤`bash -n`通过。
+  `git -c core.whitespace=cr-at-eol diff --check`用于保留原CRLF后的差异核对。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：44源码，
+  仍原2项lifecycle:318/lifecycle_store:647；将MYPYPATH设为根pytest现有全部pythonpath后运行
+  `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：236源码仍原39项，
+  与M2f3同环境诊断集合逐条一致，不宣称类型检查通过。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv lock --offline`及
+  `uv export --frozen --extra agent --no-hashes --no-emit-local --offline`成功；
+  `uv sync --frozen --dry-run --group dev --extra agent --extra cloud --extra safety --extra video --extra ros --offline`
+  成功，仅dry-run，不等于完整frozen根重装。
+- 同cache下`uv build senior_control --offline --out-dir /tmp/m3a-final-wheels`和根
+  `uv build --offline --out-dir /tmp/m3a-final-wheels`成功生成sdist/wheel。
+  以原Python创建/tmp/m3a-base-venv和/tmp/m3a-agent-venv，使用上述export约束安装本片manager及既有contracts wheel。
+  agent extra初次离线安装因WebSockets15.0.1未缓存失败；下载原锁定依赖后安装成功，无服务启动。
+  最终wheel重装后，从/tmp执行原工具`--manager-tasks-only`及`--manager-agent-only`均通过；
+  后者核对Root/cloud/ROS/地图包不存在并输出网络库0.28.1/15.0.1。
+  `uv pip check --python <各环境python>`分别8包/15包通过。
+- 原/tmp/vehicle-batch-one-venv完整锁约束重装尝试缺pydantic-settings2.16.1离线缓存；
+  保留旧SDK已有兼容第三方版本，`uv pip install --offline --reinstall --no-deps`安装本片root/manager wheel，
+  再按export约束安装manager[agent]/contracts网络依赖成功。
+  从/tmp运行原工具默认模式及`uv pip check`通过，29包；不是完整根frozen重装通过。
+  工具真实构造旧Connector但不连接，核对旧link工厂、值/异常与方法身份；
+  使用真实临时SQLite和原Database/AgentJournal prepare/begin/get/finish，核对同DB/锁/原值及状态。
+  原任务/Home/生产IPC装配引用检查继续通过，没有发运动或替换真实IPC。
+
+真实Linux/ROS/ament/DDS/原生及车辆/仿真运行、Python3.10和GitHub runner未实测；
+安装工具原native/SLAM仍UNVERIFIED，既有S3夹具失败与原2/39项类型诊断仍登记。
+选定116项通过不代表全仓全绿；无开发/实车服务、部署或推送。
+下一片先精核快照/连接与请求处理依赖，保留原IPC/控制和唯一状态owner，再预报迁移；本片未提前实施。
