@@ -1,0 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "senior-motion-control"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.hatch.build.targets.wheel]
+packages = ["senior_motion_control"]

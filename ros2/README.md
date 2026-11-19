@@ -94,3 +94,7 @@ LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x720x24' \
 ```
 
 Keep the same sourced ROS environments and isolated domain described above in both terminals. This establishes the sensor test only; the complete ROS suite and watchdog negative control remain separate gates. Fortress also offers `--headless-rendering` for EGL with OGRE2, but that option has not been tested in this VM. `-s` alone means server-only and does not request that option. See the [Fortress headless rendering documentation](https://gazebosim.org/api/gazebo/6/headless_rendering.html).
+
+## 原生控制输出包迁移（批次 1）
+
+两个 guard 和 FinalCommand 帧实现已归 [senior_motion_control](src/senior_motion_control/README.md)。senior_robot 的 SafetyGate 实际使用新包索引路径，实车/仿真仍共用该入口；先构建新包再启动现有组合。senior_motion_msgs 暂只保留 native_receipt 运行程序及消息/时序契约，不能声称已完成全部执行拆分。ABI、原截止和停止语义不变。

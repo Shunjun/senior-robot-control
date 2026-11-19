@@ -1422,6 +1422,17 @@ wheels = [
 ]
 
 [[package]]
+name = "senior-contracts"
+version = "0.1.0"
+source = { editable = "contracts" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.8,<3" }]
+
+[[package]]
 name = "senior-control"
 version = "0.1.0"
 source = { editable = "." }
@@ -1431,6 +1442,7 @@ dependencies = [
     { name = "pydantic-settings", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pydantic-settings", version = "2.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
+    { name = "senior-contracts" },
 ]
 
 [package.optional-dependencies]
@@ -1475,6 +1487,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "senior-contracts", editable = "contracts" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
     { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
 ]

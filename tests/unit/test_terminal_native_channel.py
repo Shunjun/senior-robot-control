@@ -15,7 +15,7 @@ from senior_control.safety.arbiter import FinalCommandFence
 
 
 def test_native_identity_channel_preserves_newer_manual_generation(rig):  # noqa: F811
-    path = Path("ros2/src/senior_motion_msgs/test/test_final_command_frame.py")
+    path = Path("ros2/src/senior_motion_control/test/test_final_command_frame.py")
     spec = importlib.util.spec_from_file_location("terminal_frame_test", path)
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)

@@ -4,12 +4,13 @@ import math
 import time
 from typing import Any
 
+from senior_motion_control.final_command_frame import PAYLOAD_FIELDS
+
 from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionEvent, MotionMode, MotionTarget
 from senior_control.motion.contracts import MotionEventKind as K
 from senior_control.motion.manual_target import ManualLinearTarget
 from senior_control.motion.state_machine import MotionStateMachine
-from senior_robot.final_command_frame import PAYLOAD_FIELDS
 
 
 class CommandArbitration:

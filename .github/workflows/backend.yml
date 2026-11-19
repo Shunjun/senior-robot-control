@@ -17,9 +17,12 @@ jobs:
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src/senior_control
       - run: uv run --no-sync pytest tests/unit tests/integration
-      - run: uv build
+      - run: uv build --out-dir dist
+      - run: uv build contracts --out-dir dist
+      - run: uv build ros2/src/senior_motion_control --out-dir dist
       - run: |
           python -m venv /tmp/wheel-test
           /tmp/wheel-test/bin/pip install dist/*.whl
           cd /tmp
           /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config; import importlib.util; assert importlib.util.find_spec("shapely") is None'
+          /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"

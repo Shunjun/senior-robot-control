@@ -111,3 +111,5 @@ uv run --no-sync lefthook install
 
 
 标准 ROS 传感器和 `/cmd_vel` 接口的部署要求见[实车部署](docs/operations/vehicle-deploy.md)，1 倍仿真使用[标准环境入口](docs/operations/simulation.md)。旧时间协议 overlay 已退役，无需修改厂家、Nav2 或 Gazebo 组件。
+
+批次 1 的独立契约位于 [contracts](contracts/README.md)，原生输出位于 [senior_motion_control](ros2/src/senior_motion_control/README.md)；管理与云端当前安装入口保持原状。最新边界见[确认稿](docs/architecture/ROS2与车端架构重构确认稿.md)，实际迁移清单见[批次记录](docs/architecture/vehicle-batch-one.md)。独立安装根 wheel 时须一并安装 senior-contracts wheel；根 uv 路径依赖会自动处理。

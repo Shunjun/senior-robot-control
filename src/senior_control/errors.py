@@ -1,20 +1,4 @@
-"""Stable domain error codes."""
+"""//Compatible: historical path; all values are the same contract objects."""
 
-from enum import Enum
-
-
-class ErrorCode(str, Enum):
-    VALIDATION = "validation"
-    CONFLICT = "conflict"
-    OFFLINE = "offline"
-    UNAVAILABLE = "unavailable"
-    LOCALIZATION_UNAVAILABLE = "localization_unavailable"
-    SAFETY_REJECTED = "safety_rejected"
-    TIMEOUT = "timeout"
-    OPERATION_UNKNOWN = "operation_unknown"
-
-
-class DomainError(Exception):
-    def __init__(self, code: ErrorCode, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+from senior_contracts.errors import DomainError as DomainError
+from senior_contracts.errors import ErrorCode as ErrorCode

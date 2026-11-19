@@ -18,14 +18,13 @@ import time
 from collections import deque
 from contextlib import ExitStack
 from dataclasses import replace
-from pathlib import Path
 
-from ament_index_python.packages import get_package_prefix
 from rclpy.clock import Clock as RosClock
 from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from senior_motion_control.native import native_executable
 from senior_motion_msgs.msg import (
     BoundedDepthEvidence,
     FencedDepthEvidence,
@@ -159,7 +158,7 @@ class SafetyGate(Node):
         self._bounded_depth_topic = str(self.get_parameter("bounded_depth_topic").value)
         self._raw_depth_topic = str(self.get_parameter("raw_depth_topic").value)
         self._raw_depth_info_topic = str(self.get_parameter("raw_depth_info_topic").value)
-        from senior_robot.motion_output import MotionOutput
+        from senior_motion_control.motion_output import MotionOutput
 
         self._output_transport = (
             self._own(MotionOutput(self.resolve_topic_name(output)))
@@ -345,10 +344,7 @@ class SafetyGate(Node):
 
     def _start_command_guard(self) -> None:
         try:
-            executable = (
-                Path(get_package_prefix("senior_motion_msgs"))
-                / "lib/senior_motion_msgs/final_command_guard"
-            )
+            executable = native_executable("final_command_guard")
             parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             try:
                 process = subprocess.Popen(
@@ -392,7 +388,7 @@ class SafetyGate(Node):
         channel = self._guard_socket
         if channel is None:
             return
-        from senior_robot.final_command_frame import LAYOUT, decode_frame
+        from senior_motion_control.final_command_frame import LAYOUT, decode_frame
 
         layout = LAYOUT
         try:

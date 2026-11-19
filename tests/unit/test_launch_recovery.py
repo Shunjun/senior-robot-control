@@ -538,7 +538,7 @@ def native_recovery_codec(tmp_path):
             "-Wextra",
             "-Werror",
             "-I",
-            str(Path("ros2/src/senior_motion_msgs/src").resolve()),
+            str(Path("ros2/src/senior_motion_control/native").resolve()),
             str(source),
             "-o",
             str(binary),
@@ -580,7 +580,7 @@ def _check_command_guard_core_recovery(monkeypatch, tmp_path):
         node = production_command_owner(clock)
         requests, _ = wire_owner(monkeypatch, rig.run)
         monkeypatch.setattr(
-            "senior_robot.motion_core_output.LearningClient", learning_client.LearningClient
+            "senior_robot.vehicle_learning.LearningClient", learning_client.LearningClient
         )
         monkeypatch.setenv("SENIOR_LAUNCH_RECOVERED", "1")
         first = rig.new_core()

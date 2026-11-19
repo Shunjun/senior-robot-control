@@ -33,7 +33,7 @@ def native_harness(tmp_path_factory):
             "-I",
             str(directory),
             "-I",
-            str(ROOT / "ros2/src/senior_motion_msgs/src"),
+            str(ROOT / "ros2/src/senior_motion_control/native"),
             "-I",
             str(ROOT / "ros2/src/senior_motion_msgs/include"),
             str(directory / "protocol_harness.cpp"),
@@ -64,7 +64,8 @@ def output_module(monkeypatch):
     package.get_package_prefix = lambda _: "/nonexistent-batch-test-install"
     monkeypatch.setitem(sys.modules, package.__name__, package)
     spec = importlib.util.spec_from_file_location(
-        "native_output_under_test", ROOT / "ros2/src/senior_robot/senior_robot/motion_output.py"
+        "native_output_under_test",
+        ROOT / "ros2/src/senior_motion_control/senior_motion_control/motion_output.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -126,7 +127,7 @@ def native_state_harness(tmp_path_factory):
             "-I",
             str(directory),
             "-I",
-            str(ROOT / "ros2/src/senior_motion_msgs/src"),
+            str(ROOT / "ros2/src/senior_motion_control/native"),
             "-I",
             str(ROOT / "ros2/src/senior_motion_msgs/include"),
             str(directory / "protocol_state_harness.cpp"),

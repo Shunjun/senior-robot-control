@@ -12,7 +12,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 SPEC = importlib.util.spec_from_file_location(
-    "frame_codec", ROOT / "ros2/src/senior_robot/senior_robot/final_command_frame.py"
+    "frame_codec",
+    ROOT / "ros2/src/senior_motion_control/senior_motion_control/final_command_frame.py",
 )
 codec = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(codec)
@@ -35,7 +36,7 @@ class NativeRoundtrip(unittest.TestCase):
                 "-Wextra",
                 "-Werror",
                 "-I",
-                str(source.parent.parent / "src"),
+                str(source.parent.parent / "native"),
                 str(source),
                 "-o",
                 str(cls.binary),

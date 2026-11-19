@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkeypatch):  # noqa: F811
     spec = importlib.util.spec_from_file_location(
-        "native_test", ROOT / "ros2/src/senior_motion_msgs/test/test_final_command_frame.py"
+        "native_test", ROOT / "ros2/src/senior_motion_control/test/test_final_command_frame.py"
     )
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
