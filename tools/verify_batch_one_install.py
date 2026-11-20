@@ -324,7 +324,147 @@ def verify_platform_runtime() -> None:
     )
 
 
+def verify_manager_config(*, compatible: bool = False) -> None:
+    """Check the real installed manager leaves and optional original SDK binding."""
+    import inspect
+    from dataclasses import FrozenInstanceError, fields
+    from importlib.util import find_spec
+
+    from pydantic import ValidationError
+    from vehicle_manager.agent.config import AgentConfig
+    from vehicle_manager.agent.pose_reply import PoseReply
+
+    for value in (AgentConfig, PoseReply):
+        assert "site-packages" in inspect.getfile(value), inspect.getfile(value)
+    if not compatible:
+        for package in ("vehicle_core", "senior_control", "cloud", "rclpy", "senior_robot"):
+            assert find_spec(package) is None, package
+    environment = {
+        "SENIOR_ROBOT_ID": "robot",
+        "SENIOR_CLOUD_URL": "wss://cloud.test/ws/agent",
+        "SENIOR_DEVICE_TOKEN": "private-config-token",
+        "SENIOR_DATABASE_PATH": "/tmp/config.db",
+        "SENIOR_AGENT_SOCKET": "/tmp/config.sock",
+        "SENIOR_UNRELATED": "ignored",
+    }
+    config = AgentConfig.from_environment(environment)
+    assert type(config) is AgentConfig and config.database_path == Path("/tmp/config.db")
+    assert "private-config-token" not in repr(config)
+    assert not hasattr(config, "diagnostics")
+    assert not next(field for field in fields(config) if field.name == "device_token").repr
+    try:
+        config.robot_id = "changed"
+    except FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("configuration is mutable")
+    for change in (
+        {"SENIOR_CLOUD_URL": "ws://cloud.test"},
+        {"SENIOR_CLOUD_URL": "wss://user:password@cloud.test"},
+        {"SENIOR_DATABASE_PATH": "relative.db"},
+        {"SENIOR_WORKSPACE_MAP_BUNDLE": "/tmp/map.zip"},
+    ):
+        try:
+            AgentConfig.from_environment({**environment, **change})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(change)
+    pose = dict(
+        v=1,
+        ok=True,
+        sampled_at=10.0,
+        healthy=True,
+        map_id="map",
+        reference_revision=1,
+        anchor_id="anchor",
+        x=0.0,
+        y=0.0,
+        yaw=0.0,
+        anchor_x=0.0,
+        anchor_y=0.0,
+        anchor_yaw=0.0,
+    )
+    assert PoseReply.model_validate(pose).map_generation is None
+    for change in (
+        {"healthy": False},
+        {"sampled_at": float("inf")},
+        {"reference_revision": "1"},
+        {"extra": 1},
+    ):
+        try:
+            PoseReply.model_validate({**pose, **change})
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(change)
+    if compatible:
+        from senior_control.agent.composition import AgentConfig as OldConfig
+        from senior_control.agent.ports import PoseReply as OldPoseReply
+        from vehicle_core.diagnostics import DiagnosticsSettings
+
+        assert OldConfig is not AgentConfig and issubclass(OldConfig, AgentConfig)
+        assert OldConfig.__post_init__ is AgentConfig.__post_init__
+        assert OldConfig.from_environment.__func__ is AgentConfig.from_environment.__func__
+        assert OldPoseReply is PoseReply
+        names = (
+            "robot_id",
+            "cloud_url",
+            "device_token",
+            "database_path",
+            "socket_path",
+            "workspace_map_bundle",
+            "workspace_map_sha256",
+            "simulation_video_frame",
+            "ros_video_topic",
+            "simulation_settings",
+            "diagnostics",
+        )
+        assert tuple(inspect.signature(OldConfig).parameters) == names
+        diagnostic = next(field for field in fields(OldConfig) if field.name == "diagnostics")
+        assert diagnostic.default_factory is DiagnosticsSettings
+        old = OldConfig(
+            "robot",
+            environment["SENIOR_CLOUD_URL"],
+            environment["SENIOR_DEVICE_TOKEN"],
+            Path("/tmp/config.db"),
+            Path("/tmp/config.sock"),
+        )
+        assert type(old.diagnostics) is DiagnosticsSettings
+        parsed = OldConfig.from_environment(
+            {**environment, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "7"}
+        )
+        assert type(parsed) is OldConfig and parsed.diagnostics.queue.count == 7
+        assert "private-config-token" not in repr(parsed)
+        missing = {key: value for key, value in environment.items() if key != "SENIOR_ROBOT_ID"}
+        try:
+            OldConfig.from_environment({**missing, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0"})
+        except ValueError as exc:
+            assert str(exc) == "missing environment variable SENIOR_ROBOT_ID"
+            assert isinstance(exc.__cause__, KeyError)
+        else:
+            raise AssertionError("missing required environment did not fail first")
+        try:
+            OldConfig.from_environment(
+                {
+                    **environment,
+                    "SENIOR_CLOUD_URL": "ws://cloud.test",
+                    "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0",
+                }
+            )
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError("diagnostic validation did not precede constructor validation")
+        print("installed SDK config signature/diagnostic priority and PoseReply identity: PASS")
+    else:
+        for name in ("vehicle_core", "senior_control", "cloud", "rclpy", "senior_robot"):
+            assert name not in sys.modules, name
+        print("installed manager config/PoseReply without core, legacy SDK or ROS: PASS")
+
+
 def verify_manager_agent(*, network: bool = False) -> None:
+    verify_manager_config()
     from vehicle_manager import agent
     from vehicle_manager.agent.composition import build_task_runtime, run_agent
     from vehicle_manager.agent.ipc_motion import IpcMotion, TaskAwareMotion
@@ -1495,6 +1635,7 @@ def main() -> None:
     verify_manager_lifecycle()
     verify_legacy_task_store()
     verify_lazy_shared_imports()
+    verify_manager_config(compatible=True)
     verify_legacy_operator()
     verify_navigation()
     verify_legacy_media()
@@ -1654,6 +1795,10 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-config-only"]:
+        verify_manager_config()
+    elif sys.argv[1:] == ["--manager-config-compatible"]:
+        verify_manager_config(compatible=True)
     elif sys.argv[1:] == ["--navigation-only"]:
         verify_navigation()
     elif sys.argv[1:] == ["--platform-runtime-only"]:

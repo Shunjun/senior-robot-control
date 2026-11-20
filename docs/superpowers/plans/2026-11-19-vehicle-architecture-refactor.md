@@ -1001,3 +1001,36 @@ f565a17归档仅对照该节点复现相同错误，未修改测试；Ruff80文�
 [manager本片记录](../../../senior_control/README.md#r1-共享车内值异常与运行态)。
 不宣称guard用例或全量通过，不运行仿真/ROS/实车/开发服务、不发运动、不部署推送；
 提交固定分支后等待负责人审核，真实设备验证与旧fixture后续另批处理。
+
+
+### R5 首片：通用 AgentConfig 与 PoseReply（2026-11-21）
+
+固定功能分支基线 `6266c9a`，实施前工作区干净。先登记范围，再将AgentConfig通用
+字段、环境读取与TLS/路径校验归manager/agent/config.py；canonical frozen基类不含具体
+诊断类型，不依赖vehicle_core/旧包/ROS。旧composition.AgentConfig用Compatible frozen
+dataclass子类补原diagnostics字段及原诊断解析绑定，保持字段顺序、默认工厂与行为。
+两类不同，不能声称同对象；共用唯一from_environment与__post_init__，在原全部必填
+读取/路径构造之后、cls构造之前调用受保护类方法补诊断kwargs，避免新增配置框架、
+伪默认诊断或全局provider。保留缺必填/坏诊断/构造校验的异常优先级、KeyError链与文本。
+
+PoseReply原pydantic校验归manager/agent/pose_reply.py，旧ports显式同对象转发；
+IpcHomePort解析对象、请求顺序不变，RuntimeState/StateReply仍原位，发行DAG另批。
+预算7文件：产品增2改2、工具文档改3（安装工具/manager README/本计划），
+测试/配置0、无删；依赖/锁/systemd/CLI/生产parser与run_agent实例传递不变。
+
+限定测试仅manager的test_agent_config.py与test_agent_ports.py，均非仿真；必要临时Unix
+socket沿原受控测试能力，不跑同名仿真环境。另做Ruff/CRLF约定diff、manager/root wheel、
+仓库外manager-only和兼容SDK检查：环境/TLS/路径/secret repr、新基类不加载core/旧业务/ROS，
+旧签名/诊断解析/默认factory/缺必填优先与PoseReply身份保持。
+不发运动请求、不启任何仿真/ROS/实车/开发服务、不部署推送；自审后仅固定分支提交。
+
+
+本片实际7文件，产品增2改2、工具文档改3，测试/配置无改、无删。
+通用配置字段/校验原样，唯一解析只加末尾诊断kwargs接缝；旧类为不同Compatible子类，
+原构造顺序/默认/异常优先级保持，PoseReply class AST及旧新身份相同。
+指定非仿真测试 **14通过**，Ruff5文件、CRLF约定diff、manager/root wheel通过；
+仓库外8包manager-only无core/旧包/ROS安装及26包SDK兼容检查、两边pip check通过。
+完整命令、版本、自审和限制见
+[manager本片记录](../../../senior_control/README.md#r5-首片通用-agentconfig-与-posereply)。
+未改运行入口/依赖/锁，不宣称完整独立生产部署；未运行仿真/开发/ROS/车辆服务、
+无运动请求或部署推送，提交固定分支后等待负责人审核。

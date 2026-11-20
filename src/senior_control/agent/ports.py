@@ -11,6 +11,9 @@ from vehicle_manager.agent.ipc_navigation import IpcMapPort as _IpcMapPort
 from vehicle_manager.agent.ipc_navigation import IpcNavigation as _IpcNavigation
 from vehicle_manager.agent.ipc_state import IpcState as _IpcState
 from vehicle_manager.agent.local_ports import NavigationValues
+
+# //Compatible: the original Home parser retains the canonical class identity.
+from vehicle_manager.agent.pose_reply import PoseReply as PoseReply
 from vehicle_manager.agent.request_ports import Requester as Requester
 from vehicle_manager.waypoints.home_capture import HomeCapture as _HomeCapture
 from vehicle_manager.waypoints.ports import WaypointValuePorts
@@ -139,25 +142,6 @@ class IpcState(_IpcState[RuntimeState]):
             ipc_error=IpcError,
             clock=clock,
         )
-
-
-class PoseReply(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-    v: Literal[1]
-    ok: Literal[True]
-    sampled_at: float
-    healthy: Literal[True]
-    map_id: str
-    reference_revision: int
-    anchor_id: str
-    x: float
-    y: float
-    yaw: float
-    anchor_x: float
-    anchor_y: float
-    anchor_yaw: float
-    # //Compatible: legacy pose IPC remains readable but cannot authorize Home.
-    map_generation: str | None = None
 
 
 class IpcHomePort(_HomeCapture[MapRef, Pose2D]):

@@ -2322,3 +2322,81 @@ test/tests目录不动，仿真点只静态迁引。预算82文件：产品增3�
 当前guard旧fixture错误仍保留，不能宣称该条通过或全量通过；其余测试未扩大运行。
 本片没有仿真验证、ROS/实车/开发服务启动或部署，没有发送运动请求；
 真实Humble/ABI/设备与实车手动控制行为仍未验证。
+
+
+### R5 首片：通用 AgentConfig 与 PoseReply
+
+基线 `6266c9a`，固定功能分支工作区干净后实施。通用frozen AgentConfig构造、环境读取、
+TLS/路径校验归 `vehicle_manager/agent/config.py`；不含具体diagnostics字段，也不依赖core、
+旧包或ROS。旧composition.AgentConfig为Compatible frozen dataclass子类，唯一增加原
+diagnostics字段/default_factory与环境解析绑定；旧类和新基类不同，不能报告同对象。
+旧公开构造字段/顺序/默认保持，共用唯一__post_init__和from_environment解析。
+
+from_environment在原必填项/路径读取完成之后、cls构造之前，调用受保护_environment_fields
+获取额外kwargs；基类返回空字段，旧子类只提供原diagnostics_from_environment结果。
+保留缺必填KeyError文本/链、坏诊断与TLS/路径构造校验优先级，不新增provider/配置框架
+或伪诊断默认值；原生产配置实例、parser和运行入口保持。
+
+PoseReply原pydantic校验迁 `vehicle_manager/agent/pose_reply.py`，旧ports显式同对象转发，
+IpcHomePort解析对象/请求顺序保持，RuntimeState/StateReply仍原位。实际7文件预算：
+产品增2改2、工具文档改3，测试/配置0、无删除，依赖/锁/systemd/CLI不改。
+
+
+#### 本片验证、自审与限制
+
+环境：macOS arm64，原主仓Python 3.12.15、pytest 8.4.2、Ruff 0.17.3、uv 0.12.23。
+工具仍复用原主仓 `.venv/bin`；不改项目 `.venv`、依赖或锁。
+
+- 先给既有安装工具增加新配置/PoseReply检查；旧manager wheel执行
+  `--manager-config-compatible` 明确缺少vehicle_manager.agent.config而退出1，
+  新owner检查有效。工具原断言保留，新检查接入已有manager agent检查和默认SDK路径，
+  并提供两个定向安装检查选项。
+- 指定测试命令（项目目录、原主仓Python）：
+
+  ```sh
+  python -m pytest senior_control/tests/test_agent_config.py \
+    senior_control/tests/test_agent_ports.py -q --tb=short
+  ```
+
+  申请原受控本地Unix fixture权限后 **14通过**，0.43秒，退出0，无跳过。
+  同DB/写锁/九客户端、原CLI配对绑定/凭据、无adapter时继续上报、Home原准入及
+  独立stop lane等既有断言保持；测试文件未改，不向ROS或车辆发送请求。
+- 5份改动/新增Python的 `ruff check` / `ruff format --check`通过；
+  初轮1处导入排序、3处格式及1个迁移后未使用Path导入已整理。
+  按既有CRLF约定 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+  diff --check` 通过。
+- 自审AST：新通用字段（除diagnostics）及__post_init__与基线原定义相同；
+  from_environment只将末尾原diagnostics表达式改为受保护hook的kwargs，
+  必填/路径读取顺序、KeyError处理及其余解析完全相同；返回类型使用标准库TypeVar保持
+  旧子类实际返回类型，不引入配置框架。旧子类diagnostics原default_factory保持。
+  PoseReply完整class AST相同，composition除配置类以外所有主体及ports除PoseReply
+  以外所有主体与基线相同，IpcHomePort仍用同名同对象parser和原请求顺序。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-manager-config-wheels`
+  与 `uv build senior_control --offline --out-dir /tmp/vehicle-manager-config-wheels`：
+  Root/manager两个项目sdist/wheel通过；Root移除未使用import后再次构建更新实际wheel。
+- 以 `uv pip install --offline --reinstall --no-deps --python
+  /tmp/vehicle-core-leaf-sdk/bin/python <新Root wheel> <新manager wheel>` 更新已有26包SDK夹具；
+  其余依赖wheel沿用前片，不冒充全部重建。
+  另 `uv venv --python <原主仓Python> /tmp/vehicle-manager-config-only`，
+  仅安装新manager和原contracts wheel及其依赖，共8包，无Root/core/ROS。
+- 从 `/tmp`、`PYTHONPATH=` 执行安装工具：
+
+  ```sh
+  /tmp/vehicle-manager-config-only/bin/python <仓库>/tools/verify_batch_one_install.py --manager-config-only
+  /tmp/vehicle-core-leaf-sdk/bin/python <仓库>/tools/verify_batch_one_install.py --manager-config-compatible
+  ```
+
+  两者通过。manager-only实际来自site-packages，通用配置环境/TLS/绝对路径/冻结/secret repr
+  与PoseReply严格校验通过，core/旧包/ROS不只未import，而是find_spec也不存在。
+  SDK确认旧类为新类的不同子类，唯一__post_init__/from_environment复用、原11字段顺序
+  与diagnostics默认工厂保持；原诊断环境解析、缺必填优先及KeyError链、坏诊断先于
+  TLS构造校验均通过；旧PoseReply与新类同对象。
+  两夹具 `uv pip check --python ...` 分别8包/26包兼容。
+
+实际7文件，与预报一致：产品增2改2、工具文档改3，无测试/配置/依赖/锁/systemd/CLI
+变更或删除。manager新叶子没有反向依赖core或旧包；RuntimeState/StateReply、
+完整生产绑定及发行DAG尚未迁完，不宣称独立manager生产部署完成。
+提交仅固定分支，禁用超范围钩子且限定检查已手动执行，不推送，等待负责人审核。
+
+本片未运行仿真测试或任何仿真/开发/ROS/车辆服务，无运动请求或部署。
+真实Linux/Humble/设备及实车手动控制可用性仍未验证。
