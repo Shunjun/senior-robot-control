@@ -334,3 +334,74 @@ def test_docker_pair_preserves_operator_identity_and_existing_credentials(
         "-i",
     ]
     assert sorted(file.name for file in control.iterdir()) == ["config.json", "device.json"]
+
+
+def test_docker_stop_uses_only_host_owned_unit_when_container_is_unavailable(tmp_path, monkeypatch):
+    import hashlib
+
+    python_trace = runtime(tmp_path, monkeypatch)
+    control = (tmp_path / "control").resolve()
+    control.mkdir(mode=0o700)
+    (control / "config.json").write_text('{"kind":"real"}')
+    unit = "senior-agent-" + hashlib.sha256(os.fsencode(control)).hexdigest()[:16] + ".service"
+    unit_file = control / unit
+    unit_file.write_text("[Unit]\nRequires=docker.service\n[Service]\nRestart=on-failure\n")
+    units = tmp_path / "systemd"
+    units.mkdir()
+    (units / unit).symlink_to(unit_file)
+    assert os.path.samefile(units / unit, unit_file)
+
+    # Approved platform fixture: replace only the absolute directory constant.
+    # The original -ef and mode checks execute against real files and symlinks.
+    constant = "/etc/systemd/system"
+    source = SCRIPT.read_text()
+    assert source.count(constant) > 0 and str(units) not in source
+    mapped_source = source.replace(constant, str(units))
+    assert constant not in mapped_source
+    assert mapped_source.replace(str(units), constant) == source
+    copied = tmp_path / "senior-robot"
+    copied.write_text(mapped_source)
+
+    for command, body in {
+        "uname": "printf 'Linux\\n'",
+        "timeout": 'printf "%s\\n" "$@" >> "$TIMEOUT_TRACE"; shift; exec "$@"',
+        "systemctl": 'printf "%s\\n" "$@" >> "$SYSTEMCTL_TRACE"',
+        "docker": 'printf "%s\\n" "$DOCKER_CASE:$*" >> "$DOCKER_TRACE"; exit 99',
+    }.items():
+        substitute = tmp_path / command
+        substitute.write_text("#!/bin/bash\n" + body + "\n")
+        substitute.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("DOCKER_TRACE", str(tmp_path / "docker-trace"))
+    monkeypatch.setenv("SYSTEMCTL_TRACE", str(tmp_path / "systemctl-trace"))
+    monkeypatch.setenv("TIMEOUT_TRACE", str(tmp_path / "timeout-trace"))
+
+    def stop(script):
+        return subprocess.run(
+            ["/bin/bash", str(script), "docker", "stop", "--control-dir", str(control)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    for state in ("stopped", "daemon-unavailable"):
+        monkeypatch.setenv("DOCKER_CASE", state)
+        result = stop(copied)
+        assert result.returncode == 0, result.stderr
+    assert (tmp_path / "systemctl-trace").read_text().splitlines() == ["stop", unit] * 2
+    assert (tmp_path / "timeout-trace").read_text().splitlines() == [
+        "30s",
+        "systemctl",
+        "stop",
+        unit,
+    ] * 2
+    assert not (tmp_path / "docker-trace").exists() and not python_trace.exists()
+
+    # The original production path must still reject this undeployed fixture.
+    result = stop(SCRIPT)
+    assert result.returncode == 1 and "deploy the selected project service first" in result.stderr
+    unit_file.write_text("[Unit]\n[Service]\nRestart=on-failure\n")
+    result = stop(copied)
+    assert result.returncode == 1 and "not Docker-managed" in result.stderr
+    assert (tmp_path / "systemctl-trace").read_text().splitlines() == ["stop", unit] * 2
+    assert not (tmp_path / "docker-trace").exists() and not python_trace.exists()

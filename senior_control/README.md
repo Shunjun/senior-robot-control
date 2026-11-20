@@ -1863,3 +1863,19 @@ bin/senior-robot.sh
 - Docker 只读 `docker version --format '{{.Server.Version}}'`：普通沙箱先拒绝 socket，扩大只读权限后明确 daemon 不可连接；未启动 Docker/容器。Docker 行为由原替身与真实 Python 渲染验证，未声称真实 Docker/systemd link/rollback 或镜像运行通过。
 
 未验：真正 Linux/systemd 用户/系统 unit、Humble/ament/厂商设备、真实容器/UID映射/取消断连回滚、真实仿真及车辆、Python3.10/CI。安装工具的导航 executable/share、native接收/守卫和SLAM继续明确 UNVERIFIED。只用了原受控本地子进程/socket/SQLite及PTY夹具，未启动开发、实车、仿真服务、容器或 VM，未部署或推送。后续 B8 和共享发行/平台独立部署边界由负责人另行审阅推进。
+
+### Shell CLI 审阅修复：共享容器不可用时仍能停止项目 unit
+
+基线 `490fb2c` 的 `docker stop` 先进入统一的 inspect/Running/容器 metadata 路径，故共享容器停止或 daemon 不可达时，无法执行宿主 `systemctl stop`，项目的 `Restart=on-failure` unit 可能持续重试。本片只修改 Shell、原 Shell 测试和本 README，共3文件修改，无新增/删除。
+
+独立 `senior-robot docker stop --control-dir ...` 现在复用原宿主日志的 control-dir 哈希选择，复用原目录/符号路径校验、`/etc/systemd/system/<unit> -ef <control-dir>/<unit>` 与 Docker mode 检查，以及原 Linux/timeout30秒/systemctl 单项目启停实现。它不需要 Docker 可用，不 inspect/exec，不调用宿主 Python，更不执行 docker stop/kill/start；unit 的 ExecStop、权限、停止顺序和拓扑未变。start、dry-run 和 restart 仍走原运行中容器检查，restart 内部 stop 失败不会 start，未扩大本次修复范围。
+
+新增一个实际 bug 回归函数 `test_docker_stop_uses_only_host_owned_unit_when_container_is_unavailable`，在 stopped/daemon-unavailable 两种条件下设置任何触及即记录并失败的 Docker 替身，断言仅对目标项目执行 `timeout 30s systemctl stop <hash-unit>`、无 Docker/Python；同场景保留错 mode 拒绝，并直接运行原生产脚本验证未部署拒绝。按负责人确认的 macOS 测试接缝，只有测试副本把 `/etc/systemd/system` 常量映射到临时目录，显式断言存在匹配、替换后无残留、反向替换与原文完全相同；使用真实临时符号链接和原 `-ef`/mode 检查，没有生产注入开关或修改真实 `/etc`。
+
+验证环境沿用上节 Bash3.2.57/Python3.12.15/pytest8.4.2/ruff0.17.3：
+
+- 红灯：修复前运行上述单条回归，退出1，成功路径实际返回99（Docker 禁用替身被触及），复现原缺陷。
+- 绿灯：修复后相同单条回归1通过；`bash -n bin/senior-robot.sh`、测试文件 `ruff check` / `ruff format --check` 和 `git diff --check`通过。
+- 完整原 Shell 用例：`python -m pytest senior_control/tests/test_shell_cli.py -q --tb=short`，包含原停机 start/dry-run 仅 inspect、运行中预览、restart 失败不启动、配对与日志等保护；扩大受控PTY测试权限后 **9通过**，6.81秒，退出0（普通沙箱对原PTY ioctl的限制沿用前节登记，未修改或跳过该断言）。
+
+这是命令替身/真实临时文件身份回归，不能代替 Linux systemd 与真实 daemon 故障实测；未启动真实 systemd、开发/车辆/仿真服务、容器或VM，未部署/推送。原共享发行与B8未验事项继续保留。

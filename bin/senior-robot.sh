@@ -31,8 +31,9 @@ Options:
 
 Native: senior-robot start. Docker: senior-robot docker start.
 Native Python: SENIOR_ROBOT_PYTHON or config project_dir/.venv/bin/python.
-Docker requires an already-running shared container; it never starts/stops that container.
-Host tools: jq; Docker mode also needs docker and Linux systemd for lifecycle/deploy.
+Docker runtime actions require a running container; stop/logs are host-only.
+The CLI never starts/stops the shared container itself.
+Host tools: jq; Docker runtime actions need docker; lifecycle/deploy need Linux systemd.
 HELP
 }
 fail() { printf 'senior-robot: %s\n' "$1" >&2; exit "${2:-2}"; }
@@ -101,21 +102,58 @@ if [[ "$action" == pair ]]; then
     [[ -n "$cloud_url" && -n "${name//[[:space:]]/}" ]] || fail 'pair requires --cloud-url and --name'
     case "$cloud_url" in https://*|wss://*) ;; *) fail 'pair requires a TLS cloud URL' ;; esac
 fi
-# Every Docker failure before exec is host-only Shell/jq/inspect, never host Python.
-if [[ "$mode" == docker && "$action" == logs ]]; then
-    [[ "$selection" == control-dir ]] || fail 'Docker requires --control-dir' 1
+# Shared host selection and installed-unit checks do not depend on Docker/Python.
+normalize_docker_directory() {
+    [[ -d "$selected" && ! -L "$selected" ]] || fail 'control directory is not a real directory' 1
+    logical=$(cd -L -- "$selected" && pwd -L) || exit 1
     selected=$(cd -- "$selected" && pwd -P) || exit 1
-    command -v jq >/dev/null 2>&1 || fail 'jq is required for journal routing' 127
+    [[ "$selected" == "$logical" ]] || fail 'control directory must not contain symlink aliases' 1
+}
+select_docker_unit() {
+    command -v jq >/dev/null 2>&1 || fail 'jq is required for project unit routing' 127
     [[ $(jq -er '.kind' "$selected/config.json") == real ]] || fail 'Docker simulation is unsupported' 1
     if command -v sha256sum >/dev/null 2>&1; then
         digest=$(printf '%s' "$selected" | sha256sum) || exit $?
     elif command -v shasum >/dev/null 2>&1; then
         digest=$(printf '%s' "$selected" | shasum -a 256) || exit $?
     else
-        fail 'sha256sum or shasum is required to identify the project journal' 127
+        fail 'sha256sum or shasum is required to identify the project unit' 127
     fi
     unit=senior-agent-${digest:0:16}.service
-    invoke() { printf '{"unit":"%s","user":false}\n' "$unit"; }
+}
+require_linux() {
+    [[ $(uname -s) == Linux ]] || fail 'systemd lifecycle/deployment requires Linux' 1
+    command -v timeout >/dev/null 2>&1 || fail 'timeout is required for bounded host commands' 127
+}
+require_deployed() {
+    [[ /etc/systemd/system/$unit -ef "$selected/$unit" ]] || fail 'deploy the selected project service first' 1
+    grep -Fx 'Requires=docker.service' "$selected/$unit" >/dev/null || fail 'selected unit is not Docker-managed' 1
+    if [[ "$1" == start ]]; then
+        expected=$(docker_invoke unit) || return $?
+        actual=$(< "$selected/$unit")
+        [[ "$actual" == "$expected" ]] || fail 'service mode/configuration changed; redeploy the Shell-managed unit explicitly' 1
+    fi
+}
+docker_lifecycle() {
+    require_linux
+    require_deployed "$1" || return $?
+    # start must not invoke an old unit that auto-starts a shared container.
+    timeout 30s systemctl "$1" "$unit"
+}
+# Runtime-dependent Docker commands inspect before exec; stop/logs stay on host.
+if [[ "$mode" == docker && ( "$action" == logs || "$action" == stop ) ]]; then
+    [[ "$selection" == control-dir ]] || fail 'Docker requires --control-dir' 1
+    if [[ "$action" == stop ]]; then
+        normalize_docker_directory
+    else
+        selected=$(cd -- "$selected" && pwd -P) || exit 1
+    fi
+    select_docker_unit
+    if [[ "$action" == stop ]]; then
+        invoke() { docker_lifecycle stop; }
+    else
+        invoke() { printf '{"unit":"%s","user":false}\n' "$unit"; }
+    fi
 elif [[ "$mode" == docker ]]; then
     [[ "$selection" == control-dir ]] || fail 'Docker requires --control-dir' 1
     command -v jq >/dev/null 2>&1 || fail 'jq is required for Docker routing' 127
@@ -132,11 +170,7 @@ elif [[ "$mode" == docker ]]; then
     printf '%s' "$inspection" | jq -e 'length == 1 and (.[0] | type == "object")' >/dev/null || fail 'invalid Docker inspection' 1
     printf '%s' "$inspection" | jq -e '.[0].State.Running == true' >/dev/null || fail "container $container is stopped; start it explicitly before this command" 1
     inspection=$(printf '%s' "$inspection" | jq -c '.[0]') || exit 1
-    # Normalize existing control directories, rejecting symlink aliases just as deploy does.
-    [[ -d "$selected" && ! -L "$selected" ]] || fail 'control directory is not a real directory' 1
-    logical=$(cd -L -- "$selected" && pwd -L) || exit 1
-    selected=$(cd -- "$selected" && pwd -P) || exit 1
-    [[ "$selected" == "$logical" ]] || fail 'control directory must not contain symlink aliases' 1
+    normalize_docker_directory
     config=$selected/config.json
     [[ $(jq -er '.kind' "$config") == real ]] || fail 'Docker requires a real profile; Docker simulation is unsupported' 1
     project=$(jq -er '.project_dir | select(type == "string" and startswith("/"))' "$config") || fail 'set an absolute container project_dir' 1
@@ -179,26 +213,10 @@ elif [[ "$mode" == docker ]]; then
         metadata=$(docker_invoke metadata) || exit $?
         unit=$(printf '%s' "$metadata" | jq -er '.unit') || exit 1
     fi
-    require_linux() {
-        [[ $(uname -s) == Linux ]] || fail 'systemd lifecycle/deployment requires Linux' 1
-        command -v timeout >/dev/null 2>&1 || fail 'timeout is required for bounded host commands' 127
-    }
-    require_deployed() {
-        [[ /etc/systemd/system/$unit -ef "$selected/$unit" ]] || fail 'deploy the selected project service first' 1
-        grep -Fx 'Requires=docker.service' "$selected/$unit" >/dev/null || fail 'selected unit is not Docker-managed' 1
-        if [[ "$1" == start ]]; then
-            expected=$(docker_invoke unit) || return $?
-            actual=$(< "$selected/$unit")
-            [[ "$actual" == "$expected" ]] || fail 'service mode/configuration changed; redeploy the Shell-managed unit explicitly' 1
-        fi
-    }
     invoke() {
         case "$1" in
             start|stop)
-                require_linux
-                require_deployed "$1" || return $?
-                # start must not invoke an old unit that auto-starts a shared container.
-                timeout 30s systemctl "$1" "$unit" ;;
+                docker_lifecycle "$1" ;;
             log-route) printf '%s\n' "$metadata" ;;
             status)
                 require_linux
