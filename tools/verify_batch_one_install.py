@@ -829,6 +829,125 @@ def verify_real_preflight() -> None:
     print("installed ROS-free real preflight and original public identities: PASS")
 
 
+def verify_home_database(*, compatible: bool = False) -> None:
+    """Use installed SQL and the same injected per-database Home owner."""
+    import asyncio
+    import inspect
+    import tempfile
+    from importlib.util import find_spec
+    from unittest.mock import patch
+
+    import aiosqlite
+    from vehicle_manager.storage.database import Database as Engine
+    from vehicle_manager.storage.domain_schema import domain_migrations
+    from vehicle_manager.storage.home_database import HomeDatabase, HomeExecutionCoordination
+    from vehicle_manager.storage.migrations import Migration, migrate
+    from vehicle_manager.tasks.store import TASK_STATEMENTS
+    from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS
+
+    assert "site-packages" in inspect.getfile(HomeDatabase)
+    assert HomeDatabase.__aenter__ is Engine.__aenter__
+    if not compatible:
+        for package in ("vehicle_core", "senior_control", "senior_mapping", "cloud", "rclpy"):
+            assert find_spec(package) is None, package
+    locks, coordinations = [], []
+
+    def lock_factory(name):
+        lock = asyncio.Lock()
+        locks.append((name, lock))
+        return lock
+
+    def coordination_factory():
+        coordination = HomeExecutionCoordination(lock_factory=lock_factory)
+        coordinations.append(coordination)
+        return coordination
+
+    def selected(path):
+        return HomeDatabase(
+            path, lock_factory=lock_factory, coordination_factory=coordination_factory
+        )
+
+    map_sql = ("CREATE TABLE install_map_owner (value INTEGER)",)
+    migrations = domain_migrations(map_sql)
+    assert tuple(m.version for m in migrations) == (1, 2, 3)
+    assert all(type(m) is Migration for m in migrations)
+    assert migrations[0].statements is map_sql
+    assert migrations[1].statements is WAYPOINT_STATEMENTS
+    assert migrations[2].statements is TASK_STATEMENTS
+    if compatible:
+        from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS
+
+        from senior_control.storage import schema
+        from senior_control.storage.database import Database as OldDatabase
+        from senior_control.storage.database import HomeExecutionCoordination as OldCoordination
+        from vehicle_core.diagnostics import DiagnosticLock, process_diagnostics
+
+        assert tuple(inspect.signature(OldDatabase).parameters) == ("path", "busy_timeout_ms")
+        assert inspect.signature(OldDatabase).parameters["busy_timeout_ms"].default == 1000
+        assert not inspect.signature(OldCoordination).parameters
+        assert OldCoordination is not HomeExecutionCoordination
+        assert issubclass(OldCoordination, HomeExecutionCoordination)
+        assert OldDatabase.home_execution is HomeDatabase.home_execution
+        assert OldDatabase.home_target_lock is HomeDatabase.home_target_lock
+        assert schema.Migration is Migration
+        assert schema.OPERATION_JOURNAL_STATEMENTS is OPERATION_JOURNAL_STATEMENTS
+        assert schema.TASK_STATEMENTS is TASK_STATEMENTS
+        assert schema.WAYPOINT_STATEMENTS is WAYPOINT_STATEMENTS
+        migrations = schema.DOMAIN_MIGRATIONS
+        assert tuple(m.version for m in migrations) == (1, 2, 3)
+        assert migrations[0].statements is OPERATION_JOURNAL_STATEMENTS
+        assert migrations[1].statements is WAYPOINT_STATEMENTS
+        assert migrations[2].statements is TASK_STATEMENTS
+        selected = OldDatabase
+
+    async def verify(directory):
+        database = selected(directory / "home.db")
+        write_lock = database.write_lock
+        target = database.home_target_lock("robot")
+        assert database.home_target_lock("robot") is target
+        shared = database.home_execution("robot")
+        assert database.home_execution("robot") is shared
+        assert shared.connected and shared.disconnect_generation == 0
+        assert shared.cancel_owner is None and not shared.cancel_required
+        assert database.home_execution("other") is not shared
+        other = selected(directory / "other.db")
+        assert other.home_execution("robot") is not shared
+        assert other.home_target_lock("robot") is not target
+        if compatible:
+            assert type(shared) is OldCoordination
+            for lock in (write_lock, target, shared.lock):
+                assert type(lock) is DiagnosticLock
+                assert lock._diagnostic.diagnostics is process_diagnostics()
+        else:
+            assert [name for name, _ in locks].count("storage.home_target_wait") == 3
+            assert len(coordinations) == 4  # setdefault still eagerly constructs on cache hits.
+        connection_paths = []
+        connect = aiosqlite.connect
+
+        def tracked_connect(path, *args, **kwargs):
+            connection_paths.append(str(path))
+            return connect(path, *args, **kwargs)
+
+        with patch.object(aiosqlite, "connect", tracked_connect):
+            async with database as opened:
+                assert opened is database
+                connection = database.connection
+                await migrate(database, list(migrations))
+                assert database.connection is connection and database.write_lock is write_lock
+                assert database.home_execution("robot") is shared
+                async with connection.execute("PRAGMA user_version") as cursor:
+                    assert await cursor.fetchone() == (3,)
+                async with connection.execute("SELECT name FROM sqlite_master") as cursor:
+                    tables = {row[0] for row in await cursor.fetchall()}
+                assert {"waypoint", "task_definition"} <= tables
+        assert connection_paths.count(str(database.path)) == 1
+        assert not database.is_open
+
+    with tempfile.TemporaryDirectory() as directory:
+        asyncio.run(verify(Path(directory)))
+    print("installed Home database owner/factory timing and domain SQLite schema: PASS", compatible)
+
+
 def verify_manager_storage() -> None:
     """Exercise the installed SQLite owner with the original migration cases."""
     import asyncio
@@ -1635,6 +1754,7 @@ def main() -> None:
     verify_manager_lifecycle()
     verify_legacy_task_store()
     verify_lazy_shared_imports()
+    verify_home_database(compatible=True)
     verify_manager_config(compatible=True)
     verify_legacy_operator()
     verify_navigation()
@@ -1795,6 +1915,8 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--home-database-compatible"]:
+        verify_home_database(compatible=True)
     elif sys.argv[1:] == ["--manager-config-only"]:
         verify_manager_config()
     elif sys.argv[1:] == ["--manager-config-compatible"]:
@@ -1826,6 +1948,7 @@ if __name__ == "__main__":
         else:
             verify_manager_tasks()
             assert "aiosqlite" not in sys.modules and "pydantic" not in sys.modules
+            verify_home_database()
             verify_manager_task_store()
             verify_manager_lifecycle()
             verify_manager_execution()

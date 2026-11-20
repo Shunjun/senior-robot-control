@@ -2400,3 +2400,83 @@ IpcHomePort解析对象/请求顺序保持，RuntimeState/StateReply仍原位。
 
 本片未运行仿真测试或任何仿真/开发/ROS/车辆服务，无运动请求或部署。
 真实Linux/Humble/设备及实车手动控制可用性仍未验证。
+
+
+### R5 数据库装配：Home协调与domain schema
+
+基线 `0e0f7f0`，固定功能分支工作区干净后实施。manager/storage/home_database.py
+承接原逐DB/逐robot目标锁与执行协调缓存，HomeDatabase继承原Database单连接引擎；
+锁与协调工厂显式逐实例注入。协调复用现有OperationT形状，setdefault仍每次先构造候选，
+不改缓存粒度/时机。旧无参HomeExecutionCoordination为绑定原DiagnosticLock/OperationResult
+的Compatible薄子类；旧Database同默认签名，注入该原构造工厂，实际返回旧具体协调类型。
+两旧类与manager基类不同，行为方法唯一继承，不复制诊断、锁业务或连接owner。
+
+manager/storage/domain_schema.py持有唯一1地图/2航点/3任务顺序，显式接原地图SQL tuple，
+复用canonical Migration及Task/Waypoint原tuple；旧schema在原模块导入时注入，保留
+DOMAIN_MIGRATIONS、Migration及3份历史SQL常量访问/身份。manager没有直接导入core、
+旧包、地图/ROS/cloud owner；map_persistence和业务执行未改。
+预算7文件：产品增2改2、工具文档改3，测试/配置0，无删除或新依赖/锁/额外连接。
+
+
+#### 本片验证、自审与限制
+
+环境：macOS arm64，原主仓Python 3.12.15、pytest 8.4.2、Ruff 0.17.3、uv 0.12.23。
+不改项目 `.venv`、依赖/锁；复用原主仓工具与已有临时wheel夹具。
+
+- 既有安装工具先对旧manager wheel执行 `--home-database-compatible`，退出1，
+  明确缺少vehicle_manager.storage.domain_schema，新owner检查有效。
+- 唯一pytest命令（项目目录、原主仓Python）：
+
+  ```sh
+  python -m pytest senior_control/tests/test_database_ownership.py \
+    tests/integration/test_storage.py \
+    senior_control/tests/test_home.py::test_shared_home_guard_serializes_claim_and_ignores_old_terminal \
+    senior_control/tests/test_home.py::test_legacy_home_guard_migration_preserves_safety_and_unknowns \
+    ros2/tests/test_map_operations.py::test_startup_blocks_motion_before_waiting_for_database \
+    -q --tb=short
+  ```
+
+  **27通过**，0.92秒，退出0，无跳过。实际SQLite单连接/reentry、vehicle/cloud迁移回滚、
+  busy/磁盘满/取消/备份、共享Home guard及旧guard安全字段迁移、Gate先阻断再等DB通过；
+  所有选定fixture均为本地数据库、内存地图/导航或Gate替身，无仿真/ROS执行。
+  没有旧失败需要对照，未扩大到同文件其他测试，测试和断言未改。
+- 5份改动/新增Python的 `ruff check` / `ruff format --check`通过，首轮1处import排序
+  与1处工具格式已整理；保留原schema CRLF，按既有约定的diff检查通过：
+  `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`。
+- 自审AST对照：协调初始化只用显式lock_factory替换原DiagnosticLock、OperationT替换
+  原具体结果类型；原全部状态字段及两个setdefault方法主体保持，仅工厂来源/泛型返回
+  注解变化。没有改成懒缓存，没有增加锁层或在manager引入core/地图/云/ROS。
+  原SQLite引擎、map_persistence、业务执行、测试、配置、Requires-Dist和uv.lock无diff。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-manager-home-db-wheels`
+  与 `uv build senior_control --offline --out-dir /tmp/vehicle-manager-home-db-wheels`：
+  Root/manager两个项目sdist/wheel通过。用 `uv pip install --offline --reinstall --no-deps
+  --python ...` 将两新wheel装入26包SDK夹具，将新manager装入8包manager-only夹具；
+  其他依赖闭包沿用前片，不冒充全部ROS发行重新安装。
+- 从 `/tmp`、`PYTHONPATH=` 执行：
+
+  ```sh
+  /tmp/vehicle-manager-config-only/bin/python <仓库>/tools/verify_batch_one_install.py --manager-tasks-only
+  /tmp/vehicle-core-leaf-sdk/bin/python <仓库>/tools/verify_batch_one_install.py --home-database-compatible
+  ```
+
+  两者通过。manager-tasks-only原有纯任务检查/断言保留，新Home检查放在其纯导入门之后；
+  新HomeDatabase来自site-packages，实际lock/coordination工厂注入，逐DB/逐robot隔离；
+  缓存命中仍构造候选的次数与原setdefault一致，manager没有安装core/旧包/地图/cloud/ROS。
+  同一Base Database.__aenter__负责实际连接；原连接和write_lock在迁移前后保持，
+  追踪实际aiosqlite.connect只打开1条主库连接（原迁移备份连接仍按原引擎存在）。
+  domain工厂使用显式注入SQL、同一Task/Waypoint tuple和canonical Migration，实际SQLite
+  迁移至版本3并创建原waypoint/task_definition表。
+  SDK进一步确认旧Database两参数/1000默认、旧协调无参签名及实际旧协调具体类型；
+  write/target/transaction锁均为原DiagnosticLock，全部使用原process_diagnostics owner，
+  同DB/robot返回同锁/协调；旧schema所有历史常量和三项SQL tuple身份保持，
+  1地图/2航点/3任务版本顺序原样，实际SQLite成功迁移，无第二条主库连接。
+  两夹具 `uv pip check --python ...` 分别8包/26包兼容。
+
+实际7文件，与预报一致：产品增2改2、工具文档改3，测试/配置0、无删。
+旧HomeExecutionCoordination和Database与manager基类为不同薄子类，实际旧调用仍返回
+原旧类对象；状态/缓存/SQL业务只有一份实现，没有模块全局工厂或第二个连接owner。
+manager完整生产绑定及发行DAG仍待后续，不宣称独立生产部署完成。
+提交仅固定分支，禁用超范围钩子且限定检查已手动执行，不推送，等待负责人审核。
+
+未启动任何仿真/ROS/实车/开发服务，不验证仿真、不发送运动请求、不部署。
+真实Linux/Humble/设备和实车控制可用性仍未验证。

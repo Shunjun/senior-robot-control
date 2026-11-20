@@ -1034,3 +1034,38 @@ socket沿原受控测试能力，不跑同名仿真环境。另做Ruff/CRLF约�
 [manager本片记录](../../../senior_control/README.md#r5-首片通用-agentconfig-与-posereply)。
 未改运行入口/依赖/锁，不宣称完整独立生产部署；未运行仿真/开发/ROS/车辆服务、
 无运动请求或部署推送，提交固定分支后等待负责人审核。
+
+
+### R5 数据库装配：Home协调与domain schema（2026-11-21）
+
+固定功能分支基线 `0e0f7f0`，实施前工作区干净。先登记范围，再新增manager/storage/
+home_database.py承接逐DB/逐robot协调对象与目标锁缓存，继承既有Database单连接owner，
+显式注入lock/coordination工厂，复用原OperationT形状；setdefault的每次参数构造时机保持，
+不改为懒get或改变粒度。旧HomeExecutionCoordination无参薄子类绑定原DiagnosticLock和
+OperationResult，旧Database默认签名与实际协调类型保持，传入原构造工厂，不复制锁业务。
+
+新增manager/storage/domain_schema.py，只用canonical Migration和Task/Waypoint SQL tuple，
+工厂显式接地图原SQL tuple，持有1地图/2航点/3任务唯一顺序声明；旧schema在原import
+时机注入原地图tuple，保留DOMAIN_MIGRATIONS、Migration与全部历史SQL常量访问。
+manager不导入core/旧SDK/地图/ROS/cloud owner；map_persistence与业务执行不改。
+预算7文件：产品增2改2、工具文档改3，测试/配置0、无删除，扩大前先报告。
+
+限定测试已核对为纯本地SQLite/内存Home与Gate替身：manager database ownership、
+tests/integration/test_storage.py、指定2条Home guard（含原参数化）、
+ros2/tests/test_map_operations.py::test_startup_blocks_motion_before_waiting_for_database。
+不执行同文件其他场景、不运行仿真；旧失败限量基线对照且不改断言。
+另验证 --manager-tasks-only真实独立wheel的注入/owner/纯依赖，与SDK中旧签名、
+同锁/协调类型、SQL identity及真实SQLite单连接/schema；Ruff/CRLF约定diff、manager/root
+wheel后自审，仅固定分支提交，不启任何服务、不发运动、不部署推送。
+
+
+本片实际7文件，与预报一致，测试/配置/依赖/锁/map_persistence/引擎不改。
+原协调状态及eager setdefault时机保持；旧类薄装配注入原DiagnosticLock/协调工厂，
+实际旧协调类型和同DB/robot锁身份保持；domain顺序唯一声明，旧模块同tuple注入。
+指定非仿真测试 **27通过**，Ruff5文件、CRLF约定diff、manager/root wheel通过；
+仓库外manager-tasks-only和SDK真实SQLite验证工厂时机、同owner/锁/单主连接、
+版本/SQL tuple身份和无反向依赖通过，两夹具pip check通过。完整命令、版本、
+实际安装与限制见
+[manager本片记录](../../../senior_control/README.md#r5-数据库装配home协调与domain-schema)。
+无仿真验证/任何服务/运动请求/部署推送，不宣称完整独立生产部署或实车通过；
+提交固定分支后等待负责人审核。
