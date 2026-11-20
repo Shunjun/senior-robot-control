@@ -11,6 +11,7 @@ setup(
             "share/senior_robot/config",
             [
                 "config/self_filter.yaml",
+                # //Compatible: frozen original resources retain the historical share paths.
                 "config/nav2.yaml",
                 "config/lattice_diff.json",
                 "config/slam.yaml",
@@ -32,6 +33,7 @@ setup(
         ),
         (
             "share/senior_robot/behavior_trees",
+            # //Compatible: original byte-identical trees; production reads senior_navigation.
             ["behavior_trees/navigate.xml", "behavior_trees/navigate_through_poses.xml"],
         ),
     ],
@@ -46,7 +48,8 @@ setup(
             "safety_node = senior_motion_control.safety_node:main",
             "motion_fusion = senior_robot.motion_fusion:main",
             "command_node = senior_motion_control.command_node:main",
-            "navigation_adapter = senior_robot.navigation_adapter:main",
+            # //Compatible: preserve ros2 run senior_robot navigation_adapter.
+            "navigation_adapter = senior_navigation.navigation_adapter:main",
             "slam_adapter = senior_mapping.slam_adapter:main",
             "localization_node = senior_localization.localization_node:main",
             "agent_adapter = senior_robot.agent_adapter:main",

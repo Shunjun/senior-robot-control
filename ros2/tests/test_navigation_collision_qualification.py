@@ -42,7 +42,7 @@ def navigation_evidence(monkeypatch):
 
 
 async def test_running_route_stops_when_current_source_authority_is_revoked(navigation_evidence):
-    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+    from senior_navigation.navigation_adapter import NavigationAdapter, RouteService
 
     runtime = navigation_evidence
     canceled = []
@@ -205,9 +205,9 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
     fake_module("rclpy", ok=lambda: False)
     fake_module("senior_robot.command_node", CommandNode=lambda **_: node)
     fake_module("senior_localization.hardware_reference", HardwareReference=lambda *a: runtime.ref)
-    fake_module("senior_robot.dedicated_controller", DedicatedController=Controller)
+    fake_module("senior_navigation.dedicated_controller", DedicatedController=Controller)
     fake_module(
-        "senior_robot.navigation_adapter",
+        "senior_navigation.navigation_adapter",
         RouteService=Routes,
         create_nav2_adapter=lambda _: None,
         create_planner_readiness=lambda _: lambda: True,

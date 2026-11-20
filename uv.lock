@@ -1447,6 +1447,7 @@ dependencies = [
     { name = "senior-mapping" },
     { name = "senior-motion-control" },
     { name = "senior-motion-estimation" },
+    { name = "senior-navigation" },
     { name = "senior-perception" },
     { name = "senior-robot" },
     { name = "vehicle-cloud" },
@@ -1497,6 +1498,7 @@ requires-dist = [
     { name = "senior-mapping", editable = "ros2/src/senior_mapping" },
     { name = "senior-motion-control", editable = "ros2/src/senior_motion_control" },
     { name = "senior-motion-estimation", editable = "ros2/src/senior_motion_estimation" },
+    { name = "senior-navigation", editable = "ros2/src/senior_navigation" },
     { name = "senior-perception", editable = "ros2/src/senior_perception" },
     { name = "senior-robot", editable = "ros2/src/senior_robot" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
@@ -1543,6 +1545,21 @@ source = { editable = "ros2/src/senior_motion_control" }
 name = "senior-motion-estimation"
 version = "0.1.0"
 source = { editable = "ros2/src/senior_motion_estimation" }
+
+[[package]]
+name = "senior-navigation"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_navigation" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "senior-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "senior-contracts", specifier = "==0.1.0" },
+]
 
 [[package]]
 name = "senior-perception"

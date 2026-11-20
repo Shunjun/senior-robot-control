@@ -10,6 +10,53 @@ import sys
 from pathlib import Path
 
 
+def verify_navigation() -> None:
+    """Verify the real SDK aliases, then ROS prefix paths when ROS is installed."""
+    from senior_navigation import navigation_adapter, route
+    from senior_robot import navigation_adapter as old_adapter
+
+    from senior_control import navigation as old_route
+    from senior_control.errors import DomainError, ErrorCode
+    from senior_control.models import MapRef, Pose2D
+
+    for name in ("RoutePlan", "QualifiedRoute", "RouteRejected", "RouteProgress", "RouteStatus"):
+        assert getattr(old_route, name) is getattr(route, name)
+    for name in ("NavigationAdapter", "RouteService", "MapGoal", "NavigationRejected", "main"):
+        assert getattr(old_adapter, name) is getattr(navigation_adapter, name)
+    assert route.MapRef is MapRef and route.Pose2D is Pose2D
+    assert issubclass(route.RouteRejected, DomainError)
+    assert route.RouteRejected().code is ErrorCode.UNAVAILABLE
+    assert route.RoutePlan.__module__ == "senior_navigation.route"
+    assert navigation_adapter.RouteService.__module__ == "senior_navigation.navigation_adapter"
+    print("installed navigation canonical route and historical SDK identities: PASS")
+    try:
+        from ament_index_python.packages import get_package_prefix, get_package_share_directory
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"ament_index_python", "ament_index_python.packages"}:
+            raise
+        print("navigation ROS executable/share installation: UNVERIFIED (ament/ROS prefix absent)")
+        return
+    from senior_navigation.dedicated_controller import DedicatedController
+    from senior_robot.dedicated_controller import DedicatedController as OldController
+
+    assert OldController is DedicatedController
+    nav = Path(get_package_share_directory("senior_navigation"))
+    robot = Path(get_package_share_directory("senior_robot"))
+    for package in ("senior_navigation", "senior_robot"):
+        executable = Path(get_package_prefix(package)) / "lib" / package / "navigation_adapter"
+        assert executable.is_file() and executable.stat().st_mode & 0o111, executable
+    for asset in (
+        "config/nav2.yaml",
+        "config/lattice_diff.json",
+        "behavior_trees/navigate.xml",
+        "behavior_trees/navigate_through_poses.xml",
+    ):
+        assert (nav / asset).read_bytes() == (robot / asset).read_bytes(), asset
+    for share in (nav, robot):
+        assert (share / "launch/navigation.launch.py").is_file()
+    print("installed navigation new/old ROS executable and byte-identical share assets: PASS")
+
+
 def verify_platform_runtime() -> None:
     """Locate the installed real provider without management or ROS imports."""
     from senior_robot import platform_runtime
@@ -1066,8 +1113,9 @@ def main() -> None:
     assert LocalRouteProgress is RouteProgress and LocalErrorCode is ErrorCode
     assert LocalLogRequest is LogRequest
     assert old_serialize is serialize_envelope and old_validate is validate_envelope
-    for local in (DomainError, Velocity, RoutePlan, MotionRuntimeState):
+    for local in (DomainError, Velocity, MotionRuntimeState):
         assert local.__module__.startswith("senior_control."), local
+    assert RoutePlan.__module__ == "senior_navigation.route"
     assert DrivingSettings.__module__ == "vehicle_manager.settings.models"
     assert LegacyDrivingSettings is DrivingSettings
     assert LegacySettingsService is SettingsService
@@ -1160,6 +1208,7 @@ def main() -> None:
     verify_manager_lifecycle()
     verify_legacy_task_store()
     verify_legacy_operator()
+    verify_navigation()
     verify_legacy_media()
     subprocess.run(
         [
@@ -1315,7 +1364,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--platform-runtime-only"]:
+    if sys.argv[1:] == ["--navigation-only"]:
+        verify_navigation()
+    elif sys.argv[1:] == ["--platform-runtime-only"]:
         verify_platform_runtime()
     elif sys.argv[1:] == ["--manager-media-only"]:
         verify_manager_media()

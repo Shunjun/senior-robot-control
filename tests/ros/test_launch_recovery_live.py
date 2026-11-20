@@ -400,7 +400,9 @@ def native_navigation(isolated_ros, tmp_path):
     from tf2_ros import StaticTransformBroadcaster
 
     parameters = yaml.safe_load(
-        (Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/config/nav2.yaml").read_text()
+        (
+            Path(__file__).resolve().parents[2] / "ros2/src/senior_navigation/config/nav2.yaml"
+        ).read_text()
     )
     follow = parameters["controller_server"]["ros__parameters"]["FollowPath"]
     # //Compatible: actual wheeltec MPPI 1.1.9 exports ObstaclesCritic, not
@@ -475,7 +477,7 @@ def native_navigation(isolated_ros, tmp_path):
             "-c",
             "from ros2cli.cli import main; raise SystemExit(main())",
             "launch",
-            "senior_robot",
+            "senior_navigation",
             "navigation.launch.py",
             "use_sim_time:=false",
             f"parameters:={parameters_path}",

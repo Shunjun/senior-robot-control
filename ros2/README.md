@@ -249,3 +249,20 @@ commands still requires their existing owners/environment. This is not independe
 vehicle execution or management deployment. Commands, unchanged behavior audits,
 old fixture failures and native/Linux/ROS limits are in
 [manager M5D1](../senior_control/README.md#m5d1-实车平台命令与视频探针).
+
+
+## B7 existing navigation
+
+Existing route execution, Nav2 adapter, DedicatedController and navigation launch
+now belong to [senior_navigation](src/senior_navigation/README.md). Real safety and
+sim motion Includes use the canonical launch; sim controller and AMCL assets read
+its share. Historical Python/ROS entries remain explicit Compatible aliases or
+Include wrappers. Robot's four historical share assets remain byte-identical frozen
+compatibility resources; canonical production assets are in the navigation package.
+
+Map/localization/control authority and the sole chassis cmd_vel owner are unchanged.
+The package uses the original shared values/errors/recovery owners, with no manager
+or robot implementation imports. Hardware_navigation already forwards localization
+and did not move. SDK wheel/old identity checks are separate from unavailable real
+ROS/ament/Nav2/Linux validation; see the package record for exact old failures and
+commands. No exploration, new map/Home rules or new qualification thresholds landed.

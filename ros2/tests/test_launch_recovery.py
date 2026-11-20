@@ -146,7 +146,7 @@ def _dedicated_controller_class(root):
 
     from senior_control.runtime.launch_recovery import owner_command
 
-    path = Path("ros2/src/senior_robot/senior_robot/dedicated_controller.py")
+    path = Path("ros2/src/senior_navigation/senior_navigation/dedicated_controller.py")
     source = next(
         item for item in ast.parse(path.read_text()).body if isinstance(item, ast.ClassDef)
     )

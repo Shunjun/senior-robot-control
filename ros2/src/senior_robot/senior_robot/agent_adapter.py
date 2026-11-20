@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from senior_mapping.workspace import WorkspaceMap
+from senior_navigation.route import RoutePlan
 
-from senior_control.navigation import RoutePlan
 from senior_control.protocol import (
     SimpleEnvelope,
     validate_envelope,
@@ -30,7 +30,7 @@ from senior_control.protocol import (
 from senior_control.safety.arbiter import CommandResult
 
 if TYPE_CHECKING:
-    from senior_robot.navigation_adapter import RouteService
+    from senior_navigation.navigation_adapter import RouteService
 
 SOCKET_ENV = "SENIOR_AGENT_SOCKET"
 
@@ -630,8 +630,8 @@ def main() -> None:
         nav_params = str(node.get_parameter("navigation_controller_params").value)
         node.declare_parameter("navigation_odometry_topic", "/wheel/odom")
         if reference is not None and nav_params and Path(nav_params).is_file():
-            from senior_robot.dedicated_controller import DedicatedController
-            from senior_robot.navigation_adapter import (
+            from senior_navigation.dedicated_controller import DedicatedController
+            from senior_navigation.navigation_adapter import (
                 RouteService,
                 create_nav2_adapter,
                 create_planner_readiness,

@@ -10,7 +10,9 @@ import yaml
 
 
 def test_nav2_costmap_nodes_receive_footprint_and_layers():
-    config_path = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/config/nav2.yaml"
+    config_path = (
+        Path(__file__).resolve().parents[2] / "ros2/src/senior_navigation/config/nav2.yaml"
+    )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     # The controller and planner create separate, namespaced costmap nodes.
     local = config["local_costmap"]["local_costmap"]["ros__parameters"]
@@ -27,7 +29,9 @@ def test_nav2_costmap_nodes_receive_footprint_and_layers():
 
 
 def test_nav2_launch_config_keeps_recovery_output_before_arbitration():
-    config_path = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/config/nav2.yaml"
+    config_path = (
+        Path(__file__).resolve().parents[2] / "ros2/src/senior_navigation/config/nav2.yaml"
+    )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert (
         config["navigation_adapter"]["ros__parameters"]["command_topic"] == "/control/recovery_cmd"
@@ -37,7 +41,7 @@ def test_nav2_launch_config_keeps_recovery_output_before_arbitration():
 def test_nav2_humble_uses_project_through_poses_tree():
     from xml.etree import ElementTree
 
-    package = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot"
+    package = Path(__file__).resolve().parents[2] / "ros2/src/senior_navigation"
     config = yaml.safe_load((package / "config/nav2.yaml").read_text(encoding="utf-8"))
     navigator = config["bt_navigator"]["ros__parameters"]
     assert "nav2_compute_path_through_poses_action_bt_node" in navigator["plugin_lib_names"]
@@ -55,7 +59,7 @@ def test_nav2_humble_uses_project_through_poses_tree():
 
 def test_navigation_node_does_not_publish_cmd_vel():
     rclpy = pytest.importorskip("rclpy")
-    from senior_robot.navigation_adapter import SAFETY_COMMAND_TOPIC, create_navigation_node
+    from senior_navigation.navigation_adapter import SAFETY_COMMAND_TOPIC, create_navigation_node
 
     assert SAFETY_COMMAND_TOPIC == "/control/recovery_cmd"
     rclpy.init()
@@ -155,7 +159,13 @@ def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
     try:
         with log_path.open("w") as log:
             process = subprocess.Popen(
-                ["ros2", "launch", "senior_robot", "navigation.launch.py", "use_sim_time:=false"],
+                [
+                    "ros2",
+                    "launch",
+                    "senior_navigation",
+                    "navigation.launch.py",
+                    "use_sim_time:=false",
+                ],
                 start_new_session=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -260,8 +270,9 @@ def test_installed_nav2_bringup_with_synthetic_map(tmp_path):
 async def test_qualified_route_runs_in_order(end):
     import asyncio
 
+    from senior_navigation.route import QualifiedRoute
+
     from senior_control.models import MapRef, Pose2D
-    from senior_control.navigation import QualifiedRoute
 
     goals = []
     generation = "map-a"
@@ -304,7 +315,7 @@ async def test_qualified_route_runs_in_order(end):
 @pytest.fixture
 def navigation_source_path(monkeypatch):
     root = Path(__file__).resolve().parents[2]
-    monkeypatch.syspath_prepend(str(root / "ros2/src/senior_robot"))
+    monkeypatch.syspath_prepend(str(root / "ros2/src/senior_navigation"))
 
 
 async def test_route_service_reports_actual_index_and_blocks_next_on_lost_reference(
@@ -312,10 +323,10 @@ async def test_route_service_reports_actual_index_and_blocks_next_on_lost_refere
 ):
     import asyncio
 
-    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+    from senior_navigation.navigation_adapter import NavigationAdapter, RouteService
+    from senior_navigation.route import RoutePlan
 
     from senior_control.models import MapRef, OperationResult, OperationStatus
-    from senior_control.navigation import RoutePlan
 
     class GoalExecutor:
         def __init__(self):

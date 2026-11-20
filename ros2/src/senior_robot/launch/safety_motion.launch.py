@@ -111,7 +111,7 @@ def _nodes(context):
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution(
-                        [FindPackageShare("senior_robot"), "launch", "navigation.launch.py"]
+                        [FindPackageShare("senior_navigation"), "launch", "navigation.launch.py"]
                     )
                 ),
                 launch_arguments={

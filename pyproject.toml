@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "senior-control"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["senior-robot==0.1.0", "vehicle-manager==0.1.0", "vehicle-cloud==0.1.0", "senior-localization==0.1.0", "senior-mapping==0.1.0", "senior-motion-control==0.1.0", "senior-motion-estimation==0.1.0", "senior-perception==0.1.0", "senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
+dependencies = ["senior-navigation==0.1.0", "senior-robot==0.1.0", "vehicle-manager==0.1.0", "vehicle-cloud==0.1.0", "senior-localization==0.1.0", "senior-mapping==0.1.0", "senior-motion-control==0.1.0", "senior-motion-estimation==0.1.0", "senior-perception==0.1.0", "senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
 
 [project.scripts]
 senior-robot = "senior_control.cli:main"
@@ -54,11 +54,12 @@ python_version = "3.10"
 strict = true
 
 [tool.pytest.ini_options]
-pythonpath = ["senior_control/src", "senior_control/tests", "cloud/src", "cloud/tests", "tests/integration", "ros2/src/senior_mapping/scripts", "ros2/src/senior_mapping/test", "ros2/src/senior_localization", "ros2/src/senior_mapping", "ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "src", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_motion_control"]
+pythonpath = ["senior_control/src", "senior_control/tests", "cloud/src", "cloud/tests", "tests/integration", "ros2/src/senior_mapping/scripts", "ros2/src/senior_mapping/test", "ros2/src/senior_localization", "ros2/src/senior_mapping", "ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "src", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_navigation", "ros2/src/senior_motion_control"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.uv.sources]
+senior-navigation = { path = "ros2/src/senior_navigation", editable = true }
 senior-robot = { path = "ros2/src/senior_robot", editable = true }
 vehicle-manager = { path = "senior_control", editable = true }
 vehicle-cloud = { path = "cloud", editable = true }

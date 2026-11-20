@@ -66,13 +66,14 @@ def environment_assets(context):
 def _simulation_nodes(context):
     sim = FindPackageShare("senior_sim")
     robot = FindPackageShare("senior_robot")
+    nav = FindPackageShare("senior_navigation")
     sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     navigation = IfCondition(LaunchConfiguration("navigation_enabled"))
     params = PathJoinSubstitution([robot, "config", "simulation_motion.yaml"])
     common = {"use_sim_time": sim_time}
     profile = ParameterValue(LaunchConfiguration("hardware_motion_profile"), value_type=str)
     controller_params = RewrittenYaml(
-        source_file=PathJoinSubstitution([robot, "config", "nav2.yaml"]),
+        source_file=PathJoinSubstitution([nav, "config", "nav2.yaml"]),
         root_key="",
         param_rewrites={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
@@ -83,10 +84,10 @@ def _simulation_nodes(context):
             "controller_server.ros__parameters.FollowPath.vx_min": "-0.15",
             "controller_server.ros__parameters.FollowPath.wz_max": "0.4",
             "default_nav_to_pose_bt_xml": PathJoinSubstitution(
-                [robot, "behavior_trees", "navigate.xml"]
+                [nav, "behavior_trees", "navigate.xml"]
             ),
             "default_nav_through_poses_bt_xml": PathJoinSubstitution(
-                [robot, "behavior_trees", "navigate_through_poses.xml"]
+                [nav, "behavior_trees", "navigate_through_poses.xml"]
             ),
         },
         convert_types=True,
@@ -107,7 +108,7 @@ def _simulation_nodes(context):
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                PathJoinSubstitution([robot, "launch", "navigation.launch.py"])
+                PathJoinSubstitution([nav, "launch", "navigation.launch.py"])
             ),
             condition=navigation,
             launch_arguments={
@@ -188,7 +189,7 @@ def _simulation_nodes(context):
 
 
 def _localization_members(context):
-    robot = FindPackageShare("senior_robot")
+    nav = FindPackageShare("senior_navigation")
     common = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
     navigation = IfCondition(LaunchConfiguration("navigation_enabled"))
     map_server = Node(
@@ -210,7 +211,7 @@ def _localization_members(context):
         name="amcl",
         condition=navigation,
         parameters=[
-            PathJoinSubstitution([robot, "config", "nav2.yaml"]),
+            PathJoinSubstitution([nav, "config", "nav2.yaml"]),
             common,
             {
                 "base_frame_id": "base_link",

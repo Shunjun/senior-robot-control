@@ -50,33 +50,33 @@ ROS Python 文件简称均位于 `ros2/src/senior_robot/senior_robot/`。每个�
 
 ```text
 contracts/src/senior_contracts/              # 已实现：实际云车 WS 消息与嵌套 DTO
-senior_control/                             # 本批骨架：独立车端管理项目
+senior_control/                             # 管理业务已迁；生产公共owner/完整独立安装未闭合
   pyproject.toml, README.md
-  src/vehicle_manager/__init__.py           # 导入标识，无生产执行实现
+  src/vehicle_manager/__init__.py           # 默认按需导入，各管理模块见包README
   tests/README.md
-cloud/                                     # 本批骨架：独立云项目，可逆目录名
+cloud/                                     # C1–C3云业务/factory/镜像接线；实际Docker待验
   pyproject.toml, README.md
-  src/cloud/__init__.py                     # 导入标识，无服务入口
+  src/cloud/__init__.py                     # 独立服务入口见cloud.bootstrap
   tests/README.md
 ros2/src/
-  senior_motion_control/                   # 已实现：两个 guard、帧、MotionOutput
+  senior_motion_control/                   # B4既有控制、两个guard、帧与输出已迁
   senior_sensor_ingress/                   # B1：native_receipt 程序与客户端已归此包，ROS 实测待补
   senior_motion_estimation/                # B3：既有观测/融合/位姿与公开只读快照已迁
-  senior_perception/                       # B2 首片：雷达/解码/补点/相关几何已迁，其他职责待续
-  senior_localization/
-  senior_mapping/
-  senior_navigation/
+  senior_perception/                       # B2雷达/解码/补点/学习/矩形净距已迁
+  senior_localization/                    # B5既有定位已迁，新功能另批
+  senior_mapping/                         # B5既有Python/持久化/原生SLAM已迁，ROS待验
+  senior_navigation/                      # B7既有Route/Nav2/controller/资产已迁，ROS待验
   senior_robot/                            # 既有实车组合，生产入口保持
   senior_sim/                              # 既有仿真组合，生产入口保持
-ros2/tests/                               # B1 已迁入两份原 ROS 接收/关停用例
+ros2/tests/                               # 已迁原ROS接口/装配用例，导航用例本片续迁
 src/senior_control/                        # 尚未迁完的现有生产实现，继续工作
 ```
 
-五个新增 ROS 骨架各只有 `CMakeLists.txt`、`package.xml`、`README.md`。
-它们是可发现的 ament 包，尚无节点、算法、launch、运行参数或业务返回值。
-源码、公开接口与测试的后续落点写在各包 README，真实文件迁入时才创建/安装。
+B0时五个新增ROS骨架各只有 `CMakeLists.txt`、`package.xml`、`README.md`，当时没有节点或运行能力。
+当前已随下表批次迁入既有行为；实际源码、公开接口、安装与测试落点见各包README，
+缺失新功能与真实ROS实测仍分别登记，不能以骨架或静态声明宣称可用。
 没有重复创建现有 `senior_motion_control`，没有新增根目录 `runtime` 或其他技术发行包。
-默认生产构建/launch 不引用新骨架；根项目安装配置与已有服务入口不切换。
+B0当时默认生产构建/launch未引用新骨架；后续真实入口与根SDK安装接线以对应批次记录为准。
 
 ### 实际批次、源目标、依赖与完成条件
 
@@ -110,7 +110,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M5B 本地请求与任务工厂已迁 | IpcMotion/TaskAwareMotion、IpcMapPort/IpcNavigation/IpcState → manager agent ipc_*；任务工厂 → 原manager composition | 原具体类型/异常/DTO及DB/IPC/诊断仍原owner注入，旧构造Compatible，九客户端/timeout与终端规则保持；复用既有接口使实际范围小于预报，见M5B |
 | B6.M5C 管理媒体与执行接入已迁 | stream/signaling/turn/最新帧消费 → manager/media；原ROS camera → senior_robot；sim直接用原共享RGB1 | 原帧类/codec唯一、诊断真实注入、旧Compatible和logger保持，23文件与原43/7及安装4项结果见M5C；ROS实测和独立部署后置 |
 | B6.M5D1 实车平台构造已归组合包 | 原helper五份命令/视频探针 → senior_robot.platform_runtime | 原只读配置/五签名Compatible、ServicePorts与逐次恢复效果保持；9文件、原回归/安装及旧失败见M5D1记录，公共owner及独立入口后置 |
-| B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
+| B7 既有导航已迁，ROS实测待补；新算法后置 | 原Root navigation、robot navigation_adapter/DedicatedController、导航launch和四资产 → senior_navigation；hardware_navigation定位别名不重复迁移 | 实车/仿真Include与参数读取已接canonical，原值/异常/恢复和控制/定位owner保持；35逻辑文件、原回归和旧失败/安装见B7记录；新探索等算法仍后置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
 每批实施前重新核对实际文件清单及测试候选，预报范围后再动手。迁移先复用现有算法和同名用例；
@@ -742,3 +742,20 @@ B7继续后置迁原RoutePlan/QualifiedRoute/RouteService、Nav2适配/Dedicated
 依赖B3/B4/B5接口和资格/终端退场保持；hardware_navigation已转发定位包无需重复迁移。
 原可用建图/导航链保持，缺失地图/Home/定位协作在所属模块实现，新前沿探索最后。
 实际ROS/ament/Linux及原native/SLAM缺口继续登记，不能用本片静态/SDK导入替代。
+
+
+### B7 既有导航迁移
+
+基线4b8f31f；原RoutePlan/QualifiedRoute/RouteRejected、RouteService/Nav2适配、DedicatedController、
+导航launch与四资产归已有senior_navigation；实车/仿真真实Include及sim定位/控制参数读取改canonical。
+Root与robot旧Python对象Compatible同身份，旧ROS executable保留，旧launch三参数/default/覆盖/namespace
+透传；旧robot四share资产作为已确认的原字节Compatible资源保留，原公共类型/异常/恢复继续由原owner提供。
+导航不反向导入robot/manager，不搬hardware_navigation定位别名，不改IPC/WS或算法/阈值。
+实际35逻辑文件与完整清单/命令/旧失败/安装及未验项见
+[导航B7记录](../../../ros2/src/senior_navigation/README.md)。
+
+原路线、资格/位姿新鲜度、终端/手动隔离和恢复回归保持；旧控制与恢复夹具失败在4b8f31f归档复现，
+未补假属性或删弱保护。SDK闭包不冒充ROS可执行/share/设备验收，实际Humble/Linux仍待补。
+公共IPC/诊断/Clock/帧与管理独立安装收尾不是本片既有导航迁移前置，但其owner决策仍未完成。
+缺失地图操作/每图Home/定位协作留相应模块实现；新的前沿探索等算法在接口稳定后的模块阶段实施，
+当前仅迁既有行为，B8真实ROS/仿真/实车联调验收未完成。

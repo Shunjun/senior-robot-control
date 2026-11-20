@@ -80,7 +80,9 @@ def observe_lock_attempt(lock: asyncio.Lock, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def navigation_module() -> object:
-    path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "navigation_adapter.py"
+    path = (
+        ROOT / "ros2" / "src" / "senior_navigation" / "senior_navigation" / "navigation_adapter.py"
+    )
     spec = importlib.util.spec_from_file_location("navigation_adapter_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
