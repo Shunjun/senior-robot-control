@@ -2167,3 +2167,84 @@ Requires-Dist、uv.lock、cloud/src自身诊断、纯策略及launch均无diff�
 canonical定义点另行适配，不能把本批29项当作全量通过。
 未运行仿真测试/环境或任何开发/车辆/ROS服务，未部署、推送或发送运动请求；
 Linux/Humble/真实设备链及实车手动控制可用性仍未验证。
+
+
+### R1 共享 IPC：通用 v1 Unix 传输
+
+基线 `1b1318b`，固定功能分支工作区干净后实施。原runtime/ipc唯一实现迁入
+`src/vehicle_core/ipc.py`，通用车内v1传输不进入云车契约；原IPC模块Compatible显式转发
+17个常量、类型、类、必要私有函数与logger，同一实现/类型身份，不包装或新增构造。
+新owner显式保留原 `senior_control.runtime.ipc` logger名，其余实现保持。
+
+10个产品消费者接canonical：agent_adapter，agent的composition/connection/main/ports/workspace，
+docker_start_helper/operator_actions/simulation_cli/vehicle_deploy；仿真相关文件只静态迁引。
+3测试文件仅改真实monkeypatch定义点：RGBD同步3处诊断module、exclusive_bind race socket
+module、导航state polling fake IPC server module，原兼容导入及输入/fixture/assert保留。
+预算18文件：产品增1改11、测试改3、工具文档改3，配置0、无删除。
+
+不改变v1字节、frame/path上界、timeout、request/intent lane隔离、socket身份/生命周期/
+并发bind/取消或外部SO_PEERCRED调用；不增加工厂、诊断owner、依赖或新运行行为。
+
+
+#### 本片验证、自审与限制
+
+环境：macOS arm64，原主仓Python 3.12.15、pytest 8.4.2、Ruff 0.17.3、uv 0.12.23。
+原主仓 `.venv/bin` 提供测试工具，本项目 `.venv`、依赖、锁文件与安装方式不变。
+
+- 安装工具先对上一片已安装Root wheel检查：`python tools/verify_batch_one_install.py
+  --lazy-shared-only` 退出1，明确缺少 `vehicle_core.ipc`，新canonical检查有效。
+- 唯一pytest命令（项目目录，原主仓Python）：
+
+  ```sh
+  python -m pytest tests/unit/test_ipc_frames.py \
+    tests/integration/test_ipc_lifecycle.py \
+    tests/integration/test_intent_ipc_stream.py \
+    tests/integration/test_ipc_exclusive_bind.py \
+    tests/unit/test_rgbd_sync_ordering.py \
+    ros2/tests/test_navigation_collision_qualification.py::test_state_polling_does_not_log_running_route_qualification_loss \
+    -q --tb=short
+  ```
+
+  依据已知沙箱Unix bind限制，申请仅限定本地临时socket测试权限后运行，
+  **33通过**，0.36秒，退出0，无跳过。没有扩大到仿真环境或ROS服务。
+  exclusive_bind历史注释虽提simulation，实际用例只创建本地socket/file/symlink并测试
+  bind竞争，不加载或静态验证仿真launch，全部符合本片范围；导航指定用例使用假server
+  与ROS模块替身，并明确禁止实际controller/IPC请求。intent用例只向临时本地fake handler
+  交付合成manual_intent帧，未连接车辆或ROS输出。
+  原负责人已复现的RGBD旧定义点2通过3失败，本片改canonical后5项通过，无重做基线或
+  弱化assert；3测试文件仅改import定义点，原输入/fixture/assert均保持。
+- 修改Python及新IPC叶子 `ruff check` / `ruff format --check`：16文件通过，
+  首轮7处导入排序已修正。普通 `git diff --check` 对agent_adapter三条新import报CR行尾；
+  原文件全部809行使用CRLF，现仍保留809个CRLF，未整文件改写或混合行尾。
+  使用保留默认空白保护并允许既有CRLF的命令通过：
+
+  ```sh
+  git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
+  ```
+
+  该设置仅作用于命令，不修改Git配置或跳过其他空白检查；暂存检查沿用相同参数。
+- IPC与 `git show 1b1318b:src/senior_control/runtime/ipc.py` 的AST对照，只替换logger
+  为原名称字符串，其他全部相同；新Compatible注释仅说明日志路由。
+  10个产品消费者及3测试文件去除import后AST与基线相同，产品无新业务调用/构造。
+  外部SO_PEERCRED核验、socket所有权及私有helper调用保持。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-core-ipc-wheels`：
+  根sdist/wheel成功；`uv pip install --offline --reinstall --no-deps --python
+  /tmp/vehicle-core-leaf-sdk/bin/python <新Root wheel>` 更新前片临时安装夹具。
+  仅重建Root，26包依赖闭包其余沿用，不冒充所有ROS功能包重新构建安装。
+- 从 `/tmp`、`PYTHONPATH=` 执行临时安装Python与
+  `<仓库>/tools/verify_batch_one_install.py --lazy-shared-only`：通过。
+  新IPC实际来自site-packages；原17个出口（logger/4常量/2类型/异常/4编解码函数/
+  server/client/3所有权helper）旧新同对象；logger保持原名，v1/8192/100及大端header
+  字节不变；PendingCounter是已有canonical诊断类型，实际counter使用同一process_diagnostics
+  缓存owner，没有新增socket或业务连接。单独导入IPC不加载旧SDK/管理/云/ROS，
+  旧门面也不带入Agent/config/旧sensor策略。
+  `uv pip check --python /tmp/vehicle-core-leaf-sdk/bin/python`：26包兼容。
+
+自审实际18文件：产品增1改11、测试改3、工具文档改3，配置0、无删除；
+无依赖、锁、工厂或协议变更，唯一传输实现及兼容类型/私有helper/logger保持。
+提交仅在固定功能分支，使用禁用超范围钩子的 `git -c core.hooksPath=/dev/null commit`，
+限定检查已手动执行，不推送，等待负责人审核。
+
+未运行仿真测试/环境或任何ROS/实车/开发服务，未向实车或ROS发送运动请求，
+未部署。真实Linux SO_PEERCRED、Humble/ament/设备行为仍未验证；
+本地Unix/fake server通过不等于实车手动控制可用或独立manager生产部署完成。

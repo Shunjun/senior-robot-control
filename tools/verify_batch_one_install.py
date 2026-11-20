@@ -18,6 +18,30 @@ def verify_lazy_shared_imports() -> None:
         """
 import sys
 from pathlib import Path
+from vehicle_core import ipc
+assert 'site-packages' in str(Path(ipc.__file__).resolve()), ipc.__file__
+assert ipc.IpcServer.__module__ == ipc.IpcClient.__module__ == 'vehicle_core.ipc'
+assert ipc.logger.name == 'senior_control.runtime.ipc'
+assert (ipc.PROTOCOL_VERSION, ipc.MAX_FRAME, ipc.MAX_PATH) == (1, 8192, 100)
+assert ipc._HEADER.pack(5) == bytes((0, 0, 0, 5))
+for name in ('senior_control', 'vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_robot', 'senior_motion_control', 'senior_perception'):
+    assert name not in sys.modules, name
+from vehicle_core import diagnostics
+assert ipc.PendingCounter is diagnostics.PendingCounter
+assert ipc.PendingCounter('install.ipc').diagnostics is diagnostics.process_diagnostics()
+from senior_control.runtime import ipc as old
+for name in ('logger', 'PROTOCOL_VERSION', 'MAX_FRAME', 'MAX_PATH', '_HEADER',
+             'Message', 'Handler', 'IpcError', '_check_path', '_encode', '_finite_float',
+             '_read', 'IpcServer', 'IpcClient', '_identity', '_record', '_prepare_socket'):
+    assert getattr(old, name) is getattr(ipc, name), name
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch', 'senior_control.agent',
+             'senior_control.config', 'senior_control.sensors.policy'):
+    assert name not in sys.modules, name
+""",
+        """
+import sys
+from pathlib import Path
 from unittest.mock import patch
 from vehicle_core import diagnostics
 assert 'site-packages' in str(Path(diagnostics.__file__).resolve()), diagnostics.__file__

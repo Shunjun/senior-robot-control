@@ -17,9 +17,9 @@ from senior_control.agent.ports import Requester
 from senior_control.errors import DomainError
 from senior_control.models import MapRef, Pose2D
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel
-from senior_control.runtime.ipc import IpcError
 from senior_control.tasks import TaskStore
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.ipc import IpcError
 
 _PAGE_SIZE = 32
 

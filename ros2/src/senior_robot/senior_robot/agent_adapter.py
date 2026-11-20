@@ -537,7 +537,7 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
         return
     if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
         raise ValueError("invalid launch endpoint ownership context")
-    from senior_control.runtime.ipc import _prepare_socket
+    from vehicle_core.ipc import _prepare_socket
 
     descriptor = os.open(
         path.with_suffix(".launch.lock"),
@@ -559,9 +559,9 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
 def main() -> None:
     import rclpy
 
-    from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import MotionExecutor, run
+    from vehicle_core.ipc import IpcServer
 
     def spin(node, executor, should_stop: Callable[[], bool]) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
@@ -744,7 +744,7 @@ def main() -> None:
                 await server.start()
                 started = True
                 if owner is not None:
-                    from senior_control.runtime.ipc import _record
+                    from vehicle_core.ipc import _record
 
                     _record(path, run_id=owner)
                 executor.add_node(node)

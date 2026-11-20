@@ -94,7 +94,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
     monkeypatch,
 ):
     from senior_control.models import MapRef
-    from senior_control.runtime import ipc
+    from vehicle_core import ipc
 
     runtime = navigation_evidence
     logs = []

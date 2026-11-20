@@ -7,7 +7,7 @@ from vehicle_manager.agent.ipc_motion import IpcMotion as _IpcMotion
 from vehicle_manager.agent.local_ports import MotionErrors
 
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.runtime.ipc import IpcClient, IpcError
+from vehicle_core.ipc import IpcClient, IpcError
 
 
 class MotionRejected(IpcError):

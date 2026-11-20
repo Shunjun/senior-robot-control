@@ -17,7 +17,7 @@ from vehicle_manager.simulation import _stop as _stop
 from vehicle_manager.simulation import _unit as _unit
 
 from senior_control.agent.pairing import Credentials, read_credentials
-from senior_control.runtime.ipc import MAX_PATH, IpcClient, IpcError
+from vehicle_core.ipc import MAX_PATH, IpcClient, IpcError
 
 
 def _ports() -> SimulationPorts:

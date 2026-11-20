@@ -17,8 +17,8 @@ from senior_control.cli import _ports
 def main() -> int:
     if sys.argv[1:] == ["docker-request"]:
         from senior_control.docker_start_helper import _adapter_command, _runtime_profile
-        from senior_control.runtime.ipc import MAX_PATH
         from senior_control.simulation_cli import _probe
+        from vehicle_core.ipc import MAX_PATH
 
         def validate_runtime(profile: VehicleProfile) -> None:
             _adapter_command(profile, "doctor")

@@ -39,7 +39,6 @@ from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import (
     HEARTBEAT_INTERVAL_MS,
 )
-from senior_control.runtime.ipc import IpcError
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
@@ -50,6 +49,7 @@ from vehicle_core.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
+from vehicle_core.ipc import IpcError
 
 logger = logging.getLogger("senior_control.agent")
 

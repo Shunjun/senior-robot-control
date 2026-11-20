@@ -25,10 +25,10 @@ from senior_control.protocol import (
     RuntimeObservation,
     ScanPointPayload,
 )
-from senior_control.runtime.ipc import IpcError
 from senior_control.tasks.models import ExecutionContext
 from senior_control.tasks.store import TaskStore
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.ipc import IpcError
 
 
 class IpcMapPort(_IpcMapPort):

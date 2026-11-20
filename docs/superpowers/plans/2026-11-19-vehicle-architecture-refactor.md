@@ -929,3 +929,42 @@ monkeypatch定义点，原cloud诊断/纯sensor策略/3个launch不动。
 [manager本片记录](../../../senior_control/README.md#r1-第四片唯一进程诊断-owner)。
 其他历史测试旧定义点monkeypatch未扩改；不宣称全量或实车控制通过，未运行仿真验证、
 开发/车辆/ROS服务，不部署、推送或发送运动请求，提交后等待负责人审核。
+
+
+### R1 共享 IPC：通用 v1 Unix 传输（2026-11-21）
+
+固定功能分支基线 `1b1318b`，实施前工作区干净。先记范围，再将
+`src/senior_control/runtime/ipc.py` 唯一实现迁到 `src/vehicle_core/ipc.py`；
+旧模块Compatible显式同对象转发原常量、类型、类、必要私有函数与logger。
+只显式固定原 `senior_control.runtime.ipc` logger名，其余实现保持。
+通用车内v1协议不进入云车契约，不新建调用、构造、工厂或独立发行。
+
+10个真实产品消费者更新canonical import：agent_adapter；agent的composition/connection/
+main/ports/workspace；docker_start_helper/operator_actions/simulation_cli/vehicle_deploy。
+模拟文件只迁引用，不运行或验证；SO_PEERCRED外部调用、frame字节/上界/timeout、
+request与intent lane隔离、socket身份/生命周期/并发bind/取消保护不变。
+
+测试仅3文件真实monkeypatch定义点适配：RGBD同步的3处旧diagnostics module；
+exclusive_bind的race socket module；导航state polling的fake IPC server module。
+输入、fixture行为和assert不变，其他旧兼容导入保留；前片RGBD的2通过3失败已由
+负责人复现，本片不重复该已知基线取证。预报18文件：产品增1改11、测试改3、
+工具文档改3（安装工具/manager README/本计划），配置0、无删，扩大前先报告。
+
+限定验证为test_ipc_frames、test_ipc_lifecycle、test_intent_ipc_stream、
+test_ipc_exclusive_bind、test_rgbd_sync_ordering，以及指定导航state polling用例。
+已核对exclusive_bind虽有历史simulation注释，但所有实际场景只操作本地Unix socket、
+路径、symlink与替身，没有静态验证仿真launch或启动仿真；导航用例明确禁止controller
+或IPC请求并以fake server/ROS模块替身执行，不启动ROS。另核对Ruff/diff、根wheel、
+仓库外canonical/旧出口及诊断缓存归属；不发运动请求、不启动任何仿真/车辆/开发/ROS
+服务，不部署推送，自审后仅提交固定分支，等待负责人审核。
+
+
+本片实际18文件，与预报一致；10消费者和3测试只改import定义点，IPC主体AST除
+显式原logger名外与基线相同，原17出口同对象。指定本地Unix/离线/fake server测试
+**33通过**（含RGBD5项恢复），Ruff16文件、根wheel与仓库外出口/字节常量/诊断cache/
+惰性导入检查通过，26包pip check通过。agent_adapter保留原809行CRLF，普通diff的3条
+CR行尾提示改用显式保留其他空白保护的cr-at-eol参数检查通过，不写Git配置。
+完整命令、版本、真实范围与未验项见
+[manager本片记录](../../../senior_control/README.md#r1-共享-ipc通用-v1-unix-传输)。
+未启动仿真/ROS/车辆/开发服务、未向实车发送运动、不部署推送；
+真实Linux peer及Humble/设备行为另验，提交后等待负责人审核。

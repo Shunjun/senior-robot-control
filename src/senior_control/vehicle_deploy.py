@@ -31,7 +31,7 @@ def _validate_navigation(reference: Path | None, parameters: Path | None) -> Non
 
 def _ports() -> DeploymentPorts:
     from senior_control.cli import UNIT_ROOT, _install_once
-    from senior_control.runtime.ipc import MAX_PATH
+    from vehicle_core.ipc import MAX_PATH
 
     return DeploymentPorts(
         UNIT_ROOT, _install_once, MAX_PATH, _validate_runtime, _validate_navigation
