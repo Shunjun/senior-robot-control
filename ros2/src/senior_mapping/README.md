@@ -150,7 +150,7 @@ node名slam_toolbox、原扫描/TF/frame/receipt、参数文件、进程数及re
 ### 构建与注册
 
 默认完整构建所有原生目标，不加可选自动探测、静默漏目标或缺依赖fallback。
-CMake显式要求slam_toolbox 2.6.10 EXACT，沿用其私有async_slam_toolbox/toolbox_common/kartoSlamToolbox
+当前构建使用车端 ROS 2 Humble 容器中已有的 slam_toolbox 2.6.8。CMake 和 package.xml 均锁定 2.6.8，沿用其私有 async_slam_toolbox/toolbox_common/kartoSlamToolbox
 库定位与Boost serialization/thread、OpenSSL::Crypto、TBB::tbb、Threads、rclcpp/tf2/sensor_msgs/motion_msgs依赖。
 bridge只rosidl生成接口，mapping通过标准ament导出消费它，不猜外部imported target名称或复制同项目graph_typesupport变量。
 真实Humble类型导出/私有符号链接仍须实际编译验证，源码核对不能替代。
