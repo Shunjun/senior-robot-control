@@ -5,10 +5,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import SampleTime
 from senior_control.vision.raw_capture import RawCaptureHeader, capture_from_message
 from senior_perception.raw_safety_observation import PredictedReturn
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import default_policy
 
 
 @dataclass(frozen=True)

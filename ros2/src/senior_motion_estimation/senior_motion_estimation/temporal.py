@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from senior_control.models import Pose2D
 from senior_control.motion.kinematics import body_delta, compose, exponential, logarithm
-from senior_control.sensors.sample_time import StampInterval
 from senior_motion_estimation.admission_events import SourceSnapshot
 from senior_motion_estimation.observations import (
     AdaptedObservation,
@@ -22,6 +21,7 @@ from senior_motion_estimation.sample_types import (
     PointObservation,
     physical_support,
 )
+from vehicle_core.sample_time import StampInterval
 
 Key = tuple[str, str, int]
 Values = tuple[float | None, float | None, float | None]

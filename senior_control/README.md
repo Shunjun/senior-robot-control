@@ -2037,3 +2037,66 @@ spawn、父亡、异常和reap行为沿用原实现。限定验证与平台缺�
 本机未验证Linux prctl父亡分支、Humble/ROS安装及真实设备；OS管道/spawn纯测试不等于
 实车手动控制已通。本批没有发送运动请求，没有启动任何仿真/实车/开发/ROS服务，
 没有运行仿真验证或部署；senior_sim launch仅静态引用迁移及通用静态lint。
+
+
+### R1 第三片：采集时间与纯传感器时效策略
+
+基线 `d3c7dec`，固定功能分支工作区干净后实施。原sample_time唯一实现逐字节迁入
+`src/vehicle_core/sample_time.py`；Age/SensorTiming/SensorClockError/default_policy/
+sensor_current纯实现归 `vehicle_core/sensor_policy.py`，只调整叶子与资源路径、移除诊断依赖。
+旧sample_time与policy显式Compatible转发同对象；唯一ros_sensor_parameters仍在旧policy，
+保留原适配代码及延迟诊断导入，不迁adapter/诊断或新增owner。
+
+原defaults.json原字节移动为唯一 `src/vehicle_core/sensor_defaults.json`，不保留旧资源副本；
+36个真实产品消费者改用纯叶子，3个仅消费ros_sensor_parameters的launch保留原适配入口。
+仿真点只有静态引用迁移，不执行任何仿真或其验证。范围为产品增2改38、资源迁移1、
+工具文档改4（安装工具、本README、既有计划、hardware-motion-parameters），测试/其他配置
+不改，无其他删除。算法、缓存、阈值、原始时间、ROS/IPC行为及控制/手动权限均不变。
+
+
+#### 本片验证、自审与限制
+
+环境：macOS arm64，原主仓Python 3.12.15、pytest 8.4.2、Ruff 0.17.3、uv 0.12.23；
+独立C++合成输入使用Apple clang 21.0.0、C++17。本片不修改项目 `.venv` 或依赖。
+
+- 安装工具初稿的子进程字节常量有双层转义错误，首次检查报SyntaxError，已改为显式换行
+  字节组合；随后对上一片已安装wheel执行 `--lazy-shared-only`，退出1，明确缺少
+  `vehicle_core.sample_time`，不是将语法错误当成有效的缺owner验证。
+- 唯一pytest命令（原主仓 `.venv/bin/python`，项目目录运行）：
+
+  ```sh
+  python -m pytest tests/unit/test_sensor_timing.py \
+    tests/unit/test_runtime_diagnostics.py::test_age_raw_dedup_separate_compute_and_five_second_debug \
+    -q --tb=short
+  ```
+
+  **17通过**，1.71秒，退出0，无跳过。包含0.3秒软降/1秒硬失效边界、原始接收映射与
+  队列耗时、重复采集端点固定deadline、年龄诊断去重及5秒DEBUG，以及独立编译运行的
+  C++整数时钟合成输入契约。该C++用例不链接ROS，不是ROS或仿真运行验证。
+- 修改Python和两份新叶子的 `ruff check` / `ruff format --check`：41文件通过；
+  首轮34处迁移导入排序已修正，`git diff --check`通过。
+- sample_time及资源与 `git show d3c7dec:src/senior_control/sensors/...` 逐字节对照相同；
+  纯策略所有类/函数及lru_cache装饰器AST相同（default_policy只替换资源路径）；
+  旧ros_sensor_parameters整个AST与基线相同，仍延迟导入原诊断owner。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-core-sensor-leaf-wheels`：
+  根sdist/wheel成功；zip内容检查确认新路径唯一sensor_defaults.json字节与基线相同，
+  无旧sensors/defaults.json。用 `uv pip install --offline --reinstall --no-deps --python
+  /tmp/vehicle-core-leaf-sdk/bin/python <新Root wheel>` 更新既有临时安装夹具，仅重建Root，
+  其余26包依赖闭包沿用前片，未声称重新安装验证36个ROS消费者的执行环境。
+- 从 `/tmp`、`PYTHONPATH=` 运行临时安装Python与
+  `<仓库>/tools/verify_batch_one_install.py --lazy-shared-only`：通过。
+  新canonical模块来自site-packages；原sample_time类/函数/常量与新owner同对象；
+  policy类/函数、default_policy缓存及返回默认实例同对象，maxsize仍1；
+  ros_sensor_parameters仍归旧policy；新旧资源唯一性及300/1000/5.0原字节均核对，
+  纯叶子和旧转发导入不加载诊断/管理/ROS/launch。
+  `uv pip check --python /tmp/vehicle-core-leaf-sdk/bin/python`：26包兼容。
+
+自审实际45逻辑文件：产品增2改38、资源原字节迁移1、工具文档改4，测试无改，
+无额外配置/删除/依赖变更。git原始路径统计为42修改、3新增、1删除，其中JSON增删是一项
+移动；暂存后可识别100%资源重命名。产品旧纯导入无残留，仅3个launch保留原ROS参数
+适配入口；不复制时钟/缓存/默认资源或新建工厂。Requires-Dist、uv.lock、CI配置无diff。
+
+提交仍采用 `git -c core.hooksPath=/dev/null commit` 避免超范围钩子运行，限定验证均已
+手动执行，仅提交固定功能分支，不推送。本片没有运行任何仿真测试或环境，没有发送运动
+请求，没有启动车辆/开发/ROS服务或部署。仿真相关消费者仅静态改引用及通用静态lint；
+真实Linux/Humble/ABI与设备链未验，不声称实车控制可用或独立manager生产部署完成。

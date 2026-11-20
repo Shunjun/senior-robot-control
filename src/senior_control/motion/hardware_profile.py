@@ -19,7 +19,7 @@ from senior_control.motion.observations import AdmissionConfig, Source, SourceRu
 from senior_control.motion.temporal import TemporalConfig
 from senior_control.runtime.diagnostics import DiagnosticsSettings
 from senior_control.sensors.input_config import OptionalMotionInput
-from senior_control.sensors.policy import default_policy
+from vehicle_core.sensor_policy import default_policy
 
 
 class HardwareMotionProfile(BaseModel):

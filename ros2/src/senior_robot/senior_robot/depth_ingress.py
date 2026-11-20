@@ -18,7 +18,6 @@ from senior_motion_msgs.msg import (
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_control.runtime.diagnostics import process_diagnostics
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth_runtime import (
     CameraInfoFrame,
     DepthGeometrySettings,
@@ -35,6 +34,7 @@ from senior_control.vision.raw_capture import (
     compatible_captures,
 )
 from senior_robot.motion_lifecycle import run
+from vehicle_core.sensor_policy import default_policy
 
 
 def _ns(stamp):

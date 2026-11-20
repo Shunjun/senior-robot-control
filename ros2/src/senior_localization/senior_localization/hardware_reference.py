@@ -12,9 +12,9 @@ from typing import Any
 from senior_sensor_ingress.native_receipt import with_dds_info
 
 from senior_control.models import Pose2D
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import SampleTime
 from senior_localization.navigation_reference import load_navigation_reference
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import default_policy
 
 
 class HardwareReference:

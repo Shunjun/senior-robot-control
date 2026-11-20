@@ -8,8 +8,8 @@ from uuid import uuid4
 from senior_control.models import Pose2D
 from senior_control.motion.kinematics import compose, exponential, logarithm
 from senior_control.sensors.consensus import Vote, combine
-from senior_control.sensors.policy import Age, default_policy
 from senior_motion_estimation.estimator import MotionEstimate, Origin, validate_origins
+from vehicle_core.sensor_policy import Age, default_policy
 
 
 def angle(v: float) -> float:

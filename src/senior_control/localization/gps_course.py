@@ -5,8 +5,8 @@ from collections import deque
 from dataclasses import dataclass
 
 from senior_control.motion.estimator import Origin
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import StampInterval
+from vehicle_core.sample_time import StampInterval
+from vehicle_core.sensor_policy import default_policy
 
 
 def wrap(value: float) -> float:

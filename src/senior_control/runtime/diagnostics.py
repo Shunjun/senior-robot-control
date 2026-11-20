@@ -17,7 +17,7 @@ from functools import lru_cache
 from threading import RLock
 from typing import Any, ClassVar, Generic, Literal, SupportsIndex, TypeVar
 
-from senior_control.sensors.policy import Age, default_policy
+from vehicle_core.sensor_policy import Age, default_policy
 
 _LIMIT = (1 << 63) - 1
 

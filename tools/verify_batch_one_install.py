@@ -18,6 +18,36 @@ def verify_lazy_shared_imports() -> None:
         """
 import sys
 from pathlib import Path
+from importlib.resources import files
+from vehicle_core import sample_time, sensor_policy
+for module in (sample_time, sensor_policy):
+    assert 'site-packages' in str(Path(module.__file__).resolve()), module.__file__
+assert sample_time.SampleTime.__module__ == 'vehicle_core.sample_time'
+assert sensor_policy.SensorTiming.__module__ == 'vehicle_core.sensor_policy'
+resource = files('vehicle_core').joinpath('sensor_defaults.json')
+assert resource.read_bytes() == (
+    b'{"soft_age_ms": 300, "hard_age_ms": 1000, "diagnostics_period_s": 5.0}' + bytes((10,))
+)
+assert not files('senior_control.sensors').joinpath('defaults.json').is_file()
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_control.runtime.diagnostics', 'senior_control.sensors.policy'):
+    assert name not in sys.modules, name
+from senior_control.sensors import sample_time as old_time, policy as old_policy
+for name in ('_INT64_MAX', '_UINT64_MAX', '_coordinate', 'SampleTime', 'map_sample',
+             'StampInterval', 'interval_ns', 'ClockObservation', 'ClockTracker'):
+    assert getattr(old_time, name) is getattr(sample_time, name), name
+for name in ('Age', 'SensorTiming', 'SensorClockError', 'default_policy', 'sensor_current'):
+    assert getattr(old_policy, name) is getattr(sensor_policy, name), name
+assert old_policy.default_policy() is sensor_policy.default_policy()
+assert sensor_policy.default_policy.cache_info().maxsize == 1
+assert old_policy.ros_sensor_parameters.__module__ == 'senior_control.sensors.policy'
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_control.runtime.diagnostics'):
+    assert name not in sys.modules, name
+""",
+        """
+import sys
+from pathlib import Path
 from vehicle_core import lifecycle_events, process_resources
 for module in (lifecycle_events, process_resources):
     assert 'site-packages' in str(Path(module.__file__).resolve()), module.__file__

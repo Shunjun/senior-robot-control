@@ -7,7 +7,6 @@ current graph authentication. This coordinator is not a DDS admission fence.
 from dataclasses import replace
 from typing import Any
 
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.independent_motion import Profile
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_frame_builder import (
@@ -18,6 +17,7 @@ from senior_control.vision.rgbd_frame_builder import (
 from senior_control.vision.rgbd_parent_ledger import CaptureLedger, CaptureTicket
 from senior_control.vision.rgbd_spawn_worker import CompactResult, SpawnWorker
 from senior_control.vision.static_tf_binding import StaticBinding
+from vehicle_core.sensor_policy import default_policy
 
 
 class RgbdCoordinator:

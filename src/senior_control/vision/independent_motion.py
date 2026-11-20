@@ -10,13 +10,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import SampleTime
 from senior_control.vision.raw_capture import (
     RawCaptureAdmission,
     RawCaptureHeader,
     compatible_captures,
 )
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import default_policy
 
 
 def _bounded_text(value: Any, maximum: int, *, nonempty: bool = False) -> bool:

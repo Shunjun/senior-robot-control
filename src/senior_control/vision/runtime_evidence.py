@@ -7,7 +7,7 @@ registration, collision clearance, sensor coverage or any velocity command.
 import math
 from dataclasses import dataclass, field
 
-from senior_control.sensors.policy import sensor_current
+from vehicle_core.sensor_policy import sensor_current
 
 
 @dataclass(frozen=True)

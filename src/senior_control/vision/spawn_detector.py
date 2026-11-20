@@ -24,11 +24,11 @@ from senior_control.runtime.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.depth import GeometrySample
 from senior_control.vision.detector import Detection, _ultralytics_runtime
 from senior_control.vision.image_codec import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
 from senior_control.vision.synchronizer import ImageFrame
+from vehicle_core.sensor_policy import default_policy
 
 DetectionValue = tuple[str, float, tuple[float, float, float, float]]
 Processor = Callable[[ImageFrame], list[DetectionValue]]

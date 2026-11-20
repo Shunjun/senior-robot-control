@@ -13,11 +13,11 @@ from senior_sensor_ingress.native_receipt import received_sample
 
 from senior_control.models import Pose2D
 from senior_control.sensors.input_config import OptionalMotionInput
-from senior_control.sensors.sample_time import StampInterval
 from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.rgbd_body_motion import body_pose_increment, planar_body_twist
 from senior_motion_estimation.estimator import MotionObservation, Origin
 from senior_motion_estimation.motion_observation_adapter import observation_origin, stamp_seconds
+from vehicle_core.sample_time import StampInterval
 
 
 def static_matrix(status: Any, base: str, camera: str) -> Any:

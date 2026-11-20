@@ -39,7 +39,6 @@ from senior_control.motion.source_fences import (
     SourceEpochFence,
 )
 from senior_control.safety.freshness import SafetyFreshness
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
@@ -51,6 +50,7 @@ from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
+from vehicle_core.sensor_policy import default_policy
 
 
 class SafetyGate(Node):

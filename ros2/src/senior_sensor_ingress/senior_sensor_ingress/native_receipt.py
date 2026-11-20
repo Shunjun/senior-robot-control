@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from senior_control.runtime.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import SampleTime
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import default_policy
 
 _MetadataCallback = TypeVar("_MetadataCallback", bound=Callable)
 

@@ -12,8 +12,8 @@ from uuid import uuid4
 
 from senior_control.models import Pose2D
 from senior_control.sensors.consensus import Vote, combine
-from senior_control.sensors.policy import Age, SensorTiming, default_policy
-from senior_control.sensors.sample_time import ClockTracker, SampleTime, StampInterval
+from vehicle_core.sample_time import ClockTracker, SampleTime, StampInterval
+from vehicle_core.sensor_policy import Age, SensorTiming, default_policy
 
 
 @dataclass(frozen=True)

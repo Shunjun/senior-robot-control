@@ -10,7 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from senior_control.models import Pose2D
-from senior_control.sensors.sample_time import SampleTime
+from vehicle_core.sample_time import SampleTime
 
 if TYPE_CHECKING:
     from senior_motion_estimation.sample_types import MotionSample

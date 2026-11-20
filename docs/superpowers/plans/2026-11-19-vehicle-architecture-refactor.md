@@ -862,3 +862,37 @@ launch_recovery仅更新一条child_lifetime导入。安装检查先在旧wheel�
 [manager本片记录](../../../senior_control/README.md#r1-第二片生命周期事件与进程资源叶子)。
 不声称实车手动控制可用，未运行任何仿真验证、ROS/实车/开发服务或部署，不推送；
 提交后由负责人审核，Linux父亡分支与Humble/真实设备验证仍未完成。
+
+
+### R1 第三片：采集时间与纯传感器时效策略（2026-11-21）
+
+固定功能分支基线 `d3c7dec`，实施前工作区干净。先记录本范围，再迁唯一实现：
+`src/senior_control/sensors/sample_time.py` 逐字节归 `src/vehicle_core/sample_time.py`；
+policy中的Age、SensorTiming、SensorClockError、default_policy、sensor_current纯实现归
+`vehicle_core/sensor_policy.py`，仅调整sample_time和资源路径、去掉诊断依赖。
+原policy显式Compatible转发同对象，唯一ros_sensor_parameters适配及延迟诊断导入留原位。
+原sample_time显式转发原类、函数及内部常量；不重写时间或引入新owner副本。
+
+原 `sensors/defaults.json` 原字节移动到 `vehicle_core/sensor_defaults.json`，只保留一个资源，
+算法、阈值、lru_cache和缺失/时效语义保持。36个实际产品消费者接纯叶子；
+3个仅导入ros_sensor_parameters的launch继续用旧专用适配入口。仿真文件只静态改引用，
+不运行或验证。范围：产品增2改38、配置资源迁移1、工具文档改4，测试不改，无其他删除
+或配置；工具文档限安装工具、manager README、本计划、hardware-motion-parameters路径。
+不增加依赖、发行或工厂，不改ROS/IPC行为、诊断owner或控制/手动权限。
+
+限定验证：`tests/unit/test_sensor_timing.py`（含独立C++合成输入算术契约）与
+`tests/unit/test_runtime_diagnostics.py::test_age_raw_dedup_separate_compute_and_five_second_debug`；
+另核对仓库外新wheel唯一资源、canonical/旧路径类函数与默认缓存同对象、纯叶子无诊断/ROS
+导入，以及Ruff/diff。无需新增测试或skill工作区，按已有明确方案独立实施、自审后仅在
+固定分支提交，禁止推送/部署/运动请求/任何仿真或车辆/开发/ROS服务。
+
+
+本片实际45逻辑文件（产品增2改38、唯一资源迁移1、工具文档改4），测试/其他配置无改。
+sample_time/JSON原字节相同，策略主体与缓存AST保持、仅资源路径调整，唯一ROS adapter
+AST不变且仍延迟导入诊断；36个消费者接新纯叶子，3个专用launch适配入口保留。
+指定离线pytest **17通过**（含独立C++合成时钟契约），Ruff41文件及diff通过；
+根wheel新资源唯一、canonical/旧路径和缓存同对象、无诊断/ROS依赖的仓库外检查通过。
+完整命令、版本、工具初稿转义修正与限制见
+[manager本片记录](../../../senior_control/README.md#r1-第三片采集时间与纯传感器时效策略)。
+未运行任何仿真验证、车辆/开发/ROS服务或部署，不发运动请求、不推送；
+真实Humble及设备行为仍未验证，提交后等待负责人审核。
