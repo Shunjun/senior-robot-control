@@ -1879,3 +1879,94 @@ bin/senior-robot.sh
 - 完整原 Shell 用例：`python -m pytest senior_control/tests/test_shell_cli.py -q --tb=short`，包含原停机 start/dry-run 仅 inspect、运行中预览、restart 失败不启动、配对与日志等保护；扩大受控PTY测试权限后 **9通过**，6.81秒，退出0（普通沙箱对原PTY ioctl的限制沿用前节登记，未修改或跳过该断言）。
 
 这是命令替身/真实临时文件身份回归，不能代替 Linux systemd 与真实 daemon 故障实测；未启动真实 systemd、开发/车辆/仿真服务、容器或VM，未部署/推送。原共享发行与B8未验事项继续保留。
+
+
+### R0/R1 首片：共享 Clock 与 ImageFrame 叶子
+
+本片在固定功能分支由 `9cafe01` 快进至同文件树的 `origin/main@492f14d` 后实施。
+现有根发行内新增 `src/vehicle_core/{__init__,clock,image_frame}.py`，只承接原
+`Clock`、`SystemClock` 与 frozen `ImageFrame` 唯一实现；旧 `senior_control.clock`、
+`senior_control.image_frame` 显式 `//Compatible` 同对象转发。产品消费者直接导入新叶子，
+`senior_control.vision.ImageFrame` 保持按需公开同一类；原测试导入不改。
+
+根 hatch 明确打包两个命名空间，CI现有类型检查包含 `src/vehicle_core`；不改变
+Requires-Dist、uv.lock、安装方式或项目 `.venv`，未新增独立项目、状态或依赖环。
+本片不代表独立manager生产部署，IPC/诊断/业务值/默认平台绑定仍待后批。
+实际范围21文件：产品增3改13、测试0、配置改2、工具文档改3，无删除。
+仿真文件只有静态导入迁移，不运行任何仿真或其验证；ROS、实车、部署和推送均不在本片范围。
+
+验证命令、结果与环境限制见本节后续记录及原实施计划同名批次。
+
+
+#### 实际范围、自审与验证结果
+
+实际21文件，增3改18删0，与预报一致；测试文件未编辑：
+
+- 产品新增：`src/vehicle_core/__init__.py`、`clock.py`、`image_frame.py`
+- 产品修改：原 `src/senior_control/{clock,image_frame}.py`；agent的 `main.py`、
+  `composition.py`；vision的 `__init__.py`、`rgb1.py`、`ros_video.py`、
+  `simulation_video.py`、`stream.py`、`synchronizer.py`；localization的 `geo.py`、
+  `localization_node.py`；motion_control的 `command_node.py`
+- 配置修改：根 `pyproject.toml`、`.github/workflows/backend.yml`
+- 工具文档修改：`tools/verify_batch_one_install.py`、manager README、本计划
+
+自审核对新clock/image_frame与 `492f14d` 原实现逐字节相同，旧模块只有显式Compatible
+别名；产品旧导入搜索仅余原定位测试，未改原测试导入。vision的运行时导出表也指向新owner，
+不是只改TYPE_CHECKING。根project元数据逐项相同、uv.lock无diff；没有新依赖边或全局状态。
+新wheel同时含两个命名空间。import排序曾产生8项Ruff I001，已仅整理现有导入后全部通过。
+
+环境：macOS arm64；Python 3.12.15、pytest 8.4.2；工具复用原主仓
+`/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin`，当前工作区 `.venv` 缺pytest，
+未安装或改变它；临时wheel验证环境不作为第二套项目运行环境。
+
+1. 定向回归（原主仓Python）：
+
+   ```sh
+   python -m pytest tests/unit/test_control_clock_domains.py \
+     tests/unit/test_manual_session.py tests/unit/test_manual_authority.py \
+     tests/unit/test_settings.py::test_clock_is_injected_without_sleep \
+     tests/unit/test_rgbd_sync_ordering.py \
+     tests/unit/test_perception.py::test_rgb_depth_time_mismatch_rejected \
+     tests/unit/test_perception.py::test_vision_import_loads_no_detector_runtime \
+     -q --tb=short
+   ```
+
+   **115通过、1失败**，0.48秒，退出1。失败为原
+   `test_close_is_permanent_and_old_acquire_returns_closed[stop]`：旧测试调用
+   `ManualAuthorityManager.stop()` 缺 `gesture` 参数；测试和该实现均未改。
+   用 `git archive 492f14d src tests/unit/test_manual_authority.py pyproject.toml`
+   解包至 `/tmp/vehicle-core-leaf-baseline`，以该归档src优先、现有功能包源码路径补齐，
+   执行归档原测试 `-k close_is_permanent_and_old_acquire_returns_closed -q --tb=short`：
+   **2通过、1相同失败、31未选**，0.08秒；没有放宽断言、补假参数或越界修旧测试。
+   控制时钟、手动会话及帧同步均为纯离线既有用例，不含仿真运行或仿真验收。
+
+2. 本批所有修改Python文件及 `src/vehicle_core` 的 `ruff check`、
+   `ruff format --check` 通过（17文件）；`mypy src/vehicle_core`：3源文件无错误；
+   `git diff --check` 通过。没有运行全量mypy或全量pytest。
+
+3. `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-core-leaf-wheels`，
+   以及同参数 `uv build ros2/src/senior_localization`、
+   `uv build ros2/src/senior_motion_control`：三个项目sdist/wheel成功。
+   构建前后均未改依赖声明或uv.lock，不是ROS/ament原生构建。
+
+4. `uv venv --python <原主仓Python> /tmp/vehicle-core-leaf-sdk`；以
+   `uv pip install --offline --python /tmp/vehicle-core-leaf-sdk/bin/python` 安装新Root wheel
+   与既有10份依赖闭包wheel，共26包；随后用 `--reinstall --no-deps` 替换为本批新建的
+   localization/control wheels。其余复用的实际artifact来自 `/tmp/shell-cli-wheels`
+   （manager）、`/tmp/cloud-build-9cafe01`（cloud）、`/tmp/b7-wheels`（navigation/robot）
+   与 `/tmp/m5c-wheels`（contracts/mapping/estimation/perception等），不声称全部依赖
+   重新构建，也不将这一叠装证明扩大为独立manager生产安装。
+   `uv pip check --python /tmp/vehicle-core-leaf-sdk/bin/python`：26包兼容。
+
+5. 从 `/tmp`、`PYTHONPATH=` 执行新安装Python与仓库工具
+   `tools/verify_batch_one_install.py --lazy-shared-only`：通过。新owner的真实导入、
+   Clock/SystemClock/ImageFrame旧新同对象、无manager/cloud/rclpy急切导入、旧agent/vision
+   惰性公开均检查；未执行工具其他入口。另从 `/tmp` 实际导入新安装的
+   `vehicle_core.clock/image_frame`、`senior_localization.geo/localization_node`，
+   四者路径均位于site-packages，定位消费者和旧路径Clock/SystemClock同一对象，
+   ImageFrame兼容身份相同。control命令节点因rclpy环境不在本机，未实际导入或启动。
+
+限制：未运行任何仿真测试、仿真环境、ROS/ament、开发服务、实车或部署；
+`simulation_video.py` 只有静态导入迁移及通用静态lint，未执行其功能验证。
+未验证Linux/Humble/Python3.10 ABI或真实设备；未宣称manager独立生产部署、完整发行DAG
+收尾或新功能验收。本批仅提交固定功能主分支，不推送，等待负责人审核。

@@ -17,7 +17,29 @@ def verify_lazy_shared_imports() -> None:
     scripts = (
         """
 import sys
-from senior_control.image_frame import ImageFrame
+from vehicle_core.clock import Clock, SystemClock
+from vehicle_core.image_frame import ImageFrame
+assert Clock.__module__ == SystemClock.__module__ == 'vehicle_core.clock'
+assert ImageFrame.__module__ == 'vehicle_core.image_frame'
+assert isinstance(SystemClock().monotonic(), float)
+assert ImageFrame(0.0, 1, 1, 'rgb8', b'abc').data == b'abc'
+for name in ('senior_control', 'vehicle_manager', 'cloud', 'rclpy'):
+    assert name not in sys.modules, name
+from senior_control.clock import Clock as OldClock, SystemClock as OldSystemClock
+from senior_control.image_frame import ImageFrame as OldImageFrame
+assert OldClock is Clock and OldSystemClock is SystemClock
+assert OldImageFrame is ImageFrame
+for name in ('senior_control.agent', 'senior_control.vision',
+             'senior_control.runtime.diagnostics', 'senior_control.sensors.policy',
+             'vehicle_manager', 'cloud', 'rclpy'):
+    assert name not in sys.modules, name
+""",
+        """
+import sys
+from vehicle_core.image_frame import ImageFrame
+from senior_control.image_frame import ImageFrame as OldImageFrame
+assert OldImageFrame is ImageFrame
+assert ImageFrame.__module__ == 'vehicle_core.image_frame'
 from senior_control.vision import rgb1
 assert rgb1.ImageFrame is ImageFrame
 for name in ('depth', 'detector', 'tracking', 'synchronizer'):
@@ -43,7 +65,7 @@ assert agent.Agent is main.Agent
 assert agent.RobotSnapshot is snapshots.RobotSnapshot
 assert vision.ImageFrame is OldFrame is ImageFrame
 owners = {
-    'senior_control.image_frame': ('ImageFrame',),
+    'vehicle_core.image_frame': ('ImageFrame',),
     'senior_control.vision.depth': (
         'CalibrationError', 'CameraCalibration', 'CameraExtrinsic', 'ColumnStatus',
         'GeometryConfig', 'GeometryObservation', 'GeometryPoint', 'project_depth'),
@@ -63,7 +85,7 @@ for owner, names in owners.items():
     )
     for script in scripts:
         subprocess.run([sys.executable, "-c", script], cwd="/tmp", check=True, timeout=15)
-    print("isolated legacy execution/media imports and unchanged public identities: PASS")
+    print("installed vehicle_core leaves, legacy identities and lazy execution/media imports: PASS")
 
 
 def verify_navigation() -> None:

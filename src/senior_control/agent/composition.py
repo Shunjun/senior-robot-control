@@ -36,7 +36,6 @@ from senior_control.agent.settings_wire import SettingsRuntime
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError
-from senior_control.image_frame import ImageFrame
 from senior_control.protocol import RuntimeObservation
 from senior_control.runtime.diagnostics import (
     DiagnosticsSettings,
@@ -53,6 +52,7 @@ from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vehicle_logs.service import VehicleLogService
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.image_frame import ImageFrame
 
 logger = logging.getLogger("senior_control.agent")
 

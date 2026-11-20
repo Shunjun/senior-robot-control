@@ -786,3 +786,40 @@ B8实际ROS/Humble/Linux与真实仿真/设备验收仍待环境，缺失新算�
 用户随后明确停止容器的预览直接失败，冻结已解除：新 Shell 只 inspect 判定停止后非零退出，既不 exec/start/run也不写配置/unit/systemctl；已运行容器使用其 `.venv` 中固定动作完整预览。Docker start 同样要求共享容器已运行，新 unit 无自动 docker start。原 Python Compatible 入口仍可执行原停机预览与旧启动流程，不删除原断言。
 
 Shell 直接管理宿主 systemd/journal，Python 逐次提供原 profile、渲染、原子写入、凭据、IPC探针与实际运行 owner；固定请求不是旧 argparse 的二次解析。新 Docker deploy 使用挂载目录同一原子写入器，宿主 link/reload失败以原文件身份收据回滚；unit/config不一致拒绝启动，native不操作Docker unit。独立 Shell 安装与 wheel 解绑，CI 安装单脚本后验旧 module兼容和新动作，不宣称 manager 独立部署。实际文件及命令/基线/缺口见管理 README 的 Shell CLI 记录；B8真实Linux/Humble/车辆验收与共享发行边界仍未完成。
+
+
+### R0/R1 首片：共享 Clock 与 ImageFrame 叶子（2026-11-20）
+
+本批已确认使用现有根发行内 `src/vehicle_core` 命名空间承接共享叶子，不新增独立项目。
+先核对工作区干净、实车修复分支基线 `9b029b7`，切回既有固定功能主分支
+`feat/vehicle-architecture-refactor`；原分支 `9cafe01` 可快进到 `origin/main@492f14d`，
+二者文件树均为 `0491c797120f577cf5afb42fe900209bedb59619`，因此只执行该快进。
+不合入、重写或推送实车修复分支。
+
+顺序：先登记本范围；再将原 `src/senior_control/{clock,image_frame}.py` 唯一实现迁入
+`src/vehicle_core/{clock,image_frame}.py`，新增无副作用 `__init__.py`；旧两模块显式
+`//Compatible` 同对象转发；更新实际产品导入及 vision 按需公开 owner；最后定向验证与审阅。
+仿真静态引用只迁移，完全不运行仿真或任何仿真验证。原测试导入保留为兼容覆盖。
+
+范围固定21文件：产品增3改13，测试不编辑，配置改2，工具文档改3，无删除。
+配置仅根 hatch 显式打包 `senior_control` 与 `vehicle_core`，以及现有CI类型检查纳入新路径；
+工具只更新安装验证的实际 owner、旧新对象身份和惰性加载边界；文档仅本计划与manager README。
+不改 Requires-Dist、uv.lock、安装方式或一套项目 `.venv`，不迁IPC/诊断/业务值，
+不改时钟算法、帧校验、CLI、进程拓扑或服务绑定，不新增全局状态或跨项目依赖环。
+
+候选验证复用非仿真的控制时钟、原手动会话时效与帧同步/类型用例；仓库外新wheel实际导入
+与旧路径兼容身份分别验证，补惰性导入隔离检查；Ruff及diff检查后自审真实diff，仅提交固定
+功能分支，禁止推送。完整命令、结果和平台限制在实施后追加；不以静态检查替代ROS/实车证据。
+
+
+本批实际21文件（增3改18删0），与预报一致，测试文件未编辑。
+新两个实现与 `492f14d` 逐字节相同，旧新类型同一对象；产品消费者和vision按需owner接
+vehicle_core。根Requires-Dist输入、uv.lock及项目 `.venv` 未改。自审未见业务分支或状态变化。
+
+定向非仿真回归115通过、1原手动authority测试缺gesture失败；`492f14d` 归档同场景
+2通过、1相同失败、31未选。Ruff check/format、三文件mypy与diff检查通过；
+Root/localization/control的离线sdist/wheel构建通过；仓库外临时26包安装及pip check、
+新owner/旧兼容身份/惰性边界、实际安装定位消费者导入均通过。完整命令、真实artifact来源、
+失败对照和限制见 [manager记录](../../../senior_control/README.md#r0r1-首片共享-clock-与-imageframe-叶子)。
+不运行仿真及其验证、不启动ROS/车辆/服务、不部署或推送；Linux/Humble/ABI及
+独立manager生产安装仍未验证。提交固定功能主分支后等待负责人审阅，再推进后批。

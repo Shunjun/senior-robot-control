@@ -34,7 +34,6 @@ from senior_control.agent.dispatcher import (
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import StatePort
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.clock import Clock, SystemClock
 from senior_control.errors import DomainError
 from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import (
@@ -50,6 +49,7 @@ from senior_control.runtime.ipc import IpcError
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
+from vehicle_core.clock import Clock, SystemClock
 
 logger = logging.getLogger("senior_control.agent")
 

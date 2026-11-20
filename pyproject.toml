@@ -39,6 +39,9 @@ dev = [
     "lefthook==2.2.2",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/senior_control", "src/vehicle_core"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

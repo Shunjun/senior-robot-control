@@ -30,7 +30,6 @@ from senior_control.agent.manual_control import (
     ManualTarget,
     MotionRuntimeReceiver,
 )
-from senior_control.clock import Clock, SystemClock
 from senior_control.errors import ErrorCode
 from senior_control.models import Velocity
 from senior_control.motion.contracts import ManualIntent
@@ -44,6 +43,7 @@ from senior_control.protocol import (
 )
 from senior_control.settings.models import DrivingSettings
 from senior_motion_control.arbiter import Arbiter, CommandResult
+from vehicle_core.clock import Clock, SystemClock
 
 
 @dataclass
