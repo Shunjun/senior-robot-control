@@ -1276,3 +1276,20 @@ wheel、base12包/SDK26包重装与pip check、真实SQLite/schema/tuple/旧新�
 12份Python Ruff/format、CRLF diff及14文件自审通过；完整命令与限制见
 [manager本片记录](../../../senior_control/README.md#r5-工作区与domain具体存储绑定)。
 固定分支提交禁hooks，无仿真/服务/ROS/车辆启动或验证、不发运动、不部署推送。
+
+
+### R5 正式 Agent 入口切换（基线 c4a2844）
+
+范围固定15文件：产品新增 production.py、__main__.py，修改旧 composition/main 兼容入口及 manager service/simulation 子进程 argv；部署 unit 同步入口；仅修改5个已有测试的真实 patch/import/argv；安装工具、manager README 与本计划。唯一具体装配迁入 manager，默认只使用 IPC；配置启用时局部导入地图/摄像头公共效果，内部导入失败不得吞掉。旧运行/关闭、九客户端、超时、状态报告及配对退出语义保持；仿真仅静态迁 argv，不执行任何仿真验证。
+
+验收：明确非仿真已有场景、Ruff/CRLF diff；真实 root/manager wheel、仓库外 base 和 SDK，canonical module help/坏配置及临时 SQLite/Unix IPC/WS 替身真实生命周期，验证隔离、九客户端与关闭。尝试原锁 agent extra 离线安装，缺缓存如实记录；不启动任何生产/开发/车辆/ROS/仿真服务，不部署或推送。
+
+本片实际完成15文件，无扩围。新正式 module、纯 manager 生产装配、旧显式兼容出口与 service/unit
+argv 已切换；可选地图/camera效果仅配置启用后导入，缺顶层功能包明确告警/原UNAVAILABLE，内部导入错误保留。
+root/manager wheel和空base12包、兼容SDK26包真实安装/pip check通过；仓库外canonical实际临时SQLite/
+Unix IPC/WS替身生命周期证明九client、状态报告与原退出清理，另验旧入口身份/委托及真实归档显示fallback。
+非仿真配置/故障隔离17通过（排除11），其余选择7通过（排除1）；short_admission11参数与目录日志场景
+遇旧learning_capability fixture失败，原c4a2844仅代表tick+目录日志2节点同样失败，未改断言。
+agent extra离线缓存缺websockets15.0.1，原锁URL亦缺缓存，未升级联网；完整网络extra与Linux/ROS/实车未验。
+12份Python Ruff/format、CRLF diff、AST/字节自审通过；命令、环境与限制详见manager README本片记录。
+仿真仅静态argv迁移，未执行任何相关环境/验收；无服务/实车运动/部署/推送。

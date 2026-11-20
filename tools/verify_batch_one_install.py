@@ -10,6 +10,227 @@ import sys
 from pathlib import Path
 
 
+def verify_production_entry(*, compatible: bool = False) -> None:
+    """Run the installed production assembly against local IPC and in-memory WS peers."""
+    import asyncio
+    import os
+    import subprocess
+    import tempfile
+    import time
+    from unittest.mock import patch
+
+    from vehicle_manager.agent import production
+    from vehicle_manager.agent.__main__ import main
+    from vehicle_manager.agent.config import AgentConfig
+
+    from vehicle_core.ipc import IpcClient, IpcServer
+
+    assert production.run_agent.__module__ == "vehicle_manager.agent.production"
+    assert callable(main)
+    assert "site-packages" in str(Path(production.__file__).resolve())
+    forbidden = (
+        "senior_control",
+        "senior_mapping",
+        "senior_robot",
+        "senior_navigation",
+        "cloud",
+        "rclpy",
+        "launch",
+        "aiortc",
+        "av",
+        "httpx",
+        "websockets",
+    )
+
+    def isolated() -> None:
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in sys.modules
+            for prefix in forbidden
+        )
+
+    isolated()
+    if not compatible:
+        from vehicle_core.errors import DomainError, ErrorCode
+
+        try:
+            production.load_exported_grid(Path("/tmp/not-opened-display.zip"), "0" * 64, "robot")
+        except DomainError as exc:
+            assert exc.code is ErrorCode.UNAVAILABLE
+            assert isinstance(exc.__cause__, ModuleNotFoundError)
+            assert exc.__cause__.name == "senior_mapping"
+        else:
+            raise AssertionError("missing optional mapping feature was not reported")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("SENIOR_") and key != "PYTHONPATH"
+    }
+    for arguments, code, expected in ((["--help"], 0, "usage:"), ([], 78, "SENIOR_ROBOT_ID")):
+        result = subprocess.run(
+            [sys.executable, "-m", "vehicle_manager.agent", *arguments],
+            cwd="/tmp",
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == code, result.stderr
+        assert expected in result.stdout + result.stderr
+    invalid = dict(
+        environment,
+        SENIOR_ROBOT_ID="robot",
+        SENIOR_DEVICE_TOKEN="private-token",
+        SENIOR_CLOUD_URL="ws://remote.test/ws/agent",
+        SENIOR_DATABASE_PATH="/tmp/never-open-entry.db",
+        SENIOR_AGENT_SOCKET="/tmp/never-connect-entry.sock",
+    )
+    rejected = subprocess.run(
+        [sys.executable, "-m", "vehicle_manager.agent"],
+        cwd="/tmp",
+        env=invalid,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert rejected.returncode == 78 and "authenticated TLS" in rejected.stderr
+    assert "private-token" not in rejected.stdout + rejected.stderr
+
+    class Link:
+        epoch = 1
+
+        def __init__(self):
+            self.snapshots = []
+            self.closed = False
+            self.heartbeats = 0
+
+        async def recv(self):
+            await asyncio.Future()
+
+        async def send_snapshot(self, snapshot):
+            self.snapshots.append(snapshot)
+
+        async def send_heartbeat(self):
+            self.heartbeats += 1
+
+        async def close(self):
+            self.closed = True
+
+    async def lifecycle(directory: Path) -> None:
+        link = Link()
+        agents, clients, closed, requests = [], [], [], []
+        database_exit = production.Database.__aexit__
+
+        async def peer(message):
+            kind = message["type"]
+            requests.append(kind)
+            if kind == "state.get":
+                return dict(
+                    ok=True,
+                    sampled_at=time.monotonic(),
+                    localized=False,
+                    safety_clear=True,
+                    manual_driving=False,
+                    map_id=None,
+                    reference_revision=None,
+                    execution_status="idle",
+                )
+            assert kind in {"identity", "disable_motion", "exit"}, kind
+            return {"ok": True}
+
+        server = IpcServer(directory / "agent.sock", peer)
+        await server.start()
+
+        async def connect():
+            return link
+
+        async def logs(_self, _url, _token):
+            # Only the remote log transport is replaced, never the log/SQLite owner.
+            await asyncio.Future()
+
+        def client(*args, **kwargs):
+            value = IpcClient(*args, **kwargs)
+            clients.append(value)
+            return value
+
+        async def database_close(database, *args):
+            await database_exit(database, *args)
+            closed.append(not database.is_open)
+
+        config = AgentConfig(
+            "robot",
+            "wss://cloud.invalid/ws/agent",
+            "test-token",
+            directory / "agent.db",
+            directory / "agent.sock",
+        )
+        with (
+            patch.object(production, "IpcClient", client),
+            patch.object(production, "WebSocketConnector", lambda *args: connect),
+            patch.object(production.AgentLogConnection, "run", logs),
+            patch.object(production.Database, "__aexit__", database_close),
+            patch.object(
+                production.Agent, "install_signal_handlers", lambda self: agents.append(self)
+            ),
+        ):
+            runner = asyncio.create_task(production.run_agent(config))
+            try:
+
+                async def reporting():
+                    while len(link.snapshots) < 2:
+                        if runner.done():
+                            await runner
+                            raise AssertionError("entry exited before reporting")
+                        await asyncio.sleep(0.01)
+
+                await asyncio.wait_for(reporting(), 5)
+                assert len(clients) == len({id(value) for value in clients}) == 9
+                assert sorted(value._timeout for value in clients) == [1.0] * 8 + [3.0]
+                agent = agents[0]
+                database = agent._journal._database
+                tasks = agent._dispatcher._tasks._store
+                assert tasks._database is agent._state._waypoints._database is database
+                assert agent._state._tasks is tasks
+                assert agent._motion.tasks._database.connection is database.connection
+                assert agent._motion.tasks._database.write_lock is database.write_lock
+                assert agent.connected and "state.get" in requests
+                assert not runner.done() and not link.closed
+                assert link.snapshots[-1].vehicle_ui["observation"]["status"] != "ipc_unavailable"
+                isolated()
+            finally:
+                if agents:
+                    agents[0].request_shutdown()
+                try:
+                    assert await asyncio.wait_for(runner, 5) == 0
+                finally:
+                    await server.close()
+        assert closed == [True] and link.closed
+        assert all(value._writer is None for value in clients)
+        assert "disable_motion" in requests and "exit" in requests
+        assert not (directory / "agent.sock").exists()
+
+    with tempfile.TemporaryDirectory(prefix="entry-", dir="/tmp") as directory:
+        asyncio.run(lifecycle(Path(directory)))
+    isolated()
+    if compatible:
+        from vehicle_manager.agent import __main__ as entry
+
+        from senior_control.agent import composition
+        from senior_control.agent import main as old_main
+
+        assert composition.run_agent is production.run_agent
+        assert composition.build_task_runtime is production.build_task_runtime
+        assert composition._media_binding is production._media_binding
+        assert composition.AgentConfig is AgentConfig
+        with patch.object(entry, "main", return_value=78) as called:
+            assert old_main.main() == 78
+            called.assert_called_once_with()
+    print(
+        "installed canonical Agent: CLI exits, real SQLite/9 IPC clients/"
+        "state reporting/cleanup, isolation: PASS"
+    )
+
+
 def verify_lazy_shared_imports() -> None:
     """Fresh processes check the actual installed import graph and public identities."""
     import subprocess
@@ -761,6 +982,15 @@ def verify_workspace_domain(*, compatible: bool = False) -> None:
                 client.request.side_effect = IpcError("local IPC unavailable")
                 assert (await reader._manifest(payload, allow_export=True)).grid_id == digest
                 assert effects == ["map.manifest", "map.manifest"]
+                from vehicle_manager.agent import production
+
+                canonical_grid = production.load_exported_grid(bundle, digest, "robot")
+                assert canonical_grid == grid
+                canonical = production._workspace_reader(
+                    "robot", tasks, points, client, exported_grid=canonical_grid
+                )
+                assert type(canonical) is workspace_bindings.WorkspaceReader
+                assert (await canonical._manifest(payload, allow_export=True)).grid_id == digest
                 from senior_control.agent.workspace import WorkspaceReader as LegacyWorkspace
 
                 legacy = LegacyWorkspace("robot", tasks, points, client, exported_grid=grid)
@@ -992,6 +1222,8 @@ for name in ('vehicle_manager.agent.frame_projection', 'vehicle_manager.agent.st
         signature = inspect.signature(SnapshotState)
         assert signature.parameters["clock"].default is time.monotonic
         assert signature.parameters["manual_enabled"].default is False
+        from vehicle_manager.agent import production
+
         captured = []
         marker = object()
 
@@ -1007,8 +1239,8 @@ for name in ('vehicle_manager.agent.frame_projection', 'vehicle_manager.agent.st
             Path("/tmp/snapshot.sock"),
         )
         with (
-            patch.object(composition, "SnapshotState", marker),
-            patch.object(composition, "_run_agent", capture),
+            patch.object(production, "SnapshotState", marker),
+            patch.object(production, "_run_agent", capture),
         ):
             assert asyncio.run(composition.run_agent(config)) == 0
         assert captured == [marker]
@@ -3401,7 +3633,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--lazy-shared-only"]:
+    if sys.argv[1:] == ["--manager-entry-only"]:
+        verify_manager_core_distribution()
+        verify_production_entry()
+    elif sys.argv[1:] == ["--manager-entry-compatible"]:
+        verify_production_entry(compatible=True)
+    elif sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
     elif sys.argv[1:] == ["--manager-workspace-domain-only"]:
         verify_manager_core_distribution()

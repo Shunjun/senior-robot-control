@@ -365,7 +365,7 @@ async def supervise(
         agent = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
-            "senior_control.agent.main",
+            "vehicle_manager.agent",
             env=events.agent_environment(env),
             pass_fds=(events.reader,),
         )

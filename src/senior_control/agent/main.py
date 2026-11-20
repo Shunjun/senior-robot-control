@@ -46,11 +46,9 @@ from vehicle_manager.agent.runtime_bindings import process_diagnostics as proces
 
 def main() -> int:
     """//Compatible: original entry, configured with the same production owners per call."""
-    from vehicle_manager.agent.application import main as application_main
+    from vehicle_manager.agent.__main__ import main as canonical_main
 
-    from senior_control.agent.composition import AgentConfig, run_agent
-
-    return application_main(configuration=AgentConfig.from_environment, run_agent=run_agent)
+    return canonical_main()
 
 
 if __name__ == "__main__":

@@ -3167,3 +3167,155 @@ prepare AST仅canonical import变化、调用顺序相同；mapping算法及comp
 未验证真实地图进程、SLAM图来源/回放/导航能力、ROS/车辆、完整agent网络extra或Linux/Humble ABI。
 前片网络extra缓存缺口仍保留，本片不涉及其安装收尾。未启动/验证任何仿真、车辆、ROS、
 生产/开发服务，未发送实车运动、部署或推送；仅固定功能分支提交待审核。
+
+### R5 正式 Agent 入口（c4a2844 起，本批15文件）
+
+固定 `feat/vehicle-architecture-refactor`，初始工作区干净、基线 `c4a2844`。
+实际产品新增2、修改4，测试仅修改5个已有文件的 import/patch 点/argv，部署配置修改1，
+工具文档修改3；没有新增测试、发行依赖、锁或其他文件。原计划先记录了范围与验收。
+
+正式入口为 `python -m vehicle_manager.agent`：使用原 application.main 的配置、配对、
+私密输入和退出语义。唯一具体 run_agent、任务执行构造和媒体装配在 agent/production.py；
+旧 composition 显式 //Compatible 同对象转发，旧 main 保留公开导出并委托新 main。
+旧 WorkspaceReader 构造仍注入原地图显示效果，RosCameraSource 兼容导出保留；
+实际新装配默认使用纯 IPC WorkspaceReader，有导出 grid 时才显式注入原 WorkspaceMap 读取。
+service 子进程及 systemd unit 改同一 module；simulation 子进程仅改 argv，未执行或验证仿真。
+Shell 总 CLI 未改，未改变一套 .venv、IPC/readiness/手动准入、状态投影或关闭 owner。
+
+地图归档读取仅在配置启用时局部导入 senior_mapping 公共效果；只有缺顶层功能包被明确转成
+原 UNAVAILABLE 路径，通用 bootstrap 按原逻辑告警并保持 IPC。内部依赖的 ModuleNotFoundError
+仍向外传播，不伪装缺可选包。ROS camera 仅在视频配置启用且 video extra 可用后局部导入；
+缺 senior_robot 明确告警降级，原 source/session/factory 的 close 次序保持。
+本批没有实际验证摄像头、aiortc 或 ROS 可用性。
+
+环境为 macOS arm64、Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+以下 `python`/`ruff` 使用原主仓 `.venv/bin` 工具，项目 .venv 未重建；
+`<checkout>` 为本工作区绝对路径。实际非仿真测试命令：
+
+```sh
+PYTHONPATH=senior_control/src:src:contracts/src python -m pytest \
+  senior_control/tests/test_agent_config.py tests/integration/test_short_admission.py \
+  tests/integration/test_settings_logs_review.py \
+  tests/integration/test_deployment_config.py::test_agent_entry_reports_missing_configuration \
+  tests/integration/test_deployment_config.py::test_missing_secrets_fail_closed \
+  tests/integration/test_deployment_config.py::test_deploy_never_exposes_dds \
+  tests/integration/test_deployment_config.py::test_example_has_no_real_credentials \
+  tests/integration/test_runtime_fault_isolation.py \
+  -k 'not supervise_local_fault and not launch_exit' -q --tb=short
+```
+
+首轮13 failed、23 passed、11 deselected：其中一个临时 Unix socket bind 被 sandbox 拒绝；
+其余为 short_admission 的11参数及 settings_logs_review 的目录日志失败场景，旧 IPC 替身
+未处理 learning_capability，状态采集失败。没有改原断言、扩大产品协议或修补这些既有 fixture。
+允许本地 Unix socket 后，配置和明确非仿真故障隔离单独复跑：
+
+```sh
+PYTHONPATH=senior_control/src:src:contracts/src python -m pytest \
+  senior_control/tests/test_agent_config.py tests/integration/test_runtime_fault_isolation.py \
+  -k 'not supervise_local_fault and not launch_exit' -q --tb=short
+# 17 passed, 11 deselected in 0.84s
+PYTHONPATH=senior_control/src:src:contracts/src python -m pytest \
+  tests/integration/test_settings_logs_review.py \
+  tests/integration/test_deployment_config.py::test_agent_entry_reports_missing_configuration \
+  tests/integration/test_deployment_config.py::test_missing_secrets_fail_closed \
+  tests/integration/test_deployment_config.py::test_deploy_never_exposes_dds \
+  tests/integration/test_deployment_config.py::test_example_has_no_real_credentials \
+  -k 'not directory_log_database' -q --tb=short
+# 7 passed, 1 deselected in 0.75s
+```
+
+最小基线对照使用 `git archive c4a2844 | tar -x -C /tmp/vehicle-agent-entry-baseline`，
+不切分支。在该副本执行以下原节点，2 failed in 3.88s，同样是未处理 learning_capability：
+
+```sh
+PYTHONPATH=senior_control/src:src:contracts/src python -m pytest \
+  'tests/integration/test_short_admission.py::test_task_port_waits_do_not_starve_fresh_manual_intents[tick]' \
+  tests/integration/test_settings_logs_review.py::test_directory_log_database_does_not_abort_composed_control \
+  -q --tb=short
+```
+
+仅对以上两个代表节点做基线对照，未声称另10参数逐一重跑基线。故障隔离的 supervise 参数组
+及扫描仿真 launch 的 test_launch_exit 全部未执行；部署的仿真 profile 用例也未执行。
+
+真实非editable wheel与安装命令（`UV_CACHE_DIR=/tmp/vehicle-uv-cache`）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-agent-entry-wheels
+uv build --offline --wheel --out-dir /tmp/vehicle-agent-entry-wheels senior_control
+python3.12 -m venv /tmp/vehicle-agent-entry-base
+uv pip install --offline --python /tmp/vehicle-agent-entry-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-agent-entry-wheels/*.whl \
+  /tmp/m5c-wheels/senior_contracts-*.whl
+# manager 收尾后重新实建；base 和 SDK 重装两 wheel：
+uv pip install --offline --reinstall --no-deps --python /tmp/vehicle-agent-entry-base/bin/python \
+  /tmp/vehicle-agent-entry-wheels/*.whl
+uv pip install --offline --reinstall --no-deps --python /tmp/vehicle-dag-sdk/bin/python \
+  /tmp/vehicle-agent-entry-wheels/*.whl
+/tmp/vehicle-agent-entry-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-agent-entry-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-entry-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-entry-compatible
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-workspace-domain-compatible
+```
+
+root/manager 实建成功；空 base 安装12包，SDK 复用前片26包闭包并重装本轮 root/manager，
+两环境 pip check 均无坏依赖。SDK mapping 沿用 c4a2844、navigation/robot 沿用0a13d2c，
+其余旧 wheel 沿用前片；不声称本轮重建了所有 feature wheel 或实际 Linux/ROS 安装。
+冻结约束仍取原根锁，无版本升级、Requires-Dist 或锁变化。
+
+新增安装入口检查从 /tmp 真实导入 site-packages：module --help 为0、缺配置和远端明文 URL 为78，
+错误不泄漏 token；随后实际执行 canonical run_agent 与 Agent.run，真实临时 SQLite 和 Unix IPC
+服务器、仅外部控制/日志 WS 使用内存替身，不连接生产控制设备。验证唯一连接和 write_lock、
+实际 tasks/waypoints/journal/motion 同 owner、9个独立客户端、8个1000ms+1个3000ms、
+至少两次状态报告及 IPC state.get、运行仍存活、原 disable_motion/exit 独立关闭路径，
+最后数据库和全部 client/WS/socket 关闭。关闭和原状态新鲜度校验沿用原实现。
+base 前后均未加载 senior_control、mapping/navigation/robot、cloud、ROS、httpx/websockets、
+aiortc/av；兼容 SDK 检查先保持同样隔离，再检查旧 run/build/media/config 同对象及旧 main 委托。
+base 另验证缺可选地图包明确 UNAVAILABLE，未将缺包说成地图能力验证成功。
+安装夹具首轮将 bound list.append 直接作为类方法导致参数错误，已改为原形 lambda self 捕获；
+修正后真实生命周期通过，未为此改产品运行或清理流程。
+
+纯归档兼容检查沿用真实临时地图归档、hash、manifest 和 WorkspaceMap 读取，再经新 production
+局部 loader 与显式 callback 执行 fallback，确认 display_only、不可导航/写航点，live IPC优先、
+冲突/坏回复不被导出遮盖。未执行图回放、SLAM、地图进程或仿真；内部依赖导入失败未吞掉。
+已有安装器的 snapshot capture patch 点更新到 production，旧身份/基类/方法断言保留。
+
+锁定 agent extra 两次离线尝试：
+
+```sh
+uv pip install --offline --python /tmp/vehicle-agent-entry-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt \
+  '/tmp/vehicle-agent-entry-wheels/vehicle_manager-0.1.0-py3-none-any.whl[agent]'
+uv pip install --offline --python /tmp/vehicle-agent-entry-base/bin/python \
+  'https://files.pythonhosted.org/packages/3d/69/1a681dd6f02180916f116894181eab8b2e25b31e484c5d0eae637ec01f7c/websockets-15.0.1-cp312-cp312-macosx_11_0_arm64.whl'
+```
+
+均失败：原锁 websockets15.0.1 在缓存中不可用，原 URL 也未命中可安装缓存；未联网、升级或伪造wheel。
+已有 pytest 环境有 httpx0.28.1/websockets15.0.1，非本次锁定extra新安装证明；本轮 base 真实运行
+用明确 WS 替身且保持无网络模块加载。完整锁定 agent extra、真实 TLS/云连接和硬件安装仍未验。
+
+12个变更 Python 文件 Ruff check 与 format --check 通过；按既有 cr-at-eol 约定 diff check通过。
+额外 AST 对照确认 _ControlViewer、build_task_runtime 原主体原样，run_agent 仅 workspace
+工厂改为明确 callback 装配；service/simulation/unit 字节只有 argv 替换，五个测试文件全部原
+Assert AST保持。自审完整产品 diff，具体 owner、logger、构造默认及 source/session/peer cleanup 保持。
+提交禁 hooks，避免触发全量/仿真检查；上述范围检查已手动执行。
+未启动/验证任何生产、开发、仿真、ROS、车辆服务，未发送实车运动、部署或推送；仅固定分支提交待审核。
+
+收尾静态检查的实际命令（下列括号展开为12个已列范围内Python文件）：
+
+```sh
+ruff check senior_control/src/vehicle_manager/agent/{production,__main__}.py \
+  src/senior_control/agent/{composition,main}.py \
+  senior_control/src/vehicle_manager/{service,simulation}.py \
+  senior_control/tests/test_agent_config.py \
+  tests/integration/test_{runtime_fault_isolation,short_admission,settings_logs_review,deployment_config}.py \
+  tools/verify_batch_one_install.py
+ruff format --check senior_control/src/vehicle_manager/agent/{production,__main__}.py \
+  src/senior_control/agent/{composition,main}.py \
+  senior_control/src/vehicle_manager/{service,simulation}.py \
+  senior_control/tests/test_agent_config.py \
+  tests/integration/test_{runtime_fault_isolation,short_admission,settings_logs_review,deployment_config}.py \
+  tools/verify_batch_one_install.py
+git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
+```
