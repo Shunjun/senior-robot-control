@@ -1688,3 +1688,65 @@ aiortc1.15.0、PyAV17.1.0。命令的python/checker取主仓库`.venv/bin`，uv�
 Python3.10/CI未执行，native/SLAM安装仍UNVERIFIED。静态/安装导入不冒充ROS运行。
 共享帧/RGB1仍需旧SDK，Manager新wheel无默认设备/诊断绑定；生产CLI及其余技术owner仍原边界，
 本片不是独立管理生产部署或共享公共owner决策，不提前迁IPC/诊断/算法或扩大WS。
+
+
+## M5D1 实车平台命令与视频探针
+
+基线 `81f17f8`，直接在固定功能分支交付。本片是既有行为迁移；没有新增运行入口、
+修改 systemd/module 命令、IPC、诊断、Clock、学习、帧或导航业务。
+
+实际9文件：产品新增1、修改1，测试修改2，配置0，工具文档修改5，删除0，迁移单计。
+
+```text
+ros2/src/senior_robot/senior_robot/platform_runtime.py # 新增，唯一五函数实现/只读 RuntimeProfile
+src/senior_control/docker_start_helper.py             # 修改，原五签名 Compatible/真实效果注入
+senior_control/tests/test_docker_start_helper.py       # 修改，原overlay用例从canonical入口调用
+senior_control/tests/test_vehicle_cli.py               # 修改，原sim用例patch实际asyncio owner
+README.md, senior_control/README.md, ros2/README.md    # 修改，实际边界与验证
+docs/superpowers/plans/2026-11-19-vehicle-architecture-refactor.md # 修改，实际批次顺序
+tools/verify_batch_one_install.py                    # 修改，原安装验证与provider隔离导入
+```
+
+### 真实调用与公开接缝
+
+旧 `docker_start_helper._ports()` → 原 `ServicePorts` → 原五个 Compatible 包装函数 →
+`senior_robot.platform_runtime`；包装函数保留原配置对象和签名，不复制状态。
+`RuntimeProfile` 仅公开 motion_profile、safety_parameters、ros_setup、ros_domain、
+vendor_ros_setup、navigation_reference、navigation_parameters 的只读实际字段。
+真实预检仍按原时机从 `senior_robot.real_runtime` 延迟导入，其依赖未迁移。
+
+相机包装逐次导入原 `runtime.launch_recovery.restart_prefix` 并传入唯一实现，
+同时传入原 `_ros_launch_command` 回调以保留现有安装调用/故障隔离接缝。
+provider只调用传入效果，既不导入管理程序也不拥有第二个恢复器。
+原vendor/overlay顺序、同解释器、域、原argv/namespace、相机过滤表达式、
+视频5秒探针/环境白名单/失败保留控制环境/探针进程清理与警告logger名称均保持。
+peer身份、权限、0.5秒校验、IPC、关闭、学习/events及Agent/module入口未改。
+
+### 验证命令、结果与限制
+
+环境：macOS26.4 arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23。
+以下 `python`/`ruff`/`mypy` 来自主仓库原 `.venv/bin/`；所有uv命令使用
+`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，没有更新锁/依赖或启动开发、车辆、仿真服务。
+
+- 修改前原 `python -m pytest senior_control/tests/test_docker_start_helper.py senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py -q --tb=short`：58通过、1跳过，4.94秒。
+- 原overlay用例改canonical导入后先单独运行：因新模块未创建失败；迁移后原断言不变，1通过。
+- 原定向 `python -m pytest senior_control/tests/test_docker_start_helper.py senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py senior_control/tests/test_agent_config.py tests/unit/test_runtime_identity.py tests/integration/test_runtime_fault_isolation.py -q --tb=short`：83通过、1跳过、5失败，8.59秒。
+  五项是原real故障隔离夹具未带ros_setup及group_stop未接受group_grace；原camera叶子恢复/受控子进程关闭、CLI/dry-run、9客户端与同DB装配/身份用例通过，不补夹具假字段或弱化断言。
+- `git archive 81f17f8`至 `/tmp/m5d1-baseline-source`，同解释器原 `pytest tests/integration/test_runtime_fault_isolation.py -q --tb=short`：16通过、完全相同5失败，4.09秒。
+- 用原pytest pythonpath生成MYPYPATH；`mypy src/senior_control/docker_start_helper.py ros2/src/senior_robot/senior_robot/platform_runtime.py --follow-imports=silent`：2源码通过。
+  `mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：269源码仍39项；81f17f8归档用同命令仍39项，归一行号后的诊断完全一致。
+  最初未配置MYPYPATH的单独检查报12项路径缺失/随之Any，修正为仓库真实发现路径后无新问题。
+- 原五函数AST主体对照：只归一视频logger固定旧名和相机显式注入，全部原语义主体一致；
+  helper剩余peer/IPC/learning/events/服务函数AST完全一致，两份原测试全部assert AST完全一致。
+- `uv build ros2/src/senior_robot --offline --out-dir /tmp/m5d1-wheels` 和根 `uv build --offline --out-dir /tmp/m5d1-wheels`：两个sdist/wheel通过。
+- `uv venv /tmp/m5d1-robot` 后仅安装新Robot wheel；从 `/tmp` 运行
+  `python <仓库>/tools/verify_batch_one_install.py --platform-runtime-only`：provider来自该环境site-packages、五函数可定位且导入无Root/manager/rclpy，通过。
+- `/tmp/m5d1-sdk`全新环境安装本片两个wheel与其余8个现有闭包wheel，共25包；从 `/tmp` 运行原完整
+  `python <仓库>/tools/verify_batch_one_install.py`：原公开身份/生产ServicePorts、CLI及所有旧module help、SQLite和媒体等原检查通过；`uv pip check --python /tmp/m5d1-sdk/bin/python`通过。
+- 五份变更Python源码/工具 `ruff check`、`ruff format --check` 及 `git diff --check` 通过。
+
+原用例中的受控替身子进程和临时Unix socket只验证原监管行为，没有启动真实ROS或厂商进程。
+本机缺rclpy/ament_index_python/colcon/cmake，原Linux SO_PEERCRED专属用例跳过，
+实际ROS/ament安装、vendor overlay sourcing、ROS域/命名空间/相机设备与真实systemd/docker执行未验；
+native/SLAM安装仍UNVERIFIED，Python3.10及CI未执行。这里的Robot独立导入与完整旧SDK安装
+分别报告，均不冒充管理独立生产部署；公共IPC/诊断/Clock/进程/帧owner归属仍待定。

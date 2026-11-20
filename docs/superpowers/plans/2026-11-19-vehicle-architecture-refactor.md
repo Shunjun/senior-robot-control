@@ -109,6 +109,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M5A 管理观测与Agent CLI已迁 | Root observability与Agent main驱动 → vehicle_manager/observability、agent/application | 旧公开观测同对象、原main签名Compatible逐次接原配置/run_agent，12文件、原17项及安装验证见M5A；共享技术边界和管理独立生产部署仍后置 |
 | B6.M5B 本地请求与任务工厂已迁 | IpcMotion/TaskAwareMotion、IpcMapPort/IpcNavigation/IpcState → manager agent ipc_*；任务工厂 → 原manager composition | 原具体类型/异常/DTO及DB/IPC/诊断仍原owner注入，旧构造Compatible，九客户端/timeout与终端规则保持；复用既有接口使实际范围小于预报，见M5B |
 | B6.M5C 管理媒体与执行接入已迁 | stream/signaling/turn/最新帧消费 → manager/media；原ROS camera → senior_robot；sim直接用原共享RGB1 | 原帧类/codec唯一、诊断真实注入、旧Compatible和logger保持，23文件与原43/7及安装4项结果见M5C；ROS实测和独立部署后置 |
+| B6.M5D1 实车平台构造已归组合包 | 原helper五份命令/视频探针 → senior_robot.platform_runtime | 原只读配置/五签名Compatible、ServicePorts与逐次恢复效果保持；9文件、原回归/安装及旧失败见M5D1记录，公共owner及独立入口后置 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -720,3 +721,24 @@ manager76源码仍原4项，全链269源码与只读基线263源码同39项诊�
 真实ROS/ament/厂商/仿真、Python3.10/CI未验，原native/SLAM UNVERIFIED保持。
 Manager没有默认设备/诊断绑定，Root共享帧与codec尚未独立安装归属，不宣称独立生产部署；
 后续按既有边界核定入口/公共依赖，不用新根runtime或扩大契约绕过，导航算法仍最后。
+
+
+### B6.M5D1 实车平台命令与视频探针
+
+基线81f17f8，五个现有构造/探针从原helper归已有senior_robot：
+_adapter_command、_ros_launch_command、_motion_command、_camera_command、_video_environment。
+原helper五签名Compatible，ServicePorts真实调用仍经过这些包装；相机逐次注入原restart_prefix
+和原launch回调，原技术/学习/诊断/IPC owner、原module/systemd命令不变。
+执行provider仅以七字段只读RuntimeProfile接实际配置，默认导入不加载Root/manager/ROS。
+原ROS包集合和wheel已收录新模块，不改配置/锁/launch或新建项目。
+实际9文件与原定向/旧失败、AST、类型、离仓库wheel安装结果见
+[manager M5D1](../../../senior_control/README.md#m5d1-实车平台命令与视频探针)。
+
+下一片先核定共享IPC/诊断/Clock/进程恢复、ImageFrame/RGB1及原内部值/异常的公共归属和安装方式，
+再审阅预报整体CLI/systemd/docker helper/sim/Agent真实factory闭包；不能只改启动字符串，
+不能增加根runtime或扩大WS契约，也不能令ROS依赖manager。
+管理独立部署仍未完成；当前真实平台仍需原SDK技术和值/异常/DB协调绑定。
+B7继续后置迁原RoutePlan/QualifiedRoute/RouteService、Nav2适配/DedicatedController及实际功能资产/入口，
+依赖B3/B4/B5接口和资格/终端退场保持；hardware_navigation已转发定位包无需重复迁移。
+原可用建图/导航链保持，缺失地图/Home/定位协作在所属模块实现，新前沿探索最后。
+实际ROS/ament/Linux及原native/SLAM缺口继续登记，不能用本片静态/SDK导入替代。

@@ -228,3 +228,24 @@ publisher imports no manager media; real ROS subscription and simulator publicat
 remain unverified because ROS/ament are unavailable. Original real aiortc loopback and
 installed-wheel RGB1/peer tests passed; commands and platform limits are in
 [manager M5C](../senior_control/README.md#m5c-管理媒体与执行端图像接入).
+
+
+## M5D1 real platform commands
+
+`src/senior_robot/senior_robot/platform_runtime.py` owns the original adapter,
+ROS launch, motion, camera command builders and optional video environment probe.
+Its `RuntimeProfile` protocol exposes only seven read-only fields consumed by
+these functions; it does not import `vehicle_manager` or import ROS on module load.
+The old `senior_control.docker_start_helper` signatures remain Compatible, with
+`ServicePorts` still binding those wrappers. Each camera request injects the real
+original `restart_prefix` and original launch hook; no recovery/peer/IPC/learning
+implementation moved. The video warning retains `senior_control.docker_start_helper`.
+
+The existing Python package collection in setup.py and wheel declaration already
+include this module; no build or launch configuration changed. The one-package
+Robot wheel was installed outside the checkout and the provider imported without
+Root, manager or ROS. Calling the real preflight and running the original ROS
+commands still requires their existing owners/environment. This is not independent
+vehicle execution or management deployment. Commands, unchanged behavior audits,
+old fixture failures and native/Linux/ROS limits are in
+[manager M5D1](../senior_control/README.md#m5d1-实车平台命令与视频探针).

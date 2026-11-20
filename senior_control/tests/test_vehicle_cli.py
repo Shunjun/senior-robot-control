@@ -188,7 +188,9 @@ async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
     async def cleanup(process, timeout):
         stopped.append(process)
 
-    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+    from vehicle_manager import simulation
+
+    monkeypatch.setattr(simulation.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
     monkeypatch.setattr(simulation_cli, "_stop", cleanup)
     profile, credentials = _simulation_profile(tmp_path)
@@ -226,7 +228,9 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
     async def cleanup(process, timeout):
         pass
 
-    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+    from vehicle_manager import simulation
+
+    monkeypatch.setattr(simulation.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
     monkeypatch.setattr(simulation_cli, "_stop", cleanup)
     profile, credentials = _simulation_profile(tmp_path)
@@ -352,7 +356,9 @@ async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatc
     async def cleanup(*args):
         pass
 
-    monkeypatch.setattr(simulation_cli.asyncio, "create_subprocess_exec", spawn)
+    from vehicle_manager import simulation
+
+    monkeypatch.setattr(simulation.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(simulation_cli, "_wait_for_adapter", verify)
     monkeypatch.setattr(simulation_cli, "_stop", cleanup)
     monkeypatch.setattr(docker_start_helper, "_terminate_motion_stack", cleanup)

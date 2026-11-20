@@ -117,7 +117,7 @@ def real_profile(root, *, domain=None):
 
 
 def test_adapter_command_sources_runtime_overlay_without_motion_launch(service_root):
-    from senior_control.docker_start_helper import _adapter_command
+    from senior_robot.platform_runtime import _adapter_command
 
     profile = real_profile(service_root)
     command = _adapter_command(profile, "robot-a")

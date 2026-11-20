@@ -10,6 +10,27 @@ import sys
 from pathlib import Path
 
 
+def verify_platform_runtime() -> None:
+    """Locate the installed real provider without management or ROS imports."""
+    from senior_robot import platform_runtime
+
+    for name in (
+        "_adapter_command",
+        "_ros_launch_command",
+        "_motion_command",
+        "_camera_command",
+        "_video_environment",
+    ):
+        assert callable(getattr(platform_runtime, name))
+    assert not any(
+        name == "senior_control" or name.startswith(("senior_control.", "vehicle_manager", "rclpy"))
+        for name in sys.modules
+    )
+    print(
+        "installed execution platform provider without Root/manager/ROS:", platform_runtime.__file__
+    )
+
+
 def verify_manager_agent(*, network: bool = False) -> None:
     from vehicle_manager import agent
     from vehicle_manager.agent.composition import build_task_runtime, run_agent
@@ -146,6 +167,14 @@ def verify_legacy_operator() -> None:
         assert getattr(old_observability, name) is getattr(observability, name)
     assert cli.VehicleProfile is VehicleProfile and cli.load_profile is load_profile
     assert vehicle_deploy.render_service is deployment.render_service
+    from senior_robot import platform_runtime
+
+    assert helper._platform is platform_runtime
+    ports = helper._ports()
+    assert ports.adapter_command is helper._adapter_command
+    assert ports.motion_command is helper._motion_command
+    assert ports.camera_command is helper._camera_command
+    assert ports.video_environment is helper._video_environment
     assert helper._runtime_profile is service._runtime_profile
     assert helper._terminate_motion_stack is service._terminate_motion_stack
     assert simulation_cli.DisplayUnavailableError is simulation.DisplayUnavailableError
@@ -1286,7 +1315,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--manager-media-only"]:
+    if sys.argv[1:] == ["--platform-runtime-only"]:
+        verify_platform_runtime()
+    elif sys.argv[1:] == ["--manager-media-only"]:
         verify_manager_media()
     elif sys.argv[1:] == ["--manager-video-only"]:
         verify_manager_media(backend=True)
