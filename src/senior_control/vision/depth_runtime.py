@@ -9,7 +9,6 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 
-from senior_control.runtime.diagnostics import DiagnosticDeque
 from senior_control.vision.depth import (
     CameraCalibration,
     GeometryConfig,
@@ -19,6 +18,7 @@ from senior_control.vision.depth import (
 )
 from senior_control.vision.image_codec import decode_depth
 from senior_control.vision.runtime_evidence import DepthHeader
+from vehicle_core.diagnostics import DiagnosticDeque
 from vehicle_core.sensor_policy import default_policy, sensor_current
 
 

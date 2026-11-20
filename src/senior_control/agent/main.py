@@ -39,17 +39,17 @@ from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import (
     HEARTBEAT_INTERVAL_MS,
 )
-from senior_control.runtime.diagnostics import (
-    DiagnosticPending,
-    PendingCounter,
-    QueueSnapshot,
-    process_diagnostics,
-)
 from senior_control.runtime.ipc import IpcError
 from senior_control.settings.service import RuntimeGate, SettingsService
 from senior_control.vision.signaling import VideoSignaling
 from senior_control.vision.stream import VideoSession
 from vehicle_core.clock import Clock, SystemClock
+from vehicle_core.diagnostics import (
+    DiagnosticPending,
+    PendingCounter,
+    QueueSnapshot,
+    process_diagnostics,
+)
 
 logger = logging.getLogger("senior_control.agent")
 

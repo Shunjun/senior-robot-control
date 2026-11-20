@@ -4,7 +4,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from senior_control.runtime.diagnostics import DiagnosticDeque
+from vehicle_core.diagnostics import DiagnosticDeque
 
 # //Compatible: the historical frame name denotes the same single shared class.
 from vehicle_core.image_frame import ImageFrame as ImageFrame

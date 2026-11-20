@@ -17,14 +17,14 @@ from cloud.limits import CloudLimits
 from fastapi import FastAPI
 
 from senior_control.config import CloudSettings
-from senior_control.runtime.diagnostics import (
+from senior_control.storage.database import Database
+from senior_control.storage.migrations import Migration, migrate
+from senior_control.storage.schema import DOMAIN_MIGRATIONS
+from vehicle_core.diagnostics import (
     DiagnosticAsyncQueue,
     DiagnosticDeque,
     configure_diagnostics,
 )
-from senior_control.storage.database import Database
-from senior_control.storage.migrations import Migration, migrate
-from senior_control.storage.schema import DOMAIN_MIGRATIONS
 
 # //Compatible: the original migration objects use the same SQL and version numbers.
 CLOUD_MIGRATION = Migration(4, CLOUD_STATEMENTS)

@@ -11,7 +11,7 @@ from vehicle_manager.vehicle_logs.service import LogSubscription as LogSubscript
 from vehicle_manager.vehicle_logs.service import VehicleLogService as _VehicleLogService
 from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
-from senior_control.runtime.diagnostics import (
+from vehicle_core.diagnostics import (
     DiagnosticAsyncQueue,
     DiagnosticLock,
     PendingCounter,

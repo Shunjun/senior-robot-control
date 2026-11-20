@@ -14,7 +14,7 @@ from vehicle_manager.agent.websocket import WebSocketLink as _WebSocketLink
 
 from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
-from senior_control.runtime.diagnostics import DiagnosticLock, QueueSnapshot, process_diagnostics
+from vehicle_core.diagnostics import DiagnosticLock, QueueSnapshot, process_diagnostics
 
 
 def _receive_diagnostic(owner: object) -> None:

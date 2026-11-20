@@ -17,7 +17,6 @@ from senior_motion_msgs.msg import (
     SemanticObject,
 )
 
-from senior_control.runtime.diagnostics import process_diagnostics
 from senior_control.vision.depth_runtime import CameraInfoFrame
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
@@ -38,6 +37,7 @@ from senior_control.vision.semantic_runtime import (
 )
 from senior_control.vision.spawn_detector import SpawnInferenceWorker
 from senior_robot.motion_lifecycle import run
+from vehicle_core.diagnostics import process_diagnostics
 from vehicle_core.sensor_policy import default_policy
 
 

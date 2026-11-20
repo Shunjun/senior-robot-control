@@ -184,7 +184,7 @@ class SafetyGate(Node):
             from senior_perception.scan_gap_compensation import ScanGapCompensator
             from tf2_ros import Buffer, TransformListener
 
-            from senior_control.runtime.diagnostics import configure_diagnostics
+            from vehicle_core.diagnostics import configure_diagnostics
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path

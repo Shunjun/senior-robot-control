@@ -14,8 +14,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from senior_control.runtime.diagnostics import DiagnosticDeque
 from senior_control.vision.synchronizer import ImageFrame
+from vehicle_core.diagnostics import DiagnosticDeque
 
 InferFn = Callable[[ImageFrame], "list[Detection]"]
 RuntimeLoader = Callable[[Path], InferFn]

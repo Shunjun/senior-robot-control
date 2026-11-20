@@ -12,7 +12,6 @@ from senior_control.motion.controller import Feedback
 from senior_control.motion.kinematics import body_delta, logarithm
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.stillness import stationary
-from senior_control.runtime.diagnostics import QueueSnapshot, RuntimeDiagnostics
 from senior_motion_estimation.estimator import (
     MotionEstimate,
     MotionEstimation,
@@ -23,6 +22,7 @@ from senior_motion_estimation.estimator import (
 from senior_motion_estimation.observations import Frame, Source, SourceStatus
 from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
 from senior_motion_estimation.sample_types import DeltaObservation, MotionSample, PointObservation
+from vehicle_core.diagnostics import QueueSnapshot, RuntimeDiagnostics
 from vehicle_core.sample_time import SampleTime, interval_ns
 
 

@@ -18,6 +18,36 @@ def verify_lazy_shared_imports() -> None:
         """
 import sys
 from pathlib import Path
+from unittest.mock import patch
+from vehicle_core import diagnostics
+assert 'site-packages' in str(Path(diagnostics.__file__).resolve()), diagnostics.__file__
+assert diagnostics.RuntimeDiagnostics.__module__ == 'vehicle_core.diagnostics'
+for name in ('senior_control', 'vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_motion_control', 'senior_perception'):
+    assert name not in sys.modules, name
+with patch('logging.getLogger') as logger:
+    diagnostics.RuntimeDiagnostics()._emit(20, {})
+    logger.assert_called_once_with('senior_control.runtime.diagnostics')
+from senior_control.runtime import diagnostics as old
+for name in ('_LIMIT', 'QueueSnapshot', 'QueueWarningPolicy', '_Stats', '_QueueState',
+             'RuntimeDiagnostics', 'DiagnosticsSettings', 'diagnostics_from_environment',
+             'configure_diagnostics', 'process_diagnostics', 'PendingCounter', 'T',
+             'DiagnosticDeque', 'DiagnosticAsyncQueue', 'K', 'V', 'DiagnosticPending',
+             'DiagnosticLock'):
+    assert getattr(old, name) is getattr(diagnostics, name), name
+settings = diagnostics.DiagnosticsSettings(period_s=3.0)
+owner = diagnostics.configure_diagnostics(settings)
+assert old.configure_diagnostics(settings) is owner
+assert old.process_diagnostics() is diagnostics.process_diagnostics() is owner
+assert diagnostics.process_diagnostics.cache_info().maxsize == 1
+assert owner.period == 3.0
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch', 'senior_control.agent',
+             'senior_control.config', 'senior_control.sensors.policy'):
+    assert name not in sys.modules, name
+""",
+        """
+import sys
+from pathlib import Path
 from importlib.resources import files
 from vehicle_core import sample_time, sensor_policy
 for module in (sample_time, sensor_policy):

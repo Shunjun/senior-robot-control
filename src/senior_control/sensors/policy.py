@@ -10,13 +10,13 @@ from vehicle_core.sensor_policy import default_policy as default_policy
 from vehicle_core.sensor_policy import sensor_current as sensor_current
 
 if TYPE_CHECKING:
-    from senior_control.runtime.diagnostics import DiagnosticsSettings
+    from vehicle_core.diagnostics import DiagnosticsSettings
 
 
 def ros_sensor_parameters(
     diagnostics: "DiagnosticsSettings | None" = None,
 ) -> dict[str, int | float]:
-    from senior_control.runtime.diagnostics import QueueWarningPolicy
+    from vehicle_core.diagnostics import QueueWarningPolicy
 
     q = QueueWarningPolicy() if diagnostics is None else diagnostics.queue
     p = default_policy()

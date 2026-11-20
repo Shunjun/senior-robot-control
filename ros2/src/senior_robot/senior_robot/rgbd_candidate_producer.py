@@ -17,7 +17,6 @@ from senior_motion_msgs.msg import (
     StaticTransformEdge,
 )
 
-from senior_control.runtime.diagnostics import DiagnosticPending, process_diagnostics
 from senior_control.vision.independent_motion import Profile
 from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.rgbd_bounded_inbox import BoundedInbox
@@ -25,6 +24,7 @@ from senior_control.vision.rgbd_candidate_codec import fill_candidate
 from senior_control.vision.rgbd_producer_engine import RetainedFrontiers, RgbdProducerEngine
 from senior_control.vision.static_tf_binding import StaticBinding
 from senior_control.vision.static_tf_wire import observe_verified_tf
+from vehicle_core.diagnostics import DiagnosticPending, process_diagnostics
 from vehicle_core.sensor_policy import default_policy
 
 

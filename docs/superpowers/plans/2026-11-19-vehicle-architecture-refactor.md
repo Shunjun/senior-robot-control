@@ -896,3 +896,36 @@ AST不变且仍延迟导入诊断；36个消费者接新纯叶子，3个专用la
 [manager本片记录](../../../senior_control/README.md#r1-第三片采集时间与纯传感器时效策略)。
 未运行任何仿真验证、车辆/开发/ROS服务或部署，不发运动请求、不推送；
 真实Humble及设备行为仍未验证，提交后等待负责人审核。
+
+
+### R1 第四片：唯一进程诊断 owner（2026-11-21）
+
+固定功能分支基线 `105494a`，实施前工作区干净。先登记范围，再将
+`src/senior_control/runtime/diagnostics.py` 唯一实现迁入 `src/vehicle_core/diagnostics.py`；
+只将默认logger的 `__name__` 明确为原 `senior_control.runtime.diagnostics`，
+其余锁、队列/log、帧龄、时钟、lru_cache、公开及必要私有类型/函数保持。
+旧模块显式Compatible同对象转发，不复制缓存、诊断实例或新增替代owner。
+
+32个实际产品消费者改诊断引用，包含旧policy的ROS参数适配中延迟诊断import；
+纯sensor_policy保持独立，3个launch不动，cloud自己的诊断实现不改。
+测试仅改 `test_estimation_review_contracts.py` 中指定拒收回执用例的monkeypatch定义点，
+由旧诊断模块指向canonical，保留输入、assert及其余测试。
+预报38文件：产品增1改33、测试改1、工具文档改3，配置0，无删除。
+
+已逐项阅读指定runtime/logging诊断测试，均为离线值/队列/替身链路，无仿真运行项；
+只复用 `tests/unit/test_runtime_diagnostics.py`、`tests/unit/test_logging_diagnostics.py` 与
+`tests/unit/test_estimation_review_contracts.py::test_rejected_native_receipt_uses_original_identity_without_live_state_mutation`。
+另做根wheel、仓库外同对象/单缓存owner/logger/无管理ROS或旧SDK业务导入检查，以及Ruff/diff。
+不新增测试或额外工作区，不改变诊断业务和控制/手动权限；不发运动请求、不启动仿真、
+车辆/开发/ROS服务，不部署推送；自审后仅提交固定分支，等待负责人审核。
+
+
+本片实际38文件，产品增1改33、测试改1、工具文档改3，配置0、无删。
+诊断主体AST除显式原logger名称外与基线相同；32消费者仅改导入，唯一测试仅改
+monkeypatch定义点，原cloud诊断/纯sensor策略/3个launch不动。
+指定非仿真pytest **29通过**，Ruff36文件及diff通过；根wheel与仓库外旧新18出口、
+单缓存owner、原logger名及无旧SDK业务/管理ROS导入检查通过，26包pip check通过。
+完整命令、版本、自审及未验项见
+[manager本片记录](../../../senior_control/README.md#r1-第四片唯一进程诊断-owner)。
+其他历史测试旧定义点monkeypatch未扩改；不宣称全量或实车控制通过，未运行仿真验证、
+开发/车辆/ROS服务，不部署、推送或发送运动请求，提交后等待负责人审核。

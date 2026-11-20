@@ -15,7 +15,7 @@ from senior_control.motion.constraints import (
     TickEvaluation,
 )
 from senior_control.motion.contracts import BrakeKind, BrakeRequest
-from senior_control.runtime.diagnostics import QueueSnapshot, process_diagnostics
+from vehicle_core.diagnostics import QueueSnapshot, process_diagnostics
 
 
 class Worker(Protocol):

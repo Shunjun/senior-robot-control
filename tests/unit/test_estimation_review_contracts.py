@@ -260,7 +260,7 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
     from senior_control.motion.observations import Source
 
     d, emitted = reporter()
-    monkeypatch.setattr("senior_control.runtime.diagnostics.process_diagnostics", lambda: d)
+    monkeypatch.setattr("vehicle_core.diagnostics.process_diagnostics", lambda: d)
     monkeypatch.setattr(adapter, "time", N(monotonic=lambda: 21.0))
     p = generic_motion_profile()
     s = MotionSensorRuntime(p, d)

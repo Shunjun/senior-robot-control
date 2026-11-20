@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from senior_control.runtime.diagnostics import PendingCounter
+from vehicle_core.diagnostics import PendingCounter
 
 logger = logging.getLogger(__name__)
 

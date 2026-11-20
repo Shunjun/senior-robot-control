@@ -59,10 +59,10 @@ from senior_control.agent.workspace import WorkspaceReader
 from senior_control.errors import DomainError, ErrorCode
 from senior_control.models import MapRef, OperationResult, OperationStatus
 from senior_control.protocol import OperationEnvelope
-from senior_control.runtime.diagnostics import PendingCounter
 from senior_control.tasks import TaskDefinition, TaskStore
 from senior_control.waypoints import HomeService, LocalizedPose
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.diagnostics import PendingCounter
 
 if TYPE_CHECKING:
     from senior_control.tasks.executor import TaskExecutor

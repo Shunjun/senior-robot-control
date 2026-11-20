@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from senior_control.runtime.diagnostics import DiagnosticsSettings
+from vehicle_core.diagnostics import DiagnosticsSettings
 
 
 class ConfigModel(BaseModel):

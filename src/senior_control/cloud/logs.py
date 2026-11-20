@@ -7,7 +7,7 @@ from typing import Any
 from cloud.logs import LogPeer as _LogPeer
 from cloud.logs import LogRelay as _LogRelay
 
-from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
+from vehicle_core.diagnostics import DiagnosticAsyncQueue
 
 
 @dataclass(eq=False)

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from senior_control.runtime.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
+from vehicle_core.diagnostics import DiagnosticDeque, QueueSnapshot, process_diagnostics
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.sensor_policy import default_policy
 

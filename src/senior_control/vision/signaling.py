@@ -7,7 +7,7 @@ from vehicle_manager.media.signaling import VideoSignaling as _VideoSignaling
 from vehicle_manager.media.signaling import logger as logger
 from vehicle_manager.media.stream import VideoSession
 
-from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
+from vehicle_core.diagnostics import DiagnosticAsyncQueue
 
 
 class VideoSignaling(_VideoSignaling):

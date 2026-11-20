@@ -13,8 +13,8 @@ from vehicle_manager.agent.logs_wire import (
     log_url as log_url,
 )
 
-from senior_control.runtime.diagnostics import DiagnosticLock, PendingCounter
 from senior_control.vehicle_logs.service import VehicleLogService
+from vehicle_core.diagnostics import DiagnosticLock, PendingCounter
 
 
 class AgentLogConnection(_AgentLogConnection):
