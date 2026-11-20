@@ -30,6 +30,8 @@ from vehicle_manager.agent.production_bindings import (
     VehicleLogService,
     WebSocketConnector,
 )
+from vehicle_manager.agent.request_bindings import LifecycleNavigationOperations, StoreTaskPort
+from vehicle_manager.agent.runtime_bindings import Agent
 from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
 from vehicle_manager.agent.state_ports import SnapshotPorts
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
@@ -37,8 +39,6 @@ from vehicle_manager.storage.bindings import Database
 from vehicle_manager.tasks.execution_bindings import NavigationEffects, TaskExecutor
 from vehicle_manager.tasks.navigation_port import TaskNavigation
 
-from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
-from senior_control.agent.main import Agent
 from senior_control.agent.manual_control import vehicle_frame
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.tasks import TaskStore

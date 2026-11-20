@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，任务执行/路线IPC装配见末尾本片记录。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，请求/具体Agent运行绑定见末尾本片记录。
 
 ## 实际目录与调用
 
@@ -2861,3 +2861,107 @@ IpcNavigation仅waypoint接口/cast类型边界变化，实际实例身份和通
 未验agent网络extra完整安装、Linux/Humble ABI、ROS进程/真实Nav2、实车和完整生产Agent。
 前片extra缓存缺口不在本片收尾；无仿真验证、任何开发/ROS/实车/仿真服务启动，
 无实车运动请求、部署或推送；仅固定功能分支提交待审核。
+
+
+## R5 请求和Agent具体运行绑定
+
+基线`feat/vehicle-architecture-refactor@0a13d2c`，开始时干净。负责人批准原9文件扩大至
+**10文件**：产品新增2、修改5，工具文档修改3，测试/配置/删除0。
+额外的旧vision/signaling文件为必要身份边界：原Agent用的VideoSignaling是注入
+DiagnosticAsyncQueue的具体子类，manager原类仍要求queue_factory；不能把generic类或partial
+当作原具体类。获批将唯一小子类一并迁入runtime_bindings，旧路径/原logger/VideoSession显式转发。
+没有增加依赖、第二套工厂或默认队列，也没有急切导入可选媒体库。
+
+`vehicle_manager/agent/request_bindings.py`持有原生产MapPort、OperationNotCommitted、
+TaskOperationResult、_values、Dispatcher、StoreTaskPort、LifecycleNavigationOperations、
+_map_ref、_TaskRouteReceiver及原_Navigation/DirectNavigation。定义与业务方法保持；
+仅waypoints注解改为真正manager owner或既有HomeReader[Pose2D]接口，值/状态、名义继承、
+异常、timeout、admit、metrics、真实IPC调用与原generic业务方法均不复制或改写。
+旧dispatcher只保留原StoreHomePort/StoreMapPort特殊适配构造，仍注入同一canonical _values；
+当前默认生产工厂不用这两种特殊适配。旧direct_navigation显式 //Compatible 同对象，
+_Goal/_Reference仍为原manager schema helper，没有自造新schema。
+
+`vehicle_manager/agent/runtime_bindings.py`持有ManualOperationResult、_report_queues、
+具体Agent构造及获批的VideoSignaling。四个定义文本逐字保持；AgentRuntimePorts中原结果/
+异常/诊断/clock/metrics/dispatcher/navigation/signaling构造均同对象，时间默认不改。
+原logger名称仍senior_control.agent，信令继承方法的logger及旧兼容导出仍为
+senior_control.vision.signaling。纯manager媒体代码可导入，httpx/websockets/aiortc/av保持惰性。
+旧main保留原main函数/CLI行为，移走的名字显式同对象出口；composition只改Agent、
+LifecycleNavigationOperations、StoreTaskPort真实绑定，SnapshotState/vehicle_frame、store、
+地图fallback/media/systemd与其他运行组合不动。本片不宣称整个production composition已独立。
+
+### 实际验证
+
+macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+工具复用原主检出.venv，当前项目运行.venv未改。已读指定用例及夹具：
+仅FakeConnector/内存link/SQLite/临时Unix socket；direct-navigation中的sim只是map ID，
+没有仿真环境、仿真模块或仿真验收。精确命令如下，允许临时本地Unix socket：
+
+```sh
+python -m pytest senior_control/tests/test_direct_navigation.py \
+  tests/integration/test_task_ownership.py::test_dispatcher_acceptance_and_query_share_task_transaction \
+  senior_control/tests/test_agent.py::test_edit_ack_only_after_device_commit \
+  senior_control/tests/test_agent.py::test_failed_commit_is_never_reported_as_success \
+  senior_control/tests/test_agent.py::test_operation_id_deduplicates \
+  senior_control/tests/test_agent.py::test_same_operation_id_with_different_content_conflicts \
+  senior_control/tests/test_agent.py::test_unknown_operation_query_is_reported \
+  senior_control/tests/test_agent_config.py -q --tb=short
+```
+
+**15 passed in 0.68s**。原自由空间/代际与Home目标拒绝、task接受/查询同事务、提交前不ACK、
+失败提交、操作去重/内容冲突/未知查询、配置/九client/CLI行为通过。未修改原测试/断言，
+无原用例失败，未运行其他agent用例、仿真或全量CI。
+
+离线wheel命令（`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，`<checkout>`为本工作区）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-request-runtime-wheels
+uv build --offline --wheel --out-dir /tmp/vehicle-request-runtime-wheels senior_control
+python3.12 -m venv /tmp/vehicle-request-runtime-base
+uv pip install --offline --python /tmp/vehicle-request-runtime-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-request-runtime-wheels/*.whl \
+  /tmp/m5c-wheels/senior_contracts-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-request-runtime-wheels/*.whl
+/tmp/vehicle-request-runtime-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-request-runtime-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-runtime-only
+/tmp/vehicle-request-runtime-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-runtime-compatible
+```
+
+两真实非editable wheel通过；全新base12包、原SDK26包重装root/manager，均pip check通过。
+约束沿用5988c42根冻结导出，无解析升级；SDK另外9个项目wheel复用前片，其中navigation/robot
+为上一片`/tmp/vehicle-route-execution-wheels`构建，contracts/localization/mapping/motion-control/
+motion-estimation/perception来自`/tmp/m5c-wheels`，cloud来自`/tmp/cloud-build-9cafe01`。
+本片没有重建或运行这些执行项目，安装环境是临时夹具，不是第二套项目运行.venv。
+
+安装器保留bound!=generic/继承方法同一对象检查，新增真实构造和隔离验证：
+
+- 真实Database/AgentJournal的受控TaskPort请求经具体Dispatcher提交、journal持久成功/修订、
+  重放只调用一次、不同内容冲突；Result仍原OperationResult，revision在原JournalEntry中。
+  具体StoreTaskPort/DirectNavigation/LifecycleNavigationOperations/_TaskRouteReceiver保存同一
+  注入对象和值/错误构造。SQLite是真实的，外部业务端口用Mock，不执行物理动作。
+- 具体Agent构造实际生成新Dispatcher并注入原AgentRuntimePorts，检查Manual/Task结果、错误、
+  诊断counter/safety pending/clock/metrics/queue reporting/signaling、原时间默认和motion clock绑定；
+  无inflight、supervisor或连接，不调用Agent.run。VideoSignaling仍用真实DiagnosticAsyncQueue，
+  只构造/关闭空队列，不建session、camera、peer或协商。
+- base无legacy SDK、Nav2/ROS、地图/导航执行发行、cloud或httpx/websockets/aiortc/av加载，
+  manager→core和无cloud/ROS发行安装检查保留；core同wheel兼容namespace仍可发现。
+- SDK旧dispatcher全部已迁类/私有helper、direct-navigation、main及vision/signaling均与新owner
+  同对象；原信令logger/VideoSession、composition真实默认工厂和两个旧特殊适配边界保持。
+  安装器一处已过期的OperationResult旧模块名断言改为core精确owner加is身份，未放宽保护。
+
+新增工具检查初轮按错误方法/字段名断言，已按现有API纠正为accept/execution_command等
+以及JournalEntry.revision；没有修改产品或原测试配合检查。最终base/SDK及原manager-tasks-only通过。
+另在空`/tmp/vehicle-request-runtime-agent`按同冻结约束离线安装本片manager[agent]/root/contracts
+仍失败于缺websockets15.0.1缓存；未联网或换版本，**未完成锁定agent extra安装或网络运行验收**。
+
+git show对照确认15个迁移定义文本保持（仅两处store类型注解改变）；两个特殊适配、原CLI
+main函数不变，composition除import外业务AST相同。8份Python的Ruff/format、CRLF约定diff与
+获批10文件自审通过。提交禁hooks避免未授权全量/仿真检查，上述范围验证手动执行。
+
+未验完整agent网络extra、真实云连接、媒体后端、ROS/Nav2/车辆、Linux/Humble ABI或实车手动控制。
+没有启动任何生产/开发/ROS/实车/仿真服务或仿真验证，未发实车运动、部署或推送；
+仅固定功能分支提交待审核。

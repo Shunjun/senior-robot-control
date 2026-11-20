@@ -1189,3 +1189,32 @@ ament/ROS prefix不存在故ROS executable/share明确UNVERIFIED；其余7个旧
 Ruff/format、CRLF diff及15文件自审通过，完整命令和未验限制见
 [manager本片记录](../../../senior_control/README.md#r5-任务执行和路线ipc装配)。
 固定分支提交禁hooks，未启动服务/仿真、不发实车运动、不部署推送，不声称实车通过。
+
+
+### R5 请求和Agent具体运行绑定（基线0a13d2c）
+
+开始时固定功能分支干净。预报9文件：产品增request_bindings/runtime_bindings两文件、
+改旧dispatcher/direct_navigation/main/composition四文件；工具/README/本计划三文件，
+测试/配置/删除0。请求值/异常/具体绑定唯一迁移，旧dispatcher仅保留StoreHomePort/StoreMapPort，
+旧CLI/main与其他组合不动。验收只限指定非仿真用例与base/SDK wheel隔离及Ruff/diff。
+
+产品修改前发现一个原依赖需确认：AgentRuntimePorts.video_signaling实际绑定旧
+senior_control.vision.signaling.VideoSignaling，它是原DiagnosticAsyncQueue具体子类；
+manager.media.signaling.VideoSignaling仍要求queue_factory参数，不是同对象。
+在禁止legacy import且保持原具体构造/类型身份的约束下，应将该小类同迁runtime_bindings，
+旧vision/signaling显式同对象转发，需要额外改1文件（总10）。已向负责人请求范围选择，
+未先改产品或以partial/新默认/全局provider改变行为；未启动服务或仿真。
+
+负责人批准扩围至10文件：将原具体VideoSignaling同迁runtime_bindings，额外修改旧
+vision/signaling.py为显式同对象出口，保留原logger/VideoSession；无新增依赖或可选库急切导入。
+其余产品/测试范围不变，开始按批准范围实施。
+
+本片按批准范围实际10文件：产品增2改5、工具文档改3，测试/配置/锁0。
+15个迁移定义保留（两处store注解收敛至manager/已有接口），旧特殊适配/CLI与composition
+业务AST不变，旧新同对象/generic方法身份及获批VideoSignaling队列/logger边界通过。
+指定非仿真15用例通过（0.68s），无原失败/断言修改；root/manager真实wheel、全新base12包
+及SDK26包重装/pip check、真实SQLite请求提交/重放/冲突与Agent构造/隔离通过。
+agent extra离线仍缺websockets15.0.1缓存，未换版本联网，不称完整网络运行通过。
+Ruff/format、CRLF diff及10文件自审通过；完整命令与限制见
+[manager本片记录](../../../senior_control/README.md#r5-请求和agent具体运行绑定)。
+固定分支提交禁hooks，不启动服务或仿真、不发实车运动、不部署推送。

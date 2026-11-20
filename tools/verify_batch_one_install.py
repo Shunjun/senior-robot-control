@@ -526,6 +526,258 @@ def verify_manager_config(*, compatible: bool = False) -> None:
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
 
 
+def verify_request_runtime(*, compatible: bool = False) -> None:
+    """Construct the actual request/runtime bindings and commit a local edit without a service."""
+    import asyncio
+    import inspect
+    import tempfile
+    import time
+    from unittest.mock import AsyncMock, Mock
+
+    from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, OperationEnvelope, OperationPayload
+    from vehicle_manager.agent import dispatcher, main, request_bindings, runtime_bindings
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.media.signaling import VideoSignaling as GenericSignaling
+    from vehicle_manager.observability import Metrics
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.waypoints.direct_navigation import DirectNavigation as GenericDirect
+
+    from vehicle_core.clock import SystemClock
+    from vehicle_core.diagnostics import (
+        DiagnosticAsyncQueue,
+        DiagnosticPending,
+        PendingCounter,
+        process_diagnostics,
+    )
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.values import MapRef, OperationResult, OperationStatus
+
+    for bound, generic, methods in (
+        (request_bindings.Dispatcher, dispatcher.Dispatcher, ("run", "_plan", "_execute")),
+        (request_bindings.StoreTaskPort, dispatcher.StoreTaskPort, ("create", "update", "delete")),
+        (
+            request_bindings.LifecycleNavigationOperations,
+            dispatcher.LifecycleNavigationOperations,
+            ("query", "accept", "execution_command", "__call__"),
+        ),
+        (
+            request_bindings._TaskRouteReceiver,
+            dispatcher._TaskRouteReceiver,
+            ("start_poses", "cancel_current"),
+        ),
+        (request_bindings.DirectNavigation, GenericDirect, ("__call__",)),
+        (runtime_bindings.Agent, main.Agent, ("run", "dispatch", "_session", "_release")),
+        (runtime_bindings.VideoSignaling, GenericSignaling, ("submit", "close", "retire")),
+    ):
+        assert "site-packages" in inspect.getfile(bound), bound
+        assert bound is not generic and issubclass(bound, generic)
+        for name in methods:
+            assert getattr(bound, name) is getattr(generic, name)
+    assert runtime_bindings.logger is main.logger is dispatcher.logger
+    assert runtime_bindings.logger.name == "senior_control.agent"
+    assert request_bindings.TaskOperationResult.__bases__ == (OperationResult,)
+    assert runtime_bindings.ManualOperationResult.__bases__ == (OperationResult,)
+    assert issubclass(request_bindings.OperationNotCommitted, DomainError)
+    assert request_bindings._map_ref({"map_id": "yard", "reference_revision": 1}) == MapRef(
+        "yard", 1
+    )
+    values = request_bindings._values()
+    assert values.result is OperationResult and values.status is OperationStatus
+    assert values.task_result is request_bindings.TaskOperationResult
+    assert values.direct_navigation is request_bindings.DirectNavigation
+    assert values.not_committed is request_bindings.OperationNotCommitted
+    assert values.counter is PendingCounter
+
+    async def verify(directory):
+        async with Database(directory / "requests.db") as database:
+            journal = AgentJournal(database, robot_id="robot")
+            await journal.prepare()
+            tasks, home, maps = AsyncMock(), AsyncMock(), AsyncMock()
+            tasks.create.return_value = 1
+            admissions = []
+            metrics = Metrics()
+            instance = request_bindings.Dispatcher(
+                "robot",
+                journal=journal,
+                tasks=tasks,
+                home=home,
+                maps=maps,
+                deadlines=request_bindings.Deadlines(),
+                metrics=metrics,
+                map_root=directory,
+                admit=lambda envelope: admissions.append(envelope.type),
+            )
+            assert instance._journal is journal and journal._database is database
+            assert instance._metrics is metrics and instance._tasks is tasks
+            store = Mock()
+            task_port = request_bindings.StoreTaskPort(store, robot_id="robot")
+            assert task_port._store is store and task_port._values.result is OperationResult
+            state, workspace, points, navigation = Mock(), Mock(), Mock(), Mock()
+            direct = request_bindings.DirectNavigation(state, workspace, points, navigation)
+            assert direct._state is state and direct._workspace is workspace
+            assert direct._waypoints is points and direct._navigation is navigation
+            executor = Mock()
+            actions = request_bindings.LifecycleNavigationOperations(
+                executor, state, workspace, points
+            )
+            assert actions.executor is executor and actions.state is state
+            assert actions.workspace is workspace and actions.waypoints is points
+            receiver = request_bindings._TaskRouteReceiver(executor, "fingerprint", state)
+            assert receiver.executor is executor and receiver.state is state
+            assert receiver.fingerprint == "fingerprint"
+            envelope = OperationEnvelope(
+                v=1,
+                robot_id="robot",
+                session_id="session",
+                connection_epoch=1,
+                request_id="request",
+                seq=1,
+                expires_at=time.time() + 30,
+                type="task.create",
+                payload=OperationPayload(operation_id="installed-request", body={}),
+            )
+            result = await instance.run(envelope)
+            assert type(result) is OperationResult and result.status is OperationStatus.SUCCEEDED
+            assert result.operation_id == "installed-request" and admissions == ["task.create"]
+            assert (await journal.get("installed-request")).closed
+            assert (await journal.get("installed-request")).revision == 1
+            replay = await instance.run(envelope)
+            assert replay == result
+            tasks.create.assert_awaited_once()
+            changed = envelope.model_copy(
+                update={
+                    "payload": OperationPayload(
+                        operation_id="installed-request",
+                        body={"changed": True},
+                    )
+                }
+            )
+            try:
+                await instance.run(changed)
+            except DomainError as exc:
+                assert exc.code is ErrorCode.CONFLICT
+            else:
+                raise AssertionError("different request content was admitted")
+            motion = Mock()
+            agent = runtime_bindings.Agent(
+                "robot",
+                connector=AsyncMock(),
+                journal=journal,
+                tasks=tasks,
+                home=home,
+                maps=maps,
+                state=Mock(),
+                motion=motion,
+                metrics=metrics,
+            )
+            assert type(agent._dispatcher) is request_bindings.Dispatcher
+            assert agent._dispatcher._journal is journal and agent.metrics is metrics
+            assert agent._ports.error is DomainError and agent._ports.status is OperationStatus
+            assert agent._ports.result is OperationResult and agent._ports.metrics is Metrics
+            assert agent._ports.manual_result is runtime_bindings.ManualOperationResult
+            assert agent._ports.manual_result_type is runtime_bindings.ManualOperationResult
+            assert agent._ports.task_result is request_bindings.TaskOperationResult
+            assert agent._ports.not_committed is request_bindings.OperationNotCommitted
+            assert agent._ports.dispatcher is request_bindings.Dispatcher
+            assert (
+                agent._ports.lifecycle_navigation is request_bindings.LifecycleNavigationOperations
+            )
+            assert (
+                agent._ports.counter is PendingCounter
+                and agent._ports.safety_pending is DiagnosticPending
+            )
+            assert agent._ports.clock is SystemClock
+            assert agent._ports.report_queues is runtime_bindings._report_queues
+            assert agent._ports.video_signaling is runtime_bindings.VideoSignaling
+            assert agent._intent_queue.diagnostics is process_diagnostics()
+            assert agent._heartbeat_ms == HEARTBEAT_INTERVAL_MS and agent._retry_delay_ms == 1000
+            assert agent._command_ttl_seconds == 0.3 and agent._snapshot_seconds == 2.0
+            assert agent._state_poll_seconds == 0.25 and isinstance(agent._clock, SystemClock)
+            assert not agent._inflight and agent._supervisor is None and not agent.connected
+            motion.bind_clock.assert_called_once_with(agent._clock.monotonic)
+            video = runtime_bindings.VideoSignaling(
+                "robot",
+                1,
+                send=AsyncMock(),
+                make_session=lambda: None,
+            )
+            assert video._queue_factory is DiagnosticAsyncQueue
+            assert type(video._candidates) is DiagnosticAsyncQueue and video._task is None
+            await video.close()
+            home.set_current.assert_not_awaited()
+            maps.export.assert_not_awaited()
+
+    with tempfile.TemporaryDirectory(prefix="installed-requests-", dir="/tmp") as directory:
+        asyncio.run(verify(Path(directory)))
+    if compatible:
+        from vehicle_manager.media.signaling import logger as signaling_logger
+        from vehicle_manager.media.stream import VideoSession
+
+        from senior_control.agent import composition, direct_navigation
+        from senior_control.agent import dispatcher as old_dispatcher
+        from senior_control.agent import main as old_main
+        from senior_control.vision import signaling as old_signaling
+
+        for name in (
+            "MapPort",
+            "OperationNotCommitted",
+            "TaskOperationResult",
+            "_values",
+            "Dispatcher",
+            "StoreTaskPort",
+            "LifecycleNavigationOperations",
+            "_map_ref",
+            "_TaskRouteReceiver",
+        ):
+            assert getattr(old_dispatcher, name) is getattr(request_bindings, name)
+        assert direct_navigation.DirectNavigation is request_bindings.DirectNavigation
+        assert direct_navigation._Navigation is request_bindings._Navigation
+        for name in ("Agent", "ManualOperationResult", "_report_queues"):
+            assert getattr(old_main, name) is getattr(runtime_bindings, name)
+        assert old_signaling.VideoSignaling is runtime_bindings.VideoSignaling
+        assert (
+            old_signaling.logger is signaling_logger and old_signaling.VideoSession is VideoSession
+        )
+        assert composition.Agent is runtime_bindings.Agent
+        assert composition.StoreTaskPort is request_bindings.StoreTaskPort
+        assert (
+            composition.LifecycleNavigationOperations
+            is request_bindings.LifecycleNavigationOperations
+        )
+        assert old_dispatcher.StoreHomePort is not dispatcher.StoreHomePort
+        assert old_dispatcher.StoreHomePort.set_current is dispatcher.StoreHomePort.set_current
+        assert (
+            old_dispatcher.StoreHomePort.__init__.__globals__["_values"] is request_bindings._values
+        )
+        assert old_dispatcher.StoreMapPort is not dispatcher.StoreMapPort
+        assert old_dispatcher.StoreMapPort.export is dispatcher.StoreMapPort.export
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "cloud",
+                    "rclpy",
+                    "launch",
+                    "nav2",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                    "httpx",
+                    "websockets",
+                    "aiortc",
+                    "av",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed bound requests/runtime/video, SQLite commit and independent constructor: PASS",
+        compatible,
+    )
+
+
 def verify_route_execution(*, compatible: bool = False) -> None:
     """Assemble actual manager execution types and check shared route validation offline."""
     import asyncio
@@ -1231,6 +1483,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
     verify_local_ipc()
     verify_production_bindings()
     verify_route_execution()
+    verify_request_runtime()
     if network:
         import httpx
         import websockets
@@ -2101,7 +2354,8 @@ def verify_legacy_task_store() -> None:
             actions = LifecycleNavigationOperations(executor, state, workspace, points)
             assert workspace._ports.map_reference is MapRef and workspace._ports.pose is Pose2D
             assert workspace._ports.error is DomainError and workspace._ports.ipc_error is IpcError
-            assert actions._values.result.__module__ == "senior_control.models"
+            assert actions._values.result is OperationResult
+            assert actions._values.result.__module__ == "vehicle_core.values"
             assert actions._values.not_committed is OperationNotCommitted
             assert actions._values.task_result is TaskOperationResult
             assert actions._values.direct_navigation is DirectNavigation
@@ -2625,6 +2879,11 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-runtime-only"]:
+        verify_manager_core_distribution()
+        verify_request_runtime()
+    elif sys.argv[1:] == ["--manager-runtime-compatible"]:
+        verify_request_runtime(compatible=True)
     elif sys.argv[1:] == ["--manager-route-only"]:
         verify_manager_core_distribution()
         verify_route_execution()
