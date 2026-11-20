@@ -3,6 +3,7 @@
 import time
 from collections.abc import Callable
 
+from vehicle_manager.agent.connection import HeartbeatFrame
 from vehicle_manager.agent.ports import WebSocketPorts
 from vehicle_manager.agent.websocket import (
     SOCKET_SEND_TIMEOUT_SECONDS as SOCKET_SEND_TIMEOUT_SECONDS,
@@ -12,7 +13,6 @@ from vehicle_manager.agent.websocket import Socket as Socket
 from vehicle_manager.agent.websocket import WebSocketConnector as _WebSocketConnector
 from vehicle_manager.agent.websocket import WebSocketLink as _WebSocketLink
 
-from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
 from vehicle_core.diagnostics import DiagnosticLock, QueueSnapshot, process_diagnostics
 

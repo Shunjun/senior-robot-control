@@ -526,6 +526,231 @@ def verify_manager_config(*, compatible: bool = False) -> None:
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
 
 
+def verify_local_ipc(*, compatible: bool = False) -> None:
+    """Exercise installed concrete bindings with local replies, without a runtime service."""
+    import asyncio
+    import inspect
+    from unittest.mock import AsyncMock
+
+    from pydantic import ValidationError
+    from senior_contracts.wire import SimpleEnvelope
+    from vehicle_manager.agent import ipc_motion, ipc_navigation, ipc_state, local_adapters
+    from vehicle_manager.agent.local_state import RuntimeState, StateReply
+    from vehicle_manager.agent.pose_reply import PoseReply
+    from vehicle_manager.tasks.models import ExecutionContext
+    from vehicle_manager.waypoints.home_capture import HomeCapture
+
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.ipc import IpcError
+    from vehicle_core.values import MapRef, Pose2D
+
+    for name, base, methods in (
+        ("IpcMotion", ipc_motion.IpcMotion, ("_ok", "manual", "learning", "close")),
+        ("TaskAwareMotion", ipc_motion.TaskAwareMotion, ("manual", "send_intent", "bind_tasks")),
+        ("IpcMapPort", ipc_navigation.IpcMapPort, ("_call", "export", "import_", "clear")),
+        ("IpcState", ipc_state.IpcState, ("read",)),
+        ("IpcHomePort", HomeCapture, ("set_current", "home_revision")),
+    ):
+        bound = getattr(local_adapters, name)
+        assert bound is not base and issubclass(bound, base)
+        assert "site-packages" in inspect.getfile(bound), bound
+        for method in methods:
+            assert getattr(bound, method) is getattr(base, method)
+    assert local_adapters.TaskAwareMotion.__mro__ == (
+        local_adapters.TaskAwareMotion,
+        ipc_motion.TaskAwareMotion,
+        local_adapters.IpcMotion,
+        ipc_motion.IpcMotion,
+        object,
+    )
+    assert local_adapters.TaskAwareMotion.__init__ is local_adapters.IpcMotion.__init__
+    assert local_adapters.PoseReply is PoseReply
+    assert issubclass(local_adapters.MotionRejected, IpcError)
+    packet = {
+        "v": 1,
+        "ok": True,
+        "sampled_at": 10.0,
+        "localized": True,
+        "safety_clear": True,
+        "manual_driving": False,
+        "map_id": "yard",
+        "reference_revision": 1,
+        "execution_status": "idle",
+        "task_evidence_ready": True,
+        "navigation_ready": True,
+    }
+
+    async def verify() -> None:
+        client = AsyncMock()
+        client.request.return_value = packet
+        state = local_adapters.IpcState(client, clock=lambda: 10.5)
+        assert state._parse_state == StateReply.model_validate
+        assert state._state_factory is RuntimeState and state._map_reference is MapRef
+        value = await state.read()
+        assert type(value) is RuntimeState and value.map_ref == MapRef("yard", 1)
+        assert value.valid_until == 10.5 and value.scan_points == ()
+        context = value.for_tasks(True)
+        assert type(context) is ExecutionContext and context.connected
+        assert context.admission_ready and context.valid_until == 10.5
+        for now, change, cause in (
+            (10.500001, {}, ValueError),
+            (9.9, {}, ValueError),
+            (10.0, {"map_id": None}, ValueError),
+            (10.0, {"localized": "true"}, ValidationError),
+            (10.0, {"unknown": 1}, ValidationError),
+        ):
+            client.request.return_value = {**packet, **change}
+            try:
+                await local_adapters.IpcState(client, clock=lambda now=now: now).read()
+            except DomainError as exc:
+                assert exc.code is ErrorCode.UNAVAILABLE and isinstance(exc.__cause__, cause)
+            else:
+                raise AssertionError((now, change))
+        failure = IpcError("installed local transport failure")
+        client.request.side_effect = failure
+        for operation in (
+            local_adapters.IpcState(client).read(),
+            local_adapters.IpcMapPort(client).clear("clear", MapRef("yard", 1)),
+        ):
+            try:
+                await operation
+            except DomainError as exc:
+                assert exc.code is ErrorCode.UNAVAILABLE and exc.__cause__ is failure
+            else:
+                raise AssertionError("transport cause lost")
+        client.request.side_effect = None
+        home = local_adapters.IpcHomePort(client, AsyncMock(), robot_id="robot")
+        assert home._client is client and home._state._client is client
+        assert type(home._state) is local_adapters.IpcState
+        assert home._parse_pose == PoseReply.model_validate
+        assert home._transport_errors == (IpcError, OSError, ValueError, ValidationError)
+        assert home._values.pose is Pose2D and home._values.map_reference is MapRef
+        assert home._values.error is DomainError
+        intent, disable, safety = AsyncMock(), AsyncMock(), AsyncMock()
+        motion = local_adapters.TaskAwareMotion(
+            client,
+            intent_client=intent,
+            disable_client=disable,
+            safety_client=safety,
+        )
+        assert motion._errors.rejected is local_adapters.MotionRejected
+        assert motion._errors.domain is DomainError and motion._errors.ipc is IpcError
+        stop = SimpleEnvelope(
+            v=1,
+            type="drive.stop",
+            robot_id="robot",
+            session_id="session",
+            connection_epoch=1,
+            seq=1,
+            expires_at=5.0,
+            request_id="stop",
+            payload={},
+        )
+        safety.request.return_value = {"ok": True}
+        client.request.reset_mock()
+        await motion.stop(stop)
+        client.request.assert_not_awaited()
+        safety.request.assert_awaited_once()
+        for reply, error, code in (
+            ({"ok": False, "error": "unsupported"}, DomainError, ErrorCode.UNAVAILABLE),
+            (
+                {"ok": False, "accepted": False, "error": "conflict"},
+                local_adapters.MotionRejected,
+                ErrorCode.CONFLICT,
+            ),
+            (
+                {"ok": False, "accepted": False, "error": "unknown-code"},
+                local_adapters.MotionRejected,
+                None,
+            ),
+            ({"ok": False}, IpcError, None),
+        ):
+            client.request.return_value = reply
+            try:
+                await motion._ok("manual")
+            except error as exc:
+                assert getattr(exc, "code", None) is code
+            else:
+                raise AssertionError(reply)
+        release = SimpleEnvelope.model_validate({**stop.model_dump(), "type": "control.release"})
+        safety.request.return_value = {"ok": False, "accepted": False, "error": "conflict"}
+        try:
+            await motion.manual(release)
+        except DomainError as exc:
+            assert exc.code is ErrorCode.CONFLICT
+            assert type(exc.__cause__) is local_adapters.MotionRejected
+            assert exc.__cause__.code is ErrorCode.CONFLICT
+        else:
+            raise AssertionError("explicit rejection lost its cause")
+        safety.request.side_effect = failure
+        try:
+            await motion.manual(release)
+        except DomainError as exc:
+            assert exc.code is ErrorCode.OPERATION_UNKNOWN and exc.__cause__ is failure
+        else:
+            raise AssertionError("transport failure lost its unknown outcome")
+        await motion.close()
+        for lane in (client, intent, disable, safety):
+            lane.close.assert_awaited_once()
+
+    asyncio.run(verify())
+    if compatible:
+        from vehicle_manager.agent.connection import HeartbeatFrame, Link, MotionPort
+        from vehicle_manager.agent.request_ports import Requester
+
+        from senior_control.agent import (
+            composition,
+            connection,
+            direct_navigation,
+            dispatcher,
+            main,
+            ports,
+            settings_wire,
+            websocket,
+            workspace,
+        )
+
+        for name in ("IpcState", "IpcHomePort", "IpcMapPort", "TaskAwareMotion", "IpcMotion"):
+            assert getattr(ports, name) is getattr(local_adapters, name)
+        assert connection.IpcMotion is local_adapters.IpcMotion
+        assert connection.MotionRejected is local_adapters.MotionRejected
+        assert connection.HeartbeatFrame is HeartbeatFrame
+        assert connection.Link is Link and connection.MotionPort is MotionPort
+        assert ports.RuntimeState is RuntimeState and ports.StateReply is StateReply
+        assert ports.PoseReply is PoseReply
+        for name in ("IpcState", "IpcHomePort", "IpcMapPort", "TaskAwareMotion"):
+            assert getattr(composition, name) is getattr(local_adapters, name)
+        assert composition.IpcNavigation is ports.IpcNavigation
+        assert ports.IpcNavigation is not ipc_navigation.IpcNavigation
+        assert ports.IpcNavigation._call is ipc_navigation.IpcNavigation._call
+        assert main.MotionRejected is local_adapters.MotionRejected
+        assert main.Link is Link and main.MotionPort is MotionPort
+        assert direct_navigation.IpcState is dispatcher.IpcState is settings_wire.IpcState
+        assert settings_wire.IpcState is local_adapters.IpcState
+        assert websocket.HeartbeatFrame is HeartbeatFrame and workspace.Requester is Requester
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "cloud",
+                    "rclpy",
+                    "launch",
+                    "nav2",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed concrete local IPC bindings, 0.5s parser/error dispatch and MRO: PASS",
+        compatible,
+    )
+
+
 def verify_manager_agent(*, network: bool = False) -> None:
     verify_manager_config()
     from vehicle_manager import agent
@@ -585,6 +810,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
         name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
         for name in sys.modules
     )
+    verify_local_ipc()
     if network:
         import httpx
         import websockets
@@ -1979,6 +2205,11 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-local-ipc-only"]:
+        verify_manager_core_distribution()
+        verify_local_ipc()
+    elif sys.argv[1:] == ["--manager-local-ipc-compatible"]:
+        verify_local_ipc(compatible=True)
     elif sys.argv[1:] == ["--home-database-compatible"]:
         verify_home_database(compatible=True)
     elif sys.argv[1:] == ["--manager-config-only"]:

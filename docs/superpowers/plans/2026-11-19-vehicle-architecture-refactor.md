@@ -1098,3 +1098,33 @@ agent extra安装缺原websockets15.0.1缓存，Python3.10尝试缺PyYAML6.0.3�
 Ruff/format/CRLF约定diff及8文件实际diff自审通过；命令/闭包/兼容代价和未验限制见
 [manager本片记录](../../../senior_control/README.md#r0r5-发行dag切换)。
 固定分支提交，禁hooks避免全量/仿真，未启服务或发运动、未部署推送，等待负责人审核。
+
+
+### R5 本地IPC实际装配（基线5988c42）
+
+14文件：产品增2改9（local_state/local_adapters、旧ports/connection及七个生产消费者），
+工具文档改3（原安装工具/manager README/本计划），测试/配置/锁0、无删。
+RuntimeState/StateReply原定义及for_tasks迁manager；实际RouteProgress公共路径是
+senior_contracts.navigation（无nav模块），复用原同对象，不新建契约。
+具体IpcState/Home/Map/TaskAwareMotion、IpcMotion/MotionRejected迁唯一local_adapters，
+保留原MRO、同client/锁/异常cause、时钟和所有effects，HomeWriter只替换store注解。
+旧ports仅保留IpcNavigation真实导航绑定，其余原名显式 //Compatible 同对象转发。
+生产七消费者改canonical，composition仅旧IpcNavigation保留，底层generic类不改。
+
+验收：先核对指定agent ports/config与intent IPC流用例不含仿真；仅本地SQLite/替身/Unix
+socket，核实九client、1000/3000ms和独立停车路径；不启动实车/ROS/仿真/开发服务。
+manager wheel装入无ROS base，证明具体绑定/模型、原0.5秒状态解析、parse/error分派、
+MRO和无旧业务/cloud/ROS/Nav2/mapping导入；SDK检查旧新身份且保留bound!=generic断言。
+Ruff/format/CRLF约定diff、自审与固定分支提交，不改CLI/systemd/发行/锁，不部署推送。
+
+本片实际14文件符合预算，产品增2改9、工具文档改3，测试/配置/锁0。
+模型/类文本逐字对照通过（Home仅协议注解替换），七消费者业务AST不变；
+旧IpcNavigation文本保留、旧新具体绑定同对象、generic区别与有效MRO均验证。
+指定非仿真用例首轮13通过2例沙箱bind EPERM，允许临时Unix socket后原命令15通过；
+九client、八1000ms/一3000ms及独立停车、原learning receipt/deadline检查通过。
+真实root/manager wheel重装无ROS base与SDK、两边pip check、专用IPC安装入口和原
+manager-tasks-only通过；原0.5秒状态解析/错误分派/cause和无旧业务/ROS加载保持。
+agent extra离线仍缺websockets15.0.1缓存，未升级/联网、不称agent-only或实车通过。
+Ruff/format与CRLF约定diff检查通过，具体命令、环境与限制见
+[manager本片记录](../../../senior_control/README.md#r5-本地ipc实际装配)。
+固定分支提交，禁hooks避免全量/仿真，未启服务、未发实车运动、未部署推送。

@@ -2,12 +2,12 @@
 
 from typing import Protocol
 
+from vehicle_manager.agent.local_adapters import IpcState
 from vehicle_manager.waypoints.direct_navigation import DirectNavigation as _DirectNavigation
 from vehicle_manager.waypoints.direct_navigation import _Goal as _Goal
 from vehicle_manager.waypoints.direct_navigation import _Reference as _Reference
 from vehicle_manager.waypoints.ports import WaypointValuePorts
 
-from senior_control.agent.ports import IpcState
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.waypoints.store import WaypointStore
 from vehicle_core.errors import DomainError

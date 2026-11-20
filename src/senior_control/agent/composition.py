@@ -15,6 +15,12 @@ from vehicle_manager.agent.composition import build_task_runtime as _build_task_
 from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
 from vehicle_manager.agent.composition import run_agent as _run_agent
 from vehicle_manager.agent.config import AgentConfig as _AgentConfig
+from vehicle_manager.agent.local_adapters import (
+    IpcHomePort,
+    IpcMapPort,
+    IpcState,
+    TaskAwareMotion,
+)
 from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
 from vehicle_manager.agent.state_ports import SnapshotPorts
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
@@ -24,13 +30,7 @@ from senior_control.agent.journal import AgentJournal
 from senior_control.agent.logs_wire import AgentLogConnection
 from senior_control.agent.main import Agent
 from senior_control.agent.manual_control import vehicle_frame
-from senior_control.agent.ports import (
-    IpcHomePort,
-    IpcMapPort,
-    IpcNavigation,
-    IpcState,
-    TaskAwareMotion,
-)
+from senior_control.agent.ports import IpcNavigation
 from senior_control.agent.settings_wire import SettingsRuntime
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader

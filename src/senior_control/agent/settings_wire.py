@@ -2,10 +2,10 @@
 
 from typing import TYPE_CHECKING
 
+from vehicle_manager.agent.local_adapters import IpcState
 from vehicle_manager.agent.settings_wire import SettingsRuntime as _SettingsRuntime
 from vehicle_manager.agent.settings_wire import settings_command as settings_command
 
-from senior_control.agent.ports import IpcState
 from vehicle_core.errors import DomainError
 
 if TYPE_CHECKING:

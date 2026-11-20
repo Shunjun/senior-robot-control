@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from vehicle_manager.agent.connection import Link, MotionPort
+from vehicle_manager.agent.local_adapters import MotionRejected
 from vehicle_manager.agent.main import HALT_TYPES as HALT_TYPES
 from vehicle_manager.agent.main import MAX_INFLIGHT as MAX_INFLIGHT
 from vehicle_manager.agent.main import MAX_SAFETY_PENDING as MAX_SAFETY_PENDING
@@ -15,11 +17,6 @@ from vehicle_manager.agent.main import _snapshot_change_key as _snapshot_change_
 from vehicle_manager.agent.runtime_ports import AgentRuntimePorts
 from vehicle_manager.observability import Metrics
 
-from senior_control.agent.connection import (
-    Link,
-    MotionPort,
-    MotionRejected,
-)
 from senior_control.agent.dispatcher import (
     Deadlines,
     Dispatcher,

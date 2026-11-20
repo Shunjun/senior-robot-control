@@ -49,12 +49,12 @@ from vehicle_manager.agent.dispatcher import _TaskRouteReceiver as _ManagerTaskR
 from vehicle_manager.agent.dispatcher import (
     _text as _text,
 )
+from vehicle_manager.agent.local_adapters import IpcState
 from vehicle_manager.agent.request_ports import RequestValues
 from vehicle_manager.observability import Metrics
 
 from senior_control.agent.direct_navigation import DirectNavigation
 from senior_control.agent.journal import AgentJournal
-from senior_control.agent.ports import IpcState
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.protocol import OperationEnvelope
 from senior_control.tasks import TaskDefinition, TaskStore

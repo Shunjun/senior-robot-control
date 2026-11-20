@@ -10,10 +10,9 @@ from senior_mapping.workspace import (
     WorkspaceGrid,
     WorkspaceMap,
 )
-from vehicle_manager.agent.request_ports import WorkspacePorts
+from vehicle_manager.agent.request_ports import Requester, WorkspacePorts
 from vehicle_manager.agent.workspace import WorkspaceReader as _WorkspaceReader
 
-from senior_control.agent.ports import Requester
 from senior_control.protocol import MapRefPayload, ShortText, StrictModel
 from senior_control.tasks import TaskStore
 from senior_control.waypoints.store import WaypointStore

@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖与安装语义以末尾「R0/R5 发行DAG切换」为准。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，本地IPC绑定见末尾「R5 本地IPC实际装配」。
 
 ## 实际目录与调用
 
@@ -2571,3 +2571,100 @@ cd /tmp
 本片只改变发行DAG与安装语义；不宣称agent完整独立生产运行、Linux实机安装、
 ROS加载、实车手动控制或整车视频已通过。agent及完整整车真实冻结安装需要补齐原版本缓存
 后再验，不能用干跑或旧SDK基础闭包替代。无运动请求、部署或推送；固定功能分支提交待审核。
+
+
+## R5 本地IPC实际装配
+
+基线`feat/vehicle-architecture-refactor@5988c42`，开始时工作区干净。
+实际14文件：产品新增2、修改9，工具文档修改3，测试/配置/删除0。
+根/manager pyproject、uv.lock、systemd和CLI均未改，不新增发行或运行入口。
+
+唯一owner为：
+
+- `vehicle_manager/agent/local_state.py`：原冻结RuntimeState、严格StateReply及for_tasks，
+  原字段/默认/校验和主体逐字保持。RouteProgress使用实际既有
+  `senior_contracts.navigation`（仓库不存在nav模块），ExecutionContext直接使用
+  `vehicle_manager.tasks.models`原同对象；其余复用vehicle_core值/运行DTO和wire数据类型。
+- `vehicle_manager/agent/local_adapters.py`：原具体IpcState、IpcHomePort、IpcMapPort、
+  TaskAwareMotion、IpcMotion、MotionRejected唯一实现。全部类定义逐字保持，唯一差别是
+  Home构造store注解从旧WaypointStore改为既有HomeWriter[Pose2D]；仍保存原store实例。
+  TaskAwareMotion的MRO仍为「具体TaskAwareMotion、generic TaskAwareMotion、
+  具体IpcMotion、generic IpcMotion、object」，constructor仍经具体IpcMotion注入原异常。
+- 旧`agent/ports.py`与`connection.py`仅 //Compatible 显式同对象转发已迁名字；
+  ports保留唯一IpcNavigation旧导航绑定及其必要旧依赖，导航类定义完全未改。
+  composition/main/settings_wire/direct_navigation/dispatcher/workspace/websocket七处
+  实际消费者改canonical引用，composition只保留旧IpcNavigation。
+  Link/MotionPort/HeartbeatFrame/Requester使用已存在manager公开路径。
+
+没有移动底层generic传输实现或引入第二套schema/parser/effects。
+Home仍保存_client，pose.get和state.get仍用同client，原PoseReply同对象与catch集合保留。
+状态读取仍用原单调时钟、闭区间0–0.5秒、原有效期/几何屏蔽和任务证据投影；
+请求/intent/disable/safety四路与独立停车/异常cause/运行结果保持原行为。
+
+### 实际命令、环境与结果
+
+环境：macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+测试解释器和Ruff复用原主检出`.venv/bin`工具，当前项目运行.venv未变。
+新wheel验证复用前片临时base/SDK环境，不创建第二套项目运行环境。
+下列`<checkout>`为本工作区；uv离线使用`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，
+冻结约束`/tmp/vehicle-dag-constraints.txt`来自5988c42已核对的根锁导出，未重新解析升级。
+
+```sh
+python -m pytest senior_control/tests/test_agent_ports.py \
+  senior_control/tests/test_agent_config.py tests/integration/test_intent_ipc_stream.py -q
+```
+
+已逐份读取三文件，均为非仿真用例。本地SQLite、FakeConnector/FakeLink/AsyncMock与
+临时Unix socket，不加载ROS或连接实车。首轮沙箱内13通过、2失败，失败均为Unix socket
+bind的EPERM；允许临时本地socket后原命令复跑：**15 passed in 0.47s**，未改测试或断言。
+覆盖实际composition原九个独立IpcClient、八个1000ms加一个3000ms超时、同数据库/连接/
+write_lock、任务装配、独立停车客户端、learning原deadline/receipt、缺失与外来adapter报告、
+Home合格定位/旧定位拒绝及100帧intent合并和请求通道不阻塞。未运行其他测试文件。
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-local-ipc-wheels senior_control
+uv build --offline --wheel --out-dir /tmp/vehicle-local-ipc-wheels
+uv pip install --offline --python /tmp/vehicle-dag-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-local-ipc-wheels/vehicle_manager-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-local-ipc-wheels/*.whl
+/tmp/vehicle-dag-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-dag-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-local-ipc-only
+/tmp/vehicle-dag-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-local-ipc-compatible
+```
+
+两真实非editable wheel构建和重装通过；base保留12包、SDK保留26包声明闭包，两边pip check通过。
+base仍为前片无ROS/cloud/导航项目安装环境，根wheel仅提供已声明core；SDK复用前片显式
+11项目wheel闭包（本片只重建root/manager），不称本片全量重建或agent网络extra安装成功。
+安装工具确认class来自site-packages；具体绑定!=generic基类与继承方法同对象的原保护保留。
+新增验证内容为：
+
+- 实际MRO/constructor注入，原MotionRejected及错误code，StateReply/RuntimeState解析工厂、
+  for_tasks的原ExecutionContext和有效期，0.5秒边界接受、超时/未来值拒绝、残缺map引用、
+  strict类型/未知字段拒绝，以及原DomainError UNAVAILABLE和原ValueError/ValidationError cause。
+- state/map传输异常原对象作为cause；Home同client/state/PoseReply、原catch和值构造；
+  四路transport绑定、停车走safety、原unsupported/accepted/rejected/unknown-code分派，
+  手动release的显式拒绝cause与OPERATION_UNKNOWN失联cause、四client关闭。
+  全部作用于AsyncMock，没有连接socket或发送实车运动。
+- manager-only不加载senior_control/cloud/rclpy/launch/Nav2/senior_mapping/
+  senior_navigation/senior_robot；原根Requires-Dist、manager→core及无cloud/ROS发行安装断言仍在。
+  SDK证明旧ports/connection所有已迁名字与新具体类/DTO同对象，七处生产消费者用新绑定，
+  IpcNavigation仍是原旧绑定并继承同generic请求方法。旧绑定!=generic类的既有检查未删弱。
+
+agent extra另在新`/tmp/vehicle-local-ipc-agent`空Python3.12环境按同冻结约束尝试离线安装
+本片root与manager[agent]、原contracts wheel，仍失败于缺websockets15.0.1缓存。
+没有升级/联网补包，未运行--manager-agent-only或网络连接；本片有效本地IPC入口已在base验证。
+--manager-tasks-only仍仅检查监督模块可调用并渲染kind=real profile，没有运行仿真监督或环境。
+
+`ruff check`与`ruff format --check`覆盖12个涉及Python文件，全部通过。
+临时源码对照脚本用git show 5988c42逐个提取类文本：两个模型、各绑定、MotionRejected、
+旧IpcNavigation完全相同（仅Home注解例外）；七消费者除import外业务AST相同。
+按既有CRLF约定diff check通过，自审14文件范围，不改测试/锁/配置。
+提交禁用hooks以免触发未授权全量/仿真检查，所有范围检查手动执行。
+
+未验：agent网络extra闭包、真实ROS/实车IPC、Nav2、完整独立生产agent与手动控制；
+本地替身和Unix socket通过不代表这些能力已通过。未启动仿真、ROS、开发或车辆服务，
+未发实车运动请求、部署或推送；仅固定功能分支提交待负责人审核。
