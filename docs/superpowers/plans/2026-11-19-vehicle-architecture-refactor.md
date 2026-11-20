@@ -1246,3 +1246,33 @@ codec逐字节一致，原Mode/State/投影/读取构造定义保持，控制/in
 其他9旧wheel复用；10份非仿真Python的Ruff/format、CRLF diff及13文件自审通过。
 完整命令/选择与未验项见[manager本片记录](../../../senior_control/README.md#r5-状态快照与rgb1生产绑定)。
 固定分支提交禁hooks，未运行或新增仿真验收、未启服务、不发实车运动、不部署推送。
+
+
+### R5 工作区与domain具体存储绑定（基线5745fee3）
+
+固定功能分支开始时干净，严格14文件：产品增4改7，工具文档改3，测试/配置/删除0。
+core workspace_limits承接原三个数值常量；map_journal_schema承接原版本1 SQL tuple字节。
+manager domain_bindings持有原具体TaskStore/WaypointStore/Waypoint/StoredWaypoint、adopted
+helper和唯一DOMAIN_MIGRATIONS装配，原prepare domain→core顺序及同连接/事务不变。
+manager workspace_bindings持有原验证器与具体reader，默认只用IPC；导出grid必须显式注入
+真实read效果，未提供provider不默默忽略grid，原generic只读校验/IPC优先/失败分派不改。
+旧workspace保留原签名仅注入WorkspaceMap真实效果的薄子类；composition保留该真实效果
+绑定与模块patch点，只切canonical task/waypoint构造，不移动地图算法或归档/图读效果。
+旧store/schema显式 //Compatible 同对象；mapping仅改共享常量/SQL引用，原CRLF布局保持。
+
+限定非仿真：workspace_data原四项（明确排除simulation_waypoint_create）、database ownership、
+waypoint_store两条Home唯一性/修订冲突、task_runner两条重启/版本3以及agent_config。
+真实root/manager/mapping wheel、base/SDK具体SQLite owner/schema/tuple/旧新身份与明确
+效果注入、临时文件的真实地图导出fallback验证；不启动/验证任何仿真/ROS/车辆/服务。
+Ruff/CRLF diff与实际14文件自审后固定分支提交，不发运动、部署或推送。
+
+本片实际14文件符合预算，产品增4改7、工具文档改3、测试/配置/锁0。
+原SQL字节、常量数值、验证器/值/helper保持，store prepare顺序/同连接及mapping算法和
+composition其余业务AST不变，schema CRLF保持。canonical默认IPC、导出明确效果注入/
+无provider拒绝，legacy原签名真实WorkspaceMap效果和原fallback/校验/错误/patch位置保持。
+指定17项非仿真原测试通过，收尾后同选择复跑17通过（0.59s），无基线失败或断言修改；root/manager/mapping真实
+wheel、base12包/SDK26包重装与pip check、真实SQLite/schema/tuple/旧新身份及真实临时
+归档加载和原WorkspaceMap显示fallback检查通过，不验证SLAM后端或来源。
+12份Python Ruff/format、CRLF diff及14文件自审通过；完整命令与限制见
+[manager本片记录](../../../senior_control/README.md#r5-工作区与domain具体存储绑定)。
+固定分支提交禁hooks，无仿真/服务/ROS/车辆启动或验证、不发运动、不部署推送。

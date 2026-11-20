@@ -7,9 +7,10 @@ from typing import Any
 
 from vehicle_core.values import MapRef, Pose2D
 
-TILE_SIZE = 32
-MAX_GRID_SIDE = 65_536
-MAX_GRID_CELLS = 16_777_216
+# //Compatible: all map consumers share the same original limit values.
+from vehicle_core.workspace_limits import MAX_GRID_CELLS as MAX_GRID_CELLS
+from vehicle_core.workspace_limits import MAX_GRID_SIDE as MAX_GRID_SIDE
+from vehicle_core.workspace_limits import TILE_SIZE as TILE_SIZE
 
 
 @dataclass(frozen=True)

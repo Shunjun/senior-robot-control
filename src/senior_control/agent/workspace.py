@@ -1,69 +1,20 @@
-"""Read the vehicle's workspace without putting reads in its durable edit journal."""
+"""//Compatible: original workspace constructor injects the same mapping read effect."""
 
-from typing import Annotated, Literal
+from typing import cast
 
-from pydantic import Field
-from senior_mapping.workspace import (
-    MAX_GRID_CELLS,
-    MAX_GRID_SIDE,
-    TILE_SIZE,
-    WorkspaceGrid,
-    WorkspaceMap,
-)
-from vehicle_manager.agent.request_ports import Requester, WorkspacePorts
-from vehicle_manager.agent.workspace import WorkspaceReader as _WorkspaceReader
-
-from senior_control.protocol import MapRefPayload, ShortText, StrictModel
-from senior_control.tasks import TaskStore
-from senior_control.waypoints.store import WaypointStore
-from vehicle_core.errors import DomainError
-from vehicle_core.ipc import IpcError
-from vehicle_core.values import MapRef, Pose2D
-
-_PAGE_SIZE = 32
-
-
-class _MapReply(StrictModel):
-    v: Literal[1]
-    ok: Literal[True]
-    map_ref: MapRefPayload
-    grid_id: ShortText
-
-
-class _Origin(StrictModel):
-    x: float
-    y: float
-    yaw: float
-
-
-class _Manifest(_MapReply):
-    width: int = Field(gt=0, le=MAX_GRID_SIDE)
-    height: int = Field(gt=0, le=MAX_GRID_SIDE)
-    resolution: float = Field(gt=0)
-    origin: _Origin
-    tile_size: Literal[32]
-    display_only: bool = False
-    waypoint_writes: bool = False
-    navigation_ready: bool = False
-
-
-class _Tile(_MapReply):
-    tile_x: int = Field(ge=0)
-    tile_y: int = Field(ge=0)
-    width: int = Field(gt=0, le=TILE_SIZE)
-    height: int = Field(gt=0, le=TILE_SIZE)
-    cells: list[Annotated[int, Field(ge=-1, le=100)]] = Field(max_length=TILE_SIZE**2)
-
-
-class _WaypointCreate(MapRefPayload):
-    waypoint_id: ShortText
-    grid_id: ShortText
-    x: float
-    y: float
-    yaw: float
-
-
-# //Compatible: local validators/types and original mapping fallback, sole manager orchestration.
+from senior_mapping.workspace import MAX_GRID_CELLS as MAX_GRID_CELLS
+from senior_mapping.workspace import MAX_GRID_SIDE as MAX_GRID_SIDE
+from senior_mapping.workspace import TILE_SIZE as TILE_SIZE
+from senior_mapping.workspace import WorkspaceGrid, WorkspaceMap
+from vehicle_manager.agent.request_ports import Requester
+from vehicle_manager.agent.workspace_bindings import _PAGE_SIZE as _PAGE_SIZE
+from vehicle_manager.agent.workspace_bindings import WorkspaceReader as _WorkspaceReader
+from vehicle_manager.agent.workspace_bindings import _Manifest as _Manifest
+from vehicle_manager.agent.workspace_bindings import _MapReply as _MapReply
+from vehicle_manager.agent.workspace_bindings import _Origin as _Origin
+from vehicle_manager.agent.workspace_bindings import _Tile as _Tile
+from vehicle_manager.agent.workspace_bindings import _WaypointCreate as _WaypointCreate
+from vehicle_manager.storage.domain_bindings import TaskStore, WaypointStore
 
 
 class WorkspaceReader(_WorkspaceReader):
@@ -82,17 +33,7 @@ class WorkspaceReader(_WorkspaceReader):
             waypoints,
             maps,
             exported_grid=exported_grid,
-            ports=WorkspacePorts(
-                MapRef,
-                Pose2D,
-                DomainError,
-                IpcError,
-                _MapReply,
-                _Manifest,
-                _Tile,
-                _WaypointCreate,
-                MAX_GRID_CELLS,
-                TILE_SIZE,
-                lambda grid, kind, fields: WorkspaceMap(lambda: grid).read(kind, fields),
-            ),
+            exported_read=lambda grid, kind, fields: WorkspaceMap(
+                lambda: cast(WorkspaceGrid, grid)
+            ).read(kind, fields),
         )

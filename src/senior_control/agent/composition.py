@@ -38,14 +38,13 @@ from vehicle_manager.agent.snapshot_bindings import vehicle_frame as vehicle_fra
 from vehicle_manager.media.frame_bindings import LatestFrameFile as LatestFrameFile
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
 from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore, WaypointStore
 from vehicle_manager.tasks.execution_bindings import NavigationEffects, TaskExecutor
 from vehicle_manager.tasks.navigation_port import TaskNavigation
 
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.tasks import TaskStore
 from senior_control.tasks.lifecycle_store import Admission
 from senior_control.tasks.runtime import TaskRuntime
-from senior_control.waypoints.store import WaypointStore
 from vehicle_core.diagnostics import configure_diagnostics
 from vehicle_core.errors import DomainError
 from vehicle_core.image_frame import ImageFrame

@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，状态快照/共享帧绑定见末尾本片记录。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，工作区/domain存储绑定见末尾本片记录。
 
 ## 实际目录与调用
 
@@ -3059,3 +3059,111 @@ store注解变化；其余控制契约、manual ingress/receiver和composition�
 未验agent网络extra/媒体后端、Linux/Humble ABI、真实ROS/Nav2/车辆或手动控制。
 前片websockets15.0.1离线缓存缺口仍保留，本片不重试网络extra安装；本地帧IO不代表后端已通过。
 未启动任何生产/开发/ROS/车辆/仿真服务，未发实车运动、部署或推送；固定功能分支提交待审核。
+
+
+## R5 工作区与domain具体存储绑定
+
+基线`feat/vehicle-architecture-refactor@5745fee3`，开始时干净；实际严格14文件：
+产品新增4、修改7，工具文档修改3，测试/配置/删除0。没有新增发行或依赖，锁/CLI/systemd/
+媒体/运行入口未改，地图算法、归档和图读效果留在mapping原owner。
+
+core/workspace_limits.py仅原TILE_SIZE=32、MAX_GRID_SIDE=65536、MAX_GRID_CELLS=16777216；
+core/map_journal_schema.py承接原版本1 SQL tuple，整个原声明文件逐字节相同。
+mapping workspace/schema显式重导同一常量/SQL对象，不导入manager。
+
+manager/storage/domain_bindings.py唯一装配DOMAIN_MIGRATIONS（原1地图/2航点/3任务），
+并持有原Waypoint/StoredWaypoint、TaskStore/WaypointStore薄构造和adopted_home_blocks_foreign。
+值和helper定义不变，prepare仅切canonical import：仍domain migrate后core migrate、同DB/
+connection/write_lock/事务。旧store/schema显式 //Compatible 同对象出口，不重建tuple/数据值。
+
+manager/agent/workspace_bindings.py持有原五个严格验证器和具体WorkspaceReader，继承原
+manager唯一读/校验流程。默认只用IPC；导出grid为opaque只读输入，必须显式提供exported_read
+真实效果。原generic先验证display_only，随后缺失或不可调用的效果明确报错，不能忽略grid
+或把无provider的导出当live；无导出时不构造地图算法或替代provider。
+
+旧workspace保留原构造签名，仅用原WorkspaceMap.read效果（typing cast返回同一grid对象）
+注入canonical reader的薄子类；验证器则同对象转发。旧构造仍默认真实地图读取，不改原
+IPC优先、允许的display fallback、校验/错误和只读约束。composition只切canonical TaskStore/
+WaypointStore，仍使用该原真实效果兼容绑定、原load_exported_grid与模块工厂patch点。
+它仍是原实际导出读效果的owner装配处，本片不声称整个composition已无地图依赖。
+
+### 实际命令与结果
+
+macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+测试工具复用原主检出.venv，本项目运行.venv未改。已读取精确选择，四条workspace用例为
+纯地图/SQLite/内存relay，不执行simulation_waypoint_create节点；原命令：
+
+```sh
+python -m pytest \
+  senior_control/tests/test_workspace_data.py::test_workspace_read_is_reference_fenced \
+  senior_control/tests/test_workspace_data.py::test_tile_fits_ipc_frame \
+  senior_control/tests/test_workspace_data.py::test_relay_prioritizes_control_and_correlates_workspace_replies \
+  senior_control/tests/test_workspace_data.py::test_workspace_edit_requires_current_grid_and_saved_waypoint \
+  senior_control/tests/test_database_ownership.py \
+  senior_control/tests/test_waypoint_store.py::test_home_revision_conflict_keeps_the_old_pose \
+  senior_control/tests/test_waypoint_store.py::test_one_home_per_robot \
+  senior_control/tests/test_task_runner.py::test_version_three_leaves_map_link_unchanged \
+  senior_control/tests/test_task_runner.py::test_device_reboot_preserves_tasks \
+  senior_control/tests/test_agent_config.py -q --tb=short
+```
+
+首次**17 passed in 0.65s**，兼容注解/守卫收尾后同选择复跑**17 passed in 0.59s**；含原Home修订冲突/唯一性、map_task_link布局/重启持久、连接重入/关闭、
+原配置与九client等。没有替换等价节点、修改测试/断言或出现原失败，无需基线对照。
+配置夹具只用临时Unix socket和FakeConnector，不启动生产服务。
+
+离线wheel命令（`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，`<checkout>`为本工作区）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-workspace-domain-wheels
+uv build --offline --wheel --out-dir /tmp/vehicle-workspace-domain-wheels senior_control
+uv build --offline --wheel --out-dir /tmp/vehicle-workspace-domain-wheels ros2/src/senior_mapping
+python3.12 -m venv /tmp/vehicle-workspace-domain-base
+uv pip install --offline --python /tmp/vehicle-workspace-domain-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-workspace-domain-wheels/senior_control-*.whl \
+  /tmp/vehicle-workspace-domain-wheels/vehicle_manager-*.whl /tmp/m5c-wheels/senior_contracts-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-workspace-domain-wheels/*.whl
+/tmp/vehicle-workspace-domain-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-workspace-domain-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-workspace-domain-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-workspace-domain-compatible
+/tmp/vehicle-workspace-domain-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+```
+
+root/manager/mapping三真实非editable wheel构建通过，全新base12包和SDK26包安装/pip check通过。
+兼容类型注解/格式收尾后重建root并重装再验；冻结约束复用5988c42根锁导出，没有registry升级。
+SDK其他8个旧wheel复用前片：navigation/robot为route-execution构建，contracts/localization/
+motion-control/motion-estimation/perception取m5c-wheels，cloud取cloud-build-9cafe01，
+没有把本轮说成全量重建/ROS安装；所有venv为临时安装夹具。
+
+实际安装检查保留bound!=generic/继承方法身份，验证：
+
+- canonical store真实prepare/CRUD与Waypoint/StoredWaypoint类型、TaskDefinition/MapRef，
+  DOMAIN版本1/2/3及core版本4，map_task_link实写；tasks与points共享同DB/connection/write_lock，
+  SQL tuple和迁移tuple身份保持。base无legacy/mapping/导航执行/ROS/cloud安装或加载。
+- 默认canonical reader只有IPC；带只读grid却无/无效provider明确拒绝，非只读grid仍先走原
+  ValueError。没有默认假地图，也没有静默忽略导出。
+- SDK用原SlamSnapshot序列化、原archive writer/hash/manifest/grid函数制作临时真实归档文件，
+  经原MapArchive.inspect_bundle/load_exported_grid读取，再由原WorkspaceMap.read执行显示fallback。
+  graph字节是明确不执行的fixture；这里只验读取与完整性，不验SLAM图来源、导图定位或ROS。
+- live IPC有效回复优先，不调用export；冲突/validation按原DomainError，malformed成功回复按
+  原UNAVAILABLE及ValidationError cause，不被fallback掩盖；IPC失联可执行原display fallback。
+  显示grid仍display_only=True/waypoint_writes=False/navigation_ready=False，不能用于live目标验证。
+  原legacy构造无需新参数仍执行真实默认效果；错误bundle hash仍拒绝。
+- SDK旧store/数据值/helper/schema tuple与canonical is同对象，旧验证器同对象，旧reader为
+  唯一效果注入薄子类且read方法仍原generic。mapping常量和SQL与core同对象，composition的
+  store工厂已canonical且workspace/load-export绑定保持原有真实效果与patch位置。
+
+新增安装夹具初轮Schedule默认时区与TaskDefinition的UTC输入不一致，按既有API显式传UTC
+后通过，未改产品校验。安装器把Waypoint/StoredWaypoint实际owner断言改为domain_bindings，
+保留原基类/方法/类型身份保护；原manager有效逻辑/隔离检查继续通过，没有运行仿真生命周期。
+
+git show对照：SQL声明完整字节一致，五验证器/数据值/adopted helper文本保持；两个store的
+prepare AST仅canonical import变化、调用顺序相同；mapping算法及composition除import/常量
+转发外业务AST相同，旧schema原CRLF保持。12份Python的Ruff/format、CRLF diff及14文件自审通过。
+提交禁hooks避免全量/仿真检查，范围验证手动执行。
+
+未验证真实地图进程、SLAM图来源/回放/导航能力、ROS/车辆、完整agent网络extra或Linux/Humble ABI。
+前片网络extra缓存缺口仍保留，本片不涉及其安装收尾。未启动/验证任何仿真、车辆、ROS、
+生产/开发服务，未发送实车运动、部署或推送；仅固定功能分支提交待审核。

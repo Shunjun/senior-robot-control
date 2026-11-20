@@ -527,6 +527,297 @@ def verify_manager_config(*, compatible: bool = False) -> None:
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
 
 
+def verify_workspace_domain(*, compatible: bool = False) -> None:
+    """Use real canonical stores and explicit workspace effects without a running map process."""
+    import asyncio
+    import hashlib
+    import inspect
+    import tempfile
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from pydantic import ValidationError
+    from senior_contracts.wire import MapRefPayload
+    from vehicle_manager.agent import workspace_bindings
+    from vehicle_manager.agent.workspace import WorkspaceReader as GenericWorkspace
+    from vehicle_manager.storage import domain_bindings
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.core_schema import CORE_MIGRATIONS
+    from vehicle_manager.tasks.models import TaskDefinition
+    from vehicle_manager.tasks.schedule import Schedule
+    from vehicle_manager.tasks.store import TASK_STATEMENTS
+    from vehicle_manager.tasks.store import TaskStore as GenericTasks
+    from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS
+    from vehicle_manager.waypoints.store import WaypointStore as GenericPoints
+
+    from vehicle_core import workspace_limits
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.ipc import IpcError
+    from vehicle_core.map_journal_schema import OPERATION_JOURNAL_STATEMENTS
+    from vehicle_core.values import MapRef, Pose2D
+
+    for value, base, methods in (
+        (domain_bindings.TaskStore, GenericTasks, ("prepare", "create", "get")),
+        (domain_bindings.WaypointStore, GenericPoints, ("prepare", "save_waypoint", "save_home")),
+        (workspace_bindings.WorkspaceReader, GenericWorkspace, ("read", "_map", "active_map")),
+    ):
+        assert "site-packages" in inspect.getfile(value), value
+        assert value is not base and issubclass(value, base)
+        for name in methods:
+            assert getattr(value, name) is getattr(base, name)
+    migrations = domain_bindings.DOMAIN_MIGRATIONS
+    assert tuple(m.version for m in migrations) == (1, 2, 3)
+    assert migrations[0].statements is OPERATION_JOURNAL_STATEMENTS
+    assert (
+        migrations[1].statements is WAYPOINT_STATEMENTS
+        and migrations[2].statements is TASK_STATEMENTS
+    )
+    assert (
+        workspace_limits.TILE_SIZE,
+        workspace_limits.MAX_GRID_SIDE,
+        workspace_limits.MAX_GRID_CELLS,
+    ) == (32, 65_536, 16_777_216)
+
+    async def verify(directory):
+        async with Database(directory / "domain.db") as database:
+            tasks = domain_bindings.TaskStore(database, robot_id="robot")
+            points = domain_bindings.WaypointStore(database, robot_id="robot")
+            connection, lock = database.connection, database.write_lock
+            await tasks.prepare()
+            await points.prepare()
+            assert tasks._database is points._database is database
+            assert database.connection is connection and database.write_lock is lock
+            assert tasks._ports.map_reference is MapRef and points._ports.pose is Pose2D
+            assert points._ports.waypoint is domain_bindings.Waypoint
+            assert points._ports.stored is domain_bindings.StoredWaypoint
+            for query, expected in (
+                ("PRAGMA user_version", 3),
+                ("SELECT version FROM core_schema_version WHERE id=1", len(CORE_MIGRATIONS)),
+            ):
+                async with connection.execute(query) as cursor:
+                    assert (await cursor.fetchone())[0] == expected
+            ref, pose = MapRef("yard", 1), Pose2D(0.0, 0.0, 0.0)
+            point = await points.save_waypoint(
+                waypoint_id="point",
+                pose=pose,
+                map_ref=ref,
+                anchor_id="origin",
+                anchor_pose=pose,
+                source_robot_id="robot",
+                status="confirmed",
+                latitude=None,
+                longitude=None,
+            )
+            assert type(point) is domain_bindings.Waypoint and point.pose is pose
+            assert type(await points.waypoint("point")) is domain_bindings.StoredWaypoint
+            created = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            definition = TaskDefinition(
+                "task",
+                "robot",
+                ref,
+                ("point",),
+                Schedule.interval(created, 60, "UTC"),
+                "UTC",
+                True,
+                0,
+                created,
+            )
+            saved = await tasks.create(definition)
+            assert await tasks.get("task") == saved
+            async with connection.execute(
+                "SELECT map_id FROM map_task_link WHERE task_id='task'"
+            ) as cursor:
+                assert await cursor.fetchone() == ("yard",)
+            client = AsyncMock()
+            client.request.return_value = {"ok": False, "error": "unavailable"}
+            reader = workspace_bindings.WorkspaceReader("robot", tasks, points, client)
+            assert reader._tasks is tasks and reader._waypoints is points and reader._maps is client
+            assert await reader.active_map() is None
+            exported = SimpleNamespace(display_only=True, map_ref=ref)
+            for grid, effect, text in (
+                (exported, None, "explicit read effect"),
+                (exported, False, "explicit read effect"),
+                (SimpleNamespace(display_only=False), None, "must be read-only"),
+            ):
+                try:
+                    workspace_bindings.WorkspaceReader(
+                        "robot", tasks, points, client, exported_grid=grid, exported_read=effect
+                    )
+                except ValueError as exc:
+                    assert text in str(exc)
+                else:
+                    raise AssertionError("export silently accepted without its real effect")
+            if compatible:
+                from senior_mapping import archive as archive_module
+                from senior_mapping.evidence import OccupancySnapshot
+                from senior_mapping.references import GridExtent, SlamSnapshot
+                from senior_mapping.workspace import WorkspaceMap
+                from senior_mapping.workspace_export import load_exported_grid
+
+                snapshot = SlamSnapshot(
+                    ref,
+                    "wheel_odom",
+                    0.1,
+                    Path("pose_graph"),
+                    OccupancySnapshot(ref, ()),
+                    (),
+                    (),
+                    (),
+                    GridExtent(1, 1, 0.0, 0.0),
+                    (),
+                    (),
+                    False,
+                )
+                layers = directory / "layers"
+                snapshot.write(layers / "occupancy")
+                archive_module._write_grid(
+                    snapshot, layers / "grid", archive_module.MAX_BUNDLE_BYTES
+                )
+                (layers / "waypoints.json").write_bytes(archive_module._dumps({"waypoints": []}))
+                files = archive_module._file_bytes(layers, archive_module.MAX_BUNDLE_BYTES)
+                # Opaque, unexecuted graph bytes: this only checks the read-only display loader.
+                files["pose_graph/graph.posegraph"] = b"local archive fixture"
+                manifest = archive_module.BundleManifest(
+                    1,
+                    tuple(
+                        sorted(
+                            (name, hashlib.sha256(data).hexdigest()) for name, data in files.items()
+                        )
+                    ),
+                    archive_module.BACKEND_VERSION,
+                    ref,
+                    archive_module.STABLE_LAYER,
+                    (),
+                    archive_module.Georeference("unreferenced"),
+                    (),
+                    archive_module.ROS_VERSION,
+                    archive_module.SLAM_VERSION,
+                    archive_module.COORDINATE_CONVENTION,
+                    None,
+                    None,
+                    "robot",
+                    False,
+                    (),
+                )
+                files["manifest.json"] = archive_module._dumps(
+                    archive_module._manifest_json(manifest)
+                )
+                bundle = directory / "display.zip"
+                archive_module._write_zip(bundle, files)
+                digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+                grid = load_exported_grid(bundle, digest, "robot")
+                assert grid.display_only and not grid.waypoint_writes
+                effects = []
+
+                def read_export(value, kind, fields):
+                    effects.append(kind)
+                    return WorkspaceMap(lambda: value).read(kind, fields)
+
+                reader = workspace_bindings.WorkspaceReader(
+                    "robot", tasks, points, client, exported_grid=grid, exported_read=read_export
+                )
+                payload = MapRefPayload(
+                    map_id=ref.map_id, reference_revision=ref.reference_revision
+                )
+                display = await reader._manifest(payload, allow_export=True)
+                assert (
+                    display.display_only
+                    and not display.navigation_ready
+                    and not display.waypoint_writes
+                )
+                assert effects == ["map.manifest"]
+                live = replace(grid, grid_id="live", display_only=False)
+                client.request.return_value = {
+                    "v": 1,
+                    **WorkspaceMap(lambda: live).read("map.manifest", payload.model_dump()),
+                }
+                assert (await reader._manifest(payload, allow_export=True)).grid_id == "live"
+                assert effects == ["map.manifest"]
+                for response, code in (
+                    ({"ok": False, "error": "conflict"}, ErrorCode.CONFLICT),
+                    ({"ok": False, "error": "validation"}, ErrorCode.VALIDATION),
+                    ({"ok": True}, ErrorCode.UNAVAILABLE),
+                ):
+                    client.request.return_value = response
+                    try:
+                        await reader._manifest(payload, allow_export=True)
+                    except DomainError as exc:
+                        assert exc.code is code
+                        if response.get("ok") is True:
+                            assert isinstance(exc.__cause__, ValidationError)
+                    else:
+                        raise AssertionError("map failure was hidden by the export")
+                    assert effects == ["map.manifest"]
+                client.request.return_value = {"ok": False, "error": "unavailable"}
+                try:
+                    await reader.verify_free_target(ref, digest, pose)
+                except DomainError as exc:
+                    assert exc.code is ErrorCode.UNAVAILABLE
+                else:
+                    raise AssertionError("display export granted live target verification")
+                assert effects == ["map.manifest"]
+                client.request.side_effect = IpcError("local IPC unavailable")
+                assert (await reader._manifest(payload, allow_export=True)).grid_id == digest
+                assert effects == ["map.manifest", "map.manifest"]
+                from senior_control.agent.workspace import WorkspaceReader as LegacyWorkspace
+
+                legacy = LegacyWorkspace("robot", tasks, points, client, exported_grid=grid)
+                assert (await legacy._manifest(payload, allow_export=True)).grid_id == digest
+                try:
+                    load_exported_grid(bundle, "0" * 64, "robot")
+                except DomainError as exc:
+                    assert exc.code is ErrorCode.VALIDATION
+                else:
+                    raise AssertionError("bad archive checksum accepted")
+
+    with tempfile.TemporaryDirectory(prefix="installed-workspace-domain-", dir="/tmp") as directory:
+        asyncio.run(verify(Path(directory)))
+    if compatible:
+        from senior_mapping import schema as mapping_schema
+        from senior_mapping import workspace as mapping_workspace
+
+        from senior_control.agent import composition
+        from senior_control.agent import workspace as legacy_workspace
+        from senior_control.storage import schema
+        from senior_control.tasks import store as old_tasks
+        from senior_control.waypoints import store as old_points
+
+        assert schema.DOMAIN_MIGRATIONS is migrations
+        assert mapping_schema.OPERATION_JOURNAL_STATEMENTS is OPERATION_JOURNAL_STATEMENTS
+        for name in ("TILE_SIZE", "MAX_GRID_SIDE", "MAX_GRID_CELLS"):
+            assert getattr(mapping_workspace, name) is getattr(workspace_limits, name)
+        for name in ("_MapReply", "_Origin", "_Manifest", "_Tile", "_WaypointCreate"):
+            assert getattr(legacy_workspace, name) is getattr(workspace_bindings, name)
+        assert old_tasks.TaskStore is composition.TaskStore is domain_bindings.TaskStore
+        for name in ("Waypoint", "StoredWaypoint", "WaypointStore", "adopted_home_blocks_foreign"):
+            assert getattr(old_points, name) is getattr(domain_bindings, name)
+        assert composition.WaypointStore is domain_bindings.WaypointStore
+        assert composition.WorkspaceReader is legacy_workspace.WorkspaceReader
+        assert legacy_workspace.WorkspaceReader is not workspace_bindings.WorkspaceReader
+        assert legacy_workspace.WorkspaceReader.read is GenericWorkspace.read
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                    "cloud",
+                    "rclpy",
+                    "nav2",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed domain stores/schema and explicit workspace IPC/export effects: PASS", compatible
+    )
+
+
 def verify_snapshot_frames(*, compatible: bool = False) -> None:
     """Read the canonical non-simulation codec and bind display-only production snapshots."""
     import asyncio
@@ -1708,6 +1999,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
     verify_route_execution()
     verify_request_runtime()
     verify_snapshot_frames()
+    verify_workspace_domain()
     if network:
         import httpx
         import websockets
@@ -2350,7 +2642,11 @@ def verify_legacy_task_store() -> None:
 
     assert WaypointStore is not ManagerWaypointStore
     assert issubclass(WaypointStore, ManagerWaypointStore)
-    assert Waypoint.__module__ == StoredWaypoint.__module__ == "senior_control.waypoints.store"
+    assert (
+        Waypoint.__module__
+        == StoredWaypoint.__module__
+        == "vehicle_manager.storage.domain_bindings"
+    )
     assert DOMAIN_MIGRATIONS[1].statements is WAYPOINT_STATEMENTS is ManagerWaypointStatements
     for method in ("home", "waypoint", "route_poses", "save_home", "save_waypoint", "sync_poses"):
         assert getattr(WaypointStore, method) is getattr(ManagerWaypointStore, method)
@@ -3107,6 +3403,11 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-workspace-domain-only"]:
+        verify_manager_core_distribution()
+        verify_workspace_domain()
+    elif sys.argv[1:] == ["--manager-workspace-domain-compatible"]:
+        verify_workspace_domain(compatible=True)
     elif sys.argv[1:] == ["--manager-snapshot-frame-only"]:
         verify_manager_core_distribution()
         verify_snapshot_frames()
