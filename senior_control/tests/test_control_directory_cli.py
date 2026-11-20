@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from vehicle_manager import cli as cli_owner
 
 from senior_control import cli
 
@@ -129,7 +130,7 @@ def test_container_mapping_uses_deepest_bind_and_refuses_unshared_root(control_d
 
 def test_dry_run_prints_plan_without_writing_or_starting(control_dir, monkeypatch, capsys):
     configure(control_dir)
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: pytest.fail("mutated system"))
+    monkeypatch.setattr(cli_owner.subprocess, "run", lambda *a, **k: pytest.fail("mutated system"))
     assert cli.main(["deploy", "--control-dir", str(control_dir), "--dry-run"]) == 0
     text = capsys.readouterr().out
     assert "/opt/robot/.ros-venv/bin/python" in text
@@ -139,7 +140,9 @@ def test_dry_run_prints_plan_without_writing_or_starting(control_dir, monkeypatc
 
 def test_invalid_container_name_is_rejected_before_external_commands(control_dir, monkeypatch):
     configure(control_dir)
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: pytest.fail("ran external command"))
+    monkeypatch.setattr(
+        cli_owner.subprocess, "run", lambda *a, **k: pytest.fail("ran external command")
+    )
     assert cli.main(["deploy", "--control-dir", str(control_dir), "--container", "bad/name"]) != 0
 
 
@@ -165,9 +168,9 @@ def test_native_deploy_writes_only_into_control_root_and_links_unit(control_dir,
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cli, "UNIT_ROOT", unit_root)
-    monkeypatch.setattr(cli.sys, "platform", "linux")
-    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(cli.subprocess, "run", systemctl)
+    monkeypatch.setattr(cli_owner.sys, "platform", "linux")
+    monkeypatch.setattr(cli_owner.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli_owner.subprocess, "run", systemctl)
     assert cli.main(["deploy", "--control-dir", str(control_dir)]) == 0
     services = list(control_dir.glob("*.service"))
     assert len(services) == 1
@@ -208,7 +211,7 @@ def test_docker_dry_run_maps_runtime_paths_without_starting_container(
             returncode=0,
         )
 
-    monkeypatch.setattr(cli.subprocess, "run", docker)
+    monkeypatch.setattr(cli_owner.subprocess, "run", docker)
     assert cli.main(["deploy", "--control-dir", str(control_dir), "--container", "--dry-run"]) == 0
     assert len(calls) == 1
     assert "--control-dir /runtime" in capsys.readouterr().out

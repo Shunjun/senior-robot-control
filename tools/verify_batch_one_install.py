@@ -63,6 +63,112 @@ def verify_manager_agent(*, network: bool = False) -> None:
     print("installed manager agent foundations without Root/ROS: PASS")
 
 
+def verify_manager_operator() -> None:
+    import json
+    import tempfile
+
+    from vehicle_manager import cli, deployment, service, simulation
+    from vehicle_manager.profile import VehicleProfile, load_profile
+
+    assert all(
+        callable(value)
+        for value in (
+            cli.main,
+            deployment.render_service,
+            service.supervise,
+            simulation.supervise,
+            load_profile,
+            VehicleProfile,
+        )
+    )
+    with tempfile.TemporaryDirectory(prefix="installed-operator-", dir="/tmp") as directory:
+        root = Path(directory).resolve()
+        profile_path = root / "config.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "kind": "real",
+                    "project_dir": "/opt/robot",
+                    "cloud_url": "wss://example.test/ws/agent",
+                }
+            )
+        )
+        profile = load_profile(profile_path)
+        assert profile.credentials == root / "device.json" and profile.socket == root / "agent.sock"
+        rendered = deployment.render_service(profile, "1000", container_root=None)
+        assert "KillMode=mixed" in rendered and "RestartPreventExitStatus=78" in rendered
+        assert "/opt/robot/.ros-venv/bin/python" in rendered
+        assert "senior_control.docker_start_helper" in rendered
+        assert deployment.environment(profile, root).count("SENIOR_") == 4
+    assert not any(
+        name == "senior_control" or name.startswith(("senior_control.", "rclpy"))
+        for name in sys.modules
+    )
+    print("installed manager profile/rendering and supervisor imports without Root/ROS: PASS")
+
+
+def verify_legacy_operator() -> None:
+    import contextlib
+    import io
+    import json
+    import subprocess
+    import tempfile
+
+    from vehicle_manager import cli as canonical_cli
+    from vehicle_manager import deployment, service, simulation
+    from vehicle_manager.profile import VehicleProfile, load_profile
+
+    from senior_control import cli, simulation_cli, vehicle_deploy
+    from senior_control import docker_start_helper as helper
+    from senior_control.runtime import ipc
+
+    assert cli.VehicleProfile is VehicleProfile and cli.load_profile is load_profile
+    assert vehicle_deploy.render_service is deployment.render_service
+    assert helper._runtime_profile is service._runtime_profile
+    assert helper._terminate_motion_stack is service._terminate_motion_stack
+    assert simulation_cli.DisplayUnavailableError is simulation.DisplayUnavailableError
+    assert helper._identity is ipc._identity and helper._record is ipc._record
+    assert helper._prepare_socket is ipc._prepare_socket
+    assert (ipc.PROTOCOL_VERSION, ipc.MAX_FRAME, ipc.MAX_PATH) == (1, 8192, 100)
+    assert cli._unit is canonical_cli._unit and cli._install_once is canonical_cli._install_once
+    with tempfile.TemporaryDirectory(prefix="installed-cli-", dir="/tmp") as directory:
+        root = Path(directory).resolve()
+        (root / "config.json").write_text(
+            json.dumps(
+                {
+                    "kind": "real",
+                    "project_dir": "/opt/robot",
+                    "cloud_url": "wss://example.test/ws/agent",
+                }
+            )
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            assert cli.main(["deploy", "--control-dir", str(root), "--dry-run"]) == 0
+        assert "Runtime data directory:" in output.getvalue()
+        assert sorted(path.name for path in root.iterdir()) == ["config.json"]
+    for module in (
+        "senior_control.cli",
+        "senior_control.docker_start_helper",
+        "senior_control.simulation_cli",
+    ):
+        result = subprocess.run(
+            [sys.executable, "-m", module, "--help"],
+            cwd="/tmp",
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        assert "usage:" in result.stdout
+    console = Path(sys.executable).with_name("senior-robot")
+    result = subprocess.run(
+        [str(console), "--help"], cwd="/tmp", capture_output=True, text=True, timeout=15, check=True
+    )
+    assert "--help" in result.stdout
+    print("installed legacy operator aliases, unchanged dry-run and real CLI help: PASS")
+
+
 def verify_manager_storage() -> None:
     """Exercise the installed SQLite owner with the original migration cases."""
     import asyncio
@@ -835,6 +941,7 @@ def main() -> None:
     verify_manager_task_store()
     verify_manager_lifecycle()
     verify_legacy_task_store()
+    verify_legacy_operator()
     subprocess.run(
         [
             sys.executable,
@@ -995,6 +1102,7 @@ if __name__ == "__main__":
         for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
             assert importlib.util.find_spec(package) is None, package
         verify_manager_agent(network=True)
+        verify_manager_operator()
     elif sys.argv[1:] in (["--manager-storage-only"], ["--manager-tasks-only"]):
         import importlib.util
 
@@ -1010,5 +1118,6 @@ if __name__ == "__main__":
             verify_manager_execution()
             verify_manager_waypoints()
             verify_manager_agent()
+            verify_manager_operator()
     else:
         main()

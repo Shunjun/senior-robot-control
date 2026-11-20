@@ -104,6 +104,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M3A 管理连接基础已迁 | 原agent/websocket、pairing、journal与runtime/supervisor → `vehicle_manager/agent/` | 原快照/heartbeat、诊断和journal值逐实例注入；旧构造Compatible薄子类或同对象别名，原DB/锁、WS身份/超时/撤销和离线任务语义保持；21文件及安装/验证见M3A记录，快照/请求处理后片另核 |
 | B6.M3B 管理投影/读取/分发已迁 | 原snapshots、vehicle_state、vehicle_frame、SnapshotState、settings/logs wire、workspace、dispatcher → `vehicle_manager/agent/` | 原值/异常/诊断与地图效果逐实例沿用；同DB/原任务/IPC/手动端保持，WS不带内部DTO；26文件，原失败及ROS缺口见M3B记录，Agent/main和真实启动接线后片另核 |
 | B6.M3C 管理主循环与编排已迁 | 原Agent/session、纯Link/Heartbeat和run_agent管理编排 → `vehicle_manager/agent/` | 原CLI/Config、同DB/9客户端、名义异常/结果/诊断/clock/metrics及媒体effects明示绑定；IPC/ROS执行与媒体后端原位，15文件及旧失败/安装缺口见M3C记录 |
+| B6.M4A 操作与两条监管链已迁 | 原cli/profile、vehicle_deploy、docker_start_helper/simulation_cli管理职责 → `vehicle_manager/{profile,cli,deployment,service,simulation,platform_ports}` | 原模块/签名/systemd配置保持，原技术owner逐调用注入；共享socket函数归既有IPC且ROS不再读管理helper；23文件与旧失败/兼容安装见M4A记录，ROS launch及独立部署后置 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -620,3 +621,26 @@ manager59源码4项包括两项从Root Agent搬入的旧诊断，全链251源码
 实际目录、命令/版本/失败与未验项见[manager M3C](../../../senior_control/README.md#m3c-agent会话与生产管理编排)。
 真实Linux/ROS/ament/DDS/native/车辆仿真、实际媒体/Python3.10/CI未验，native/SLAM仍UNVERIFIED，原frozen缓存与旧S3夹具失败继续登记。
 不开服务/部署/推送；剩余Root IPC/媒体/诊断设施和实际安装收尾后续只读精核再预报，不提前迁ROS导航算法。
+
+
+### B6.M4A 管理操作与实车/仿真生命周期已迁
+
+基线e6dccc4；完整管理CLI/profile、部署渲染/事务、两条监管链归已有vehicle_manager，
+旧四模块显式Compatible签名/入口保留，纯值/辅助同对象，唯一业务实现canonical。
+共享_identity/_record/_prepare_socket原实现归既有runtime/ipc.py，旧helper别名同对象，
+ROS agent_adapter两处直接读IPC owner，无需导入管理helper；IPC消息/权限/回收与诊断owner不迁。
+ROS命令/相机环境/peer验证六份效果仍原位，学习/事件/IPC由真实端口逐次接入，无Root容器、新项目、WS或算法扩张。
+原目录/权限/容器路径/PID UID inode/readiness/进程停止、仿真参数与学习导航保持；systemd与module字符串不改。
+
+实际23逻辑文件：产品12/测试5（迁移3与owner导入修改2）/配置0/工具文档6，即新增6/修改14/迁移3/删除0。
+原CLI49通过，最终定向103通过/5失败/1原Linux peer跳过，e6dccc4只读基线同五个旧进程夹具失败；不弱化断言/补假属性。
+38个管理函数、原profile/IPC与socket、六份ROS/设备效果按明确接缝审计一致，ROS adapter除两导入外原字节保持。
+manager65源码仍原4项、全链257源码仍原39项；两wheel构建和仓库外8/15/29包兼容检查、实际旧CLI dry-run/help通过。
+独立manager只实测profile/渲染和导入边界，生产仍需旧SDK平台绑定，不代表独立部署完成。
+实际树、命令/版本/结果/旧失败与未验见[manager M4A](../../../senior_control/README.md#m4a-操作cli部署渲染与实车仿真监管)。
+真实Linux/ROS/ament/DDS/systemd/Docker/车辆仿真、SO_PEERCRED与媒体等未验，native/SLAM仍UNVERIFIED；不开服务/部署/推送。
+
+M4B下一片只收尾组合：real_runtime归现有senior_robot的实车预检接口，更新真实launch/平台导入并保留旧入口；
+仿真canonical simulation_motion/RGBD launch归已有senior_sim，保留旧senior_robot Include入口，更新真实包/安装/消费者。
+当前它们确实仍在senior_robot且CLI仍调用旧包，本片未提前搬移；公用nav2/BT和校准资产复用原owner，若动专属YAML先核旧share兼容。
+Root中性IPC/媒体/诊断及其他遗留入边和独立部署门禁仍待真实闭包收敛后另审，不以旧SDK或纯导入宣称独立；新导航算法仍最后。

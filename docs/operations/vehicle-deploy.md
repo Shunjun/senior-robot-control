@@ -1,5 +1,11 @@
 # 实车 Agent 部署
 
+
+本轮仅迁移管理实现，本文原CLI、module启动名与安装命令保持兼容。
+生产平台绑定仍需本项目完整SDK与既有ROS/媒体/IPC owner，不能仅安装vehicle-manager替换当前运行环境；
+独立manager的配置解析/计划渲染与旧SDK的help/dry-run检查不代表独立生产部署验收。
+仿真总装配launch目前仍由senior_robot安装与调用，归senior_sim的收尾将在后续单独验证。
+
 本页从克隆仓库后的安装开始，分别说明已有 Docker 容器和非容器两种实车部署。云端服务须先按[云端部署](deploy.md)准备；Gazebo 环境使用[仿真部署](simulation.md)，不要把仿真启动命令用于实车。
 
 本页适用于包含 [PR #17](https://github.com/Shunjun/senior-robot-control/pull/17) 联合启停修复与 [PR #18](https://github.com/Shunjun/senior-robot-control/pull/18) 实车控制接入的版本。native 与 Docker 的 `start` 都校验实车参数、加载实际 ROS overlay，启动共享扫描处理、运动融合、安全门和单个 `agent_adapter`，完成身份握手后再启动 Agent。`deploy` 仅生成和注册服务，不启动。选择实车运动配置后，运动 ROS launch 启动厂家底盘（含板载 IMU、EKF、车身 TF）和雷达，相机由同一服务的独立 launch 启动；已有容器仍由现场管理；导航需另外提供有效地图、定位与 Nav2 参数。服务 active 或云端在线都不代表运动能力已就绪。

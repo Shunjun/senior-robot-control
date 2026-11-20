@@ -124,3 +124,12 @@ Agent仅改原ControlledAsyncio的patch模块为vehicle_manager.agent.main，实
 94bc1d9只读基线相同9个失败ID；旧夹具问题和未验执行链不算通过。
 媒体原选集5通过（其他35未选），无新测试情景、假owner或保护弱化。
 48方法/组装/媒体/值身份审计、离仓库manager/SDK和原CLI help检查及完整命令见[manager M3C](../README.md#m3c-agent会话与生产管理编排)。
+
+
+M4A迁入原test_vehicle_cli、test_control_directory_cli、test_docker_start_helper。
+前两份仅把stdlib patch目标改到canonical真实实现模块，其余case/输入/断言不变；helper原字节不变。
+原runtime_identity和launch_recovery的_record改从实际IPC owner读，保留全部原保护。
+原CLI目录选择49通过；允许原测试socket/child的完整选择103通过/5失败/1原Linux peer凭据跳过，
+e6dccc4只读归档复现相同五个旧进程夹具失败，未补假属性/弱化断言。
+38函数与真实IPC/平台效果审计、安装兼容和原CLI help/dry-run证据及实际ROS/部署未验见[manager M4A](../README.md#m4a-操作cli部署渲染与实车仿真监管)。
+独立环境只验证真实profile/render与模块边界，完整旧SDK检查是兼容证据，不能算独立生产部署通过。

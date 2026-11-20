@@ -537,7 +537,7 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
         return
     if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
         raise ValueError("invalid launch endpoint ownership context")
-    from senior_control.docker_start_helper import _prepare_socket
+    from senior_control.runtime.ipc import _prepare_socket
 
     descriptor = os.open(
         path.with_suffix(".launch.lock"),
@@ -744,7 +744,7 @@ def main() -> None:
                 await server.start()
                 started = True
                 if owner is not None:
-                    from senior_control.docker_start_helper import _record
+                    from senior_control.runtime.ipc import _record
 
                     _record(path, run_id=owner)
                 executor.add_node(node)

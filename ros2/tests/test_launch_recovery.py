@@ -787,7 +787,7 @@ async def test_launch_endpoint_reclaims_only_same_owner_refused_stale_socket(
 
     from senior_robot.agent_adapter import _launch_endpoint
 
-    from senior_control.docker_start_helper import _record
+    from senior_control.runtime.ipc import _record
 
     path = endpoint_root / "agent.sock"
     owner = "a" * 32

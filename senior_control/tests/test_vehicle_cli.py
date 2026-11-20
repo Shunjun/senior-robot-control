@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
+from vehicle_manager import cli as cli_owner
+from vehicle_manager import simulation as simulation_owner
 
 from senior_control import cli
 
@@ -148,7 +150,7 @@ def test_deploy_dry_run_leaves_files_and_services_untouched(tmp_path: Path, monk
     def unexpected(*args, **kwargs):
         raise AssertionError("dry run invoked a system mutation")
 
-    monkeypatch.setattr(cli.subprocess, "run", unexpected)
+    monkeypatch.setattr(cli_owner.subprocess, "run", unexpected)
     assert cli.main(["deploy", "--profile", str(profile), "--dry-run"]) == 0
     assert list(tmp_path.iterdir()) == [profile]
 
@@ -259,7 +261,7 @@ def test_simulation_service_receives_runtime_mode_and_desktop(tmp_path, monkeypa
     from senior_control import simulation_cli
 
     calls = []
-    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
     monkeypatch.setenv("DISPLAY", ":7")
     monkeypatch.setenv("XAUTHORITY", "/tmp/desktop auth")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
@@ -268,7 +270,7 @@ def test_simulation_service_receives_runtime_mode_and_desktop(tmp_path, monkeypa
         calls.append(argv)
         return SimpleNamespace(returncode=1 if "is-active" in argv else 0)
 
-    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    monkeypatch.setattr(simulation_owner.subprocess, "run", run)
     profile, _ = _simulation_profile(tmp_path)
     assert (
         simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=headless)
@@ -292,14 +294,14 @@ def test_windowed_start_requires_display_without_starting_service(tmp_path, monk
     from senior_control import simulation_cli
 
     calls = []
-    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
 
     def run(argv, **kwargs):
         calls.append(argv)
         return SimpleNamespace(returncode=1)
 
-    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    monkeypatch.setattr(simulation_owner.subprocess, "run", run)
     profile, _ = _simulation_profile(tmp_path)
     assert (
         simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=False) == 1
@@ -314,14 +316,14 @@ def test_windowed_start_does_not_duplicate_running_simulation(tmp_path, monkeypa
     from senior_control import simulation_cli
 
     calls = []
-    monkeypatch.setattr(simulation_cli.sys, "platform", "linux")
+    monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
 
     def run(argv, **kwargs):
         calls.append(argv)
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(simulation_cli.subprocess, "run", run)
+    monkeypatch.setattr(simulation_owner.subprocess, "run", run)
     profile, _ = _simulation_profile(tmp_path)
     assert (
         simulation_cli.lifecycle("start", tmp_path / "profile.json", profile, headless=False) == 0
@@ -388,10 +390,8 @@ def short_socket_root(monkeypatch):
     from tempfile import TemporaryDirectory
     from types import SimpleNamespace
 
-    from senior_control import simulation_cli
-
     original_lstat = Path.lstat
-    original_socket = simulation_cli.socket.socket
+    original_socket = simulation_owner.socket.socket
 
     # The local test environment prohibits AF_UNIX bind. Preserve real inode races while
     # modeling socket metadata and connect results, without starting a listener.
@@ -421,7 +421,7 @@ def short_socket_root(monkeypatch):
 
     monkeypatch.setattr(Path, "lstat", socket_lstat)
     monkeypatch.setattr(
-        simulation_cli.socket,
+        simulation_owner.socket,
         "socket",
         lambda *args, **kwargs: (
             original_socket(*args, **kwargs) if "fileno" in kwargs or len(args) > 3 else Probe()
@@ -450,9 +450,9 @@ def test_live_socket_is_preserved(short_socket_root, monkeypatch):
 
     path = short_socket_root / "adapter.sock"
     _stale_test_socket(path)
-    probe = simulation_cli.socket.socket()
+    probe = simulation_owner.socket.socket()
     monkeypatch.setattr(probe, "connect_ex", lambda _: 0)
-    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: probe)
+    monkeypatch.setattr(simulation_owner.socket, "socket", lambda *args: probe)
     identity = path.lstat()
     with pytest.raises(ValueError, match="live or cannot"):
         simulation_cli._remove_stale_socket(path)
@@ -478,7 +478,7 @@ def test_stale_cleanup_rejects_unowned_or_non_socket_paths(
     else:
         _stale_test_socket(path)
         actual_uid = path.lstat().st_uid
-        monkeypatch.setattr(simulation_cli.os, "getuid", lambda: actual_uid + 1)
+        monkeypatch.setattr(simulation_owner.os, "getuid", lambda: actual_uid + 1)
     original = path.lstat()
     with pytest.raises(ValueError, match="not an owned socket"):
         simulation_cli._remove_stale_socket(path)
@@ -516,7 +516,7 @@ def test_stale_cleanup_preserves_uncertain_socket(short_socket_root, monkeypatch
             assert address == str(path)
             return errors[outcome]
 
-    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: Probe())
+    monkeypatch.setattr(simulation_owner.socket, "socket", lambda *args: Probe())
     with pytest.raises(ValueError, match="cannot be safely checked"):
         simulation_cli._remove_stale_socket(path)
     assert path.lstat().st_ino == original.st_ino
@@ -547,7 +547,7 @@ def test_stale_cleanup_preserves_socket_replaced_during_probe(short_socket_root,
             replacement.replace(path)
             return errno.ECONNREFUSED
 
-    monkeypatch.setattr(simulation_cli.socket, "socket", lambda *args: Probe())
+    monkeypatch.setattr(simulation_owner.socket, "socket", lambda *args: Probe())
     with pytest.raises(ValueError, match="changed during stale check"):
         simulation_cli._remove_stale_socket(path)
     assert path.lstat().st_ino == replacement_identity.st_ino
@@ -593,8 +593,8 @@ def test_main_only_cleans_stale_socket_after_both_locks(
 
     monkeypatch.setattr(simulation_cli, "validate_simulation_profile", lambda _: None)
     monkeypatch.setattr(simulation_cli, "read_credentials", lambda _: credentials)
-    monkeypatch.setattr(simulation_cli.os, "open", open_lock)
-    monkeypatch.setattr(simulation_cli.fcntl, "flock", lock)
+    monkeypatch.setattr(simulation_owner.os, "open", open_lock)
+    monkeypatch.setattr(simulation_owner.fcntl, "flock", lock)
     monkeypatch.setattr(simulation_cli, "_remove_stale_socket", cleanup)
     monkeypatch.setattr(simulation_cli, "supervise", supervise)
     assert simulation_cli.main(path) == (1 if lock_failure else 0)

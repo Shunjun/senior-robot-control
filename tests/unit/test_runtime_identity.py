@@ -64,7 +64,7 @@ async def test_owned_adapter_must_have_current_peer_verification_record():
             with pytest.raises(IpcError):
                 await client.request("manual")
             assert not calls and path.exists()
-            from senior_control.docker_start_helper import _record
+            from senior_control.runtime.ipc import _record
 
             _record(path, run_id="old-run")
             with pytest.raises(IpcError):

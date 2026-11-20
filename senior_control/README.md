@@ -1319,3 +1319,100 @@ uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1、HTTPX0.28.1/WebSockets15.0.1。
 真实Linux/ROS/ament/DDS/native/车辆仿真、相机与aiortc实媒体、Python3.10及GitHub runner未验；
 安装工具native/SLAM仍UNVERIFIED，旧S3夹具失败继续登记，不以宿主检查代替ROS实测。
 无开发/实车服务、部署或推送；剩余Root IPC/媒体/诊断设施的职责与真实安装收尾需另审范围，导航算法仍最后。
+
+
+## M4A 操作CLI、部署渲染与实车/仿真监管
+
+基线e6dccc4；管理实现迁入已有vehicle_manager，现有senior-robot console及所有旧python -m入口保持。
+
+```text
+senior_control/src/vehicle_manager/
+├── profile.py        # 原VehicleProfile/load_profile，目录与配置规则
+├── cli.py            # 原操作分发、配对/doctor/deploy和旧布局支持
+├── deployment.py     # 原统一目录、容器映射、unit渲染和部署事务
+├── service.py        # 原native/Docker联合监管、ready/stop/进程回收
+├── simulation.py     # 原user service/仿真监管/双锁/stale检查
+└── platform_ports.py # 逐调用原IPC/学习/事件/平台效果，无Root容器或新实现
+src/senior_control/
+├── cli.py/vehicle_deploy.py/docker_start_helper.py/simulation_cli.py # Compatible旧签名/模块入口
+└── runtime/ipc.py    # 原传输原位；新增承接原三份socket归属函数的唯一实现
+ros2/src/senior_robot/senior_robot/agent_adapter.py # 两处改读实际IPC owner
+senior_control/tests/
+├── test_vehicle_cli.py
+├── test_control_directory_cli.py
+└── test_docker_start_helper.py
+```
+
+原纯profile与路径解释、部署辅助函数、进程终止辅助和DisplayUnavailableError同对象转发。
+其余旧函数是显式Compatible薄调用，签名不变；业务仅canonical一份，旧class/入口不伪造反射属性。
+原Root helper保留六份ROS/设备效果（命令组装、视频环境、Linux peer验证），
+原IPC/学习服务/生命周期事件与配置预检均逐实例明示接入，manager无Root/ROS反向实现导入。
+原CLI平台导入仍按实际功能惰性调用，pair/help不为构造绑定提前加载native监管。
+root helper的_identity/_record/_prepare_socket原实现归既有runtime/ipc.py；旧入口同对象别名，
+ROS adapter直接从IPC读同一函数，不再为了socket操作导入管理helper。
+没有搬IPC协议/ROS执行/媒体/诊断owner或新建顶层项目、扩大WS/新增算法。
+
+权限/私有目录、O_NOFOLLOW/独占实例锁、无覆盖安装、host/container最深可写bind映射、
+PID/UID/dev/inode/run_id复查和35秒readiness、原IPC字段、原停止顺序及超时全部保持。
+服务仍只停止所选owned进程，不stop容器；Agent/ROS/camera隔离与学习claim分配/跨实例清理原位，
+仿真双锁、headless/windowed环境、视频私有slot和既有学习/导航链不改。
+原CLI/systemd/module命令与配置文件值保持，仿真当前仍调用senior_robot的simulation_motion.launch.py，未提前搬launch。
+
+### 实际范围和验证
+
+23逻辑文件：产品12（新增6、修改旧四入口/IPC/ROS adapter共6），测试5（迁移3、原owner路径调整2），
+配置0，工具文档6（原安装工具、manager/tests README、原plan、两份operations说明）；
+新增6/修改14/迁移3/删除0，迁移单计。
+两份CLI测试只改实际stdlib patch模块，Docker helper测试逐字节迁移；
+原runtime_identity和launch_recovery只把_record导入改到实际IPC实现，所有原用例/输入/断言保持。
+
+环境macOS26.4 arm64；原主仓库.venv/bin的Python3.12.15/pytest8.4.2/ruff0.17.3/mypy2.4.0、
+uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1，HTTPX0.28.1/WebSockets15.0.1。
+以下python/ruff/mypy均该绝对路径；工作区命令如下，仓库外项另注。
+
+- RED：旧独立manager执行原工具--manager-tasks-only，缺vehicle_manager.cli等新模块报ImportError；本片wheel安装后通过。
+- 首次原选择在沙箱有Unix socket EPERM及旧stdlib patch路径失败；
+  按真实方法owner调整原CLI用例的patch，未补回假module属性、改断言或新增pytest情景。
+  `python -m pytest senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py -q`：49通过，0.44s；最终惰性装配收尾后同组49通过，0.42s。
+- 最终允许原测试socket/隔离child执行
+  `python -m pytest senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py senior_control/tests/test_docker_start_helper.py tests/unit/test_runtime_identity.py tests/integration/test_ipc_exclusive_bind.py tests/integration/test_runtime_fault_isolation.py tests/integration/test_ipc_lifecycle.py tests/unit/test_ipc_frames.py ros2/tests/test_launch_recovery.py::test_launch_endpoint_reclaims_only_same_owner_refused_stale_socket -q`：
+  103通过/5失败/1跳过，8.69s；包含上述49项，不累加。
+  唯一跳过为原Linux SO_PEERCRED用例，宿主不具备该接口；不是实际peer凭据验证通过。
+- e6dccc4用git archive只读导出/tmp/m4a-baseline，同环境允许socket运行
+  `python -m pytest tests/integration/test_runtime_fault_isolation.py -q`：16通过/5失败，4.17s；
+  原real-spawn/identity/exit/agent_exit/adapter_exit五项失败ID与本轮相同，
+  仍缺ros_setup、group_stop替身不接受group_grace，原macOS学习SOCK_SEQPACKET不可用日志亦如实保留。
+  不补假属性/改保护或把该真实进程链算通过；历史其他旧夹具缺口不宣称修复。
+- 38个原管理/部署/监管函数按明确效果接缝归一后AST一致；profile及路径规则、三份socket归属函数和
+  原IPC所有函数/类体精确一致，六份原ROS/设备效果精确一致。
+  ROS adapter保留CRLF，除两处owner导入外逐字节一致；五份测试体/断言在仅归一实际patch/导入位置后AST一致。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：65源码仍M3C原4项；
+  MYPYPATH取根pytest原pythonpath后`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  257源码仍原39项，忽略迁移行号后诊断集合逐项相同，不宣称类型全绿。
+- 相关产品/工具/测试的ruff check/format --check及
+  `git -c core.whitespace=cr-at-eol diff --check`核对；不重格式化其他ROS源码或改其旧保护。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build senior_control --offline --out-dir /tmp/m4a-wheels`和根
+  `uv build --offline --out-dir /tmp/m4a-wheels`成功构建两份sdist/wheel。
+  用同cache的`uv pip install --offline --reinstall --no-deps`向原/tmp/m3a-base-venv、/tmp/m3a-agent-venv安装本片manager，
+  向原/tmp/vehicle-batch-one-venv安装本片root/manager；均为原第三方兼容闭包，无配置/锁改动。
+  从/tmp运行原工具--manager-tasks-only、--manager-agent-only及默认SDK模式通过；
+  `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv pip check --python <对应Python>`分别8/15/29包通过。
+  独立manager环境真实解析临时config.json、渲染原unit/env，无Root/ROS导入；监管仅检查导入，未运行服务。
+  SDK环境核对profile/渲染/进程辅助/socket别名同一身份，实际旧CLI --control-dir deploy --dry-run保留唯一config文件且不启动/写服务，
+  并用该SDK解释器从/tmp运行原cli/docker_start_helper/simulation_cli --help及实际senior-robot console --help，全返回0。
+
+这些是迁移兼容性验证。独立manager计划仍输出历史模块启动命令，生产绑定仍需完整旧SDK与平台owner；
+不以旧SDK验证或纯导入/渲染冒充独立部署。根完整frozen重装缓存缺口、原类型与旧夹具问题仍登记。
+真实Linux/systemd/Docker/厂商ROS/ament/DDS/车辆仿真和实际SO_PEERCRED、相机/媒体、Python3.10/CI未验，
+安装工具native/SLAM仍UNVERIFIED。仅运行原测试套接字/临时子进程和替身，未启开发/实车服务、systemd或Docker容器、部署或推送。
+
+### M4B 必要收尾范围（尚未实施）
+
+原real_runtime.py仍是校准参数/导航组合预检，不能移入manager；下一片归现有senior_robot实车组合公开接口，
+保留旧转发并更新safety_motion.launch及Root平台provider的真实预检导入，控制/感知算法与原硬件类型不顺带重写。
+仿真总装配仍为senior_robot/launch/{simulation_motion,simulation_rgbd}.launch.py，
+由senior_robot/setup.py安装，RGBD仍include旧motion入口；senior_sim已有ament_cmake的simulation.launch、world/URDF及camera/world_reference脚本。
+下一片将canonical仿真组合归senior_sim，保留旧Include兼容入口，逐项更新真实调用、CMake/setup/package及installed share检查。
+现有nav2/BT/校准配置先复用真实owner；若移动仿真专属YAML，必须先列旧share路径兼容和实际消费者再预报，不静默扩大。
+独立部署门禁须在这些原技术owner/平台闭包真正收敛后另做，不能通过安装旧senior-control SDK或只import宣称完成；
+Root IPC/媒体/诊断最终归属和其他遗留Root入边仍须另审，导航算法仍后置。

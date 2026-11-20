@@ -1,5 +1,11 @@
 # Linux 仿真部署与运行
 
+
+本轮仅迁移管理实现，本文原CLI、module启动名与安装命令保持兼容。
+生产平台绑定仍需本项目完整SDK与既有ROS/媒体/IPC owner，不能仅安装vehicle-manager替换当前运行环境；
+独立manager的配置解析/计划渲染与旧SDK的help/dry-run检查不代表独立生产部署验收。
+仿真总装配launch目前仍由senior_robot安装与调用，归senior_sim的收尾将在后续单独验证。
+
 本页只面向 Linux 仿真机。云服务先按[云端部署](deploy.md)配置；实车用[实车部署](vehicle-deploy.md)，不要把本页的 Gazebo 真值或运动恢复操作用于实车。浏览器与仿真机都连接真实云域名，跨机器不使用各自的 `localhost`。
 
 ## 1. 准备 Linux 环境与仓库
