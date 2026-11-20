@@ -27,10 +27,11 @@ cd senior-robot-control
 npm --prefix web ci --include=dev
 VITE_DEMO_DATA=0 npm --prefix web run build
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[cloud]'
+.venv/bin/python -m pip install uv==0.12.23
+.venv/bin/uv sync --project cloud --frozen --no-dev --extra server --no-editable
 ```
 
-本地 `.venv` 在这里用于生成管理员密码哈希，云进程在 Docker 镜像内运行。所有后续 `deploy/...` 命令均以仓库根目录为当前目录。Jenkins 路径由流水线完成网页构建，见下节，不需要重复手工构建。
+本地 `.venv` 只安装固定 uv；独立云环境在 `cloud/.venv`，用于生成管理员密码哈希，不安装根管理/ROS SDK。云进程在 Docker 镜像内运行。所有后续 `deploy/...` 命令均以仓库根目录为当前目录。Jenkins 路径由流水线完成网页构建，见下节，不需要重复手工构建。
 
 ## 准备和 TLS
 
@@ -110,10 +111,10 @@ cloud/Caddy 日志，并遮盖凭据文件中的值。流水线不会自动恢�
 停止写入并按经过验证的数据库恢复流程操作。`current` 只是最后一次健康版本的记录，
 并不保证失败后正在运行的版本与它一致。
 
-在云主机仓库根目录，用前面安装的 `.venv` 交互式生成管理员哈希（手动 Compose 和 Jenkins Secret file 都需要）：
+在云主机仓库根目录，用前面安装的 `cloud/.venv` 交互式生成管理员哈希（手动 Compose 和 Jenkins Secret file 都需要）：
 
 ```sh
-.venv/bin/python -c 'from getpass import getpass; from senior_control.cloud.auth import hash_password; print(hash_password(getpass("管理员密码: ")))'
+cloud/.venv/bin/python -c 'from getpass import getpass; from cloud.auth import hash_password; print(hash_password(getpass("管理员密码: ")))'
 ```
 
 将输出的整行放入 Secret file 的 `ADMIN_PASSWORD_HASH='...'`，不要在日志或版本库中
@@ -128,3 +129,19 @@ Caddy 的固定地址 `172.29.231.2`；Caddy 另连默认网络以申请证书�
 ## 源码依据与验收边界
 
 手动服务与卷见 [compose.yaml](../../deploy/compose.yaml)，环境校验及 TURN profile 选择见 [compose.sh](../../deploy/compose.sh)，镜像见 [Dockerfile.cloud](../../deploy/Dockerfile.cloud)。Jenkins 行为见 [Jenkinsfile](../../Jenkinsfile) 和 [jenkins-deploy.sh](../../deploy/jenkins-deploy.sh)。DNS、TLS 续期、HTTPS/WebSocket、TURN 网络、备份恢复与升级回退仍需在目标云环境验证；流水线健康探测不代替机器人控制全链路验收。
+
+
+### C3 独立镜像接线与本地验证边界
+
+Dockerfile仍位于deploy/Dockerfile.cloud，Jenkins/Compose继续以仓库根为上下文，外部命令路径不变。
+镜像只复制cloud与contracts的构建声明/锁/源码（由.dockerignore白名单约束），
+以uv0.12.23对cloud/uv.lock执行frozen、server extra、no-editable安装；不安装根项目或ROS包。
+Uvicorn0.32.1、WebSockets15.0.1仍固定，入口为python -m cloud.bootstrap。
+SENIOR_SECRET、ADMIN_PASSWORD_HASH、ALLOWED_ORIGIN、DATABASE_PATH、TRUSTED_PROXY原字段不变，
+端口8000、/var/lib/senior/cloud.db及原卷、UID/GID10001、只读/反代/本地daemon保护均保留。
+
+C3开发机已验证仓库外frozen安装、双SQLite lifespan、原入口参数和替身发布保护；
+实际Docker构建尝试因本地daemon不可连接失败，因此镜像构建/镜像内一次性导入尚未实测，
+不能把宿主安装或静态上下文断言当作镜像验证。完整命令/版本/结果见
+[云包C3记录](../../cloud/README.md#c3-生产镜像与独立锁接线)。
+本次没有启动Docker、Uvicorn或生产服务，没有执行部署或推送；目标环境仍需原HTTPS/WS与反代验收。

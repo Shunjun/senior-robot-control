@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -eu
-root=$(cd "$(dirname "$0")/../.." && pwd)
+source_root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin"
+# Use only this test's private release inputs; no prebuilt repository web/dist is required.
+root="$tmp/repository"
+mkdir -p "$tmp/bin" "$root/deploy/coturn" "$root/web/dist"
+for name in jenkins-deploy.sh validate-jenkins-env.py redact-logs.py compose.jenkins.yaml Caddyfile; do
+  cp "$source_root/deploy/$name" "$root/deploy/$name"
+done
+cp "$source_root/deploy/coturn/turnserver.conf.template" "$root/deploy/coturn/"
+printf '<!doctype html><html></html>\n' > "$root/web/dist/index.html"
+cd "$root"
 cat > "$tmp/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$1 $2 $3" == 'context inspect --format' ]]; then echo 'tcp://other-host:2375'; exit 0; fi

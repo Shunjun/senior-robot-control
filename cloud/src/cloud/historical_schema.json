@@ -1,0 +1,65 @@
+[
+  {
+    "version": 1,
+    "statements": [
+      "\n    CREATE TABLE map_operation (\n        operation_id TEXT PRIMARY KEY,\n        action TEXT NOT NULL,\n        payload TEXT NOT NULL,\n        status TEXT NOT NULL,\n        rollback_confirmed INTEGER NOT NULL,\n        relocalized INTEGER NOT NULL\n    )\n    ",
+      "\n    CREATE TABLE map_operation_phase (\n        operation_id TEXT NOT NULL,\n        seq INTEGER NOT NULL,\n        phase TEXT NOT NULL,\n        PRIMARY KEY (operation_id, seq),\n        FOREIGN KEY (operation_id) REFERENCES map_operation (operation_id)\n    )\n    ",
+      "\n    CREATE TABLE map_task_link (\n        task_id TEXT PRIMARY KEY,\n        definition TEXT NOT NULL,\n        map_id TEXT NOT NULL,\n        reference_revision INTEGER NOT NULL,\n        invalidated INTEGER NOT NULL\n    )\n    ",
+      "\n    CREATE TABLE map_home_link (\n        robot_id TEXT PRIMARY KEY,\n        source_robot_id TEXT NOT NULL,\n        map_id TEXT NOT NULL,\n        reference_revision INTEGER NOT NULL,\n        waypoint_id TEXT NOT NULL,\n        status TEXT NOT NULL,\n        adopted INTEGER NOT NULL\n    )\n    "
+    ],
+    "sha256": [
+      "3368352455b8b62718cc67573b14fe8767fc03f526c9e8506fd271af39579633",
+      "fc0ea01f9ed40766bff604292d822336878b8cb6c625db33acf3ba2cd48e0a82",
+      "d023c6bcc9914ed078b7f975e0f0e4d2c79a37fe8464c3dbc57d13d4efba8000",
+      "398ee57aa71220e3df64a469dc582fe86f9e04ffbeb05f79a0b8065e3e11fdbf"
+    ]
+  },
+  {
+    "version": 2,
+    "statements": [
+      "\n    CREATE TABLE waypoint (\n        waypoint_id TEXT PRIMARY KEY,\n        robot_id TEXT NOT NULL,\n        kind TEXT NOT NULL,\n        x REAL NOT NULL,\n        y REAL NOT NULL,\n        yaw REAL NOT NULL,\n        map_id TEXT NOT NULL,\n        reference_revision INTEGER NOT NULL,\n        anchor_id TEXT NOT NULL,\n        source_robot_id TEXT NOT NULL,\n        status TEXT NOT NULL,\n        latitude REAL,\n        longitude REAL,\n        anchor_x REAL NOT NULL,\n        anchor_y REAL NOT NULL,\n        anchor_yaw REAL NOT NULL,\n        recorded_at TEXT NOT NULL\n    )\n    ",
+      "\n    CREATE UNIQUE INDEX waypoint_one_home\n    ON waypoint (robot_id)\n    WHERE kind = 'home'\n    "
+    ],
+    "sha256": [
+      "bea125219f604951460191ba802a44c14a2b74ef91bc93c12472e1e7b4e5f004",
+      "a99c2f2979296d371224e5e6f0fe4f509c1327eaba4674fb5334d4f0780d1cb7"
+    ]
+  },
+  {
+    "version": 3,
+    "statements": [
+      "\n    CREATE TABLE task_definition (\n        task_id TEXT PRIMARY KEY,\n        robot_id TEXT NOT NULL,\n        map_id TEXT NOT NULL,\n        reference_revision INTEGER NOT NULL,\n        waypoint_ids TEXT NOT NULL,\n        schedule_kind TEXT NOT NULL,\n        every_seconds INTEGER,\n        cron_expression TEXT,\n        timezone TEXT NOT NULL,\n        enabled INTEGER NOT NULL,\n        revision INTEGER NOT NULL,\n        created_at TEXT NOT NULL\n    )\n    ",
+      "\n    CREATE TABLE task_execution (\n        execution_id TEXT PRIMARY KEY,\n        task_id TEXT NOT NULL,\n        occurrence_utc TEXT NOT NULL,\n        status TEXT NOT NULL,\n        navigation_sent INTEGER NOT NULL,\n        rollback_confirmed INTEGER NOT NULL,\n        UNIQUE (task_id, occurrence_utc),\n        FOREIGN KEY (task_id) REFERENCES task_definition (task_id)\n    )\n    ",
+      "\n    CREATE TABLE task_skip (\n        skip_id TEXT PRIMARY KEY,\n        task_id TEXT NOT NULL,\n        skip_from TEXT NOT NULL,\n        skip_until TEXT NOT NULL,\n        reason TEXT NOT NULL,\n        FOREIGN KEY (task_id) REFERENCES task_definition (task_id)\n    )\n    ",
+      "\n    CREATE TABLE task_runtime (\n        robot_id TEXT PRIMARY KEY,\n        boot_id TEXT NOT NULL\n    )\n    "
+    ],
+    "sha256": [
+      "99d9fedb49d78fd1217977f39f1057edd1461bbd0cfdb3934e01780247ad6261",
+      "926e61df34089b59dc85cb7d581ddd28cef5bd6231fc3219ce7da22f2a232d39",
+      "42ffc189e7d7312292863b7605501573a898caabb56776e570cb3425145cd397",
+      "d76d55cd495364932cf29d226ad2432348f7168aa303b4c966af4caf3cd8bfd2"
+    ]
+  },
+  {
+    "version": 4,
+    "statements": [
+      "\n    CREATE TABLE cloud_session (\n        token_hash TEXT PRIMARY KEY,\n        csrf_hash TEXT NOT NULL,\n        created_at REAL NOT NULL,\n        expires_at REAL NOT NULL\n    )\n    ",
+      "\n    CREATE TABLE cloud_pairing_code (\n        code_hash TEXT PRIMARY KEY,\n        created_at REAL NOT NULL,\n        expires_at REAL NOT NULL,\n        redeemed_at REAL\n    )\n    ",
+      "\n    CREATE TABLE cloud_robot (\n        robot_id TEXT PRIMARY KEY,\n        name TEXT NOT NULL,\n        device_hash TEXT NOT NULL UNIQUE,\n        created_at REAL NOT NULL,\n        revoked_at REAL\n    )\n    "
+    ],
+    "sha256": [
+      "b93903561a15263914d0c0cf0b6d22e8be94c56bb8535b7ce42f688b31095430",
+      "9d6124c0eda8d892a2e597c2e3af881efc14642ef8f1bd6ae469bfc1bd61130d",
+      "cd11ad757243bdeb6ddea5704be6261f1c7d68786b904e6fe50d31bd1d9217c9"
+    ]
+  },
+  {
+    "version": 5,
+    "statements": [
+      "ALTER TABLE cloud_robot ADD COLUMN connection_epoch INTEGER NOT NULL DEFAULT 0"
+    ],
+    "sha256": [
+      "70af15b5f23d3c54ddf944429a6aba051c7b3301c3bb4fab6dbbce366ce28347"
+    ]
+  }
+]

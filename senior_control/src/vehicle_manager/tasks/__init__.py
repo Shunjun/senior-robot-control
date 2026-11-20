@@ -1,0 +1,96 @@
+"""Pure task scheduling and lifecycle interfaces; owners load only when requested."""
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from vehicle_manager.tasks import lifecycle
+    from vehicle_manager.tasks.executor import (
+        NavigationFailure,
+        NavigationPort,
+        ProcessCrash,
+        TaskExecutor,
+    )
+    from vehicle_manager.tasks.lifecycle_service import LifecycleService
+    from vehicle_manager.tasks.lifecycle_store import LifecycleStore
+    from vehicle_manager.tasks.models import (
+        ExecutionContext,
+        ExecutionRecord,
+        ExecutionStatus,
+        IntentAction,
+        SkipRecord,
+        TaskDefinition,
+        TaskIntent,
+    )
+    from vehicle_manager.tasks.navigation_port import NavigationEffects, TaskNavigation
+    from vehicle_manager.tasks.runner import TaskRunner
+    from vehicle_manager.tasks.runtime import TaskRuntime
+    from vehicle_manager.tasks.schedule import Schedule
+    from vehicle_manager.tasks.store import TaskStore
+
+__all__ = [
+    "ExecutionContext",
+    "ExecutionRecord",
+    "ExecutionStatus",
+    "IntentAction",
+    "LifecycleService",
+    "LifecycleStore",
+    "NavigationEffects",
+    "NavigationFailure",
+    "NavigationPort",
+    "ProcessCrash",
+    "TaskExecutor",
+    "TaskNavigation",
+    "TaskRuntime",
+    "Schedule",
+    "SkipRecord",
+    "TaskDefinition",
+    "TaskIntent",
+    "TaskRunner",
+    "TaskStore",
+    "lifecycle",
+]
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"TaskExecutor", "NavigationFailure", "NavigationPort", "ProcessCrash"}:
+        return getattr(import_module("vehicle_manager.tasks.executor"), name)
+    if name in {"NavigationEffects", "TaskNavigation"}:
+        return getattr(import_module("vehicle_manager.tasks.navigation_port"), name)
+    if name == "TaskRuntime":
+        from vehicle_manager.tasks.runtime import TaskRuntime
+
+        return TaskRuntime
+    if name == "LifecycleService":
+        from vehicle_manager.tasks.lifecycle_service import LifecycleService
+
+        return LifecycleService
+    if name == "LifecycleStore":
+        from vehicle_manager.tasks.lifecycle_store import LifecycleStore
+
+        return LifecycleStore
+    if name == "Schedule":
+        from vehicle_manager.tasks.schedule import Schedule
+
+        return Schedule
+    if name == "lifecycle":
+        return import_module("vehicle_manager.tasks.lifecycle")
+    if name in {
+        "ExecutionContext",
+        "ExecutionRecord",
+        "ExecutionStatus",
+        "IntentAction",
+        "SkipRecord",
+        "TaskDefinition",
+        "TaskIntent",
+    }:
+        return getattr(import_module("vehicle_manager.tasks.models"), name)
+    if name == "TaskRunner":
+        from vehicle_manager.tasks.runner import TaskRunner
+
+        return TaskRunner
+    if name == "TaskStore":
+        from vehicle_manager.tasks.store import TaskStore
+
+        return TaskStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

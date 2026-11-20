@@ -1,9 +1,9 @@
 """Publish admitted native motion observations for the shared estimator."""
 
 from rclpy.node import Node
+from senior_motion_estimation.motion_observation_adapter import NativeObservationRosBridge
 
 from senior_robot.motion_lifecycle import MotionExecutor, run
-from senior_robot.motion_observation_adapter import NativeObservationRosBridge
 from senior_robot.motion_profile import select_motion_profile
 
 

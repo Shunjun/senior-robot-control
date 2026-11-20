@@ -66,13 +66,8 @@ class RecordingReports:
 
 
 def local_resources(monkeypatch):
-    import senior_robot.motion_core_output as output
-    import senior_robot.runtime_reports as reports
+    import senior_motion_control.runtime_reports as reports
 
-    import senior_control.motion.process_resources as processes
-
-    monkeypatch.setattr(output, "ProcessWorker", lambda **_: LocalWorker())
-    monkeypatch.setattr(processes, "ProcessWorker", lambda **_: LocalWorker())
     monkeypatch.setattr(reports, "RuntimeReports", RecordingReports)
 
 
@@ -134,10 +129,9 @@ class Reception:
     def publish(self, ros, steady):
         self.sensors.ingest_poses(self.sensors.poses)
         reference = self.sensors.estimate(ros, steady)
-        state = {
-            k: v for k, v in self.sensors.__dict__.items() if k not in {"profile", "diagnostics"}
-        }
-        assert self.channel.slot.put((state, tuple(self.core.node._scans), True, 1, reference))
+        state = self.sensors.decision_snapshot()
+        view = ({key: reference[0][key] for key in ("average", "mode")}, None, None)
+        assert self.channel.slot.put((state, tuple(self.core.node._scans)[-1:], True, 1, view))
         self.channel.update(self.core.node, self.core.sensors)
         return reference
 

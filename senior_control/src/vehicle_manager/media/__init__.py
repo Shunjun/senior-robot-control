@@ -1,0 +1,16 @@
+"""Management media interfaces; shared frame objects remain at their original owner."""
+
+from typing import Protocol
+
+
+class ImageReading(Protocol):
+    @property
+    def stamp(self) -> float: ...
+    @property
+    def width(self) -> int: ...
+    @property
+    def height(self) -> int: ...
+    @property
+    def encoding(self) -> str: ...
+    @property
+    def data(self) -> bytes: ...

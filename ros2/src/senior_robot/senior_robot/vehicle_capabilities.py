@@ -1,0 +1,9 @@
+"""//Compatible: historical entry points forward the same functional implementation."""
+
+from senior_motion_control.vehicle_capabilities import CapabilityPort as CapabilityPort
+from senior_motion_control.vehicle_capabilities import CapabilityResult as CapabilityResult
+from senior_motion_control.vehicle_capabilities import LocalizationAdapter as LocalizationAdapter
+from senior_motion_control.vehicle_capabilities import MapManagementAdapter as MapManagementAdapter
+from senior_motion_control.vehicle_capabilities import NavigationAdapter as NavigationAdapter
+from senior_motion_control.vehicle_capabilities import T as T
+from senior_motion_control.vehicle_capabilities import VehicleCapabilities as VehicleCapabilities

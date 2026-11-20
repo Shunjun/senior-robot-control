@@ -9,17 +9,130 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --frozen --group dev --extra safety --extra cloud --extra agent --extra video --extra ros
+      - run: bash -n bin/senior-robot.sh
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
-      - run: uv run --no-sync mypy src/senior_control
-      - run: uv run --no-sync pytest tests/unit tests/integration
-      - run: uv build
+      - run: uv run --no-sync mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud
+      - run: uv run --no-sync pytest ros2/tests/test_navigation.py ros2/tests/test_navigation_collision_qualification.py senior_control/tests cloud/tests tests/unit tests/integration ros2/src/senior_mapping/test ros2/tests/test_map_operations.py ros2/src/senior_localization/test ros2/tests/test_navigation_reference.py ros2/tests/test_mapping.py ros2/tests/test_relocalization.py ros2/tests/test_motion_ros_twist_output.py ros2/tests/test_startup_visibility.py ros2/tests/test_terminal_release_wire.py ros2/tests/test_motion_guard_to_owner.py ros2/tests/test_motion_cli_lifecycle.py ros2/tests/test_control_cadence_gate.py ros2/tests/test_terminal_native_channel.py ros2/tests/test_launch_recovery.py ros2/tests/test_navigation_command_clock.py ros2/tests/test_manual_command_generation.py ros2/tests/test_terminal_release_collection.py ros2/src/senior_motion_estimation/test ros2/tests/test_native_motion_observation_adapter.py ros2/tests/test_control_process_resources.py ros2/tests/test_laser_reference_publication.py ros2/src/senior_perception/test ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py ros2/tests/test_startup_learning_chain.py
+      - run: uv build --out-dir dist
+      - run: uv build ros2/src/senior_navigation --out-dir dist
+      - run: uv build ros2/src/senior_robot --out-dir dist
+      - run: uv build senior_control --out-dir dist
+      - run: uv build cloud --out-dir dist
+      - run: uv build contracts --out-dir dist
+      - run: uv build ros2/src/senior_localization --out-dir dist
+      - run: uv build ros2/src/senior_mapping --out-dir dist
+      - run: uv build ros2/src/senior_motion_estimation --out-dir dist
+      - run: uv build ros2/src/senior_perception --out-dir dist
+      - run: uv build ros2/src/senior_motion_control --out-dir dist
       - run: |
           python -m venv /tmp/wheel-test
           /tmp/wheel-test/bin/pip install dist/*.whl
+          install -m 0755 bin/senior-robot.sh /tmp/wheel-test/bin/senior-robot
           cd /tmp
-          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config; import importlib.util; assert importlib.util.find_spec("shapely") is None'
+          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
+          /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'
+          /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"
+          /tmp/wheel-test/bin/pip install 'senior-control[safety]==0.1.0'
+          /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --real-preflight-only
+      - name: Verify independent manager base and agent wheels without starting a service
+        run: |
+          uv export --frozen --extra agent --no-hashes --no-emit-local > /tmp/manager-agent-constraints.txt
+          python -m venv /tmp/manager-base-wheel-test
+          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_contracts-*.whl
+          python -m venv /tmp/manager-agent-wheel-test
+          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_contracts-*.whl
+          cd /tmp
+          /tmp/manager-base-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-tasks-only
+          /tmp/manager-agent-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-agent-only
+      - name: Verify independent cloud wheel and lifespan
+        run: |
+          python -m venv /tmp/cloud-wheel-test
+          /tmp/cloud-wheel-test/bin/pip install dist/vehicle_cloud-*.whl dist/senior_contracts-*.whl
+          cd /tmp
+          /tmp/cloud-wheel-test/bin/python - <<'PY'
+          import asyncio
+          import importlib.util
+          import tempfile
+          from pathlib import Path
+          from cloud.application import create_app
+          from cloud.auth import hash_password
+          from cloud.config import CloudSettings
+          from cloud.storage import Database
+
+          async def verify():
+              for name in ("senior_control", "vehicle_manager", "rclpy"):
+                  assert importlib.util.find_spec(name) is None
+              with tempfile.TemporaryDirectory() as directory:
+                  database = Database(Path(directory) / "cloud.db")
+                  app = create_app(
+                      CloudSettings(secret="s" * 32), database=database,
+                      admin_password_hash=hash_password("password"),
+                      allowed_origins=("https://cloud.test",),
+                  )
+                  assert not database.is_open
+                  for _ in range(2):
+                      async with app.router.lifespan_context(app):
+                          async with database.connection.execute("PRAGMA user_version") as cursor:
+                              assert await cursor.fetchone() == (5,)
+                      assert not database.is_open
+          asyncio.run(verify())
+          PY
+      - name: Verify frozen production cloud closure without starting a server
+        run: |
+          mkdir -p /tmp/frozen-cloud/cloud /tmp/frozen-cloud/contracts
+          cp cloud/pyproject.toml cloud/uv.lock /tmp/frozen-cloud/cloud/
+          cp -R cloud/src /tmp/frozen-cloud/cloud/src
+          cp contracts/pyproject.toml /tmp/frozen-cloud/contracts/
+          cp -R contracts/src /tmp/frozen-cloud/contracts/src
+          uv sync --project /tmp/frozen-cloud/cloud --frozen --no-dev --extra server --no-editable
+          cd /tmp
+          /tmp/frozen-cloud/cloud/.venv/bin/python - <<'PY'
+          import asyncio
+          import importlib.metadata
+          import importlib.util
+          import os
+          import sqlite3
+          import cloud
+          import tempfile
+          from pathlib import Path
+          from unittest.mock import patch
+          from cloud.auth import hash_password
+          from cloud.bootstrap import create_app_from_environment, main
+          import uvicorn.protocols.websockets.websockets_impl
+
+          async def verify():
+              assert "site-packages" in cloud.__file__
+              for name in ("senior_control", "vehicle_manager", "rclpy"):
+                  assert importlib.util.find_spec(name) is None
+              assert importlib.metadata.version("uvicorn") == "0.32.1"
+              assert importlib.metadata.version("websockets") == "15.0.1"
+              with tempfile.TemporaryDirectory() as directory:
+                  environment = {
+                      "SENIOR_SECRET": "s" * 32,
+                      "DATABASE_PATH": str(Path(directory) / "cloud.db"),
+                      "ADMIN_PASSWORD_HASH": hash_password("password"),
+                      "ALLOWED_ORIGIN": "https://cloud.test",
+                      "TRUSTED_PROXY": "caddy",
+                  }
+                  app = create_app_from_environment(environment)
+                  assert not Path(environment["DATABASE_PATH"]).exists()
+                  for _ in range(2):
+                      async with app.router.lifespan_context(app):
+                          assert Path(environment["DATABASE_PATH"]).is_file()
+                          with sqlite3.connect(environment["DATABASE_PATH"]) as connection:
+                              assert connection.execute("PRAGMA user_version").fetchone() == (5,)
+                  with patch.dict(os.environ, environment, clear=True), patch("uvicorn.run") as run:
+                      main()
+                      assert run.call_args.kwargs == {
+                          "host": "0.0.0.0", "port": 8000,
+                          "proxy_headers": True, "forwarded_allow_ips": "caddy",
+                      }
+          asyncio.run(verify())
+          PY

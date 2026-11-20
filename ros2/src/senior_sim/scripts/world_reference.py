@@ -7,7 +7,8 @@ import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from pathlib import Path
 
-from senior_control.mapping.workspace import WorkspaceGrid
+from senior_mapping.workspace import WorkspaceGrid
+
 from senior_control.models import MapRef, Pose2D
 
 _BASELINE_HASH = "528523ece69d7eaf1eeb2d9fd2930a024ac56a151f62ffa939bd63c338db1c44"

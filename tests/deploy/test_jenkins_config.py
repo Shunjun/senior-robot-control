@@ -11,7 +11,26 @@ def test_web_build_forces_real_data_and_installs_build_dependencies():
 
 def test_cloud_image_installs_websocket_protocol():
     dockerfile = (ROOT / "deploy/Dockerfile.cloud").read_text()
-    assert "websockets==15.0.1" in dockerfile
+    manifest = (ROOT / "cloud/pyproject.toml").read_text()
+    assert '"websockets==15.0.1"' in manifest
+    assert '"uvicorn==0.32.1"' in manifest
+    assert "uv:0.12.23" in dockerfile
+    assert "--project cloud --frozen --no-dev --extra server --no-editable" in dockerfile
+    assert 'CMD ["python", "-m", "cloud.bootstrap"]' in dockerfile
+    assert "COPY src " not in dockerfile and "COPY ros2/" not in dockerfile
+    assert "COPY cloud ./cloud" in dockerfile and "COPY contracts ./contracts" in dockerfile
+    assert "USER 10001:10001" in dockerfile and "EXPOSE 8000" in dockerfile
+    assert "/var/lib/senior" in dockerfile
+    ignored = (ROOT / ".dockerignore").read_text().splitlines()
+    for entry in (
+        "!cloud/uv.lock",
+        "!cloud/pyproject.toml",
+        "!cloud/src/**",
+        "!contracts/pyproject.toml",
+        "!contracts/src/**",
+    ):
+        assert entry in ignored
+    assert "!src/**" not in ignored and "!ros2/**" not in ignored
     assert "uvicorn.protocols.websockets.websockets_impl" in dockerfile
 
 

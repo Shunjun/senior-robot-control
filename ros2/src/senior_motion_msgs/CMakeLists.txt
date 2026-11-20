@@ -14,7 +14,6 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHeader.msg"
@@ -27,26 +26,12 @@ rosidl_generate_interfaces(${PROJECT_NAME} "msg/ScanMotion.msg" "msg/BoundedHead
   "msg/FencedSafetyScan.msg" "msg/FencedFilteredScan.msg"
   "msg/StaticTransformEdge.msg" "msg/BoundedStaticTf.msg" "msg/RawImageLayout.msg" "msg/RgbdMotionCandidate.msg" "msg/FencedRgbdCandidate.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs)
-add_executable(final_command_guard src/final_command_guard.cpp)
-ament_target_dependencies(final_command_guard rclcpp)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
-target_link_libraries(final_command_guard "${cpp_typesupport_target}")
 target_link_libraries(sensor_timing INTERFACE "${cpp_typesupport_target}")
-add_executable(motion_output_guard src/motion_output_guard.cpp)
-ament_target_dependencies(motion_output_guard rclcpp geometry_msgs)
-target_link_libraries(motion_output_guard "${cpp_typesupport_target}" sensor_timing)
-add_executable(native_receipt src/native_receipt.cpp)
-ament_target_dependencies(native_receipt rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs)
-target_link_libraries(native_receipt "${cpp_typesupport_target}" sensor_timing)
-install(TARGETS final_command_guard motion_output_guard native_receipt DESTINATION lib/${PROJECT_NAME})
-ament_export_dependencies(rosidl_default_runtime builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs rclcpp)
+ament_export_dependencies(rosidl_default_runtime builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   enable_testing()
-  add_test(NAME final_command_frame_roundtrip
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_final_command_frame.py)
-  set_tests_properties(final_command_frame_roundtrip PROPERTIES
-    ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}")
   # colcon test runs after installation: exercise the public package export,
   # including generated and handwritten headers, without source include paths.
   add_test(NAME installed_header_consumer

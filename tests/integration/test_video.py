@@ -27,9 +27,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import pytest
-
-from senior_control.runtime.supervisor import Supervisor
-from senior_control.vision.stream import (
+from vehicle_manager.media.stream import (
     NoCommonCodec,
     PeerRequest,
     PeerStats,
@@ -42,13 +40,15 @@ from senior_control.vision.stream import (
     ViewerBudget,
     negotiate_codec,
 )
-from senior_control.vision.synchronizer import ImageFrame
-from senior_control.vision.turn import (
+from vehicle_manager.media.turn import (
     IceCredentials,
     TurnConfig,
     TurnCredentialIssuer,
     verify_turn_credentials,
 )
+
+from senior_control.runtime.supervisor import Supervisor
+from senior_control.vision.synchronizer import ImageFrame
 
 SECRET = b"s" * 32
 URLS = ("turn:turn.example.test:3478?transport=udp", "turns:turn.example.test:5349")
@@ -203,7 +203,8 @@ async def test_unselected_robot_stream_denied() -> None:
 
 async def test_hub_controller_selection_gates_video() -> None:
     pytest.importorskip("fastapi")
-    from senior_control.cloud.limits import CloudLimits
+    from cloud.limits import CloudLimits
+
     from senior_control.cloud.relay import Hub
 
     hub = Hub(CloudLimits())
@@ -521,7 +522,7 @@ def test_aiortc_is_not_imported_with_the_package() -> None:
 
 
 async def test_encode_work_does_not_block_the_session_loop() -> None:
-    from senior_control.vision.stream import _EncodeLoop
+    from vehicle_manager.media.stream import _EncodeLoop
 
     encode = _EncodeLoop()
 
@@ -543,7 +544,7 @@ async def test_encode_work_does_not_block_the_session_loop() -> None:
 async def test_missing_aiortc_reports_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 
-    from senior_control.vision.stream import AiortcPeerFactory
+    from vehicle_manager.media.stream import AiortcPeerFactory
 
     monkeypatch.setitem(sys.modules, "aiortc", None)  # makes `import aiortc` raise ImportError
     factory = AiortcPeerFactory()
@@ -560,7 +561,7 @@ async def test_missing_aiortc_reports_unavailable(monkeypatch: pytest.MonkeyPatc
 async def test_aiortc_applies_only_relay_candidates_in_relay_only_offer(
     line_end: str, relay_only: bool
 ) -> None:
-    from senior_control.vision.stream import _AiortcPeer
+    from vehicle_manager.media.stream import _AiortcPeer
 
     host = "a=candidate:host 1 UDP 1 10.0.0.1 9000 typ host"
     relay = "a=candidate:relay 1 UDP 1 192.0.2.1 9000 typ relay"
@@ -597,7 +598,7 @@ async def test_aiortc_applies_only_relay_candidates_in_relay_only_offer(
 async def test_aiortc_loopback_delivers_a_real_frame() -> None:
     """Runs only where the `video` extra is installed; uses local sockets, no server."""
     aiortc = pytest.importorskip("aiortc")
-    from senior_control.vision.stream import AiortcPeerFactory
+    from vehicle_manager.media.stream import AiortcPeerFactory
 
     class Camera:
         async def next_frame(self, timeout: float) -> ImageFrame | None:
@@ -747,7 +748,7 @@ def stop_frame() -> bytes:
 
 
 def drain_outbox(connection: object) -> list[bytes]:
-    from senior_control.cloud.relay import Outbox
+    from cloud.relay import Outbox
 
     outbox = connection.outbox  # type: ignore[attr-defined]
     assert isinstance(outbox, Outbox)
@@ -764,7 +765,8 @@ async def settle(condition: object) -> None:
 
 class WireRig:
     def __init__(self, outbox_frames: int = 32) -> None:
-        from senior_control.cloud.limits import CloudLimits
+        from cloud.limits import CloudLimits
+
         from senior_control.cloud.relay import Hub
 
         self.hub = Hub(CloudLimits(outbox_frames=outbox_frames))
@@ -1027,7 +1029,7 @@ async def test_a_full_controller_queue_drops_video_and_keeps_the_socket() -> Non
 
 
 def test_encode_loop_close_joins_thread_and_closes_loop() -> None:
-    from senior_control.vision.stream import _EncodeLoop
+    from vehicle_manager.media.stream import _EncodeLoop
 
     encode = _EncodeLoop()
     encode.close()

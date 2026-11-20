@@ -9,7 +9,7 @@
 在实际 ROS 运行环境的项目根目录执行只读检查，参数文件路径替换为现场已校准的真实绝对路径（本例名称不是可直接使用的参数）：
 
 ```sh
-.ros-venv/bin/python tools/doctor.py /absolute/path/to/calibrated-hardware.yaml
+.venv/bin/python tools/doctor.py /absolute/path/to/calibrated-hardware.yaml
 ```
 
 doctor 不启动设备、ROS 节点或下载任务，也不加载或获取模型权重。未运行 ROS 图时，

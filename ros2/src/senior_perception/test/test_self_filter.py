@@ -1,0 +1,78 @@
+import math
+
+from senior_perception.self_filter import ScanObservation, filter_self
+
+from senior_control.config import DeviceProfile
+from senior_control.models import Pose2D
+
+
+def scan(ranges, *, pose=None):
+    pose = pose or Pose2D(0, 0, 0)
+    return ScanObservation(
+        tuple(ranges), -0.5, 0.5, 0.1, 5.0, 10.0, "ros", pose, 10.0, "base_link", 10.0
+    )
+
+
+def test_attached_occluder_never_creates_free_ray():
+    profile = DeviceProfile(
+        self_mask_calibrated=True, self_mask=[[(0.9, -0.2), (1.1, -0.2), (1.1, 0.2), (0.9, 0.2)]]
+    )
+    result = filter_self(scan([2.0, 1.0, 2.0]), profile)
+    assert len(result.occluded_regions) == 1
+    assert len(result.free_rays) == 2
+    assert len(result.external_hits) == 2
+    assert result.rays[1].kind == "self"
+
+
+def test_nearby_wall_not_self():
+    profile = DeviceProfile(
+        self_mask_calibrated=True, self_mask=[[(0.9, -0.2), (1.1, -0.2), (1.1, 0.2), (0.9, 0.2)]]
+    )
+    result = filter_self(scan([0.5, 0.5, 0.5]), profile)
+    assert len(result.external_hits) == 3
+
+
+def test_no_return_clear_does_not_paint_inf_as_free():
+    raw = scan([math.inf, 1.0])
+    forced = ScanObservation(
+        raw.ranges,
+        raw.angle_min,
+        raw.angle_increment,
+        raw.range_min,
+        raw.range_max,
+        raw.stamp,
+        raw.clock_domain,
+        raw.sensor_to_body,
+        raw.transform_stamp,
+        raw.reference_frame,
+        raw.reference_stamp,
+        raw.interpolate,
+        raw.max_angular_gap,
+        True,
+        raw.transform_static,
+    )
+    result = filter_self(forced, DeviceProfile(self_mask_calibrated=True))
+    assert all(ray.kind != "clear" for ray in result.rays)
+    assert result.rays[0].kind == "invalid"
+
+
+def test_unverified_no_return_unknown():
+    result = filter_self(scan([math.inf, math.nan, 1.0]), DeviceProfile(self_mask_calibrated=True))
+    assert len(result.invalid_regions) == 2
+    assert len(result.free_rays) == 1
+
+
+def test_obsolete_calibration_flag_does_not_gate_offline_filter():
+    for value in (True, False):
+        profile = DeviceProfile(self_mask_calibrated=value)
+        result = filter_self(scan([1.0]), profile)
+        assert len(result.external_hits) == 1
+        assert "self_mask_calibrated" not in profile.model_dump()
+
+
+def test_transformed_sensor_origin_applies_to_mask():
+    profile = DeviceProfile(
+        self_mask_calibrated=True, self_mask=[[(1.9, -0.2), (2.1, -0.2), (2.1, 0.2), (1.9, 0.2)]]
+    )
+    result = filter_self(scan([1.0], pose=Pose2D(1, 0, 0.5)), profile)
+    assert result.rays[0].kind == "self"

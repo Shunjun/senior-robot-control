@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vehicle-cloud"
+version = "0.1.0"
+description = "Cloud service business with explicitly injected production facilities"
+dependencies = ["senior-contracts==0.1.0", "fastapi>=0.115,<1", "pydantic>=2.8,<3", "aiosqlite>=0.20,<1"]
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+server = ["uvicorn==0.32.1", "websockets==15.0.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cloud"]
+
+[tool.uv.sources]
+senior-contracts = { path = "../contracts", editable = true }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.uv]
+required-version = "==0.12.23"

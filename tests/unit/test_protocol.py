@@ -29,6 +29,9 @@ def message(**changes):
 
 
 def test_valid_velocity():
+    from senior_contracts.wire import validate_envelope as shared_validate
+
+    assert shared_validate is validate_envelope
     assert validate_envelope(message(), "r1").payload.linear == 0.2
 
 

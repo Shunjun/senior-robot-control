@@ -20,8 +20,9 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from senior_control.mapping.workspace import WorkspaceMap
-from senior_control.navigation import RoutePlan
+from senior_mapping.workspace import WorkspaceMap
+from senior_navigation.route import RoutePlan
+
 from senior_control.protocol import (
     SimpleEnvelope,
     validate_envelope,
@@ -29,7 +30,7 @@ from senior_control.protocol import (
 from senior_control.safety.arbiter import CommandResult
 
 if TYPE_CHECKING:
-    from senior_robot.navigation_adapter import RouteService
+    from senior_navigation.navigation_adapter import RouteService
 
 SOCKET_ENV = "SENIOR_AGENT_SOCKET"
 
@@ -536,7 +537,7 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
         return
     if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
         raise ValueError("invalid launch endpoint ownership context")
-    from senior_control.docker_start_helper import _prepare_socket
+    from senior_control.runtime.ipc import _prepare_socket
 
     descriptor = os.open(
         path.with_suffix(".launch.lock"),
@@ -570,7 +571,7 @@ def main() -> None:
         hardware_reference = str(node.get_parameter("hardware_navigation_reference").value)
         reference = None
         if hardware_reference:
-            from senior_robot.hardware_reference import HardwareReference
+            from senior_localization.hardware_reference import HardwareReference
 
             reference = HardwareReference(node, Path(hardware_reference))
         exiting = False
@@ -629,8 +630,8 @@ def main() -> None:
         nav_params = str(node.get_parameter("navigation_controller_params").value)
         node.declare_parameter("navigation_odometry_topic", "/wheel/odom")
         if reference is not None and nav_params and Path(nav_params).is_file():
-            from senior_robot.dedicated_controller import DedicatedController
-            from senior_robot.navigation_adapter import (
+            from senior_navigation.dedicated_controller import DedicatedController
+            from senior_navigation.navigation_adapter import (
                 RouteService,
                 create_nav2_adapter,
                 create_planner_readiness,
@@ -743,7 +744,7 @@ def main() -> None:
                 await server.start()
                 started = True
                 if owner is not None:
-                    from senior_control.docker_start_helper import _record
+                    from senior_control.runtime.ipc import _record
 
                     _record(path, run_id=owner)
                 executor.add_node(node)

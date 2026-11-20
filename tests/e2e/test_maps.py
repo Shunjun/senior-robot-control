@@ -9,10 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from conftest import SimulationProfile
-
-from senior_control.localization.geo import AlignedPose, GeoAlignment, QualifiedFix
-from senior_control.localization.relocalization import PoseHint, Relocalizer
-from senior_control.mapping import (
+from senior_mapping import (
     CellEvidence,
     MappingObservation,
     OccupancyMaintainer,
@@ -20,16 +17,19 @@ from senior_control.mapping import (
     RangeRay,
     SceneHit,
 )
-from senior_control.mapping.archive import Georeference, MapArchive
-from senior_control.mapping.operations import MapOperations
-from senior_control.mapping.references import (
+from senior_mapping.archive import Georeference, MapArchive
+from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
     GridExtent,
     SlamSnapshot,
 )
-from senior_control.mapping.store import MapReferenceStore
+from senior_mapping.store import MapReferenceStore
+
+from senior_control.localization.geo import AlignedPose, GeoAlignment, QualifiedFix
+from senior_control.localization.relocalization import PoseHint, Relocalizer
+from senior_control.mapping.operations import MapOperations
 from senior_control.models import MapRef, OperationStatus, Pose2D
 from senior_control.storage.database import Database
 

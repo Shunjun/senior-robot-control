@@ -253,7 +253,8 @@ def test_launch_exit_only_reports_lifecycle(monkeypatch, code):
         raw = os.read(events.reader, 2048)
         assert json.loads(raw)["returncode"] == code
         for filename in ("safety_motion.launch.py", "simulation_motion.launch.py"):
-            source = Path("ros2/src/senior_robot/launch", filename).read_text()
+            package = "senior_sim" if filename.startswith("simulation_") else "senior_robot"
+            source = Path("ros2/src", package, "launch", filename).read_text()
             assert "OnProcessExit(on_exit=report_ros_exit)" in source
             # Cleanup OnShutdown handlers do not request a launch-wide shutdown.
             assert not any(

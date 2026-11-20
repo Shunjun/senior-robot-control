@@ -45,7 +45,9 @@
 
 [部署资产索引](deploy/README.md)说明现有文件用途；[硬件校准与检查](docs/operations/hardware.md)列出实车前置条件。程序启动或云端在线不代表运动资格通过。实车联合启停需要包含 [PR #17](https://github.com/Shunjun/senior-robot-control/pull/17) 修复；[PR #18](https://github.com/Shunjun/senior-robot-control/pull/18) 进一步接入共享运动栈，启动前必须填写已测量的实车参数。
 
-仅克隆不会得到 `senior-robot` 命令。实车宿主机用项目 `.venv` 安装 CLI；实际 ROS / Agent 运行环境用独立 `.ros-venv`。Docker 模式宿主机无需 ROS，不能与容器共用 Python 虚拟环境。各指南先创建 `config.json`，默认位置为当前用户 `~/senior-control/config.json`，并明确何处执行命令。
+CLI 源文件为单个 [bin/senior-robot.sh](bin/senior-robot.sh)，不编译、不随 Python wheel 注册同名 console-script。可执行 `sudo install -m 0755 bin/senior-robot.sh /usr/local/bin/senior-robot` 独立安装，更新旧环境后检查 `type -a senior-robot`，避免旧 venv 入口遮盖。Shell 拥有帮助、参数和交互，Python 只提供固定动作与原业务绑定。
+
+`senior-robot start/stop/restart/status/logs` 管宿主机；`senior-robot docker start/stop/restart/status/logs` 管本项目 Docker 服务。pair/doctor/deploy 使用同样分组。两模式分别只用所选运行位置的项目 `.venv`；Docker 宿主机仅需 Shell、jq、Docker、timeout/systemd 等系统工具，无需 Python，容器必须已经运行。停止不关闭共享容器，restart 停止失败不启动。停止容器上的 Docker `deploy --dry-run` 只 inspect 后报错，不启动容器；运行中的预览使用容器 `.venv`，不写配置/unit。配置默认 `~/senior-control/config.json`，native 按 `project_dir/.venv/bin/python` 选择解释器，可用绝对路径 `SENIOR_ROBOT_PYTHON` 显式选择；Docker 不使用此宿主覆盖。原 `python -m senior_control.cli` 保留 Compatible 入口，管理独立发行/真实 ROS 验收仍未完成。
 
 ### 开发与验收入口
 
@@ -111,3 +113,18 @@ uv run --no-sync lefthook install
 
 
 标准 ROS 传感器和 `/cmd_vel` 接口的部署要求见[实车部署](docs/operations/vehicle-deploy.md)，1 倍仿真使用[标准环境入口](docs/operations/simulation.md)。旧时间协议 overlay 已退役，无需修改厂家、Nav2 或 Gazebo 组件。
+
+批次 1 的独立契约位于 [contracts](contracts/README.md)，原生输出位于 [senior_motion_control](ros2/src/senior_motion_control/README.md)；管理与云端当前安装入口保持原状。最新边界见[确认稿](docs/architecture/ROS2与车端架构重构确认稿.md)，实际迁移清单见[批次记录](docs/architecture/vehicle-batch-one.md)。独立安装根 wheel 时须一并安装 senior-contracts wheel；根 uv 路径依赖会自动处理。
+
+
+M5D1 将实车 ROS 命令构造和可选视频环境探针归入已有
+[`senior_robot.platform_runtime`](ros2/src/senior_robot/senior_robot/platform_runtime.py)，
+旧 helper 保留 Compatible 签名和逐次恢复效果绑定。systemd、CLI、IPC、诊断及学习 owner 不变。
+实际文件和验证见[管理批次记录](senior_control/README.md#m5d1-实车平台命令与视频探针)。
+独立 Robot wheel 的 provider 导入检查不代表 ROS 启动或管理独立部署验收。
+
+
+共享导入准备片将唯一 `ImageFrame` 放在 [image_frame.py](src/senior_control/image_frame.py)，
+原 vision/agent 公开名字按需加载并保留对象身份；ROS所用手动执行类不再连带导入Agent主循环或管理投影。
+本片不改变Root发行依赖、生产入口或公共IPC/诊断/DrivingSettings，不表示独立部署完成。
+实际14文件、原失败基线和仓库外wheel证据见[管理记录](senior_control/README.md#共享导入准备片-imageframe与按需公开)。

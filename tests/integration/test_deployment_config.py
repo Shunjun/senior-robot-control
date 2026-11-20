@@ -123,3 +123,24 @@ sensor_coverage: {scan: 6.28}
     assert not report.ok
     assert report.checks["profile"].status == "failed"
     assert "duplicate" in report.checks["profile"].detail.lower()
+
+
+def test_cloud_bootstrap_factory_uses_explicit_environment_without_opening_db(tmp_path):
+    from cloud.auth import hash_password
+    from cloud.bootstrap import create_app_from_environment
+
+    environment = {
+        "SENIOR_SECRET": "s" * 32,
+        "DATABASE_PATH": str(tmp_path / "cloud.db"),
+        "ADMIN_PASSWORD_HASH": hash_password("password"),
+        "ALLOWED_ORIGIN": "https://cloud.test",
+        "TRUSTED_PROXY": "caddy",
+    }
+    app = create_app_from_environment(environment)
+    assert app.docs_url is None and app.openapi_url is None
+    assert not (tmp_path / "cloud.db").exists()
+    for required in ("SENIOR_SECRET", "DATABASE_PATH", "ADMIN_PASSWORD_HASH", "ALLOWED_ORIGIN"):
+        values = {name: value for name, value in environment.items() if name != required}
+        with pytest.raises(KeyError, match=required):
+            create_app_from_environment(values)
+    assert not (tmp_path / "cloud.db").exists()

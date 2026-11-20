@@ -11,15 +11,15 @@ from typing import Any, Literal
 
 import pytest
 from test_task_lifecycle_store import NOW, setup_store
+from vehicle_manager.tasks.executor import TaskExecutor
+from vehicle_manager.tasks.runtime import TaskRuntime
 
 from senior_control.agent.composition import build_task_runtime
 from senior_control.models import Pose2D
 from senior_control.navigation import RouteProgress
 from senior_control.storage.database import Database
-from senior_control.tasks.executor import TaskExecutor
 from senior_control.tasks.lifecycle import Effect
 from senior_control.tasks.models import ExecutionContext, TaskDefinition
-from senior_control.tasks.runtime import TaskRuntime
 from senior_control.tasks.store import TaskStore
 
 

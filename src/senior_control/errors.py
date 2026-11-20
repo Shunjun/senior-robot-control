@@ -1,17 +1,7 @@
-"""Stable domain error codes."""
+"""Vehicle-local exceptions and the shared wire error codes."""
 
-from enum import Enum
-
-
-class ErrorCode(str, Enum):
-    VALIDATION = "validation"
-    CONFLICT = "conflict"
-    OFFLINE = "offline"
-    UNAVAILABLE = "unavailable"
-    LOCALIZATION_UNAVAILABLE = "localization_unavailable"
-    SAFETY_REJECTED = "safety_rejected"
-    TIMEOUT = "timeout"
-    OPERATION_UNKNOWN = "operation_unknown"
+# //Compatible: local callers keep the same wire error enum.
+from senior_contracts.errors import ErrorCode as ErrorCode
 
 
 class DomainError(Exception):

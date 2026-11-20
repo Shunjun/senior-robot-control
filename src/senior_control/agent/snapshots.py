@@ -1,260 +1,34 @@
-"""Live robot state, and the cloud's cache of it. A cached snapshot is never live state."""
+"""//Compatible: original local values and snapshot entry points."""
 
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from vehicle_manager.agent.snapshots import (
+    HomeSummary as HomeSummary,
+)
+from vehicle_manager.agent.snapshots import (
+    LiveState as LiveState,
+)
+from vehicle_manager.agent.snapshots import (
+    RobotSnapshot as RobotSnapshot,
+)
+from vehicle_manager.agent.snapshots import (
+    StatePort as StatePort,
+)
+from vehicle_manager.agent.snapshots import (
+    TaskSummary as TaskSummary,
+)
+from vehicle_manager.agent.snapshots import (
+    _map_payload as _map_payload,
+)
+from vehicle_manager.agent.snapshots import (
+    snapshot_envelope as snapshot_envelope,
+)
+from vehicle_manager.agent.snapshots import (
+    snapshot_from_envelope as _snapshot_from_envelope,
+)
 
 from senior_control.models import MapRef
-from senior_control.navigation import RouteProgress
-from senior_control.protocol import (
-    HomePayload,
-    MapRefPayload,
-    RobotPosePayload,
-    ScanPointPayload,
-    SnapshotEnvelope,
-    SnapshotPayload,
-    TaskSummaryPayload,
-)
-from senior_control.waypoints import Waypoint
-
-
-@dataclass(frozen=True)
-class TaskSummary:
-    task_id: str
-    revision: int
-    enabled: bool
-
-
-@dataclass(frozen=True)
-class LiveState:
-    """What the robot's own stores and sensors say right now."""
-
-    localized: bool
-    map_ref: MapRef | None
-    home: Waypoint | None
-    task_revision: int
-    execution_status: str
-    runnable_task_ids: tuple[str, ...] = ()
-    tasks: tuple[TaskSummary, ...] = ()
-    # //Compatible: custom ports without a task cut use the agent journal fallback.
-    deleted_task_ids: frozenset[str] | None = None
-    map_generation: str | None = None
-    route_progress: RouteProgress | None = None
-    navigation_ready: bool | None = None
-    # //Compatible: older sources do not supply live geometry.
-    robot_pose: RobotPosePayload | None = None
-    navigation_block_reason: str | None = None
-    scan_points: tuple[ScanPointPayload, ...] = ()
-    vehicle_ui: dict[str, Any] | None = None
-    manual_controller_generation: int | None = None
-    manual_agent_epoch: int | None = None
-
-
-class StatePort(Protocol):
-    async def collect(self) -> LiveState: ...
-
-
-@dataclass(frozen=True)
-class HomeSummary:
-    waypoint_id: str
-    map_ref: MapRef
-    status: str
-
-
-@dataclass(frozen=True)
-class RobotSnapshot:
-    robot_id: str
-    connected: bool
-    localized: bool
-    map_ref: MapRef | None
-    home: HomeSummary | None
-    task_revision: int
-    execution_status: str
-    collected_at: float
-    runnable_task_ids: tuple[str, ...] = ()
-    tasks: tuple[TaskSummary, ...] = ()
-    home_revision: int = 0
-    map_generation: str | None = None
-    route_progress: RouteProgress | None = None
-    navigation_ready: bool | None = None
-    # //Compatible: older sources do not supply live geometry.
-    robot_pose: RobotPosePayload | None = None
-    navigation_block_reason: str | None = None
-    scan_points: tuple[ScanPointPayload, ...] = ()
-    vehicle_ui: dict[str, Any] | None = None
-    manual_controller_generation: int | None = None
-    manual_agent_epoch: int | None = None
-
-
-def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
-    if map_ref is None:
-        return None
-    return MapRefPayload(map_id=map_ref.map_id, reference_revision=map_ref.reference_revision)
-
-
-def snapshot_envelope(
-    snapshot: RobotSnapshot,
-    *,
-    robot_id: str,
-    session_id: str,
-    connection_epoch: int,
-    request_id: str,
-    seq: int,
-    expires_at: float,
-    stale: bool = False,
-    last_synced_at: float | None = None,
-) -> SnapshotEnvelope:
-    """The uplink frame a ``Link`` sends for a snapshot.
-
-    ``stale`` and ``last_synced_at`` belong to the cloud's cached copy; an agent leaves them out.
-    """
-    home = snapshot.home
-    frame = SnapshotEnvelope(
-        v=1,
-        robot_id=robot_id,
-        session_id=session_id,
-        connection_epoch=connection_epoch,
-        request_id=request_id,
-        seq=seq,
-        expires_at=expires_at,
-        type="snapshot",
-        payload=SnapshotPayload(
-            connected=snapshot.connected,
-            localized=snapshot.localized,
-            map_ref=_map_payload(snapshot.map_ref),
-            home=None
-            if home is None
-            else HomePayload(
-                waypoint_id=home.waypoint_id,
-                map_ref=MapRefPayload(
-                    map_id=home.map_ref.map_id,
-                    reference_revision=home.map_ref.reference_revision,
-                ),
-                status=home.status,
-            ),
-            task_revision=snapshot.task_revision,
-            runnable_task_ids=list(snapshot.runnable_task_ids),
-            execution_status=snapshot.execution_status,
-            collected_at=snapshot.collected_at,
-            vehicle_ui=snapshot.vehicle_ui,
-            manual_controller_generation=snapshot.manual_controller_generation,
-            manual_agent_epoch=snapshot.manual_agent_epoch,
-            stale=stale,
-            last_synced_at=last_synced_at,
-            tasks=[
-                TaskSummaryPayload(
-                    task_id=item.task_id, revision=item.revision, enabled=item.enabled
-                )
-                for item in snapshot.tasks
-            ],
-            home_revision=snapshot.home_revision,
-            map_generation=snapshot.map_generation,
-            route_progress=snapshot.route_progress if not stale else None,
-            navigation_block_reason=snapshot.navigation_block_reason,
-            robot_pose=snapshot.robot_pose
-            if not stale
-            and snapshot.connected
-            and snapshot.localized
-            and snapshot.map_generation is not None
-            else None,
-            scan_points=list(snapshot.scan_points)
-            if not stale
-            and snapshot.connected
-            and snapshot.localized
-            and snapshot.map_generation is not None
-            else [],
-        ),
-    )
-    if snapshot.navigation_ready is not None:
-        frame.payload.navigation_ready = (
-            snapshot.navigation_ready and snapshot.connected and not stale
-        )
-    return frame
+from senior_control.protocol import SnapshotEnvelope
 
 
 def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:
-    payload = envelope.payload
-    home = payload.home
-    readiness = payload.navigation_ready if "navigation_ready" in payload.model_fields_set else None
-    return RobotSnapshot(
-        robot_id=envelope.robot_id,
-        connected=payload.connected,
-        localized=payload.localized,
-        map_ref=None
-        if payload.map_ref is None
-        else MapRef(payload.map_ref.map_id, payload.map_ref.reference_revision),
-        home=None
-        if home is None
-        else HomeSummary(
-            home.waypoint_id,
-            MapRef(home.map_ref.map_id, home.map_ref.reference_revision),
-            home.status,
-        ),
-        task_revision=payload.task_revision,
-        execution_status=payload.execution_status,
-        collected_at=payload.collected_at,
-        runnable_task_ids=tuple(payload.runnable_task_ids),
-        tasks=tuple(
-            TaskSummary(item.task_id, item.revision, item.enabled) for item in payload.tasks
-        ),
-        home_revision=payload.home_revision,
-        map_generation=payload.map_generation,
-        route_progress=payload.route_progress,
-        navigation_ready=readiness,
-        robot_pose=payload.robot_pose,
-        navigation_block_reason=payload.navigation_block_reason,
-        scan_points=tuple(payload.scan_points),
-        vehicle_ui=payload.vehicle_ui,
-        manual_controller_generation=payload.manual_controller_generation,
-        manual_agent_epoch=payload.manual_agent_epoch,
-    )
-
-
-@dataclass(frozen=True)
-class CloudSnapshot:
-    snapshot: RobotSnapshot
-    last_synced_at: float
-    stale: bool
-
-
-class SnapshotCache:
-    """Read-only cloud copy. It goes stale when the robot is offline or has been quiet."""
-
-    def __init__(self, *, stale_after: float = 5.0, clock: Callable[[], float] = time.time) -> None:
-        if stale_after <= 0:
-            raise ValueError("stale_after must be positive")
-        self._stale_after = stale_after
-        self._clock = clock
-        self._entries: dict[str, tuple[RobotSnapshot, float]] = {}
-        self._offline: set[str] = set()
-
-    def store(self, snapshot: RobotSnapshot) -> CloudSnapshot:
-        self._entries[snapshot.robot_id] = (snapshot, self._clock())
-        self._offline.discard(snapshot.robot_id)
-        view = self._view(snapshot.robot_id)
-        assert view is not None
-        return view
-
-    def mark_offline(self, robot_id: str) -> None:
-        self._offline.add(robot_id)
-
-    def get(self, robot_id: str) -> CloudSnapshot | None:
-        return self._view(robot_id)
-
-    def _view(self, robot_id: str) -> CloudSnapshot | None:
-        entry = self._entries.get(robot_id)
-        if entry is None:
-            return None
-        snapshot, synced = entry
-        stale = robot_id in self._offline or self._clock() - synced > self._stale_after
-        # The cached copy never claims the robot is connected.
-        ready = snapshot.navigation_ready
-        shown = replace(
-            snapshot,
-            connected=snapshot.connected and not stale,
-            robot_pose=snapshot.robot_pose if not stale else None,
-            scan_points=snapshot.scan_points if not stale else (),
-            navigation_ready=ready and not stale if ready is not None else None,
-        )
-        return CloudSnapshot(shown, synced, stale)
+    """//Compatible: decode with the original local MapRef constructor."""
+    return _snapshot_from_envelope(envelope, map_reference=MapRef)

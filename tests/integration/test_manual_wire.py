@@ -102,7 +102,7 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         stub = ModuleType(name)
         stub.__dict__.update(attributes)
         monkeypatch.setitem(sys.modules, name, stub)
-    path = Path("ros2/src/senior_robot/senior_robot/command_node.py")
+    path = Path("ros2/src/senior_motion_control/senior_motion_control/command_node.py")
     spec = importlib.util.spec_from_file_location("manual_command_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -763,7 +763,8 @@ async def test_native_websocket_connector_does_not_negotiate_old_motion_clock(
 
 
 async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending() -> None:
-    from senior_control.cloud.limits import CloudLimits
+    from cloud.limits import CloudLimits
+
     from senior_control.cloud.relay import Hub
 
     hub = Hub(CloudLimits(outbox_frames=4))
@@ -806,7 +807,8 @@ async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending()
 
 @pytest.mark.parametrize("drop", ["release", "replace", "evict", "close"])
 async def test_relay_dropped_intent_settles_only_its_original_owner(drop: str) -> None:
-    from senior_control.cloud.limits import CloudLimits
+    from cloud.limits import CloudLimits
+
     from senior_control.cloud.relay import Hub
 
     hub = Hub(CloudLimits(outbox_frames=1))

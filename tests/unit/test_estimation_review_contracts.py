@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 from control_process_test_support import generic_motion_profile, read_inputs, read_observation
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from sensor_time_test_support import sample_time
 from test_reference_nanosecond_boundary import replay  # noqa: F401
 from test_unified_estimator import observation
@@ -255,7 +255,7 @@ def test_invalid_candidate_clock_has_use_rejection_counter_without_age():
 def test_rejected_native_receipt_uses_original_identity_without_live_state_mutation(monkeypatch):
     from types import SimpleNamespace as N
 
-    from senior_robot import motion_observation_adapter as adapter
+    from senior_motion_estimation import motion_observation_adapter as adapter
 
     from senior_control.motion.observations import Source
 

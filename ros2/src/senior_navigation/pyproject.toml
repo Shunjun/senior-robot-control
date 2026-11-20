@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "senior-navigation"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["senior-contracts==0.1.0", "pydantic>=2.8,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["senior_navigation"]

@@ -1,87 +1,13 @@
-"""Agent seams: the cloud link and the ROS IPC motion port."""
+"""//Compatible: original motion constructors over the sole management request implementation."""
 
-from dataclasses import dataclass
-from typing import Any, Protocol
+from vehicle_manager.agent.connection import HeartbeatFrame as HeartbeatFrame
+from vehicle_manager.agent.connection import Link as Link
+from vehicle_manager.agent.connection import MotionPort as MotionPort
+from vehicle_manager.agent.ipc_motion import IpcMotion as _IpcMotion
+from vehicle_manager.agent.local_ports import MotionErrors
 
-from senior_control.agent.snapshots import RobotSnapshot
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.protocol import (
-    Envelope,
-    ManualIntentEnvelope,
-    ResponseEnvelope,
-    SimpleEnvelope,
-    VideoEnvelope,
-    serialize_envelope,
-)
 from senior_control.runtime.ipc import IpcClient, IpcError
-
-
-@dataclass(frozen=True)
-class HeartbeatFrame:
-    """A cloud heartbeat addressed to one robot."""
-
-    robot_id: str
-
-
-class Link(Protocol):
-    """One authenticated cloud socket. ``epoch`` is the number the relay assigned to it."""
-
-    epoch: int
-
-    async def recv(self) -> Envelope | VideoEnvelope | HeartbeatFrame:
-        """Next frame. A dropped socket raises ``ConnectionError``."""
-        ...
-
-    async def send_response(self, envelope: ResponseEnvelope) -> None: ...
-
-    async def send_video(self, envelope: VideoEnvelope) -> None: ...
-
-    async def send_snapshot(self, snapshot: RobotSnapshot) -> None: ...
-
-    async def send_heartbeat(self) -> None: ...
-
-    async def close(self) -> None: ...
-
-
-class MotionPort(Protocol):
-    """The only way the agent reaches motion: through the ROS-side adapter."""
-
-    async def manual(
-        self,
-        envelope: Envelope,
-        *,
-        received_steady: float | None = None,
-        deadline_steady: float | None = None,
-        **fields: Any,
-    ) -> dict[str, Any]: ...
-
-    async def learning_available(self) -> bool: ...
-
-    async def learning(
-        self, envelope: Envelope, *, received_steady: float, deadline_steady: float
-    ) -> dict[str, Any]: ...
-
-    async def send_intent(
-        self,
-        envelope: ManualIntentEnvelope,
-        *,
-        received_steady: float,
-        deadline_steady: float,
-    ) -> None: ...
-
-    async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None: ...
-
-    async def stop(self, envelope: SimpleEnvelope) -> None: ...
-
-    async def estop(self, envelope: SimpleEnvelope) -> None: ...
-
-    async def disable(self, connection_epoch: int) -> None: ...
-
-    async def exit(self) -> None: ...
-
-    async def call(self, name: str) -> Any: ...
-
-    async def close(self) -> None: ...
 
 
 class MotionRejected(IpcError):
@@ -92,8 +18,8 @@ class MotionRejected(IpcError):
         self.code = code
 
 
-class IpcMotion:
-    """``MotionPort`` over the local socket. It never touches rclpy or ``/cmd_vel``."""
+class IpcMotion(_IpcMotion):
+    """//Compatible: original signature and exception classes, canonical inherited methods."""
 
     def __init__(
         self,
@@ -103,137 +29,10 @@ class IpcMotion:
         disable_client: IpcClient | None = None,
         safety_client: IpcClient | None = None,
     ) -> None:
-        self._client = client
-        self._learning_available: bool | None = None
-        self._intent_client = intent_client
-        # //Compatible: isolated callers can still supply one serialized IPC client.
-        self._disable_client = disable_client if disable_client is not None else client
-        self._safety_client = safety_client if safety_client is not None else client
-
-    async def _ok(
-        self, kind: str, *, client: IpcClient | None = None, **fields: Any
-    ) -> dict[str, Any]:
-        reply = await (client if client is not None else self._client).request(kind, **fields)
-        if reply.get("ok") is not True and reply.get("error") in {"unsupported", "unavailable"}:
-            raise DomainError(ErrorCode.UNAVAILABLE, f"ROS {kind} is unavailable")
-        if reply.get("ok") is not True:
-            if reply.get("accepted") is False:
-                try:
-                    code = ErrorCode(reply.get("error"))
-                except (TypeError, ValueError):
-                    code = None
-                raise MotionRejected(kind, code)
-            raise IpcError(f"ros side refused {kind}")
-        return reply
-
-    async def verify_robot(self, robot_id: str) -> None:
-        await self._ok("identity", robot_id=robot_id)
-
-    async def stop(self, envelope: SimpleEnvelope) -> None:
-        await self._ok(
-            "stop", client=self._safety_client, envelope=serialize_envelope(envelope).decode()
+        super().__init__(
+            client,
+            intent_client=intent_client,
+            disable_client=disable_client,
+            safety_client=safety_client,
+            errors=MotionErrors(DomainError, IpcError, MotionRejected),
         )
-
-    async def estop(self, envelope: SimpleEnvelope) -> None:
-        await self._ok(
-            "estop", client=self._safety_client, envelope=serialize_envelope(envelope).decode()
-        )
-
-    async def estop_received(self, envelope: SimpleEnvelope, *, received_steady: float) -> None:
-        await self._ok(
-            "estop",
-            client=self._safety_client,
-            envelope=serialize_envelope(envelope).decode(),
-            received_at=received_steady,
-        )
-
-    async def learning_available(self) -> bool:
-        if self._learning_available is None:
-            try:
-                response = await self._client.request("learning_capability")
-                self._learning_available = response.get("learning_protocol_version") == 1
-            except (IpcError, OSError):
-                return False
-        return self._learning_available
-
-    async def learning(
-        self, envelope: Envelope, *, received_steady: float, deadline_steady: float
-    ) -> dict[str, Any]:
-        try:
-            result = await self._ok(
-                "learning",
-                envelope=serialize_envelope(envelope).decode(),
-                received_steady=received_steady,
-                deadline_steady=deadline_steady,
-            )
-        except MotionRejected as exc:
-            raise DomainError(
-                exc.code or ErrorCode.CONFLICT, "learning request was refused"
-            ) from exc
-        data = result.get("data")
-        if not isinstance(data, dict):
-            raise DomainError(ErrorCode.UNAVAILABLE, "learning reply unavailable")
-        return data
-
-    async def send_intent_frame(
-        self,
-        envelope: ManualIntentEnvelope,
-        *,
-        received_steady: float,
-        deadline_steady: float,
-        driving: dict[str, Any],
-        driving_version: int,
-    ) -> None:
-        await self._intent_client.send(
-            "manual_intent",
-            envelope=serialize_envelope(envelope).decode(),
-            received_steady=received_steady,
-            deadline_steady=deadline_steady,
-            driving=driving,
-            driving_version=driving_version,
-        )
-
-    async def manual(
-        self,
-        envelope: Envelope,
-        *,
-        received_steady: float | None = None,
-        deadline_steady: float | None = None,
-        **fields: Any,
-    ) -> dict[str, Any]:
-        try:
-            return await self._ok(
-                "manual",
-                client=self._safety_client if envelope.type == "control.release" else None,
-                envelope=serialize_envelope(envelope).decode(),
-                received_steady=received_steady,
-                deadline_steady=deadline_steady,
-                **fields,
-            )
-        except MotionRejected as exc:
-            raise DomainError(
-                exc.code or ErrorCode.SAFETY_REJECTED, "manual request was refused"
-            ) from exc
-        except (IpcError, OSError) as exc:
-            raise DomainError(ErrorCode.OPERATION_UNKNOWN, "manual IPC outcome is unknown") from exc
-
-    async def disable(self, connection_epoch: int) -> None:
-        await self._ok(
-            "disable_motion", client=self._disable_client, connection_epoch=connection_epoch
-        )
-
-    async def exit(self) -> None:
-        await self._ok("exit", client=self._disable_client)
-
-    async def call(self, name: str) -> Any:
-        return (await self._ok("ros_call", name=name)).get("result")
-
-    async def close(self) -> None:
-        for client in {
-            self._client,
-            self._intent_client,
-            self._disable_client,
-            self._safety_client,
-        }:
-            if client is not None:
-                await client.close()

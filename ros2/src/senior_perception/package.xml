@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>senior_perception</name>
+  <version>0.1.0</version>
+  <description>Lidar ingress, scan decoding and existing perception geometry</description>
+  <maintainer email="maintainer@example.com">Senior Robot</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>senior_motion_msgs</exec_depend>
+  <exec_depend>senior_sensor_ingress</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-shapely</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <exec_depend>senior_mapping</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

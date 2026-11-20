@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.8)
+project(senior_navigation)
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(${PROJECT_NAME})
+install(PROGRAMS scripts/navigation_adapter DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch config behavior_trees DESTINATION share/${PROJECT_NAME})
+ament_package()

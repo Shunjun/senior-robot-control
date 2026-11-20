@@ -2,10 +2,10 @@
 
 from functools import lru_cache
 
+from senior_perception.self_filter import FilteredObservation
 from shapely.geometry import Point, Polygon
 
 from senior_control.safety.learning_view import LearningFilterView
-from senior_control.safety.self_filter import FilteredObservation
 
 
 @lru_cache(maxsize=4)

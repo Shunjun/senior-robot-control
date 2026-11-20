@@ -412,3 +412,54 @@ class IpcClient:
 
     async def close(self) -> None:
         self._drop()
+
+
+def _identity(path: Path) -> list[int]:
+    info = path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.geteuid():
+        raise ValueError(f"foreign IPC path: {path.name}")
+    return [info.st_dev, info.st_ino, info.st_uid]
+
+
+def _record(path: Path, expected: list[int] | None = None, *, run_id: str | None = None) -> None:
+    identity = _identity(path)
+    if expected is not None and identity != expected:
+        raise ValueError("IPC socket changed before ownership recording")
+    marker = path.with_suffix(".owner.json")
+    temporary = marker.with_suffix(".tmp")
+    # The enclosing private directory and instance lock protect this ownership record.
+    fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as file:
+        json.dump(identity if run_id is None else {"identity": identity, "run_id": run_id}, file)
+    os.replace(temporary, marker)
+
+
+async def _prepare_socket(path: Path, *, expected_run_id: str | None = None) -> None:
+    """Called under the instance lock; never replace a live or unrecognized socket."""
+    if not os.path.lexists(path):
+        return
+    identity = _identity(path)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.setblocking(False)
+    try:
+        await asyncio.wait_for(asyncio.get_running_loop().sock_connect(probe, str(path)), 1)
+    except ConnectionRefusedError:
+        marker = path.with_suffix(".owner.json")
+        try:
+            owned = json.loads(marker.read_text())
+            if expected_run_id is not None and (
+                not isinstance(owned, dict) or owned.get("run_id") != expected_run_id
+            ):
+                owned = None
+            # //Compatible: pre-isolation ownership records contain only the identity list.
+            if isinstance(owned, dict):
+                owned = owned.get("identity")
+        except (OSError, ValueError):
+            owned = None
+        if owned != identity or _identity(path) != identity:
+            raise ValueError(f"unrecognized stale IPC socket: {path.name}") from None
+        path.unlink()
+    else:
+        raise ValueError(f"active IPC socket: {path.name}; stop its owner first")
+    finally:
+        probe.close()

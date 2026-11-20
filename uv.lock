@@ -1422,6 +1422,17 @@ wheels = [
 ]
 
 [[package]]
+name = "senior-contracts"
+version = "0.1.0"
+source = { editable = "contracts" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.8,<3" }]
+
+[[package]]
 name = "senior-control"
 version = "0.1.0"
 source = { editable = "." }
@@ -1431,12 +1442,21 @@ dependencies = [
     { name = "pydantic-settings", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pydantic-settings", version = "2.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
+    { name = "senior-contracts" },
+    { name = "senior-localization" },
+    { name = "senior-mapping" },
+    { name = "senior-motion-control" },
+    { name = "senior-motion-estimation" },
+    { name = "senior-navigation" },
+    { name = "senior-perception" },
+    { name = "senior-robot" },
+    { name = "vehicle-cloud" },
+    { name = "vehicle-manager" },
 ]
 
 [package.optional-dependencies]
 agent = [
-    { name = "httpx" },
-    { name = "websockets" },
+    { name = "vehicle-manager", extra = ["agent"] },
 ]
 cloud = [
     { name = "fastapi" },
@@ -1450,7 +1470,7 @@ safety = [
     { name = "shapely", version = "2.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 video = [
-    { name = "aiortc" },
+    { name = "vehicle-manager", extra = ["video"] },
 ]
 
 [package.dev-dependencies]
@@ -1466,17 +1486,26 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiortc", marker = "extra == 'video'", specifier = ">=1.15,<2" },
     { name = "aiosqlite", specifier = ">=0.20,<1" },
     { name = "fastapi", marker = "extra == 'cloud'", specifier = ">=0.115,<1" },
-    { name = "httpx", marker = "extra == 'agent'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'cloud'", specifier = ">=0.27,<1" },
     { name = "numpy", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'ros'", specifier = ">=1.24,<2" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "senior-contracts", editable = "contracts" },
+    { name = "senior-localization", editable = "ros2/src/senior_localization" },
+    { name = "senior-mapping", editable = "ros2/src/senior_mapping" },
+    { name = "senior-motion-control", editable = "ros2/src/senior_motion_control" },
+    { name = "senior-motion-estimation", editable = "ros2/src/senior_motion_estimation" },
+    { name = "senior-navigation", editable = "ros2/src/senior_navigation" },
+    { name = "senior-perception", editable = "ros2/src/senior_perception" },
+    { name = "senior-robot", editable = "ros2/src/senior_robot" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
-    { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
+    { name = "vehicle-cloud", editable = "cloud" },
+    { name = "vehicle-manager", editable = "senior_control" },
+    { name = "vehicle-manager", extras = ["agent"], marker = "extra == 'agent'", editable = "senior_control" },
+    { name = "vehicle-manager", extras = ["video"], marker = "extra == 'video'", editable = "senior_control" },
 ]
 provides-extras = ["safety", "ros", "agent", "cloud", "video"]
 
@@ -1490,6 +1519,57 @@ dev = [
     { name = "types-pyyaml" },
     { name = "types-shapely", specifier = ">=2.1.0.20260728" },
 ]
+
+[[package]]
+name = "senior-localization"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_localization" }
+
+[[package]]
+name = "senior-mapping"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_mapping" }
+dependencies = [
+    { name = "aiosqlite" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "aiosqlite", specifier = ">=0.20,<1" }]
+
+[[package]]
+name = "senior-motion-control"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_motion_control" }
+
+[[package]]
+name = "senior-motion-estimation"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_motion_estimation" }
+
+[[package]]
+name = "senior-navigation"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_navigation" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "senior-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "senior-contracts", specifier = "==0.1.0" },
+]
+
+[[package]]
+name = "senior-perception"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_perception" }
+
+[[package]]
+name = "senior-robot"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_robot" }
 
 [[package]]
 name = "shapely"
@@ -1790,6 +1870,58 @@ sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
 ]
+
+[[package]]
+name = "vehicle-cloud"
+version = "0.1.0"
+source = { editable = "cloud" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "senior-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20,<1" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "senior-contracts", editable = "contracts" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = "==0.32.1" },
+    { name = "websockets", marker = "extra == 'server'", specifier = "==15.0.1" },
+]
+provides-extras = ["server"]
+
+[[package]]
+name = "vehicle-manager"
+version = "0.1.0"
+source = { editable = "senior_control" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "pydantic" },
+    { name = "senior-contracts" },
+]
+
+[package.optional-dependencies]
+agent = [
+    { name = "httpx" },
+    { name = "websockets" },
+]
+video = [
+    { name = "aiortc" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiortc", marker = "extra == 'video'", specifier = ">=1.15,<2" },
+    { name = "aiosqlite", specifier = ">=0.20,<1" },
+    { name = "httpx", marker = "extra == 'agent'", specifier = ">=0.27,<1" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "senior-contracts", editable = "contracts" },
+    { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
+]
+provides-extras = ["video", "agent"]
 
 [[package]]
 name = "websockets"

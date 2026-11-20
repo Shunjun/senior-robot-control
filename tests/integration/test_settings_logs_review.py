@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 from agent_fakes import FakeConnector, FakeLink, until
+from cloud.limits import CloudLimits
 from test_manual_wire import envelope, runtime
 
 from senior_control.agent import composition
 from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.main import Agent
-from senior_control.cloud.limits import CloudLimits
 from senior_control.cloud.relay import Hub
 from senior_control.protocol import ResponseEnvelope, serialize_envelope, validate_envelope
 from senior_control.runtime.ipc import IpcClient
