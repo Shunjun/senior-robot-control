@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "senior-control"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["senior-navigation==0.1.0", "senior-robot==0.1.0", "vehicle-manager==0.1.0", "vehicle-cloud==0.1.0", "senior-localization==0.1.0", "senior-mapping==0.1.0", "senior-motion-control==0.1.0", "senior-motion-estimation==0.1.0", "senior-perception==0.1.0", "senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
+dependencies = ["senior-contracts==0.1.0", "pydantic>=2.8,<3", "pydantic-settings>=2.4,<3", "PyYAML>=6,<7", "aiosqlite>=0.20,<1"]
 
 
 [project.optional-dependencies]
@@ -18,17 +18,29 @@ ros = [
     "numpy>=1.24,<2; sys_platform == 'linux' and python_version == '3.10'",
 ]
 agent = [
-    "vehicle-manager[agent]==0.1.0",
+    "httpx>=0.27,<1",
+    "websockets>=14,<16",
 ]
 cloud = [
     "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
 ]
 video = [
-    "vehicle-manager[video]==0.1.0",
+    "aiortc>=1.15,<2",
 ]
 
 [dependency-groups]
+vehicle = [
+    "senior-navigation==0.1.0",
+    "senior-robot==0.1.0",
+    "vehicle-manager==0.1.0",
+    "vehicle-cloud==0.1.0",
+    "senior-localization==0.1.0",
+    "senior-mapping==0.1.0",
+    "senior-motion-control==0.1.0",
+    "senior-motion-estimation==0.1.0",
+    "senior-perception==0.1.0",
+]
 dev = [
     "pytest>=8,<9",
     "pytest-asyncio>=0.24,<1",
@@ -40,6 +52,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
+# //Compatible: ship legacy senior_control beside canonical vehicle_core in this distribution.
 packages = ["src/senior_control", "src/vehicle_core"]
 
 [tool.ruff]
@@ -57,6 +70,9 @@ strict = true
 pythonpath = ["senior_control/src", "senior_control/tests", "cloud/src", "cloud/tests", "tests/integration", "ros2/src/senior_mapping/scripts", "ros2/src/senior_mapping/test", "ros2/src/senior_localization", "ros2/src/senior_mapping", "ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "src", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_navigation", "ros2/src/senior_motion_control"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.uv]
+default-groups = ["dev", "vehicle"]
 
 [tool.uv.sources]
 senior-navigation = { path = "ros2/src/senior_navigation", editable = true }

@@ -151,7 +151,7 @@ docker exec -it ros2 bash
 source /opt/ros/humble/setup.bash
 cd /home/wheeltec/ros2_shared_dir/senior-robot-control
 python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -e '.[agent,safety,ros,video]'
+uv sync --frozen --no-dev --inexact --extra agent --extra safety --extra ros --extra video
 
 # 通过 rosdep 补齐这些实车 ROS 包缺少的依赖；不安装 Gazebo 仿真包：
 rosdep install --from-paths \
@@ -165,7 +165,14 @@ cd ros2
 source install/setup.bash
 ```
 
-容器应预先具备对应 ROS 发行版、Python venv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
+根项目默认启用dev与vehicle依赖组；`--no-dev`排除开发工具但保留vehicle整车项目组，
+上述冻结命令复用根目录同一套`.venv`。现场需使用锁文件对应的uv（当前0.12.23），
+不要用仅安装根wheel代替整车同步。根`senior-control` wheel现只声明共享core基础依赖；
+manager通过它获得`vehicle_core`，不再由根wheel默认聚合manager/cloud/ROS项目。
+//Compatible 旧`senior_control`源码命名空间仍随根wheel分发，供原SDK入口使用；
+manager独立逻辑不得导入旧业务模块，完整旧SDK由vehicle组装配。
+
+容器应预先具备对应 ROS 发行版、Python venv、uv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
 
 启动服务前执行 [ROS 类型支持加载检查](ros-interface-rebuild.md#启动前检查不创建-ros-节点)。升级包含消息删除或重命名时，先按该页定向备份并重建接口包；普通增量构建成功不足以排除旧生成物和安装残留，无需重复创建 venv 或 pip 安装。
 

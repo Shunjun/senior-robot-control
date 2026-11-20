@@ -2,13 +2,13 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留，当前任务生命周期持久/服务边界与验证见末尾S2记录。
+下文各片记录按当时范围保留；当前发行依赖与安装语义以末尾「R0/R5 发行DAG切换」为准。
 
 ## 实际目录与调用
 
 ```text
 senior_control/
-  pyproject.toml                       # contracts、Pydantic、aiosqlite
+  pyproject.toml                       # senior-control(core)、contracts、Pydantic、aiosqlite
   src/vehicle_manager/
     __init__.py, py.typed              # 顶层无业务加载副作用
     settings/
@@ -2480,3 +2480,94 @@ manager完整生产绑定及发行DAG仍待后续，不宣称独立生产部署�
 
 未启动任何仿真/ROS/实车/开发服务，不验证仿真、不发送运动请求、不部署。
 真实Linux/Humble/设备和实车控制可用性仍未验证。
+
+
+## R0/R5 发行DAG切换
+
+基线`feat/vehicle-architecture-refactor@2acd5c5`干净，实际8文件均为配置/工具文档，
+产品和测试0；不改cloud锁，不生成manager独立锁，不新增发行。
+当前发行图为`vehicle-manager → senior-control(vehicle_core) → senior-contracts`，
+并保留原基础Pydantic/settings/PyYAML/aiosqlite约束。根wheel不再聚合manager、cloud或ROS项目；
+九个原项目依赖原版本进入根vehicle组，默认组dev+vehicle。根agent/video extra直接声明
+与manager精确相同的httpx/websockets/aiortc约束，没有反向manager依赖。
+
+//Compatible 旧senior_control命名空间仍和vehicle_core在根同一wheel中可发现，
+不是物理移除旧SDK；manager安装因此多出根基础依赖，不能再用find_spec不存在证明隔离。
+工具改为正向wheel归属/METADATA证明及sys.modules无旧业务加载，原无legacy-loaded保护保留；
+cloud和ROS发行/模块仍不得安装或加载。旧SDK入口仍需vehicle整车组或显式全部项目wheel，
+仅pip安装根wheel（即使带agent/video extra）不再自动装完整SDK。
+项目仍用根单套.venv，现场完整命令仍为：
+
+```sh
+uv sync --frozen --no-dev --inexact --extra agent --extra safety --extra ros --extra video
+```
+
+### 实际命令与结果
+
+宿主macOS arm64，Python3.12.15（另用3.10.22做目标平台干跑）、uv0.12.23、
+Ruff0.17.3。下列uv命令均离线，主要使用`UV_CACHE_DIR=/tmp/vehicle-uv-cache`原缓存副本；
+临时环境用于安装验证，不是项目运行环境。命令从checkout执行，安装工具从`/tmp`执行，
+未设置PYTHONPATH；`<checkout>`表示本工作区绝对路径。
+
+- `uv lock --offline`及`uv lock --check --offline`通过，解析71条package记录。
+  对比2acd5c5锁：全部(name,version,source)相同；除root/manager两条metadata和边外，
+  其余69条完整记录相同，包括全部registry制品hash、URL和平台wheel，无升级。
+- 新旧各执行`uv export --frozen --no-dev --extra agent --extra safety --extra ros --extra video --no-hashes`，
+  基线用`--project /tmp/vehicle-dag-baseline`（git show 2acd5c5的锁/清单快照）。
+  忽略注释后54条导出行完全相同：11个本地项目+43条带平台marker的registry需求。
+  加`--no-emit-local`生成`/tmp/vehicle-dag-constraints.txt`，后续安装均使用该冻结约束。
+- 临时`/tmp/vehicle-dag-independent`只复制根、manager、contracts三个pyproject，
+  不放ROS/cloud项目目录，在其中运行`uv lock --project .../senior_control --offline`通过。
+  独立解析36条记录（含全部optional extra），本地项目仅manager/root/contracts，
+  无父级vehicle/dev组的cloud、ROS项目及pytest/ruff/mypy/lefthook；真实manager锁未写入。
+- `uv build --offline --wheel --out-dir /tmp/vehicle-dag-wheels`与
+  `uv build --offline --wheel --out-dir /tmp/vehicle-dag-wheels senior_control`通过。
+  根/manager的`direct_url.json`均指向真实`.whl`且无editable标记；core文件位于
+  site-packages且属于senior-control的RECORD路径，manager METADATA声明senior-control==0.1.0。
+- `python3.12 -m venv /tmp/vehicle-dag-base`创建空环境，随后：
+
+```sh
+uv pip install --offline --python /tmp/vehicle-dag-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-dag-wheels/*.whl \
+  /tmp/m5c-wheels/senior_contracts-*.whl
+/tmp/vehicle-dag-base/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-dag-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+/tmp/vehicle-dag-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-config-only
+```
+
+  12个声明闭包包安装成功（不计venv自带pip/setuptools），pip check无损坏需求。
+  真实SQLite单连接/SQL/锁工厂、任务/生命周期/执行/航点接口、配置环境/TLS路径/repr、
+  agent基础接口、真实profile/service渲染和media惰性边界通过。
+  无cloud/ROS发行安装或旧业务模块加载；纯任务检查仍在Pydantic/aiosqlite加载前进行。
+  operator检查仅import监督模块/检查callable并渲染kind=real的profile，
+  不调用任何simulation.supervise、仿真行为、服务或容器。
+- `/tmp/vehicle-dag-sdk`另建空Python3.12 venv，按同一冻结约束显式安装11个项目wheel，
+  26包通过`python -m pip check`。本轮root/manager为新构建，其余复用未修改项目的既有wheel：
+  contracts/localization/mapping/motion-control/motion-estimation/perception取`/tmp/m5c-wheels`，
+  navigation/robot取`/tmp/b7-wheels`，cloud取`/tmp/cloud-build-9cafe01`；不称其为本轮全量重建。
+  从`/tmp`运行同工具`--lazy-shared-only`、`--manager-config-compatible`、
+  `--home-database-compatible`均通过：共享叶子canonical/旧路径同对象与惰性依赖、
+  旧配置签名/诊断优先级/PoseReply身份、Home实际SQLite/SQL tuple与owner保持。
+- 宿主精确现场命令附加`--offline --dry-run --python <Python3.12>`并设置
+  `UV_PROJECT_ENVIRONMENT=/tmp/vehicle-dag-frozen`通过，计划45包；实际去掉dry-run尝试失败，
+  原缓存缺`numpy==2.5.4`的macOS arm64 wheel，未联网、升级或修改根.venv。
+- Linux/aarch64目标检查：原精确命令附加`--offline --dry-run --python <Python3.10.22>
+  --python-platform aarch64-unknown-linux-gnu`，新旧清单分别运行并设置不同临时环境路径。
+  两者均计划相同46包（35个registry+11本地），包括numpy1.26.4、shapely2.1.2、
+  pydantic-settings2.15.0。宿主执行的是目标平台解析干跑，未真实安装Linux制品或验证Humble ABI。
+- agent extra的空Python3.12环境安装按同约束离线失败：缺websockets15.0.1缓存。
+  直接重试原`~/.cache/uv`也相同；Python3.10临时环境尝试则缺PyYAML6.0.3缓存。
+  因此本轮**未完成agent extra真实安装/--manager-agent-only运行**，未换成其他版本或声称通过。
+  已检查其入口：network=True仅import httpx/websockets，不连接网络；其余manager有效逻辑
+  已由base入口执行。CI的base/agent pip安装均显式提供新根wheel，并执行pip check，继续只装声明依赖闭包。
+- `ruff check tools/verify_batch_one_install.py`、`ruff format --check`通过；
+  按原CRLF约定`git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`通过。
+  TOML/YAML静态解析、实际diff与8文件预算自审通过。提交禁用hooks避免触发全量或仿真测试，
+  上述范围检查手动执行；无产品变更，未跑pytest/full CI、仿真验证或服务。
+
+### 限制与后续
+
+本片只改变发行DAG与安装语义；不宣称agent完整独立生产运行、Linux实机安装、
+ROS加载、实车手动控制或整车视频已通过。agent及完整整车真实冻结安装需要补齐原版本缓存
+后再验，不能用干跑或旧SDK基础闭包替代。无运动请求、部署或推送；固定功能分支提交待审核。

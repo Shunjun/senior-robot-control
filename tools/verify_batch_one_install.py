@@ -324,6 +324,68 @@ def verify_platform_runtime() -> None:
     )
 
 
+def verify_manager_core_distribution() -> None:
+    """The installed manager depends on the core wheel, never its legacy business."""
+    import re
+
+    import vehicle_core
+
+    manager = importlib.metadata.distribution("vehicle-manager")
+    core = importlib.metadata.distribution("senior-control")
+    assert "senior-control==0.1.0" in (manager.requires or [])
+    requirements = core.requires or []
+    names = {re.split(r"[<>=!~;\[ ]", item, maxsplit=1)[0].lower() for item in requirements}
+    assert names == {
+        "senior-contracts",
+        "pydantic",
+        "pydantic-settings",
+        "pyyaml",
+        "aiosqlite",
+        "httpx",
+        "websockets",
+        "aiortc",
+        "shapely",
+        "numpy",
+        "fastapi",
+    }, names
+
+    def extra_requirements(distribution, extra):
+        return {
+            item.split(";", 1)[0].strip()
+            for item in distribution.requires or []
+            if re.search(rf"extra == ['\"]{extra}['\"]", item)
+        }
+
+    for extra in ("agent", "video"):
+        assert extra_requirements(core, extra) == extra_requirements(manager, extra), extra
+    location = Path(vehicle_core.__file__).resolve()
+    assert "site-packages" in str(location), location
+    assert location == Path(core.locate_file("vehicle_core/__init__.py")).resolve()
+    assert Path("vehicle_core/__init__.py") in (core.files or [])
+    # //Compatible: the legacy namespace is shipped in the same core wheel.
+    assert importlib.util.find_spec("senior_control") is not None
+    assert not any(
+        name == "senior_control" or name.startswith("senior_control.") for name in sys.modules
+    )
+    for name in ("cloud", "rclpy", "senior_mapping", "senior_robot"):
+        assert importlib.util.find_spec(name) is None, name
+    installed = {item.metadata["Name"].lower() for item in importlib.metadata.distributions()}
+    assert not installed.intersection(
+        {
+            "vehicle-cloud",
+            "senior-localization",
+            "senior-mapping",
+            "senior-motion-control",
+            "senior-motion-estimation",
+            "senior-navigation",
+            "senior-perception",
+            "senior-robot",
+            "rclpy",
+        }
+    ), installed
+    print("installed manager -> core metadata, wheel ownership and no legacy/ROS load: PASS")
+
+
 def verify_manager_config(*, compatible: bool = False) -> None:
     """Check the real installed manager leaves and optional original SDK binding."""
     import inspect
@@ -337,7 +399,8 @@ def verify_manager_config(*, compatible: bool = False) -> None:
     for value in (AgentConfig, PoseReply):
         assert "site-packages" in inspect.getfile(value), inspect.getfile(value)
     if not compatible:
-        for package in ("vehicle_core", "senior_control", "cloud", "rclpy", "senior_robot"):
+        verify_manager_core_distribution()
+        for package in ("cloud", "rclpy", "senior_robot"):
             assert find_spec(package) is None, package
     environment = {
         "SENIOR_ROBOT_ID": "robot",
@@ -458,9 +521,9 @@ def verify_manager_config(*, compatible: bool = False) -> None:
             raise AssertionError("diagnostic validation did not precede constructor validation")
         print("installed SDK config signature/diagnostic priority and PoseReply identity: PASS")
     else:
-        for name in ("vehicle_core", "senior_control", "cloud", "rclpy", "senior_robot"):
+        for name in ("senior_control", "cloud", "rclpy", "senior_robot"):
             assert name not in sys.modules, name
-        print("installed manager config/PoseReply without core, legacy SDK or ROS: PASS")
+        print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
 
 
 def verify_manager_agent(*, network: bool = False) -> None:
@@ -529,7 +592,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
 
         assert callable(connect) and callable(httpx.AsyncClient)
         print("installed manager agent network extra:", httpx.__version__, websockets.__version__)
-    print("installed manager agent foundations without Root/ROS: PASS")
+    print("installed manager agent foundations without legacy business/ROS: PASS")
 
 
 def verify_manager_operator() -> None:
@@ -577,7 +640,7 @@ def verify_manager_operator() -> None:
         for name in sys.modules
     )
     verify_manager_media()
-    print("installed manager profile/rendering and supervisor imports without Root/ROS: PASS")
+    print("installed manager real profile/rendering without legacy business/ROS: PASS")
 
 
 def verify_legacy_operator() -> None:
@@ -748,7 +811,7 @@ def verify_manager_media(*, backend: bool = False) -> None:
         import av
 
         print("installed isolated media backend:", aiortc.__version__, av.__version__)
-    print("installed manager media without Root/ROS and lazy backend: PASS")
+    print("installed manager media without legacy business/ROS and lazy backend: PASS")
 
 
 def verify_legacy_media() -> None:
@@ -848,7 +911,8 @@ def verify_home_database(*, compatible: bool = False) -> None:
     assert "site-packages" in inspect.getfile(HomeDatabase)
     assert HomeDatabase.__aenter__ is Engine.__aenter__
     if not compatible:
-        for package in ("vehicle_core", "senior_control", "senior_mapping", "cloud", "rclpy"):
+        verify_manager_core_distribution()
+        for package in ("senior_mapping", "cloud", "rclpy"):
             assert find_spec(package) is None, package
     locks, coordinations = [], []
 
@@ -1030,7 +1094,7 @@ def verify_manager_task_store() -> None:
 
     assert tasks.TaskStore is TaskStore
     assert TaskStore.__module__ == "vehicle_manager.tasks.store"
-    print("installed manager TaskStore interface without Root/ROS owners: PASS")
+    print("installed manager TaskStore interface without legacy business/ROS owners: PASS")
 
 
 def verify_manager_lifecycle() -> None:
@@ -1042,7 +1106,7 @@ def verify_manager_lifecycle() -> None:
     assert tasks.LifecycleService is LifecycleService
     assert LifecycleStore.__module__ == "vehicle_manager.tasks.lifecycle_store"
     assert LifecycleService.__module__ == "vehicle_manager.tasks.lifecycle_service"
-    print("installed manager lifecycle interfaces without Root/ROS owners: PASS")
+    print("installed manager lifecycle interfaces without legacy business/ROS owners: PASS")
 
 
 def verify_manager_execution() -> None:
@@ -1066,7 +1130,7 @@ def verify_manager_execution() -> None:
         name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
         for name in sys.modules
     )
-    print("installed canonical task drivers without Root/ROS: PASS")
+    print("installed canonical task drivers without legacy business/ROS: PASS")
 
 
 def verify_manager_waypoints() -> None:
@@ -1087,7 +1151,7 @@ def verify_manager_waypoints() -> None:
         name == "senior_control" or name.startswith(("senior_control.", "rclpy", "senior_mapping"))
         for name in sys.modules
     )
-    print("installed canonical waypoint storage without Root/ROS: PASS")
+    print("installed canonical waypoint storage without legacy business/ROS: PASS")
 
 
 def verify_legacy_task_store() -> None:
@@ -1934,14 +1998,16 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["--manager-agent-only"]:
         import importlib.util
 
-        for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
+        verify_manager_core_distribution()
+        for package in ("cloud", "rclpy", "senior_mapping", "senior_robot"):
             assert importlib.util.find_spec(package) is None, package
         verify_manager_agent(network=True)
         verify_manager_operator()
     elif sys.argv[1:] in (["--manager-storage-only"], ["--manager-tasks-only"]):
         import importlib.util
 
-        for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):
+        verify_manager_core_distribution()
+        for package in ("cloud", "rclpy", "senior_mapping", "senior_robot"):
             assert importlib.util.find_spec(package) is None, package
         if sys.argv[1:] == ["--manager-storage-only"]:
             verify_manager_storage()

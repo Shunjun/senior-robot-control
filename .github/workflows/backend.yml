@@ -45,9 +45,11 @@ jobs:
         run: |
           uv export --frozen --extra agent --no-hashes --no-emit-local > /tmp/manager-agent-constraints.txt
           python -m venv /tmp/manager-base-wheel-test
-          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_contracts-*.whl
+          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_control-*.whl dist/senior_contracts-*.whl
           python -m venv /tmp/manager-agent-wheel-test
-          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_contracts-*.whl
+          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_control-*.whl dist/senior_contracts-*.whl
+          /tmp/manager-base-wheel-test/bin/pip check
+          /tmp/manager-agent-wheel-test/bin/pip check
           cd /tmp
           /tmp/manager-base-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-tasks-only
           /tmp/manager-agent-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-agent-only

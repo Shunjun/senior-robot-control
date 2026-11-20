@@ -1069,3 +1069,32 @@ wheel后自审，仅固定分支提交，不启任何服务、不发运动、不
 [manager本片记录](../../../senior_control/README.md#r5-数据库装配home协调与domain-schema)。
 无仿真验证/任何服务/运动请求/部署推送，不宣称完整独立生产部署或实车通过；
 提交固定分支后等待负责人审核。
+
+
+### R0/R5 发行DAG切换（基线2acd5c5）
+
+复用senior-control根发行承载vehicle_core与暂留的 //Compatible senior_control命名空间。
+根只保留contracts与原四项基础依赖；原九项聚合依赖原版本移入vehicle组，默认dev+vehicle，
+保留现场uv sync --frozen --no-dev --inexact --extra agent --extra safety --extra ros --extra video
+选择的整车闭包和单套.venv。agent/video直接声明manager同约束第三方依赖；manager声明
+senior-control及父根本地source，形成manager→core发行DAG，不新增发行或改变产品。
+预算8文件：四配置（根/manager pyproject、根uv.lock、backend.yml），四工具文档
+（安装工具、部署文档、manager README、本计划）；不改产品、测试、cloud/manager独立锁。
+
+验收：offline锁更新逐包比对版本/source和registry完整记录，冻结导出对比原现场闭包；
+临时副本独立manager解析不读取父组；真实非editable根/manager wheel在空临时base/agent
+环境安装声明闭包、pip check、METADATA和文件归属、无cloud/ROS安装及旧业务模块加载；
+原SDK闭包安装及兼容检查。manager-agent-only只执行真实profile渲染/惰性import与本地
+接口检查，不调用仿真监督或启动入口。精确命令的宿主冻结安装/干跑与Linux3.10锁导出
+分开记录环境和限制，Ruff及CRLF约定diff通过后固定分支提交，不推送或部署。
+
+本片实际8文件，与预报一致，产品/测试/删除0，cloud锁及manager独立锁不改。
+离线锁71条版本/source全同，除root/manager外69条完整记录不变；新旧精确现场冻结导出
+54行（11本地+43带marker需求）一致，Linux/aarch64 Python3.10干跑均46包。
+独立manager临时解析36条、仅3本地项目，无父dev/vehicle组。真实root/manager wheel通过，
+空base12包与SDK26包安装/pip check及安装工具非仿真有效入口通过。
+agent extra安装缺原websockets15.0.1缓存，Python3.10尝试缺PyYAML6.0.3，
+宿主整车实际冻结安装缺numpy2.5.4缓存；未升级/联网，未称agent-only或整车实际安装通过。
+Ruff/format/CRLF约定diff及8文件实际diff自审通过；命令/闭包/兼容代价和未验限制见
+[manager本片记录](../../../senior_control/README.md#r0r5-发行dag切换)。
+固定分支提交，禁hooks避免全量/仿真，未启服务或发运动、未部署推送，等待负责人审核。
