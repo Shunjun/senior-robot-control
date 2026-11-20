@@ -1,46 +1,15 @@
-"""Explicit Fortress-only depth diagnostic composition; no coverage qualification."""
-
-import os
+"""//Compatible: forward the original launch surface to senior_sim."""
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    GroupAction,
-    IncludeLaunchDescription,
-    OpaqueFunction,
-    SetEnvironmentVariable,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
-from senior_robot.rgbd_transport import transport_environment
-
-from senior_control.runtime.launch_recovery import restart_prefix
-
-
-def _detect_rmw():
-    from rclpy.utilities import get_rmw_implementation_identifier
-
-    return get_rmw_implementation_identifier()
-
-
-def _transport_actions(context):
-    enabled = LaunchConfiguration("enable_rgbd_transport").perform(context).lower()
-    if enabled not in {"true", "false"}:
-        raise ValueError("enable_rgbd_transport must be true or false")
-    profile = LaunchConfiguration("rgbd_transport_profile").perform(context)
-    additions = transport_environment(
-        context.environment, enabled == "true", profile, os.getcwd(), _detect_rmw
-    )
-    return [SetEnvironmentVariable(name, value) for name, value in additions.items()]
 
 
 def generate_launch_description():
+    sim = FindPackageShare("senior_sim")
     robot = FindPackageShare("senior_robot")
-    profile = PathJoinSubstitution([robot, "config", "simulation_rgbd.yaml"])
-    clock = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
     return LaunchDescription(
         [
             DeclareLaunchArgument("agent_socket"),
@@ -52,40 +21,18 @@ def generate_launch_description():
                 "rgbd_transport_profile",
                 default_value=PathJoinSubstitution([robot, "config", "rgbd_transport.xml"]),
             ),
-            GroupAction(
-                scoped=True,
-                actions=[
-                    OpaqueFunction(function=_transport_actions),
-                    IncludeLaunchDescription(
-                        PythonLaunchDescriptionSource(
-                            PathJoinSubstitution([robot, "launch", "simulation_motion.launch.py"])
-                        ),
-                        launch_arguments={
-                            "agent_socket": LaunchConfiguration("agent_socket"),
-                            "robot_id": LaunchConfiguration("robot_id"),
-                            "headless": LaunchConfiguration("headless"),
-                            "use_sim_time": LaunchConfiguration("use_sim_time"),
-                        }.items(),
-                    ),
-                    Node(
-                        package="senior_sensor_ingress",
-                        executable="raw_receipt_node",
-                        prefix=restart_prefix(),
-                        parameters=[profile, clock],
-                    ),
-                    Node(
-                        package="senior_robot",
-                        executable="depth_ingress",
-                        prefix=restart_prefix(),
-                        parameters=[profile, clock],
-                    ),
-                    Node(
-                        package="senior_robot",
-                        executable="semantic_ingress",
-                        prefix=restart_prefix(),
-                        parameters=[profile, clock],
-                    ),
-                ],
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([sim, "launch", "simulation_rgbd.launch.py"])
+                ),
+                launch_arguments={
+                    "agent_socket": LaunchConfiguration("agent_socket"),
+                    "robot_id": LaunchConfiguration("robot_id"),
+                    "headless": LaunchConfiguration("headless"),
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
+                    "enable_rgbd_transport": LaunchConfiguration("enable_rgbd_transport"),
+                    "rgbd_transport_profile": LaunchConfiguration("rgbd_transport_profile"),
+                }.items(),
             ),
         ]
     )

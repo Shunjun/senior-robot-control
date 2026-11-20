@@ -1416,3 +1416,61 @@ uv0.12.23、Pydantic2.14.1/aiosqlite0.22.1，HTTPX0.28.1/WebSockets15.0.1。
 现有nav2/BT/校准配置先复用真实owner；若移动仿真专属YAML，必须先列旧share路径兼容和实际消费者再预报，不静默扩大。
 独立部署门禁须在这些原技术owner/平台闭包真正收敛后另做，不能通过安装旧senior-control SDK或只import宣称完成；
 Root IPC/媒体/诊断最终归属和其他遗留Root入边仍须另审，导航算法仍后置。
+
+### M4B 实车预检与仿真组合入口
+
+基线7fe7832。预检唯一实现归`ros2/src/senior_robot/senior_robot/real_runtime.py`；
+原`senior_control.real_runtime`显式Compatible同对象转发。真实provider
+`docker_start_helper._adapter_command`、`vehicle_deploy`校验与`safety_motion.launch.py`
+直接调用canonical。原预检实现逐字节保留，原硬件profile、传感器策略、诊断和导航reference仍原owner。
+
+仿真唯一组合归`senior_sim/launch/{simulation_motion,simulation_rgbd}.launch.py`，
+`vehicle_manager.simulation.supervise`实际执行`ros2 launch senior_sim simulation_motion.launch.py`。
+原`senior_robot/launch`两文件仅Compatible Include，全部原声明/默认值逐项不变并转发，
+Include继承原launch上下文（含namespace及额外配置），use_sim_time仍显式透传；没有第二组节点。
+RGBD canonical直接Include senior_sim motion；原GroupAction transport隔离、三个节点、RMW环境保持。
+专属YAML、nav2/BT、RGBD transport XML仍读取senior_robot share，world/profile仍senior_sim share。
+
+实际23文件：产品5（新增1/修改4）、测试4修改、配置构建10（新增3/修改7）、工具文档4修改；
+即新增4/修改19/删除0，迁移实现单计在对应修改/新增中，无额外删除。
+产品为实车预检新旧两路径、原helper/deploy provider、manager simulation；
+测试为test_vehicle_cli、test_common_sensor_composition、test_rgbd_transport_config、test_runtime_fault_isolation。
+配置为Root pyproject/uv.lock、CI、senior_robot pyproject、原safety launch、四份新旧simulation launch、senior_sim package.xml。
+工具文档为安装核验工具、本README、ros2/README及原实施计划。
+
+安装有两种真实边界：senior_robot新增与原功能包一致的非ROS Python wheel（无console script），
+Root SDK依赖它，保持CLI在source overlay前可找到预检；原ament setup.py/resource/节点及launch安装声明保持。
+wheel不替代ament share/executable安装，默认包导入不拉起ROS。预检与原来相同需要SDK safety extra，
+不能把基础CLI可导入称作硬件预检依赖齐全。senior_sim原CMake整个launch目录安装覆盖两新文件，
+补齐其实际直接launch/nav2/控制/接收依赖；保留sim→robot资产/节点依赖，robot不新增sim依赖形成环。
+旧robot Include入口要求部署环境同时安装sim，与原来调用sim环境相同。
+
+验证环境：macOS arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23。
+以下工具取主仓库`.venv/bin`，uv使用`UV_CACHE_DIR=/tmp/vehicle-uv-cache`；未启真实服务/仿真/车辆。
+
+- `python -m pytest senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py senior_control/tests/test_docker_start_helper.py tests/unit/test_common_sensor_composition.py tests/unit/test_rgbd_transport_config.py tests/unit/test_sim_contract.py tests/integration/test_runtime_fault_isolation.py -q`：111通过/5失败/1跳过，8.59秒。
+  原断言保留；只改实际canonical读取路径，原slot替身核对真实新launch包，原RGBD组合用例同步核对旧Include所有声明参数/目标与无重复节点。
+- `git archive 7fe7832`至临时目录，同解释器`pytest tests/integration/test_runtime_fault_isolation.py -q --tb=no`：16通过/同5失败，4.02秒。
+  五个real-{spawn,identity,exit,agent_exit,adapter_exit}旧夹具缺ros_setup且group_stop不接group_grace，未补假属性或弱化保护。
+  跳过为macOS不支持原Linux SO_PEERCRED；学习SOCK_SEQPACKET不可用亦保留原记录。
+- `uv build --offline {ros2/src/senior_robot,senior_control,根项目} --out-dir /tmp/m4b-wheels`分别构建三个sdist/wheel通过。
+  `/tmp/vehicle-batch-one-venv`原兼容闭包叠加安装三wheel，从/tmp运行`tools/verify_batch_one_install.py`通过：原CLI/模块help、原dry-run、同DB/类型与真实管理构造；30包pip check通过。
+  初次预检导入明确缺Shapely；原safety依赖离线缓存不可用，联网装入Shapely2.2.0及NumPy2.5.5后
+  `--real-preflight-only`同对象/无rclpy验证通过，32包pip check通过。
+  仓库外直接调用原预检缺失/不存在校准路径和不完整导航参数拒绝保持，通过；未连接任何硬件。
+  这是既有兼容SDK闭包验证，不是完整Root frozen重装或独立manager生产部署。
+- `uv lock --check --offline`通过，70包，仅新增本地senior-robot，第三方锁版本不变。
+  原预检/motion launch逐字节、全部原launch声明/default AST、全部原config字节比对通过；RGBD仅新Include路径及格式变化。
+- MYPYPATH取Root pytest原pythonpath后`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：257源码仍原39项，归一行号与M4A集合一致。
+  未设置源码路径的初次检查138项含本地包不可见，不能作为全链结果；没有新增ignore/cast。
+  变动Python ruff/format和diff检查通过（见提交前最终核验）。
+
+当前无ros2/colcon/ament_index_python；`cmake -S ros2/src/senior_sim -B /tmp/m4b-sim-build`亦因cmake命令缺失不能执行。
+因此未验证真实ament安装、launch substitutions/namespace运行、DDS、cmd_vel唯一发布、原学习启动及Linux厂商/设备关闭；
+静态/替身通过不替代这些实测。Python3.10和CI未执行，原native/SLAM安装仍UNVERIFIED。
+
+管理独立部署仍未完成：原CLI/systemd/module入口保留Root绑定，manager只拥有编排，
+原9客户端与IPC协议/权限、媒体/相机/视频、诊断/clock/metrics、进程恢复/学习服务及ROS平台效果仍原owner。
+实车预检虽归robot但消费原硬件profile/导航公开实现；仿真组合仍消费Root恢复/生命周期/策略和robot节点/资产。
+已迁功能包的真实ROS进程、原导航/扫描/设备适配兼容入口尚有上述实际边界，需后续按依赖只读核定，
+不能借完整旧SDK或纯import宣称独立部署。导航/建图算法、状态、IPC和WS本片未迁未改。

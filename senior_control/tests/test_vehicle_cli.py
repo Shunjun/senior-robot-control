@@ -178,6 +178,7 @@ async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
 
     async def spawn(*args, **kwargs):
         if "simulation_motion.launch.py" in args:
+            assert args[:4] == ("ros2", "launch", "senior_sim", "simulation_motion.launch.py")
             return owned_ros
         raise OSError("agent failed to spawn")
 
@@ -213,6 +214,7 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
         slots.append(slot)
         assert slot.parent.stat().st_mode & 0o777 == 0o700
         if "simulation_motion.launch.py" in args:
+            assert args[:4] == ("ros2", "launch", "senior_sim", "simulation_motion.launch.py")
             assert f"video_frame_path:={slot}" in args
             assert "video_enabled:=true" in args
             return object()

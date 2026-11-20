@@ -105,6 +105,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M3B 管理投影/读取/分发已迁 | 原snapshots、vehicle_state、vehicle_frame、SnapshotState、settings/logs wire、workspace、dispatcher → `vehicle_manager/agent/` | 原值/异常/诊断与地图效果逐实例沿用；同DB/原任务/IPC/手动端保持，WS不带内部DTO；26文件，原失败及ROS缺口见M3B记录，Agent/main和真实启动接线后片另核 |
 | B6.M3C 管理主循环与编排已迁 | 原Agent/session、纯Link/Heartbeat和run_agent管理编排 → `vehicle_manager/agent/` | 原CLI/Config、同DB/9客户端、名义异常/结果/诊断/clock/metrics及媒体effects明示绑定；IPC/ROS执行与媒体后端原位，15文件及旧失败/安装缺口见M3C记录 |
 | B6.M4A 操作与两条监管链已迁 | 原cli/profile、vehicle_deploy、docker_start_helper/simulation_cli管理职责 → `vehicle_manager/{profile,cli,deployment,service,simulation,platform_ports}` | 原模块/签名/systemd配置保持，原技术owner逐调用注入；共享socket函数归既有IPC且ROS不再读管理helper；23文件与旧失败/兼容安装见M4A记录，ROS launch及独立部署后置 |
+| B6.M4B 组合入口已归位 | 原real_runtime → senior_robot；simulation_motion/RGBD → senior_sim；manager实际调用更新 | 原预检字节、全部launch声明/default与配置保持；旧Include和预检Compatible；Python wheel/SDK已验，实际ROS/ament安装及独立管理部署未验，详见M4B |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -644,3 +645,20 @@ M4B下一片只收尾组合：real_runtime归现有senior_robot的实车预检�
 仿真canonical simulation_motion/RGBD launch归已有senior_sim，保留旧senior_robot Include入口，更新真实包/安装/消费者。
 当前它们确实仍在senior_robot且CLI仍调用旧包，本片未提前搬移；公用nav2/BT和校准资产复用原owner，若动专属YAML先核旧share兼容。
 Root中性IPC/媒体/诊断及其他遗留入边和独立部署门禁仍待真实闭包收敛后另审，不以旧SDK或纯导入宣称独立；新导航算法仍最后。
+
+
+### B6.M4B 预检与仿真装配归位
+
+基线7fe7832；原实车预检唯一实现归senior_robot并接原provider/safety launch，Root入口Compatible同对象。
+原两份simulation launch归senior_sim，manager实际调用新包，旧robot路径仅完整参数Include；
+原motion实现字节和所有声明/default/config保持，RGBD仅直接Include新canonical。
+专属YAML/nav2/BT保持原share；原cmd_vel/学习/设备/导航/权限/关停owner不迁不重写。
+新增robot非ROS Python wheel接Root/lock/CI，原ament安装保持；sim原目录安装覆盖新launch并补直接依赖，无包环。
+实际23文件：产品5/测试4/配置构建10/工具文档4，新增4修改19删除0。
+原选集111通过/同基线5旧失败/1Linux peer跳过；原预检与launch声明/配置比对通过。
+三个wheel构建、仓库外原兼容SDK/CLI help与dry-run通过，原safety extra补齐后预检身份和拒绝行为通过；
+mypy完整原源码路径仍39项，无新增诊断。版本/命令/实际目录与缺口见[manager M4B](../../../senior_control/README.md#m4b-实车预检与仿真组合入口)。
+真实ROS/ament/厂商/仿真/车辆未验，cmake亦缺失，不能用静态或导入冒充实测；原native/SLAM UNVERIFIED延续。
+后续管理独立部署仍需核定Root IPC/媒体/诊断/clock/metrics/进程恢复/学习与平台绑定闭包；
+已迁ROS包仍有Root公共实现和robot兼容适配/资产边界，不以完整旧SDK闭包宣称独立。
+仅按下一批真实入边制定范围，原地图/定位/导航保持；先迁已有导航行为再做新算法，缺失功能仍由所属模块实现。

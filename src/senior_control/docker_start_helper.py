@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 
 def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
-    from senior_control.real_runtime import validate_real_runtime
+    from senior_robot.real_runtime import validate_real_runtime
 
     hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
     setup = profile.ros_setup
@@ -41,7 +41,7 @@ def _adapter_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
     vendor = profile.vendor_ros_setup
     if not vendor.is_absolute() or not vendor.is_file():
         raise ValueError("vendor_ros_setup: WHEELTEC install/setup.bash is missing")
-    from senior_control.real_runtime import validate_navigation
+    from senior_robot.real_runtime import validate_navigation
 
     validate_navigation(profile.navigation_reference, profile.navigation_parameters)
     return [

@@ -168,7 +168,7 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
     spec = importlib.util.spec_from_file_location(
-        "rgbd_launch", ROBOT / "launch/simulation_rgbd.launch.py"
+        "rgbd_launch", ROOT / "ros2/src/senior_sim/launch/simulation_rgbd.launch.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -203,3 +203,24 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
     additions = children[0].kwargs["function"](context)
     assert {action.args for action in additions} == set(select().items())
     assert context.environment == {}
+
+    # The old launch files remain argument-only Includes; no second node owner.
+    for filename in ("simulation_motion.launch.py", "simulation_rgbd.launch.py"):
+        spec = importlib.util.spec_from_file_location(
+            "compatible_launch", ROBOT / "launch" / filename
+        )
+        wrapper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wrapper)
+        items = wrapper.generate_launch_description().args[0]
+        arguments = {
+            item.args[0] for item in items if isinstance(item, actions.DeclareLaunchArgument)
+        }
+        includes = [item for item in items if isinstance(item, actions.IncludeLaunchDescription)]
+        assert len(includes) == 1
+        assert len(items) == len(arguments) + 1
+        forwarded = dict(includes[0].kwargs["launch_arguments"])
+        assert set(forwarded) == arguments
+        assert all(value.args == (name,) for name, value in forwarded.items())
+        target = includes[0].args[0].args[0].args[0]
+        assert target[0].args == ("senior_sim",)
+        assert target[1:] == ["launch", filename]

@@ -169,6 +169,26 @@ def verify_legacy_operator() -> None:
     print("installed legacy operator aliases, unchanged dry-run and real CLI help: PASS")
 
 
+def verify_real_preflight() -> None:
+    """The existing hardware preflight requires the original SDK safety extra."""
+    from senior_robot import real_runtime as preflight
+
+    from senior_control import real_runtime as old_preflight
+
+    for name in (
+        "real_parameter_defaults",
+        "load_real_parameters",
+        "validate_real_runtime",
+        "validate_navigation",
+        "REQUIRED_PARAMETERS",
+        "RETIRED_PARAMETERS",
+    ):
+        assert getattr(old_preflight, name) is getattr(preflight, name)
+    assert "rclpy" not in sys.modules
+
+    print("installed ROS-free real preflight and original public identities: PASS")
+
+
 def verify_manager_storage() -> None:
     """Exercise the installed SQLite owner with the original migration cases."""
     import asyncio
@@ -1096,7 +1116,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--manager-agent-only"]:
+    if sys.argv[1:] == ["--real-preflight-only"]:
+        verify_real_preflight()
+    elif sys.argv[1:] == ["--manager-agent-only"]:
         import importlib.util
 
         for package in ("senior_control", "cloud", "rclpy", "senior_mapping", "senior_robot"):

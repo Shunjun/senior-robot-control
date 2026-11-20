@@ -18,13 +18,13 @@ from vehicle_manager.profile import VehicleProfile
 
 
 def _validate_runtime(motion_profile: Path | None, safety_parameters: Path | None) -> object:
-    from senior_control.real_runtime import validate_real_runtime
+    from senior_robot.real_runtime import validate_real_runtime
 
     return validate_real_runtime(motion_profile, safety_parameters)
 
 
 def _validate_navigation(reference: Path | None, parameters: Path | None) -> None:
-    from senior_control.real_runtime import validate_navigation
+    from senior_robot.real_runtime import validate_navigation
 
     return validate_navigation(reference, parameters)
 

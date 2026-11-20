@@ -22,8 +22,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from senior_robot.real_runtime import load_real_parameters, validate_real_runtime
 
-from senior_control.real_runtime import load_real_parameters, validate_real_runtime
 from senior_control.runtime.launch_recovery import restart_prefix
 from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters

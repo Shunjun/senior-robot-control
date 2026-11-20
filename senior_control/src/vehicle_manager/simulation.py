@@ -323,7 +323,7 @@ async def supervise(
                 *(["xvfb-run", "-a"] if headless else []),
                 "ros2",
                 "launch",
-                "senior_robot",
+                "senior_sim",
                 "simulation_motion.launch.py",
                 f"headless:={str(headless).lower()}",
                 "navigation_enabled:=true",

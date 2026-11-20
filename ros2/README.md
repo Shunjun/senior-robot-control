@@ -167,3 +167,38 @@ uv 0.12.23、ruff 0.17.3。命令中的 Python 使用原主仓库 `.venv/bin/pyt
 `colcon test --packages-select senior_motion_msgs senior_sensor_ingress`，先确认安装前缀中接收程序及 Python 模块，
 再以 `ROS_DOMAIN_ID=173 ROS_LOCALHOST_ONLY=1` 执行已迁入的 native executor 用例；关停原用例还需
 `SENIOR_RECEIPT_BINARY_DIR=<prefix>/lib/senior_sensor_ingress`。未启动开发服务、部署或推送。
+
+### M4B composition entry locations
+
+```text
+src/
+├── senior_robot/
+│   ├── senior_robot/real_runtime.py       # canonical calibrated real preflight
+│   ├── pyproject.toml                    # ROS-free Python wheel; no ROS assets/scripts
+│   ├── setup.py                          # existing ament assets/node installation
+│   ├── launch/safety_motion.launch.py    # real composition calls canonical preflight
+│   ├── launch/simulation_motion.launch.py # Compatible Include only
+│   ├── launch/simulation_rgbd.launch.py   # Compatible Include only
+│   └── config/                           # original calibrated/shared config remains here
+└── senior_sim/
+    ├── launch/simulation_motion.launch.py # canonical simulation composition
+    ├── launch/simulation_rgbd.launch.py   # canonical scoped RGBD diagnostic composition
+    └── CMakeLists.txt                    # existing launch directory installation
+```
+
+The manager now requests `ros2 launch senior_sim simulation_motion.launch.py`.
+The old senior_robot launch names forward every original declared argument and retain
+inherited launch context. No executable shim or duplicate nodes are introduced.
+Both new launch files still use original senior_robot config/BT assets and original
+functional nodes. Dependencies remain sim → robot, without robot → sim manifest cycles;
+using the optional legacy simulation Includes requires installing senior_sim as before.
+The real provider uses the installed senior_robot Python preflight before sourcing ROS.
+Its original hardware-profile dependencies require the existing SDK safety extra; this
+wheel does not provide an independent ROS or manager deployment.
+
+Portable reused tests and installed SDK checks pass with five reproduced legacy fixture
+failures and one Linux-peer skip; full commands, counts and limitations are recorded in
+[manager M4B](../senior_control/README.md#m4b-实车预检与仿真组合入口).
+ROS/ament/colcon and cmake are unavailable locally. Real ament installation, launch
+context evaluation, vendor hardware, DDS, simulation, cmd_vel ownership and shutdown
+remain unverified; no simulation or real service was started.

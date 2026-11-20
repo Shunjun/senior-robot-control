@@ -1448,6 +1448,7 @@ dependencies = [
     { name = "senior-motion-control" },
     { name = "senior-motion-estimation" },
     { name = "senior-perception" },
+    { name = "senior-robot" },
     { name = "vehicle-cloud" },
     { name = "vehicle-manager" },
 ]
@@ -1498,6 +1499,7 @@ requires-dist = [
     { name = "senior-motion-control", editable = "ros2/src/senior_motion_control" },
     { name = "senior-motion-estimation", editable = "ros2/src/senior_motion_estimation" },
     { name = "senior-perception", editable = "ros2/src/senior_perception" },
+    { name = "senior-robot", editable = "ros2/src/senior_robot" },
     { name = "shapely", marker = "extra == 'safety'", specifier = ">=2,<3" },
     { name = "vehicle-cloud", editable = "cloud" },
     { name = "vehicle-manager", editable = "senior_control" },
@@ -1546,6 +1548,11 @@ source = { editable = "ros2/src/senior_motion_estimation" }
 name = "senior-perception"
 version = "0.1.0"
 source = { editable = "ros2/src/senior_perception" }
+
+[[package]]
+name = "senior-robot"
+version = "0.1.0"
+source = { editable = "ros2/src/senior_robot" }
 
 [[package]]
 name = "shapely"
