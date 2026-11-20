@@ -106,6 +106,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M3C 管理主循环与编排已迁 | 原Agent/session、纯Link/Heartbeat和run_agent管理编排 → `vehicle_manager/agent/` | 原CLI/Config、同DB/9客户端、名义异常/结果/诊断/clock/metrics及媒体effects明示绑定；IPC/ROS执行与媒体后端原位，15文件及旧失败/安装缺口见M3C记录 |
 | B6.M4A 操作与两条监管链已迁 | 原cli/profile、vehicle_deploy、docker_start_helper/simulation_cli管理职责 → `vehicle_manager/{profile,cli,deployment,service,simulation,platform_ports}` | 原模块/签名/systemd配置保持，原技术owner逐调用注入；共享socket函数归既有IPC且ROS不再读管理helper；23文件与旧失败/兼容安装见M4A记录，ROS launch及独立部署后置 |
 | B6.M4B 组合入口已归位 | 原real_runtime → senior_robot；simulation_motion/RGBD → senior_sim；manager实际调用更新 | 原预检字节、全部launch声明/default与配置保持；旧Include和预检Compatible；Python wheel/SDK已验，实际ROS/ament安装及独立管理部署未验，详见M4B |
+| B6.M5A 管理观测与Agent CLI已迁 | Root observability与Agent main驱动 → vehicle_manager/observability、agent/application | 旧公开观测同对象、原main签名Compatible逐次接原配置/run_agent，12文件、原17项及安装验证见M5A；共享技术边界和管理独立生产部署仍后置 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -662,3 +663,20 @@ mypy完整原源码路径仍39项，无新增诊断。版本/命令/实际目录
 后续管理独立部署仍需核定Root IPC/媒体/诊断/clock/metrics/进程恢复/学习与平台绑定闭包；
 已迁ROS包仍有Root公共实现和robot兼容适配/资产边界，不以完整旧SDK闭包宣称独立。
 仅按下一批真实入边制定范围，原地图/定位/导航保持；先迁已有导航行为再做新算法，缺失功能仍由所属模块实现。
+
+
+### B6.M5A 管理专用观测与Agent CLI驱动已迁
+
+基线c4591ca；observability唯一实现归manager，旧JsonFormatter/Metrics/configure_logging/OTHER同对象；
+原Agent main驱动归manager/agent/application，旧main()模块入口显式Compatible，
+逐次注入原AgentConfig.from_environment和真实run_agent，不提供假默认装配或全局注册。
+原logger前缀/隐私/有限标签及锁、CLI参数/环境/私密凭据配对/错误退出与原工厂保持。
+Clock/IPC/共享诊断/媒体/ROS执行和配置依赖不迁，不扩WS、不建项目、不改算法。
+实际12文件：产品5/测试3/配置0/工具文档4，新增2修改10删除0；原测试assert保持，
+原选集允许临时socket后17通过，规范化CLI/原观测字节及Agent体审计通过。
+两wheel构建、仓库外manager基础/agent-extra及旧SDK兼容入口/CLI help/原78错误退出通过；
+manager67源码仍原4项，全链259源码仍原39项，无新增诊断。
+命令/版本/实际目录与限制见[manager M5A](../../../senior_control/README.md#m5a-管理观测与agent命令行驱动)。
+生产入口仍由Root提供真实工厂/车内值异常、同DB协调、IPC/诊断与媒体绑定，不宣称独立管理生产部署。
+后片共享IPC/诊断/帧及车内公开值安装归属待负责人确认，不新增根runtime或扩大WS契约绕过；
+原ROS/Linux/厂商实测缺口与native/SLAM UNVERIFIED保留，导航算法仍最后。

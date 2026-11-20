@@ -61,7 +61,8 @@ def test_pair_cli_reads_code_privately_and_uses_credential_path(
     import asyncio
     import sys
 
-    import senior_control.agent.pairing as pairing
+    from vehicle_manager.agent import application, pairing
+
     from senior_control.agent import main as agent_module
 
     seen: list[tuple[str, str, str, Path]] = []
@@ -78,7 +79,7 @@ def test_pair_cli_reads_code_privately_and_uses_credential_path(
             loop.close()
 
     path = tmp_path / "credentials.json"
-    monkeypatch.setattr(agent_module.asyncio, "run", run_isolated)
+    monkeypatch.setattr(application.asyncio, "run", run_isolated)
     monkeypatch.setattr(pairing, "pair_device", pair)
     monkeypatch.setattr("getpass.getpass", lambda prompt: "one-time-secret")
     monkeypatch.setattr(

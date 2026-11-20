@@ -133,3 +133,11 @@ M4A迁入原test_vehicle_cli、test_control_directory_cli、test_docker_start_he
 e6dccc4只读归档复现相同五个旧进程夹具失败，未补假属性/弱化断言。
 38函数与真实IPC/平台效果审计、安装兼容和原CLI help/dry-run证据及实际ROS/部署未验见[manager M4A](../README.md#m4a-操作cli部署渲染与实车仿真监管)。
 独立环境只验证真实profile/render与模块边界，完整旧SDK检查是兼容证据，不能算独立生产部署通过。
+
+M5A复用原`tests/unit/test_logging_diagnostics.py`、`tests/integration/test_backend_observability.py`
+及本目录`test_agent_config.py`，不新增pytest场景或迁入无关测试。
+前两者改用canonical管理观测，配对CLI夹具patch真实`vehicle_manager.agent.application.asyncio`
+和canonical pairing owner，原assert全部保持。允许原临时Unix socket后17项通过；
+最初受限bind失败不当作产品失败，也未补假属性。安装工具另外核对真实旧Agent help/78错误退出
+及公开同对象别名；manager基础/agent-extra导入通过不代表独立生产装配完成。
+完整命令、版本和环境限制见[manager M5A](../README.md#m5a-管理观测与agent命令行驱动)。

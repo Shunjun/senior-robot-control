@@ -3,7 +3,7 @@ import json
 import logging
 import sys
 
-from senior_control.observability import JsonFormatter
+from vehicle_manager.observability import JsonFormatter
 
 
 def test_uplink_error_keeps_cause_and_location_without_exception_secrets():

@@ -22,11 +22,11 @@ from agent_fakes import (
     operation,
     until,
 )
+from vehicle_manager.observability import JsonFormatter, Metrics
 
 from senior_control.agent import Agent
 from senior_control.agent.journal import AgentJournal
 from senior_control.errors import DomainError, ErrorCode
-from senior_control.observability import JsonFormatter, Metrics
 from senior_control.protocol import OPERATION_TYPES
 from senior_control.storage.database import Database
 
@@ -139,7 +139,7 @@ def test_metrics_labels_are_bounded() -> None:
 
 
 def test_cli_logging_config_restores_leaf_propagation_and_is_idempotent() -> None:
-    from senior_control.observability import configure_logging
+    from vehicle_manager.observability import configure_logging
 
     parent = logging.getLogger("senior_control")
     leaf = logging.getLogger("senior_control.agent")

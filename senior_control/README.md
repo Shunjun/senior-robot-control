@@ -1474,3 +1474,62 @@ wheel不替代ament share/executable安装，默认包导入不拉起ROS。预�
 实车预检虽归robot但消费原硬件profile/导航公开实现；仿真组合仍消费Root恢复/生命周期/策略和robot节点/资产。
 已迁功能包的真实ROS进程、原导航/扫描/设备适配兼容入口尚有上述实际边界，需后续按依赖只读核定，
 不能借完整旧SDK或纯import宣称独立部署。导航/建图算法、状态、IPC和WS本片未迁未改。
+
+### M5A 管理观测与Agent命令行驱动
+
+基线c4591ca。实际目录与生产调用如下：
+
+```text
+senior_control/src/vehicle_manager/
+├── observability.py        # 原JsonFormatter/Metrics/configure_logging唯一实现
+└── agent/application.py    # 原Agent CLI驱动；每次显式传配置与run_agent
+src/senior_control/
+├── observability.py        # //Compatible，同对象公开别名
+└── agent/
+    ├── main.py             # 原main()签名/模块入口，薄调用application.main
+    ├── dispatcher.py       # 直接消费canonical Metrics
+    └── composition.py      # 原AgentConfig/实际run_agent绑定，本片不迁
+```
+
+真实旧模块入口仍调用Root `AgentConfig.from_environment`和`run_agent`，
+将这两个原工厂逐次传给canonical驱动，无全局注册或默认假执行入口。
+`JsonFormatter`、`Metrics`、`configure_logging`及`OTHER`旧新入口同一对象；
+CLI旧main是显式Compatible薄函数，保留无参数签名，唯一驱动函数体在manager。
+原parser、环境覆盖、凭据/私密配对、错误退出78和日志初始化顺序保持；
+原senior_control logger命名、allowlist、脱敏、有限异常链/标签及锁原样。
+Root Agent类、ManualOperationResult与队列报告方法体未改，
+Clock/IPC/共享诊断、媒体、ROS执行、WS和配置/安装依赖未迁未改。
+
+实际12文件：产品5（新增2/修改3）、测试3修改、配置0、工具文档4修改，新增2/修改10/删除0。
+产品为上述五个观测/CLI驱动文件；测试为原logging_diagnostics、backend_observability及agent_config；
+工具文档为verify_batch_one_install.py、本README、tests/README和原实施计划。
+完整模块及CLI主体迁移各一组，旧路径保留薄入口，无额外文件删除。
+未增加pytest场景，只调整真实canonical导入和pairing/asyncio patch owner，所有原断言AST一致。
+
+验证使用macOS arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23。
+解释器和检查器取主仓库`.venv/bin`；uv使用`UV_CACHE_DIR=/tmp/vehicle-uv-cache`。
+
+- `python -m pytest tests/unit/test_logging_diagnostics.py tests/integration/test_backend_observability.py senior_control/tests/test_agent_config.py -q --tb=short`：
+  初次16通过/1临时Unix bind权限失败；允许原夹具socket后17通过，0.44秒。
+  覆盖原隐私/异常链、有限指标、配置/私密配对、真实SQLite装配与无adapter仍上报，未启真实服务。
+- 原observability字节、原Agent/result/报告体及规范化CLI AST比对通过；
+  CLI仅移除原局部实现导入并将原配置构造改为明示callback，原全部测试assert AST比对通过。
+- `uv build --offline senior_control --out-dir /tmp/m5a-wheels`及Root对应构建：两个sdist/wheel通过。
+  仓库外原基础8包、agent-extra15包、旧SDK32包环境叠加安装最终wheel，
+  分别执行原工具`--manager-tasks-only`、`--manager-agent-only`及默认模式通过，三个pip check均通过。
+  manager环境明确无Root/cloud/ROS，新application/observability可导入但未提供独立默认生产factory。
+  SDK模式核对旧新观测公开身份，运行真实旧console和模块help（包括senior_control.agent.main），
+  原不安全ws配置返回78、打印原TLS错误且不泄漏token，实际配置在run_agent前拒绝，无网络连接或DB写入。
+  这些是兼容安装叠加验证，不是全量Root frozen重装或独立管理部署。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：67源码仍原4项；
+  MYPYPATH取Root pytest原pythonpath后`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  259源码仍原39项，与M4B归一行号的诊断集合一致。回调按真实Coroutine返回标注，无新增cast/ignore。
+- 变动Python的Ruff/format及diff检查在提交前核验；配置/锁/CI无变化。
+
+真实Linux/ROS/ament/DDS/厂商/车辆仿真、媒体及Python3.10/CI本片未验，原native/SLAM安装仍UNVERIFIED。
+原其他旧失败仅在此前批次登记，本片未扩大重跑无关选集，也未删弱保护。
+管理生产装配仍需Root工厂、原具体值/异常、同DB协调及IPC/诊断/媒体平台owners，
+Root→manager依赖保持单向，manager新模块无Root/ROS反向导入；不能把旧SDK装配通过称作独立管理部署完成。
+下一片须先确认共享技术安装归属：IPC codec/身份和诊断队列跨管理/ROS共用，
+帧龄策略仍原owner；Clock、ImageFrame、车内值/异常构造来源及媒体设备输入仍按真实边界核定，
+不得用新根runtime、扩大WS contracts或复制业务/状态绕过。

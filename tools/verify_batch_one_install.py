@@ -67,7 +67,10 @@ def verify_manager_operator() -> None:
     import json
     import tempfile
 
-    from vehicle_manager import cli, deployment, service, simulation
+    from vehicle_manager import cli, deployment, observability, service, simulation
+    from vehicle_manager.agent import application
+
+    assert callable(application.main) and callable(observability.configure_logging)
     from vehicle_manager.profile import VehicleProfile, load_profile
 
     assert all(
@@ -115,13 +118,16 @@ def verify_legacy_operator() -> None:
     import tempfile
 
     from vehicle_manager import cli as canonical_cli
-    from vehicle_manager import deployment, service, simulation
+    from vehicle_manager import deployment, observability, service, simulation
     from vehicle_manager.profile import VehicleProfile, load_profile
 
     from senior_control import cli, simulation_cli, vehicle_deploy
     from senior_control import docker_start_helper as helper
+    from senior_control import observability as old_observability
     from senior_control.runtime import ipc
 
+    for name in ("JsonFormatter", "Metrics", "configure_logging", "OTHER"):
+        assert getattr(old_observability, name) is getattr(observability, name)
     assert cli.VehicleProfile is VehicleProfile and cli.load_profile is load_profile
     assert vehicle_deploy.render_service is deployment.render_service
     assert helper._runtime_profile is service._runtime_profile
@@ -151,6 +157,7 @@ def verify_legacy_operator() -> None:
         "senior_control.cli",
         "senior_control.docker_start_helper",
         "senior_control.simulation_cli",
+        "senior_control.agent.main",
     ):
         result = subprocess.run(
             [sys.executable, "-m", module, "--help"],
@@ -166,7 +173,32 @@ def verify_legacy_operator() -> None:
         [str(console), "--help"], cwd="/tmp", capture_output=True, text=True, timeout=15, check=True
     )
     assert "--help" in result.stdout
-    print("installed legacy operator aliases, unchanged dry-run and real CLI help: PASS")
+    import os
+
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("SENIOR_")
+    }
+    environment.update(
+        SENIOR_ROBOT_ID="robot-a",
+        SENIOR_CLOUD_URL="ws://cloud.test/ws/agent",
+        SENIOR_DEVICE_TOKEN="private-token",
+        SENIOR_DATABASE_PATH="/tmp/unused-agent.db",
+        SENIOR_AGENT_SOCKET="/tmp/unused-agent.sock",
+    )
+    rejected = subprocess.run(
+        [sys.executable, "-m", "senior_control.agent.main"],
+        cwd="/tmp",
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert rejected.returncode == 78
+    assert "invalid agent configuration: cloud URL must use authenticated TLS" in rejected.stderr
+    assert "private-token" not in rejected.stdout + rejected.stderr
+    print(
+        "installed legacy aliases, unchanged dry-run/CLI help and original Agent error exit: PASS"
+    )
 
 
 def verify_real_preflight() -> None:

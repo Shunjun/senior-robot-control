@@ -1,10 +1,6 @@
 """The on-robot agent: owns the robot database and the cloud link, never an rclpy executor."""
 
-import argparse
-import asyncio
 import logging
-import os
-import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -17,6 +13,7 @@ from vehicle_manager.agent.main import MAX_SAFETY_PENDING as MAX_SAFETY_PENDING
 from vehicle_manager.agent.main import Agent as _Agent
 from vehicle_manager.agent.main import _snapshot_change_key as _snapshot_change_key
 from vehicle_manager.agent.runtime_ports import AgentRuntimePorts
+from vehicle_manager.observability import Metrics
 
 from senior_control.agent.connection import (
     Link,
@@ -40,7 +37,6 @@ from senior_control.agent.workspace import WorkspaceReader
 from senior_control.clock import Clock, SystemClock
 from senior_control.errors import DomainError
 from senior_control.models import OperationResult, OperationStatus
-from senior_control.observability import Metrics
 from senior_control.protocol import (
     HEARTBEAT_INTERVAL_MS,
 )
@@ -163,58 +159,12 @@ class Agent(_Agent[OperationResult]):
 
 
 def main() -> int:
-    """Load explicit configuration and run the owned agent composition."""
+    """//Compatible: original entry, configured with the same production owners per call."""
+    from vehicle_manager.agent.application import main as application_main
+
     from senior_control.agent.composition import AgentConfig, run_agent
 
-    parser = argparse.ArgumentParser(description="Robot cloud agent")
-    parser.add_argument("--robot-id")
-    parser.add_argument("--cloud-url")
-    parser.add_argument("--database-path")
-    parser.add_argument("--socket-path")
-    parser.add_argument("--token-file", type=Path)
-    parser.add_argument("--credentials-file", type=Path)
-    parser.add_argument("--pair", action="store_true")
-    parser.add_argument("--device-name")
-    args = parser.parse_args()
-    values = dict(os.environ)
-    for name, value in (
-        ("SENIOR_ROBOT_ID", args.robot_id),
-        ("SENIOR_CLOUD_URL", args.cloud_url),
-        ("SENIOR_DATABASE_PATH", args.database_path),
-        ("SENIOR_AGENT_SOCKET", args.socket_path),
-    ):
-        if value is not None:
-            values[name] = value
-    try:
-        from senior_control.agent.pairing import pair_device, read_credentials, read_token
-
-        credentials_file = args.credentials_file
-        if credentials_file is None and values.get("SENIOR_CREDENTIALS_FILE"):
-            credentials_file = Path(values["SENIOR_CREDENTIALS_FILE"])
-        if args.pair:
-            import getpass
-
-            cloud_url = values.get("SENIOR_CLOUD_URL")
-            if not cloud_url or credentials_file is None or not args.device_name:
-                raise ValueError("pair requires cloud URL, device name and credentials file")
-            code = getpass.getpass("Pairing code: ")
-            robot_id = asyncio.run(pair_device(cloud_url, code, args.device_name, credentials_file))
-            print(f"Paired robot {robot_id}")
-            return 0
-        if credentials_file is not None:
-            credentials = read_credentials(credentials_file)
-            values["SENIOR_ROBOT_ID"] = credentials.robot_id
-            values["SENIOR_DEVICE_TOKEN"] = credentials.device_token
-        if args.token_file is not None:
-            values["SENIOR_DEVICE_TOKEN"] = read_token(args.token_file)
-        config = AgentConfig.from_environment(values)
-    except (OSError, ValueError) as exc:
-        print(f"invalid agent configuration: {exc}", file=sys.stderr)
-        return 78
-    from senior_control.observability import configure_logging
-
-    configure_logging()
-    return asyncio.run(run_agent(config))
+    return application_main(configuration=AgentConfig.from_environment, run_agent=run_agent)
 
 
 if __name__ == "__main__":
