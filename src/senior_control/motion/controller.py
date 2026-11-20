@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass, field, replace
 
-from senior_control.models import Velocity
 from senior_control.motion.constraints import (
     BrakingProof,
     ConstraintEngine,
@@ -15,6 +14,7 @@ from senior_control.motion.contracts import BrakeKind
 from senior_control.motion.source_modes import SourceMode
 from senior_control.motion.stillness import stationary
 from senior_control.motion.trajectory import Trajectory, TrajectoryStep, scale_wheels
+from vehicle_core.values import Velocity
 
 
 @dataclass(frozen=True)

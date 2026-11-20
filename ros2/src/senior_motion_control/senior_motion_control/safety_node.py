@@ -33,7 +33,6 @@ from senior_motion_msgs.msg import (
 )
 from senior_perception.raw_safety_observation import RawSafetyObservation
 
-from senior_control.models import Velocity
 from senior_control.motion.source_fences import (
     ProducerTopology,
     SourceEpochFence,
@@ -51,6 +50,7 @@ from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
 from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Velocity
 
 
 class SafetyGate(Node):

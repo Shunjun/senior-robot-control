@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 
-from senior_control.models import Pose2D
 from senior_control.safety.self_filter import FilteredObservation
+from vehicle_core.values import Pose2D
 
 _HALF = math.pi / 6
 _WIDTH = 2 * _HALF

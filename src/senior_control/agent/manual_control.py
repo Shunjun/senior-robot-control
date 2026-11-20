@@ -8,7 +8,6 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_control.models import Velocity
 from senior_control.motion.contracts import (
     AcceptedManualIntent,
     ManualIntent,
@@ -20,8 +19,9 @@ from senior_control.motion.manual_authority import (
     ManualAuthorityManager,
     ManualAuthorityReceipt,
 )
-from senior_control.protocol import MotionRuntimeState, RuntimeObservation
 from senior_control.settings.models import DrivingSettings
+from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
+from vehicle_core.values import Velocity
 
 
 @dataclass(frozen=True)

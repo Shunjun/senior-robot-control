@@ -13,8 +13,8 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_navigation.route import QualifiedRoute, RoutePlan, RouteProgress, RouteStatus
+from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
 SAFETY_COMMAND_TOPIC = "/control/recovery_cmd"
 ERROR_NONE = 0

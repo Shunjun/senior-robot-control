@@ -16,6 +16,62 @@ def verify_lazy_shared_imports() -> None:
 
     scripts = (
         """
+import json
+import sys
+from pathlib import Path
+from pydantic import ValidationError
+from senior_contracts.errors import ErrorCode
+from vehicle_core import errors, runtime_state, values
+for module in (errors, runtime_state, values):
+    assert 'site-packages' in str(Path(module.__file__).resolve()), module.__file__
+for name in ('senior_control', 'vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_robot', 'senior_motion_control', 'senior_perception'):
+    assert name not in sys.modules, name
+assert errors.ErrorCode is ErrorCode
+assert errors.DomainError(ErrorCode.UNAVAILABLE, 'unavailable').code is ErrorCode.UNAVAILABLE
+assert values.OperationResult('operation', 'running').status is values.OperationStatus.RUNNING
+packet = dict(
+    schema=1, robot_id='robot', boot_id='boot', sequence=1, sampled_steady=10.0,
+    mode='idle', reason='', stationary=True, healthy=True, evidence_stamp_steady=None,
+    evidence_deadline_steady=None, estop_revision=0, fault_revision=0,
+    confirmed_estop_status='clear', allowed_actions=['acquire'], task_id=None,
+    output_generation=0, body_reference=None, wheel_linear_mps=None,
+)
+state = runtime_state.MotionRuntimeState.model_validate(packet)
+assert state.schema_version == 1
+assert state.model_dump() == json.loads(state.model_dump_json()) == packet
+assert 'schema' in state.model_json_schema()['properties']
+assert 'schema_version' not in state.model_dump()
+for change in (dict(schema=2), dict(sequence=-1), dict(sampled_steady=float('inf')),
+               dict(evidence_stamp_steady=9.0), dict(extra_field=1)):
+    try:
+        runtime_state.MotionRuntimeState.model_validate({**packet, **change})
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError(change)
+try:
+    runtime_state.BodyReferenceState(
+        average={'vx': 0.0}, source='wheel', computed_steady=9.0, valid_until_steady=10.0
+    )
+except ValidationError:
+    pass
+else:
+    raise AssertionError('incomplete body reference accepted')
+from senior_control import errors as old_errors, models as old_values, protocol as old_state
+for name in ('_finite', 'Velocity', 'BodyTwist', 'Pose2D', 'MapRef', 'SensorHealth',
+             'OperationStatus', 'OperationResult'):
+    assert getattr(old_values, name) is getattr(values, name), name
+for name in ('ErrorCode', 'DomainError'):
+    assert getattr(old_errors, name) is getattr(errors, name), name
+for name in ('BodyReferenceState', 'RuntimeObservation', 'MotionRuntimeState'):
+    assert getattr(old_state, name) is getattr(runtime_state, name), name
+assert old_state.MotionRuntimeState.model_validate_json(state.model_dump_json()) == state
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch', 'senior_control.agent',
+             'senior_control.config', 'senior_control.runtime.diagnostics'):
+    assert name not in sys.modules, name
+""",
+        """
 import sys
 from pathlib import Path
 from vehicle_core import ipc

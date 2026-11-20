@@ -14,10 +14,10 @@ from vehicle_manager.tasks.store import TASK_STATEMENTS as TASK_STATEMENTS
 from vehicle_manager.tasks.store import WINDOW_SCAN_SQL as WINDOW_SCAN_SQL
 from vehicle_manager.tasks.store import TaskStore as _TaskStore
 
-from senior_control.errors import DomainError
-from senior_control.errors import ErrorCode as ErrorCode
-from senior_control.models import MapRef
 from senior_control.storage.database import Database
+from vehicle_core.errors import DomainError
+from vehicle_core.errors import ErrorCode as ErrorCode
+from vehicle_core.values import MapRef
 
 
 class TaskStore(_TaskStore):

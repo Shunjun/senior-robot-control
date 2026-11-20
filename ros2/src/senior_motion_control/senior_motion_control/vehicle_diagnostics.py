@@ -4,8 +4,8 @@ import math
 from dataclasses import asdict
 
 from senior_control.motion.contracts import MotionMode
-from senior_control.protocol import MotionRuntimeState
 from senior_control.vision.raw_capture import capture_from_message
+from vehicle_core.runtime_state import MotionRuntimeState
 from vehicle_core.sensor_policy import default_policy
 
 _OUTPUT_BUDGET_S = 0.25

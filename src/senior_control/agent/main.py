@@ -34,8 +34,6 @@ from senior_control.agent.dispatcher import (
 from senior_control.agent.journal import AgentJournal
 from senior_control.agent.snapshots import StatePort
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.errors import DomainError
-from senior_control.models import OperationResult, OperationStatus
 from senior_control.protocol import (
     HEARTBEAT_INTERVAL_MS,
 )
@@ -49,7 +47,9 @@ from vehicle_core.diagnostics import (
     QueueSnapshot,
     process_diagnostics,
 )
+from vehicle_core.errors import DomainError
 from vehicle_core.ipc import IpcError
+from vehicle_core.values import OperationResult, OperationStatus
 
 logger = logging.getLogger("senior_control.agent")
 

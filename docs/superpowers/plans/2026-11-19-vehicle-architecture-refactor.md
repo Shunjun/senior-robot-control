@@ -968,3 +968,36 @@ CR行尾提示改用显式保留其他空白保护的cr-at-eol参数检查通过
 [manager本片记录](../../../senior_control/README.md#r1-共享-ipc通用-v1-unix-传输)。
 未启动仿真/ROS/车辆/开发服务、未向实车发送运动、不部署推送；
 真实Linux peer及Humble/设备行为另验，提交后等待负责人审核。
+
+
+### R1 共享车内值、异常与运行态（2026-11-21）
+
+固定功能分支基线 `f565a17`，实施前工作区干净；AST核对73个实际产品消费者，
+跳过test/tests目录，符合82文件预报。先记录范围，再迁唯一实现：
+`models.py` → `vehicle_core/values.py`，`errors.py` → `vehicle_core/errors.py`；
+protocol中仅BodyReferenceState、RuntimeObservation、MotionRuntimeState原实现 →
+`vehicle_core/runtime_state.py`，仅复用senior_contracts.wire的StrictModel及既有整数界。
+原ErrorCode仍复用senior_contracts，旧三模块Compatible同对象转发，保留_finite等私有接口，
+不重建别名类/枚举/异常；其余旧protocol的WS导出逐项原样保持。
+
+73个产品消费者只改import，混合协议import仅分离3个本地类型，类型构造与业务不变；
+仿真文件只静态迁引，不验证。预算82文件：产品增3改76、测试/配置不改、
+工具文档改3（安装工具、manager README、本计划），无删除或新依赖/协议状态。
+
+限定测试：test_protocol.py、manager test_agent_ports.py、指定
+test_runtime_guard_ready.py::test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver；
+后者只用受控ROS I/O，不调用同文件manual_target或仿真环境，若旧fixture失败限量基线对照，
+不改测试。另做Ruff、保留CRLF的diff检查、根wheel及仓库外身份/精确校验/序列化/惰性导入。
+不改Requires-Dist或锁，不改权限、过滤、schema、日志或时序；不运行仿真/ROS/实车/开发
+服务，不发运动、不部署推送，仅固定分支提交，等待负责人审核。
+
+
+本片实际82文件，与预报一致：产品增3改76、工具文档改3，测试/配置0、无删。
+values/errors原字节与3个DTO class AST保持，protocol全部原WS导出行原样；
+73消费者仅改import。指定回归30通过、1旧guard fixture缺 `_output_incarnation` 设置错误，
+f565a17归档仅对照该节点复现相同错误，未修改测试；Ruff80文件、既有CRLF约定diff、
+根wheel及仓库外13出口/ErrorCode身份、精确schema alias/校验/序列化和惰性导入检查通过，
+26包pip check通过。完整命令、版本、失败证据及未验项见
+[manager本片记录](../../../senior_control/README.md#r1-共享车内值异常与运行态)。
+不宣称guard用例或全量通过，不运行仿真/ROS/实车/开发服务、不发运动、不部署推送；
+提交固定分支后等待负责人审核，真实设备验证与旧fixture后续另批处理。

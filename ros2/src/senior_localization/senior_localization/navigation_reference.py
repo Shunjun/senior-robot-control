@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from senior_mapping.workspace import WorkspaceGrid
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 
 class NavigationReferenceConfig(BaseModel):

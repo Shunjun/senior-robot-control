@@ -9,7 +9,7 @@ from pathlib import Path
 
 from senior_mapping.workspace import WorkspaceGrid
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 _BASELINE_HASH = "528523ece69d7eaf1eeb2d9fd2930a024ac56a151f62ffa939bd63c338db1c44"
 _QUALIFICATION_HASH = "dc9869da0f8328cfac25cae53e18e7cb5ccb56b317f3da840f07e0f572569759"

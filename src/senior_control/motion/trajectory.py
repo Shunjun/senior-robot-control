@@ -3,8 +3,8 @@
 import math
 from dataclasses import dataclass
 
-from senior_control.models import Velocity
 from senior_control.motion.contracts import ResponseBounds
+from vehicle_core.values import Velocity
 
 
 @dataclass(frozen=True)

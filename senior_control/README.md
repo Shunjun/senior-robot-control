@@ -2248,3 +2248,77 @@ module、导航state polling fake IPC server module，原兼容导入及输入/f
 未运行仿真测试/环境或任何ROS/实车/开发服务，未向实车或ROS发送运动请求，
 未部署。真实Linux SO_PEERCRED、Humble/ament/设备行为仍未验证；
 本地Unix/fake server通过不等于实车手动控制可用或独立manager生产部署完成。
+
+
+### R1 共享车内值、异常与运行态
+
+基线 `f565a17`，固定功能分支工作区干净后实施。原models/errors唯一实现逐字节迁
+`src/vehicle_core/values.py`、`errors.py`，ErrorCode仍为原senior_contracts枚举；
+三个本地DTO BodyReferenceState/RuntimeObservation/MotionRuntimeState原实现迁到
+`vehicle_core/runtime_state.py`，只复用contracts的StrictModel及原整数界。
+旧三模块Compatible同对象转发，保留_finite等私有接口，不造新别名类/枚举/异常；
+protocol的其余WS出口原样保留。
+
+AST核对73个仅产品消费者更新导入，混合WS导入仅分离本地DTO，原类型构造/业务不改；
+test/tests目录不动，仿真点只静态迁引。预算82文件：产品增3改76、工具文档改3，
+测试/配置0，无删除。不新增依赖、协议状态、工厂或owner，不改权限/过滤/schema/日志/时序。
+
+
+#### 本片验证、自审与限制
+
+环境：macOS arm64，原主仓Python 3.12.15、pytest 8.4.2、Ruff 0.17.3、uv 0.12.23。
+复用原主仓 `.venv/bin` 工具，不改项目 `.venv`、Requires-Dist、uv.lock或CI配置。
+
+- 安装工具先对上一片已安装Root wheel执行 `--lazy-shared-only`：退出1，明确
+  缺少vehicle_core.errors，新owner检查不会让未迁移wheel通过。
+- 唯一当前限定pytest命令（项目目录，原主仓Python）：
+
+  ```sh
+  python -m pytest tests/unit/test_protocol.py senior_control/tests/test_agent_ports.py \
+    tests/unit/test_runtime_guard_ready.py::test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver \
+    -q --tb=short
+  ```
+
+  **30通过、1旧fixture设置错误**，0.39秒，退出1；错误为ready fixture调用实际
+  CommandNode._on_motion_runtime时缺少 `_output_incarnation`，发生在用例assert之前。
+  未补假属性或改测试。以 `git archive f565a17 src ros2/src senior_control/src cloud/src
+  contracts/src pyproject.toml tests/unit tests/fixtures/runtime_guard_ready.json
+  ros2/tests/test_navigation_command_clock.py` 解包至 `/tmp/vehicle-core-values-baseline`，
+  在该归档目录仅运行相同guard节点选择：**1相同设置错误**，0.21秒，退出1；
+  行号随import整理变化，但缺失字段与fixture位置完全相同。没有扩大基线测试。
+  protocol和Agent ports原兼容导入、原输入与断言不改；受控guard不调用同文件
+  manual_target，不加载或运行仿真环境。
+- 修改Python及3新叶子 `ruff check` / `ruff format --check`：80文件通过；
+  首轮63处导入排序已整理，按既有CRLF约定的检查通过：
+
+  ```sh
+  git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
+  ```
+
+- 自审：values/errors与基线原文件逐字节相同；3个DTO class AST与原protocol完全相同，
+  所有原 `from senior_contracts.wire import ...` 导出行的内容与顺序完全保持。
+  73个消费者去除import后AST与基线相同；两个混合协议导入只将本地DTO分离，
+  原WS名字、别名、实际构造与业务分支均保持。test/tests文件无diff。
+- `UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build --offline --out-dir /tmp/vehicle-core-values-wheels`：
+  根sdist/wheel成功；以 `uv pip install --offline --reinstall --no-deps --python
+  /tmp/vehicle-core-leaf-sdk/bin/python <新Root wheel>` 更新既有临时夹具。
+  仅重建Root，其他26包闭包沿用前片，不声称全部ROS消费者重建或独立manager部署。
+- 从 `/tmp`、`PYTHONPATH=` 运行临时安装Python与
+  `<仓库>/tools/verify_batch_one_install.py --lazy-shared-only`：通过。
+  3新叶子来自site-packages，新旧13个值/异常/DTO及私有_finite出口同对象，
+  ErrorCode为原contracts枚举；OperationResult原字符串状态转换保持。
+  MotionRuntimeState的schema alias、dump/JSON往返/JSON schema属性精确核对，
+  无效schema、负sequence、无限值、半边证据窗口、extra字段及不完整BodyReference均
+  按原规则拒绝；旧路径读新序列化结果仍同类相等。
+  新叶子不加载旧SDK/管理/ROS，旧兼容路径也不带入Agent/config/诊断业务。
+  既有安装工具其余旧断言保持；`uv pip check --python /tmp/vehicle-core-leaf-sdk/bin/python`：
+  26包兼容。
+
+实际82文件：产品增3改76、工具文档改3，测试/配置0、无删除；
+没有新增依赖、协议状态、类型副本或工厂，权限、过滤、schema、日志、时序保持。
+提交仅在固定功能分支，禁用可能超范围运行的钩子，限定检查已手动执行；
+不推送，等待负责人审核。
+
+当前guard旧fixture错误仍保留，不能宣称该条通过或全量通过；其余测试未扩大运行。
+本片没有仿真验证、ROS/实车/开发服务启动或部署，没有发送运动请求；
+真实Humble/ABI/设备与实车手动控制行为仍未验证。

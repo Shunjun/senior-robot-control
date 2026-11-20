@@ -12,9 +12,9 @@ from vehicle_manager.waypoints.store import (
 )
 from vehicle_manager.waypoints.store import replace_imported_home as replace_imported_home
 
-from senior_control.errors import DomainError
-from senior_control.models import MapRef, Pose2D
 from senior_control.storage.database import Database
+from vehicle_core.errors import DomainError
+from vehicle_core.values import MapRef, Pose2D
 
 
 @dataclass(frozen=True)

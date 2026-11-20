@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from senior_control.models import Pose2D
 from vehicle_core.sample_time import SampleTime
+from vehicle_core.values import Pose2D
 
 if TYPE_CHECKING:
     from senior_motion_estimation.sample_types import MotionSample
@@ -220,8 +220,8 @@ def metadata_error(
     Nonfinite component/covariance *measurements* remain payload failures;
     malformed identity/time metadata never changes owner clocks or watermarks.
     """
-    from senior_control.models import Pose2D
     from senior_motion_estimation.sample_types import DeltaObservation, PointObservation
+    from vehicle_core.values import Pose2D
 
     if not isinstance(
         observation, (Observation, PointObservation, DeltaObservation)

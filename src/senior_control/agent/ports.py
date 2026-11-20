@@ -16,19 +16,15 @@ from vehicle_manager.waypoints.home_capture import HomeCapture as _HomeCapture
 from vehicle_manager.waypoints.ports import WaypointValuePorts
 
 from senior_control.agent.connection import IpcMotion
-from senior_control.errors import DomainError
-from senior_control.models import MapRef, Pose2D
 from senior_control.navigation import RoutePlan, RouteProgress, RouteRejected
-from senior_control.protocol import (
-    MotionRuntimeState,
-    RobotPosePayload,
-    RuntimeObservation,
-    ScanPointPayload,
-)
+from senior_control.protocol import RobotPosePayload, ScanPointPayload
 from senior_control.tasks.models import ExecutionContext
 from senior_control.tasks.store import TaskStore
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.errors import DomainError
 from vehicle_core.ipc import IpcError
+from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
+from vehicle_core.values import MapRef, Pose2D
 
 
 class IpcMapPort(_IpcMapPort):

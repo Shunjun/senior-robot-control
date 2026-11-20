@@ -9,9 +9,9 @@ from vehicle_manager.waypoints.ports import WaypointValuePorts
 
 from senior_control.agent.ports import IpcState
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.errors import DomainError
-from senior_control.models import MapRef, Pose2D
 from senior_control.waypoints.store import WaypointStore
+from vehicle_core.errors import DomainError
+from vehicle_core.values import MapRef, Pose2D
 
 
 class _Navigation(Protocol):

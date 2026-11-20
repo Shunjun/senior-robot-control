@@ -6,9 +6,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
 from senior_mapping.evidence import CellEvidence, OccupancySnapshot
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 FORMAT_VERSION = 1
 # Humble 2.6.10 graph_visualization publishes node spheres in this namespace.

@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 TILE_SIZE = 32
 MAX_GRID_SIDE = 65_536

@@ -14,10 +14,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import IO, Protocol, cast
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
 from senior_mapping.references import AnchorPose, SlamSnapshot
 from senior_mapping.store import MapReferenceStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 BUNDLE_FORMAT_VERSION = 1
 BACKEND_VERSION = "slam_toolbox 2.6.10"

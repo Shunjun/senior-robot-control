@@ -8,8 +8,6 @@ from copy import copy
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
 from senior_mapping.evidence import CellEvidence, OccupancySnapshot
 from senior_mapping.references import (
     AnchoredWaypoint,
@@ -21,6 +19,8 @@ from senior_mapping.references import (
     SlamSnapshot,
     WaypointBinding,
 )
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 _MAX_INGEST_ANCHORS = 16_384
 _MAX_INGEST_CHANGES = 8_192

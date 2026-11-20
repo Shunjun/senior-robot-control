@@ -9,9 +9,9 @@ from vehicle_manager.storage.agent_schema import (
     AGENT_JOURNAL_STATEMENTS as AGENT_JOURNAL_STATEMENTS,
 )
 
-from senior_control.errors import ErrorCode
-from senior_control.models import OperationStatus
 from senior_control.storage.database import Database
+from vehicle_core.errors import ErrorCode
+from vehicle_core.values import OperationStatus
 
 _OPEN = (OperationStatus.ACCEPTED, OperationStatus.DISPATCHING, OperationStatus.RUNNING)
 

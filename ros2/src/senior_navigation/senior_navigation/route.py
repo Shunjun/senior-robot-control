@@ -10,8 +10,8 @@ from senior_contracts.navigation import MAX_ROUTE_WAYPOINTS as MAX_ROUTE_WAYPOIN
 from senior_contracts.navigation import RouteProgress as RouteProgress
 from senior_contracts.navigation import RouteStatus as RouteStatus
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 
 class RouteRejected(DomainError):

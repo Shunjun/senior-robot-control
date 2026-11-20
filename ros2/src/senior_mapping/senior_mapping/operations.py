@@ -14,8 +14,6 @@ from typing import Protocol, cast
 
 import aiosqlite
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, OperationResult, OperationStatus
 from senior_mapping.archive import BundleManifest, MapArchive
 from senior_mapping.persistence import MapDatabase, MapPersistence
 from senior_mapping.references import (
@@ -26,6 +24,8 @@ from senior_mapping.references import (
 )
 from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS as OPERATION_JOURNAL_STATEMENTS
 from senior_mapping.store import MapReferenceStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationResult, OperationStatus
 
 _GRAPH_WAIT_SECONDS = 0.25
 

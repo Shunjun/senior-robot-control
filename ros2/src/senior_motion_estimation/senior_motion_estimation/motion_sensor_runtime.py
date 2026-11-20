@@ -7,7 +7,6 @@ stopping envelope or a truth bound.
 
 from dataclasses import asdict, dataclass, replace
 
-from senior_control.models import Pose2D, Velocity
 from senior_control.motion.controller import Feedback
 from senior_control.motion.kinematics import body_delta, logarithm
 from senior_control.motion.source_modes import SourceMode
@@ -24,6 +23,7 @@ from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservat
 from senior_motion_estimation.sample_types import DeltaObservation, MotionSample, PointObservation
 from vehicle_core.diagnostics import QueueSnapshot, RuntimeDiagnostics
 from vehicle_core.sample_time import SampleTime, interval_ns
+from vehicle_core.values import Pose2D, Velocity
 
 
 @dataclass(frozen=True)

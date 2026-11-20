@@ -5,12 +5,12 @@ import os
 from dataclasses import dataclass
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
 from senior_control.safety.self_filter import ScanObservation, filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_perception.learning_record import LearningGeometry
 from senior_perception.learning_wire import RecordedFrame
 from vehicle_core.process_resources import LatestSnapshot, child_lifetime, stop_process
+from vehicle_core.values import Pose2D
 
 
 @dataclass(frozen=True)

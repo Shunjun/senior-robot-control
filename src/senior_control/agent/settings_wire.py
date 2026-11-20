@@ -6,7 +6,7 @@ from vehicle_manager.agent.settings_wire import SettingsRuntime as _SettingsRunt
 from vehicle_manager.agent.settings_wire import settings_command as settings_command
 
 from senior_control.agent.ports import IpcState
-from senior_control.errors import DomainError
+from vehicle_core.errors import DomainError
 
 if TYPE_CHECKING:
     from senior_control.tasks.lifecycle_store import LifecycleStore

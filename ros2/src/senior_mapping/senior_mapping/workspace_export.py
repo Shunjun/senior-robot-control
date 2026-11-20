@@ -5,11 +5,11 @@ import io
 import math
 from pathlib import Path
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import Pose2D
 from senior_mapping.archive import MAX_BUNDLE_BYTES, STABLE_LAYER, MapArchive
 from senior_mapping.references import SlamSnapshot
 from senior_mapping.workspace import MAX_GRID_CELLS, MAX_GRID_SIDE, WorkspaceGrid
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import Pose2D
 
 
 def load_exported_grid(path: Path, digest: str, robot_id: str) -> WorkspaceGrid:

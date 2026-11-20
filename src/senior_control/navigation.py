@@ -7,7 +7,7 @@ from senior_navigation.route import RouteProgress as RouteProgress
 from senior_navigation.route import RouteRejected as RouteRejected
 from senior_navigation.route import RouteStatus as RouteStatus
 
-from senior_control.errors import DomainError as DomainError
-from senior_control.errors import ErrorCode as ErrorCode
-from senior_control.models import MapRef as MapRef
-from senior_control.models import Pose2D as Pose2D
+from vehicle_core.errors import DomainError as DomainError
+from vehicle_core.errors import ErrorCode as ErrorCode
+from vehicle_core.values import MapRef as MapRef
+from vehicle_core.values import Pose2D as Pose2D

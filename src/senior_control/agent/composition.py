@@ -35,8 +35,6 @@ from senior_control.agent.ports import (
 from senior_control.agent.settings_wire import SettingsRuntime
 from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.errors import DomainError
-from senior_control.protocol import RuntimeObservation
 from senior_control.storage.database import Database
 from senior_control.tasks import TaskExecutor, TaskStore
 from senior_control.tasks.lifecycle_store import Admission
@@ -50,9 +48,11 @@ from vehicle_core.diagnostics import (
     configure_diagnostics,
     diagnostics_from_environment,
 )
+from vehicle_core.errors import DomainError
 from vehicle_core.image_frame import ImageFrame
 from vehicle_core.ipc import IpcClient
 from vehicle_core.lifecycle_events import READ_FD, observe
+from vehicle_core.runtime_state import RuntimeObservation
 
 logger = logging.getLogger("senior_control.agent")
 

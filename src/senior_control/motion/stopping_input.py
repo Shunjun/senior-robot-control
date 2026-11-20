@@ -6,10 +6,10 @@ Independent stillness/reset evidence is a separate concern.
 
 from dataclasses import dataclass, field
 
-from senior_control.models import Velocity
 from senior_control.motion.constraints import AxisStop, stop_axis
 from senior_control.motion.contracts import ResponseBounds
 from senior_control.motion.estimator import AxisEstimate, MotionEstimate
+from vehicle_core.values import Velocity
 
 
 def _axis_domain(

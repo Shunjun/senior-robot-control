@@ -10,4 +10,4 @@ from vehicle_manager.tasks.lifecycle_store import StaleEffect as StaleEffect
 from vehicle_manager.tasks.lifecycle_store import VersionConflict as VersionConflict
 from vehicle_manager.tasks.models import TaskDefinition as TaskDefinition
 
-from senior_control.models import Pose2D as Pose2D
+from vehicle_core.values import Pose2D as Pose2D

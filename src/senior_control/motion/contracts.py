@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from senior_control.models import BodyTwist, Velocity
 from senior_control.motion.manual_target import ManualLinearTarget
+from vehicle_core.values import BodyTwist, Velocity
 
 
 class MotionMode(str, Enum):

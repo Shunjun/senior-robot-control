@@ -11,13 +11,13 @@ from typing import Any
 
 from senior_sensor_ingress.native_receipt import received_sample
 
-from senior_control.models import Pose2D
 from senior_control.sensors.input_config import OptionalMotionInput
 from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.rgbd_body_motion import body_pose_increment, planar_body_twist
 from senior_motion_estimation.estimator import MotionObservation, Origin
 from senior_motion_estimation.motion_observation_adapter import observation_origin, stamp_seconds
 from vehicle_core.sample_time import StampInterval
+from vehicle_core.values import Pose2D
 
 
 def static_matrix(status: Any, base: str, camera: str) -> Any:
@@ -261,9 +261,9 @@ class OptionalMotionInputs:
         from rclpy.time import Time
         from tf2_ros import TransformException
 
-        from senior_control.models import Pose2D
         from senior_control.motion.kinematics import compose, inverse
         from senior_control.motion.pose_estimator import PoseObservation
+        from vehicle_core.values import Pose2D
 
         def planar(p, q):
             values = (p.x, p.y, q.x, q.y, q.z, q.w)

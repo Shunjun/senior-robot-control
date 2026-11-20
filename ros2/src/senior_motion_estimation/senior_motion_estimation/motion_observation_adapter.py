@@ -12,7 +12,6 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 from uuid import uuid4
 
-from senior_control.models import Pose2D
 from senior_control.motion.source_modes import SourceMode
 from senior_control.vision.raw_capture import capture_from_message
 from senior_motion_estimation.fusion import FusionConfig, NumericalFusion
@@ -33,6 +32,7 @@ from senior_motion_estimation.sample_types import (
 from senior_motion_estimation.source_admission import AdmissionOwner
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
 from vehicle_core.sample_time import SampleTime
+from vehicle_core.values import Pose2D
 
 
 def publisher_gid(info: Any) -> bytes:

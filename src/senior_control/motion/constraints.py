@@ -13,7 +13,6 @@ from shapely.geometry import GeometryCollection, MultiPoint, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from senior_control.models import Pose2D, Velocity
 from senior_control.motion.contracts import (
     BodyMotion,
     BrakeKind,
@@ -25,6 +24,7 @@ from senior_control.motion.contracts import (
 from senior_control.motion.source_modes import SourceMode
 from senior_control.safety.geometry import swept_footprint
 from senior_control.safety.startup_visibility import StartupVisibility
+from vehicle_core.values import Pose2D, Velocity
 
 Point = tuple[float, float]
 

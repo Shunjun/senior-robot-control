@@ -14,11 +14,11 @@ from senior_mapping.store import MapReferenceStore
 from vehicle_manager.waypoints.home_ports import HomeServicePorts
 from vehicle_manager.waypoints.home_service import HomeService as _HomeService
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_control.storage.database import Database
 from senior_control.waypoints.store import StoredWaypoint as StoredWaypoint
 from senior_control.waypoints.store import Waypoint, WaypointStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
 
 @dataclass(frozen=True)

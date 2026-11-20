@@ -35,8 +35,8 @@ def planar_body_twist(
 
     import numpy as np
 
-    from senior_control.models import Pose2D
     from senior_control.motion.kinematics import body_twist_delta
+    from vehicle_core.values import Pose2D
 
     if (
         not all(math.isfinite(x) for x in (dt, max_tilt_rad, max_vertical_m))

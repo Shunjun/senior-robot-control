@@ -7,7 +7,6 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Protocol
 
-from senior_control.models import Velocity
 from senior_control.motion.constraints import (
     ConstraintEngine,
     ConstraintResult,
@@ -16,6 +15,7 @@ from senior_control.motion.constraints import (
 )
 from senior_control.motion.contracts import BrakeKind, BrakeRequest
 from vehicle_core.diagnostics import QueueSnapshot, process_diagnostics
+from vehicle_core.values import Velocity
 
 
 class Worker(Protocol):

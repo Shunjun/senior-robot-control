@@ -6,8 +6,8 @@ from pathlib import Path
 
 from vehicle_manager.storage.database import Database as _Database
 
-from senior_control.models import OperationResult
 from vehicle_core.diagnostics import DiagnosticLock
+from vehicle_core.values import OperationResult
 
 
 class HomeExecutionCoordination:

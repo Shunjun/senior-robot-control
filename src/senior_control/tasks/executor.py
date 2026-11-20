@@ -10,10 +10,10 @@ from vehicle_manager.tasks.executor import TaskExecutor as _TaskExecutor
 from vehicle_manager.tasks.lifecycle_service import LifecycleService
 from vehicle_manager.tasks.ports import TaskExecutionErrors
 
-from senior_control.errors import DomainError, ErrorCode
 from senior_control.navigation import RouteRejected
 from senior_control.storage.database import Database
 from senior_control.tasks.store import TaskStore
+from vehicle_core.errors import DomainError, ErrorCode
 
 
 class QualificationUnavailable(DomainError):
