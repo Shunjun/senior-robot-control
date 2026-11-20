@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，本地IPC绑定见末尾「R5 本地IPC实际装配」。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，具体配置/诊断装配见末尾「R5 具体Agent依赖绑定」。
 
 ## 实际目录与调用
 
@@ -2668,3 +2668,98 @@ agent extra另在新`/tmp/vehicle-local-ipc-agent`空Python3.12环境按同冻�
 未验：agent网络extra闭包、真实ROS/实车IPC、Nav2、完整独立生产agent与手动控制；
 本地替身和Unix socket通过不代表这些能力已通过。未启动仿真、ROS、开发或车辆服务，
 未发实车运动请求、部署或推送；仅固定功能分支提交待负责人审核。
+
+
+## R5 具体Agent依赖绑定
+
+基线`feat/vehicle-architecture-refactor@ba0d4f7`，开始时干净；实际13文件：
+产品新增2、修改8，工具文档修改3，测试/配置/删除0。没有修改发行、锁、systemd或CLI。
+
+canonical `vehicle_manager.agent.config.AgentConfig`现直接包含原末尾diagnostics字段，
+仍为frozen dataclass、secret repr=False，默认factory仍是同一DiagnosticsSettings。
+旧composition.AgentConfig与新类现在**同一个类**，上一片过渡子类不再存在。
+两处_environment_fields均移除；from_environment在原必填读取/Path构造后以明确diagnostics实参
+解析环境，随后才运行原构造/TLS校验。缺必填KeyError→原ValueError文本/cause优先，
+坏诊断优先于构造时坏TLS，字段顺序/默认及全部原校验保留。
+
+新增唯一具体绑定owner：
+
+- `vehicle_manager/storage/bindings.py`：原Database和HomeExecutionCoordination两薄构造。
+  保留原无参协调、Database(path,busy_timeout_ms=1000)、DiagnosticLock、实际OperationResult
+  泛型绑定与原协调factory；继承同一HomeDatabase/SQLite引擎，不复制连接/缓存/事务。
+- `vehicle_manager/agent/production_bindings.py`：原JournalEntry/AgentJournal/_OPEN、
+  AgentLogConnection、SettingsRuntime、WebSocketLink/WebSocketConnector/_receive_diagnostic、
+  VehicleLogService。类及函数文本逐字相同，直接用既有manager RobotSnapshot/snapshot_envelope、
+  stores/ports、core诊断owner；底层generic业务与logger不改，网络库仍在原实际连接时惰性导入。
+
+旧storage/database、agent/journal/logs_wire/settings_wire/websocket、vehicle_logs/service
+六模块显式 //Compatible 同对象出口，保留_transaction、_OPEN、AGENT_JOURNAL_STATEMENTS、
+settings_command、log_url、CloudLogGrants、Socket/ProtocolRejected等既有辅助名。
+旧composition只改这些具体构造/配置的导入，其余业务AST不变；九client、mapping/media、
+原Agent/任务/导航组合仍在原位，本片不宣称整个生产composition已迁完。
+
+### 实际验证
+
+macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+复用主检出`/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin`的测试工具，
+本工作区运行.venv未改。已读指定五文件，未包含仿真功能验证；原命令为：
+
+```sh
+python -m pytest senior_control/tests/test_agent_config.py senior_control/tests/test_agent_ports.py \
+  senior_control/tests/test_database_ownership.py senior_control/tests/test_vehicle_logs.py \
+  senior_control/tests/test_websocket_link.py -q
+```
+
+允许测试内临时Unix socket与回环WebSocket监听后，**67 passed in 1.81s**。
+覆盖原配置/TLS、实际九client/1000–3000ms/同DB与独立停车、Home/learning结果、连接重入/关闭、
+日志认证/有界队列/脱敏/持久与损坏路径、heartbeat nonce/epoch/超时/撤销以及本地connector握手。
+WebSocket测试使用该测试环境预装`websockets15.0.1`，另有`httpx0.28.1`；不是本轮空环境
+安装agent extra的证据，没有连接远端云。未修改测试或断言，未跑其他用例或全CI。
+
+离线wheel/仓库外命令（uv使用`UV_CACHE_DIR=/tmp/vehicle-uv-cache`；`<checkout>`为本工作区）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-production-wheels senior_control
+uv build --offline --wheel --out-dir /tmp/vehicle-production-wheels
+python3.12 -m venv /tmp/vehicle-production-base
+uv pip install --offline --python /tmp/vehicle-production-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-production-wheels/*.whl \
+  /tmp/m5c-wheels/senior_contracts-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-production-wheels/*.whl
+/tmp/vehicle-production-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-production-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-production-only
+/tmp/vehicle-production-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-production-compatible
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --home-database-compatible
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-local-ipc-compatible
+```
+
+两真实非editable wheel通过；全新base安装12个声明闭包包（不计venv工具），SDK复用前片
+26包闭包并重装本片root/manager；均pip check通过。冻结约束复用5988c42的已核对根锁导出，
+无重新锁解析或版本升级。工具确认site-packages实际构造可用、manager→core发行与文件归属。
+新配置的完整签名/默认/诊断解析/错误优先级断言已同时应用于base和SDK，旧新必须is，
+删除的仅是已撤销过渡方案的「无诊断」「旧类!=新类」假设，没有删除构造/继承方法保护。
+具体绑定与generic底层仍!=且继承同一方法：所有原generic区别断言保留，新增实际运行检查：
+
+- 真实临时SQLite journal prepare/begin/get/finish、原JournalEntry/OperationStatus/_OPEN，
+  同Database/connection/write_lock、退出关闭；Home逐robot锁/协调同对象，协调实际类型和
+  OperationResult泛型身份，以及锁和日志PendingCounter全部归同一个process_diagnostics缓存。
+- 实际日志/SettingsRuntime/WebSocket绑定构造：原store/grants/state/tasks、诊断factory和
+  原snapshot callback/receive callback、send lock与connector link factory，无替代owner。
+  本项不启动日志writer/cleaner或连接网络；完整日志行为由上述原测试验证。
+- base不加载senior_control、cloud、rclpy/launch/Nav2、mapping/navigation/robot、
+  httpx/websockets/aiortc；无cloud/ROS项目安装，根同wheel兼容namespace仍可发现。
+  SDK证明旧六模块的类/值/私有helper与canonical同对象，composition实际使用新构造，
+  旧_transaction/SQL tuple仍为原manager对象；旧Home schema与本地IPC绑定检查继续通过。
+
+临时git show源码对照确认10个搬迁类/函数文本逐字相同；composition除去已迁AgentConfig
+和import后业务AST相同；config __post_init__及环境求值顺序除明确诊断实参外相同。
+11个涉及Python文件的Ruff/format、按原CRLF约定diff check及13文件实际diff自审通过。
+提交禁hooks避免执行未授权全量/仿真检查，上述范围检查均手动执行。
+
+本片未重新尝试空环境agent extra安装；前片原版本缓存缺口仍未收尾，预装依赖测试不替代它。
+未验证Linux/Humble ABI、ROS/实车、完整独立生产agent或手动控制，未运行任何仿真验证，
+未启动开发/ROS/车辆/仿真服务，未发实车运动、部署或推送；固定功能分支提交待审核。

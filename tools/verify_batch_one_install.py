@@ -396,6 +396,8 @@ def verify_manager_config(*, compatible: bool = False) -> None:
     from vehicle_manager.agent.config import AgentConfig
     from vehicle_manager.agent.pose_reply import PoseReply
 
+    from vehicle_core.diagnostics import DiagnosticsSettings
+
     for value in (AgentConfig, PoseReply):
         assert "site-packages" in inspect.getfile(value), inspect.getfile(value)
     if not compatible:
@@ -413,7 +415,8 @@ def verify_manager_config(*, compatible: bool = False) -> None:
     config = AgentConfig.from_environment(environment)
     assert type(config) is AgentConfig and config.database_path == Path("/tmp/config.db")
     assert "private-config-token" not in repr(config)
-    assert not hasattr(config, "diagnostics")
+    assert type(config.diagnostics) is DiagnosticsSettings
+    assert not hasattr(AgentConfig, "_environment_fields")
     assert not next(field for field in fields(config) if field.name == "device_token").repr
     try:
         config.robot_id = "changed"
@@ -461,69 +464,260 @@ def verify_manager_config(*, compatible: bool = False) -> None:
             pass
         else:
             raise AssertionError(change)
+    names = (
+        "robot_id",
+        "cloud_url",
+        "device_token",
+        "database_path",
+        "socket_path",
+        "workspace_map_bundle",
+        "workspace_map_sha256",
+        "simulation_video_frame",
+        "ros_video_topic",
+        "simulation_settings",
+        "diagnostics",
+    )
+    assert tuple(inspect.signature(AgentConfig).parameters) == names
+    diagnostic = next(field for field in fields(AgentConfig) if field.name == "diagnostics")
+    assert diagnostic.default_factory is DiagnosticsSettings
+    old = AgentConfig(
+        "robot",
+        environment["SENIOR_CLOUD_URL"],
+        environment["SENIOR_DEVICE_TOKEN"],
+        Path("/tmp/config.db"),
+        Path("/tmp/config.sock"),
+    )
+    assert type(old.diagnostics) is DiagnosticsSettings
+    parsed = AgentConfig.from_environment({**environment, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "7"})
+    assert type(parsed) is AgentConfig and parsed.diagnostics.queue.count == 7
+    assert "private-config-token" not in repr(parsed)
+    missing = {key: value for key, value in environment.items() if key != "SENIOR_ROBOT_ID"}
+    try:
+        AgentConfig.from_environment({**missing, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0"})
+    except ValueError as exc:
+        assert str(exc) == "missing environment variable SENIOR_ROBOT_ID"
+        assert isinstance(exc.__cause__, KeyError)
+    else:
+        raise AssertionError("missing required environment did not fail first")
+    try:
+        AgentConfig.from_environment(
+            {
+                **environment,
+                "SENIOR_CLOUD_URL": "ws://cloud.test",
+                "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0",
+            }
+        )
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("diagnostic validation did not precede constructor validation")
+    print("installed config signature, default diagnostics and validation priority: PASS")
     if compatible:
         from senior_control.agent.composition import AgentConfig as OldConfig
         from senior_control.agent.ports import PoseReply as OldPoseReply
-        from vehicle_core.diagnostics import DiagnosticsSettings
 
-        assert OldConfig is not AgentConfig and issubclass(OldConfig, AgentConfig)
+        assert OldConfig is AgentConfig
         assert OldConfig.__post_init__ is AgentConfig.__post_init__
         assert OldConfig.from_environment.__func__ is AgentConfig.from_environment.__func__
         assert OldPoseReply is PoseReply
-        names = (
-            "robot_id",
-            "cloud_url",
-            "device_token",
-            "database_path",
-            "socket_path",
-            "workspace_map_bundle",
-            "workspace_map_sha256",
-            "simulation_video_frame",
-            "ros_video_topic",
-            "simulation_settings",
-            "diagnostics",
-        )
-        assert tuple(inspect.signature(OldConfig).parameters) == names
-        diagnostic = next(field for field in fields(OldConfig) if field.name == "diagnostics")
-        assert diagnostic.default_factory is DiagnosticsSettings
-        old = OldConfig(
-            "robot",
-            environment["SENIOR_CLOUD_URL"],
-            environment["SENIOR_DEVICE_TOKEN"],
-            Path("/tmp/config.db"),
-            Path("/tmp/config.sock"),
-        )
-        assert type(old.diagnostics) is DiagnosticsSettings
-        parsed = OldConfig.from_environment(
-            {**environment, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "7"}
-        )
-        assert type(parsed) is OldConfig and parsed.diagnostics.queue.count == 7
-        assert "private-config-token" not in repr(parsed)
-        missing = {key: value for key, value in environment.items() if key != "SENIOR_ROBOT_ID"}
-        try:
-            OldConfig.from_environment({**missing, "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0"})
-        except ValueError as exc:
-            assert str(exc) == "missing environment variable SENIOR_ROBOT_ID"
-            assert isinstance(exc.__cause__, KeyError)
-        else:
-            raise AssertionError("missing required environment did not fail first")
-        try:
-            OldConfig.from_environment(
-                {
-                    **environment,
-                    "SENIOR_CLOUD_URL": "ws://cloud.test",
-                    "SENIOR_DIAGNOSTICS__QUEUE__COUNT": "0",
-                }
-            )
-        except ValidationError:
-            pass
-        else:
-            raise AssertionError("diagnostic validation did not precede constructor validation")
-        print("installed SDK config signature/diagnostic priority and PoseReply identity: PASS")
     else:
         for name in ("senior_control", "cloud", "rclpy", "senior_robot"):
             assert name not in sys.modules, name
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
+
+
+def verify_production_bindings(*, compatible: bool = False) -> None:
+    """Use the installed production constructors without importing the legacy composition."""
+    import asyncio
+    import inspect
+    import tempfile
+    from typing import get_args
+    from unittest.mock import AsyncMock
+
+    from vehicle_manager.agent import (
+        journal,
+        logs_wire,
+        production_bindings,
+        settings_wire,
+        snapshots,
+        websocket,
+    )
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.settings.models import DrivingSettings, LoggingSettings, SettingsSnapshot
+    from vehicle_manager.storage import bindings
+    from vehicle_manager.storage.database import Database as Engine
+    from vehicle_manager.storage.home_database import HomeDatabase, HomeExecutionCoordination
+    from vehicle_manager.vehicle_logs.service import VehicleLogService as LogOwner
+    from vehicle_manager.vehicle_logs.store import VehicleLogStore
+
+    from vehicle_core.diagnostics import (
+        DiagnosticAsyncQueue,
+        DiagnosticLock,
+        PendingCounter,
+        process_diagnostics,
+    )
+    from vehicle_core.errors import DomainError
+    from vehicle_core.values import OperationResult, OperationStatus
+
+    for bound, base, methods in (
+        (bindings.Database, HomeDatabase, ("__aenter__", "__aexit__", "home_execution")),
+        (bindings.HomeExecutionCoordination, HomeExecutionCoordination, ()),
+        (
+            production_bindings.AgentJournal,
+            journal.AgentJournal,
+            ("prepare", "get", "begin", "finish"),
+        ),
+        (production_bindings.AgentLogConnection, logs_wire.AgentLogConnection, ("serve", "run")),
+        (production_bindings.SettingsRuntime, settings_wire.SettingsRuntime, ("refresh", "check")),
+        (
+            production_bindings.WebSocketLink,
+            websocket.WebSocketLink,
+            ("recv", "send_heartbeat", "close"),
+        ),
+        (production_bindings.WebSocketConnector, websocket.WebSocketConnector, ("__call__",)),
+        (production_bindings.VehicleLogService, LogOwner, ("start", "enqueue", "query", "close")),
+    ):
+        assert "site-packages" in inspect.getfile(bound), bound
+        assert bound is not base and issubclass(bound, base)
+        for name in methods:
+            assert getattr(bound, name) is getattr(base, name)
+    assert bindings.Database.__aenter__ is Engine.__aenter__
+    assert get_args(bindings.HomeExecutionCoordination.__orig_bases__[0]) == (OperationResult,)
+    assert tuple(inspect.signature(bindings.Database).parameters) == ("path", "busy_timeout_ms")
+    assert inspect.signature(bindings.Database).parameters["busy_timeout_ms"].default == 1000
+    assert not inspect.signature(bindings.HomeExecutionCoordination).parameters
+    assert production_bindings._OPEN == (
+        OperationStatus.ACCEPTED,
+        OperationStatus.DISPATCHING,
+        OperationStatus.RUNNING,
+    )
+
+    async def verify(directory):
+        database = bindings.Database(directory / "bound.db")
+        write_lock = database.write_lock
+        assert type(write_lock) is DiagnosticLock
+        assert write_lock._diagnostic.diagnostics is process_diagnostics()
+        assert database._home_coordination_factory is bindings.HomeExecutionCoordination
+        coordination = database.home_execution("robot")
+        assert type(coordination) is bindings.HomeExecutionCoordination
+        assert database.home_execution("robot") is coordination
+        assert type(coordination.lock) is DiagnosticLock
+        assert coordination.lock._diagnostic.diagnostics is process_diagnostics()
+        assert database.home_target_lock("robot") is database.home_target_lock("robot")
+        async with database:
+            connection = database.connection
+            bound = production_bindings.AgentJournal(database, robot_id="robot")
+            assert bound._database is database and database.write_lock is write_lock
+            assert bound._ports.entry is production_bindings.JournalEntry
+            assert (
+                bound._ports.status is OperationStatus
+                and bound._ports.active is production_bindings._OPEN
+            )
+            await bound.prepare()
+            assert await bound.begin("installed-binding", "fingerprint") is None
+            entry = await bound.get("installed-binding")
+            assert type(entry) is production_bindings.JournalEntry
+            assert entry.status is OperationStatus.RUNNING and not entry.closed
+            await bound.finish("installed-binding", OperationStatus.SUCCEEDED, revision=1)
+            entry = await bound.get("installed-binding")
+            assert entry.closed and entry.revision == 1
+            assert database.connection is connection and database.write_lock is write_lock
+        assert not database.is_open
+        snapshot = SettingsSnapshot(
+            driving=DrivingSettings(
+                low_linear_mps=0.5,
+                high_linear_mps=1,
+                low_angular_rps=1,
+                high_angular_rps=1,
+                reverse_linear_mps=0.3,
+            ),
+            logging=LoggingSettings(),
+        )
+        grants = logs_wire.CloudLogGrants()
+        store = VehicleLogStore(directory / "logs")
+        service = production_bindings.VehicleLogService(store, "robot", grants, lambda: snapshot)
+        assert service._store is store and service._authorizer is grants
+        assert service._diagnostics.lock is DiagnosticLock
+        assert service._diagnostics.counter is PendingCounter
+        assert service._diagnostics.outbox is DiagnosticAsyncQueue
+        assert type(service._queue_diagnostic) is PendingCounter
+        assert service._queue_diagnostic.diagnostics is process_diagnostics()
+        assert type(service._publication_lock) is DiagnosticLock
+        assert service._publication_lock._diagnostic.diagnostics is process_diagnostics()
+        assert service._writer is None and service._cleaner is None
+        logs = production_bindings.AgentLogConnection(service, grants)
+        assert logs.service is service and logs.grants is grants
+        assert logs._lock_factory is DiagnosticLock and logs._counter_factory is PendingCounter
+        state = IpcState(AsyncMock())
+        tasks = AsyncMock()
+        runtime = production_bindings.SettingsRuntime(state, tasks)
+        assert runtime.state is state and runtime.tasks is tasks and runtime._error is DomainError
+        link = production_bindings.WebSocketLink(AsyncMock(), "robot", 1)
+        assert link._ports.snapshot is snapshots.snapshot_envelope
+        assert link._ports.receive_diagnostic is production_bindings._receive_diagnostic
+        assert type(link._send_lock) is DiagnosticLock
+        assert link._send_lock._diagnostic.diagnostics is process_diagnostics()
+        await link.close()
+        connector = production_bindings.WebSocketConnector("wss://cloud.invalid", "token", "robot")
+        assert connector._link_factory is production_bindings.WebSocketLink
+
+    with tempfile.TemporaryDirectory(prefix="installed-bindings-", dir="/tmp") as directory:
+        asyncio.run(verify(Path(directory)))
+    if compatible:
+        from senior_control.agent import composition
+        from senior_control.agent import journal as old_journal
+        from senior_control.agent import logs_wire as old_logs
+        from senior_control.agent import settings_wire as old_settings
+        from senior_control.agent import websocket as old_websocket
+        from senior_control.storage import database as old_database
+        from senior_control.vehicle_logs import service as old_service
+
+        for owner, names in (
+            (old_journal, ("JournalEntry", "AgentJournal", "_OPEN")),
+            (old_logs, ("AgentLogConnection",)),
+            (old_settings, ("SettingsRuntime",)),
+            (old_websocket, ("WebSocketLink", "WebSocketConnector", "_receive_diagnostic")),
+            (old_service, ("VehicleLogService",)),
+        ):
+            for name in names:
+                assert getattr(owner, name) is getattr(production_bindings, name)
+        assert old_journal._transaction is journal._transaction
+        assert old_journal.AGENT_JOURNAL_STATEMENTS is journal.AGENT_JOURNAL_STATEMENTS
+        assert old_database.Database is bindings.Database
+        assert old_database.HomeExecutionCoordination is bindings.HomeExecutionCoordination
+        assert composition.Database is bindings.Database
+        for name in (
+            "AgentJournal",
+            "AgentLogConnection",
+            "SettingsRuntime",
+            "WebSocketConnector",
+            "VehicleLogService",
+        ):
+            assert getattr(composition, name) is getattr(production_bindings, name)
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "cloud",
+                    "rclpy",
+                    "launch",
+                    "nav2",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                    "httpx",
+                    "websockets",
+                    "aiortc",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed concrete production bindings, real SQLite/diagnostics and lazy network: PASS",
+        compatible,
+    )
 
 
 def verify_local_ipc(*, compatible: bool = False) -> None:
@@ -811,6 +1005,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
         for name in sys.modules
     )
     verify_local_ipc()
+    verify_production_bindings()
     if network:
         import httpx
         import websockets
@@ -2205,6 +2400,13 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-production-only"]:
+        verify_manager_core_distribution()
+        verify_manager_config()
+        verify_production_bindings()
+    elif sys.argv[1:] == ["--manager-production-compatible"]:
+        verify_manager_config(compatible=True)
+        verify_production_bindings(compatible=True)
     elif sys.argv[1:] == ["--manager-local-ipc-only"]:
         verify_manager_core_distribution()
         verify_local_ipc()

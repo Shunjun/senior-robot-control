@@ -1,26 +1,10 @@
-"""//Compatible: log wire adapter with the original diagnostic factories."""
+"""//Compatible: original names forward to the same concrete manager bindings and helpers."""
 
-from vehicle_manager.agent.logs_wire import (
-    AgentLogConnection as _AgentLogConnection,
-)
-from vehicle_manager.agent.logs_wire import (
-    AgentLogHandler as AgentLogHandler,
-)
-from vehicle_manager.agent.logs_wire import (
-    CloudLogGrants as CloudLogGrants,
-)
-from vehicle_manager.agent.logs_wire import (
-    log_url as log_url,
-)
+from vehicle_manager.agent.logs_wire import AgentLogHandler as AgentLogHandler
+from vehicle_manager.agent.logs_wire import CloudLogGrants as CloudLogGrants
+from vehicle_manager.agent.logs_wire import log_url as log_url
+from vehicle_manager.agent.production_bindings import AgentLogConnection as AgentLogConnection
+from vehicle_manager.agent.production_bindings import VehicleLogService as VehicleLogService
 
-from senior_control.vehicle_logs.service import VehicleLogService
-from vehicle_core.diagnostics import DiagnosticLock, PendingCounter
-
-
-class AgentLogConnection(_AgentLogConnection):
-    """//Compatible: original constructor; no duplicate diagnostic state."""
-
-    def __init__(self, service: VehicleLogService, grants: CloudLogGrants) -> None:
-        super().__init__(
-            service, grants, lock_factory=DiagnosticLock, counter_factory=PendingCounter
-        )
+from vehicle_core.diagnostics import DiagnosticLock as DiagnosticLock
+from vehicle_core.diagnostics import PendingCounter as PendingCounter

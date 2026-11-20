@@ -1128,3 +1128,33 @@ agent extra离线仍缺websockets15.0.1缓存，未升级/联网、不称agent-o
 Ruff/format与CRLF约定diff检查通过，具体命令、环境与限制见
 [manager本片记录](../../../senior_control/README.md#r5-本地ipc实际装配)。
 固定分支提交，禁hooks避免全量/仿真，未启服务、未发实车运动、未部署推送。
+
+
+### R5 具体Agent依赖绑定（基线ba0d4f7）
+
+13文件：产品增2改8（manager config、storage/bindings、agent/production_bindings、
+旧六模块及composition），工具文档改3，测试/配置/锁0、无删。
+将原diagnostics字段和环境解析最后实参迁回canonical AgentConfig，去掉两处过渡
+_environment_fields；旧composition.AgentConfig与新类同对象，保留签名/默认/异常优先级。
+原带DiagnosticLock/OperationResult的Database与Home协调薄构造迁storage/bindings；
+JournalEntry/_OPEN/AgentJournal、log/settings/websocket绑定与VehicleLogService迁
+production_bindings，只用manager/core/contracts既有同对象，不加载旧业务/nav/ROS/cloud。
+旧六模块显式 //Compatible 同对象转发原公开与现用辅助名；composition只改目标绑定，
+其余九client、mapping/media、启动组合/systemd/CLI不动。
+
+验收先读指定五个非仿真测试文件，执行agent config/ports、database ownership、vehicle logs、
+websocket link（本地测试网络替身/临时监听，非开发服务，记录预装依赖版本不冒充锁定extra）。
+真实manager/root wheel在空base与SDK检查诊断/绑定默认、身份/继承方法、真实SQLite/锁/
+日志与网络惰性加载，保留旧generic基类与bound子类区别。Ruff/format/CRLF diff、自审后
+仅固定分支提交；不发实车运动，不启动ROS/实车/开发/仿真或部署推送。
+
+本片实际13文件符合预算，产品增2改8、工具文档改3、测试/配置/锁0。
+原10个绑定类/函数文本不变，composition业务AST不变；Config恢复完整字段与明确诊断实参，
+旧新同类和原签名/默认/required-key→诊断→TLS优先级验证通过。
+指定五份非仿真测试67通过（预装websockets15.0.1/httpx0.28.1，不冒充extra安装）。
+真实root/manager wheel、全新base12包与SDK26包重装/pip check通过，仓库外真实SQLite/
+同锁/同诊断缓存/类型与辅助名身份、无旧业务/ROS/网络库加载通过，generic区别保护保留。
+原Home兼容和本地IPC兼容安装检查继续通过；Ruff/format、CRLF diff及13文件自审通过。
+完整命令与未验限制见[manager本片记录](../../../senior_control/README.md#r5-具体agent依赖绑定)。
+固定分支提交禁hooks，不启动服务/仿真、不发实车运动、不部署推送；agent extra缓存缺口
+仍按前片保留，不称完整生产agent、ROS或实车通过。

@@ -1,11 +1,13 @@
-"""Agent configuration independent of concrete diagnostics and execution bindings."""
+"""Agent configuration with the original concrete diagnostic settings binding."""
 
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 from urllib.parse import urlsplit
+
+from vehicle_core.diagnostics import DiagnosticsSettings, diagnostics_from_environment
 
 ConfigT = TypeVar("ConfigT", bound="AgentConfig")
 
@@ -23,6 +25,7 @@ class AgentConfig:
     ros_video_topic: str | None = None
     # //Compatible: accepted from old simulation environments; no longer gates settings.
     simulation_settings: bool = False
+    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
 
     def __post_init__(self) -> None:
         url = urlsplit(self.cloud_url)
@@ -62,12 +65,7 @@ class AgentConfig:
                 simulation_video_frame=Path(video) if video is not None else None,
                 ros_video_topic=environment.get("SENIOR_ROS_VIDEO_TOPIC"),
                 simulation_settings=environment.get("SENIOR_SIMULATION_SETTINGS") == "1",
-                **cls._environment_fields(environment),
+                diagnostics=diagnostics_from_environment(environment),
             )
         except KeyError as exc:
             raise ValueError(f"missing environment variable {exc.args[0]}") from exc
-
-    @classmethod
-    def _environment_fields(cls, environment: Mapping[str, str]) -> dict[str, Any]:
-        """Supply bound extras after required values and paths have been read."""
-        return {}

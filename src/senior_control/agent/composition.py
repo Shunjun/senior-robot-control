@@ -3,10 +3,9 @@
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from importlib.util import find_spec
-from typing import Any
 
 from senior_mapping.workspace_export import load_exported_grid
 from senior_robot.ros_video import RosCameraSource
@@ -14,39 +13,39 @@ from vehicle_manager.agent.bootstrap_ports import AgentBootstrapPorts, MediaBind
 from vehicle_manager.agent.composition import build_task_runtime as _build_task_runtime
 from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
 from vehicle_manager.agent.composition import run_agent as _run_agent
-from vehicle_manager.agent.config import AgentConfig as _AgentConfig
+
+# //Compatible: the original configuration name is the same canonical class.
+from vehicle_manager.agent.config import AgentConfig as AgentConfig
 from vehicle_manager.agent.local_adapters import (
     IpcHomePort,
     IpcMapPort,
     IpcState,
     TaskAwareMotion,
 )
+from vehicle_manager.agent.production_bindings import (
+    AgentJournal,
+    AgentLogConnection,
+    SettingsRuntime,
+    VehicleLogService,
+    WebSocketConnector,
+)
 from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
 from vehicle_manager.agent.state_ports import SnapshotPorts
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
+from vehicle_manager.storage.bindings import Database
 
 from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
-from senior_control.agent.journal import AgentJournal
-from senior_control.agent.logs_wire import AgentLogConnection
 from senior_control.agent.main import Agent
 from senior_control.agent.manual_control import vehicle_frame
 from senior_control.agent.ports import IpcNavigation
-from senior_control.agent.settings_wire import SettingsRuntime
-from senior_control.agent.websocket import WebSocketConnector
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.storage.database import Database
 from senior_control.tasks import TaskExecutor, TaskStore
 from senior_control.tasks.lifecycle_store import Admission
 from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
-from senior_control.vehicle_logs.service import VehicleLogService
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.waypoints.store import WaypointStore
-from vehicle_core.diagnostics import (
-    DiagnosticsSettings,
-    configure_diagnostics,
-    diagnostics_from_environment,
-)
+from vehicle_core.diagnostics import configure_diagnostics
 from vehicle_core.errors import DomainError
 from vehicle_core.image_frame import ImageFrame
 from vehicle_core.ipc import IpcClient
@@ -54,17 +53,6 @@ from vehicle_core.lifecycle_events import READ_FD, observe
 from vehicle_core.runtime_state import RuntimeObservation
 
 logger = logging.getLogger("senior_control.agent")
-
-
-@dataclass(frozen=True)
-class AgentConfig(_AgentConfig):
-    """//Compatible: original constructor with its sole concrete diagnostic binding."""
-
-    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
-
-    @classmethod
-    def _environment_fields(cls, environment: Mapping[str, str]) -> dict[str, Any]:
-        return {"diagnostics": diagnostics_from_environment(environment)}
 
 
 @dataclass(frozen=True)
