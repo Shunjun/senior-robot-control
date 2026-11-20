@@ -108,6 +108,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M4B 组合入口已归位 | 原real_runtime → senior_robot；simulation_motion/RGBD → senior_sim；manager实际调用更新 | 原预检字节、全部launch声明/default与配置保持；旧Include和预检Compatible；Python wheel/SDK已验，实际ROS/ament安装及独立管理部署未验，详见M4B |
 | B6.M5A 管理观测与Agent CLI已迁 | Root observability与Agent main驱动 → vehicle_manager/observability、agent/application | 旧公开观测同对象、原main签名Compatible逐次接原配置/run_agent，12文件、原17项及安装验证见M5A；共享技术边界和管理独立生产部署仍后置 |
 | B6.M5B 本地请求与任务工厂已迁 | IpcMotion/TaskAwareMotion、IpcMapPort/IpcNavigation/IpcState → manager agent ipc_*；任务工厂 → 原manager composition | 原具体类型/异常/DTO及DB/IPC/诊断仍原owner注入，旧构造Compatible，九客户端/timeout与终端规则保持；复用既有接口使实际范围小于预报，见M5B |
+| B6.M5C 管理媒体与执行接入已迁 | stream/signaling/turn/最新帧消费 → manager/media；原ROS camera → senior_robot；sim直接用原共享RGB1 | 原帧类/codec唯一、诊断真实注入、旧Compatible和logger保持，23文件与原43/7及安装4项结果见M5C；ROS实测和独立部署后置 |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -699,3 +700,23 @@ RuntimeState/StateReply/PoseReply/Home接线、值/异常、Unix codec/peer、Cl
 五类/工厂规范化AST与原DTO/其他owner字节审计保持，manager71源码仍旧4项、全链263源码仍旧39项。
 实际目录、命令版本、安装/定向结果与平台缺口见[manager M5B](../../../senior_control/README.md#m5b-本地请求适配与真实任务工厂)。
 后续共享安装/媒体与执行provider边界仍按此前只读清单待审；真实ROS/Linux缺口及native/SLAM UNVERIFIED保留。
+
+
+### B6.M5C 媒体管理与执行图像输入已迁
+
+基线3b4e14f；WebRTC/session/encoder、单viewer信令、TURN helper与最新帧消费归manager/media，
+原ROS订阅线程归现有senior_robot，生产binding显式传原ImageFrame；sim原发布节点直接用Root rgb1。
+ImageFrame仍在原synchronizer，RGB1仅同一legacy项目内隔离实现，旧入口同对象转发，未定新的公共owner。
+三个需注入原owner的旧类为Compatible薄子类非同类，其他公开媒体值/错误/会话保持同对象。
+原SDP/relay-only/单viewer/有界独立队列/关闭顺序与控制隔离、logger名称保持，诊断队列仍原构造注入。
+无Root/ROS导入进入manager媒体，执行camera不导入manager；不迁IPC/诊断/配准识别/控制，不扩WS或建项目。
+原video extra委托manager[video]，锁70包版本/来源及非本地包记录保持，配置仅两个pyproject与Root锁。
+实际23文件：产品14/测试2/配置3/工具文档4，新增7修改16删除0；原用例断言保持，无新增pytest场景。
+原视频43项和Agent配置7项在允许原测试socket能力后通过，含真实aiortc1.15/PyAV17.1的64×48帧回环；
+另清空pytest源码路径验证安装SDK原RGB1/manager peer四项通过，不累计为新场景。
+新base8包、video20包无Root/ROS的媒体导入及真实backend检查通过，旧SDK25包兼容绑定/实际共享帧读写通过；
+manager76源码仍原4项，全链269源码与只读基线263源码同39项诊断，主体/codec/断言审计保持。
+完整目录、命令/版本/权限失败与构建缓存限制见[manager M5C](../../../senior_control/README.md#m5c-管理媒体与执行端图像接入)。
+真实ROS/ament/厂商/仿真、Python3.10/CI未验，原native/SLAM UNVERIFIED保持。
+Manager没有默认设备/诊断绑定，Root共享帧与codec尚未独立安装归属，不宣称独立生产部署；
+后续按既有边界核定入口/公共依赖，不用新根runtime或扩大契约绕过，导航算法仍最后。

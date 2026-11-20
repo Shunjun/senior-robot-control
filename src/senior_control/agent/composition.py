@@ -11,12 +11,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from senior_mapping.workspace_export import load_exported_grid
+from senior_robot.ros_video import RosCameraSource
 from vehicle_manager.agent.bootstrap_ports import AgentBootstrapPorts, MediaBinding
 from vehicle_manager.agent.composition import build_task_runtime as _build_task_runtime
 from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
 from vehicle_manager.agent.composition import run_agent as _run_agent
 from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
 from vehicle_manager.agent.state_ports import SnapshotPorts
+from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
 
 from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
 from senior_control.agent.journal import AgentJournal
@@ -48,9 +50,8 @@ from senior_control.tasks.lifecycle_store import Admission
 from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vehicle_logs.service import VehicleLogService
-from senior_control.vision.ros_video import RosCameraSource
 from senior_control.vision.simulation_video import LatestFrameFile
-from senior_control.vision.stream import AiortcPeerFactory, VideoSession
+from senior_control.vision.synchronizer import ImageFrame
 from senior_control.waypoints.store import WaypointStore
 
 logger = logging.getLogger("senior_control.agent")
@@ -195,7 +196,7 @@ def _media_binding(config: AgentConfig) -> MediaBinding:
         if video_factory is None:
             video_factory = AiortcPeerFactory()
         if config.ros_video_topic is not None:
-            source = RosCameraSource(config.ros_video_topic)
+            source = RosCameraSource(config.ros_video_topic, frame_factory=ImageFrame)
 
             class RosVideoSession(VideoSession):
                 async def close(self) -> None:

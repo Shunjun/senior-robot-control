@@ -10,6 +10,7 @@ dependencies = ["senior-contracts==0.1.0", "pydantic>=2.8,<3", "aiosqlite>=0.20,
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
+video = ["aiortc>=1.15,<2"]
 agent = ["httpx>=0.27,<1", "websockets>=14,<16"]
 
 [tool.hatch.build.targets.wheel]

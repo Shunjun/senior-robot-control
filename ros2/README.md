@@ -202,3 +202,29 @@ failures and one Linux-peer skip; full commands, counts and limitations are reco
 ROS/ament/colcon and cmake are unavailable locally. Real ament installation, launch
 context evaluation, vendor hardware, DDS, simulation, cmd_vel ownership and shutdown
 remain unverified; no simulation or real service was started.
+
+### M5C camera and media boundary
+
+`senior_robot/senior_robot/ros_video.py` now owns the original lazy ROS camera subscriber
+thread and one latest frame slot. Its required frame constructor is supplied by the
+original production binding as `senior_control.vision.synchronizer.ImageFrame`;
+`CapturedFrame` is only a read interface, without a replacement value class.
+The module imports neither manager nor Root nor rclpy until the original runtime path
+requests ROS. The legacy `senior_control.vision.ros_video.RosCameraSource` remains a
+Compatible constructor over that same implementation.
+
+The original sim node still owns publication. It now directly imports the sole RGB1
+publisher from `senior_control.vision.rgb1`, within the existing shared legacy owner,
+so it does not pass through the manager consumer compatibility module. Header,
+permissions, monotonic capture time, dimensions and publisher/GID checks are unchanged.
+No image geometry, calibration or detection algorithms moved in this batch.
+
+Management WebRTC/session/signaling/TURN and latest-file consumption are in
+`vehicle_manager/media`. The actual shared ImageFrame and RGB1 implementation remain
+unique in Root, pending a separate shared-owner decision. Diagnostic queues are still
+provided by the original owner. This does not establish an independent ROS or manager
+deployment. The installed execution camera imports no Root/manager/ROS, and the shared
+publisher imports no manager media; real ROS subscription and simulator publication
+remain unverified because ROS/ament are unavailable. Original real aiortc loopback and
+installed-wheel RGB1/peer tests passed; commands and platform limits are in
+[manager M5C](../senior_control/README.md#m5c-管理媒体与执行端图像接入).

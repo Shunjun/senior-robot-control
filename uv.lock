@@ -1469,7 +1469,7 @@ safety = [
     { name = "shapely", version = "2.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 video = [
-    { name = "aiortc" },
+    { name = "vehicle-manager", extra = ["video"] },
 ]
 
 [package.dev-dependencies]
@@ -1485,7 +1485,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiortc", marker = "extra == 'video'", specifier = ">=1.15,<2" },
     { name = "aiosqlite", specifier = ">=0.20,<1" },
     { name = "fastapi", marker = "extra == 'cloud'", specifier = ">=0.115,<1" },
     { name = "httpx", marker = "extra == 'cloud'", specifier = ">=0.27,<1" },
@@ -1504,6 +1503,7 @@ requires-dist = [
     { name = "vehicle-cloud", editable = "cloud" },
     { name = "vehicle-manager", editable = "senior_control" },
     { name = "vehicle-manager", extras = ["agent"], marker = "extra == 'agent'", editable = "senior_control" },
+    { name = "vehicle-manager", extras = ["video"], marker = "extra == 'video'", editable = "senior_control" },
 ]
 provides-extras = ["safety", "ros", "agent", "cloud", "video"]
 
@@ -1891,16 +1891,20 @@ agent = [
     { name = "httpx" },
     { name = "websockets" },
 ]
+video = [
+    { name = "aiortc" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiortc", marker = "extra == 'video'", specifier = ">=1.15,<2" },
     { name = "aiosqlite", specifier = ">=0.20,<1" },
     { name = "httpx", marker = "extra == 'agent'", specifier = ">=0.27,<1" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "senior-contracts", editable = "contracts" },
     { name = "websockets", marker = "extra == 'agent'", specifier = ">=14,<16" },
 ]
-provides-extras = ["agent"]
+provides-extras = ["video", "agent"]
 
 [[package]]
 name = "websockets"

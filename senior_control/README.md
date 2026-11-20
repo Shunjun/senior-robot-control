@@ -1607,3 +1607,84 @@ Requester、工厂注入和自动wheel/test发现，不另造按类门面或为�
 实际Linux SO_PEERCRED/PR_SET_PDEATHSIG/SOCK_SEQPACKET、ROS/ament/DDS/厂商、媒体、Python3.10和CI未验；
 原native/SLAM安装仍UNVERIFIED。管理生产仍需Root配置/具体值/诊断/IPC/媒体及执行provider绑定，
 并未完成独立生产部署。下一片共享安装归属仍待确认，不用根runtime、WS扩张或复制owner绕过。
+
+### M5C 管理媒体与执行端图像接入
+
+基线3b4e14f。实际目录：
+
+```text
+senior_control/src/vehicle_manager/media/
+├── __init__.py       # 只读ImageReading形状，不定义另一份ImageFrame
+├── stream.py         # 原WebRTC session/peer/encoder/thread唯一实现
+├── signaling.py      # 原单viewer与候选队列，注入原诊断队列
+├── turn.py           # 原TURN值/签名/凭据唯一实现
+└── latest_frame.py   # 管理端poll/最后capture状态，注入原RGB1读取函数
+ros2/src/senior_robot/senior_robot/ros_video.py # 原ROS订阅线程/单slot，显式注入帧构造
+ros2/src/senior_sim/scripts/simulation_camera.py # 原发布节点，仅直接引用共用RGB1 publisher
+src/senior_control/vision/
+├── rgb1.py           # 同一legacy owner内隔离原RGB1编解码/发布，实现仅一份
+├── synchronizer.py   # 原ImageFrame仍唯一、未迁配准/识别
+└── stream/turn/signaling/simulation_video/ros_video.py # 原公开Compatible入口
+```
+
+stream和turn公开类/异常/函数通过旧入口同对象别名；需要原owner注入的
+VideoSignaling、LatestFrameFile、RosCameraSource是Compatible薄子类，非同一类，业务方法唯一。
+实际Root `_media_binding`使用canonical stream及执行端camera，显式传原ImageFrame；
+相机peer关闭后再关订阅源、最后关共享encoder factory的顺序保持。
+ROS订阅源码不导入Root/manager，仍按需创建原rclpy context/node/executor和线程，
+话题/QoS/时间判断/尺寸/单slot/关闭行为保持；FrameT/CapturedFrame仅其真实消费形状。
+
+RGB1与ImageFrame最终共同安装owner仍未另定。本片保留在原legacy项目，
+仅将RGB1原函数隔离到独立模块，避免sim发布经兼容consumer入口引入manager。
+旧publisher及header/helpers显式转发同一实现，sim直接调用Root rgb1，
+生产与ROS端仍注入同一个原ImageFrame类，未复制结构或放进WS contracts。
+Root共享依赖仍存在，不以此宣称整个ROS或管理部署已独立。
+管理端ImageReading只读接口不构造新帧值；诊断仍注入原DiagnosticAsyncQueue，
+原队列上界、计数/锁/bind_async owner未迁未复制。
+
+原logger名称senior_control.vision.stream/signaling/ros_video明确保留，旧logger入口可引用同一对象。
+原SDP/候选/epoch与viewer限制、relay-only、拥塞丢帧/心跳stop隔离和backend懒加载保持。
+Root video extra改委托manager[video]，沿用aiortc>=1.15,<2；编码仍直接更新AV plane，不新增NumPy依赖。
+根锁70包版本/来源、非本地包完整记录和原resolution partitions保持，只有两个本地包的extra元数据变动。
+CMake/ament和既有Robot wheel声明自动包含新Python模块，现有CI独立manager核验工具同时检查媒体导入；
+未改启动服务、launch、设备参数、部署镜像或独立安装策略。
+
+实际23文件：产品14（新增7/修改7）、测试2修改、配置3修改、工具文档4修改；新增7/修改16/删除0。
+产品为上述七份新实现/接口，五个旧vision入口、Root composition及sim脚本；
+测试只改原simulation_video/video的真实实现导入，原全部assert AST不变，无新增pytest场景；
+配置为Root/manager pyproject及Root uv.lock；工具文档为安装工具、本README、ros2/README和原计划。
+未为预报测试数量改写其他owner用例。原ImageFrame、诊断、IPC、深度/识别与控制业务不改。
+
+验证环境：macOS arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23；
+aiortc1.15.0、PyAV17.1.0。命令的python/checker取主仓库`.venv/bin`，uv设UV_CACHE_DIR=/tmp/vehicle-uv-cache。
+
+- `python -m pytest tests/unit/test_simulation_video.py tests/integration/test_video.py -q --tb=short`：
+  初次受限环境42通过/真实loopback等帧20秒超时（并有原read coroutine结束警告）；
+  允许原测试UDP能力后43通过，6.84秒，收到真实64×48帧，原20秒断言/时限未改。
+  覆盖原无后端/无相机、单viewer/候选上界、relay-only、编码关闭、拥塞不影响控制、RGB1帧新鲜/非法文件与padding。
+- 生产绑定影响的原`pytest senior_control/tests/test_agent_config.py -q --tb=short`：
+  初次6通过/1临时Unix bind权限失败；允许原socket后7通过，0.28秒，无改断言或补属性。
+- 3b4e14f只读归档的完整mypy为263源码/39项；新代码269源码仍相同39项，归一行号无新增。
+  完整命令MYPYPATH取Root pytest原pythonpath，运行`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`。
+  `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`为76源码仍原4项。
+- 原TURN逐字节、stream/signaling/reader/ROS/生产binding/sim主体按明示接口规范化AST审计一致；
+  RGB1三个原函数和header/constants精确保持，原assert与ImageFrame/诊断/IPC字节保持。
+- 临时缓存清空导致最初offline构建缺hatchling、锁解析缺原lefthook元数据、安装缺pydantic-core wheel；
+  获取既有构建/锁依赖后manager/Root/Robot/contract及原兼容依赖wheel构建通过。
+  锁未升级任何第三方；`uv lock --check --offline`与frozen export通过。
+- 新venv以frozen导出的约束安装本地wheel：base8包从/tmp执行安装工具`--manager-media-only`及既有`--manager-tasks-only`通过；
+  video20包执行`--manager-video-only`通过，实际导入aiortc/PyAV且无Root/ROS依赖，基础导入不拉起backend。
+  旧SDK全新25包wheel闭包执行默认工具通过：旧公开身份、原RGB1实际读写/原ImageFrame类型、
+  原队列注入及camera无启动构造/旧CLI和真实既有SQLite/Agent装配检查保持，三个pip check均通过。
+- 进一步在安装SDK补原video extra和测试工具，从/tmp执行
+  `python -m pytest <仓库>/tests/unit/test_simulation_video.py <仓库>/tests/integration/test_video.py::test_aiortc_loopback_delivers_a_real_frame -q --tb=short -o pythonpath=`：
+  4通过，29.37秒；清空pytest源码路径，实际运行安装wheel的Root RGB1与manager peer/encoder，同一原帧类型。
+  这些复跑不相加算新增场景。Robot subscriber安装导入不加载Root/manager/rclpy；
+  Root共享RGB1 publisher导入不加载manager.media，未经兼容consumer给sim引入新反向依赖。
+- 提交前核对变动Python Ruff/format、diff及最终wheel源码位置。
+
+未启动开发/实车/仿真服务、部署或推送；实际回环仅原测试本机RTC peer，无服务器。
+当前无rclpy/ROS/ament，真实订阅/设备/QoS、ROS时钟、厂商环境和sim发布实测未验，
+Python3.10/CI未执行，native/SLAM安装仍UNVERIFIED。静态/安装导入不冒充ROS运行。
+共享帧/RGB1仍需旧SDK，Manager新wheel无默认设备/诊断绑定；生产CLI及其余技术owner仍原边界，
+本片不是独立管理生产部署或共享公共owner决策，不提前迁IPC/诊断/算法或扩大WS。

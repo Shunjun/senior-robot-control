@@ -122,6 +122,7 @@ def verify_manager_operator() -> None:
         name == "senior_control" or name.startswith(("senior_control.", "rclpy"))
         for name in sys.modules
     )
+    verify_manager_media()
     print("installed manager profile/rendering and supervisor imports without Root/ROS: PASS")
 
 
@@ -214,6 +215,95 @@ def verify_legacy_operator() -> None:
     print(
         "installed legacy aliases, unchanged dry-run/CLI help and original Agent error exit: PASS"
     )
+
+
+def verify_manager_media(*, backend: bool = False) -> None:
+    """Import real media code without a legacy/ROS dependency or implicit listener."""
+    from vehicle_manager.media.latest_frame import LatestFrameFile
+    from vehicle_manager.media.signaling import VideoSignaling
+    from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
+    from vehicle_manager.media.turn import TurnCredentialIssuer
+
+    assert all(
+        callable(value)
+        for value in (
+            LatestFrameFile,
+            VideoSignaling,
+            AiortcPeerFactory,
+            VideoSession,
+            TurnCredentialIssuer,
+        )
+    )
+    assert not any(
+        name.startswith(("senior_control", "rclpy", "senior_robot")) for name in sys.modules
+    )
+    assert "aiortc" not in sys.modules and "av" not in sys.modules
+    if backend:
+        from vehicle_manager.media.stream import _load_aiortc
+
+        aiortc = _load_aiortc()
+        import av
+
+        print("installed isolated media backend:", aiortc.__version__, av.__version__)
+    print("installed manager media without Root/ROS and lazy backend: PASS")
+
+
+def verify_legacy_media() -> None:
+    from senior_robot.ros_video import RosCameraSource as Camera
+    from vehicle_manager.media import stream, turn
+    from vehicle_manager.media.latest_frame import LatestFrameFile as Reader
+    from vehicle_manager.media.signaling import VideoSignaling as Signaling
+
+    from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
+    from senior_control.vision import rgb1
+    from senior_control.vision import stream as old_stream
+    from senior_control.vision import turn as old_turn
+    from senior_control.vision.ros_video import RosCameraSource
+    from senior_control.vision.signaling import VideoSignaling
+    from senior_control.vision.simulation_video import LatestFrameFile, publish_image
+    from senior_control.vision.synchronizer import ImageFrame
+
+    for module, old in ((stream, old_stream), (turn, old_turn)):
+        for name in (
+            name
+            for name in vars(module)
+            if not name.startswith("_") and getattr(module, name).__class__.__name__ == "type"
+        ):
+            if getattr(module, name).__module__ == module.__name__:
+                assert getattr(old, name) is getattr(module, name), name
+    assert old_stream.ImageFrame is ImageFrame
+    assert old_stream.negotiate_codec is stream.negotiate_codec
+    assert old_turn.issue_turn_credentials is turn.issue_turn_credentials
+    assert old_turn.verify_turn_credentials is turn.verify_turn_credentials
+    assert old_stream.logger.name == "senior_control.vision.stream"
+    assert publish_image is rgb1.publish_image
+    assert issubclass(LatestFrameFile, Reader) and LatestFrameFile.next_frame is Reader.next_frame
+    reader = LatestFrameFile(Path("/tmp/unused.rgb"))
+    assert reader._read_frame is rgb1._read_frame
+    assert reader._poll_seconds == rgb1._POLL_SECONDS
+    assert issubclass(RosCameraSource, Camera) and RosCameraSource._run is Camera._run
+    camera = RosCameraSource("/camera/color/image_raw")
+    assert camera._frame_factory is ImageFrame and camera._thread is None
+    import asyncio
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="installed-media-") as directory:
+        path = Path(directory) / "camera.rgb"
+        assert publish_image(path, 1, 1, 3, "rgb8", b"abc")
+        frame = asyncio.run(LatestFrameFile(path).next_frame(0.1))
+        assert type(frame) is ImageFrame and frame.data == b"abc"
+    assert VideoSignaling is not Signaling and issubclass(VideoSignaling, Signaling)
+    assert VideoSignaling.submit is Signaling.submit
+    assert VideoSignaling.close is Signaling.close
+    import inspect
+
+    assert (
+        inspect.signature(VideoSignaling).parameters["make_session"].kind
+        is inspect.Parameter.KEYWORD_ONLY
+    )
+    # Actual production binding; no fake diagnostic queue, camera thread or peer.
+    assert VideoSignaling.__init__.__globals__["DiagnosticAsyncQueue"] is DiagnosticAsyncQueue
+    print("installed original media aliases, shared RGB1/frame and execution camera binding: PASS")
 
 
 def verify_real_preflight() -> None:
@@ -1041,6 +1131,7 @@ def main() -> None:
     verify_manager_lifecycle()
     verify_legacy_task_store()
     verify_legacy_operator()
+    verify_legacy_media()
     subprocess.run(
         [
             sys.executable,
@@ -1195,7 +1286,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--real-preflight-only"]:
+    if sys.argv[1:] == ["--manager-media-only"]:
+        verify_manager_media()
+    elif sys.argv[1:] == ["--manager-video-only"]:
+        verify_manager_media(backend=True)
+    elif sys.argv[1:] == ["--real-preflight-only"]:
         verify_real_preflight()
     elif sys.argv[1:] == ["--manager-agent-only"]:
         import importlib.util

@@ -28,7 +28,7 @@ cloud = [
     "httpx>=0.27,<1",
 ]
 video = [
-    "aiortc>=1.15,<2",
+    "vehicle-manager[video]==0.1.0",
 ]
 
 [dependency-groups]
