@@ -823,3 +823,42 @@ Root/localization/control的离线sdist/wheel构建通过；仓库外临时26包
 失败对照和限制见 [manager记录](../../../senior_control/README.md#r0r1-首片共享-clock-与-imageframe-叶子)。
 不运行仿真及其验证、不启动ROS/车辆/服务、不部署或推送；Linux/Humble/ABI及
 独立manager生产安装仍未验证。提交固定功能主分支后等待负责人审阅，再推进后批。
+
+
+### R1 第二片：生命周期事件与进程资源叶子（2026-11-21）
+
+固定功能分支基线 `7ea8183`，实施前工作区干净。本片仅迁两个标准库公共技术叶子：
+`src/senior_control/runtime/lifecycle_events.py` → `src/vehicle_core/lifecycle_events.py`，
+`src/senior_control/motion/process_resources.py` → `src/vehicle_core/process_resources.py`。
+旧模块保留显式 `//Compatible` 同对象出口；事件logger仍用原
+`senior_control.runtime.lifecycle_events` 名称，环境变量字节、帧上界、单向管道、EOF、
+失联、FD关闭与spawn/父亡/异常/reap语义保持，不改变控制或手动权限。
+
+先记录本范围，再更新安装检查以核对新owner与兼容身份，迁唯一实现与9个真实产品消费者：
+control_inputs/runtime_reports、learning_compute/learning_owner、实车safety_motion launch、
+senior_sim simulation_motion launch、旧agent/composition、docker_start_helper、launch_recovery。
+不迁 `launch_recovery` 本体，其入口与命令字符串保持；仿真launch只静态改引用，不验证。
+
+预报16文件：产品增2改11、工具文档改3，测试/配置无修改，无删除；不新增依赖、工厂、
+发行或功能。已有工作区和本节作为实施记录，不新增skill工作区、测试或辅助worker。
+仅复用指定非仿真用例，不能以额外测试扩大范围：
+
+- `ros2/tests/test_control_process_resources.py::test_real_spawn_serializes_tasks_and_results_and_cleans_up`
+- 同文件 `test_process_death_fails_pending_future_and_close_reaps_it`
+- `tests/integration/test_runtime_fault_isolation.py::test_observer_eof_is_reported_by_actual_agent_without_exiting`
+
+不运行会扫描仿真launch的 `test_launch_exit_only_reports_lifecycle`，不跑整份测试文件。
+另做仓库外wheel canonical/旧路径同对象与无管理/ROS依赖检查、Ruff/diff检查；
+真实命令、版本、结果和平台限制实施后补录。仅提交固定功能分支，不部署或推送，
+不发运动请求、不启动仿真/实车/开发/ROS服务，不宣称实车手动控制已通。
+
+
+本片实际16文件，产品增2改11、工具文档改3，无测试/配置修改或删除。
+除保留原logger名的显式Compatible写法外，两叶子主体与基线保持；旧出口同对象，
+launch_recovery仅更新一条child_lifetime导入。安装检查先在旧wheel确认缺owner失败，
+迁移后新Root wheel仓库外canonical/兼容身份/惰性边界检查通过；指定3条非仿真测试
+全部通过，Ruff14文件与diff检查通过，26包临时安装夹具pip check通过。
+完整命令、版本、实际安装来源与限制见
+[manager本片记录](../../../senior_control/README.md#r1-第二片生命周期事件与进程资源叶子)。
+不声称实车手动控制可用，未运行任何仿真验证、ROS/实车/开发服务或部署，不推送；
+提交后由负责人审核，Linux父亡分支与Humble/真实设备验证仍未完成。

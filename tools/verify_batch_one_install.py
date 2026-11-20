@@ -17,6 +17,34 @@ def verify_lazy_shared_imports() -> None:
     scripts = (
         """
 import sys
+from pathlib import Path
+from vehicle_core import lifecycle_events, process_resources
+for module in (lifecycle_events, process_resources):
+    assert 'site-packages' in str(Path(module.__file__).resolve()), module.__file__
+assert lifecycle_events.logger.name == 'senior_control.runtime.lifecycle_events'
+assert lifecycle_events.READ_FD == 'SENIOR_RUNTIME_EVENTS_READ_FD'
+assert lifecycle_events.WRITE_FD == 'SENIOR_RUNTIME_EVENTS_WRITE_FD'
+assert lifecycle_events.MAX_EVENT_BYTES == 2048
+assert lifecycle_events.LifecycleEvents.__module__ == 'vehicle_core.lifecycle_events'
+assert process_resources.ProcessWorker.__module__ == 'vehicle_core.process_resources'
+for name in ('senior_control', 'vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_motion_control', 'senior_perception'):
+    assert name not in sys.modules, name
+from senior_control.runtime import lifecycle_events as old_events
+from senior_control.motion import process_resources as old_resources
+for name in ('logger', 'READ_FD', 'WRITE_FD', 'MAX_EVENT_BYTES', 'emit',
+             'LifecycleEvents', 'report_ros_exit', 'observe'):
+    assert getattr(old_events, name) is getattr(lifecycle_events, name), name
+for name in ('SnapshotT', 'ResultT', 'WorkerReply', 'LatestSnapshot', 'child_lifetime',
+             'stop_process', '_refinement_loop', '_ProcessFuture', 'ProcessWorker'):
+    assert getattr(old_resources, name) is getattr(process_resources, name), name
+for name in ('vehicle_manager', 'cloud', 'rclpy', 'launch',
+             'senior_control.agent', 'senior_control.runtime.launch_recovery',
+             'senior_control.runtime.diagnostics', 'senior_control.sensors.policy'):
+    assert name not in sys.modules, name
+""",
+        """
+import sys
 from vehicle_core.clock import Clock, SystemClock
 from vehicle_core.image_frame import ImageFrame
 assert Clock.__module__ == SystemClock.__module__ == 'vehicle_core.clock'

@@ -102,7 +102,7 @@ def _cleanup_learning(
 
 
 def _events() -> Events:
-    from senior_control.runtime.lifecycle_events import LifecycleEvents
+    from vehicle_core.lifecycle_events import LifecycleEvents
 
     return LifecycleEvents()
 

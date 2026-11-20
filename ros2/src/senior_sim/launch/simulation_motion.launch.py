@@ -31,8 +31,8 @@ from senior_control.runtime.launch_recovery import (
     lifecycle_owner_prefix,
     restart_prefix,
 )
-from senior_control.runtime.lifecycle_events import report_ros_exit
 from senior_control.sensors.policy import ros_sensor_parameters
+from vehicle_core.lifecycle_events import report_ros_exit
 
 
 def environment_assets(context):
