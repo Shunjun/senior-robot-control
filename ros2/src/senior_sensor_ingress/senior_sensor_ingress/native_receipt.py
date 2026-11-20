@@ -35,6 +35,30 @@ _MAX_TRANSPORT_AGE = default_policy().hard_age_s
 _MAX_PENDING_SAMPLES = 64
 _MAX_PENDING_BYTES = 32 * 1024 * 1024
 
+# Keep these labels aligned with ExitCode in native_receipt.cpp.
+_CHILD_EXIT_REASONS = {
+    0: "normal_exit",
+    # //Compatible: older native_receipt binaries report every failure as 2.
+    2: "legacy_failure",
+    10: "write_deadline",
+    11: "send_failure",
+    12: "poll_failure",
+    13: "oversize_payload",
+    14: "retired_source_exhaustion",
+    15: "invalid_arguments",
+    16: "invalid_fd_or_parent",
+    17: "parent_death_setup",
+    18: "unexpected_exception",
+}
+
+
+def _child_exit_reason(returncode: int | None) -> str:
+    if returncode is None:
+        return "not_observed"
+    if returncode < 0:
+        return f"signal_{-returncode}"
+    return _CHILD_EXIT_REASONS.get(returncode, f"unknown_exit_{returncode}")
+
 
 def received_steady(info: Any) -> float:
     """Native callback transport time; never a Python delivery-time fallback."""
@@ -335,6 +359,7 @@ class NativeReceiptGroup:
             self.node.get_logger().error(
                 "native DDS receipt failed; all dependent evidence revoked; "
                 f"reason={self._failure_reason}; child_exit={returncode}; "
+                f"child_exit_reason={_child_exit_reason(returncode)}; "
                 f"topics={[entry.topic for entry in self.inputs]}"
             )
             return

@@ -175,3 +175,151 @@ print(json.dumps(results, indent=2))
 ```
 
 </details>
+
+
+## 附录：原生接收退出原因定位（d3ffc50 后续）
+
+目标仅为下一次退出可定位，不宣称修复积压。基线固定 `d3ffc5019705947d77cb790b55cc8be33cd6678f`、同一功能主分支。产品修改2：`senior_sensor_ingress/src/native_receipt.cpp` 和 `senior_sensor_ingress/senior_sensor_ingress/native_receipt.py`（均在 ros2/src 下）；工具文档修改1为本文；测试/数据、配置/构建、新增、删除均0，合计严格3文件修改。
+
+设计与顺序：先记录本附录，再将已有失败分支的通用2替换为短 enum class 的唯一非零退出码；header/payload 保持共享原100ms写截止，send/poll按原条件失败，不增加热路径时钟调用、不输出子进程stdio、不改FD/parent检查顺序。父进程仅在原失败日志新增 child_exit_reason，保留 child_exit、原failure_reason、先撤证再poll/close/log的顺序。旧二进制2标记 legacy_failure；None只表示 not_observed，负数表示 signal_N，未知数表示 unknown_exit_N，不推断子进程是否仍活着或自动重启。
+
+| 码 | enum成员 / Python标签 | 对应原分支 |
+| --- | --- | --- |
+| 10 | write_deadline | header或payload的原共用100ms deadline耗尽 |
+| 11 | send_failure | send为0或errno非EAGAIN/EWOULDBLOCK/EINTR |
+| 12 | poll_failure | poll返回负且errno非EINTR |
+| 13 | oversize_payload | 序列化payload大于20MiB |
+| 14 | retired_source_exhaustion | retired GID集合达到256 |
+| 15 | invalid_arguments | 参数数量/分组/最多16输入的原shape检查 |
+| 16 | invalid_fd_or_parent | fd<3或初始parent不等于getppid |
+| 17 | parent_death_setup | 原prctl失败或注册后parent改变 |
+| 18 | unexpected_exception | 原main捕获std::exception |
+
+合并同因说明：不区分header/payload写阶段，共享同一个截止且无需新增热路径参数；初始fd/parent保持原复合条件，parent-death注册及竞态也保持原短路检查。stoi格式/溢出、构造输入/QoS/类型异常等仍由原catch归unexpected_exception，不重新分类或扩大异常捕获。
+
+验证清单：复用既有纯Python freshness、egress及runtime diagnostics；源级核对所有enum数值唯一、非0且不复用旧2，Python解释与C++枚举逐项相等、原每个失败条件只替换返回码且所有时间调用/FD/协议不变；用内存node/process/socket/logger替身调用真实NativeReceiptGroup._drain失败路径，核对全部已知码、旧2、None、信号、未知码的日志及撤证/close顺序。没有新增测试文件或修改用例；mock和静态检查不得称native build/ROS验收。Linux/Humble真实阻塞socket、send/poll故障及各退出分支仅列后续隔离复现，不在本轮启动。
+
+实际命令与结果实施后补记；本轮不读生产数据/配置，不启服务/设备/ROS/仿真，不部署推送。
+
+### 退出定位实际验证
+
+基线 d3ffc50 与本片候选复用命令：
+```sh
+PYTHONDONTWRITEBYTECODE=1 '/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest -p no:cacheprovider -q tests/unit/test_safety_freshness.py tests/unit/test_egress_receipt.py tests/unit/test_runtime_diagnostics.py
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/ruff' check --no-cache ros2/src/senior_sensor_ingress/senior_sensor_ingress/native_receipt.py
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/ruff' format --check --no-cache ros2/src/senior_sensor_ingress/senior_sensor_ingress/native_receipt.py
+git diff --check
+```
+
+结果：基线33 passed in 0.28s、候选33 passed in 0.27s；freshness2项、egress9项、runtime diagnostics22项。两版Ruff lint通过、format为1 file already formatted，diff --check通过，三文件CRLF均0。新增/改写测试0、实际bug回归0；产品检查后仅补文档，没有再修改产品。
+
+源码核对通过：9个唯一非零码10..18且避开旧2，分别使用于原9个退出位置；Python九个原因标签与C++逐项相等。C++去掉enum并将cast还原2后与基线逐字节一致，Python去掉新增映射/helper/log字段后与基线逐字节一致，故没有改变任何原条件/时钟调用/FD/关停顺序/协议。首轮临时核对脚本还原Python段落时少保留一空行，断言失败；修正核对脚本后通过，产品未为此变更。
+
+内存替身调用真实 NativeReceiptGroup._drain 和close的5项均通过：10→write_deadline、旧2→legacy_failure、None→not_observed、-15→signal_15、255→unknown_exit_255。每项都核对先invalidate、poll、关socket、再唯一一次log，原reason/child_exit/topics保留且不反序列化；None仍保持原close中的terminate/wait，日志使用原poll状态，不调整异步竞态。其余新码及0正常退出标签只由严格映射覆盖，不冒称触发了真实退出。未新增测试文件，下方是准确内联命令。
+
+<details>
+<summary>源级一致性与父失败分支核对命令</summary>
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 '/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' - <<'PY'
+import ast
+from collections import Counter
+import importlib.util
+from pathlib import Path
+import re
+import subprocess
+import sys
+import threading
+import tomllib
+import types
+
+config = tomllib.loads(Path('pyproject.toml').read_text())
+sys.path[:0] = [str(Path.cwd() / p) for p in config['tool']['pytest']['ini_options']['pythonpath']]
+cpp_path = 'ros2/src/senior_sensor_ingress/src/native_receipt.cpp'
+py_path = 'ros2/src/senior_sensor_ingress/senior_sensor_ingress/native_receipt.py'
+cpp, py = Path(cpp_path).read_text(), Path(py_path).read_text()
+block = re.search(r'// Keep these failure codes aligned.*?enum class ExitCode : int \{(.*?)\n\};\n', cpp, re.S)
+assert block
+pairs = re.findall(r'([a-z_]+) = (\d+),', block[1])
+assert len(pairs) == 9
+codes = {int(code): name for name, code in pairs}
+assert len(codes) == 9 and all(0 < code < 256 and code != 2 for code in codes)
+uses = re.findall(r'static_cast<int>\(ExitCode::([a-z_]+)\)', cpp)
+assert Counter(uses) == Counter(name for name, code in pairs)
+normalized = cpp[:block.start()] + cpp[block.end():]
+normalized = re.sub(r'static_cast<int>\(ExitCode::[a-z_]+\)', '2', normalized)
+assert normalized == subprocess.check_output(['git', 'show', 'd3ffc50:' + cpp_path], text=True)
+assignment = next(n for n in ast.parse(py).body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '_CHILD_EXIT_REASONS' for t in n.targets))
+assert len(assignment.value.keys) == 11
+labels = ast.literal_eval(assignment.value)
+assert {code: labels[code] for code in codes} == codes
+assert labels[2] == 'legacy_failure' and labels[0] == 'normal_exit'
+start = py.index('# Keep these labels aligned with ExitCode in native_receipt.cpp.')
+end = py.index('\n\ndef received_steady', start)
+normalized_py = py[:start] + '\n' + py[end+2:]
+normalized_py = normalized_py.replace('                f"child_exit_reason={_child_exit_reason(returncode)}; "\n', '')
+assert normalized_py == subprocess.check_output(['git', 'show', 'd3ffc50:' + py_path], text=True)
+print('source contract PASS: 9 unique nonzero codes, exact Python labels and 9 exit sites; normalized C++/Python byte-identical to d3ffc50')
+spec = importlib.util.spec_from_file_location('receipt_exit_diagnostic_check', py_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+serialization = types.ModuleType('rclpy.serialization')
+def forbidden_deserialize(*args):
+    raise AssertionError('failed branch must not deserialize')
+serialization.deserialize_message = forbidden_deserialize
+sys.modules['rclpy'] = types.ModuleType('rclpy')
+sys.modules['rclpy.serialization'] = serialization
+for code, reason in [(10, 'write_deadline'), (2, 'legacy_failure'), (None, 'not_observed'), (-15, 'signal_15'), (255, 'unknown_exit_255')]:
+    events, errors = [], []
+    class Process:
+        def __init__(self):
+            self.code = code
+        def poll(self):
+            events.append('poll')
+            return self.code
+        def terminate(self):
+            events.append('terminate')
+        def wait(self, timeout):
+            assert timeout == 1
+            events.append('wait')
+            self.code = -15
+    class Socket:
+        def shutdown(self, how):
+            events.append('socket_shutdown')
+        def close(self):
+            events.append('socket_close')
+    class Logger:
+        def error(self, message):
+            events.append('log')
+            errors.append(message)
+    logger = Logger()
+    group = module.NativeReceiptGroup.__new__(module.NativeReceiptGroup)
+    group.node = types.SimpleNamespace(get_logger=lambda: logger)
+    group.inputs = [types.SimpleNamespace(topic='/fixture/input', invalidate=lambda: events.append('invalidate'))]
+    group._closed = False
+    group._started_at = 1.0
+    group._lock = threading.Lock()
+    group._invalid = {0}
+    group._pending = {}
+    group._queued_bytes = 0
+    group._failed = True
+    group._failure_reason = 'OSError: native receipt channel closed'
+    group._process = Process()
+    group._socket = Socket()
+    group._thread = None
+    module.process_diagnostics = lambda: types.SimpleNamespace(pump=lambda now: events.append('pump'))
+    group._drain()
+    assert group._closed
+    assert events[:5] == ['pump', 'invalidate', 'poll', 'socket_shutdown', 'socket_close']
+    assert events[-1] == 'log' and events.count('log') == 1
+    assert ('terminate' in events) == (code is None)
+    assert len(errors) == 1
+    assert f'reason=OSError: native receipt channel closed; child_exit={code}; child_exit_reason={reason};' in errors[0]
+    assert "topics=['/fixture/input']" in errors[0]
+    print(f'memory _drain PASS: child_exit={code}, child_exit_reason={reason}, events={events}')
+PY
+```
+</details>
+
+限制及后续：未做native build/ROS消息生成/Linux/Humble运行、真实子进程或真实socket故障；未运行服务/设备/ROS/仿真，未读生产数据或生产配置，未部署推送。获准后在隔离Linux/Humble用原生程序和私有socketpair暂停reader并填满缓冲，验证原100ms写deadline触发码10，再独立验证send/poll错误、超大payload、retired source和启动失败分支；这些仅为后续候选，本轮未执行。新码只能定位触发条件，不能把write_deadline说成某个Python pending队列、fenced scan回调或唯一事故根因；header/payload仍共用一个截止标签，未新增errno或异常文本采集。
